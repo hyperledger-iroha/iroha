@@ -450,6 +450,9 @@ public enum VerifyingKeyBackendTag {
     if (backend.isEmpty() || !trimWhitespace(backend).equals(backend)) {
       return null;
     }
+    if (PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS.contains(backend)) {
+      return backend;
+    }
     final String[][] prefixes = {
       {"halo2/pasta/ipa/", "halo2/pasta/"},
       {"halo2/pasta/", "halo2/pasta/"},

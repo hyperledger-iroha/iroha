@@ -145,10 +145,9 @@ pub mod isi {
             delta: &TransferDeltaTranscript,
         ) -> Result<(), Error> {
             {
-                let from_balance_after = Quantity::from_canonical_numeric(
-                    delta.from_balance_after.clone(),
-                )
-                .map_err(|_| MathError::NegativeValue)?;
+                let from_balance_after =
+                    Quantity::from_canonical_numeric(delta.from_balance_after.clone())
+                        .map_err(|_| MathError::NegativeValue)?;
                 let asset = self
                     .assets
                     .get_mut(source_id)
@@ -160,10 +159,9 @@ pub mod isi {
             }
 
             {
-                let to_balance_after = Quantity::from_canonical_numeric(
-                    delta.to_balance_after.clone(),
-                )
-                .map_err(|_| MathError::NegativeValue)?;
+                let to_balance_after =
+                    Quantity::from_canonical_numeric(delta.to_balance_after.clone())
+                        .map_err(|_| MathError::NegativeValue)?;
                 let dst = self.asset_or_insert_exact(destination_id, Quantity::zero())?;
                 **dst = to_balance_after;
             }
@@ -1861,8 +1859,7 @@ pub mod isi {
         destination: AccountId,
         amount: Numeric,
     ) -> Result<(), Error> {
-        state_transaction
-            .require_transfer_transcript_identity("SCCP native inbound settlement")?;
+        state_transaction.require_transfer_transcript_identity("SCCP native inbound settlement")?;
         state_transaction.world.account(&destination)?;
         let destination_id = AssetId::new(source_id.definition().clone(), destination);
         let (source_id, destination_id, delta) = apply_numeric_asset_transfer_delta(
@@ -1873,8 +1870,8 @@ pub mod isi {
             NumericAssetTransferSourcePolicy::SccpInboundSettlement,
         )?;
         state_transaction.record_transfer_transcript(submitting_authority, delta)?;
-        let quantity = Quantity::from_canonical_numeric(amount)
-            .map_err(|_| MathError::NegativeValue)?;
+        let quantity =
+            Quantity::from_canonical_numeric(amount).map_err(|_| MathError::NegativeValue)?;
         state_transaction.world.emit_events([
             AssetEvent::Removed(AssetChanged {
                 asset: source_id,

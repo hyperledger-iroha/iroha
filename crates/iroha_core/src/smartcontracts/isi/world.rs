@@ -9119,9 +9119,8 @@ pub mod isi {
                 &self.proof.payload,
                 iroha_data_model::bridge::BridgeProofPayload::NativeProtocol(_)
             ) {
-                state_transaction.require_transfer_transcript_identity(
-                    "SCCP native inbound settlement",
-                )?;
+                state_transaction
+                    .require_transfer_transcript_identity("SCCP native inbound settlement")?;
             }
             let current_height = state_transaction._curr_block.height.get();
             let validated = encode_and_validate_bridge_proof(&self.proof, state_transaction)?;
@@ -10447,8 +10446,7 @@ pub mod isi {
             settlement.settlement_asset_definition_id.clone(),
             authority.clone(),
         );
-        state_transaction
-            .require_transfer_transcript_identity("SCCP message recording")?;
+        state_transaction.require_transfer_transcript_identity("SCCP message recording")?;
         crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
             state_transaction,
             authority,
@@ -12961,10 +12959,7 @@ pub mod isi {
                     err.to_string(),
                 ))
             })?;
-            let burn = Burn::asset_quantity(
-                Quantity::from(*self.amount()),
-                asset_id,
-            );
+            let burn = Burn::asset_quantity(Quantity::from(*self.amount()), asset_id);
             burn.execute(authority, state_transaction)?;
             state_transaction.register_commitments(1)?;
             // Append commitment and update root; emit audit metadata with roots and commitment.
@@ -13735,10 +13730,7 @@ pub mod isi {
                 state_transaction.zk.tree_frontier_checkpoint_interval,
                 state_transaction.zk.reorg_depth_bound,
             );
-            let mint = Mint::asset_quantity(
-                Quantity::from(*self.public_amount()),
-                asset_id,
-            );
+            let mint = Mint::asset_quantity(Quantity::from(*self.public_amount()), asset_id);
             mint.execute(authority, state_transaction)?;
             // Emit an audit pulse with latest unshield info, including proof hash
             let key: Name = "zk.unshield.last".parse().unwrap();
@@ -22060,10 +22052,8 @@ seiyaku GovernanceLifecycle {
             holders: Option<BTreeSet<AccountId>>,
             assets: Option<BTreeSet<AssetId>>,
             nonzero_holders: Option<BTreeSet<AccountId>>,
-            proofs: BTreeMap<
-                iroha_data_model::proof::ProofId,
-                iroha_data_model::proof::ProofRecord,
-            >,
+            proofs:
+                BTreeMap<iroha_data_model::proof::ProofId, iroha_data_model::proof::ProofRecord>,
             proofs_by_status: BTreeMap<
                 iroha_data_model::proof::ProofStatus,
                 BTreeSet<iroha_data_model::proof::ProofId>,
@@ -22074,10 +22064,7 @@ seiyaku GovernanceLifecycle {
                 iroha_data_model::bridge::SccpInboundMessageKeyV1,
                 iroha_data_model::bridge::SccpInboundMessageRecordV1,
             >,
-            high_water: BTreeMap<
-                iroha_data_model::bridge::SccpInboundAnchorHighWaterKeyV1,
-                u64,
-            >,
+            high_water: BTreeMap<iroha_data_model::bridge::SccpInboundAnchorHighWaterKeyV1, u64>,
             receipt_markers: BTreeSet<[u8; 32]>,
             transfer_transcripts: usize,
             events: Vec<Arc<DataEvent>>,
@@ -22319,8 +22306,8 @@ seiyaku GovernanceLifecycle {
                         .expect("non-negative SCCP custody fixture"),
                     AssetId::new(asset.clone(), custody.clone()),
                 )
-                    .execute(&ALICE_ID, stx)
-                    .expect("fund SCCP custody fixture");
+                .execute(&ALICE_ID, stx)
+                .expect("fund SCCP custody fixture");
             }
             (asset, custody)
         }
@@ -27230,7 +27217,10 @@ seiyaku GovernanceLifecycle {
             assert_eq!(after.proofs.len(), before.proofs.len() + 1);
             assert_eq!(after.inbound.len(), before.inbound.len() + 1);
             assert_eq!(after.high_water.len(), before.high_water.len() + 1);
-            assert_eq!(after.receipt_markers.len(), before.receipt_markers.len() + 1);
+            assert_eq!(
+                after.receipt_markers.len(),
+                before.receipt_markers.len() + 1
+            );
             assert!(
                 after
                     .receipt_markers

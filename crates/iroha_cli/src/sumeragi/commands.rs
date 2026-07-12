@@ -5,7 +5,7 @@ use eyre::Result;
 
 use crate::{Run, RunContext};
 
-use super::{commit_qc, evidence, rbc, status, telemetry, vrf};
+use super::{commit_qc, evidence, status, telemetry, vrf};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -15,8 +15,6 @@ pub enum Command {
     Leader(LeaderArgs),
     /// Show on-chain Sumeragi parameters snapshot
     Params(ParamsArgs),
-    /// Show current collector indices and peers
-    Collectors(CollectorsArgs),
     /// Show HighestQC/LockedQC snapshot
     Qc(QcArgs),
     /// Show pacemaker timers/config snapshot
@@ -28,9 +26,6 @@ pub enum Command {
     /// Evidence helpers (list/count/submit)
     #[command(subcommand)]
     Evidence(EvidenceCommand),
-    /// RBC helpers (status/sessions)
-    #[command(subcommand)]
-    Rbc(RbcCommand),
     /// Show VRF penalties for the given epoch
     VrfPenalties(VrfPenaltiesArgs),
     /// Show persisted VRF epoch snapshot (seed, participants, penalties)
@@ -54,14 +49,6 @@ pub enum EvidenceCommand {
     Count(EvidenceCountArgs),
     /// Submit hex-encoded evidence payload
     Submit(EvidenceSubmitArgs),
-}
-
-#[derive(clap::Subcommand, Debug)]
-pub enum RbcCommand {
-    /// Show RBC session/throughput counters
-    Status(RbcStatusArgs),
-    /// Show RBC sessions snapshot
-    Sessions(RbcSessionsArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -120,9 +107,6 @@ impl EvidenceKindArg {
 }
 
 #[derive(clap::Args, Debug)]
-pub struct CollectorsArgs {}
-
-#[derive(clap::Args, Debug)]
 pub struct QcArgs {}
 
 #[derive(clap::Args, Debug)]
@@ -133,12 +117,6 @@ pub struct PhasesArgs {}
 
 #[derive(clap::Args, Debug)]
 pub struct TelemetryArgs {}
-
-#[derive(clap::Args, Debug)]
-pub struct RbcStatusArgs {}
-
-#[derive(clap::Args, Debug)]
-pub struct RbcSessionsArgs {}
 
 #[derive(clap::Args, Debug)]
 pub struct VrfPenaltiesArgs {
@@ -167,13 +145,11 @@ impl Run for Command {
             Command::Status(args) => status::status(context, args),
             Command::Leader(args) => status::leader(context, args),
             Command::Params(args) => status::params(context, args),
-            Command::Collectors(args) => status::collectors(context, args),
             Command::Qc(args) => status::qc(context, args),
             Command::Pacemaker(args) => telemetry::pacemaker(context, args),
             Command::Phases(args) => telemetry::phases(context, args),
             Command::Telemetry(args) => telemetry::telemetry(context, args),
             Command::Evidence(cmd) => cmd.run(context),
-            Command::Rbc(cmd) => rbc::run(context, cmd),
             Command::VrfPenalties(args) => vrf::penalties(context, args),
             Command::VrfEpoch(args) => vrf::epoch(context, args),
             Command::CommitQc(cmd) => cmd.run(context),

@@ -49,7 +49,7 @@ private func nativeAmxTestHash(_ seed: UInt8) -> String {
     return "hash:\(body)#\(String(format: "%04X", checksum))"
 }
 
-private func canonicalKagemushaVerifierRecordArchive(
+private func canonicalVerifierRecordArchive(
     seed: UInt8,
     verifierKeyLength: Int = 96
 ) throws -> Data {
@@ -61,7 +61,7 @@ private func canonicalKagemushaVerifierRecordArchive(
         )
     }
     return noritoEncode(
-        typeName: KagemushaRecursiveSpend.verifyingKeyRecordWireName,
+        typeName: "iroha_data_model::proof::VerifyingKeyRecord",
         payload: Data(repeating: seed, count: verifierKeyLength),
         flags: NoritoHeader.compactLen
     )
@@ -10227,6 +10227,79 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testKagemushaVerifierProjectionInitializerPreservesExactRecord() throws {
+        let id = try ToriiVerifyingKeyId(
+            backend: "halo2/ipa",
+            name: KagemushaRecursiveSpend.VerifierRole.transfer.registryName
+        )
+        let verifier = try ToriiKagemushaActiveTransferVerifier(
+            id: id,
+            version: 7,
+            circuitId: KagemushaRecursiveSpend.VerifierRole.transfer.circuitID,
+            commitment: String(repeating: "ab", count: 32),
+            publicInputsSchemaHash: String(repeating: "cd", count: 32),
+            maxProofBytes: 4_096,
+            activationHeight: 11,
+            withdrawalHeight: 19
+        )
+
+        XCTAssertEqual(verifier.id, id)
+        XCTAssertEqual(verifier.version, 7)
+        XCTAssertEqual(
+            verifier.circuitId,
+            KagemushaRecursiveSpend.VerifierRole.transfer.circuitID
+        )
+        XCTAssertEqual(verifier.commitment, String(repeating: "ab", count: 32))
+        XCTAssertEqual(
+            verifier.publicInputsSchemaHash,
+            String(repeating: "cd", count: 32)
+        )
+        XCTAssertEqual(verifier.maxProofBytes, 4_096)
+        XCTAssertEqual(verifier.activationHeight, 11)
+        XCTAssertEqual(verifier.withdrawalHeight, 19)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testKagemushaVerifierProjectionInitializerRejectsUntrustedRecords() throws {
+        let id = try ToriiVerifyingKeyId(
+            backend: "halo2/ipa",
+            name: KagemushaRecursiveSpend.VerifierRole.transfer.registryName
+        )
+        let canonicalHash = String(repeating: "ab", count: 32)
+        let schemaHash = String(repeating: "cd", count: 32)
+
+        func construct(
+            circuitId: String = KagemushaRecursiveSpend.VerifierRole.transfer.circuitID,
+            commitment: String = canonicalHash,
+            publicInputsSchemaHash: String = schemaHash,
+            maxProofBytes: UInt32 = 4_096,
+            activationHeight: UInt64 = 11,
+            withdrawalHeight: UInt64? = 19
+        ) throws -> ToriiKagemushaActiveTransferVerifier {
+            try ToriiKagemushaActiveTransferVerifier(
+                id: id,
+                version: 7,
+                circuitId: circuitId,
+                commitment: commitment,
+                publicInputsSchemaHash: publicInputsSchemaHash,
+                maxProofBytes: maxProofBytes,
+                activationHeight: activationHeight,
+                withdrawalHeight: withdrawalHeight
+            )
+        }
+
+        XCTAssertThrowsError(try construct(commitment: "AB" + String(repeating: "ab", count: 31)))
+        XCTAssertThrowsError(try construct(commitment: String(repeating: "0", count: 64)))
+        XCTAssertThrowsError(
+            try construct(publicInputsSchemaHash: String(repeating: "0", count: 64))
+        )
+        XCTAssertThrowsError(try construct(circuitId: "../substituted"))
+        XCTAssertThrowsError(try construct(maxProofBytes: 0))
+        XCTAssertThrowsError(try construct(withdrawalHeight: 11))
+        XCTAssertThrowsError(try construct(withdrawalHeight: 10))
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineReadinessParsesExactContract() async throws {
         let payload = """
         {
@@ -11984,7 +12057,7 @@ final class ToriiClientHeaderTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetVerifyingKeyAsync() async throws {
-        let recordNorito = try canonicalKagemushaVerifierRecordArchive(seed: 0x63)
+        let recordNorito = try canonicalVerifierRecordArchive(seed: 0x63)
         let payload = """
         {
           "id": { "backend": "halo2/ipa", "name": "vk main" },
@@ -12037,7 +12110,7 @@ final class ToriiClientHeaderTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetVerifyingKeyRejectsCrossWiredDetail() async throws {
-        let recordNorito = try canonicalKagemushaVerifierRecordArchive(seed: 0x64)
+        let recordNorito = try canonicalVerifierRecordArchive(seed: 0x64)
         let payload = """
         {
           "id": { "backend": "halo2/ipa", "name": "different-vk" },
@@ -12086,8 +12159,8 @@ final class ToriiClientHeaderTests: XCTestCase {
         }
     }
 
-    func testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha() throws {
-        let recordNorito = try canonicalKagemushaVerifierRecordArchive(seed: 0x71)
+    func testVerifyingKeyDetailPreservesExactNoritoRecord() throws {
+        let recordNorito = try canonicalVerifierRecordArchive(seed: 0x71)
         let payload = """
         {
           "id": { "backend": "halo2/ipa", "name": "unshield-v3" },
@@ -12109,14 +12182,13 @@ final class ToriiClientHeaderTests: XCTestCase {
         """.data(using: .utf8)!
 
         let detail = try JSONDecoder().decode(ToriiVerifyingKeyDetail.self, from: payload)
-        let reference = try detail.asKagemushaRecursiveSpendVerifierRecordRef()
-
-        XCTAssertEqual(reference.verifierKeyId, "halo2/ipa:unshield-v3")
-        XCTAssertEqual(reference.recordBytes, recordNorito)
+        XCTAssertEqual(detail.id.backend, "halo2/ipa")
+        XCTAssertEqual(detail.id.name, "unshield-v3")
+        XCTAssertEqual(detail.recordNorito, recordNorito)
     }
 
     func testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64() throws {
-        let recordNorito = try canonicalKagemushaVerifierRecordArchive(
+        let recordNorito = try canonicalVerifierRecordArchive(
             seed: 0x79,
             verifierKeyLength: 96
         )
@@ -12162,12 +12234,6 @@ final class ToriiClientHeaderTests: XCTestCase {
             from: payload(recordBase64: nil)
         )
         XCTAssertNil(legacyDetail.recordNorito)
-        XCTAssertThrowsError(try legacyDetail.asKagemushaRecursiveSpendVerifierRecordRef()) { error in
-            XCTAssertEqual(
-                error.localizedDescription,
-                "Torii response payload was invalid: verifying-key detail is missing record_norito_base64"
-            )
-        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)

@@ -363,61 +363,23 @@ I18NI0000166X/`waitForIsoMessageStatus` трио.
 өсөн CLI-әҙер өлгөләр плюс күрһәткестәр кире тулы ялан етәкселек
 `docs/source/sdk/js/governance_iso_examples.md`.
 
-## RBC үлсәү & тапшырыу дәлилдәре
+## Sumeragi availability telemetry
 
-JS юл картаһы шулай уҡ Roadrunner Блок йөкләмәһен талап итә (РБК) үлсәү, шулай итеп, операторҙар ала
-иҫбатлауынса, улар I18NT000000001X аша алынған блок улар раҫлай торған өлөшләтә дәлилдәргә тап килә.
-Ҡул менән файҙалы йөктәр төҙөү урынына төҙөлгән ярҙамсыларҙы ҡулланығыҙ:
-
-1. `getSumeragiRbcSessions()` X көҙгө `/v1/sumeragi/rbc/sessions`, һәм
-   I18NI000000171X авто-һайлай беренсе тапшырылған сеанс менән блок хеш
-   (интеграция люксы ҡасан да булһа, уға кире төшә
-   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` необработанный).
-2. `ToriiClient.buildRbcSampleRequest(session, overrides)` I18NI000000174X нормализацияһы
-   Плю
-   етергә I18NT0000000017X.
-.
-   һәм Меркл юлдары (I18NI000000178X, I18NI000000179X, `payloadHash`) һеҙ архив менән тейеш.
-   ҡалған һеҙҙең тәрбиәгә алыу дәлилдәре.
-4. I18NI000000181X когортаның тапшырыу метамағлүмәттәрен тота, шулай итеп аудиторҙар
-   реплей оптаж осона тиклем.
+Reliable broadcast remains an internal Sumeragi v2 transport and recovery mechanism.
+The public Torii catalog exposes aggregate diagnostics through
+`GET /v1/sumeragi/telemetry`; it does not publish per-session RBC state, chunk
+samples, delivery probes, or a deterministic collector plan.
 
 ```js
-import assert from "node:assert";
-import { ToriiClient } from "@iroha/iroha-js";
-
-const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080", {
-  apiToken: process.env.TORII_API_TOKEN,
-});
-
-const candidate =
-  (await torii.findRbcSamplingCandidate().catch(() => null)) ??
-  (await torii.getSumeragiRbcSessions()).items.find((session) => session.delivered);
-if (!candidate) {
-  throw new Error("no delivered RBC session available; set IROHA_TORII_INTEGRATION_RBC_SAMPLE");
-}
-
-const request = ToriiClient.buildRbcSampleRequest(candidate, {
-  count: Number(process.env.RBC_SAMPLE_COUNT ?? 2),
-  seed: Number(process.env.RBC_SAMPLE_SEED ?? 0),
-  apiToken: process.env.RBC_SAMPLE_API_TOKEN ?? process.env.TORII_API_TOKEN,
-});
-
-const sample = await torii.sampleRbcChunks(request);
-sample.samples.forEach((chunk) => {
-  assert.ok(Buffer.from(chunk.chunkHex, "hex").length > 0, "chunk must be hex");
-});
-
-const delivery = await torii.getSumeragiRbcDelivered(sample.height, sample.view);
-console.log(
-  `rbc height=${sample.height} view=${sample.view} chunks=${sample.samples.length} delivered=${delivery?.delivered}`,
-);
+const telemetry = await torii.getSumeragiTelemetryTyped();
+console.log(`collector votes=${telemetry.availability.total_votes_ingested}`);
+console.log(`pending sessions=${telemetry.rbc_backlog.pending_sessions}`);
 ```
 
-Персистный ике яуап аҫтында артефакт тамыр һеҙ идара итеүгә тапшыра. Өҫтөнлөк
-автоһайланған сессия аша I18NI0000000182X
-Ҡасан ғына һеҙгә кәрәк, аныҡ блок тикшерергә, һәм дауалау етешһеҙлектәрен алыу өсөн эритроцит снимоктар а.
-осош алдынан ҡапҡа хатаһы түгел, ә өнһөҙ генә туранан-тура режимға тиклем түбәнәйтергә.
+Archive `availability.collectors`, `rbc_backlog`, and `rbc_pending` from the raw
+telemetry response together with Prometheus counters and consensus logs. These
+fields are aggregate operational evidence and must not be treated as light-client
+chunk proofs or transaction-finality evidence.
 
 ## Һынау & CI
 

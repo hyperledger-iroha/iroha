@@ -42,7 +42,7 @@ const OFFLINE_OPERATION_RETENTION_AFTER_EXPIRY_MS: u64 = 24 * 60 * 60 * 1_000;
 // hash + submission/expiry timestamps. The count budget separately bounds the
 // map-node/key duplication and in-flight coordination objects.
 const ADMITTED_OPERATION_ACCOUNTED_BYTES: usize =
-    iroha_config::parameters::defaults::torii::offline_issuer::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY;
+    iroha_config::parameters::defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY;
 
 #[derive(Debug, Clone)]
 pub(crate) struct OfflineCommandRuntime {
@@ -53,7 +53,7 @@ pub(crate) struct OfflineCommandRuntime {
 }
 
 impl OfflineCommandRuntime {
-    pub(crate) fn from_config(config: actual::ToriiOfflineIssuer) -> Self {
+    pub(crate) fn from_config(config: actual::ToriiKagemushaCommands) -> Self {
         Self {
             authority: config.authority,
             key_pair: config.key_pair,
@@ -1887,8 +1887,7 @@ mod tests {
             KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2,
             KagemushaRecursiveSpendArtifactBindingV3, KagemushaRequestAuthorizationV2,
             KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
-            KagemushaTopUpShieldEvidenceV2, KagemushaVerifiedFoldBundle,
-            KagemushaVerifiedFoldRecordBundle,
+            KagemushaTopUpShieldEvidenceV2,
         },
         peer::PeerId,
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
@@ -2442,7 +2441,7 @@ mod tests {
         .sign(front_runner.private_key());
         let rejected_result = TransactionResult(Err(TransactionRejectionReason::Validation(
             ValidationFail::NotPermitted(
-                "outer authority is not the configured offline issuer".to_owned(),
+                "outer authority is not the configured Kagemusha submission authority".to_owned(),
             ),
         )));
 

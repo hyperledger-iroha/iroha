@@ -4037,6 +4037,8 @@ impl StateBlock<'_> {
                                 ),
                             ))
                         })?;
+                crate::executor::ensure_contract_invocation_code_hash(call, record.code_hash)
+                    .map_err(TransactionRejectionReason::Validation)?;
                 let contract_address = Some(call.contract_address.clone());
                 Self::validate_ivm(
                     authority.clone(),
@@ -10309,6 +10311,7 @@ pub mod tests {
                 contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
                     .parse()
                     .expect("contract address"),
+                expected_code_hash: Hash::new(b"admission-contract-code"),
                 entrypoint: "call".to_owned(),
                 arguments: None,
             }))

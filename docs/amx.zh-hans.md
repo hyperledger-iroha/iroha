@@ -138,7 +138,7 @@ Norito 描述符/句柄/策略快照的固定装置位于 `crates/iroha_data_mod
 |来源 |捕捉什么 |命令/路径|证据预期|
 |--------|-----------------|----------------|------------------------|
 | Prometheus (`iroha_telemetry`) |插槽和 AMX SLO：`iroha_slot_duration_ms`、`iroha_amx_prepare_ms`、`iroha_amx_commit_ms`、`iroha_da_quorum_ratio`、`iroha_amx_abort_total{stage}` |抓取 `https://$TORII/telemetry/metrics` 或从 `docs/source/telemetry.md` 中描述的仪表板导出。 |将直方图快照（以及触发的警报历史记录）附加到夜间 `status.md` 注释中，以便审核员可以查看 p95/p99 值和警报状态。 |
-| Torii RBC 快照 | DA/RBC 积压：每个会话块积压、视图/高度元数据和 DA 可用性计数器（`sumeragi_da_gate_block_total{reason="missing_local_data"}`；`sumeragi_rbc_da_reschedule_total` 是旧版）。 | `GET /v1/sumeragi/rbc` 和 `GET /v1/sumeragi/rbc/sessions`（有关示例，请参阅 `docs/source/samples/sumeragi_rbc_status.md`）。 |每当 AMX DA 警报触发时，存储 JSON 响应（带有时间戳）；将它们包含在事件包中，以便审核人员可以确认背压与遥测相匹配。 |
+| Torii Sumeragi telemetry | Aggregated collector activity, missing-chunk totals, bounded pre-session queues, and DA availability counters (`sumeragi_da_gate_block_total{reason="missing_local_data"}`). | `GET /v1/sumeragi/telemetry`; capture `availability.collectors`, `rbc_backlog`, and `rbc_pending`. | Store timestamped JSON with the incident bundle. The payload is aggregate evidence and does not identify individual RBC sessions or publish a collector plan. |
 |证明服务指标| PVO 缓存运行状况：`iroha_pvo_cache_hit_ratio`、缓存填充/逐出计数器、证明队列深度 | `GET /metrics` 在证明服务 (`IROHA_PVO_METRICS_URL`) 上或通过共享 OTLP 收集器。 |导出缓存命中率和队列深度以及 AMX 插槽指标，以便路线图 OA/PVO 门具有确定性的人工制品。 |
 |验收线束|受控抖动下的端到端混合负载（时隙/DA/RBC/PVO）|重新运行 `ci/acceptance/slot_1s.yml`（或 CI 中的相同作业）并将日志包 + 生成的工件存档在 `artifacts/acceptance/slot_1s/<timestamp>/` 中。 |在 GA 之前以及起搏器/DA 设置更改时需要；在操作员移交数据包中包含 YAML 运行摘要以及 Prometheus 快照。 |
 
@@ -146,8 +146,8 @@ Norito 描述符/句柄/策略快照的固定装置位于 `crates/iroha_data_mod
 
 |症状|先检查|建议补救措施|
 |--------|-------------|--------------------------|
-| `iroha_slot_duration_ms` p95 爬行超过 1000ms |从 `/telemetry/metrics` 导出 Prometheus 加上最新的 `/v1/sumeragi/rbc` 快照以确认 DA 延期；与最后一个 `ci/acceptance/slot_1s.yml` 工件进行比较。 |降低 AMX 批量大小或启用额外的 RBC 收集器 (`sumeragi.collectors.k`)，然后重新运行验收工具并捕获新的遥测证据。 |
-|缺少可用性峰值 | `/v1/sumeragi/rbc/sessions` 积压字段（`lane_backlog`、`dataspace_backlog`）以及证明者运行状况仪表板。 |移除不健康的证明者，暂时增加`redundant_send_r`以加快交付速度，并在`status.md`中发布修复说明。积压工作清除后，附上更新的 RBC 快照。 |
+| Slot-duration regression | Prometheus export plus `GET /v1/sumeragi/telemetry`; compare `rbc_backlog` and `rbc_pending` against the last acceptance artefact. | Tune AMX batching or collector redundancy, rerun the acceptance harness, and retain the new aggregate telemetry. |
+| Missing availability spike | Aggregated `rbc_backlog` and `rbc_pending` fields, `availability.collectors`, status-store evictions, consensus logs, and attester health dashboards. | Remove unhealthy attesters, temporarily increase `redundant_send_r`, and attach updated aggregate telemetry after the backlog clears. |
 |收据中频繁出现 `PVO_MISSING_OR_EXPIRED` |证明服务缓存指标 + 发行者的 PVO 调度程序日志。 |重新生成过时的 PVO 工件，缩短旋转节奏，并确保每个 SDK 在 `expiry_slot` 之前刷新手柄。在证据包中包含证明服务指标以证明缓存已恢复。 |
 |重复 `AMX_LOCK_CONFLICT` 或 `AMX_TIMEOUT` | `iroha_amx_lock_conflicts_total`、`iroha_amx_prepare_ms` 以及受影响的交易清单。 |重新运行 Norito 静态分析器，更正读/写选择器（或拆分批次），并发布更新的清单固定装置，以便冲突计数器返回到基线。 |
 | `SETTLEMENT_ROUTER_UNAVAILABLE` 警报 |结算路由器日志 (`docs/settlement-router.md`)、金库缓冲区仪表板和受影响的收据。 |充值 XOR 缓冲区或将通道翻转为仅 XOR 模式，记录财务操作，并重新运行时隙验收测试以证明结算已恢复。 |

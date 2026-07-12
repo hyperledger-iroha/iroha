@@ -541,61 +541,23 @@ await torii.revokeSpaceDirectoryManifest(
 獲取 CLI 就緒示例以及返回完整現場指南的指針
 `docs/source/sdk/js/governance_iso_examples.md`。
 
-## RBC 採樣和交付證據
+## Sumeragi availability telemetry
 
-JS 路線圖還需要 Roadrunner 區塊承諾 (RBC) 抽樣，以便運營商可以
-證明他們通過 Sumeragi 獲取的塊與他們驗證的塊證明相匹配。
-使用內置的幫助程序而不是手動構建有效負載：
-
-1. `getSumeragiRbcSessions()` 鏡像 `/v1/sumeragi/rbc/sessions`，以及
-   `findRbcSamplingCandidate()` 使用塊哈希自動選擇第一個交付的會話
-   （集成套件每當
-   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` 未設置）。
-2. `ToriiClient.buildRbcSampleRequest(session, overrides)` 標準化 `{blockHash,height,view}`
-   加上可選的 `{count,seed,apiToken}` 覆蓋，因此格式錯誤的十六進製或負整數永遠不會
-   達到 Torii。
-3. `sampleRbcChunks()` 將請求 POST 到 `/v1/sumeragi/rbc/sample`，返回塊證明
-   和 Merkle 路徑（`samples[].chunkHex`、`chunkRoot`、`payloadHash`），您應該使用
-   其餘的收養證據。
-4. `getSumeragiRbcDelivered(height, view)` 捕獲隊列的交付元數據，以便審核員
-   可以端到端地重放證明。
+Reliable broadcast remains an internal Sumeragi v2 transport and recovery mechanism.
+The public Torii catalog exposes aggregate diagnostics through
+`GET /v1/sumeragi/telemetry`; it does not publish per-session RBC state, chunk
+samples, delivery probes, or a deterministic collector plan.
 
 ```js
-import assert from "node:assert";
-import { ToriiClient } from "@iroha/iroha-js";
-
-const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080", {
-  apiToken: process.env.TORII_API_TOKEN,
-});
-
-const candidate =
-  (await torii.findRbcSamplingCandidate().catch(() => null)) ??
-  (await torii.getSumeragiRbcSessions()).items.find((session) => session.delivered);
-if (!candidate) {
-  throw new Error("no delivered RBC session available; set IROHA_TORII_INTEGRATION_RBC_SAMPLE");
-}
-
-const request = ToriiClient.buildRbcSampleRequest(candidate, {
-  count: Number(process.env.RBC_SAMPLE_COUNT ?? 2),
-  seed: Number(process.env.RBC_SAMPLE_SEED ?? 0),
-  apiToken: process.env.RBC_SAMPLE_API_TOKEN ?? process.env.TORII_API_TOKEN,
-});
-
-const sample = await torii.sampleRbcChunks(request);
-sample.samples.forEach((chunk) => {
-  assert.ok(Buffer.from(chunk.chunkHex, "hex").length > 0, "chunk must be hex");
-});
-
-const delivery = await torii.getSumeragiRbcDelivered(sample.height, sample.view);
-console.log(
-  `rbc height=${sample.height} view=${sample.view} chunks=${sample.samples.length} delivered=${delivery?.delivered}`,
-);
+const telemetry = await torii.getSumeragiTelemetryTyped();
+console.log(`collector votes=${telemetry.availability.total_votes_ingested}`);
+console.log(`pending sessions=${telemetry.rbc_backlog.pending_sessions}`);
 ```
 
-將這兩個響應保留在您提交給治理的工件根下。覆蓋
-通過 `RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'` 自動選擇會話
-每當您需要探測特定塊時，並將獲取 RBC 快照失敗視為
-飛行前選通錯誤，而不是默默降級到直接模式。
+Archive `availability.collectors`, `rbc_backlog`, and `rbc_pending` from the raw
+telemetry response together with Prometheus counters and consensus logs. These
+fields are aggregate operational evidence and must not be treated as light-client
+chunk proofs or transaction-finality evidence.
 
 ## 測試和持續集成
 

@@ -30,9 +30,7 @@ use iroha_data_model::{
     isi::{
         CustomInstruction, GrantBox, InstructionBox, InstructionBox as DMInstructionBox,
         RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox,
-        error::InstructionExecutionError,
-        mint_burn::MintBox,
-        register::RegisterBox,
+        error::InstructionExecutionError, mint_burn::MintBox, register::RegisterBox,
     },
     metadata::Metadata,
     name::Name,
@@ -2247,6 +2245,21 @@ pub(crate) fn requested_contract_entrypoint(
         ));
     }
     Ok(entrypoint)
+}
+
+/// Require a by-reference invocation to match the exact live code binding
+/// authorized by its signer.
+pub(crate) fn ensure_contract_invocation_code_hash(
+    invocation: &ContractInvocation,
+    actual_code_hash: iroha_crypto::Hash,
+) -> Result<(), ValidationFail> {
+    if invocation.expected_code_hash != actual_code_hash {
+        return Err(ValidationFail::NotPermitted(format!(
+            "contract instance `{}` is bound to code `{actual_code_hash}`, not signed expected code `{}`",
+            invocation.contract_address, invocation.expected_code_hash
+        )));
+    }
+    Ok(())
 }
 
 fn requested_contract_address(
@@ -4585,6 +4598,7 @@ impl Executor {
                                 call.contract_address
                             ))
                         })?;
+                ensure_contract_invocation_code_hash(&call, identity.code_hash)?;
                 let contract_subject = code::fetch_bound_contract_subject(
                     state_transaction,
                     &identity.contract_address,
@@ -7050,6 +7064,7 @@ where
                         call.contract_address
                     ))
                 })?;
+            ensure_contract_invocation_code_hash(call, identity.code_hash)?;
             let code_bytes = state
                 .world()
                 .contract_code()
@@ -10477,6 +10492,7 @@ mod tests {
         .expect("derive DPN contract address");
         let call = iroha_data_model::transaction::executable::ContractInvocation {
             contract_address: contract_address.clone(),
+            expected_code_hash: iroha_crypto::Hash::new(b"dpn-contract-code"),
             entrypoint: entrypoint.to_owned(),
             arguments: None,
         };
@@ -10758,10 +10774,9 @@ mod tests {
             confidential::ConfidentialStatus,
             offline::{
                 KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
-                KagemushaRecursiveSpendArtifactBindingV3,
-                KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBundleV2,
-                KagemushaRecursiveSpendProofV2, KagemushaRecursiveSpendPublicStatementV2,
-                KagemushaRecursiveSpendRedeemRequestV2,
+                KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendBranchClaimV2,
+                KagemushaRecursiveSpendBundleV2, KagemushaRecursiveSpendProofV2,
+                KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendRedeemRequestV2,
                 KagemushaRecursiveSpendRedemptionIntentBuildRequestV2,
                 KagemushaRecursiveSpendTopUpAnchorV2, KagemushaRequestAuthorizationV2,
                 KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
@@ -12316,10 +12331,7 @@ mod tests {
         let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
             .with_name(asset_def_id.name().to_string())
             .build(&payer_id);
-        let payer_asset = Asset::new(
-            AssetId::of(asset_def_id.clone(), payer_id.clone()),
-            1_u32,
-        );
+        let payer_asset = Asset::new(AssetId::of(asset_def_id.clone(), payer_id.clone()), 1_u32);
         let world = World::with_assets([domain], [payer], [asset_definition], [payer_asset], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -13455,6 +13467,7 @@ seiyaku GuardedValue {
             .with_metadata(metadata)
             .with_executable(Executable::ContractCall(ContractInvocation {
                 contract_address: contract_address.clone(),
+                expected_code_hash: code_hash,
                 entrypoint: "write".to_owned(),
                 arguments: Some(arguments),
             }))
@@ -13747,6 +13760,34 @@ seiyaku IdentityRequired {
     }
 
     #[test]
+    fn contract_invocation_rejects_a_live_code_rebind() {
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &ALICE_ID,
+            77,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let signed_hash = iroha_crypto::Hash::new(b"signed-contract-code");
+        let live_hash = iroha_crypto::Hash::new(b"rebound-contract-code");
+        let invocation = ContractInvocation {
+            contract_address,
+            expected_code_hash: signed_hash,
+            entrypoint: "run".to_owned(),
+            arguments: None,
+        };
+
+        let error = ensure_contract_invocation_code_hash(&invocation, live_hash)
+            .expect_err("a signed call must not cross a live code rebind");
+        assert!(
+            matches!(error, ValidationFail::NotPermitted(message)
+                if message.contains(&signed_hash.to_string())
+                    && message.contains(&live_hash.to_string())),
+            "unexpected binding error: {error}"
+        );
+    }
+
+    #[test]
     fn contract_dispatch_context_carries_entrypoint_permission() {
         let (program, expected_entrypoint_pc) =
             contract_program_with_entrypoint("admin", Some("ContractAdmin"));
@@ -13778,6 +13819,7 @@ seiyaku IdentityRequired {
         .expect("derive contract address");
         let invocation = ContractInvocation {
             contract_address: contract_address.clone(),
+            expected_code_hash: iroha_crypto::Hash::new(b"admin-contract-code"),
             entrypoint: "admin".to_owned(),
             arguments: None,
         };
@@ -13818,6 +13860,7 @@ seiyaku IdentityRequired {
         .expect("derive contract address");
         let invocation = ContractInvocation {
             contract_address: contract_address.clone(),
+            expected_code_hash: iroha_crypto::Hash::new(b"configuration-contract-code"),
             entrypoint: "configuration".to_owned(),
             arguments: None,
         };
@@ -13861,6 +13904,7 @@ seiyaku IdentityRequired {
                 .expect("prepare lifecycle contract");
             let invocation = ContractInvocation {
                 contract_address: contract_address.clone(),
+                expected_code_hash: iroha_crypto::Hash::new(selector.as_bytes()),
                 entrypoint: selector.to_owned(),
                 arguments: None,
             };
@@ -13971,6 +14015,7 @@ seiyaku IdentityRequired {
             let (program, _) = contract_program_with_entrypoint_kind(selector, kind, None);
             let invocation = ContractInvocation {
                 contract_address: contract_address.clone(),
+                expected_code_hash: iroha_crypto::Hash::new(selector.as_bytes()),
                 entrypoint: selector.to_owned(),
                 arguments: None,
             };
@@ -14249,6 +14294,7 @@ seiyaku IdentityRequired {
         .expect("derive contract address");
         let invocation = ContractInvocation {
             contract_address,
+            expected_code_hash: iroha_crypto::Hash::new(b"malformed-argument-contract-code"),
             entrypoint: "run".to_owned(),
             arguments: Some(
                 iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(

@@ -89,8 +89,6 @@ class _MockState:
         self.sumeragi_status: Dict[str, Any] = {}
         self.sumeragi_leader: Dict[str, Any] = {}
         self.sumeragi_telemetry: Dict[str, Any] = {}
-        self.sumeragi_rbc_status: Dict[str, Any] = {}
-        self.sumeragi_rbc_sessions: Dict[str, Any] = {}
         self.pipeline_sequences: Dict[str, Dict[str, Any]] = {}
         self.pipeline_next_plan: Optional[Dict[str, Any]] = None
         self.pipeline_preflight: Dict[str, Any] = {}
@@ -231,10 +229,6 @@ class _MockState:
             return _json_response(HTTPStatus.OK, self.sumeragi_leader)
         if method == "GET" and path == "/v1/sumeragi/telemetry":
             return _json_response(HTTPStatus.OK, self.sumeragi_telemetry)
-        if method == "GET" and path == "/v1/sumeragi/rbc":
-            return _json_response(HTTPStatus.OK, self.sumeragi_rbc_status)
-        if method == "GET" and path == "/v1/sumeragi/rbc/sessions":
-            return _json_response(HTTPStatus.OK, self.sumeragi_rbc_sessions)
         if method == "GET" and path == "/v1/node/capabilities":
             return _json_response(HTTPStatus.OK, self.node_capabilities)
         if method == "GET" and path == "/v1/sccp/capabilities":
@@ -1912,38 +1906,6 @@ class _MockState:
                 "committed_no_reveal_total": 8,
                 "no_participation_total": 9,
             },
-        }
-        self.sumeragi_rbc_status = {
-            "sessions_active": 3,
-            "sessions_pruned_total": 2,
-            "ready_broadcasts_total": 5,
-            "deliver_broadcasts_total": 7,
-            "payload_bytes_delivered_total": 99,
-        }
-        self.sumeragi_rbc_sessions = {
-            "sessions_active": 2,
-            "items": [
-                {
-                    "block_hash": "feedfacecafebeef",
-                    "height": 42,
-                    "view": 8,
-                    "ready_count": 3,
-                    "total_chunks": 10,
-                    "received_chunks": 9,
-                    "delivered": True,
-                    "invalid": False,
-                },
-                {
-                    "block_hash": "deadbeefcafefeed",
-                    "height": 41,
-                    "view": 7,
-                    "ready_count": 2,
-                    "total_chunks": 8,
-                    "received_chunks": 8,
-                    "delivered": True,
-                    "invalid": False,
-                },
-            ],
         }
 
 

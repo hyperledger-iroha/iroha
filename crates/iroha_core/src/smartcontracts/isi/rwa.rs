@@ -318,19 +318,20 @@ pub mod isi {
                 return Ok(());
             }
 
-            let new_quantity = source_lot
-                .quantity
-                .clone()
-                .checked_sub(&quantity)
-                .map_err(|_| {
-                    Error::InvariantViolation(
-                        format!(
-                            "transfer quantity exceeds source quantity for RWA {}",
-                            source_lot.id()
+            let new_quantity =
+                source_lot
+                    .quantity
+                    .clone()
+                    .checked_sub(&quantity)
+                    .map_err(|_| {
+                        Error::InvariantViolation(
+                            format!(
+                                "transfer quantity exceeds source quantity for RWA {}",
+                                source_lot.id()
+                            )
+                            .into(),
                         )
-                        .into(),
-                    )
-                })?;
+                    })?;
             let child_id = state_transaction
                 .next_generated_rwa_id(source_lot.id().domain(), TransferRwa::WIRE_ID)?;
             if state_transaction.world.rwa(&child_id).is_ok() {
@@ -669,15 +670,11 @@ pub mod isi {
                 .clone()
                 .checked_add(&self.quantity)
                 .map_err(|_| Error::InvariantViolation("hold quantity overflow".into()))?;
-            let available_after = rwa
-                .quantity
-                .clone()
-                .checked_sub(&new_held)
-                .map_err(|_| {
-                    Error::InvariantViolation(
-                        format!("hold quantity exceeds total quantity for RWA {}", rwa.id()).into(),
-                    )
-                })?;
+            let available_after = rwa.quantity.clone().checked_sub(&new_held).map_err(|_| {
+                Error::InvariantViolation(
+                    format!("hold quantity exceeds total quantity for RWA {}", rwa.id()).into(),
+                )
+            })?;
             let _ = available_after;
             let rwa_mut = state_transaction.world.rwa_mut(&self.rwa)?;
             rwa_mut.held_quantity = new_held;

@@ -15,7 +15,7 @@ use integration_tests::{
     sandbox,
 };
 use iroha::{
-    client::{Client, MultisigProposalEntry, MultisigProposalsQueryRequest},
+    client::{Client, MultisigProposalEntry, MultisigProposalsListRequest},
     config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
     crypto::{ExposedPrivateKey, KeyPair},
     data_model::{
@@ -31,8 +31,8 @@ use iroha_test_samples::{
     ALICE_ID, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, gen_account_in, load_sample_ivm,
 };
 use iroha_torii::{
-    MultisigAccountSelectorDto, MultisigCancelRequestDto, MultisigProposalsLookupRequestDto,
-    MultisigProposalsQueryRequestDto,
+    MultisigAccountSelectorDto, MultisigCancelRequestDto, MultisigProposalsGetRequestDto,
+    MultisigProposalsListRequestDto,
 };
 use norito::json::Value as JsonValue;
 use reqwest::header::CONTENT_TYPE;
@@ -293,7 +293,7 @@ fn wait_for_multisig_proposal_status(
     proposal_id: &str,
     expected_status: &str,
 ) -> Result<JsonValue> {
-    let endpoint = format!("{torii_base}/v1/multisig/proposals/lookup");
+    let endpoint = format!("{torii_base}/v1/multisig/proposals/get");
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut last_status = None;
     let mut last_error = None;
@@ -302,7 +302,7 @@ fn wait_for_multisig_proposal_status(
         match post_torii_app_json(
             rt,
             &endpoint,
-            &MultisigProposalsLookupRequestDto {
+            &MultisigProposalsGetRequestDto {
                 selector: selector.clone(),
                 proposal_id: Some(proposal_id.to_owned()),
                 instructions_hash: None,
@@ -446,7 +446,7 @@ fn collect_multisig_proposals(
     let mut items = Vec::new();
 
     loop {
-        let response = client.post_multisig_proposals_query(&MultisigProposalsQueryRequest {
+        let response = client.post_multisig_proposals_list(&MultisigProposalsListRequest {
             multisig_account_id: Some(multisig_account_id.clone()),
             multisig_account_alias: None,
             status: vec![COLLECTING_SIGNATURES_STATUS.to_owned()],
@@ -710,8 +710,8 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
 
     let canceled_list = post_torii_app_json(
         &rt,
-        &format!("{torii_base}/v1/multisig/proposals/query"),
-        &MultisigProposalsQueryRequestDto {
+        &format!("{torii_base}/v1/multisig/proposals/list"),
+        &MultisigProposalsListRequestDto {
             selector,
             status: vec!["CANCELED".to_owned()],
             cursor: None,

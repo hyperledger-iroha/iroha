@@ -3698,14 +3698,10 @@ impl Kura {
         drop(store);
         drop(write_guard);
         if let Some(message) = deferred_da_recovery_fault {
-            let recovered = Error::IO(
-                std::io::Error::other(message),
-                da_rewrite_stage_path,
+            let recovered = Error::IO(std::io::Error::other(message), da_rewrite_stage_path);
+            return Err(
+                self.committed_recovery_failure("recovered committed DA block rewrite", &recovered)
             );
-            return Err(self.committed_recovery_failure(
-                "recovered committed DA block rewrite",
-                &recovered,
-            ));
         }
         // A stale association stage may describe an append whose marker never committed. Its
         // cleanup is an exact-retry precondition, not evidence that this invocation crossed a
@@ -9063,8 +9059,7 @@ impl Kura {
                 }
             },
             Err(
-                error
-                @ (Error::DaBlockRewriteCommitStateUnknown { .. }
+                error @ (Error::DaBlockRewriteCommitStateUnknown { .. }
                 | Error::CanonicalBlockCommittedRecoveryRequired { .. }
                 | Error::CanonicalStoragePoisoned),
             ) => {
@@ -12864,8 +12859,7 @@ impl Kura {
         }) {
             Ok(publication) => publication.into_result(self)?,
             Err(
-                error
-                @ (Error::DaBlockRewriteCommitStateUnknown { .. }
+                error @ (Error::DaBlockRewriteCommitStateUnknown { .. }
                 | Error::CanonicalBlockCommittedRecoveryRequired { .. }
                 | Error::CanonicalStoragePoisoned),
             ) => return Err(error),
@@ -13841,10 +13835,7 @@ impl Kura {
             .map(|marker| marker.count)
             .ok_or_else(|| {
                 Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::NotFound,
-                        "canonical commit marker is missing",
-                    ),
+                    std::io::Error::new(ErrorKind::NotFound, "canonical commit marker is missing"),
                     path,
                 )
             })
@@ -29230,8 +29221,7 @@ mod tests {
         let temp_dir = TempDir::new().expect("create Kura root");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let replacement = {
-            let (kura, _) =
-                Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
             let original = DummyBlocks::new().next();
             let original_hash = original.hash();
             kura.store_block(Arc::clone(&original))
@@ -29245,9 +29235,7 @@ mod tests {
                     |header| {
                         header.set_height(nonzero!(1_u64));
                         header.set_prev_block_hash(None);
-                        header.set_view_change_index(
-                            header.view_change_index().saturating_add(1),
-                        );
+                        header.set_view_change_index(header.view_change_index().saturating_add(1));
                     },
                 )
                 .into(),
@@ -35205,14 +35193,11 @@ mod tests {
         kura.store_block(Arc::clone(&original))
             .expect("store original block");
         let replacement: Arc<SignedBlock> = Arc::new(
-            ValidBlock::new_dummy_and_modify_header(
-                checked_keypair().private_key(),
-                |header| {
-                    header.set_height(nonzero!(1_u64));
-                    header.set_prev_block_hash(None);
-                    header.set_view_change_index(header.view_change_index().saturating_add(1));
-                },
-            )
+            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
+                header.set_height(nonzero!(1_u64));
+                header.set_prev_block_hash(None);
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
             .into(),
         );
         let replacement_hash = replacement.hash();
@@ -35279,8 +35264,7 @@ mod tests {
         let temp_dir = TempDir::new().expect("create Kura root");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let replacement = {
-            let (kura, _) =
-                Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
             let original = DummyBlocks::new().next();
             let original_hash = original.hash();
             kura.store_block(Arc::clone(&original))
@@ -35291,9 +35275,7 @@ mod tests {
                     |header| {
                         header.set_height(nonzero!(1_u64));
                         header.set_prev_block_hash(None);
-                        header.set_view_change_index(
-                            header.view_change_index().saturating_add(1),
-                        );
+                        header.set_view_change_index(header.view_change_index().saturating_add(1));
                     },
                 )
                 .into(),
@@ -35465,8 +35447,7 @@ mod tests {
         let temp_dir = TempDir::new().expect("create Kura root");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let block_hash = {
-            let (kura, _) =
-                Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
             let block = dummy_block_with_lane_payload_ownership(
                 lane_id,
                 DataSpaceId::UNIVERSAL,

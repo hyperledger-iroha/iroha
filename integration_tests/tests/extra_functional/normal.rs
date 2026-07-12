@@ -118,8 +118,7 @@ fn transactions_should_be_applied() -> Result<()> {
         target_height += 1;
         wait_for_height(target_height, "after first mint")?;
 
-        let mint_asset =
-            Mint::asset_quantity(1_u32, AssetId::new(asset_definition_id, account_id));
+        let mint_asset = Mint::asset_quantity(1_u32, AssetId::new(asset_definition_id, account_id));
         iroha.submit(mint_asset).wrap_err_with(|| {
             format!(
                 "submit second mint; torii={torii}, env_dir={}",

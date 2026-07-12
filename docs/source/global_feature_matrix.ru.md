@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 | Надежное вещание (транспортировка полезной нагрузки DA) | ◉ | Поток сообщений RBC (Init/Chunk/Ready/Deliver) включается, когда `da_enabled=true` в качестве пути транспортировки/восстановления; Доказательства доступности отслеживаются (рекомендательные), в то время как фиксация выполняется независимо. | status.md:последние |
 | Привязка корня состояния Commit QC | ◉ | В протоколах контроля качества фиксации указаны `parent_state_root`/`post_state_root`; отдельного вентиля исполнения-QC нет. | status.md:последние |
 | Распространение доказательств и конечные точки аудита | ◉ | ControlFlow::Evidence, конечные точки доказательств Torii и отрицательные тесты. | статус.md:176; status.md:760-761 |
-| Телеметрия РБК, метрики готовности/доставления | ◉ | `/v1/sumeragi/rbc*` конечные точки и счетчики/гистограммы телеметрии доступны операторам. | статус.md:283-284; статус.md:772 |
+| Aggregated RBC and collector telemetry | ◉ | `/v1/sumeragi/telemetry` exposes `availability.collectors`, `rbc_backlog`, and `rbc_pending`; Prometheus retains detailed counters and histograms. No per-session/sample/collector-plan Torii contract is published. | status.md:283-284; status.md:772 |
 | Объявление согласованных параметров и проверка топологии | ◉ | Узлы транслируют `(collectors_k, redundant_send_r)` и подтверждают равенство между узлами. | статус.md:255 |
 | Разрешенная ротация на основе PRF | ◉ | Разрешенный выбор лидера/сборщика использует начальное значение PRF + высоту/вид по каноническому списку; ротация prev-hash остается устаревшим помощником. | status.md:последние |
 

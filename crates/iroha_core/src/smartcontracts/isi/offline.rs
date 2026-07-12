@@ -4685,11 +4685,8 @@ pub mod isi {
         requested_height: u64,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<VerifyingKeyRecord, Error> {
-        let record = resolve_kagemusha_v2_recursive_verifier(
-            bundle,
-            requested_height,
-            state_transaction,
-        )?;
+        let record =
+            resolve_kagemusha_v2_recursive_verifier(bundle, requested_height, state_transaction)?;
         verify_kagemusha_v2_recursive_bundle_with_record(bundle, &record, state_transaction)?;
         Ok(record)
     }

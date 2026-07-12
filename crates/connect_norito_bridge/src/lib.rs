@@ -5263,6 +5263,10 @@ fn detached_transaction_executable_json(tx: &SignedTransaction) -> BridgeResult<
                     JsonValue::from(invocation.contract_address.to_string()),
                 ),
                 (
+                    "expected_code_hash".into(),
+                    JsonValue::from(invocation.expected_code_hash.to_string()),
+                ),
+                (
                     "entrypoint".into(),
                     JsonValue::from(invocation.entrypoint.clone()),
                 ),
@@ -10323,6 +10327,7 @@ mod detached_transaction_scaffold_tests {
                 .expect("contract address");
         let invocation = ContractInvocation {
             contract_address,
+            expected_code_hash: iroha_crypto::Hash::new(b"detached-contract-code"),
             entrypoint: "pay".to_owned(),
             arguments: Some(
                 ContractArgumentRecord::try_new(vec![0x01, 0x02, 0x03])
@@ -10402,6 +10407,13 @@ mod detached_transaction_scaffold_tests {
         assert_eq!(
             executable.get("entrypoint").and_then(JsonValue::as_str),
             Some("pay")
+        );
+        let expected_code_hash = iroha_crypto::Hash::new(b"detached-contract-code").to_string();
+        assert_eq!(
+            executable
+                .get("expected_code_hash")
+                .and_then(JsonValue::as_str),
+            Some(expected_code_hash.as_str())
         );
         assert_eq!(
             executable.get("arguments_b64").and_then(JsonValue::as_str),

@@ -279,12 +279,10 @@ impl Execute for RepoIsi {
         state_transaction
             .world
             .withdraw_numeric_asset(&collateral_source, collateral_leg.quantity().as_numeric())?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(
-                &collateral_destination,
-                collateral_leg.quantity().as_numeric(),
-            )?;
+        state_transaction.world.deposit_numeric_asset(
+            &collateral_destination,
+            collateral_leg.quantity().as_numeric(),
+        )?;
 
         let agreement = RepoAgreement::new(
             agreement_id.clone(),
@@ -505,12 +503,10 @@ impl Execute for ReverseRepoIsi {
         state_transaction
             .world
             .withdraw_numeric_asset(&collateral_source, collateral_leg.quantity().as_numeric())?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(
-                &collateral_destination,
-                collateral_leg.quantity().as_numeric(),
-            )?;
+        state_transaction.world.deposit_numeric_asset(
+            &collateral_destination,
+            collateral_leg.quantity().as_numeric(),
+        )?;
 
         state_transaction
             .world

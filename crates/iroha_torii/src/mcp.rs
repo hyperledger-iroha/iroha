@@ -359,7 +359,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_sumeragi_evidence_count_tool());
     tools.push(iroha_sumeragi_evidence_list_tool());
     tools.push(iroha_sumeragi_evidence_submit_tool());
-    tools.push(iroha_sumeragi_new_view_tool());
     tools.push(iroha_sumeragi_vrf_penalties_tool());
     tools.push(iroha_sumeragi_vrf_epoch_tool());
     tools.push(iroha_sumeragi_vrf_commit_tool());
@@ -692,7 +691,6 @@ fn is_manual_read_tool_name(name: &str) -> bool {
             | "iroha.node.query_projection_checkpoint_plan"
             | "iroha.node.query_projection_shard_catalog"
             | "iroha.queries.submit"
-            | "iroha.sumeragi.new_view"
             | "iroha.sumeragi.vrf.commit"
             | "iroha.sumeragi.vrf.reveal"
     ) || name.ends_with(".get")
@@ -1183,12 +1181,6 @@ async fn handle_tools_call(
         }
         "iroha.sumeragi.evidence.submit" => {
             match dispatch_iroha_sumeragi_evidence_submit(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.new_view" => {
-            match dispatch_iroha_sumeragi_new_view(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -3964,27 +3956,6 @@ async fn dispatch_iroha_sumeragi_evidence_submit(
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_sumeragi_new_view(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/sumeragi/new-view",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
         arguments
             .get("accept")
             .and_then(Value::as_str)
@@ -10159,27 +10130,6 @@ fn iroha_sumeragi_evidence_submit_tool() -> ToolSpec {
     }
 }
 
-fn iroha_sumeragi_new_view_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.new_view".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.new_view"),
-        description: "Fetch NEW_VIEW counters (`/v1/sumeragi/new-view`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/new-view".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
 fn iroha_sumeragi_vrf_penalties_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.vrf.penalties".to_owned(),
@@ -15605,11 +15555,6 @@ mod tests {
             tools
                 .iter()
                 .any(|tool| tool.name == "iroha.sumeragi.evidence.submit")
-        );
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.name == "iroha.sumeragi.new_view")
         );
         assert!(
             tools

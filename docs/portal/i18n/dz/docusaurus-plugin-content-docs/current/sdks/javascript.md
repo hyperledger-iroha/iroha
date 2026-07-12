@@ -465,61 +465,23 @@ I18NI000000161X གཞུང་སྐྱོང་ཨེ་པི་ཨའེ་�
 གི་དོན་ལུ་ CLI-red དཔེ་ཚད་ཚུ་ 2 ནང་ ས་སྒོ་ཆ་ཚང་ལམ་སྟོན་པ་ལུ་ ལོག་སྟེ་ དཔག་བྱེད་འབད།
 `docs/source/sdk/js/governance_iso_examples.md`.
 
-## RBC དཔེ་ཚད་དང་ བསྐྱེལ་འདྲེན་གྱི་བདེན་ཁུངས།
+## Sumeragi availability telemetry
 
-ཇེ་ཨེསི་ལམ་སྟོན་འདི་ཡང་ རོ་ཌི་རཱན་བཱོཀ་ཁས་བླངས་ (RBC) དགོཔ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ འབད་ཚུགས།
-Sumeragi བརྒྱུད་དེ་ཁོང་གིས་བདེན་དཔང་འབད་མི་ ཆ་ཤས་བདེན་ཁུངས་ཚུ་དང་མཐུན་སྒྲིག་ཡོདཔ་སྦེ་བདེན་དཔང་འབདཝ་ཨིན།
-ལགཔ་གིས་ གླ་ཆ་རྐྱབ་ནིའི་ཚབ་ལུ་ ནང་འཁོད་གྲོགས་རམ་པ་ཚུ་ ལག་ལེན་འཐབ།
-
-1. `getSumeragiRbcSessions()` `/v1/sumeragi/rbc/sessions`, དང་།
-   `findRbcSamplingCandidate()` རང་བཞིན་-སེལ་འཐུ་འབདཝ་ཨིན། དང་པ་ བཀྲམ་སྤེལ་འབད་ཡོད་པའི་ལཱ་ཡུན་འདི་ སྡེབ་ཚན་ཧེཤ་དང་གཅིག་ཁར་ སེལ་འཐུ་འབདཝ་ཨིན།
-   །མཉམ་པའི་ཆ་ཚན་འདི་ག་དུས་ལུ་ལོག་ལྷོདཔ་ཨིན།
-   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` མ་སྒྲིག་པས།)
-2. `ToriiClient.buildRbcSampleRequest(session, overrides)` སྤྱིར་བཏང་ང་ཡི་`{blockHash,height,view}`
-   གདམ་ཁ་ཅན་གྱི་ `{count,seed,apiToken}` འདི་ བརྒལ་འགྱོཝ་ལས་ ཧེགསི་ཡང་ན་ ངན་པའི་ཧྲིལ་གྲངས་ཚུ་ ནམ་ཡང་ ནམ་ཡང་མ་བྱུང་པས།
-   Torii ལུ་ལྷོད་ཡོདཔ།
-3. I18NI000000176X POSTs `/v1/sumeragi/rbc/sample` ལུ་ཞུ་བ་འབདཝ་ཨིན།
-   དང་ མེར་ཀལ་ལམ་ཚུ་ (`samples[].chunkHex`, `chunkRoot`, `payloadHash`) ཁྱོད་ཀྱིས་ཡིག་མཛོད་དང་གཅིག་ཁར་ གཏན་མཛོད་འབད་དགོ།
-   ཁྱོད་ཀྱི་ངོས་ལེན་གྱི་སྒྲུབ་བྱེད་གཞན་ཚུ།
-4. `getSumeragiRbcDelivered(height, view)` གིས་ སྡེ་ཚན་གྱི་བཀྲམ་སྤེལ་གྱི་མེ་ཊ་ཌེ་ཊ་འདི་ རྩིས་ཞིབ་པ་ཚུ་ བཟུང་དོ་ཡོདཔ་ཨིན།
-   མཐའ་མཇུག་ལས་མཇུག་ཚུན་ཚོད་ བདེན་ཁུངས་འདི་ ལོག་གཏང་ཚུགས།
+Reliable broadcast remains an internal Sumeragi v2 transport and recovery mechanism.
+The public Torii catalog exposes aggregate diagnostics through
+`GET /v1/sumeragi/telemetry`; it does not publish per-session RBC state, chunk
+samples, delivery probes, or a deterministic collector plan.
 
 ```js
-import assert from "node:assert";
-import { ToriiClient } from "@iroha/iroha-js";
-
-const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080", {
-  apiToken: process.env.TORII_API_TOKEN,
-});
-
-const candidate =
-  (await torii.findRbcSamplingCandidate().catch(() => null)) ??
-  (await torii.getSumeragiRbcSessions()).items.find((session) => session.delivered);
-if (!candidate) {
-  throw new Error("no delivered RBC session available; set IROHA_TORII_INTEGRATION_RBC_SAMPLE");
-}
-
-const request = ToriiClient.buildRbcSampleRequest(candidate, {
-  count: Number(process.env.RBC_SAMPLE_COUNT ?? 2),
-  seed: Number(process.env.RBC_SAMPLE_SEED ?? 0),
-  apiToken: process.env.RBC_SAMPLE_API_TOKEN ?? process.env.TORII_API_TOKEN,
-});
-
-const sample = await torii.sampleRbcChunks(request);
-sample.samples.forEach((chunk) => {
-  assert.ok(Buffer.from(chunk.chunkHex, "hex").length > 0, "chunk must be hex");
-});
-
-const delivery = await torii.getSumeragiRbcDelivered(sample.height, sample.view);
-console.log(
-  `rbc height=${sample.height} view=${sample.view} chunks=${sample.samples.length} delivered=${delivery?.delivered}`,
-);
+const telemetry = await torii.getSumeragiTelemetryTyped();
+console.log(`collector votes=${telemetry.availability.total_votes_ingested}`);
+console.log(`pending sessions=${telemetry.rbc_backlog.pending_sessions}`);
 ```
 
-ཁྱོད་ཀྱིས་ གཞུང་སྐྱོང་ལུ་ཕུལ་མི་ དངོས་པོ་རྩ་བའི་འོག་ལུ་ ལན་གཉིས་ཆ་རང་ བླུགས། དཀའ་སྤྱད་འབད།
-རང་བཞིན་སེལ་འཐུ་འབད་ཡོད་པའི་ལཱ་ཡུན་ `RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'` བརྒྱུད་དེ།
-ཁྱོད་ཀྱིས་ དམིགས་བསལ་གྱི་བཀག་ཆ་ཅིག་ འཚོལ་ཞིབ་འབད་དགོཔ་ད་ དེ་ལས་ RBC གི་པར་ཚུ་ འཐོབ་མ་ཚུགས་པའི་ འཐུས་ཤོར་ཚུ་ བརྩི་འཇོག་འབད་དགོ།
-ཐད་ཀར་གྱི་ཐབས་ལམ་ལུ་ ཁུ་སིམ་སིམ་སྦེ་ མར་ཕབ་འབད་ནི་ལས་ འཕུར་འགྲུལ་གྱི་ཧེ་མའི་ གཱ་ཊིང་འཛོལ་བ་།
+Archive `availability.collectors`, `rbc_backlog`, and `rbc_pending` from the raw
+telemetry response together with Prometheus counters and consensus logs. These
+fields are aggregate operational evidence and must not be treated as light-client
+chunk proofs or transaction-finality evidence.
 
 ## བརྟག་དཔྱད་དང་སི་ཨའི།
 

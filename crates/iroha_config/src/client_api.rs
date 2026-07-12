@@ -834,9 +834,7 @@ impl From<&base::Sumeragi> for Consensus {
             base::NodeRole::Observer => "observer",
         };
         Self {
-            protocol_version: u32::from(
-                iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
-            ),
+            protocol_version: u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION),
             role: role.to_owned(),
             round_timeout_ms: u64::try_from(value.round_timeout.as_millis())
                 .expect("parsed round timeout originated as u64 milliseconds"),
@@ -2274,9 +2272,10 @@ impl<'a> FastFromJson<'a> for Consensus {
             w.expect_colon_resync()?;
             match kh {
                 x if x == kh_protocol && w.last_key() == "protocol_version" => {
-                    protocol_version = Some(u32::try_from(w.parse_u64_inline()?).map_err(|_| {
-                        NoritoError::Message("protocol_version too large".into())
-                    })?);
+                    protocol_version =
+                        Some(u32::try_from(w.parse_u64_inline()?).map_err(|_| {
+                            NoritoError::Message("protocol_version too large".into())
+                        })?);
                 }
                 x if x == kh_role && w.last_key() == "role" => {
                     let sref = w.parse_string_ref_inline(arena)?;

@@ -204,9 +204,9 @@ impl V2IoHandle {
                                     work_id: task.id(),
                                     reference,
                                 }),
-                                Err(error) if error.requires_restart_recovery() => Ok(
-                                    V2IoCompletion::RecoveryRequired(error.to_string()),
-                                ),
+                                Err(error) if error.requires_restart_recovery() => {
+                                    Ok(V2IoCompletion::RecoveryRequired(error.to_string()))
+                                }
                                 Err(error) => Err(error.to_string()),
                             }
                         }
@@ -720,8 +720,7 @@ impl ProductionV2Services {
         if !self.pending_candidate_loads.insert(tag) {
             return Ok(());
         }
-        if let Err(error) = self.enqueue_io(V2IoCommand::LoadCandidate { tag, subject })
-        {
+        if let Err(error) = self.enqueue_io(V2IoCommand::LoadCandidate { tag, subject }) {
             self.pending_candidate_loads.remove(&tag);
             return Err(error);
         }
@@ -906,10 +905,8 @@ impl ProductionV2Services {
         executor: &mut V2EffectExecutor,
     ) -> Result<usize, EffectExecutorError> {
         if self.output_guard.restart_required() {
-            return Err(executor.external_service_failed(
-                "Sumeragi v2 consensus requires process restart",
-                self,
-            ));
+            return Err(executor
+                .external_service_failed("Sumeragi v2 consensus requires process restart", self));
         }
         let mut completions = Vec::new();
         if let Some(io) = self.io.as_ref() {
@@ -1154,9 +1151,9 @@ impl ProductionV2Services {
     }
 
     fn output_permit(&self) -> Result<ConsensusOutputPermit<'_>, String> {
-        self.output_guard.acquire().ok_or_else(|| {
-            "Sumeragi v2 canonical persistence requires restart recovery".to_owned()
-        })
+        self.output_guard
+            .acquire()
+            .ok_or_else(|| "Sumeragi v2 canonical persistence requires restart recovery".to_owned())
     }
 
     fn enqueue_io(&self, command: V2IoCommand) -> Result<(), String> {
@@ -1759,14 +1756,16 @@ mod tests {
             b"blocked body",
         )
         .expect("encode bounded payload");
-        service.prepared_candidates.push_back(PreparedCandidateBody {
-            tag: EventTag::new(1, 0, iroha_sumeragi_core::Generation::new(1)),
-            subject: wire::BlockSubject {
-                parent_block_hash: None,
-                block_hash: HashOf::from_untyped_unchecked(Hash::new(b"blocked candidate")),
-                payload_hash: Hash::new(b"blocked payload"),
-            },
-        });
+        service
+            .prepared_candidates
+            .push_back(PreparedCandidateBody {
+                tag: EventTag::new(1, 0, iroha_sumeragi_core::Generation::new(1)),
+                subject: wire::BlockSubject {
+                    parent_block_hash: None,
+                    block_hash: HashOf::from_untyped_unchecked(Hash::new(b"blocked candidate")),
+                    payload_hash: Hash::new(b"blocked payload"),
+                },
+            });
         service.output_guard.activate_restart_required();
 
         assert!(service.take_prepared_candidate().is_none());

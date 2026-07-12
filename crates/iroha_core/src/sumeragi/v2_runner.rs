@@ -393,7 +393,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                         *tag == prepared.tag()
                             && *subject == prepared.subject()
                             && executor.current_tag() == prepared.tag()
-                });
+                    });
                 if matches && let Some((_, _, events)) = pending_local_events.take() {
                     let Some(_permit) = output_guard.acquire() else {
                         return Err(V2RunnerError::RestartRequired);

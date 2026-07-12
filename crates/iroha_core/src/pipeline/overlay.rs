@@ -2218,6 +2218,8 @@ where
                         call.contract_address
                     ))
                 })?;
+            crate::executor::ensure_contract_invocation_code_hash(call, identity.code_hash)
+                .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
             let code_hash = identity.code_hash;
             let manifest = state_ro
                 .world()
@@ -2775,6 +2777,8 @@ where
                         call.contract_address
                     ))
                 })?;
+            crate::executor::ensure_contract_invocation_code_hash(call, identity.code_hash)
+                .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
             let code_hash = identity.code_hash;
             let manifest = state_ro
                 .world()
@@ -3273,6 +3277,8 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                         call.contract_address
                     ))
                 })?;
+            crate::executor::ensure_contract_invocation_code_hash(call, identity.code_hash)
+                .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
             let code_hash = identity.code_hash;
             let manifest = state_ro
                 .world()
@@ -4126,6 +4132,7 @@ mod tests_overlay_manifest {
                 .with_metadata(tx_metadata)
                 .with_executable(Executable::ContractCall(ContractInvocation {
                     contract_address: contract_address.clone(),
+                    expected_code_hash: code_hash,
                     entrypoint: "hajimari".to_owned(),
                     arguments: None,
                 }))
@@ -4287,7 +4294,11 @@ mod tests_overlay_manifest {
     #[test]
     fn state_free_generic_overlay_rejects_reserved_contract_metadata_before_execution() {
         let (authority, keypair) = gen_account_in("wonderland");
-        for reserved_key in ["contract_entrypoint", "contract_payload", "contract_address"] {
+        for reserved_key in [
+            "contract_entrypoint",
+            "contract_payload",
+            "contract_address",
+        ] {
             let mut metadata = Metadata::default();
             insert_gas_limit(&mut metadata);
             metadata.insert(
@@ -4470,6 +4481,7 @@ seiyaku RebuildArguments {
         .expect("derive rebuild contract address");
         let invocation = ContractInvocation {
             contract_address,
+            expected_code_hash: Hash::new(b"rebuild-contract-code"),
             entrypoint: "inspect".to_owned(),
             arguments: Some(arguments),
         };
@@ -4679,6 +4691,7 @@ seiyaku ProtectedParameterizedOverlay {
             .with_metadata(metadata)
             .with_executable(Executable::ContractCall(ContractInvocation {
                 contract_address,
+                expected_code_hash: code_hash,
                 entrypoint: "write".to_owned(),
                 arguments: Some(arguments),
             }))
@@ -4771,6 +4784,7 @@ seiyaku ProtectedParameterizedOverlay {
                 .with_metadata(metadata)
                 .with_executable(Executable::ContractCall(ContractInvocation {
                     contract_address: contract_address.clone(),
+                    expected_code_hash: code_hash,
                     entrypoint: "main".to_owned(),
                     arguments: None,
                 }))
@@ -4786,6 +4800,35 @@ seiyaku ProtectedParameterizedOverlay {
                     if message.contains(REQUIRED_PERMISSION) && message.contains("main")
             ),
             "unexpected authorization error: {denied:?}"
+        );
+
+        let (rebound_artifact, rebound_manifest) =
+            minimal_contract_artifact_with_permission(1, Some("ReboundPermission"));
+        let rebound_code_hash = rebound_manifest.code_hash.expect("rebound code hash");
+        assert_ne!(rebound_code_hash, code_hash);
+        let mut rebound_state = make_state(true);
+        rebound_state
+            .world
+            .contract_code
+            .insert(rebound_code_hash, rebound_artifact);
+        rebound_state
+            .world
+            .contract_manifests
+            .insert(rebound_code_hash, rebound_manifest);
+        rebound_state
+            .world
+            .contract_instances
+            .insert(contract_address.clone(), rebound_code_hash);
+        let rebound_error = build_overlay_for_transaction(&transaction, &rebound_state.view())
+            .expect_err("a signed call must not execute after its address is rebound");
+        assert!(
+            matches!(
+                &rebound_error,
+                OverlayBuildError::ContractCall(message)
+                    if message.contains(&code_hash.to_string())
+                        && message.contains(&rebound_code_hash.to_string())
+            ),
+            "unexpected code-binding error: {rebound_error:?}"
         );
 
         let authorized_state = make_state(true);

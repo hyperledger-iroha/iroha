@@ -11,8 +11,7 @@ use std::{
 };
 
 use ivm::prebuilt_fixtures::{
-    SYNTHETIC_EXECUTOR_FIXTURES, build_default_executor_program,
-    build_synthetic_executor_program,
+    SYNTHETIC_EXECUTOR_FIXTURES, build_default_executor_program, build_synthetic_executor_program,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,14 +47,16 @@ fn publish(path: &Path, expected: &[u8], mode: Mode) -> Result<(), String> {
         return Ok(());
     }
     if mode == Mode::Check {
-        return Err(format!("stale or missing generated fixture {}", path.display()));
+        return Err(format!(
+            "stale or missing generated fixture {}",
+            path.display()
+        ));
     }
 
     let parent = path
         .parent()
         .ok_or_else(|| format!("fixture has no parent: {}", path.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("create {}: {error}", parent.display()))?;
+    fs::create_dir_all(parent).map_err(|error| format!("create {}: {error}", parent.display()))?;
     let file_name = path
         .file_name()
         .and_then(|value| value.to_str())
@@ -128,14 +129,8 @@ mod tests {
 
     #[test]
     fn command_requires_an_explicit_non_mutating_or_mutating_mode() {
-        assert_eq!(
-            parse_mode_from(&["--check".to_owned()]),
-            Ok(Mode::Check)
-        );
-        assert_eq!(
-            parse_mode_from(&["--write".to_owned()]),
-            Ok(Mode::Write)
-        );
+        assert_eq!(parse_mode_from(&["--check".to_owned()]), Ok(Mode::Check));
+        assert_eq!(parse_mode_from(&["--write".to_owned()]), Ok(Mode::Write));
         assert!(parse_mode_from(&[]).is_err());
         assert!(parse_mode_from(&["--write".to_owned(), "extra".to_owned()]).is_err());
     }

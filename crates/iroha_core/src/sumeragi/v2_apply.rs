@@ -281,9 +281,12 @@ impl V2ApplyService {
                 V2ApplyError::committed_recovery_required("post-apply metadata", &error)
             })?;
 
-        let receipt = self.kura.store_v2_finality_artifact(&artifact).map_err(|error| {
-            V2ApplyError::committed_recovery_required("v2 finality artifact", &error)
-        })?;
+        let receipt = self
+            .kura
+            .store_v2_finality_artifact(&artifact)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required("v2 finality artifact", &error)
+            })?;
         self.kura
             .promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
             .map_err(|error| {
@@ -435,11 +438,9 @@ impl V2ApplyService {
             commit_topology,
             None,
         );
-        state_block
-            .commit()
-            .map_err(|error| {
-                V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
-            })?;
+        state_block.commit().map_err(|error| {
+            V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
+        })?;
 
         self.queue.remove_committed_hashes(
             committed_block
@@ -654,9 +655,11 @@ mod tests {
             .requires_restart_recovery()
         );
         assert!(
-            V2ApplyError::Kura(crate::kura::Error::CanonicalBlockCommittedRecoveryRequired {
-                detail: "new marker won".to_owned(),
-            })
+            V2ApplyError::Kura(
+                crate::kura::Error::CanonicalBlockCommittedRecoveryRequired {
+                    detail: "new marker won".to_owned(),
+                }
+            )
             .requires_restart_recovery()
         );
         assert!(

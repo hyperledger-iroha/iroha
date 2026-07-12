@@ -2249,7 +2249,6 @@ mod tests {
             parse_vk_id_pair("stark/fri/poseidon2-goldilocks:vk_stark").expect("stark vk id");
         assert_eq!(parsed.backend.as_str(), "stark/fri/poseidon2-goldilocks");
         assert_eq!(parsed.name.as_str(), "vk_stark");
-
     }
 
     #[test]

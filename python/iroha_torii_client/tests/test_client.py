@@ -18,6 +18,8 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
 
+import iroha_torii_client as torii_module  # noqa: E402
+import iroha_torii_client.client as client_module  # noqa: E402
 from iroha_torii_client import (  # noqa: E402  (import depends on sys.path mutation)
     ContractCallResponse,
     ContractOperationReceipt,
@@ -2260,6 +2262,31 @@ def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
         server.stop()
 
 
+@pytest.mark.parametrize(
+    ("method", "path"),
+    (
+        ("GET", "/v1/sumeragi/rbc"),
+        ("GET", "/v1/sumeragi/rbc/delivered/1/0"),
+        ("GET", "/v1/sumeragi/rbc/sessions"),
+        ("POST", "/v1/sumeragi/rbc/sample"),
+        ("GET", "/v1/sumeragi/collectors"),
+    ),
+)
+def test_mock_server_rejects_retired_global_sumeragi_routes(method: str, path: str) -> None:
+    server = ToriiMockServer().start()
+    try:
+        response = requests.request(
+            method,
+            f"{server.base_url.rstrip('/')}{path}",
+            json={} if method == "POST" else None,
+            timeout=5.0,
+        )
+
+        assert response.status_code == 404
+    finally:
+        server.stop()
+
+
 def test_contract_bundle_helpers_against_mock_server() -> None:
     server = ToriiMockServer().start()
     try:
@@ -3188,33 +3215,33 @@ def test_get_sumeragi_leader_parses_prf() -> None:
     assert session.calls[0]["url"].endswith("/v1/sumeragi/leader")
 
 
-def test_get_sumeragi_collectors_parses_entries() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "consensus_mode": "Permissioned",
-                "mode": "Permissioned",
-                "topology_len": 7,
-                "min_votes_for_commit": 5,
-                "proxy_tail_index": 2,
-                "height": 11,
-                "view": 3,
-                "collectors_k": 4,
-                "redundant_send_r": 1,
-                "epoch_seed": "abcd",
-                "collectors": [{"index": 0, "peer_id": "peer#0"}, {"index": 1, "peer_id": "peer#1"}],
-                "prf": {"height": 11, "view": 3, "epoch_seed": None},
-            }
-        )
+def test_retired_global_sumeragi_rbc_and_collectors_surfaces_are_absent() -> None:
+    retired_methods = (
+        "get_sumeragi_rbc",
+        "get_sumeragi_rbc_sessions",
+        "get_sumeragi_rbc_delivered",
+        "sample_rbc_chunks",
+        "get_sumeragi_collectors",
     )
-    client = ToriiClient("http://node.test", session=session)
+    for name in retired_methods:
+        assert not hasattr(ToriiClient, name), name
 
-    collectors = client.get_sumeragi_collectors()
-
-    assert collectors.collectors_k == 4
-    assert collectors.collectors[1].peer_id == "peer#1"
-    assert session.calls[0]["url"].endswith("/v1/sumeragi/collectors")
+    retired_models = (
+        "SumeragiRbcSnapshot",
+        "SumeragiRbcSession",
+        "SumeragiRbcSessionsSnapshot",
+        "SumeragiRbcDeliveryStatus",
+        "SumeragiCollectorEntry",
+        "SumeragiCollectorsSnapshot",
+        "RbcSample",
+        "RbcChunkSample",
+        "RbcMerkleProof",
+    )
+    for name in retired_models:
+        assert not hasattr(client_module, name), name
+        assert name not in client_module.__all__, name
+        assert not hasattr(torii_module, name), name
+        assert name not in torii_module.__all__, name
 
 
 def test_get_sumeragi_params_parses_flags() -> None:
@@ -3437,159 +3464,6 @@ def test_get_time_status_parses_diagnostics() -> None:
     assert status.rtt_buckets[1].upper_bound_ms == 50
     assert status.rtt_sum_ms == 28
     assert status.note == "NTS running"
-
-
-def test_get_sumeragi_rbc_snapshot() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "sessions_active": 2,
-                "sessions_pruned_total": 7,
-                "ready_broadcasts_total": 11,
-                "deliver_broadcasts_total": 13,
-                "payload_bytes_delivered_total": 1024,
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    snapshot = client.get_sumeragi_rbc()
-
-    assert snapshot.sessions_active == 2
-    assert snapshot.payload_bytes_delivered_total == 1024
-    call = session.calls[0]
-    assert call["method"] == "GET"
-    assert call["url"].endswith("/v1/sumeragi/rbc")
-
-
-def test_get_sumeragi_rbc_sessions_snapshot() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "sessions_active": 1,
-                "items": [
-                    {
-                        "block_hash": "AA55",
-                        "height": 42,
-                        "view": 3,
-                        "total_chunks": 8,
-                        "received_chunks": 4,
-                        "ready_count": 2,
-                        "delivered": True,
-                        "invalid": False,
-                        "payload_hash": "FF",
-                        "recovered": False,
-                    }
-                ],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    sessions = client.get_sumeragi_rbc_sessions()
-
-    assert sessions.sessions_active == 1
-    assert len(sessions.items) == 1
-    assert sessions.items[0].block_hash == "AA55"
-    assert sessions.items[0].delivered is True
-    assert session.calls[0]["url"].endswith("/v1/sumeragi/rbc/sessions")
-
-
-def test_get_sumeragi_rbc_delivered_flow() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(status_code=404))
-    session.queue(
-        StubResponse(
-            payload={
-                "height": 5,
-                "view": 1,
-                "delivered": True,
-                "present": True,
-                "block_hash": "DEADBEEF",
-                "ready_count": 7,
-                "received_chunks": 8,
-                "total_chunks": 10,
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    assert client.get_sumeragi_rbc_delivered(5, 1) is None
-    status = client.get_sumeragi_rbc_delivered(height="5", view="1")
-
-    assert status is not None
-    assert status.block_hash == "DEADBEEF"
-    assert status.ready_count == 7
-    assert session.calls[1]["url"].endswith("/v1/sumeragi/rbc/delivered/5/1")
-
-
-def test_sample_rbc_chunks_posts_payload() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "block_hash": "AA",
-                "height": 9,
-                "view": 0,
-                "total_chunks": 16,
-                "chunk_root": "BB",
-                "payload_hash": None,
-                "samples": [
-                    {
-                        "index": 0,
-                        "chunk_hex": "CC",
-                        "digest_hex": "DD",
-                        "proof": {
-                            "leaf_index": 0,
-                            "depth": 2,
-                            "audit_path": ["11", None],
-                        },
-                    }
-                ],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    sample = client.sample_rbc_chunks(
-        block_hash="AA",
-        height=9,
-        view=0,
-        count=2,
-        seed="10",
-        api_token="secret-token",
-    )
-
-    assert sample is not None
-    assert sample.block_hash == "AA"
-    assert sample.samples[0].proof.audit_path[0] == "11"
-
-    call = session.calls[0]
-    assert call["method"] == "POST"
-    assert call["url"].endswith("/v1/sumeragi/rbc/sample")
-    assert call["headers"]["X-API-Token"] == "secret-token"
-    assert json.loads(call["data"]) == {
-        "block_hash": "AA",
-        "height": 9,
-        "view": 0,
-        "count": 2,
-        "seed": 10,
-    }
-
-
-def test_sample_rbc_chunks_requires_token() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(status_code=401))
-    client = ToriiClient("http://node.test", session=session)
-
-    try:
-        client.sample_rbc_chunks(block_hash="AA", height=1, view=0)
-    except RuntimeError as exc:
-        assert "requires a valid X-API-Token" in str(exc)
-    else:
-        raise AssertionError("expected RuntimeError for missing RBC token")
 
 
 def test_list_kaigi_relays_parses_summary() -> None:

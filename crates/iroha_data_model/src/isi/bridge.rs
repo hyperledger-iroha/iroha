@@ -758,8 +758,8 @@ mod tests {
     #[test]
     fn record_bridge_receipt_json_rejects_unknown_instruction_fields() {
         let instruction = RecordBridgeReceipt::new(receipt());
-        let canonical = norito::json::to_json(&instruction)
-            .expect("serialize bridge receipt instruction JSON");
+        let canonical =
+            norito::json::to_json(&instruction).expect("serialize bridge receipt instruction JSON");
         assert_eq!(
             norito::json::from_json::<RecordBridgeReceipt>(&canonical)
                 .expect("canonical bridge receipt instruction JSON decodes"),

@@ -16,15 +16,6 @@ translation_last_reviewed: 2026-01-01
 تسرد هذه الصفحة نقاط نهاية غير توافقية موجهة للمشغّلين تساعد في الرؤية واستكشاف الأعطال. الاستجابات بصيغة JSON ما لم يُذكر خلاف ذلك.
 
 التوافق (Sumeragi)
-- GET `/v1/sumeragi/new-view`
-  - لقطة لعدّادات استلام NEW_VIEW لكل `(height, view)`.
-  - الشكل: `{ "ts_ms": <u64>, "items": [{ "height": <u64>, "view": <u64>, "count": <u64> }, ...] }`
-  - مثال:
-    - `curl -s http://127.0.0.1:8080/v1/sumeragi/new-view | jq .`
-- GET `/v1/sumeragi/new-view/sse` (SSE)
-  - تدفق دوري (≈1 ث) لنفس الحمولة لأجل لوحات المتابعة.
-  - مثال:
-    - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new-view/sse`
 - المقاييس: عدادات `sumeragi_new_view_receipts_by_hv{height,view}` تعكس الأعداد.
 - GET `/v1/sumeragi/status`
   - لقطة لمؤشر القائد، Highest/Locked QCs (`highest_qc`/`locked_qc` مع الارتفاعات والمشاهدات وتجزئات الموضوع)، عدادات المجمّعين/VRF، تأجيلات pacemaker، عمق طابور المعاملات، وصحة مخزن RBC (`rbc_store.{sessions,bytes,pressure_level,persist_drops_total,evictions_total,recent_evictions[...]}`).
@@ -36,16 +27,11 @@ translation_last_reviewed: 2026-01-01
   - مؤقتات/إعدادات pacemaker: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
 - GET `/v1/sumeragi/leader`
   - لقطة لمؤشر القائد. في وضع NPoS تتضمن سياق PRF: `{ height, view, epoch_seed }`.
-- GET `/v1/sumeragi/collectors`
-  - خطة مجمّعين حتمية مشتقة من الطوبولوجيا المُلتزم بها والمعلمات على السلسلة: تصدر `mode` وخطة `(height, view)` (مع `height` مساويًا لارتفاع السلسلة الحالي)، و`collectors_k` و`redundant_send_r` و`proxy_tail_index` و`min_votes_for_commit` والقائمة المرتبة للمجمّعين، و`epoch_seed` (hex) عند تفعيل NPoS.
+- GET `/v1/sumeragi/telemetry`
+  - Aggregated consensus telemetry: `availability.collectors` contains observed collector indices, peer IDs, and ingested-vote counts; `rbc_backlog` contains missing-chunk totals; `rbc_pending` contains bounded pre-session queue totals, drops, and limits. This is not a deterministic collector plan or a per-session RBC contract.
 - GET `/v1/sumeragi/params`
   - لقطة لمعلمات Sumeragi على السلسلة `{ block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
-  - عندما تكون `da_enabled` true، يتم تتبع دليل التوفر (`availability evidence` أو RBC `READY`) لكن الالتزام لا ينتظرها؛ كما أن `DELIVER` المحلي لـ RBC ليس شرطًا. يمكن للمشغّلين تأكيد سلامة نقل الحمولة عبر نقاط نهاية RBC أدناه.
-- GET `/v1/sumeragi/rbc`
-  - عدادات Reliable Broadcast الإجمالية: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.
-- GET `/v1/sumeragi/rbc/sessions`
-  - لقطة لحالة كل جلسة (تجزئة الكتلة، height/view، عدادات القطع، علامة delivered، مؤشر `invalid`، تجزئة الحمولة، وقيمة recovered) لتشخيص تعطل تسليم RBC وإبراز الجلسات المستعادة بعد إعادة التشغيل.
-  - اختصار CLI: `iroha --output-format text ops sumeragi rbc sessions` يطبع `hash` و`height/view` وتقدّم القطع وعدد ready وعلامات invalid/delivered.
+  - When `da_enabled` is true, availability evidence is tracked but does not gate commit; local payload is required and can be satisfied via RBC `DELIVER` or block sync. Use the aggregated telemetry endpoint, Prometheus counters, status snapshots, and logs to diagnose payload transport.
 
 الأدلة (تدقيق؛ خارج التوافق)
 - GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
@@ -83,38 +69,5 @@ translation_last_reviewed: 2026-01-01
 ملاحظات
 - هذه النقاط هي مشاهد محلية للعقدة (في الذاكرة حيثما ذُكر) ولا تؤثر على التوافق أو التخزين.
 - قد تُحمى الوصولات برموز API ومصادقة المشغّل (WebAuthn/mTLS) وحدود المعدل حسب إعدادات Torii.
-
-مقتطفات CLI للمراقبة (bash)
-
-- استعلام عن لقطة JSON كل 2 ث (يطبع آخر 10 إدخالات):
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-TORII="${TORII:-http://127.0.0.1:8080}"
-INTERVAL="${INTERVAL:-2}"
-TOKEN="${TOKEN:-}"
-HDR=()
-if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
-while true; do
-  curl -s "${HDR[@]}" "$TORII/v1/sumeragi/new-view" \
-    | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
-  sleep "$INTERVAL"
-done
-```
-
-- متابعة تدفق SSE مع تنسيق (آخر 10 إدخالات):
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-TORII="${TORII:-http://127.0.0.1:8080}"
-TOKEN="${TOKEN:-}"
-HDR=()
-if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
-curl -Ns "${HDR[@]}" "$TORII/v1/sumeragi/new-view/sse" \
-  | awk '/^data:/{sub(/^data: /,""); print}' \
-  | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
-```
 
 </div>

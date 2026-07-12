@@ -64,12 +64,10 @@ impl ConsensusOutputGuard {
 
     /// Permanently stop new output and drain output already admitted by this guard.
     pub(crate) fn activate_restart_required(&self) {
-        match self.state.compare_exchange(
-            OPEN,
-            ACTIVATING,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
+        match self
+            .state
+            .compare_exchange(OPEN, ACTIVATING, Ordering::AcqRel, Ordering::Acquire)
+        {
             Ok(_) => {
                 let guard = match self.output.write() {
                     Ok(guard) => guard,

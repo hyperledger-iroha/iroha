@@ -62,6 +62,7 @@ public enum NativeBridgeJSONValue: Codable, Sendable, Equatable {
 
 public struct DetachedContractCallInspection: Sendable, Equatable {
     public let contractAddress: String
+    public let expectedCodeHash: String
     public let entrypoint: String
     public let arguments: Data?
 }
@@ -167,11 +168,13 @@ private enum ExecutableDTO: Decodable {
 
 private struct ContractCallDTO: Decodable {
     let contractAddress: String
+    let expectedCodeHash: String
     let entrypoint: String
     let argumentsB64: String?
 
     enum CodingKeys: String, CodingKey {
         case contractAddress = "contract_address"
+        case expectedCodeHash = "expected_code_hash"
         case entrypoint
         case argumentsB64 = "arguments_b64"
     }
@@ -233,7 +236,9 @@ enum DetachedTransactionBridgeJSONCodec {
         let executable: DetachedTransactionExecutableInspection
         switch dto.executable {
         case let .contractCall(call):
-            guard !call.contractAddress.isEmpty, !call.entrypoint.isEmpty else {
+            guard !call.contractAddress.isEmpty,
+                  !call.expectedCodeHash.isEmpty,
+                  !call.entrypoint.isEmpty else {
                 throw NativeBridgeError.invalidDetachedTransactionOutput
             }
             let arguments: Data?
@@ -249,6 +254,7 @@ enum DetachedTransactionBridgeJSONCodec {
             executable = .contractCall(
                 DetachedContractCallInspection(
                     contractAddress: call.contractAddress,
+                    expectedCodeHash: call.expectedCodeHash,
                     entrypoint: call.entrypoint,
                     arguments: arguments
                 )
@@ -340,7 +346,7 @@ enum DetachedTransactionBridgeJSONCodec {
         switch kind {
         case "contract_call":
             guard Set(executable.keys) == [
-                "kind", "contract_address", "entrypoint", "arguments_b64",
+                "kind", "contract_address", "expected_code_hash", "entrypoint", "arguments_b64",
             ] else {
                 throw NativeBridgeError.invalidDetachedTransactionOutput
             }

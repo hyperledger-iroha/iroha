@@ -29,8 +29,6 @@ mod sumeragi_npos_pacemaker_latency;
 mod sumeragi_npos_performance;
 #[path = "sumeragi_npos_stake_activation.rs"]
 mod sumeragi_npos_stake_activation;
-#[path = "sumeragi_prf_collectors.rs"]
-mod sumeragi_prf_collectors;
 #[path = "sumeragi_randomness.rs"]
 mod sumeragi_randomness;
 #[path = "sumeragi_rotation.rs"]

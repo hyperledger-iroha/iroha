@@ -544,7 +544,6 @@ mod tests {
         gen_account_in("wonderland").0
     }
 
-
     #[test]
     fn set_kv_scales_with_value_length() {
         let id = sample_account();
@@ -683,12 +682,8 @@ mod tests {
         let mint_asset: InstructionBox =
             dm_isi::mint_burn::Mint::asset_quantity(1_u32, asset_id.clone()).into();
 
-        let transfer_asset: InstructionBox = dm_isi::transfer::Transfer::asset_quantity(
-            asset_id,
-            1_u32,
-            authority.clone(),
-        )
-        .into();
+        let transfer_asset: InstructionBox =
+            dm_isi::transfer::Transfer::asset_quantity(asset_id, 1_u32, authority.clone()).into();
 
         let cases = [
             ("RegisterDomain", register_domain, 200),

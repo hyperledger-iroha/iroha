@@ -277,13 +277,6 @@ Iroha can group signatures by scheme during block validation and verify them in 
   - These pre‑verifications do not skip per‑transaction validation yet; they are wired for early rejection and future fast paths.
 ### Torii Endpoints (Operator Aids)
 
-- Consensus visibility (Sumeragi):
-  - `GET /v1/sumeragi/new-view` — JSON snapshot of NEW_VIEW receipt counts per `(height, view)`. Shape:
-    - `{ "ts_ms": <now>, "items": [{ "height": <u64>, "view": <u64>, "count": <u64> }, ...] }`
-    - Note: counts are retained in a bounded in-memory window; oldest entries are evicted.
-  - `GET /v1/sumeragi/new-view/sse` — Server‑Sent Events stream of the same JSON (polled ~1s). Useful for dashboards.
-  - Purpose: operator insight into pacemaker gating during view changes; complements Prometheus metric `sumeragi_new_view_receipts_by_hv{height,view}`.
-
 - Evidence audit (non‑consensus):
   - `GET /v1/sumeragi/evidence/count` — `{ "count": <u64> }` for in‑memory evidence store.
 - `GET /v1/sumeragi/evidence` — `{ "total": <u64>, "items": [...] }` with basic fields per evidence (DoublePrepare/DoubleCommit, InvalidQc, InvalidProposal, Censorship).

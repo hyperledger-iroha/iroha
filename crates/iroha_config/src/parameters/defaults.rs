@@ -1842,7 +1842,6 @@ pub mod torii {
         pub const OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY: usize = 32 + 1 + 32 + 32 + 8 + 8;
         /// Maximum canonical bytes reserved by accepted bindings and in-flight operations.
         pub const OPERATION_REGISTRY_MAX_BYTES: usize = 512 * 1024;
-
     }
     /// Steady-state rate for pre-authorization attempts per IP.
     pub const PREAUTH_RATE_PER_IP_PER_SEC: Option<u32> = Some(20);

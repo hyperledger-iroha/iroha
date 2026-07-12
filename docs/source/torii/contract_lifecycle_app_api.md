@@ -21,8 +21,12 @@ Torii when the `app_api` feature is enabled.
 - Runtime calls no longer resend full bytecode or manifests. Torii now builds
   `Executable::ContractCall(ContractInvocation)`, converts boundary JSON into
   one bounded, schema-hashed canonical Norito argument record before signing,
-  and only keeps fee/gas fields in transaction metadata. Validators never
-  interpret JSON as contract argument transport.
+  and signs the exact live `expected_code_hash` into the invocation. Validators
+  reject the call if governance rebinds the address before execution, so an
+  in-flight signature cannot authorize different code. Transaction metadata
+  mirrors the canonical `contract_code_hash` for scaffold inspection; the
+  invocation field is the consensus authority. Validators never interpret JSON
+  as contract argument transport.
 - Contract-call and contract-view target selectors require exactly one of
   `contract_address` or `contract_alias`.
 - `POST /v1/contracts/call` supports three submission modes:

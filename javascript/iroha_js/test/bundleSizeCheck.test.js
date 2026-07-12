@@ -261,8 +261,8 @@ test("public browser aggregate bundles without Node inputs or global Buffer shim
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  assert.equal(Object.keys(result.metafile.inputs).length, 52);
-  assert.equal(result.outputFiles[0].contents.byteLength, 328_676);
+  assert.equal(Object.keys(result.metafile.inputs).length, 51);
+  assert.equal(result.outputFiles[0].contents.byteLength, 304_434);
   assert.ok(result.outputFiles[0].contents.byteLength <= target.limitKb * 1024);
   assert.doesNotMatch(
     result.outputFiles[0].text,
@@ -301,7 +301,7 @@ test("IVM artifact browser leaf stays below 12 KiB without Node or Buffer shims"
 
 test("remaining bundle targets retain exact pinned-esbuild baselines", async () => {
   const expected = new Map([
-    ["toriiClient.js", { bytes: 877_656, modules: 58 }],
+    ["toriiClient.js", { bytes: 851_381, modules: 57 }],
     ["transactionCodec.js (browser)", { bytes: 125_424, modules: 36 }],
     ["nexusApp.js (browser)", { bytes: 206_556, modules: 45 }],
     ["canonicalRequest.js (browser)", { bytes: 69_529, modules: 31 }],

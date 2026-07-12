@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 
+import iroha_python
+import iroha_python.client as client_module
 import pytest
 
 from iroha_python.client import (
@@ -11,6 +13,7 @@ from iroha_python.client import (
     SumeragiV2BodyState,
     SumeragiV2GlobalPhase,
     SumeragiV2StatusPhase,
+    ToriiClient,
 )
 
 
@@ -107,6 +110,52 @@ def test_status_allows_genesis_without_optional_certificates() -> None:
     assert status.phase is SumeragiV2StatusPhase.AWAITING_PROPOSAL
     assert status.body_state is SumeragiV2BodyState.MISSING
     assert status.last_committed_subject is None
+
+
+def test_retired_global_sumeragi_rbc_and_collectors_surfaces_are_absent() -> None:
+    retired_methods = (
+        "get_sumeragi_rbc",
+        "get_sumeragi_rbc_typed",
+        "get_sumeragi_rbc_sessions",
+        "get_sumeragi_rbc_sessions_typed",
+        "find_sumeragi_rbc_sampling_candidate",
+        "find_sumeragi_rbc_sampling_candidate_typed",
+        "get_sumeragi_rbc_delivered",
+        "get_sumeragi_rbc_delivered_typed",
+        "request_sumeragi_rbc_sample",
+        "request_sumeragi_rbc_sample_typed",
+        "get_sumeragi_collectors",
+        "get_sumeragi_collectors_typed",
+    )
+    for name in retired_methods:
+        assert not hasattr(ToriiClient, name), name
+
+    retired_models = (
+        "SumeragiRbcSnapshot",
+        "SumeragiRbcSession",
+        "SumeragiRbcSessionsSnapshot",
+        "SumeragiRbcDeliveryStatus",
+        "SumeragiCollectorEntry",
+        "SumeragiCollectorPlan",
+        "RbcSample",
+        "RbcChunkProof",
+        "RbcMerkleProof",
+    )
+    for name in retired_models:
+        assert not hasattr(client_module, name), name
+        assert name not in client_module.__all__, name
+        assert not hasattr(iroha_python, name), name
+        assert name not in iroha_python.__all__, name
+
+    retained_telemetry_models = (
+        "SumeragiAvailabilityCollector",
+        "SumeragiRbcBacklog",
+        "SumeragiRbcEviction",
+        "SumeragiRbcStoreStatus",
+    )
+    for name in retained_telemetry_models:
+        assert hasattr(client_module, name), name
+        assert hasattr(iroha_python, name), name
 
 
 @pytest.mark.parametrize(

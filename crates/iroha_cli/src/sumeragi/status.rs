@@ -5,7 +5,7 @@ use norito::json::Value;
 
 use crate::{CliOutputFormat, RunContext};
 
-use super::commands::{CollectorsArgs, LeaderArgs, ParamsArgs, QcArgs, StatusArgs};
+use super::commands::{LeaderArgs, ParamsArgs, QcArgs, StatusArgs};
 
 pub(crate) fn status<C: RunContext>(context: &mut C, _args: StatusArgs) -> Result<()> {
     let client = context.client_from_config();
@@ -30,15 +30,6 @@ pub(crate) fn params<C: RunContext>(context: &mut C, _args: ParamsArgs) -> Resul
     let value = client.get_sumeragi_params_json()?;
     match context.output_format() {
         CliOutputFormat::Text => context.println(summarize_params(&value)),
-        CliOutputFormat::Json => context.print_data(&value),
-    }
-}
-
-pub(crate) fn collectors<C: RunContext>(context: &mut C, _args: CollectorsArgs) -> Result<()> {
-    let client = context.client_from_config();
-    let value = client.get_sumeragi_collectors_json()?;
-    match context.output_format() {
-        CliOutputFormat::Text => context.println(summarize_collectors(&value)),
         CliOutputFormat::Json => context.print_data(&value),
     }
 }
@@ -375,44 +366,6 @@ fn summarize_params(value: &Value) -> String {
     )
 }
 
-fn summarize_collectors(value: &Value) -> String {
-    let n = value
-        .get("topology_len")
-        .and_then(norito::json::Value::as_u64)
-        .unwrap_or(0);
-    let mv = value
-        .get("min_votes_for_commit")
-        .and_then(norito::json::Value::as_u64)
-        .unwrap_or(0);
-    let tail = value
-        .get("proxy_tail_index")
-        .and_then(norito::json::Value::as_u64)
-        .unwrap_or(0);
-    let k = value
-        .get("collectors_k")
-        .and_then(norito::json::Value::as_u64)
-        .unwrap_or(0);
-    let r = value
-        .get("redundant_send_r")
-        .and_then(norito::json::Value::as_u64)
-        .unwrap_or(0);
-    let cols = value
-        .get("collectors")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let list = cols
-        .iter()
-        .filter_map(|it| {
-            let idx = it.get("index").and_then(norito::json::Value::as_u64)?;
-            let pid = it.get("peer_id").and_then(|x| x.as_str())?;
-            Some(format!("{idx}:{pid}"))
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    format!("n={n} min_votes={mv} tail={tail} k={k} r={r} collectors=[{list}]")
-}
-
 fn summarize_qc(value: &Value) -> String {
     let hq = value.get("highest_qc").and_then(|v| v.as_object());
     let lq = value.get("locked_qc").and_then(|v| v.as_object());
@@ -655,25 +608,6 @@ mod tests {
         assert_eq!(
             summarize_params(&value),
             "bt=1000ms ct=1500ms k=3 r=2 da_enabled=true next_mode=npos act_height=42"
-        );
-    }
-
-    #[test]
-    fn summarize_collectors_formats_list() {
-        let value = norito::json!({
-            "topology_len": 6,
-            "min_votes_for_commit": 4,
-            "proxy_tail_index": 3,
-            "collectors_k": 2,
-            "redundant_send_r": 1,
-            "collectors": [
-                { "index": 3, "peer_id": "peer#0" },
-                { "index": 4, "peer_id": "peer#1" }
-            ]
-        });
-        assert_eq!(
-            summarize_collectors(&value),
-            "n=6 min_votes=4 tail=3 k=2 r=1 collectors=[3:peer#0,4:peer#1]"
         );
     }
 

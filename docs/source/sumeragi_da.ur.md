@@ -20,9 +20,10 @@ commit, verifies the protocol READY quorum (four peers: ≥3 votes; six peers:
 ≥4 votes), and prints a structured summary that can be ingested by dashboards
 or regression tooling.
 
-For light-client driven sampling of RBC payloads see
-[`light_client_da.md`](light_client_da.md), which documents the authenticated
-`/v1/sumeragi/rbc/sample` endpoint and the associated rate limits and budgets.
+RBC remains an internal Sumeragi v2 transport and recovery mechanism. The
+public Torii surface exposes only aggregated availability diagnostics through
+`/v1/sumeragi/telemetry`; see [`light_client_da.md`](light_client_da.md) for the
+current light-client boundary.
 
 ### DA timeout & availability tracking
 
@@ -55,9 +56,10 @@ topology.
 
 - Payload size (bytes) and derived throughput (MiB/s) when RBC marks the
   payload as delivered.
-- RBC session snapshot (`total_chunks`, `received_chunks`, `ready_count`,
-  `view`, `block_hash`, `recovered`, `lane_backlog`, `dataspace_backlog`) fetched from
-  `/v1/sumeragi/rbc/sessions`.
+- Aggregated `/v1/sumeragi/telemetry` snapshots contain
+  `availability.collectors`, `rbc_backlog`, and `rbc_pending`. These fields report
+  observed collector activity, missing-chunk totals, and bounded pre-session queues;
+  they do not expose session hashes, chunk proofs, or per-height delivery probes.
 - Prometheus counters per peer: `sumeragi_rbc_payload_bytes_delivered_total`,
   `sumeragi_rbc_deliver_broadcasts_total`, and
   `sumeragi_rbc_ready_broadcasts_total` obtained from `/metrics`.

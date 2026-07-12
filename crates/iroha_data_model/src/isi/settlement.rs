@@ -4,8 +4,8 @@ use derive_more::{Constructor, Display, FromStr};
 use getset::{CopyGetters, Getters};
 use iroha_crypto::HashOf;
 use iroha_data_model_derive::model;
-use iroha_schema::IntoSchema;
 use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::derive::{JsonDeserialize, JsonSerialize};

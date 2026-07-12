@@ -18,6 +18,7 @@ use iroha_data_model::{
         prelude::{AssetChanged, AssetEvent},
     },
     fastpq::TransferDeltaTranscript,
+    isi::error::MathError,
     isi::escrow::{
         AcceptAnonymousAssetEscrow, AcceptAssetEscrow, CancelAnonymousAssetEscrow,
         CancelAssetEscrow, CancelAssetLock, DrawdownAssetLock, ExpireAssetLock,
@@ -26,7 +27,6 @@ use iroha_data_model::{
         ReleaseAnonymousAssetEscrow, ReleaseAssetEscrow, ResolveAnonymousEscrowDispute,
         ResolveEscrowDispute,
     },
-    isi::error::MathError,
     permission::Permission,
     prelude::*,
     proof::ProofAttachment,
@@ -195,12 +195,11 @@ fn transfer_numeric_asset_for_escrow(
         amount.as_numeric(),
         source_policy,
     )?;
-    let control_update =
-        prepare_outbound_asset_transfer_control_update(
-            state_transaction,
-            &source_id,
-            amount.as_numeric(),
-        )?;
+    let control_update = prepare_outbound_asset_transfer_control_update(
+        state_transaction,
+        &source_id,
+        amount.as_numeric(),
+    )?;
     let delta = apply_resolved_numeric_asset_transfer_delta(
         state_transaction,
         &source_id,
@@ -4553,13 +4552,9 @@ mod tests {
         let record = escrow_record(&tx, &escrow_id);
         let custody_asset = AssetId::of(asset_definition.clone(), record.custody.clone());
         assert!(
-            Transfer::asset_quantity(
-                custody_asset.clone(),
-                1_u32,
-                destination.clone()
-            )
-            .execute(&source, &mut tx)
-            .is_err(),
+            Transfer::asset_quantity(custody_asset.clone(), 1_u32, destination.clone())
+                .execute(&source, &mut tx)
+                .is_err(),
             "generic asset transfer must not drain active native lock custody"
         );
         assert!(
@@ -4579,13 +4574,9 @@ mod tests {
         );
 
         assert!(
-            Transfer::asset_quantity(
-                custody_asset.clone(),
-                1_u32,
-                destination.clone()
-            )
-            .execute(&source, &mut tx)
-            .is_err(),
+            Transfer::asset_quantity(custody_asset.clone(), 1_u32, destination.clone())
+                .execute(&source, &mut tx)
+                .is_err(),
             "generic asset transfer must not drain recorded native lock custody after close"
         );
         assert!(

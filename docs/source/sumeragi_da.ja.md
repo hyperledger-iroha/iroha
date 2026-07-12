@@ -13,7 +13,10 @@ translator: manual
 統合テスト [`sumeragi_rbc_da_large_payload_four_peers`] と
 [`sumeragi_rbc_da_large_payload_six_peers`]（`integration_tests/tests/sumeragi_da.rs`）は、`sumeragi.da.enabled = true`（DA + RBC）とした 4 ノードおよび 6 ノード構成を起動します。各実行は統合ハーネス既定の `LARGE_PAYLOAD_BYTES = 1024` を使い、RBC の配送とコミットを観測し、本来の READY クォーラム（4 ピアは 3 票以上、6 ピアは 4 票以上）を確認し、ダッシュボードや回帰ツールで取り込める構造化サマリを出力します。
 
-RBC ペイロードをライトクライアントがサンプリングする手順については [`light_client_da.md`](light_client_da.md) を参照してください。認証付き `/v1/sumeragi/rbc/sample` エンドポイントと関連するレート制限・予算を解説しています。
+RBC remains an internal Sumeragi v2 transport and recovery mechanism. The
+public Torii surface exposes only aggregated availability diagnostics through
+`/v1/sumeragi/telemetry`; see [`light_client_da.md`](light_client_da.md) for the
+current light-client boundary.
 
 ### DA タイムアウトと可用性追跡
 
@@ -30,7 +33,10 @@ RBC ペイロードをライトクライアントがサンプリングする手�
 ## 収集するメトリクス
 
 - RBC がペイロードを DELIVER とマークした時点のペイロードサイズ（バイト）と派生スループット（MiB/s）
-- `/v1/sumeragi/rbc/sessions` から取得した RBC セッションスナップショット（`total_chunks`, `received_chunks`, `ready_count`, `view`, `block_hash`, `recovered`, `lane_backlog`, `dataspace_backlog`）
+- Aggregated `/v1/sumeragi/telemetry` snapshots contain
+  `availability.collectors`, `rbc_backlog`, and `rbc_pending`. These fields report
+  observed collector activity, missing-chunk totals, and bounded pre-session queues;
+  they do not expose session hashes, chunk proofs, or per-height delivery probes.
 - 各ピアの Prometheus カウンタ `/metrics` から取得: `sumeragi_rbc_payload_bytes_delivered_total`, `sumeragi_rbc_deliver_broadcasts_total`, `sumeragi_rbc_ready_broadcasts_total`
 - `/metrics` から収集できるレーン／データスペース単位のバックログゲージ:
   `sumeragi_rbc_lane_{tx_count,total_chunks,pending_chunks,bytes_total}`（`lane_id` ラベル）と

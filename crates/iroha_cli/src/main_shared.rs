@@ -8666,6 +8666,20 @@ mod tests {
     }
 
     #[test]
+    fn retired_sumeragi_debug_commands_are_not_parseable() {
+        for command in [
+            ["iroha", "ops", "sumeragi", "collectors"].as_slice(),
+            ["iroha", "ops", "sumeragi", "rbc"].as_slice(),
+            ["iroha", "ops", "sumeragi", "rbc", "sessions"].as_slice(),
+        ] {
+            assert!(
+                Args::try_parse_from(command).is_err(),
+                "retired Sumeragi debug command leaked: {command:?}"
+            );
+        }
+    }
+
+    #[test]
     fn fallback_config_derives_checked_signing_key() {
         let config = fallback_config();
         let payload = b"offline fallback config signing smoke";
@@ -9389,6 +9403,7 @@ mod tests {
                 contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
                     .parse()
                     .expect("contract address"),
+                expected_code_hash: Hash::new(b"cli-contract-code"),
                 entrypoint: "call".to_owned(),
                 arguments: None,
             },

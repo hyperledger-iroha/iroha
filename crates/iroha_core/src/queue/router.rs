@@ -9607,6 +9607,7 @@ mod tests {
         .expect("contract address");
         let invocation = iroha_data_model::transaction::executable::ContractInvocation {
             contract_address,
+            expected_code_hash: iroha_crypto::Hash::new(b"router-contract-code"),
             entrypoint: "transfer".to_owned(),
             arguments: None,
         };

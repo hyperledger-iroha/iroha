@@ -12,114 +12,12 @@ translator: machine-google-reviewed
 
 # འོད་འབོར་གྱི་གནད་སྡུད་འཐོབ་ཚུགས་པའི་དཔེ་ཚད་ཚུ།
 
-འོད་ཀྱི་མཁོ་སྤྲོད་དཔེ་ཚད་ཨེ་པི་ཨའི་གིས་ བདེན་བཤད་འབད་ཡོད་པའི་བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ ལོག་ཐོབ་བཅུགཔ་ཨིན།
-Merkle-authentateratated RBC གི་དཔེ་ཚད་འདི་ འཕུར་འགྲུལ་གྱི་ནང་ལུ་ བཀག་ཆ་ཅིག་གི་དོན་ལུ་ཨིན། འོད་འཚེར་བའི་ཚོང་མགྲོན་པ།
-གང་བྱུང་དཔེ་ཚད་ཀྱི་ཞུ་བ་ཚུ་སྟོན་ཚུགས།
-ཁྱབ་བསྒྲགས་འབད་ཡོད་པའི་ ཅངཀ་རྩ་དང་ གནས་སྡུད་འདི་ མེད་པར་ཐོབ་ཚུགས་པའི་ ཡིད་ཆེས་བཟོ་ནི།
-པེ་ལོཌི་ཆ་མཉམ་ལེན་ནི།
+Sumeragi v2 uses reliable broadcast internally for consensus data availability.
+The public first-release Torii API does not expose per-session chunk sampling,
+delivery inspection, or global collector-plan endpoints, and there is no
+dedicated Torii sampling configuration.
 
-## མཐའ་མཚམས།
-
-```
-POST /v1/sumeragi/rbc/sample
-```
-
-མཇུག་བསྡུའི་ས་ཚིགས་འདི་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ `X-API-Token` མགོ་ཡིག་ཅིག་དགོཔ་ཨིན།
-Torii API ཊོ་ཀེན་ཚུ། ཞུ་བ་ཚུ་ ཁ་སྐོང་སྦེ་ གནས་ཚད་ཚད་འཛིན་དང་ ཉིན་བསྟར་བཞིན་དུ་ བཀལ་དགོཔ་ཨིན།
-རེ་རེ་བཞིན་གྱི་ འཆར་དངུལ་ ; ལས་ལྷག་སྟེ་ ལོག་འོང་མི་ HTTP 429.
-
-### ཞུ་བ་ལུ་ཞུ་ནི།
-
-```json
-{
-  "block_hash": "<hex-encoded block hash>",
-  "height": 42,
-  "view": 0,
-  "count": 3,
-  "seed": 12345
-}
-```
-
-* `block_hash` – དམིགས་གཏད་བཀག་ཆ་ཧེགསི་ནང་ དམིགས་གཏད་བཀག་ཆ་ཧེགསི་ནང་།
-* `height`, `view` – RBC ལཱ་ཡུན་གྱི་དོན་ལུ་ ཊུ་པལ་ངོས་འཛིན་འབད་ནི།
-* `count` – རེ་འདུན་ཅན་གྱི་དཔེ་ཚད་ཀྱི་ཨང་གྲངས་ (སྔོན་སྒྲིག་ཚུ་ ༡ ལས་ རིམ་སྒྲིག་གིས་ ཀེར་འབད་ཡོདཔ་ཨིན།)
-* `seed` – བསྐྱར་བཟོ་འབད་བཏུབ་པའི་དཔེ་ཚད་ཀྱི་དོན་ལུ་ གདམ་ཁ་ཅན་གྱི་གཏན་འབེབས་ RNG གི་སོན་རིམ།
-
-### ལན་འདེབས་ལུས་པོ།
-
-```json
-{
-  "block_hash": "…",
-  "height": 42,
-  "view": 0,
-  "total_chunks": 128,
-  "chunk_root": "…",
-  "payload_hash": "…",
-  "samples": [
-    {
-      "index": 7,
-      "chunk_hex": "…",
-      "digest_hex": "…",
-      "proof": {
-        "leaf_index": 7,
-        "depth": 8,
-        "audit_path": ["…", null, "…"]
-      }
-    }
-  ]
-}
-```
-
-དཔེ་ཚད་ཐོ་བཀོད་རེ་རེ་ནང་ ཅངཀ་ཟུར་ཐོ་ པེ་ལོཌི་བཱའིཊི་ (hex) དང་ SHA-256 འདབ་མ་ཚུ་ཡོདཔ་ཨིན།
-བཅུད་ལྡན་དང་ Merkle གི་བདེན་དཔང་ (གདམ་ཁ་ཅན་གྱི་སྤུན་ཆ་ཚུ་ ཧེགསི་སྦེ་ བཀོད་སྒྲིག་འབད་ཡོདཔ་ཨིན།
-ཡིག་རྒྱུན་ཚུ་)། མཁོ་སྤྲོད་འབད་མི་ཚུ་གིས་ `chunk_root` ས་སྒོ་ལག་ལེན་འཐབ་སྟེ་ བདེན་ཁུངས་ཚུ་བདེན་དཔྱད་འབད་ཚུགས།
-
-## དང་འདྲ་བར།
-
-**ཞུ་བ་རེ་ལུ་དཔེ་ཚད་**** – `torii.rbc_sampling.max_samples_per_request` བརྒྱུད་དེ་ རིམ་སྒྲིག་འབད་བཏུབ།
-**ཞུ་བ་རེ་ལུ་ མེགསི་བཱའིཊིསི་** – `torii.rbc_sampling.max_bytes_per_request` ལག་ལེན་འཐབ་སྟེ་ བསྟར་སྤྱོད་འབད་ཡོདཔ།
-**ཉིན་བསྟར་གྱི་བཱའིཊི་འཆར་དངུལ་** – ཁ་པར་རེ་ལུ་ `torii.rbc_sampling.daily_byte_budget` བརྒྱུད་དེ་ འབོད་བརྡ་གཏང་ཡོདཔ།
-**ཚད་གཞི་ཚད་འཛིན་** – བློ་གཏད་ཅན་གྱི་ཊོ་ཀེན་བཱ་ཀེཊི་ (`torii.rbc_sampling.rate_per_minute`) ལག་ལེན་འཐབ་སྟེ་ བསྟར་སྤྱོད་འབད་ཡོདཔ་ཨིན།
-
-ཚད་འཛིན་ལོག་ལོག་ལས་ལྷག་པའི་ ཞུ་བ་ HTTP 429 (CapacityLimit). ཆང་གི་སྐབས།
-ཚོང་ཁང་འདི་མེདཔ་ཨིན་ ཡང་ན་ ལཱ་ཡུན་འདི་ པེ་ལོསིཊི་མེདཔ་ཨིན་ མཐའ་ཐིག་འདི་བཱའིཊི་ཚུ་ མེདཔ་ཨིན་པས།
-སླར་ལོག་ HTTP 404.
-
-## ཨེསི་ཌི་ཀེ་ མཉམ་བསྡོམས།
-
-### ཇ་བ་སི་ཀིརིཔ།
-
-`@iroha/iroha-js` `ToriiClient.sampleRbcChunks` གྲོགས་རམ་པ་ ཕྱིར་བཏོན་འབདཝ་ལས་ གནད་སྡུད་ གནད་སྡུད་ཀྱིས་ གསལ་སྟོན་འབདཝ་ཨིན།
-འཐོབ་ཚུགས་པའི་བདེན་བཤད་ཚུ་གིས་ ཁོང་རའི་ ཕེཆ་མ་བསྐོར་བར་ མཇུག་སྣོད་ལུ་ འབོ་ཚུགས།
-ཚད་མ་ནི། གྲོགས་རམ་པ་གིས་ ཧེགསི་པེ་ལོཌི་ཚུ་དང་ སྤྱིར་བཏང་ཧྲིལ་གྲངས་ཚུ་ དེ་ལས་ ལོག་ཚུ་ བདེན་དཔྱད་འབདཝ་ཨིན།
-གོང་འཁོད་ཀྱི་ལན་འདེབས་ལས་རིམ་འདི་ མེ་ལོང་ནང་ཡོད་པའི་དངོས་པོ་ཚུ་:
-
-```js
-import { ToriiClient } from "@iroha/iroha-js";
-
-const torii = new ToriiClient(process.env.TORII_URL, {
-  apiToken: process.env.TORII_API_TOKEN,
-});
-
-const sample = await torii.sampleRbcChunks({
-  blockHash: "3d...ff",
-  height: 42,
-  view: 0,
-  count: 3,
-  seed: Date.now(),
-});
-
-if (!sample) {
-  throw new Error("RBC session is not available yet");
-}
-
-for (const { digestHex, proof } of sample.samples) {
-  verifyMerklizedChunk(sample.chunkRoot, digestHex, proof);
-}
-```
-
-སར་བར་འདི་གིས་ གནད་སྡུད་ནོར་འཁྲུལ་ཅན་སླར་ལོག་འབད་བའི་སྐབས་ གྲོགས་རམ་པ་འདི་གིས་ ཇེ་ཨེསི་-༠༤ ཆ་སྙོམས་ལུ་གྲོགས་རམ་འབདཝ་ཨིན།
-བརྟག་དཔྱད་ཚུ་གིས་ Rust དང་ Python SDKs གི་མཉམ་དུ་ འགྱུར་ལྡོག་ཚུ་ བརྟག་དཔྱད་འབདཝ་ཨིན། འུང་འབབ།
-(`iroha_client::ToriiClient::sample_rbc_chunks`) དང་པའེ་ཐན།
-(`IrohaToriiClient.sample_rbc_chunks`) གྲུ་གཟིངས་འདྲ་མཉམ་གྱི་རོགས་སྐྱོར། གང་ལྟར་ཡང་ལག་ལེན་འཐབ།
-ཁྱོད་ཀྱི་དཔེ་ཚད་ཀྱི་ ཧར་ནིས་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+For operator visibility, use `/v1/sumeragi/telemetry` for aggregate RBC backlog
+and availability fields and `/v1/sumeragi/status` for the compact consensus
+state. These endpoints provide operational telemetry, not light-client data-
+availability proofs.

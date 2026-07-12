@@ -29,14 +29,10 @@ Note: For the v1 release, VRF penalties jail offenders after the activation lag,
 
    ```bash
    iroha --output-format text ops sumeragi status
-   iroha --output-format text ops sumeragi collectors
-   iroha --output-format text ops sumeragi rbc status
+   iroha --output-format text ops sumeragi telemetry
    ```
 
-   The `status` line prints the leader/view tuple, RBC backlog, DA retries,
-   epoch offsets, and pacemaker deferrals; `collectors` maps collector indices
-   to peer IDs so you can show which validators are carrying randomness duties
-   at the inspected height.
+   The status output records the leader/view and durable consensus state. The telemetry output provides aggregate `availability.collectors`, `rbc_backlog`, and `rbc_pending` fields; it is not a collector-plan or per-session RBC API.
 3. Capture the epoch number you intend to audit:
 
    ```bash

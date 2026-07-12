@@ -19,9 +19,9 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "node",
     target: "node18",
     // This direct entrypoint intentionally exposes the complete Torii surface. The audited
-    // security-hardening baseline is 877,656 bytes with pinned esbuild; 864 KiB (884,736
-    // bytes) leaves 7,080 bytes, or 0.81%, of regression headroom. The increase from the
-    // former 840 KiB ceiling is bound to the typed offline-operation API added to Torii.
+    // first-release baseline is 851,381 bytes with pinned esbuild; 864 KiB (884,736
+    // bytes) leaves 33,355 bytes, or 3.92%, of regression headroom after removal of
+    // the uncatalogued global RBC sampling/session and collector-plan surfaces.
     limitKb: 864,
   }),
   Object.freeze({
@@ -85,9 +85,9 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "browser.js"),
     platform: "browser",
     target: "es2020",
-    // The browser-clean public aggregate is 328,676 bytes (321.0 KiB) with
-    // pinned esbuild; 328 KiB leaves 7,196 bytes (2.19%) for the complete
-    // namespace after the typed offline-operation API was added to Torii.
+    // The browser-clean public aggregate is 304,434 bytes (297.3 KiB) with
+    // pinned esbuild; 328 KiB leaves 31,438 bytes (10.33%) for the complete
+    // namespace after retired consensus diagnostics were removed.
     limitKb: 328,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
