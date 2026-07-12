@@ -926,11 +926,11 @@ pub enum LaneRelayError {
     /// Settlement receipt coordinates do not match the enclosing commitment.
     #[error("settlement receipt coordinates do not match commitment coordinates")]
     SettlementReceiptCoordinateMismatch,
-    /// Settlement commitment height does not match the block header height.
-    #[error("settlement commitment block height does not match block header")]
+    /// Settlement commitment height does not match the envelope's lane-local height.
+    #[error("settlement commitment block height does not match envelope lane-local height")]
     SettlementBlockHeightMismatch,
-    /// Envelope block height does not match the embedded block header.
-    #[error("block height in envelope does not match block header")]
+    /// Envelope lane-local or global proposal block height is invalid.
+    #[error("lane relay block height is invalid")]
     BlockHeightMismatch,
     /// Settlement commitment lane identifier differs from the envelope lane id.
     #[error("settlement commitment lane id does not match envelope lane id")]

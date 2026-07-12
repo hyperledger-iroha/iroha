@@ -335,16 +335,6 @@ fn expected_sccp_registry_limits() -> SccpRegistryLimits {
 }
 
 fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
-    if limits.max_outbound_messages_per_block
-        != iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
-        || limits.max_outbound_message_payload_bytes
-            != u64::try_from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1)
-                .expect("SCCP outbound payload bound fits u64")
-    {
-        return Err(eyre!(
-            "SCCP capabilities advertise incompatible fixed outbound message limits"
-        ));
-    }
     macro_rules! require_nonzero {
         ($($field:ident),+ $(,)?) => {
             $(if limits.$field == 0 {
@@ -400,6 +390,16 @@ fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
         max_native_header_bytes_per_transaction,
         max_native_header_bytes_per_block,
     );
+    if limits.max_outbound_messages_per_block
+        != iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
+        || limits.max_outbound_message_payload_bytes
+            != u64::try_from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1)
+                .expect("SCCP outbound payload bound fits u64")
+    {
+        return Err(eyre!(
+            "SCCP capabilities advertise incompatible fixed outbound message limits"
+        ));
+    }
     if limits.max_proof_bytes_per_proof > limits.max_proof_bytes_per_transaction {
         return Err(eyre!(
             "SCCP capabilities per-proof byte limit must not exceed its transaction limit"
@@ -1169,6 +1169,11 @@ fn resolve_sccp_expected_route_configuration_hash(
                 "native SCCP payload and authenticated source identity select no retained governed route"
             )
         })?;
+    if !route.activation.allows_inbound() && !route.activation.is_terminal() {
+        return Err(eyre!(
+            "native SCCP payload and authenticated source identity select no inbound-active governed route"
+        ));
+    }
     let validated = iroha_sccp::verify_sccp_native_inbound_message_proof_v1(
         native,
         &route.source_identity,
@@ -1436,6 +1441,9 @@ fn decode_canonical_sccp_base64(encoded: &str, field: &str, maximum: usize) -> R
         return Err(eyre!(
             "{field} length must be between 1 and {maximum} bytes"
         ));
+    }
+    if encoded.len() % 4 != 0 {
+        return Err(eyre!("{field} must use canonical padded base64"));
     }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(encoded.as_bytes())
@@ -22139,7 +22147,7 @@ mod tests {
             parent_state_root: Hash::prehashed([0xEA; Hash::LENGTH]),
             post_state_root: Hash::prehashed([0xEE; Hash::LENGTH]),
             height: block_header.height().get(),
-            view: 5,
+            view: block_header.view_change_index(),
             epoch: 1,
             chain_order_hash: default_chain_order_hash(),
             rechain_seq: 0,
@@ -31455,9 +31463,7 @@ mod tests {
     fn sccp_typed_readbacks_accept_the_shared_exact_fixture() {
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
         let message_id = hex::encode(fixture.bundle.commitment.message_id);
-        let bundle_bytes =
-            iroha_sccp::canonical_taira_sccp_message_bundle_bytes_checked(&fixture.bundle)
-                .expect("canonical shared SCCP bundle");
+        let bundle_bytes = norito::to_bytes(&fixture.bundle).expect("encode shared SCCP bundle");
         let request_bytes =
             iroha_sccp::encode_canonical_sccp_groth16_bn254_proof_request_v1(&fixture.request)
                 .expect("canonical shared SCCP proof request");
@@ -31514,9 +31520,7 @@ mod tests {
             hex::encode(fixture.bundle.commitment.message_id)
         );
 
-        let bundle_bytes =
-            iroha_sccp::canonical_taira_sccp_message_bundle_bytes_checked(&fixture.bundle)
-                .expect("canonical shared SCCP bundle");
+        let bundle_bytes = norito::to_bytes(&fixture.bundle).expect("encode shared SCCP bundle");
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
             .header("content-type", APPLICATION_NORITO)
@@ -31600,9 +31604,7 @@ mod tests {
             .expect_err("adversarial SCCP bundle must fail closed");
         }
 
-        let mut trailing =
-            iroha_sccp::canonical_taira_sccp_message_bundle_bytes_checked(&fixture.bundle)
-                .expect("canonical shared SCCP bundle");
+        let mut trailing = norito::to_bytes(&fixture.bundle).expect("encode shared SCCP bundle");
         trailing.push(0);
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
@@ -32282,6 +32284,8 @@ mod tests {
 
     #[test]
     fn native_submit_rejects_inactive_or_stale_governance_before_post() {
+        use base64::Engine as _;
+
         let (request, mut registry, _proof, _proof_bytes, _route_configuration_hash) =
             native_submit_fixture(iroha_data_model::bridge::SccpRouteActivationV1::Staged);
         let registry_bytes = norito::to_bytes(&registry).expect("encode inactive registry");
@@ -32311,7 +32315,7 @@ mod tests {
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].method, HttpMethod::GET);
 
-        let (request, exact_registry, _proof, _proof_bytes, _route_configuration_hash) =
+        let (mut request, exact_registry, mut proof, _proof_bytes, _route_configuration_hash) =
             native_submit_fixture(iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional);
         registry = exact_registry;
         registry.lanes[0]
@@ -32329,6 +32333,20 @@ mod tests {
         registry
             .validate()
             .expect("stale but structurally valid registry");
+        let stale_anchor = *registry.lanes[0]
+            .native_trust_anchors
+            .last()
+            .expect("fixture trust anchor");
+        proof.source.trust_anchor = stale_anchor;
+        let iroha_sccp::SccpNativeSourceProofV1::EthereumBeacon(native) = &mut proof.source.proof
+        else {
+            unreachable!("Ethereum fixture uses the beacon backend")
+        };
+        native.trusted_anchor_hash = stale_anchor.anchor_hash;
+        request.native_proof_b64 = base64::engine::general_purpose::STANDARD.encode(
+            iroha_sccp::encode_sccp_native_inbound_message_proof_v1(&proof)
+                .expect("encode structurally valid stale native proof"),
+        );
         let expectation = preflight_sccp_native_submit(&request).expect("local native preflight");
         assert!(
             resolve_sccp_expected_route_configuration_hash(&expectation, Some(&registry))

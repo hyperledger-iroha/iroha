@@ -1868,7 +1868,7 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
         parent_state_root: Hash::new([0xBA; 4]),
         post_state_root: Hash::new([0xBB; 4]),
         height: header.height().get(),
-        view: 1,
+        view: header.view_change_index(),
         epoch: 0,
         chain_order_hash: default_chain_order_hash(),
         rechain_seq: 0,

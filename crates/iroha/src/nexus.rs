@@ -248,7 +248,7 @@ mod tests {
             parent_state_root,
             post_state_root,
             height: header.height().get(),
-            view: 1,
+            view: header.view_change_index(),
             epoch: 0,
             chain_order_hash: default_chain_order_hash(),
             rechain_seq: 0,
@@ -603,19 +603,21 @@ mod tests {
     }
 
     #[test]
-    fn builder_rejects_settlement_height_mismatch() {
+    fn builder_accepts_independent_lane_local_settlement_height() {
         let lane_id = LaneId::new(2);
         let dataspace_id = DataSpaceId::new(3);
         let header = header_with_da_hash(NonZeroU64::new(12).expect("nonzero height"), None);
         let settlement = sample_settlement(lane_id, dataspace_id, header.height().get() - 1);
 
-        let err = CrossLaneTransferBuilder::new(header, None, None, settlement)
+        let proof = CrossLaneTransferBuilder::new(header, None, None, settlement)
             .build()
-            .expect_err("settlement/header mismatch should fail");
-        assert!(matches!(
-            err,
-            CrossLaneProofError::Relay(LaneRelayError::SettlementBlockHeightMismatch)
-        ));
+            .expect("lane-local settlement height may differ from global proposal height");
+
+        assert_eq!(proof.envelope().block_height, 11);
+        assert_eq!(proof.envelope().block_header.height().get(), 12);
+        proof
+            .verify()
+            .expect("independent lane-local and global heights should verify");
     }
 
     #[test]

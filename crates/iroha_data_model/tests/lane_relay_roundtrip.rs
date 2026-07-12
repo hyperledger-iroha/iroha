@@ -39,15 +39,15 @@ fn checked_random_peer_id() -> PeerId {
     )
 }
 
-fn sample_qc(block_hash: HashOf<BlockHeader>) -> Qc {
+fn sample_qc(block_header: &BlockHeader) -> Qc {
     let validator_set = vec![checked_random_peer_id(), checked_random_peer_id()];
     Qc {
         phase: CertPhase::Commit,
-        subject_block_hash: block_hash,
+        subject_block_hash: block_header.hash(),
         parent_state_root: Hash::prehashed([0x22; Hash::LENGTH]),
         post_state_root: Hash::prehashed([0x11; Hash::LENGTH]),
-        height: 5,
-        view: 3,
+        height: block_header.height().get(),
+        view: block_header.view_change_index(),
         epoch: 1,
         chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
         rechain_seq: 0,
@@ -97,7 +97,7 @@ fn lane_relay_envelope_roundtrips_and_verifies_hash() {
     )));
     let header = sample_block_header(da_hash);
     let settlement = sample_settlement();
-    let qc = sample_qc(header.hash());
+    let qc = sample_qc(&header);
     let manifest_root = Some([0x44; 32]);
     let envelope = LaneRelayEnvelope::new(header, Some(qc.clone()), da_hash, settlement.clone(), 0)
         .expect("construct envelope")
@@ -150,7 +150,7 @@ fn lane_relay_envelope_distinguishes_lane_local_and_global_heights() {
 fn lane_relay_envelope_rejects_qc_height_mismatch() {
     let header = sample_block_header(None);
     let settlement = sample_settlement();
-    let mut qc = sample_qc(header.hash());
+    let mut qc = sample_qc(&header);
     qc.height = header.height().get() + 1;
 
     let err = LaneRelayEnvelope::new(header, Some(qc), None, settlement.clone(), 0)
@@ -158,7 +158,7 @@ fn lane_relay_envelope_rejects_qc_height_mismatch() {
     assert_eq!(err, LaneRelayError::QcHeightMismatch);
 
     let mut envelope =
-        LaneRelayEnvelope::new(header, Some(sample_qc(header.hash())), None, settlement, 0)
+        LaneRelayEnvelope::new(header, Some(sample_qc(&header)), None, settlement, 0)
             .expect("construct envelope");
     let qc_ref = envelope.qc.as_mut().expect("qc present in envelope");
     qc_ref.height += 1;
@@ -175,7 +175,7 @@ fn lane_relay_envelope_detects_tampering_on_verify() {
     )));
     let header = sample_block_header(da_hash);
     let settlement = sample_settlement();
-    let qc = sample_qc(header.hash());
+    let qc = sample_qc(&header);
     let envelope = LaneRelayEnvelope::new(header, Some(qc), da_hash, settlement, 2048)
         .expect("construct envelope");
 
