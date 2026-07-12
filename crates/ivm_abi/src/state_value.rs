@@ -132,7 +132,12 @@ impl StateValueKindV1 {
         }
     }
 
-    /// Return the exact pointer-ABI type for this leaf, or `None` for inline booleans.
+    /// Return the canonical persisted pointer-ABI type for this leaf, or `None`
+    /// for inline booleans.
+    ///
+    /// Storage-boundary encoders may accept additional transient carriers. In
+    /// particular, source-level `bytes` accepts `NoritoBytes` but canonicalizes
+    /// the stored atom to the `Blob` type returned here.
     #[must_use]
     pub const fn pointer_type(self) -> Option<PointerType> {
         Some(match self {

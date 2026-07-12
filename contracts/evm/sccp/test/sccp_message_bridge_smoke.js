@@ -2472,23 +2472,35 @@ async function main() {
     ).wait();
     assert.equal(await tronToken.balanceOf(recipientAddress), 3n * SCALE);
   }
+  const tronNonceBeforeInvalidBurns = await tronBridge.transferNonce();
   await assert.rejects(
-    tronBridge.transferToTaira(CANONICAL_I105_BYTES, 1n),
+    tronBridge.transferToTaira(CANONICAL_I105_BYTES, 1n, tronNonceBeforeInvalidBurns),
     rejectedWith("Amount is not aligned to Taira scale"),
   );
   const tronBurnAccount = await signer.getAddress();
   const tronBalanceBeforeInvalidBurns = await tronToken.balanceOf(tronBurnAccount);
-  const tronNonceBeforeInvalidBurns = await tronBridge.transferNonce();
+  await assert.rejects(
+    tronBridge.transferToTaira(
+      CANONICAL_I105_BYTES,
+      SCALE,
+      tronNonceBeforeInvalidBurns + 1n,
+    ),
+    rejectedWith("Transfer nonce mismatch"),
+  );
   for (const invalidRecipient of invalidTairaRecipients) {
     await assert.rejects(
-      tronBridge.transferToTaira(invalidRecipient, SCALE),
+      tronBridge.transferToTaira(invalidRecipient, SCALE, tronNonceBeforeInvalidBurns),
       rejectedWith("Noncanonical Taira recipient"),
     );
   }
   assert.equal(await tronToken.balanceOf(tronBurnAccount), tronBalanceBeforeInvalidBurns);
   assert.equal(await tronBridge.transferNonce(), tronNonceBeforeInvalidBurns);
   const tronSourceReceipt = await (
-    await tronBridge.transferToTaira(CANONICAL_I105_BYTES, SCALE)
+    await tronBridge.transferToTaira(
+      CANONICAL_I105_BYTES,
+      SCALE,
+      tronNonceBeforeInvalidBurns,
+    )
   ).wait();
   const tronSourceEvents = tronSourceReceipt.logs
     .filter(

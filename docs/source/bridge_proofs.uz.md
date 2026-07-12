@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_proofs.md
 status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 69c9a740261d0c367d52870fc1f48775ae48307056ba9b79d2f811e0c0849f20
-source_last_modified: "2026-07-11T15:09:39+04:00"
-translation_last_reviewed: 2026-07-11
+source_hash: 74e29801129deccb6d5640d414289c47cf13fa9e0229fb55212b6c7710d7c5f7
+source_last_modified: "2026-07-12T07:38:49.568351+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-assisted
 ---
 
@@ -40,6 +40,14 @@ translator: machine-assisted
   yetishmayotgan, eskirgan yoki ortiqcha qiymatni rad etadi. Message id qayta
   ishlatilishi va replay ham rad etiladi.
 
+TRON manba route-i aniq
+`transferToTaira(bytes,uint256,uint64 expectedNonce)` ABI-dan foydalanadi.
+Muvaffaqiyatli bajarilish uchun `expectedNonce == transferNonce` bo‘lishi shart;
+so‘ng storage oshirilishidan oldin ayni qiymat canonical payload-ga yoziladi.
+Native admission to‘liq ABI call-ni payload recipient-i, masshtablangan miqdor va
+nonce-dan qayta tuzadi. Shu sababli eskirgan ikki-argumentli selector, stale yoki
+future nonce hamda chegarasi tugagan `uint64` nonce xavfsiz tarzda rad etiladi.
+
 ## Bir martalik tekshiruv va deterministik limitlar
 
 - Har bir native yoki destination proof kanonik tarzda bir marta decode qilinadi
@@ -50,6 +58,24 @@ translator: machine-assisted
   va BN254 pairing-product checks uchun majburiy noldan katta per-proof,
   per-transaction va per-block limitlarini belgilaydi. Bu admission limitlari
   consensus-bound bo‘lib, barcha validatorlarda bir xil bo‘lishi kerak.
+
+## Outbound commitment, saqlash va topish
+
+Har bir muvaffaqiyatli outbound message block execution order bo'yicha zich
+`commitment_index` (`0..=511`) oladi. V1 ning qat'iy chegaralari: har block uchun
+512 message va har message uchun 4,096 canonical payload byte. `[zk.sccp]` pending
+payload state-ni `max_pending_outbound_messages` (default `65536`) va
+`max_pending_outbound_payload_bytes` (default `268435456`) bilan birgalikda cheklaydi.
+
+Kura finality e'lon qilinishidan yoki block body chiqarilishidan oldin aniq canonical
+header va root-authenticated SCCP archive-ni immutable saqlaydi. Proof, bundle, proof
+request va recent history tarixiy block body yoki mutable WSV payload copy-ni o'qimaydi.
+Destination proof qabul qilinganda pending payload va uning charge-i atomically olib
+tashlanib, locator/index bilan fixed terminal descriptor qoladi. Pending state
+chegaralangan; terminal records va immutable Kura history doimiy replay protection
+uchun ataylab o'sadi. `GET /v1/sccp/messages/recent` murakkab
+`{ from, after_index }` cursor-dan foydalanadi. Immutable evidence total/operator
+disk usage-ga kiradi, ammo evictable-body budget-dan chiqariladi.
 
 ## Torii chegaralari
 

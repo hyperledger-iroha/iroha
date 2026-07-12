@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_proofs.md
 status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 69c9a740261d0c367d52870fc1f48775ae48307056ba9b79d2f811e0c0849f20
-source_last_modified: "2026-07-11T15:09:39+04:00"
-translation_last_reviewed: 2026-07-11
+source_hash: 74e29801129deccb6d5640d414289c47cf13fa9e0229fb55212b6c7710d7c5f7
+source_last_modified: "2026-07-12T07:38:49.568351+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-assisted
 ---
 
@@ -42,6 +42,14 @@ translator: machine-assisted
   полностью пересчитывается, а отсутствующие, устаревшие и лишние значения
   отклоняются. Повторное использование message id и replay также отклоняются.
 
+Исходный route TRON использует точный ABI
+`transferToTaira(bytes,uint256,uint64 expectedNonce)`. Успешное выполнение
+требует `expectedNonce == transferNonce`; затем до увеличения storage то же
+значение записывается в канонический payload. Native admission восстанавливает
+полный ABI call из recipient в payload, масштабированной суммы и nonce. Поэтому
+устаревший selector с двумя аргументами, старый или будущий nonce и исчерпанный
+`uint64` nonce безопасно отклоняются.
+
 ## Однократная проверка и детерминированные лимиты
 
 - Каждое native- или destination-доказательство канонически декодируется один
@@ -53,6 +61,25 @@ translator: machine-assisted
   Ethereum light client, байтов заголовков, восстановлений secp256k1,
   агрегатных проверок/вкладов BLS и pairing-product проверок BN254. Эти лимиты
   допуска связаны с консенсусом и должны совпадать у всех валидаторов.
+
+## Outbound commitment, хранение и обнаружение
+
+Каждое успешно созданное outbound message получает плотный `commitment_index` в
+порядке исполнения блока (`0..=511`). Неизменяемые пределы V1 — 512 сообщений на
+блок и 4 096 байт канонического payload на сообщение. `[zk.sccp]` совместно
+ограничивает ожидающие payload через `max_pending_outbound_messages` (по умолчанию
+`65536`) и `max_pending_outbound_payload_bytes` (по умолчанию `268435456`).
+
+До публикации finality или удаления тела блока Kura неизменно сохраняет точный
+канонический header и аутентифицированный корнем архив SCCP. Восстановление proof,
+bundle, proof request и недавней истории не читает историческое тело блока или
+изменяемую копию payload из WSV. После принятия destination proof ожидающий payload
+и его учёт удаляются атомарно, а фиксированный terminal descriptor остаётся вместе
+с locator/index. Ожидающее состояние ограничено; terminal records и неизменяемая
+история Kura намеренно растут для постоянной защиты от replay.
+`GET /v1/sccp/messages/recent` использует составной cursor
+`{ from, after_index }`. Неизменяемые evidence учитываются в общем/операторском
+использовании диска, но исключены из бюджета удаляемых тел.
 
 ## Ограничения Torii
 

@@ -60,7 +60,7 @@ Vendor syscall (Norito)
 - `0xA0` expects `r10=&NoritoBytes(InstructionBox)` and a mandatory operation tag in `r11`: `1` for `SubmitBallot`, `2` for `Unshield`, or `3` for `RecordSccpMessage`. Tag `0`, unknown tags, mismatched instruction types, and other instruction types are rejected.
 
 Examples (dev envelopes; mock WSV host only)
-- Execute query (JSON envelope) `0xA1`: set `r10` to a `&Json` TLV with `{ "type": "wsv.get_balance", "payload": { "account_id": "…", "asset_id": "…" } }`. On success, `r10` receives a pointer to a `&Json` TLV like `{ "balance": 42 }` in INPUT.
+- Execute query (JSON envelope) `0xA1`: set `r10` to a `&Json` TLV with `{ "type": "wsv.get_balance", "payload": { "account_id": "…", "asset_id": "…" } }`. On success, `r10` receives a host-owned pointer to a `&Json` TLV like `{ "balance": 42 }`.
 - List triggers (JSON envelope): `{ "type": "wsv.list_triggers", "payload": {} }` → `{ "triggers": [{"name":"…","enabled":true}, …] }` via `r10`.
 
 JSON Envelope Matrix (dev)
@@ -89,6 +89,7 @@ Ordering and OUTPUT
 - The VM clears OUTPUT (and resets its append-only cursor) when loading a program; within a run, OUTPUT writes must move forward (rewinds trap).
 - Event emission that reflects syscall outcomes must preserve syscall order. VM implementations must not reorder syscalls, including under acceleration. Deterministic overlays and commit phases in the node preserve this ordering across the pipeline.
 - Host lifecycle: `begin_tx`/`finish_tx` return `Result`; hosts must surface overlay flush errors (e.g., durable state writes) instead of swallowing them, clear staged overlays on failure, and rely on checkpoints to restore pre-tx state when a VM run aborts.
+- Deployed-contract overlays, including deterministic `IvmProved` replay, retain the selected entrypoint authorization for every queued effect and every physical durable-state path. Apply revalidates the exact caller permission, address/code/alias binding, nested caller lineage, and path ownership before effects and again immediately before each durable write; stale or structurally incomplete replay metadata applies no effects.
 
 Legend
 - Args: registers and pointer types; `&Type` indicates a provenance-valid pointer to a canonical Norito TLV.
@@ -104,6 +105,10 @@ Gas enforcement (CoreHost)
 - `JSON_GET_JSON` quotes heap-backed JSON input against the owned HEAP/INPUT payload bound and
   reserves that same HEAP-capable result bound plus its sum handle, so a valid field beyond the
   fixed INPUT arena cannot be rejected during preparation or exceed its pre-dispatch quote.
+- Host-state-dependent public-input and WSV ZK read results reserve the available syscall gas,
+  compute and preflight their exact encoded cost, and only then allocate the result. This keeps
+  valid HEAP-sized responses inside the dispatcher quote without mutating registers on
+  insufficient gas.
 - ISI syscalls charge extra gas using the native ISI schedule (`iroha_core::gas::meter_instruction`).
 - FASTPQ transfer batch scope syscalls charge the fixed gas. Gas: `G_fastpq_batch`; batch
   entries are charged separately with the transfer gas family when applied.
@@ -328,7 +333,7 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010000 QUERY_EXECUTE_NORITO — Args: `r10=&NoritoBytes(QueryRequest)` → `ptr (&NoritoBytes(QueryResponse))` — Gas: G_scq
 - 0x010001 CORE_QUERY_GET — Args: `r10=CoreQueryEntityTagV1`, `r11=&typed entity id` → `r10=Option<View>` sum handle. The active projection is flattened in declaration order and contains exact typed leaf TLVs.
 - 0x010002 CORE_QUERY_PAGE — Args: `r10=CoreQueryEntityTagV1`, `r11=offset:i64 bits`, `r12=limit:1..=64` → `r10=List<View,64>` handle, `r11=Option<i64>` sum handle. Pages preserve canonical ID order and expose a next offset only after a one-item lookahead proves another page exists.
-- 0x010006..0x010008 retain the canonical-Norito specialist reads for named parameters, contract manifests, and contract instances. Core and specialist reads use deterministic item/byte gas schedules.
+- 0x010006..0x010008 retain the canonical-Norito specialist reads for named parameters, contract manifests, and contract instances. Parameter keys are `&Name`, manifest keys are `&NoritoBytes(Hash)`, and instance keys are either `&NoritoBytes(ContractAddress)` or `&Name(alias)`; untyped `NoritoBytes(Name)` carriers are rejected. Core and specialist reads use deterministic item/byte gas schedules.
 - `QUERY_GET_PARAMETER` accepts canonical system parameter names such as `block.max_transactions`, `transaction.max_instructions`, `smart_contract.fuel`, and exact custom parameter names.
 - 0x010020 SYSVAR_CHAIN_ID — Args: none → `ptr (&Blob(chain_id))` or `0` — Gas: G_sysvar + bytes
 - 0x010021 SYSVAR_BLOCK_HEIGHT — Args: none → `u64=height` — Gas: G_sysvar
@@ -338,6 +343,8 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010025 SYSVAR_ENTRYPOINT — Args: none → `ptr (&Blob(entrypoint))` or `0` — Gas: G_sysvar + bytes
 - 0x010026 DECODE_ARGUMENT_RECORD — Args: raw hosts use `r10=&NoritoBytes(EntrypointArgumentRecordV1)`; prepared contract calls use the exact host-issued `&NoritoBytes(domain-separated record binding)`; `r11=&NoritoBytes(EntrypointArgumentSchemaV1)` → `r10=&Blob(pad:u8 then [u64; word_count])` — Gas: G_argument_decode + record + schema + materialized output. Prepared calls first validate the trusted flat schema and derive its conservative maximum aggregate and pointer-allocation bound; that bound must be affordable before the untrusted canonical record is decoded. Raw syscall quoting authenticates neither payload: it uses only bounded record/schema envelope lengths and reserves the full HEAP before schema and record authentication. For prepared calls, the complete signed record remains host-owned and the guest sees only its domain-separated binding. Before any allocation, the host preflights the complete aligned TLV sequence plus raw aggregate storage. Pointer TLVs and the output word table prefer INPUT and spill into owned HEAP, while raw `List` and sum storage is always owned HEAP. The record limit is inclusive at 1 MiB. Raw hosts then validate the schema hash, canonical flat atoms, inactive sum payloads, and every embedded typed pointer. JSON-to-record conversion occurs only at Torii/CLI tooling boundaries.
 - 0x010027 SYSVAR_CONTRACT_SUBJECT — Args: none → `ptr (&AccountId(contract subject))` — Gas: G_sysvar + bytes. Calls outside a deployed-contract scope fail closed.
+- 0x010028 NORMALIZE_NORITO_BYTES — Args: `r10=&Blob or &NoritoBytes` in validated public memory → `ptr (&NoritoBytes(same payload))` — Gas: G_pointer + bytes
+  - Compiler transport helper for strict Norito-consuming syscalls. It rejects null, malformed, disallowed, and non-bytes pointers, then allocates a fresh canonical V1 `NoritoBytes` envelope with an identical payload and recomputed hash. It performs no serialization and does not weaken the receiving syscall's exact pointer-type checks.
 - 0x010200 SET_ASSET_TRANSFER_FREEZE — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=frozen:0/1` → 0 — Gas: G_sci + bytes
 - 0x010201 SET_ASSET_TRANSFER_DAILY_LIMIT — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity or 0` → 0 — Gas: G_sci + bytes
 - 0x010210 ACCOUNT_RECOVERY_PROPOSE — Args: `r10=&Blob(alias), r11=&AccountId(replacement)` → 0 — Gas: G_sci + bytes
@@ -355,7 +362,7 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010034 STATE_MAP_KEY_AT — Args: `r10=&NoritoBytes(Vec<Name>), r11=&Name(base), r12=index` → `ptr (&NoritoBytes(canonical key))` or `0` — Gas: G_path + bytes
   - Compiler-internal decoder for bounded `StateMap` iteration. It accepts at most 64 paths in a 1 MiB page, requires an exact `base/<lowercase hex>` child, binds the recovered key to the base's CNTR-declared nominal key type, and rejects missing schemas, type confusion, malformed, non-canonical, or over-4-KiB keys.
 - 0x010035 STATE_VALUE_ENCODE — Args: `r10=&NoritoBytes(StateValueSchemaV1), r11=&[u64], r12=word_count` → `ptr (&NoritoBytes(StateValueRecordV1))` — Gas: G_state_value + schema + words + pointers + output
-  - Compiler-internal encoder for one canonical typed durable value. The schema is validated, active pointer leaves must carry canonical payloads of their declared ABI types, inactive `Option`/`Result` branches must be all-zero/null, and the stored record is bound to the exact schema by a domain-separated hash.
+  - Compiler-internal encoder for one canonical typed durable value. The schema is validated, active pointer leaves must carry canonical payloads of their declared ABI types, inactive `Option`/`Result` branches must be all-zero/null, and the stored record is bound to the exact schema by a domain-separated hash. A source-level `bytes` leaf may arrive transiently as `Blob` or `NoritoBytes`; the encoder copies its payload into the single canonical persisted `Blob` envelope. Stored records using `NoritoBytes` for that leaf remain invalid.
 - 0x010036 STATE_VALUE_DECODE — Args: `r10=&NoritoBytes(StateValueSchemaV1), r11=&NoritoBytes(StateValueRecordV1)` → `ptr (&Blob(pad:u8 then [u64; word_count]))` — Gas: G_state_value + schema + record + pointers + output
   - Compiler-internal decoder for scalars, structs, tuples, `Option`, and `Result`. Missing map entries are handled by the caller's outer `Option`; a zero record pointer, non-canonical inactive branch, malformed typed leaf, or different schema hash is rejected.
 
@@ -384,8 +391,8 @@ JSON envelope support for EXECUTE_INSTRUCTION
 - 0xA1 EXECUTE_QUERY — Args: `r10=&NoritoBytes(QueryRequest)` → `ptr` — Gas: G_scq
 - 0xA2 CREATE_NFTS_FOR_ALL_USERS — Args: none → `u64=count` — Gas: G_create_nfts_all
 - 0xA3 SET_SMARTCONTRACT_EXECUTION_DEPTH — Args: `r10=depth:u64` → `u64=prev` — Gas: G_sc_depth
-- 0xA4 GET_AUTHORITY — Args: none → `ptr` (AccountId in INPUT, `r10` points to it) — Gas: G_get_auth
-- 0xA7 RESOLVE_ACCOUNT_ALIAS — Args: `r10=&Blob(alias literal)` → `ptr` (AccountId in INPUT, `r10` points to it) — Gas: G_alias_resolve
+- 0xA4 GET_AUTHORITY — Args: none → host-owned `ptr (&AccountId)` — Gas: G_get_auth
+- 0xA7 RESOLVE_ACCOUNT_ALIAS — Args: `r10=&Blob(alias literal)` → host-owned `ptr (&AccountId)` — Gas: G_alias_resolve
 
 AXT host flow
 - 0xB0 AXT_BEGIN — Args: `r10=&AxtDescriptor`. Resets any in‑progress envelope and records the descriptor; hosts derive the canonical binding used by capability handles from this descriptor. Gas: G_axt + bytes.
@@ -497,6 +504,8 @@ node enforces that policy unconditionally.
 - Pointer provenance tests pin INPUT, allocated HEAP, and exact indexed literals as the only
   accepted V1 object stores. Asset mutation fixtures pin canonical `QuantityValueV1` frames;
   scalar and legacy `NoritoBytes(Numeric)` amount arguments remain invalid.
+- Compiler transport normalizes semantic request bytes to `NoritoBytes` before strict VRF
+  verification, while typed durable `bytes` values persist only canonical `Blob` atoms.
 - Any future post-release ABI break must be delivered through a new policy/version
   with updated tests and docs.
 
@@ -672,6 +681,7 @@ node enforces that policy unconditionally.
 | 0x10025 | SYSVAR_ENTRYPOINT | - | r10=ptr (&Blob(entrypoint)) or 0 | asset:gas/G_sysvar@ivm.core/v2 + bytes |
 | 0x10026 | DECODE_ARGUMENT_RECORD | r10=&NoritoBytes(EntrypointArgumentRecordV1), r11=&NoritoBytes(EntrypointArgumentSchemaV1) | r10=ptr (&Blob(pad:u8 then [u64; word_count])) | asset:gas/G_argument_decode@ivm.core/v2 + record + schema + output |
 | 0x10027 | SYSVAR_CONTRACT_SUBJECT | - | r10=ptr (&AccountId(contract subject)) | asset:gas/G_sysvar@ivm.core/v2 + bytes |
+| 0x10028 | NORMALIZE_NORITO_BYTES | r10=&Blob or &NoritoBytes (validated public TLV) | r10=&NoritoBytes(same payload) | asset:gas/G_pointer@ivm.core/v2 + bytes |
 | 0x10030 | STATE_KEYS | r10=&Name(prefix), r11=offset:u64, r12=limit:u64 (0..=64) | r10=ptr (&NoritoBytes(Vec<Name>)), r11=total:u64, r12=count:u64 | asset:gas/G_state_keys@ivm.core/v2 + count + bytes |
 | 0x10031 | STATE_HAS | r10=&Name(path) | r10=present:u64 | asset:gas/G_state_has@ivm.core/v2 |
 | 0x10032 | STATE_LEN | r10=&Name(path) | r10=len:u64, r11=found:u64 | asset:gas/G_state_len@ivm.core/v2 + bytes |
@@ -790,7 +800,8 @@ Codec helpers
 - 0x56 BUILD_PATH_KEY_NORITO — Args: `r10=&Name(base), r11=&NoritoBytes(key)` → Return: `ptr (&Name)` — Gas: G_path + bytes
   - Compiler-internal schema-bound helper. The base must name exactly one CNTR-declared `StateMap`; the key must be the unique canonical encoding of that map's nominal key type. It produces `base/<lowercase hex of canonical key bytes>`, rejects missing schemas, type confusion, malformed/noncanonical frames, and keys larger than 4 KiB. The exact suffix is reversible and lexicographic path order equals unsigned canonical-byte order.
 - 0x57 JSON_ENCODE — Args: `r10=&Json` → Return: `ptr (&NoritoBytes(Json))` — Gas: G_json_encode + bytes
-- 0x58 JSON_DECODE — Args: `r10=&NoritoBytes(Json)` or `r10=&Blob(JSON text)` → Return: `ptr (&Json)` — Gas: G_json_decode + bytes
+- 0x58 JSON_DECODE — Args: `r10=&NoritoBytes(Json)` → Return: `ptr (&Json)` — Gas: G_json_decode + bytes
+- JSON_DECODE rejects already-typed `Json` and raw/framed `Blob` carriers; callers use JSON_ENCODE/JSON_DECODE for the canonical typed conversion pair.
 - 0x59 SCHEMA_ENCODE — Args: `r10=&Name(schema), r11=&Json` → Return: `ptr (&NoritoBytes)` — Gas: G_schema + bytes
 - 0x5A SCHEMA_DECODE — Args: `r10=&Name(schema), r11=&NoritoBytes(Json)` → Return: `ptr (&Json)` — Gas: G_schema + bytes
 - 0x5B SCHEMA_INFO — Args: `r10=&Name(schema)` → Return: `ptr (&Json{"id":...,"version":...})` — Gas: G_schema + bytes
@@ -799,10 +810,11 @@ Codec helpers
 - 0x77 TLV_LEN — Args: `r10=&Tlv` → Return: `r10=payload_len` — Gas: G_tlv_len + bytes
   - Returns the TLV payload byte length after pointer-ABI validation. Gas charges the fixed length-read base plus the payload bytes inspected.
 - 0x5C NAME_DECODE — Args: `r10=&NoritoBytes(Name)` → Return: `ptr (&Name)` — Gas: G_name_decode + bytes
-- NAME_DECODE validates Name grammar (non-empty, no whitespace or `@/#/$`) and normalizes the output.
+- NAME_DECODE requires the canonical Norito `Name` frame; raw UTF-8, framed `String`, and alternate-layout frames are rejected.
 - 0x5D POINTER_TO_NORITO — Args: `r10=&PointerType<T>` → Return: `ptr (&NoritoBytes(TLV envelope))` — Gas: G_pointer + bytes
   - Copies the canonical byte-for-byte pointer-ABI TLV envelope into a NoritoBytes payload. Gas charges the fixed conversion base plus the envelope bytes copied.
 - 0x5E POINTER_FROM_NORITO — Args: `r10=&NoritoBytes(TLV envelope), r11=expected?:u16` → Return: `ptr (&PointerType<T>)` — Gas: G_pointer + bytes
+- POINTER_FROM_NORITO accepts only the canonical `NoritoBytes` carrier; a `Blob` containing the same inner envelope is a nominal type error.
   - Validates the embedded canonical TLV envelope, optionally checks the expected type id, and rehydrates the pointer. Gas charges the fixed conversion base plus the envelope bytes inspected.
 - Null inputs: DECODE_INT, JSON_DECODE, NAME_DECODE, and POINTER_FROM_NORITO accept `r10=0` and return `r10=0` without error.
 - All other pointer-typed syscalls require explicit non-zero pointers; there is no implicit last-input fallback.

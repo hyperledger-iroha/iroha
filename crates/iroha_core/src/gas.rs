@@ -143,6 +143,17 @@ pub(crate) fn lock_confidential_gas_for_tests() -> impl Drop {
     CONFIDENTIAL_GAS_TEST_LOCK.lock()
 }
 
+#[cfg(test)]
+pub(crate) fn confidential_gas_schedule_for_tests() -> ConfidentialGasSchedule {
+    ConfidentialGasSchedule {
+        base_verify: zk_gas_base_verify(),
+        per_public_input: zk_gas_per_public_input(),
+        per_proof_byte: zk_gas_per_proof_byte(),
+        per_nullifier: zk_gas_per_nullifier(),
+        per_commitment: zk_gas_per_commitment(),
+    }
+}
+
 fn zk_gas_base_verify() -> u64 {
     ZK_GAS_BASE_VERIFY.load(Ordering::Relaxed)
 }
@@ -1245,7 +1256,9 @@ mod tests {
             per_nullifier: 47,
             per_commitment: 59,
         };
-        state.set_zk(zk_cfg.clone());
+        state
+            .set_zk(zk_cfg.clone())
+            .expect("empty SCCP outbox accepts gas test configuration");
 
         let fixture = halo2_fixture_envelope("halo2/ipa:transfer-gas", [0u8; 32]);
         let proof_box = fixture.proof_box("halo2/ipa");

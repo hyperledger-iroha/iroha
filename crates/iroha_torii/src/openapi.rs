@@ -20519,11 +20519,7 @@ mod tests {
             "#/components/schemas/OfflineActiveTransferVerifier"
         );
         assert_eq!(
-            nullable_property_ref(
-                schemas,
-                "OfflineReadiness",
-                "active_topup_shield_verifier"
-            ),
+            nullable_property_ref(schemas, "OfflineReadiness", "active_topup_shield_verifier"),
             "#/components/schemas/OfflineActiveTopUpShieldVerifier"
         );
         let readiness_scale = readiness
@@ -22269,8 +22265,7 @@ mod tests {
         );
         assert!(list_response.contains_key("next_cursor"));
 
-        let nullable_intent_schema =
-            norito::json!({ "$ref": "#/components/schemas/JsonValue" });
+        let nullable_intent_schema = norito::json!({ "$ref": "#/components/schemas/JsonValue" });
         let nullable_terminal_timestamp_schema = norito::json!({
             "oneOf": [
                 { "type": "integer", "format": "uint64" },

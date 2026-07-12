@@ -1225,6 +1225,9 @@ impl Actor {
     }
 
     pub(in crate::sumeragi) fn poll_validation_results(&mut self) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         let Some(result_rx) = self.subsystems.validation.result_rx.take() else {
             return false;
         };

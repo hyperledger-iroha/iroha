@@ -268,7 +268,11 @@ contract TairaXorSccpBridge {
     }
 
     /** Burn wrapped XOR and emit one exact TRON-to-Taira Transfer statement. */
-    function transferToTaira(bytes calldata tairaRecipient, uint256 tokenAmount)
+    function transferToTaira(
+        bytes calldata tairaRecipient,
+        uint256 tokenAmount,
+        uint64 expectedNonce
+    )
         external onExpectedChain nonReentrant returns (bytes32 messageId)
     {
         bytes memory recipient = tairaRecipient;
@@ -281,8 +285,9 @@ contract TairaXorSccpBridge {
         uint256 tairaAmount = tokenAmount / TAIRA_TO_TOKEN_SCALE;
         require(tairaAmount != 0 && tairaAmount <= MAX_U128, "Amount exceeds SCCP u128");
         require(transferNonce != type(uint64).max, "Transfer nonce exhausted");
+        require(expectedNonce == transferNonce, "Transfer nonce mismatch");
         require(_codeHash(address(token)) == tokenCodeHash, "Token code changed");
-        uint64 nonce = transferNonce;
+        uint64 nonce = expectedNonce;
         bytes memory sender = abi.encodePacked(bytes1(0x41), msg.sender);
         SccpExactTransferCodec.TransferFields memory fields;
         fields.sourceDomain = DOMAIN_TRON;

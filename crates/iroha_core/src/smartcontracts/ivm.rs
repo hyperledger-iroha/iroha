@@ -10,10 +10,52 @@ pub mod return_value;
 
 use std::num::NonZeroU64;
 
+use iroha_crypto::Hash;
 use iroha_data_model::{
     ValidationFail,
-    executor::{IvmAdmissionError, MaxCyclesExceedsUpperBoundInfo},
+    executor::{
+        IvmAdmissionError, ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo,
+        MaxCyclesExceedsUpperBoundInfo,
+    },
+    smart_contract::manifest::ContractManifest,
 };
+
+/// Validate the consensus-binding hashes carried by a contract manifest.
+///
+/// V1 manifests must bind both the complete artifact and the exact ABI
+/// descriptor. Missing fields are rejected before mismatches, and the code
+/// hash is checked before the ABI hash to give every node identical error
+/// precedence.
+pub(crate) fn validate_manifest_hashes(
+    manifest: &ContractManifest,
+    actual_code_hash: Hash,
+    actual_abi_hash: Hash,
+) -> Result<(), IvmAdmissionError> {
+    let expected_code_hash = manifest
+        .code_hash
+        .ok_or(IvmAdmissionError::ManifestCodeHashMissing)?;
+    if expected_code_hash != actual_code_hash {
+        return Err(IvmAdmissionError::ManifestCodeHashMismatch(
+            ManifestCodeHashMismatchInfo {
+                expected: expected_code_hash,
+                actual: actual_code_hash,
+            },
+        ));
+    }
+
+    let expected_abi_hash = manifest
+        .abi_hash
+        .ok_or(IvmAdmissionError::ManifestAbiHashMissing)?;
+    if expected_abi_hash != actual_abi_hash {
+        return Err(IvmAdmissionError::ManifestAbiHashMismatch(
+            ManifestAbiHashMismatchInfo {
+                expected: expected_abi_hash,
+                actual: actual_abi_hash,
+            },
+        ));
+    }
+    Ok(())
+}
 
 /// Validate and return an artifact's positive cycle limit under node policy.
 ///
@@ -113,6 +155,70 @@ pub fn map_vm_error_with_context_to_validation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::smart_contract::manifest::ContractManifest;
+
+    fn manifest_with_hashes(code_hash: Option<Hash>, abi_hash: Option<Hash>) -> ContractManifest {
+        ContractManifest {
+            seiyaku_name: None,
+            code_hash,
+            abi_hash,
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: None,
+            states: None,
+            kotoba: None,
+            error_codes: None,
+            provenance: None,
+        }
+    }
+
+    #[test]
+    fn manifest_hash_validation_is_complete_and_has_stable_precedence() {
+        let code_hash = Hash::new(b"manifest-code");
+        let abi_hash = Hash::new(b"manifest-abi");
+        let wrong_code_hash = Hash::new(b"wrong-code");
+        let wrong_abi_hash = Hash::new(b"wrong-abi");
+
+        assert!(matches!(
+            validate_manifest_hashes(&manifest_with_hashes(None, None), code_hash, abi_hash),
+            Err(IvmAdmissionError::ManifestCodeHashMissing)
+        ));
+        assert!(matches!(
+            validate_manifest_hashes(
+                &manifest_with_hashes(Some(code_hash), None),
+                code_hash,
+                abi_hash
+            ),
+            Err(IvmAdmissionError::ManifestAbiHashMissing)
+        ));
+        assert!(matches!(
+            validate_manifest_hashes(
+                &manifest_with_hashes(Some(wrong_code_hash), Some(wrong_abi_hash)),
+                code_hash,
+                abi_hash
+            ),
+            Err(IvmAdmissionError::ManifestCodeHashMismatch(info))
+                if info.expected == wrong_code_hash && info.actual == code_hash
+        ));
+        assert!(matches!(
+            validate_manifest_hashes(
+                &manifest_with_hashes(Some(code_hash), Some(wrong_abi_hash)),
+                code_hash,
+                abi_hash
+            ),
+            Err(IvmAdmissionError::ManifestAbiHashMismatch(info))
+                if info.expected == wrong_abi_hash && info.actual == abi_hash
+        ));
+        assert_eq!(
+            validate_manifest_hashes(
+                &manifest_with_hashes(Some(code_hash), Some(abi_hash)),
+                code_hash,
+                abi_hash
+            ),
+            Ok(())
+        );
+    }
 
     #[test]
     fn gas_limit_for_cycles_scales_by_max_instruction_cost() {

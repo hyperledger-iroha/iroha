@@ -1181,37 +1181,6 @@ impl IvmBuilder {
     /// unreturned; prefer [`build_with_config`](Self::build_with_config) when the
     /// caller needs to reuse the configuration later.
     pub fn build(self) -> IVM {
-        struct BannerGuard {
-            previous: bool,
-            active: bool,
-        }
-
-        impl BannerGuard {
-            fn new(suppress: bool) -> Self {
-                if suppress {
-                    let prev = SUPPRESS_BANNER.swap(true, Ordering::Relaxed);
-                    Self {
-                        previous: prev,
-                        active: true,
-                    }
-                } else {
-                    Self {
-                        previous: SUPPRESS_BANNER.load(Ordering::Relaxed),
-                        active: false,
-                    }
-                }
-            }
-        }
-
-        impl Drop for BannerGuard {
-            fn drop(&mut self) {
-                if self.active {
-                    SUPPRESS_BANNER.store(self.previous, Ordering::Relaxed);
-                }
-            }
-        }
-
-        let guard = BannerGuard::new(self.suppress_banner);
         let mut vm = IVM::new_from_config(self.config);
         if let Some(config) = self.host_config {
             config(&mut vm);
@@ -1225,8 +1194,8 @@ impl IvmBuilder {
             vm.hardware_capabilities(),
             vm.use_metal,
             vm.use_cuda,
+            self.suppress_banner,
         );
-        drop(guard);
         vm
     }
 
@@ -1900,9 +1869,11 @@ impl IVM {
         capabilities: HardwareCapabilities,
         metal: bool,
         cuda: bool,
+        suppress: bool,
     ) {
-        // Suppress banner when disabled programmatically (e.g., in benches)
-        if SUPPRESS_BANNER.load(Ordering::Relaxed) {
+        // Builder-local suppression must not mutate process-global state: VM
+        // construction can happen concurrently in tooling and test workers.
+        if suppress || SUPPRESS_BANNER.load(Ordering::Relaxed) {
             return;
         }
         const ART: &str = r#" 
@@ -2709,6 +2680,7 @@ impl IVM {
             vm.hardware_capabilities(),
             vm.use_metal,
             vm.use_cuda,
+            false,
         );
         vm
     }
@@ -2794,7 +2766,12 @@ impl IVM {
         if parsed.metadata.abi_version != 1 {
             return Err(VMError::InvalidMetadata);
         }
-        let strict_return_integrity = parsed.contract_interface.is_some();
+        if parsed.contract_interface.is_some() {
+            let contract = crate::prepare_contract(Arc::<[u8]>::from(program))
+                .map_err(crate::ContractArtifactError::into_vm_error)?;
+            return self.load_prepared(&contract);
+        }
+        let strict_return_integrity = false;
         let header_len = parsed.header_len;
         let literal_prefix = parsed.prefix_len();
         let literal_table = decode_literal_table(
@@ -3066,6 +3043,7 @@ impl IVM {
             VMError::AssertionFailed => VmTrapKind::AssertionFailed,
             VMError::ExceededMaxCycles => VmTrapKind::ExceededMaxCycles,
             VMError::InvalidMetadata => VmTrapKind::InvalidMetadata,
+            VMError::ArtifactAbiHashMismatch { .. } => VmTrapKind::ArtifactAbiHashMismatch,
             VMError::InvalidVectorLength { .. } => VmTrapKind::InvalidVectorLength,
             VMError::MissingHalt => VmTrapKind::MissingHalt,
             VMError::VectorExtensionDisabled
@@ -8657,6 +8635,7 @@ mod tests {
         let interface = crate::metadata::EmbeddedContractInterfaceV1 {
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: String::new(),
+            abi_hash: crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
@@ -9389,10 +9368,14 @@ mod tests {
     #[test]
     fn runtime_trap_populates_last_diagnostic() {
         set_banner_enabled(false);
+        // A durable write survives optimization and guarantees that execution
+        // reaches a metered instruction; an otherwise empty contract is HALT-only.
         let source = r#"
 seiyaku Demo {
+  state int value;
+
   hajimari() {
-    let x = 1;
+    value = 1;
   }
 }
 "#;
@@ -9406,15 +9389,32 @@ seiyaku Demo {
         assert!(output.report.source_map.iter().all(|entry| {
             entry.source.source_path.as_deref() == Some("contracts/runtime_trap.ko")
         }));
+        let metadata = ProgramMetadata::parse(&output.artifact).expect("parse compiled metadata");
+        let lifecycle = metadata
+            .contract_interface
+            .as_ref()
+            .and_then(|interface| {
+                interface
+                    .entrypoints
+                    .iter()
+                    .find(|entrypoint| entrypoint.name == "hajimari")
+            })
+            .expect("compiled hajimari entrypoint");
+        let entrypoint_pc = u64::try_from(metadata.prefix_len())
+            .expect("metadata prefix fits u64")
+            .checked_add(lifecycle.entry_pc)
+            .expect("entrypoint PC fits u64");
         let mut vm = IVM::new(0);
         vm.load_program(&output.artifact)
             .expect("load compiled program");
+        vm.set_program_counter(entrypoint_pc)
+            .expect("select hajimari entrypoint");
         let err = vm.run().expect_err("zero gas should trap");
         assert_eq!(err, VMError::OutOfGas);
         let diag = vm.last_diagnostic().expect("diagnostic should be captured");
         assert_eq!(diag.trap_kind, VmTrapKind::OutOfGas);
         assert_eq!(diag.budget.gas_limit, 0);
-        assert_eq!(diag.context.entrypoint_pc, Some(vm.pc()));
+        assert_eq!(diag.context.entrypoint_pc, Some(entrypoint_pc));
         assert!(
             diag.source.is_none(),
             "deployable artifacts exclude source maps; tooling resolves the hash-keyed sidecar"

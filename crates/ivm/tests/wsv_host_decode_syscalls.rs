@@ -7,7 +7,7 @@ use iroha_crypto::PublicKey;
 use iroha_data_model::prelude::{AssetDefinitionId, Name};
 use iroha_primitives::json::Json;
 use ivm::{
-    IVM, PointerType,
+    IVM, PointerType, VMError,
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
@@ -73,7 +73,7 @@ fn wsv_host_name_decode_roundtrip() {
 }
 
 #[test]
-fn wsv_host_json_decode_accepts_blob() {
+fn wsv_host_json_decode_rejects_retired_blob_carrier() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(wsv_host());
 
@@ -85,13 +85,8 @@ fn wsv_host_json_decode_accepts_blob() {
     let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_DECODE as u8]);
     vm.set_register(10, p_blob);
     vm.load_program(&prog).expect("load program");
-    vm.run().expect("json decode");
-
-    let out_ptr = vm.register(10);
-    let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
-    assert_eq!(tlv.type_id, PointerType::Json);
-    let parsed: Json = norito::decode_from_bytes(tlv.payload).expect("decode json");
-    assert_eq!(parsed.get(), r#"{"a":1,"b":[2,3]}"#);
+    assert_eq!(vm.run(), Err(VMError::NoritoInvalid));
+    assert_eq!(vm.register(10), p_blob);
 }
 
 #[test]

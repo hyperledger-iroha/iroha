@@ -106,6 +106,7 @@ pub fn soracloud_hf_generated_service_contract_artifact() -> Vec<u8> {
     let contract_interface = ivm::EmbeddedContractInterfaceV1 {
         seiyaku_name: "SoracloudRuntime".to_owned(),
         compiler_fingerprint: "iroha-soracloud-hf-generated".to_owned(),
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),

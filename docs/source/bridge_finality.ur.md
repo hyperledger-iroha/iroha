@@ -4,8 +4,8 @@ direction: rtl
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
-source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+source_hash: 1cbd248fe14e63d00f002f09e1663181f3ab9bd99124ffeb89c56763b784046b
+source_last_modified: "2026-07-12"
 translation_last_reviewed: 2026-07-12
 ---
 
@@ -46,11 +46,14 @@ authenticate کرتا ہے۔ Finalized snapshot اگلے epoch parameters کے �
 
 ## مستقل ذخیرہ اور verification
 
-Sumeragi v2 apply path artifact کو verify کر کے immutable Kura sidecar کی صورت محفوظ
-کرتا ہے۔ proof builder canonical block اور اس کا sidecar پڑھتا ہے اور موجودہ mutable
-world state سے تاریخی PoP یا certificates دوبارہ نہیں بناتا۔ گم، خراب، متصادم یا ناقابل
-verification sidecar fail closed ہوتا ہے؛ دستیابی حالیہ in-memory history window تک محدود
-نہیں۔
+Finality publish ہونے یا block body evict ہونے سے پہلے Kura exact canonical header اور
+root-authenticated SCCP archive کو immutable retained-block record میں لکھتا ہے، پھر
+exact V2 artifact کو الگ immutable finality record میں محفوظ کرتا ہے۔ دونوں writes
+idempotent ہیں اور اسی height کا conflict مسترد کرتی ہیں۔ `build_finality_proof` صرف
+retained header اور verified finality record پڑھتا ہے؛ historical block body یا mutable
+world state کا PoP کبھی استعمال نہیں کرتا۔ Restart پر header/archive/artifact/hash
+association دوبارہ verify ہوتا ہے۔ Body eviction صحیح proof کو unavailable نہیں کرتا؛
+گم، خراب، متصادم یا ناقابل verification record fail closed ہوتا ہے۔
 
 stateless verifier version، chain، height، header hash، header کے canonical predecessor اور
 view، context، subject اور CommitQC کو عین match کرتا اور artifact کے تمام PoP verify کرتا ہے۔
@@ -80,7 +83,8 @@ SCCP یہی `BridgeFinalityProof` استعمال کرتا ہے۔ message کے د
 - `GET /v1/bridge/finality/{height}`، `BridgeFinalityProof` واپس کرتا ہے؛
 - `GET /v1/bridge/finality/bundle/{height}`، `BridgeFinalityBundle` واپس کرتا ہے۔
 
-block یا عین مستقل v2 artifact غائب یا invalid ہو تو دونوں endpoints fail closed ہوتے ہیں۔
+Retained canonical header یا عین مستقل v2 artifact غائب یا invalid ہو تو دونوں endpoints
+fail closed ہوتے ہیں۔ Historical block body eviction صحیح proof کو unavailable نہیں کرتا۔
 نامعلوم fields، unsupported versions اور retired proof shapes لازماً مسترد کیے جائیں۔
 
 </div>

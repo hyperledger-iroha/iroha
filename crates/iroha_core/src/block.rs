@@ -358,6 +358,16 @@ fn map_overlay_error(
     }
 }
 
+/// Return whether an executable is built through the VM overlay scheduler and
+/// therefore needs access capture, state-dependent retry, and live rebuild.
+#[must_use]
+const fn uses_live_vm_overlay_scheduler(executable: &Executable) -> bool {
+    matches!(
+        executable,
+        Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_)
+    )
+}
+
 fn missing_authority_requires_rejection(
     state_tx: &crate::state::StateTransaction<'_, '_>,
     tx: &SignedTransaction,
@@ -414,6 +424,7 @@ mod overlay_error_tests {
     use iroha_data_model::{
         ValidationFail,
         nexus::{AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId},
+        transaction::{IvmBytecode, IvmProved},
     };
 
     use super::*;
@@ -442,6 +453,20 @@ mod overlay_error_tests {
             }
             other => panic!("unexpected mapping: {other:?}"),
         }
+    }
+
+    #[test]
+    fn ivm_proved_uses_live_overlay_scheduler_path() {
+        let proved = Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(Vec::new()),
+            overlay: Vec::<InstructionBox>::new().into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas-policy"),
+        });
+        assert!(uses_live_vm_overlay_scheduler(&proved));
+
+        let instructions = Executable::Instructions(Vec::<InstructionBox>::new().into());
+        assert!(!uses_live_vm_overlay_scheduler(&instructions));
     }
 }
 
@@ -10599,11 +10624,7 @@ pub(crate) mod valid {
             }
 
             let capture_vm_access_log = |tx: &SignedTransaction| {
-                dynamic_prepass
-                    || matches!(
-                        tx.instructions(),
-                        Executable::ContractCall(_) | Executable::Ivm(_)
-                    )
+                dynamic_prepass || uses_live_vm_overlay_scheduler(tx.instructions())
             };
 
             let mut prepared_overlays: Vec<
@@ -10976,7 +10997,7 @@ pub(crate) mod valid {
             // sequential merge, retain the cached overlay only while every
             // durable-state prefix read by that VM still has the same value.
             // This is deliberately narrower than re-executing arbitrary ISIs:
-            // ContractCall/IVM overlays with an observed stale durable read are
+            // ContractCall/IVM/IvmProved overlays with an observed stale durable read are
             // rebuilt selectively. Bytecode with ledger access, nested calls,
             // or other opaque dynamic access is also rebuilt because those
             // observations are not yet represented by a narrow fingerprint.
@@ -10990,10 +11011,7 @@ pub(crate) mod valid {
                 crate::pipeline::overlay::OverlayBuildError,
             > {
                 let tx = txs[idx];
-                let is_vm = matches!(
-                    tx.instructions(),
-                    Executable::ContractCall(_) | Executable::Ivm(_)
-                );
+                let is_vm = uses_live_vm_overlay_scheduler(tx.instructions());
                 let (stale_durable_read, force_live_rebuild, cache_idx, prepared_argument_record) =
                     match prepared_overlays[idx].as_ref() {
                         Ok(prepared) => (
@@ -11636,10 +11654,8 @@ pub(crate) mod valid {
                         let overlay = match overlays[idx].as_ref() {
                             Ok(overlay) => Some(overlay.as_ref()),
                             Err(err)
-                                if matches!(
-                                    tx.instructions(),
-                                    Executable::ContractCall(_) | Executable::Ivm(_)
-                                ) && err.may_change_with_live_state() =>
+                                if uses_live_vm_overlay_scheduler(tx.instructions())
+                                    && err.may_change_with_live_state() =>
                             {
                                 // A VM can fail against the block-start snapshot
                                 // and become valid after an earlier globally

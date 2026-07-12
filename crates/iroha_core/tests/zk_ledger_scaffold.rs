@@ -179,7 +179,9 @@ fn state_with_account(domain_name: &str) -> (State, AccountId) {
     zk.halo2.enabled = true;
     zk.halo2.curve = iroha_config::parameters::actual::ZkCurve::Pallas;
     zk.halo2.backend = iroha_config::parameters::actual::Halo2Backend::Ipa;
-    state.set_zk(zk);
+    state
+        .set_zk(zk)
+        .expect("empty SCCP outbox accepts ledger test configuration");
     (state, owner)
 }
 
@@ -587,7 +589,9 @@ fn asset_hidden_transfer_counts_nullifiers_against_configured_cap() {
     let (mut state, owner, _asset_def_id, root_hint) = registered_asset_hidden_pool();
     let mut zk = state.zk.clone();
     zk.max_nullifiers_per_tx = 1;
-    state.set_zk(zk);
+    state
+        .set_zk(zk)
+        .expect("empty SCCP outbox accepts ledger test configuration");
     let err = execute_asset_hidden_on_state(
         &state,
         &owner,
@@ -612,7 +616,9 @@ fn asset_hidden_transfer_counts_commitments_against_configured_cap() {
     let (mut state, owner, _asset_def_id, root_hint) = registered_asset_hidden_pool();
     let mut zk = state.zk.clone();
     zk.max_commitments_per_tx = 1;
-    state.set_zk(zk);
+    state
+        .set_zk(zk)
+        .expect("empty SCCP outbox accepts ledger test configuration");
     let err = execute_asset_hidden_on_state(
         &state,
         &owner,
@@ -1402,7 +1408,9 @@ fn transfer_rejects_when_nullifiers_exceed_cap() {
     let mut state = State::new(World::new(), kura, query);
     let mut zk_cfg = state.zk.clone();
     zk_cfg.max_nullifiers_per_tx = 1;
-    state.set_zk(zk_cfg);
+    state
+        .set_zk(zk_cfg)
+        .expect("empty SCCP outbox accepts ledger test configuration");
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -2064,78 +2072,82 @@ fn zk_roots_are_bounded_in_world_state() {
     );
     #[cfg(not(feature = "telemetry"))]
     let mut state = State::new(World::new(), kura, query);
-    state.set_zk(cfg::Zk {
-        halo2: cfg::Halo2 {
-            enabled: defaults::zk::halo2::ENABLED,
-            curve: cfg::ZkCurve::Pallas,
-            backend: cfg::Halo2Backend::Ipa,
-            max_k: defaults::zk::halo2::MAX_K,
-            verifier_budget_ms: defaults::zk::halo2::VERIFIER_BUDGET_MS,
-            verifier_max_batch: defaults::zk::halo2::VERIFIER_MAX_BATCH,
-            ..cfg::Halo2::default()
-        },
-        fastpq: cfg::Fastpq {
-            execution_mode: cfg::FastpqExecutionMode::Cpu,
-            poseidon_mode: cfg::FastpqPoseidonMode::Cpu,
-            proof_sidecar_queue_cap: defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
-            proof_sidecar_max_bytes: defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
-            proof_sidecar_max_retries: defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
-            device_class: None,
-            chip_family: None,
-            gpu_kind: None,
-            metal_queue_fanout: None,
-            metal_queue_column_threshold: None,
-            metal_max_in_flight: None,
-            metal_threadgroup_width: None,
-            metal_trace: defaults::zk::fastpq::METAL_TRACE,
-            metal_debug_enum: defaults::zk::fastpq::METAL_DEBUG_ENUM,
-            metal_debug_fused: defaults::zk::fastpq::METAL_DEBUG_FUSED,
-        },
-        stark: cfg::Stark::default(),
-        root_history_cap: 4,
-        ballot_history_cap: defaults::zk::vote::BALLOT_HISTORY_CAP,
-        empty_root_on_empty: defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,
-        merkle_depth: defaults::zk::ledger::EMPTY_ROOT_DEPTH,
-        preverify_max_bytes: defaults::zk::preverify::MAX_BYTES,
-        preverify_budget_bytes: defaults::zk::preverify::BUDGET_BYTES,
-        proof_history_cap: defaults::zk::proof::RECORD_HISTORY_CAP,
-        proof_retention_grace_blocks: defaults::zk::proof::RETENTION_GRACE_BLOCKS,
-        proof_prune_batch: defaults::zk::proof::PRUNE_BATCH_SIZE,
-        bridge_proof_max_range_len: defaults::zk::proof::BRIDGE_MAX_RANGE_LEN,
-        bridge_proof_max_past_age_blocks: defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
-        bridge_proof_max_future_drift_blocks: defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
-        poseidon_params_id: defaults::confidential::POSEIDON_PARAMS_ID,
-        pedersen_params_id: defaults::confidential::PEDERSEN_PARAMS_ID,
-        kaigi_roster_join_vk: None,
-        kaigi_roster_leave_vk: None,
-        kaigi_usage_vk: None,
-        max_proof_size_bytes: defaults::confidential::MAX_PROOF_SIZE_BYTES,
-        max_nullifiers_per_tx: defaults::confidential::MAX_NULLIFIERS_PER_TX,
-        max_commitments_per_tx: 32,
-        max_confidential_ops_per_block: 32,
-        verify_timeout: defaults::confidential::VERIFY_TIMEOUT,
-        max_anchor_age_blocks: defaults::confidential::MAX_ANCHOR_AGE_BLOCKS,
-        max_proof_bytes_block: defaults::confidential::MAX_PROOF_BYTES_BLOCK,
-        max_verify_calls_per_tx: defaults::confidential::MAX_VERIFY_CALLS_PER_TX,
-        max_verify_calls_per_block: defaults::confidential::MAX_VERIFY_CALLS_PER_BLOCK,
-        max_public_inputs: defaults::confidential::MAX_PUBLIC_INPUTS,
-        reorg_depth_bound: defaults::confidential::REORG_DEPTH_BOUND,
-        policy_transition_delay_blocks: defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
-        policy_transition_window_blocks: defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
-        tree_roots_history_len: defaults::confidential::TREE_ROOTS_HISTORY_LEN,
-        tree_frontier_checkpoint_interval:
-            defaults::confidential::TREE_FRONTIER_CHECKPOINT_INTERVAL,
-        registry_max_vk_entries: defaults::confidential::REGISTRY_MAX_VK_ENTRIES,
-        registry_max_params_entries: defaults::confidential::REGISTRY_MAX_PARAMS_ENTRIES,
-        registry_max_delta_per_block: defaults::confidential::REGISTRY_MAX_DELTA_PER_BLOCK,
-        gas: cfg::ConfidentialGas {
-            proof_base: defaults::confidential::gas::PROOF_BASE,
-            per_public_input: defaults::confidential::gas::PER_PUBLIC_INPUT,
-            per_proof_byte: defaults::confidential::gas::PER_PROOF_BYTE,
-            per_nullifier: defaults::confidential::gas::PER_NULLIFIER,
-            per_commitment: defaults::confidential::gas::PER_COMMITMENT,
-        },
-    });
+    state
+        .set_zk(cfg::Zk {
+            halo2: cfg::Halo2 {
+                enabled: defaults::zk::halo2::ENABLED,
+                curve: cfg::ZkCurve::Pallas,
+                backend: cfg::Halo2Backend::Ipa,
+                max_k: defaults::zk::halo2::MAX_K,
+                verifier_budget_ms: defaults::zk::halo2::VERIFIER_BUDGET_MS,
+                verifier_max_batch: defaults::zk::halo2::VERIFIER_MAX_BATCH,
+                ..cfg::Halo2::default()
+            },
+            fastpq: cfg::Fastpq {
+                execution_mode: cfg::FastpqExecutionMode::Cpu,
+                poseidon_mode: cfg::FastpqPoseidonMode::Cpu,
+                proof_sidecar_queue_cap: defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
+                proof_sidecar_max_bytes: defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
+                proof_sidecar_max_retries: defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
+                device_class: None,
+                chip_family: None,
+                gpu_kind: None,
+                metal_queue_fanout: None,
+                metal_queue_column_threshold: None,
+                metal_max_in_flight: None,
+                metal_threadgroup_width: None,
+                metal_trace: defaults::zk::fastpq::METAL_TRACE,
+                metal_debug_enum: defaults::zk::fastpq::METAL_DEBUG_ENUM,
+                metal_debug_fused: defaults::zk::fastpq::METAL_DEBUG_FUSED,
+            },
+            stark: cfg::Stark::default(),
+            root_history_cap: 4,
+            ballot_history_cap: defaults::zk::vote::BALLOT_HISTORY_CAP,
+            empty_root_on_empty: defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,
+            merkle_depth: defaults::zk::ledger::EMPTY_ROOT_DEPTH,
+            preverify_max_bytes: defaults::zk::preverify::MAX_BYTES,
+            preverify_budget_bytes: defaults::zk::preverify::BUDGET_BYTES,
+            proof_history_cap: defaults::zk::proof::RECORD_HISTORY_CAP,
+            proof_retention_grace_blocks: defaults::zk::proof::RETENTION_GRACE_BLOCKS,
+            proof_prune_batch: defaults::zk::proof::PRUNE_BATCH_SIZE,
+            bridge_proof_max_range_len: defaults::zk::proof::BRIDGE_MAX_RANGE_LEN,
+            bridge_proof_max_past_age_blocks: defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
+            bridge_proof_max_future_drift_blocks:
+                defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
+            poseidon_params_id: defaults::confidential::POSEIDON_PARAMS_ID,
+            pedersen_params_id: defaults::confidential::PEDERSEN_PARAMS_ID,
+            kaigi_roster_join_vk: None,
+            kaigi_roster_leave_vk: None,
+            kaigi_usage_vk: None,
+            max_proof_size_bytes: defaults::confidential::MAX_PROOF_SIZE_BYTES,
+            max_nullifiers_per_tx: defaults::confidential::MAX_NULLIFIERS_PER_TX,
+            max_commitments_per_tx: 32,
+            max_confidential_ops_per_block: 32,
+            verify_timeout: defaults::confidential::VERIFY_TIMEOUT,
+            max_anchor_age_blocks: defaults::confidential::MAX_ANCHOR_AGE_BLOCKS,
+            max_proof_bytes_block: defaults::confidential::MAX_PROOF_BYTES_BLOCK,
+            max_verify_calls_per_tx: defaults::confidential::MAX_VERIFY_CALLS_PER_TX,
+            max_verify_calls_per_block: defaults::confidential::MAX_VERIFY_CALLS_PER_BLOCK,
+            max_public_inputs: defaults::confidential::MAX_PUBLIC_INPUTS,
+            reorg_depth_bound: defaults::confidential::REORG_DEPTH_BOUND,
+            policy_transition_delay_blocks: defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
+            policy_transition_window_blocks:
+                defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+            tree_roots_history_len: defaults::confidential::TREE_ROOTS_HISTORY_LEN,
+            tree_frontier_checkpoint_interval:
+                defaults::confidential::TREE_FRONTIER_CHECKPOINT_INTERVAL,
+            registry_max_vk_entries: defaults::confidential::REGISTRY_MAX_VK_ENTRIES,
+            registry_max_params_entries: defaults::confidential::REGISTRY_MAX_PARAMS_ENTRIES,
+            registry_max_delta_per_block: defaults::confidential::REGISTRY_MAX_DELTA_PER_BLOCK,
+            gas: cfg::ConfidentialGas {
+                proof_base: defaults::confidential::gas::PROOF_BASE,
+                per_public_input: defaults::confidential::gas::PER_PUBLIC_INPUT,
+                per_proof_byte: defaults::confidential::gas::PER_PROOF_BYTE,
+                per_nullifier: defaults::confidential::gas::PER_NULLIFIER,
+                per_commitment: defaults::confidential::gas::PER_COMMITMENT,
+            },
+        })
+        .expect("empty SCCP outbox accepts bounded-roots test configuration");
 
     // Begin block/transaction
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -2227,77 +2239,81 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
     #[cfg(not(feature = "telemetry"))]
     let mut state = State::new(World::new(), kura, query);
 
-    state.set_zk(cfg::Zk {
-        halo2: cfg::Halo2 {
-            enabled: defaults::zk::halo2::ENABLED,
-            curve: cfg::ZkCurve::Pallas,
-            backend: cfg::Halo2Backend::Ipa,
-            max_k: defaults::zk::halo2::MAX_K,
-            verifier_budget_ms: defaults::zk::halo2::VERIFIER_BUDGET_MS,
-            verifier_max_batch: defaults::zk::halo2::VERIFIER_MAX_BATCH,
-            ..cfg::Halo2::default()
-        },
-        fastpq: cfg::Fastpq {
-            execution_mode: cfg::FastpqExecutionMode::Cpu,
-            poseidon_mode: cfg::FastpqPoseidonMode::Cpu,
-            proof_sidecar_queue_cap: defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
-            proof_sidecar_max_bytes: defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
-            proof_sidecar_max_retries: defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
-            device_class: None,
-            chip_family: None,
-            gpu_kind: None,
-            metal_queue_fanout: None,
-            metal_queue_column_threshold: None,
-            metal_max_in_flight: None,
-            metal_threadgroup_width: None,
-            metal_trace: defaults::zk::fastpq::METAL_TRACE,
-            metal_debug_enum: defaults::zk::fastpq::METAL_DEBUG_ENUM,
-            metal_debug_fused: defaults::zk::fastpq::METAL_DEBUG_FUSED,
-        },
-        stark: cfg::Stark::default(),
-        root_history_cap: 8,
-        ballot_history_cap: defaults::zk::vote::BALLOT_HISTORY_CAP,
-        empty_root_on_empty: defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,
-        merkle_depth: defaults::zk::ledger::EMPTY_ROOT_DEPTH,
-        preverify_max_bytes: defaults::zk::preverify::MAX_BYTES,
-        preverify_budget_bytes: defaults::zk::preverify::BUDGET_BYTES,
-        proof_history_cap: defaults::zk::proof::RECORD_HISTORY_CAP,
-        proof_retention_grace_blocks: defaults::zk::proof::RETENTION_GRACE_BLOCKS,
-        proof_prune_batch: defaults::zk::proof::PRUNE_BATCH_SIZE,
-        bridge_proof_max_range_len: defaults::zk::proof::BRIDGE_MAX_RANGE_LEN,
-        bridge_proof_max_past_age_blocks: defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
-        bridge_proof_max_future_drift_blocks: defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
-        poseidon_params_id: defaults::confidential::POSEIDON_PARAMS_ID,
-        pedersen_params_id: defaults::confidential::PEDERSEN_PARAMS_ID,
-        kaigi_roster_join_vk: None,
-        kaigi_roster_leave_vk: None,
-        kaigi_usage_vk: None,
-        max_proof_size_bytes: defaults::confidential::MAX_PROOF_SIZE_BYTES,
-        max_nullifiers_per_tx: defaults::confidential::MAX_NULLIFIERS_PER_TX,
-        max_commitments_per_tx: defaults::confidential::MAX_COMMITMENTS_PER_TX,
-        max_confidential_ops_per_block: defaults::confidential::MAX_CONFIDENTIAL_OPS_PER_BLOCK,
-        verify_timeout: defaults::confidential::VERIFY_TIMEOUT,
-        max_anchor_age_blocks: defaults::confidential::MAX_ANCHOR_AGE_BLOCKS,
-        max_proof_bytes_block: defaults::confidential::MAX_PROOF_BYTES_BLOCK,
-        max_verify_calls_per_tx: defaults::confidential::MAX_VERIFY_CALLS_PER_TX,
-        max_verify_calls_per_block: defaults::confidential::MAX_VERIFY_CALLS_PER_BLOCK,
-        max_public_inputs: defaults::confidential::MAX_PUBLIC_INPUTS,
-        reorg_depth_bound: 3,
-        policy_transition_delay_blocks: defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
-        policy_transition_window_blocks: defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
-        tree_roots_history_len: defaults::confidential::TREE_ROOTS_HISTORY_LEN,
-        tree_frontier_checkpoint_interval: 1,
-        registry_max_vk_entries: defaults::confidential::REGISTRY_MAX_VK_ENTRIES,
-        registry_max_params_entries: defaults::confidential::REGISTRY_MAX_PARAMS_ENTRIES,
-        registry_max_delta_per_block: defaults::confidential::REGISTRY_MAX_DELTA_PER_BLOCK,
-        gas: cfg::ConfidentialGas {
-            proof_base: defaults::confidential::gas::PROOF_BASE,
-            per_public_input: defaults::confidential::gas::PER_PUBLIC_INPUT,
-            per_proof_byte: defaults::confidential::gas::PER_PROOF_BYTE,
-            per_nullifier: defaults::confidential::gas::PER_NULLIFIER,
-            per_commitment: defaults::confidential::gas::PER_COMMITMENT,
-        },
-    });
+    state
+        .set_zk(cfg::Zk {
+            halo2: cfg::Halo2 {
+                enabled: defaults::zk::halo2::ENABLED,
+                curve: cfg::ZkCurve::Pallas,
+                backend: cfg::Halo2Backend::Ipa,
+                max_k: defaults::zk::halo2::MAX_K,
+                verifier_budget_ms: defaults::zk::halo2::VERIFIER_BUDGET_MS,
+                verifier_max_batch: defaults::zk::halo2::VERIFIER_MAX_BATCH,
+                ..cfg::Halo2::default()
+            },
+            fastpq: cfg::Fastpq {
+                execution_mode: cfg::FastpqExecutionMode::Cpu,
+                poseidon_mode: cfg::FastpqPoseidonMode::Cpu,
+                proof_sidecar_queue_cap: defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
+                proof_sidecar_max_bytes: defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
+                proof_sidecar_max_retries: defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
+                device_class: None,
+                chip_family: None,
+                gpu_kind: None,
+                metal_queue_fanout: None,
+                metal_queue_column_threshold: None,
+                metal_max_in_flight: None,
+                metal_threadgroup_width: None,
+                metal_trace: defaults::zk::fastpq::METAL_TRACE,
+                metal_debug_enum: defaults::zk::fastpq::METAL_DEBUG_ENUM,
+                metal_debug_fused: defaults::zk::fastpq::METAL_DEBUG_FUSED,
+            },
+            stark: cfg::Stark::default(),
+            root_history_cap: 8,
+            ballot_history_cap: defaults::zk::vote::BALLOT_HISTORY_CAP,
+            empty_root_on_empty: defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,
+            merkle_depth: defaults::zk::ledger::EMPTY_ROOT_DEPTH,
+            preverify_max_bytes: defaults::zk::preverify::MAX_BYTES,
+            preverify_budget_bytes: defaults::zk::preverify::BUDGET_BYTES,
+            proof_history_cap: defaults::zk::proof::RECORD_HISTORY_CAP,
+            proof_retention_grace_blocks: defaults::zk::proof::RETENTION_GRACE_BLOCKS,
+            proof_prune_batch: defaults::zk::proof::PRUNE_BATCH_SIZE,
+            bridge_proof_max_range_len: defaults::zk::proof::BRIDGE_MAX_RANGE_LEN,
+            bridge_proof_max_past_age_blocks: defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
+            bridge_proof_max_future_drift_blocks:
+                defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
+            poseidon_params_id: defaults::confidential::POSEIDON_PARAMS_ID,
+            pedersen_params_id: defaults::confidential::PEDERSEN_PARAMS_ID,
+            kaigi_roster_join_vk: None,
+            kaigi_roster_leave_vk: None,
+            kaigi_usage_vk: None,
+            max_proof_size_bytes: defaults::confidential::MAX_PROOF_SIZE_BYTES,
+            max_nullifiers_per_tx: defaults::confidential::MAX_NULLIFIERS_PER_TX,
+            max_commitments_per_tx: defaults::confidential::MAX_COMMITMENTS_PER_TX,
+            max_confidential_ops_per_block: defaults::confidential::MAX_CONFIDENTIAL_OPS_PER_BLOCK,
+            verify_timeout: defaults::confidential::VERIFY_TIMEOUT,
+            max_anchor_age_blocks: defaults::confidential::MAX_ANCHOR_AGE_BLOCKS,
+            max_proof_bytes_block: defaults::confidential::MAX_PROOF_BYTES_BLOCK,
+            max_verify_calls_per_tx: defaults::confidential::MAX_VERIFY_CALLS_PER_TX,
+            max_verify_calls_per_block: defaults::confidential::MAX_VERIFY_CALLS_PER_BLOCK,
+            max_public_inputs: defaults::confidential::MAX_PUBLIC_INPUTS,
+            reorg_depth_bound: 3,
+            policy_transition_delay_blocks: defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
+            policy_transition_window_blocks:
+                defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+            tree_roots_history_len: defaults::confidential::TREE_ROOTS_HISTORY_LEN,
+            tree_frontier_checkpoint_interval: 1,
+            registry_max_vk_entries: defaults::confidential::REGISTRY_MAX_VK_ENTRIES,
+            registry_max_params_entries: defaults::confidential::REGISTRY_MAX_PARAMS_ENTRIES,
+            registry_max_delta_per_block: defaults::confidential::REGISTRY_MAX_DELTA_PER_BLOCK,
+            gas: cfg::ConfidentialGas {
+                proof_base: defaults::confidential::gas::PROOF_BASE,
+                per_public_input: defaults::confidential::gas::PER_PUBLIC_INPUT,
+                per_proof_byte: defaults::confidential::gas::PER_PROOF_BYTE,
+                per_nullifier: defaults::confidential::gas::PER_NULLIFIER,
+                per_commitment: defaults::confidential::gas::PER_COMMITMENT,
+            },
+        })
+        .expect("empty SCCP outbox accepts checkpoint test configuration");
 
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(

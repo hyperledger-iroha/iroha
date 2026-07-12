@@ -772,6 +772,18 @@ def _sora_finality_anchor(value: Any, label: str) -> Tuple[bytes, Tuple[bytes, .
     return _keccak_256(_SORA_FINALITY_ANCHOR_PREFIX + canonical), roles
 
 
+def _validate_proof_policy_roles(
+    semantic_hash: bytes,
+    semantic_roles: Tuple[bytes, ...],
+    anchor_hash: bytes,
+    anchor_roles: Tuple[bytes, ...],
+    label: str,
+) -> None:
+    roles = (*semantic_roles, semantic_hash, *anchor_roles, anchor_hash)
+    if any(not any(role) for role in roles) or len(set(roles)) != len(roles):
+        raise ValueError(f"{label} reuses a proof-policy hash role")
+
+
 def _outbound_proof_policy(value: Any, label: str) -> Tuple[bytes, bytes]:
     record = _exact_fields(
         value,
@@ -785,9 +797,9 @@ def _outbound_proof_policy(value: Any, label: str) -> Tuple[bytes, bytes]:
     anchor_hash, anchor_roles = _sora_finality_anchor(
         record["sora_finality_anchor"], f"{label}.sora_finality_anchor"
     )
-    roles = (*semantic_roles, semantic_hash, *anchor_roles, anchor_hash)
-    if any(not any(role) for role in roles) or len(set(roles)) != len(roles):
-        raise ValueError(f"{label} reuses a proof-policy hash role")
+    _validate_proof_policy_roles(
+        semantic_hash, semantic_roles, anchor_hash, anchor_roles, label
+    )
     return semantic_hash, anchor_hash
 
 
@@ -1976,11 +1988,18 @@ def normalize_sccp_proof_request(value: Any) -> Mapping[str, Any]:
     if inputs["target_domain"] != target[2]:
         raise ValueError("SCCP proof request target domain does not match target network")
     key_bytes = _verifying_key(record["verifying_key"], "SCCP proof request.verifying_key")
-    semantic_hash, _ = _semantic_proof_profile(
+    semantic_hash, semantic_roles = _semantic_proof_profile(
         record["semantic_proof_profile"], "SCCP proof request.semantic_proof_profile"
     )
-    anchor_hash, _ = _sora_finality_anchor(
+    anchor_hash, anchor_roles = _sora_finality_anchor(
         record["sora_finality_anchor"], "SCCP proof request.sora_finality_anchor"
+    )
+    _validate_proof_policy_roles(
+        semantic_hash,
+        semantic_roles,
+        anchor_hash,
+        anchor_roles,
+        "SCCP proof request outbound policy",
     )
     hashes = (
         "verifier_key_hash",

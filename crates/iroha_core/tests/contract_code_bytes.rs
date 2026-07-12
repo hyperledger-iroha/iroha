@@ -21,6 +21,7 @@ fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     let interface = ivm::EmbeddedContractInterfaceV1 {
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "contract-code-bytes-test".to_owned(),
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),

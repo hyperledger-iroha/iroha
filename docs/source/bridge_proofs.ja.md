@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_proofs.md
 status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 69c9a740261d0c367d52870fc1f48775ae48307056ba9b79d2f811e0c0849f20
-source_last_modified: "2026-07-11"
-translation_last_reviewed: 2026-07-11
+source_hash: 74e29801129deccb6d5640d414289c47cf13fa9e0229fb55212b6c7710d7c5f7
+source_last_modified: "2026-07-12T07:38:49.568351+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-assisted
 ---
 
@@ -48,6 +48,15 @@ governance が選ぶことはできません。Snapshot hydration は永続 reco
 再計算して完全一致を要求し、欠落、古い値、不正形式、裏付けのない値を拒否します。
 消費済み message id も replay 防止のため永続化されます。
 
+TRON の source route は、厳密に
+`transferToTaira(bytes,uint256,uint64 expectedNonce)` ABI を使用します。
+実行が成功するには `expectedNonce == transferNonce` が必要であり、storage
+をインクリメントする前に同じ値を canonical payload へ書き込みます。Native
+admission は payload の recipient、スケーリング済み amount、nonce から完全な
+ABI call を再構成します。このため、廃止済みの 2 引数 selector、古い nonce、
+未来の nonce、および上限まで消費された `uint64` nonce はすべて fail-closed
+で拒否されます。
+
 ## Single-pass 検証と work limit
 
 Destination proof と native proof は一度だけ構造化して一度だけ binding し、重い
@@ -78,6 +87,25 @@ pairing checks に対し、ゼロではない transaction 単位と block 単位
 
 1 proof が含められる canonical bytes は最大 8 MiB です。破棄または拒否された
 transaction の予約済み work が block に漏れることはありません。
+
+## Outbound commitment、保持、discovery
+
+成功した outbound message には、block の実行順に dense な `commitment_index`
+（`0..=511`）が割り当てられます。V1 の固定上限は block あたり 512 messages、
+message あたり 4,096 canonical payload bytes です。`[zk.sccp]` は pending
+payload state を `max_pending_outbound_messages`（default `65536`）と
+`max_pending_outbound_payload_bytes`（default `268435456`）の両方で制限します。
+
+Kura は finality 公開または block body eviction より前に、正確な canonical
+header と root-authenticated SCCP archive を immutable に保存します。Proof、
+bundle、proof request、recent history の再構成は historical block body や mutable
+WSV payload copy を読みません。Destination proof を受理すると pending payload と
+その charge は atomically 削除され、locator/index を保った fixed terminal
+descriptor に置き換わります。Pending state は有界ですが、terminal records と
+immutable Kura history は永久的な replay protection のため意図的に増え続けます。
+`GET /v1/sccp/messages/recent` は compound cursor `{ from, after_index }` を使います。
+Immutable evidence は total/operator disk usage に算入されますが、evictable-body
+budget からは除外されます。
 
 ## Torii と HTTP の上限
 

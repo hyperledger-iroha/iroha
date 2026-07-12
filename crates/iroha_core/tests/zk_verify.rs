@@ -249,7 +249,9 @@ fn verifyproof_rejects_when_exceeding_size_cap() {
 
     let mut zk_cfg = state.zk.clone();
     zk_cfg.max_proof_size_bytes = 3;
-    state.set_zk(zk_cfg);
+    state
+        .set_zk(zk_cfg)
+        .expect("empty SCCP outbox accepts verifier test configuration");
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -299,7 +301,9 @@ fn verifyproof_rejects_when_block_cap_hit() {
     zk_cfg.max_verify_calls_per_tx = 2;
     zk_cfg.max_proof_bytes_block = 10_000_000;
     zk_cfg.max_proof_size_bytes = 1_000_000;
-    state.set_zk(zk_cfg);
+    state
+        .set_zk(zk_cfg)
+        .expect("empty SCCP outbox accepts verifier test configuration");
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);

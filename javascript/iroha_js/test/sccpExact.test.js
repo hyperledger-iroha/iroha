@@ -558,6 +558,18 @@ function proofRequest() {
   };
 }
 
+function crossPolicyAliasedProofRequest() {
+  const request = proofRequest();
+  request.semantic_proof_profile.commitments.circuit_commitment =
+    request.sora_finality_anchor.checkpoint_block_hash;
+  request.semantic_proof_profile_hash = `0x${policyHashes({
+    version: 1,
+    semantic_profile: request.semantic_proof_profile,
+    sora_finality_anchor: request.sora_finality_anchor,
+  }).semantic}`;
+  return request;
+}
+
 function recentItem(height = 9, id = MESSAGE_ID, commitmentIndex = 0) {
   return {
     height,
@@ -1099,6 +1111,7 @@ test("registry accepts zero BN254 limbs but rejects an all-zero point", () => {
 test("regenerated SCCP distribution enforces the canonical route commitments", async () => {
   const {
     normalizeSccpCapabilities: normalizeDistributionCapabilities,
+    normalizeSccpProofRequest: normalizeDistributionProofRequest,
     normalizeSccpRecentMessages: normalizeDistributionRecentMessages,
     normalizeSccpRegistry: normalizeDistributionRegistry,
   } = await import("../dist/sccp.js");
@@ -1137,6 +1150,10 @@ test("regenerated SCCP distribution enforces the canonical route commitments", a
   assert.deepEqual(observedUrls, [
     "https://example.invalid/v1/sccp/messages/recent?from=9&after_index=8&limit=1",
   ]);
+  assert.throws(
+    () => normalizeDistributionProofRequest(crossPolicyAliasedProofRequest()),
+    /proof-policy hash role/u,
+  );
   for (const source of ["bsc-mainnet", "tron-mainnet"]) {
     assert.equal(
       normalizeDistributionRegistry(registry([governedRoute({ source })])).lanes.length,
@@ -1432,6 +1449,10 @@ test("bundle and proof-request JSON enforce the closed transfer/Groth16 schema",
   const wrongAnchor = proofRequest();
   wrongAnchor.sora_finality_anchor_hash = PREFIX_HASH(0x99);
   assert.throws(() => normalizeSccpProofRequest(wrongAnchor), /sora_finality_anchor_hash/u);
+  assert.throws(
+    () => normalizeSccpProofRequest(crossPolicyAliasedProofRequest()),
+    /proof-policy hash role/u,
+  );
   const archivedIdentity = proofRequest();
   archivedIdentity.sora_finality_anchor.chain_id_hash = Buffer.from(
     keccak_256(Buffer.from("809574f5fee75e69bfcf52451e42d50f", "hex")),

@@ -42,7 +42,9 @@ pub const VECTOR_LENGTH_MAX: u8 = 64;
 
 /// Magic prefix identifying IVM bytecode.
 pub const MAGIC: &[u8; 4] = b"IVM\0";
-pub const HEADER_SIZE: usize = 17;
+/// Fixed IVM V1 header size: 17 bytes of execution metadata followed by the
+/// authenticated 32-byte ABI descriptor hash.
+pub const HEADER_SIZE: usize = 49;
 
 /// Literal table section marker placed immediately after the metadata header
 /// when compiled bytecode includes literal fixups.
@@ -968,6 +970,13 @@ pub struct EmbeddedContractInterfaceV1 {
     /// Canonical source-level seiyaku identity.
     pub seiyaku_name: String,
     pub compiler_fingerprint: String,
+    /// Canonical hash of the exact ABI-v1 descriptor targeted by this artifact.
+    ///
+    /// The verifier compares this authenticated field with its local ABI
+    /// descriptor before accepting the artifact, so an old artifact cannot be
+    /// silently reinterpreted under changed syscall, pointer, gas, or state
+    /// semantics while retaining `abi_version = 1`.
+    pub abi_hash: [u8; 32],
     /// Compiler-derived ZK/VECTOR capability bits mirrored from the execution header.
     ///
     /// The complete `CNTR` section is covered by the artifact hash. These bits
@@ -1134,6 +1143,9 @@ impl ProgramMetadata {
             return Err(VMError::InvalidMetadata);
         }
         let abi_version = bytes[16];
+        let abi_hash: [u8; 32] = bytes[17..49]
+            .try_into()
+            .map_err(|_| VMError::InvalidMetadata)?;
         let header_len = HEADER_SIZE;
         let version_minor = bytes[5];
         let mode = bytes[6];
@@ -1162,6 +1174,15 @@ impl ProgramMetadata {
         }
         if vector_length > VECTOR_LENGTH_MAX {
             return Err(VMError::InvalidMetadata);
+        }
+        if abi_version == 1 {
+            let expected = crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1);
+            if abi_hash != expected {
+                return Err(VMError::ArtifactAbiHashMismatch {
+                    expected,
+                    actual: abi_hash,
+                });
+            }
         }
         // Note: vector_length may be non-zero even if VECTOR flag is off; the
         // host/runtime may ignore it depending on policy.
@@ -1241,6 +1262,11 @@ impl ProgramMetadata {
         v.push(self.vector_length);
         v.extend_from_slice(&self.max_cycles.to_le_bytes());
         v.push(self.abi_version);
+        let abi_hash = match self.abi_version {
+            1 => crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),
+            _ => [0; 32],
+        };
+        v.extend_from_slice(&abi_hash);
         v
     }
 
@@ -1697,6 +1723,7 @@ mod tests {
         let interface = EmbeddedContractInterfaceV1 {
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "metadata-tests".to_owned(),
+            abi_hash: crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),

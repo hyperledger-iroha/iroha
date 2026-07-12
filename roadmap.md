@@ -39,10 +39,14 @@ instead of accepting the local TAIRA/TRON diagnostic proof.
 
 IVM ABI-v1 hardening now uses one provenance-aware TLV decoder across ledger
 and codec hosts, canonical `QuantityValueV1` frames for every asset mutation
-caller with authenticated indexed fixture literals, HEAP-capable JSON getter
-input/output quotes, and optional runtime artifacts for pure Kotodama unit-test
+caller with authenticated indexed fixture literals, INPUT-first/owned-HEAP
+spill for every public host result, heap-capable JSON getter input/output
+quotes, exact first-release carrier types, canonical `Blob` atoms for typed
+durable `bytes`, explicit byte-carrier normalization before strict VRF
+verification, and optional runtime artifacts for pure Kotodama unit-test
 suites. Remaining ABI work stays limited to release validation and the
-outstanding items tracked in the engineering backlog.
+outstanding items tracked in the engineering backlog; no retired carrier
+compatibility work is planned.
 
 ## SORA Economic Constitution
 
@@ -12553,14 +12557,13 @@ from the first release and must not appear as launch blockers or evidence rows.
   that reject stripped source proofs, mismatched finality proof bytes,
   public-input drift, payload-body tampering, commitment-root tampering,
   malformed builder bundles, and BSC builder source-domain drift.
-- SCCP network scope for the current release remains EVM-family, Solana, TON,
-  and TRON lanes only. Sub&#115;trate/Pol&#107;adot networks are intentionally unsupported
-  for now; do not add public evidence rows, route manifests, deployment
-  checklists, or SDK readiness tasks for those networks until a future governed
-  network-support plan is accepted. The release-bundle builder, readiness
-  report, and strict verifier now share a parity regression for those public
-  unsupported-scope notes, so generated notes and verifier expectations cannot
-  silently drift.
+- SCCP network scope for the current release remains Ethereum, BSC, and TRON
+  only. Solana, TON, Sub&#115;trate/Pol&#107;adot, and every other network family are
+  intentionally outside the release corridor; do not add public evidence rows,
+  route manifests, deployment checklists, or SDK readiness tasks for them until
+  a future governed network-support plan is accepted. Historical Solana/TON
+  hardening notes below describe research-only negative coverage, not supported
+  launch lanes.
 - SCCP client SDK route-canary helper parity must stay pinned: Python Torii
   client, JavaScript source/dist, Swift, Kotlin/JVM, and Java Android helpers
   reject reused route-allowlist, destination-binding, source-material, and
@@ -12918,13 +12921,13 @@ from the first release and must not appear as launch blockers or evidence rows.
   route-record fallbacks when a forged source-gate hash causes route-allowlist
   recomputation to fail.
   The all-lanes route-canary scalar inventory now pins the exact expected
-  evidence source for every active launch lane (`eth`, `bsc`, `sol`, `ton`,
-  and `tron`) and has readiness/strict-bundle negative tests that remove a
+  evidence source for every active launch lane (`eth`, `bsc`, and `tron`) and
+  has readiness/strict-bundle negative tests that remove a
   lane's evidence-source sentinel, so route-canary helper or evidence-source
   drift cannot silently drop one supported lane while the rest of the scalar
   gate remains present.
   The all-lanes release-checklist exact-boolean inventory now has the same
-  active-lane coverage guard for `eth`, `bsc`, `sol`, `ton`, and `tron`, so
+  active-lane coverage guard for `eth`, `bsc`, and `tron`, so
   SDK or core route-canary role-separation sentinels cannot silently lose an
   entire launch lane while the rest of the checklist marker set still passes.
   That exact-boolean inventory now also pins the source-material
@@ -14188,11 +14191,12 @@ from the first release and must not appear as launch blockers or evidence rows.
   deployment receipt, expected bridge-code, and source-record hashes before TOML
   prerequisites or generated source-material output can mask malformed copied
   evidence.
-- SCCP first-release network scope is limited to the currently advertised
-  ETH/BSC, Solana, TON, TRON, and SORA lanes. SCCP will not support
-  Sub&#115;trate/Pol&#107;adot networks for now; do not add release evidence
-  rows, readiness blockers, SDK facade obligations, or production-corridor
-  phases for those networks until the launch scope is explicitly expanded.
+- The canonical SCCP first-release release corridor is limited to Ethereum,
+  BSC, and TRON. Solana, TON, SORA-return, and other lane descriptions retained
+  in older roadmap/status history are non-normative research history: they must
+  not add registry fixtures, release-evidence rows, readiness blockers, SDK
+  launch obligations, or production-corridor phases. Do not add any additional
+  network family until the launch scope is explicitly expanded.
 - SCCP .NET Windows-machine follow-up tasks: on a real Windows host with
   stable `.NET 8`, restore `csharp/Hyperledger.Iroha.Sdk.sln`, build the native
   `connect_norito_bridge.dll`, run the full SCCP C# test filter with
@@ -28884,12 +28888,14 @@ signed ancestor-linked solid-block header proof,
   until TRON exposes a
   consensus-authenticated contract-state root; future state-derived claims need
   a new source proof plan and material prefix instead of reusing
-  `TronDposReceiptProof`. Land the production
-  Solana, TON, and TRON prover/verifier integrations behind the SDK proof request APIs, deploy
-immutable destination verifiers plus TON/TRON verifier-contract bindings,
-produce multi-lane integration evidence, publish operator runbooks, and
-incorporate testnet-driven feedback
-from wallet and service integrations.
+  `TronDposReceiptProof`. For the first release, complete only the
+  Ethereum/BSC/TRON external evidence corridor described in **SCCP Launch
+  Scope**: independently audit the exact artifacts, deploy and authenticate the
+  governed source and destination verifier material, run bidirectional live
+  canaries, capture the Windows .NET evidence, and publish the independently
+  reproduced signed release bundle. Solana and TON are excluded profiles, not
+  deferred production integrations; no SDK, deployment, evidence, or runbook
+  task for them belongs to SCCP V1.
 
 ## IVM, Kotodama, and Norito
 
@@ -28945,7 +28951,7 @@ from wallet and service integrations.
   effect, syscall, access, gas, and lowering policy. Every new privileged
   operation must update bytecode-derived admission, ABI-v1 hashes/goldens,
   deterministic host behavior, docs, and adversarial tests in the same change.
-- Finish and validate the bounded-List, exact-Amount, native-JSON, and typed
+- Finish and validate the bounded-List, exact-decimal/quantity, native-JSON, and typed
   core-query-page corridor. The implementation and source migration are under
   final audit; regenerate every mapped golden, manifest, syscall/pointer table,
   and ABI hash only after frontend and ABI hardening are green. Then prove one

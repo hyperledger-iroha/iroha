@@ -3,6 +3,11 @@ pub use ivm_abi::pointer_abi::*;
 
 impl crate::memory::Memory {
     /// Validate a pointer-ABI TLV at `addr` in the INPUT region and return its view.
+    ///
+    /// This low-level helper deliberately has INPUT-only semantics because bare
+    /// memory cannot prove HEAP allocation ownership or loader-authenticated
+    /// literal starts. Production host decoders must use
+    /// [`crate::IVM::validate_tlv`] instead.
     pub fn validate_tlv(&self, addr: u64) -> Result<Tlv<'_>, crate::error::VMError> {
         use crate::error::VMError;
 
