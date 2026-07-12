@@ -6,7 +6,7 @@
 
 pub use iroha_data_model::bridge::{
     SccpEvmSourceEmitterV1, SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1,
-    SccpOutboundMessageKeyV1, SccpOutboundMessageRecordV1, SccpSourceEmitterV1,
+    SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1, SccpSourceEmitterV1,
     SccpSourceIdentityV1, SccpTronSourceEmitterV1, canonical_sccp_lane_id_bytes_v1,
     canonical_sccp_network_bytes_v1, canonical_sccp_source_emitter_bytes_v1,
     canonical_sccp_source_identity_bytes_v1, sccp_lane_id_hash_v1, sccp_network_identity_hash_v1,

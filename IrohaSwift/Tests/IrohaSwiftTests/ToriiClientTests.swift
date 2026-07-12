@@ -15015,6 +15015,9 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
             #"{"seiyaku_name":" Ledger "}"#,
             #"{"seiyaku_name":"seiyaku"}"#,
             #"{"seiyaku_name":"match"}"#,
+            #"{"seiyaku_name":"__kotodama_quantity_ratio_round"}"#,
+            #"{"seiyaku_name":"__kotodama_decimal_to_int_trunc"}"#,
+            #"{"seiyaku_name":"__kotodama_decimal_to_int_round"}"#,
             #"{"code_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}"#,
             #"{"code_hash":"hash:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb#ABA2"}"#,
             #"{"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#0000"}"#,
@@ -16152,24 +16155,39 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         let approverId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/list")
+            guard let body = self.bodyData(from: request),
+                  let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                XCTFail("missing JSON body")
+                throw NSError(domain: "stub", code: -1)
+            }
+            XCTAssertEqual(json["status"] as? [String], ["FINALIZED"])
+            XCTAssertEqual(json["cursor"] as? String, "page-1")
+            XCTAssertEqual(json["limit"] as? Int, 25)
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposals":[{"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","proposal":{"approvals":["\(approverId)"]}}]}
+            {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposals":[{"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","operation_type":"TRANSFER","intent":{"asset_definition_id":"pkr#sbp"},"proposal":{"approvals":["\(approverId)"]},"status":"FINALIZED","terminal_at_ms":123}],"next_cursor":"page-2"}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
 
         let request = ToriiMultisigProposalsListRequest(
-            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka")
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
+            status: [.finalized],
+            cursor: "page-1",
+            limit: 25
         )
         makeClient().listMultisigProposals(request) { result in
             switch result {
             case .success(let response):
                 XCTAssertEqual(response.proposals.count, 1)
                 XCTAssertEqual(response.proposals.first?.proposalId, proposalId)
+                XCTAssertEqual(response.proposals.first?.operationType, "TRANSFER")
+                XCTAssertEqual(response.proposals.first?.status, .finalized)
+                XCTAssertEqual(response.proposals.first?.terminalAtMs, 123)
+                XCTAssertEqual(response.nextCursor, "page-2")
             case .failure(let error):
                 XCTFail("unexpected error: \(error)")
             }
@@ -16178,7 +16196,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         waitForExpectations(timeout: 1)
     }
 
-    func testGetMultisigProposalDecodesProposalLookup() {
+    func testGetMultisigProposalDecodesProposalGetResponse() {
         let expectation = expectation(description: "multisig proposal get")
         let proposalId = String(repeating: "e", count: 64)
         let approverOne = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
@@ -16196,7 +16214,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","proposal":{"approvals":["\(approverOne)","\(approverTwo)"]}}
+            {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","operation_type":"TRANSFER","intent":null,"proposal":{"approvals":["\(approverOne)","\(approverTwo)"]},"status":"COLLECTING_SIGNATURES","terminal_at_ms":null}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -16210,12 +16228,46 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
             case .success(let response):
                 XCTAssertEqual(response.proposalId, proposalId)
                 XCTAssertEqual(response.instructionsHash, proposalId)
+                XCTAssertEqual(response.operationType, "TRANSFER")
+                XCTAssertEqual(response.status, .collectingSignatures)
+                XCTAssertNil(response.terminalAtMs)
             case .failure(let error):
                 XCTFail("unexpected error: \(error)")
             }
             expectation.fulfill()
         }
         waitForExpectations(timeout: 1)
+    }
+
+    func testListMultisigProposalsRejectsInvalidPaginationAndDuplicateStatuses() throws {
+        let selector = ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka")
+        for request in [
+            ToriiMultisigProposalsListRequest(
+                selector: selector,
+                status: [.finalized, .finalized]
+            ),
+            ToriiMultisigProposalsListRequest(selector: selector, cursor: " "),
+            ToriiMultisigProposalsListRequest(selector: selector, limit: 0),
+            ToriiMultisigProposalsListRequest(
+                selector: selector,
+                cursor: String(repeating: "x", count: 513)
+            )
+        ] {
+            XCTAssertThrowsError(try JSONEncoder().encode(request))
+        }
+    }
+
+    func testMultisigProposalResponseRejectsMissingCurrentContractFields() throws {
+        let proposalId = String(repeating: "f", count: 64)
+        let missingStatus = """
+        {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","operation_type":"TRANSFER","proposal":{}}
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalGetResponse.self, from: missingStatus))
+
+        let unknownStatus = """
+        {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","operation_type":"TRANSFER","intent":null,"proposal":{},"status":"READY_TO_SUBMIT","terminal_at_ms":null}
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalGetResponse.self, from: unknownStatus))
     }
 
     func testMultisigSelectorRejectsBothAccountIdAndAlias() throws {

@@ -12,7 +12,6 @@ import {
   KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
   normalizeCryptoAlgorithm,
   preferredKagemushaOfflineSpendMode,
-  preferredKagemushaOfflineSpendModeForCapabilities,
   supportedCryptoAlgorithms,
 } from "../src/crypto.browser.js";
 import * as srcBrowserCrypto from "../src/crypto.browser.js";
@@ -257,14 +256,14 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
       `${label} browser build must expose no preferred Kagemusha mode without recursive native support`,
     );
     assert.equal(
-      crypto.preferredKagemushaOfflineSpendMode(false, true),
-      crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
+      crypto.preferredKagemushaOfflineSpendMode(true),
+      crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2,
       `${label} native recursive availability should select recursive spend mode`,
     );
     assert.throws(
-      () => crypto.preferredKagemushaOfflineSpendMode(true),
-      /requires either zero arguments or both recursiveCompactAvailable and recursiveSpendAvailable/u,
-      `${label} browser build rejects partial explicit preferred-mode capabilities`,
+      () => crypto.preferredKagemushaOfflineSpendMode(false, true),
+      /requires zero arguments or one boolean pastaCycleV3BackendAvailable argument/u,
+      `${label} browser build rejects retired two-capability preferred-mode calls`,
     );
     assert.equal(
       crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
@@ -295,12 +294,12 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
       `${label} rejects vague recursive compact proof errors`,
     );
     assert.equal(
-      crypto.preferredKagemushaOfflineSpendModeForCapabilities(true, true),
-      crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
-      `${label} compact projection availability must not override spend-again cash`,
+      crypto.preferredKagemushaOfflineSpendMode(true),
+      crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2,
+      `${label} exact V3 backend availability selects spend-again cash`,
     );
-    assert.equal(crypto.isKagemushaSpendAgainMode("recursive_spend_v1"), true);
-    assert.equal(crypto.isKagemushaSpendAgainMode("recursive_spend_v2"), false);
+    assert.equal(crypto.isKagemushaSpendAgainMode("recursive_spend_v2"), true);
+    assert.equal(crypto.isKagemushaSpendAgainMode("recursive_spend_v1"), false);
     assert.equal(crypto.isKagemushaSpendAgainMode("recursive_compact_v1"), false);
     assert.equal(
       crypto.isKagemushaRecursiveCompactPaymentTokenNativeAvailable(),

@@ -18,6 +18,35 @@ const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_U128 = (1n << 128n) - 1n;
 const MAX_OFFLINE_ASSET_SCALE = 28n;
 const MAX_JSON_DEPTH = 128;
+const JSON_INTEGER_TOKEN_PATTERN = /^-?(?:0|[1-9][0-9]*)$/u;
+const PARSED_NUMBER_LEXEMES = new WeakMap();
+
+class ParsedOfflineJsonNumber {
+  constructor(value, token) {
+    this.value = value;
+    this.token = token;
+  }
+}
+
+function materializeParsedJsonValue(container, key, parsed) {
+  if (!(parsed instanceof ParsedOfflineJsonNumber)) return parsed;
+  let lexemes = PARSED_NUMBER_LEXEMES.get(container);
+  if (lexemes === undefined) {
+    lexemes = new Map();
+    PARSED_NUMBER_LEXEMES.set(container, lexemes);
+  }
+  lexemes.set(key, parsed.token);
+  return parsed.value;
+}
+
+function requireIntegerJsonToken(container, key, context) {
+  const token = PARSED_NUMBER_LEXEMES.get(container)?.get(key);
+  if (token !== undefined && !JSON_INTEGER_TOKEN_PATTERN.test(token)) {
+    throw new TypeError(
+      `${context} must use a JSON integer token without a fraction or exponent`,
+    );
+  }
+}
 
 function isPlainObject(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -38,6 +67,7 @@ function requireOwn(record, field, context) {
   if (!Object.prototype.hasOwnProperty.call(record, field)) {
     throw new TypeError(`${context}.${field} is required`);
   }
+  requireIntegerJsonToken(record, field, `${context}.${field}`);
   return record[field];
 }
 
@@ -81,7 +111,14 @@ function assertWellFormedUnicode(value, context) {
   }
 }
 
-/** Parse a Torii Offline JSON body without rounding wide integer tokens. */
+/**
+ * Parse a Torii Offline JSON body without rounding wide integer tokens.
+ *
+ * Number lexemes are retained out-of-band so typed integer fields can reject
+ * fractional or exponent-form tokens even when JavaScript would coerce them
+ * to an integral Number (for example `1.0` or `1e3`). Unknown members remain
+ * ordinary JSON values and cannot affect the typed canonical value.
+ */
 export function parseOfflineJson(text, context = "Offline JSON response") {
   if (typeof text !== "string") {
     throw new TypeError(`${context} must be JSON text`);
@@ -130,19 +167,19 @@ export function parseOfflineJson(text, context = "Offline JSON response") {
     if (!match) syntax("invalid JSON number");
     const token = match[0];
     index += token.length;
-    if (/^-?(?:0|[1-9][0-9]*)$/u.test(token)) {
+    if (JSON_INTEGER_TOKEN_PATTERN.test(token)) {
       const integer = BigInt(token);
       if (
         integer >= BigInt(Number.MIN_SAFE_INTEGER)
         && integer <= BigInt(Number.MAX_SAFE_INTEGER)
       ) {
-        return Number(token);
+        return new ParsedOfflineJsonNumber(Number(token), token);
       }
-      return integer;
+      return new ParsedOfflineJsonNumber(integer, token);
     }
     const number = Number(token);
     if (!Number.isFinite(number)) syntax("non-finite JSON number");
-    return number;
+    return new ParsedOfflineJsonNumber(number, token);
   };
   const parseLiteral = (literal, value) => {
     if (!text.startsWith(literal, index)) syntax(`expected ${literal}`);
@@ -174,7 +211,8 @@ export function parseOfflineJson(text, context = "Offline JSON response") {
         skipWhitespace();
         if (text[index] !== ":") syntax("expected ':' after object key");
         index += 1;
-        const value = parseValue(depth + 1);
+        const parsed = parseValue(depth + 1);
+        const value = materializeParsedJsonValue(result, key, parsed);
         Object.defineProperty(result, key, {
           value,
           enumerable: true,
@@ -201,7 +239,8 @@ export function parseOfflineJson(text, context = "Offline JSON response") {
         return result;
       }
       while (index < text.length) {
-        result.push(parseValue(depth + 1));
+        const parsed = parseValue(depth + 1);
+        result.push(materializeParsedJsonValue(result, result.length, parsed));
         skipWhitespace();
         if (text[index] === "]") {
           index += 1;
@@ -219,7 +258,8 @@ export function parseOfflineJson(text, context = "Offline JSON response") {
     return parseNumber();
   };
 
-  const value = parseValue(0);
+  const parsed = parseValue(0);
+  const value = parsed instanceof ParsedOfflineJsonNumber ? parsed.value : parsed;
   skipWhitespace();
   if (index !== text.length) syntax("trailing JSON data");
   return value;
@@ -241,7 +281,7 @@ function requireUnsignedInteger(value, context, maximum, { positive = false } = 
   if (typeof value === "bigint") {
     integer = value;
   } else if (typeof value === "number") {
-    if (!Number.isSafeInteger(value)) {
+    if (!Number.isSafeInteger(value) || Object.is(value, -0)) {
       throw new TypeError(`${context} must be a safe integer or bigint`);
     }
     integer = BigInt(value);
@@ -263,7 +303,11 @@ function requireUnsignedResponseInteger(value, context, { positive = false } = {
     }
     return value;
   }
-  if (Number.isSafeInteger(value) && value >= (positive ? 1 : 0)) return value;
+  if (
+    Number.isSafeInteger(value)
+    && !Object.is(value, -0)
+    && value >= (positive ? 1 : 0)
+  ) return value;
   const requirement = positive ? "a positive lossless integer" : "a non-negative lossless integer";
   throw new TypeError(`${context} must be ${requirement}`);
 }
@@ -283,8 +327,9 @@ function requireByteArray(value, context, exactLength = null) {
     if (!Object.prototype.hasOwnProperty.call(value, index)) {
       throw new TypeError(`${context} must not be sparse`);
     }
+    requireIntegerJsonToken(value, index, `${context}[${index}]`);
     const byte = value[index];
-    if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
+    if (!Number.isInteger(byte) || Object.is(byte, -0) || byte < 0 || byte > 255) {
       throw new RangeError(`${context}[${index}] must be an integer byte`);
     }
   }
@@ -355,7 +400,7 @@ function snapshotJson(value, context, ancestors = new Set(), depth = 0) {
     return value;
   }
   if (typeof value === "number") {
-    if (!Number.isSafeInteger(value) || value < 0) {
+    if (!Number.isSafeInteger(value) || Object.is(value, -0) || value < 0) {
       throw new TypeError(`${context} numbers must be non-negative safe integers`);
     }
     return value;
@@ -380,6 +425,7 @@ function snapshotJson(value, context, ancestors = new Set(), depth = 0) {
         if (!Object.prototype.hasOwnProperty.call(value, index)) {
           throw new TypeError(`${context} must not contain sparse arrays`);
         }
+        requireIntegerJsonToken(value, index, `${context}[${index}]`);
         result.push(snapshotJson(value[index], `${context}[${index}]`, ancestors, depth + 1));
       }
       return result;
@@ -397,6 +443,7 @@ function snapshotJson(value, context, ancestors = new Set(), depth = 0) {
         continue;
       }
       assertWellFormedUnicode(key, `${context} key`);
+      requireIntegerJsonToken(value, key, `${context}.${key}`);
       Object.defineProperty(result, key, {
         value: snapshotJson(value[key], `${context}.${key}`, ancestors, depth + 1),
         enumerable: true,
@@ -775,7 +822,11 @@ function optionalErrorUnsigned(record, field, context, maximum) {
   if (!Object.prototype.hasOwnProperty.call(record, field) || record[field] === null) {
     return undefined;
   }
-  return requireUnsignedInteger(record[field], `${context}.${field}`, maximum);
+  return requireUnsignedInteger(
+    requireOwn(record, field, context),
+    `${context}.${field}`,
+    maximum,
+  );
 }
 
 function normalizeQueueErrorDetails(value, context) {

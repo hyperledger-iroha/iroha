@@ -155,9 +155,9 @@ continues to track the proof-composition reservation, generic compact-token
 reservation, multi-hop verifier-batch reservation, and reserved ABI-7 state.
 Missing native symbols still surface as `IllegalStateException`.
 `KagemushaRecursiveSpendProver` exposes the exact ABI-18 spend-again-offline
-cash surface. Preferred mode selection returns `RECURSIVE_SPEND_V1` only when the
+cash surface. Preferred mode selection returns `RECURSIVE_SPEND` only when the
 ABI probe is exactly 18 and the Pasta-cycle backend is available; its stable
-wire value remains `recursive_spend_v1`. Older bridge modes and permissive
+wire value is exactly `recursive_spend_v2`. Other mode labels and permissive
 symbol-presence fallbacks are not release inputs.
 `transitionProfileInit(requestArchive)` and
 `transitionProfileAppend(requestArchive)` return the canonical Reserved-lineage

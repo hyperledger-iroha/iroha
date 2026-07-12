@@ -342,6 +342,18 @@ async fn retired_route_spellings_and_iso_status_alias_cannot_resolve() {
         (Method::POST, "/v1/da/pin_intents/verify", not_found),
         (Method::POST, "/v1/multisig/proposals/query", not_found),
         (Method::POST, "/v1/multisig/proposals/lookup", not_found),
+        (Method::POST, "/v1/multisig/approvals/query", not_found),
+        (Method::POST, "/v1/multisig/approvals/lookup", not_found),
+        (
+            Method::POST,
+            "/v1/multisig/approvals/query-for-authority",
+            not_found,
+        ),
+        (
+            Method::POST,
+            "/v1/multisig/approvals/lookup-for-authority",
+            not_found,
+        ),
         (Method::GET, "/v1/iso20022/status/message-1", not_found),
         (Method::GET, "/v1/sumeragi/new_view/json", not_found),
         (Method::GET, "/v1/sumeragi/new_view/sse", not_found),
@@ -363,6 +375,9 @@ async fn retired_route_spellings_and_iso_status_alias_cannot_resolve() {
         (Method::POST, "/v1/Multisig/proposals/query", not_found),
         (Method::POST, "/v1/multisig/proposals//query", invalid_path),
         (Method::POST, "/v1/multisig/proposals/%71uery", not_found),
+        (Method::POST, "/v1/multisig/approvals/query/", not_found),
+        (Method::POST, "/v1/multisig/approvals//query", invalid_path),
+        (Method::POST, "/v1/multisig/approvals/%71uery", not_found),
     ];
 
     for (method, path, (expected_status, expected_code)) in retired {

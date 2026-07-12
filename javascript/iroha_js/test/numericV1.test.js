@@ -57,6 +57,32 @@ test("numeric V1 canonical construction and endpoint rejection", () => {
   assert.throws(() => NumericV1.decodeIntJson(1), TypeError);
 });
 
+test("numeric V1 revalidates SDK value subclasses before encoding", () => {
+  class HostileInt extends KotodamaInt {
+    toString() {
+      return "not-canonical";
+    }
+  }
+  class HostileDecimal extends KotodamaDecimal {
+    toString() {
+      return "1e999";
+    }
+  }
+  class HostileQuantity extends KotodamaQuantity {
+    toString() {
+      return "-1";
+    }
+  }
+
+  assert.equal(NumericV1.encodeIntJson(new HostileInt(7n)), "7");
+  assert.equal(NumericV1.encodeDecimalJson(new HostileDecimal("1.25")), "1.25");
+  assert.equal(NumericV1.encodeQuantityJson(new HostileQuantity("2.5")), "2.5");
+  assert.equal(
+    NumericV1.decodeIntFrame(NumericV1.encodeIntFrame(new HostileInt(7n))).toString(),
+    "7",
+  );
+});
+
 test("numeric V1 frames and pointer envelopes roundtrip all domains", () => {
   const values = [
     [0x0011, new KotodamaInt(-129n), NumericV1.encodeIntFrame, NumericV1.decodeIntFrame,

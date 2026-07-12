@@ -53,6 +53,30 @@ client = create_torii_client(
 )
 ```
 
+## Exact Kotodama numbers
+
+`KotodamaInt`, `KotodamaDecimal`, and `KotodamaQuantity` implement the
+first-release Numeric V1 contract without host floating point. JSON boundaries
+use canonical strings; `NumericV1Codec` also encodes and validates the
+schema-bound Norito frames and pointer envelopes used by the IVM ABI.
+
+```python
+from iroha_python import KotodamaDecimal, KotodamaQuantity, NumericV1Codec
+
+price = KotodamaDecimal("12.500")
+quantity = NumericV1Codec.decode_quantity_json("3.25")
+payload = NumericV1Codec.encode_quantity_envelope(quantity)
+
+assert str(price) == "12.5"
+assert NumericV1Codec.decode_quantity_envelope(payload) == KotodamaQuantity(
+    "3.25"
+)
+```
+
+Python `float` and `decimal.Decimal` inputs are rejected. Use exact strings or,
+for component construction, an arbitrary-precision integer mantissa plus an
+explicit scale.
+
 ## Offline lifecycle
 
 The first-release HTTP lifecycle has exactly four canonical routes:
@@ -146,8 +170,8 @@ transports = offline_cash_available_transport_kinds(
 
 ## Native Recursive Kagemusha Spend
 
-The `iroha_python.kagemusha` module exposes ABI-6 recursive Kagemusha
-spend-again-offline helpers when the compiled `_crypto` extension is present.
+The `iroha_python.kagemusha` module exposes recursive Kagemusha
+spend-again-offline helpers when the exact ABI-18 `_crypto` extension is present.
 ABI 7 exposes source-stable `recursive_compact_v1` compact-token symbols for
 `kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend. Import
 the helpers from `iroha_python` or `iroha_python.kagemusha`, and use
@@ -169,16 +193,16 @@ inputs before native dispatch, and
 returns the native boolean receiver result. ABI 7 now
 carries the one-hop LEN=4 compact-token proof path when the native extension
 includes the packaged compact one-hop proving-key archive and matching
-verifier-slice material. Production defaults still stay on ABI 6
-Reserved-lineage recursive spend until that archive is shipped and signed for
-release. A missing packaged key, the generic compact-token reservation, and the
-multi-hop verifier-batch reservation still reach the proof-composition
-reservation and remain reserved ABI-7 state; unavailable compact surfaces raise
+verifier-slice material. Production selection requires the exact ABI-18
+Pasta-cycle recursive-spend backend and its signed V3 artifact set.
+Reserved-lineage recursive spend is a proof-composition reservation: a missing
+packaged key, the generic compact-token reservation, and the multi-hop
+verifier-batch reservation remain reserved ABI-7 state; unavailable compact surfaces raise
 `RuntimeError` before wallet code can treat reserved admission as success.
 `recursive_compact_v1` is an admission-neutral projection identifier, not a
 spend-again product mode; compact availability never wins selector choice.
 `preferred_kagemusha_offline_spend_mode()` selects
-`recursive_spend_v1` when the native extension reports native bridge ABI 6 or later
+`recursive_spend_v2` when the native extension reports native bridge ABI 18 exactly
 and every required recursive-spend method rejects the malformed availability
 probe, and otherwise returns `None` rather than falling back to archived
 checked-prefold fixtures:
@@ -192,8 +216,9 @@ helpers, `kagemusha_recursive_spend_verify`, and
 `kagemusha_recursive_spend_redeem`. Explicit capability selection must pass both
 `recursive_compact_available` and `recursive_spend_available`; single-argument
 selectors are not shipped.
-`is_kagemusha_spend_again_mode(...)` accepts only `recursive_spend_v1` and
-rejects both `recursive_spend_v2` and `recursive_compact_v1`.
+`is_kagemusha_spend_again_mode(...)` accepts only the first-release
+`recursive_spend_v2` selector and rejects the retired `recursive_spend_v1` and
+`recursive_compact_v1`.
 
 Transaction helpers expose the same Kagemusha instruction surface without
 asking wallet code to reframe native archives. Use

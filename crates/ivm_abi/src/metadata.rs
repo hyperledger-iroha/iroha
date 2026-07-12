@@ -95,6 +95,10 @@ pub fn decode_literal_descriptor(raw: u64) -> Result<(LiteralKindV1, u64), VMErr
 }
 /// Embedded contract interface section marker used by self-describing contract artifacts.
 pub const CONTRACT_INTERFACE_SECTION_MAGIC: [u8; 4] = *b"CNTR";
+/// Stable nominal Norito schema name for the first-release contract interface.
+pub const CONTRACT_INTERFACE_SCHEMA_NAME_V1: &str = "iroha.kotodama.EmbeddedContractInterfaceV1";
+/// Stable nominal Norito schema name for embedded durable-state type trees.
+pub const EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1: &str = "iroha.kotodama.EmbeddedStateTypeV1";
 /// Embedded contract debug section marker used by self-describing contract artifacts.
 pub const CONTRACT_DEBUG_SECTION_MAGIC: [u8; 4] = *b"DBG1";
 /// Embedded contract execution-capability bit: zero-knowledge mode.
@@ -194,6 +198,35 @@ pub enum EmbeddedStateType {
     },
 }
 
+impl EmbeddedStateType {
+    /// Return the stable one-byte tag used by the custom CNTR type-tree codec.
+    #[must_use]
+    pub const fn wire_tag(&self) -> u8 {
+        match self {
+            Self::Int => EMBEDDED_STATE_TYPE_TAG_INT,
+            Self::Decimal => EMBEDDED_STATE_TYPE_TAG_DECIMAL,
+            Self::Quantity => EMBEDDED_STATE_TYPE_TAG_QUANTITY,
+            Self::Bool => EMBEDDED_STATE_TYPE_TAG_BOOL,
+            Self::String => EMBEDDED_STATE_TYPE_TAG_STRING,
+            Self::Bytes => EMBEDDED_STATE_TYPE_TAG_BYTES,
+            Self::DataSpaceId => EMBEDDED_STATE_TYPE_TAG_DATASPACE_ID,
+            Self::AccountId => EMBEDDED_STATE_TYPE_TAG_ACCOUNT_ID,
+            Self::AssetDefinitionId => EMBEDDED_STATE_TYPE_TAG_ASSET_DEFINITION_ID,
+            Self::AssetId => EMBEDDED_STATE_TYPE_TAG_ASSET_ID,
+            Self::NftId => EMBEDDED_STATE_TYPE_TAG_NFT_ID,
+            Self::DomainId => EMBEDDED_STATE_TYPE_TAG_DOMAIN_ID,
+            Self::Name => EMBEDDED_STATE_TYPE_TAG_NAME,
+            Self::Json => EMBEDDED_STATE_TYPE_TAG_JSON,
+            Self::Tuple(_) => EMBEDDED_STATE_TYPE_TAG_TUPLE,
+            Self::Struct { .. } => EMBEDDED_STATE_TYPE_TAG_STRUCT,
+            Self::StateMap { .. } => EMBEDDED_STATE_TYPE_TAG_STATE_MAP,
+            Self::Option(_) => EMBEDDED_STATE_TYPE_TAG_OPTION,
+            Self::Result { .. } => EMBEDDED_STATE_TYPE_TAG_RESULT,
+            Self::List { .. } => EMBEDDED_STATE_TYPE_TAG_LIST,
+        }
+    }
+}
+
 const EMBEDDED_STATE_TYPE_TAG_INT: u8 = 0;
 const EMBEDDED_STATE_TYPE_TAG_DECIMAL: u8 = 1;
 const EMBEDDED_STATE_TYPE_TAG_QUANTITY: u8 = 2;
@@ -214,11 +247,12 @@ const EMBEDDED_STATE_TYPE_TAG_STATE_MAP: u8 = 16;
 const EMBEDDED_STATE_TYPE_TAG_OPTION: u8 = 17;
 const EMBEDDED_STATE_TYPE_TAG_RESULT: u8 = 18;
 const EMBEDDED_STATE_TYPE_TAG_LIST: u8 = 19;
-const MAX_EMBEDDED_STATE_TYPE_DEPTH: usize = 256;
+/// Maximum recursive depth accepted by the first-release CNTR state-type codec.
+pub const MAX_EMBEDDED_STATE_TYPE_DEPTH_V1: usize = 256;
 
 fn embedded_state_type_depth_error(operation: &str) -> NoritoError {
     NoritoError::Message(format!(
-        "embedded state type {operation} nesting exceeds {MAX_EMBEDDED_STATE_TYPE_DEPTH} levels"
+        "embedded state type {operation} nesting exceeds {MAX_EMBEDDED_STATE_TYPE_DEPTH_V1} levels"
     ))
 }
 
@@ -228,7 +262,7 @@ fn validate_embedded_state_type_iterative(
 ) -> Result<(), NoritoError> {
     let mut pending = vec![(root, 1_usize, false)];
     while let Some((value, depth, inside_list)) = pending.pop() {
-        if depth > MAX_EMBEDDED_STATE_TYPE_DEPTH {
+        if depth > MAX_EMBEDDED_STATE_TYPE_DEPTH_V1 {
             return Err(embedded_state_type_depth_error(operation));
         }
         let child_depth = depth
@@ -615,7 +649,7 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
     while let Some(event) = pending.pop() {
         match event {
             Event::Decode { encoded, depth } => {
-                if depth > MAX_EMBEDDED_STATE_TYPE_DEPTH {
+                if depth > MAX_EMBEDDED_STATE_TYPE_DEPTH_V1 {
                     return Err(embedded_state_type_depth_error("decoding"));
                 }
                 let child_depth = depth
@@ -887,6 +921,10 @@ impl<'a> DecodeFromSlice<'a> for EmbeddedStateFieldDescriptor {
 }
 
 impl NoritoSerialize for EmbeddedStateType {
+    fn schema_hash() -> [u8; 16] {
+        norito::core::schema_hash_for_name(EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1)
+    }
+
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), NoritoError> {
         let encoded = encode_embedded_state_type_payload(self)?;
         encoded.serialize(&mut writer)
@@ -894,6 +932,10 @@ impl NoritoSerialize for EmbeddedStateType {
 }
 
 impl<'a> NoritoDeserialize<'a> for EmbeddedStateType {
+    fn schema_hash() -> [u8; 16] {
+        norito::core::schema_hash_for_name(EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1)
+    }
+
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("EmbeddedStateType decode")
     }
@@ -921,6 +963,7 @@ pub struct EmbeddedStateDescriptor {
 
 /// Decoded payload of the required `CNTR` section carried by contract artifacts.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(schema_name = "iroha.kotodama.EmbeddedContractInterfaceV1")]
 pub struct EmbeddedContractInterfaceV1 {
     /// Canonical source-level seiyaku identity.
     pub seiyaku_name: String,
@@ -1468,6 +1511,63 @@ mod tests {
     }
 
     #[test]
+    fn embedded_state_type_tags_and_nominal_schema_names_are_stable() {
+        let variants = vec![
+            EmbeddedStateType::Int,
+            EmbeddedStateType::Decimal,
+            EmbeddedStateType::Quantity,
+            EmbeddedStateType::Bool,
+            EmbeddedStateType::String,
+            EmbeddedStateType::Bytes,
+            EmbeddedStateType::DataSpaceId,
+            EmbeddedStateType::AccountId,
+            EmbeddedStateType::AssetDefinitionId,
+            EmbeddedStateType::AssetId,
+            EmbeddedStateType::NftId,
+            EmbeddedStateType::DomainId,
+            EmbeddedStateType::Name,
+            EmbeddedStateType::Json,
+            EmbeddedStateType::Tuple(vec![EmbeddedStateType::Int, EmbeddedStateType::Decimal]),
+            EmbeddedStateType::Struct {
+                name: "Stable".to_owned(),
+                fields: vec![EmbeddedStateFieldDescriptor {
+                    name: "value".to_owned(),
+                    ty: EmbeddedStateType::Quantity,
+                }],
+            },
+            EmbeddedStateType::StateMap {
+                key: Box::new(EmbeddedStateType::AccountId),
+                value: Box::new(EmbeddedStateType::Quantity),
+            },
+            EmbeddedStateType::Option(Box::new(EmbeddedStateType::Int)),
+            EmbeddedStateType::Result {
+                ok: Box::new(EmbeddedStateType::Int),
+                err: Box::new(EmbeddedStateType::String),
+            },
+            EmbeddedStateType::List {
+                element: Box::new(EmbeddedStateType::Quantity),
+                capacity: 64,
+            },
+        ];
+
+        for (expected_tag, value) in (0_u8..).zip(variants) {
+            assert_eq!(value.wire_tag(), expected_tag);
+            let payload =
+                encode_embedded_state_type_payload(&value).expect("encode stable CNTR type");
+            assert_eq!(payload.first(), Some(&expected_tag));
+        }
+
+        assert_eq!(
+            <EmbeddedStateType as NoritoSerialize>::schema_hash(),
+            norito::core::schema_hash_for_name(EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1)
+        );
+        assert_eq!(
+            <EmbeddedContractInterfaceV1 as NoritoSerialize>::schema_hash(),
+            norito::core::schema_hash_for_name(CONTRACT_INTERFACE_SCHEMA_NAME_V1)
+        );
+    }
+
+    #[test]
     fn embedded_state_type_nesting_is_bounded_before_recursive_work() {
         std::thread::Builder::new()
             .name("embedded-state-depth-boundary".to_owned())
@@ -1490,20 +1590,20 @@ mod tests {
                     payload
                 }
 
-                let accepted_wrappers = MAX_EMBEDDED_STATE_TYPE_DEPTH - 1;
+                let accepted_wrappers = MAX_EMBEDDED_STATE_TYPE_DEPTH_V1 - 1;
                 encode_embedded_state_type_payload(&option_chain(accepted_wrappers))
                     .expect("the exact nesting budget remains valid");
                 decode_embedded_state_type_payload(&raw_option_payload(accepted_wrappers))
                     .expect("the exact decoding budget remains valid");
 
                 let error = encode_embedded_state_type_payload(&option_chain(
-                    MAX_EMBEDDED_STATE_TYPE_DEPTH,
+                    MAX_EMBEDDED_STATE_TYPE_DEPTH_V1,
                 ))
                 .expect_err("encoding above the state-type nesting budget must fail");
                 assert!(error.to_string().contains("nesting exceeds 256 levels"));
 
                 let error = decode_embedded_state_type_payload(&raw_option_payload(
-                    MAX_EMBEDDED_STATE_TYPE_DEPTH,
+                    MAX_EMBEDDED_STATE_TYPE_DEPTH_V1,
                 ))
                 .expect_err(
                     "decoding above the state-type nesting budget must fail before admission",

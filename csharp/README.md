@@ -15,6 +15,10 @@ This initial slice provides the foundation needed for a usable managed SDK:
   construction, initialization, and access plus strict v1 frame decode checks
   for magic/version, schema, compression, reserved layout flags, zero padding,
   length, and CRC
+- lossless Kotodama numeric V1 values for signed 512-bit `int`, exact
+  scale-bounded `decimal`, and nominal non-negative `quantity`, with canonical
+  string-only JSON, minimal two's-complement Norito frames, authenticated
+  pointer envelopes, and no conversion through CLR floating-point types
 - canonical Torii request signing headers with exact account, matching
   Ed25519 private seed, method, path, 16-byte lowercase-hex nonce, canonical
   64-byte signature-header base64, and positive timestamp validation before
@@ -821,10 +825,11 @@ reject empty, malformed, tampered, or wrong-type instruction archives, and keep
 recursive redeem derivation inside the native bridge.
 
 Use `PreferredMode(...)` to select only the first-release spend-again product
-mode `recursive_spend_v1` when the complete native surface is available, and
-otherwise `null`. `IsSpendAgainMode(...)` rejects `recursive_spend_v2` and
-`recursive_compact_v1`. The ABI-7 compact-token projection symbols remain source-stable and
-probe `kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend.
+mode `recursive_spend_v2` when the exact ABI-18 native surface is available, and
+otherwise `null`. `IsSpendAgainMode(...)` rejects the retired `recursive_spend_v1`
+and `recursive_compact_v1`. Compact-token projection symbols are not alternate
+product selectors; the internal projection circuit remains
+`kagemusha-recursive-compact-v1`.
 Use `BuildPallasOpenEnvelopesArchive(...)` for the current-hop record bundle
 and `BuildPreviousProofOpenEnvelopesArchive(...)` for the previous recursive
 proof bundle; gate both builders with

@@ -77,10 +77,6 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         args = "r10=&NoritoBytes(Norito-framed i64)".into();
         ret = "r10=i64".into();
         gas = "G_numeric + bytes".into();
-    } else if up.contains("BUILD_PATH_MAP_KEY") || n == 0x54 {
-        args = "r10=&Name(base), r11=key:i64".into();
-        ret = "r10=ptr (&Name)".into();
-        gas = "G_path + bytes".into();
     } else if up.contains("ENCODE_INT") || n == 0x55 {
         args = "r10=value:i64".into();
         ret = "r10=ptr (&NoritoBytes(Norito-framed i64))".into();

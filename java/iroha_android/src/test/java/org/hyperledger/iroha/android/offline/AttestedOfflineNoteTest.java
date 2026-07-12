@@ -50,6 +50,7 @@ public final class AttestedOfflineNoteTest {
     certificateValidationRejectsMalformedValues();
     offlineDeviceAttestationRegistrationMatchesRustVectors();
     offlineDeviceAttestationRegistrationDraftBuildsChallengeBeforeEvidence();
+    androidKeyMintChallengeBuildsBeforeKeyGeneration();
     offlineDeviceAttestationRegistrationValidationRejectsMalformedValues();
     offlineDeviceAttestationRegistrationDefensivelyCopiesMutableByteArrays();
     auditBundleRejectsInvalidShapesAndUncommittedOutputs();
@@ -876,6 +877,84 @@ public final class AttestedOfflineNoteTest {
     assertArrayEquals(expectedEvidence, draft.evidence(), "draft evidence");
     assertArrayEquals(
         AttestedOfflineNote.hash(expectedEvidence), draft.evidenceHash(), "draft evidence hash");
+  }
+
+  private static void androidKeyMintChallengeBuildsBeforeKeyGeneration() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> vector =
+        obj(obj(fixture, "chain_vectors"), "android_keymint_challenge");
+    final byte[] signingDigest =
+        hexBytes(string(vector, "android_signing_certificate_sha256"));
+    final byte[] challenge =
+        AttestedOfflineNote.DeviceAttestationRegistration.androidPreKeyGenerationChallengeHash(
+            intValue(vector, "version"),
+            string(vector, "device_id"),
+            string(vector, "account_id"),
+            nullableString(vector, "asset_definition_id"),
+            nullableString(vector, "ios_team_id"),
+            nullableString(vector, "ios_bundle_id"),
+            nullableString(vector, "ios_environment"),
+            string(vector, "android_package_name"),
+            signingDigest,
+            base64Bytes(string(vector, "public_key")),
+            string(vector, "assertion_scheme"),
+            string(vector, "assertion_key_algorithm"),
+            nullableInt(vector, "assertion_usage_count_limit"),
+            bool(vector, "one_use"),
+            longValue(vector, "recent_block_height"),
+            hexBytes(string(vector, "recent_block_hash")),
+            longValue(vector, "expires_at_ms"));
+    assertEquals(
+        string(vector, "challenge_hash"),
+        hex(challenge),
+        "Android pre-key-generation challenge must match the Rust vector");
+
+    final byte[] changedDigest = Arrays.copyOf(signingDigest, signingDigest.length);
+    changedDigest[0] ^= 0x01;
+    final byte[] changedChallenge =
+        AttestedOfflineNote.DeviceAttestationRegistration.androidPreKeyGenerationChallengeHash(
+            intValue(vector, "version"),
+            string(vector, "device_id"),
+            string(vector, "account_id"),
+            nullableString(vector, "asset_definition_id"),
+            nullableString(vector, "ios_team_id"),
+            nullableString(vector, "ios_bundle_id"),
+            nullableString(vector, "ios_environment"),
+            string(vector, "android_package_name"),
+            changedDigest,
+            base64Bytes(string(vector, "public_key")),
+            string(vector, "assertion_scheme"),
+            string(vector, "assertion_key_algorithm"),
+            nullableInt(vector, "assertion_usage_count_limit"),
+            bool(vector, "one_use"),
+            longValue(vector, "recent_block_height"),
+            hexBytes(string(vector, "recent_block_hash")),
+            longValue(vector, "expires_at_ms"));
+    assertTrue(
+        !Arrays.equals(challenge, changedChallenge),
+        "Android signing identity substitution must change the challenge");
+    assertThrows(
+        () ->
+            AttestedOfflineNote.DeviceAttestationRegistration
+                .androidPreKeyGenerationChallengeHash(
+                    intValue(vector, "version"),
+                    string(vector, "device_id"),
+                    string(vector, "account_id"),
+                    nullableString(vector, "asset_definition_id"),
+                    nullableString(vector, "ios_team_id"),
+                    nullableString(vector, "ios_bundle_id"),
+                    nullableString(vector, "ios_environment"),
+                    string(vector, "android_package_name"),
+                    signingDigest,
+                    base64Bytes(string(vector, "public_key")),
+                    "android-keymint-ecdsa-p256-usage-limit",
+                    string(vector, "assertion_key_algorithm"),
+                    nullableInt(vector, "assertion_usage_count_limit"),
+                    bool(vector, "one_use"),
+                    longValue(vector, "recent_block_height"),
+                    hexBytes(string(vector, "recent_block_hash")),
+                    longValue(vector, "expires_at_ms")),
+        "retired Android assertion profile must not produce a challenge");
   }
 
   private static void offlineDeviceAttestationRegistrationValidationRejectsMalformedValues()

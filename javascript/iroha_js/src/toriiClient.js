@@ -5713,7 +5713,7 @@ export class ToriiClient {
 
   /**
    * Fetch newest-first SCCP message discovery (`GET /v1/sccp/messages/recent`).
-   * @param {{from?: number, limit?: number, signal?: AbortSignal}} [options]
+   * @param {{from?: number, after_index?: number, limit?: number, signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
    */
   async getSccpRecentMessages(options = {}) {
@@ -5721,7 +5721,8 @@ export class ToriiClient {
       message: "must be a plain object",
     });
     const unknown = Object.keys(record).find(
-      (key) => key !== "from" && key !== "limit" && key !== "signal",
+      (key) =>
+        key !== "from" && key !== "after_index" && key !== "limit" && key !== "signal",
     );
     if (unknown !== undefined) {
       throw new TypeError(`getSccpRecentMessages.options contains unknown field \`${unknown}\``);
@@ -5734,6 +5735,21 @@ export class ToriiClient {
         );
       }
       params.from = String(record.from);
+    }
+    if (record.after_index !== undefined) {
+      if (record.from === undefined) {
+        throw new TypeError("getSccpRecentMessages.options.after_index requires from");
+      }
+      if (
+        !Number.isSafeInteger(record.after_index) ||
+        record.after_index < 0 ||
+        record.after_index > 511
+      ) {
+        throw new TypeError(
+          "getSccpRecentMessages.options.after_index must be an integer in 0..511",
+        );
+      }
+      params.after_index = String(record.after_index);
     }
     if (record.limit !== undefined) {
       if (!Number.isSafeInteger(record.limit) || record.limit < 1 || record.limit > 50) {
@@ -8796,7 +8812,7 @@ export class ToriiClient {
    */
   async getMultisigProposal(request = {}, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getMultisigProposal");
-    const payload = normalizeMultisigProposalLookupRequest(request);
+    const payload = normalizeMultisigProposalGetRequest(request);
     const response = await this._request("POST", "/v1/multisig/proposals/get", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
@@ -22657,6 +22673,16 @@ function normalizeMultisigProposalsListRequest(input, context) {
       normalizeMultisigProposalStatus(status, `${context}.status[${index}]`),
     );
   }
+  if (record.cursor !== undefined && record.cursor !== null) {
+    payload.cursor = requireNonEmptyString(record.cursor, `${context}.cursor`);
+  }
+  if (record.limit !== undefined && record.limit !== null) {
+    payload.limit = ToriiClient._normalizeUnsignedInteger(
+      record.limit,
+      `${context}.limit`,
+      { allowZero: false },
+    );
+  }
   return payload;
 }
 
@@ -23077,10 +23103,14 @@ function normalizeMultisigProposalsListResponse(
     proposals: proposalsValue.map((entry, index) =>
       normalizeMultisigProposalEntry(entry, `${context}.proposals[${index}]`),
     ),
+    next_cursor:
+      record.next_cursor === undefined || record.next_cursor === null
+        ? null
+        : requireNonEmptyString(record.next_cursor, `${context}.next_cursor`),
   };
 }
 
-function normalizeMultisigProposalLookupRequest(input) {
+function normalizeMultisigProposalGetRequest(input) {
   const record = ensureRecord(input, "getMultisigProposal request");
   const payload = normalizeMultisigAccountSelector(record, "getMultisigProposal request");
   const proposalId = pickOverride(record, "proposal_id", "proposalId");
@@ -23101,10 +23131,12 @@ function normalizeMultisigProposalLookupRequest(input) {
       "getMultisigProposal request.instructions_hash",
     );
   }
-  if (!payload.proposal_id && !payload.instructions_hash) {
+  const hasProposalId = payload.proposal_id !== undefined;
+  const hasInstructionsHash = payload.instructions_hash !== undefined;
+  if (hasProposalId === hasInstructionsHash) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
-      "getMultisigProposal request requires proposal_id or instructions_hash",
+      "getMultisigProposal request requires exactly one of proposal_id or instructions_hash",
       "getMultisigProposal.request",
     );
   }

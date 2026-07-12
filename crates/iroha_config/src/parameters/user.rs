@@ -3963,6 +3963,12 @@ impl Zk {
 /// every validator must obtain the same values from its configuration file.
 #[derive(Debug, ReadConfig, Clone, Copy)]
 pub struct Sccp {
+    /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
+    #[config(default = "defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES")]
+    pub max_pending_outbound_messages: NonZeroU64,
+    /// Maximum canonical outbound payload bytes awaiting destination proof acceptance.
+    #[config(default = "defaults::zk::sccp::MAX_PENDING_OUTBOUND_PAYLOAD_BYTES")]
+    pub max_pending_outbound_payload_bytes: NonZeroU64,
     /// Maximum closed SCCP proofs in one transaction.
     #[config(default = "defaults::zk::sccp::MAX_PROOFS_PER_TRANSACTION")]
     pub max_proofs_per_transaction: NonZeroU32,
@@ -4025,6 +4031,9 @@ pub struct Sccp {
 impl Default for Sccp {
     fn default() -> Self {
         Self {
+            max_pending_outbound_messages: defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES,
+            max_pending_outbound_payload_bytes:
+                defaults::zk::sccp::MAX_PENDING_OUTBOUND_PAYLOAD_BYTES,
             max_proofs_per_transaction: defaults::zk::sccp::MAX_PROOFS_PER_TRANSACTION,
             max_proofs_per_block: defaults::zk::sccp::MAX_PROOFS_PER_BLOCK,
             max_proof_bytes_per_proof: defaults::zk::sccp::MAX_PROOF_BYTES_PER_PROOF,
@@ -4082,6 +4091,14 @@ impl Sccp {
             );
         }
 
+        require_json_safe(
+            self.max_pending_outbound_messages,
+            "max_pending_outbound_messages",
+        );
+        require_json_safe(
+            self.max_pending_outbound_payload_bytes,
+            "max_pending_outbound_payload_bytes",
+        );
         require_json_safe(self.max_proof_bytes_per_proof, "max_proof_bytes_per_proof");
         require_json_safe(
             self.max_proof_bytes_per_transaction,
@@ -4157,6 +4174,8 @@ impl Sccp {
         );
 
         actual::Sccp {
+            max_pending_outbound_messages: self.max_pending_outbound_messages,
+            max_pending_outbound_payload_bytes: self.max_pending_outbound_payload_bytes,
             max_proofs_per_transaction: self.max_proofs_per_transaction,
             max_proofs_per_block: self.max_proofs_per_block,
             max_proof_bytes_per_proof: self.max_proof_bytes_per_proof,
@@ -4196,6 +4215,14 @@ mod sccp_limit_tests {
             actual.max_proof_bytes_per_proof,
             defaults::zk::sccp::MAX_PROOF_BYTES_PER_PROOF
         );
+        assert_eq!(
+            actual.max_pending_outbound_messages,
+            defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES
+        );
+        assert_eq!(
+            actual.max_pending_outbound_payload_bytes,
+            defaults::zk::sccp::MAX_PENDING_OUTBOUND_PAYLOAD_BYTES
+        );
         assert!(actual.max_proofs_per_transaction <= actual.max_proofs_per_block);
         assert!(actual.max_proof_bytes_per_proof <= actual.max_proof_bytes_per_transaction);
         assert!(actual.max_proof_bytes_per_transaction <= actual.max_proof_bytes_per_block);
@@ -4213,6 +4240,8 @@ mod sccp_limit_tests {
         let exact = NonZeroU64::new(maximum).expect("JSON-safe maximum is nonzero");
         let over = NonZeroU64::new(maximum + 1).expect("one above maximum is nonzero");
         let mut boundary = Sccp::default();
+        boundary.max_pending_outbound_messages = exact;
+        boundary.max_pending_outbound_payload_bytes = exact;
         boundary.max_proof_bytes_per_proof = exact;
         boundary.max_proof_bytes_per_transaction = exact;
         boundary.max_proof_bytes_per_block = exact;
@@ -4220,7 +4249,9 @@ mod sccp_limit_tests {
         boundary.max_native_header_bytes_per_block = exact;
         let _ = boundary.parse();
 
-        let mutations: [fn(&mut Sccp, NonZeroU64); 5] = [
+        let mutations: [fn(&mut Sccp, NonZeroU64); 7] = [
+            |value, limit| value.max_pending_outbound_messages = limit,
+            |value, limit| value.max_pending_outbound_payload_bytes = limit,
             |value, limit| value.max_proof_bytes_per_proof = limit,
             |value, limit| value.max_proof_bytes_per_transaction = limit,
             |value, limit| value.max_proof_bytes_per_block = limit,
@@ -16049,10 +16080,14 @@ pub struct Torii {
     /// Maximum proof request payload size (bytes).
     #[config(default = "defaults::torii::PROOF_MAX_BODY_BYTES")]
     pub proof_max_body_bytes: Bytes<u64>,
-    /// Maximum proof request bodies buffered concurrently before handler admission.
+    /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
+    ///
+    /// This aggregate gate also covers SCCP bridge proof/message submissions.
     #[config(default = "defaults::torii::PROOF_BODY_MAX_INFLIGHT")]
     pub proof_body_max_inflight: NonZeroUsize,
-    /// Absolute deadline for reading one admitted proof request body (milliseconds).
+    /// Absolute deadline for reading one admitted proof-bearing request body (milliseconds).
+    ///
+    /// This deadline also applies to SCCP bridge proof/message submissions.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::torii::PROOF_BODY_READ_TIMEOUT_MS))"
     )]

@@ -1444,8 +1444,21 @@ mod tests {
             .get(&instruction.settlement_id)
             .expect("FX outcome recorded");
         assert_eq!(ledger.entries.len(), 1);
-        assert_eq!(ledger.entries[0].kind, SettlementKind::FxCorridor);
-        assert!(ledger.entries[0].outcome.is_success());
+        let receipt = &ledger.entries[0];
+        assert_eq!(receipt.kind, SettlementKind::FxCorridor);
+        assert!(receipt.outcome.is_success());
+        assert!(receipt.legs.iter().all(|leg| leg.committed));
+        let details = receipt
+            .fx_corridor
+            .as_ref()
+            .expect("native FX receipt must retain exact policy and amount evidence");
+        assert_eq!(details.policy_id, policy.policy_id);
+        assert_eq!(details.policy_revision, policy.revision);
+        assert_eq!(details.source_dataspace, policy.source_dataspace);
+        assert_eq!(details.destination_dataspace, policy.destination_dataspace);
+        assert_eq!(details.source_amount, Numeric::from(10_u32));
+        assert_eq!(details.destination_amount, Numeric::from(760_u32));
+        assert_eq!(details.recipient, BOB_ID.clone());
 
         let replay = instruction
             .execute(&ALICE_ID, &mut stx)
@@ -1630,6 +1643,105 @@ mod tests {
         assert_eq!(
             **stx.world.assets.get(&source_id).expect("source unchanged"),
             Numeric::from(10_u32)
+        );
+    }
+
+    #[test]
+    fn fx_corridor_rejects_wrong_dataspace_and_frozen_reserve_without_partial_effects() {
+        let (state, policy) = fx_corridor_state(10, 1_000, 76, 1, true);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        let mut wrong_scope = policy.clone();
+        wrong_scope.source_dataspace = DataSpaceId::new(11);
+        SetFxCorridorPolicy {
+            policy: wrong_scope.clone(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("a well-formed policy may be published before its reserve is funded");
+        let wrong_scope_instruction = fx_settlement(&wrong_scope, "fx_wrong_scope", 1);
+        wrong_scope_instruction
+            .clone()
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("funds in another dataspace must not satisfy the signed policy scope");
+        let actual_source_id = AssetId::with_scope(
+            policy.source_asset_definition_id.clone(),
+            ALICE_ID.clone(),
+            AssetBalanceScope::Dataspace(policy.source_dataspace),
+        );
+        assert_eq!(
+            **stx
+                .world
+                .assets
+                .get(&actual_source_id)
+                .expect("actual source remains funded"),
+            Numeric::from(10_u32),
+        );
+        assert!(
+            stx.world
+                .settlement_ledgers
+                .get(&wrong_scope_instruction.settlement_id)
+                .is_none(),
+            "a rejected cross-dataspace attempt must not emit a success receipt",
+        );
+
+        let (state, policy) = fx_corridor_state(10, 1_000, 76, 1, true);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        SetFxCorridorPolicy {
+            policy: policy.clone(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("policy registration succeeds");
+        SetAssetTransferFreeze::new(
+            policy.destination_reserve.clone(),
+            policy.destination_asset_definition_id.clone(),
+            true,
+            Some("reserve safety hold".to_owned()),
+        )
+        .execute(&ALICE_ID, &mut stx)
+        .expect("asset owner may freeze the destination reserve");
+        let frozen_instruction = fx_settlement(&policy, "fx_frozen_reserve", 1);
+        frozen_instruction
+            .clone()
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("ordinary transfer controls must gate the native payout leg");
+
+        let source_id = AssetId::with_scope(
+            policy.source_asset_definition_id.clone(),
+            ALICE_ID.clone(),
+            AssetBalanceScope::Dataspace(policy.source_dataspace),
+        );
+        let reserve_id = AssetId::with_scope(
+            policy.destination_asset_definition_id.clone(),
+            policy.destination_reserve.clone(),
+            AssetBalanceScope::Dataspace(policy.destination_dataspace),
+        );
+        let recipient_id = AssetId::with_scope(
+            policy.destination_asset_definition_id.clone(),
+            BOB_ID.clone(),
+            AssetBalanceScope::Dataspace(policy.destination_dataspace),
+        );
+        assert_eq!(
+            **stx.world.assets.get(&source_id).expect("source unchanged"),
+            Numeric::from(10_u32),
+        );
+        assert_eq!(
+            **stx
+                .world
+                .assets
+                .get(&reserve_id)
+                .expect("reserve unchanged"),
+            Numeric::from(1_000_u32),
+        );
+        assert!(stx.world.assets.get(&recipient_id).is_none());
+        assert!(
+            stx.world
+                .settlement_ledgers
+                .get(&frozen_instruction.settlement_id)
+                .is_none(),
+            "a preflight rejection must not record a committed settlement receipt",
         );
     }
 

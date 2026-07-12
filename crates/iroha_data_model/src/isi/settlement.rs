@@ -798,6 +798,36 @@ mod tests {
         }
     }
 
+    fn fx_policy() -> FxCorridorPolicy {
+        FxCorridorPolicy {
+            policy_id: "cbuae_aed_sbp_pkr".parse().expect("policy id"),
+            revision: 1,
+            source_dataspace: DataSpaceId::new(10),
+            source_account: account(ALICE_SIGNATORY, "cbuae"),
+            source_asset_definition_id: asset("cbuae", "aed"),
+            source_sink: account(BOB_SIGNATORY, "cbuae"),
+            destination_dataspace: DataSpaceId::new(12),
+            destination_reserve: account(ALICE_SIGNATORY, "sbp"),
+            destination_asset_definition_id: asset("sbp", "pkr"),
+            rate_numerator: 76,
+            rate_denominator: 1,
+            enabled: true,
+        }
+    }
+
+    fn fx_settlement_instruction() -> SettleFxCorridor {
+        let policy = fx_policy();
+        SettleFxCorridor {
+            policy_id: policy.policy_id,
+            expected_policy_revision: policy.revision,
+            source_asset_definition_id: policy.source_asset_definition_id,
+            destination_asset_definition_id: policy.destination_asset_definition_id,
+            settlement_id: "fx_settlement_1".parse().expect("settlement id"),
+            recipient: account(BOB_SIGNATORY, "sbp"),
+            source_amount: Numeric::from(10_u32),
+        }
+    }
+
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -906,8 +936,55 @@ mod tests {
     fn settlement_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(dvp_instruction());
         assert_slice_roundtrip(pvp_instruction());
+        assert_slice_roundtrip(SetFxCorridorPolicy {
+            policy: fx_policy(),
+        });
+        assert_slice_roundtrip(fx_settlement_instruction());
         assert_slice_roundtrip(SettlementInstructionBox::Dvp(dvp_instruction()));
         assert_slice_roundtrip(SettlementInstructionBox::Pvp(pvp_instruction()));
+        assert_slice_roundtrip(SettlementInstructionBox::SetFxCorridorPolicy(
+            SetFxCorridorPolicy {
+                policy: fx_policy(),
+            },
+        ));
+        assert_slice_roundtrip(SettlementInstructionBox::SettleFxCorridor(
+            fx_settlement_instruction(),
+        ));
+    }
+
+    #[test]
+    fn fx_receipt_json_requires_canonical_quantity_strings() {
+        let policy = fx_policy();
+        let details = FxCorridorSettlementDetails {
+            policy_id: policy.policy_id,
+            policy_revision: policy.revision,
+            source_dataspace: policy.source_dataspace,
+            destination_dataspace: policy.destination_dataspace,
+            rate_numerator: policy.rate_numerator,
+            rate_denominator: policy.rate_denominator,
+            source_account: policy.source_account,
+            source_sink: policy.source_sink,
+            destination_reserve: policy.destination_reserve,
+            recipient: account(BOB_SIGNATORY, "sbp"),
+            source_asset_definition_id: policy.source_asset_definition_id,
+            destination_asset_definition_id: policy.destination_asset_definition_id,
+            source_amount: Numeric::from(10_u32),
+            destination_amount: Numeric::from(760_u32),
+        };
+        let canonical = norito::json::to_json(&details).expect("serialize FX receipt details");
+        assert!(canonical.contains("\"source_amount\":\"10\""));
+        assert!(canonical.contains("\"destination_amount\":\"760\""));
+        let decoded: FxCorridorSettlementDetails =
+            norito::json::from_str(&canonical).expect("canonical FX receipt JSON");
+        assert_eq!(decoded, details);
+
+        for replacement in ["\"source_amount\":10", "\"source_amount\":\"010\""] {
+            let malformed = canonical.replace("\"source_amount\":\"10\"", replacement);
+            assert!(
+                norito::json::from_str::<FxCorridorSettlementDetails>(&malformed).is_err(),
+                "FX receipts must reject non-string and non-canonical quantity encodings",
+            );
+        }
     }
 
     #[test]
@@ -921,14 +998,22 @@ mod tests {
         for value in [
             SettlementInstructionBox::Dvp(dvp_instruction()),
             SettlementInstructionBox::Pvp(pvp_instruction()),
+            SettlementInstructionBox::SetFxCorridorPolicy(SetFxCorridorPolicy {
+                policy: fx_policy(),
+            }),
+            SettlementInstructionBox::SettleFxCorridor(fx_settlement_instruction()),
         ] {
             assert_registry_decodes(&registry, SettlementInstructionBox::WIRE_ID, value);
         }
         for name in [
             std::any::type_name::<DvpIsi>(),
             std::any::type_name::<PvpIsi>(),
+            std::any::type_name::<SetFxCorridorPolicy>(),
+            std::any::type_name::<SettleFxCorridor>(),
             DvpIsi::WIRE_ID,
             PvpIsi::WIRE_ID,
+            SetFxCorridorPolicy::WIRE_ID,
+            SettleFxCorridor::WIRE_ID,
         ] {
             assert!(!registry.contains(name), "{name} must remain boxed-only");
         }

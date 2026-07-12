@@ -2134,7 +2134,8 @@ impl<const DEPTH: usize> Circuit<Scalar> for KagemushaTopUpShieldCircuitV2<DEPTH
         let index_quotients = (0..=DEPTH)
             .map(|_| meta.advice_column())
             .collect::<Vec<_>>();
-        let instances = std::array::from_fn(|_| meta.instance_column());
+        let instances: [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>; 11] =
+            std::array::from_fn(|_| meta.instance_column());
         let selector = meta.selector();
 
         let gate_siblings = siblings.clone();

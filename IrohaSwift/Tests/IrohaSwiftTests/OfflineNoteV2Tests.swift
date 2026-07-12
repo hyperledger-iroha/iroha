@@ -405,6 +405,79 @@ final class AttestedOfflineNoteTests: XCTestCase {
         XCTAssertEqual(draft.evidenceHash, IrohaHash.hash(expectedEvidence))
     }
 
+    func testAndroidKeyMintChallengeBuildsBeforeKeyGeneration() throws {
+        let fixture = try Self.loadFixture()
+        let vector = fixture.chainVectors.androidKeyMintChallenge
+        XCTAssertEqual(vector.platform, AttestedOfflineNoteConstants.androidKeyMintPlatform)
+        let signingDigest = try Self.hex(vector.androidSigningCertificateSha256)
+        let challenge = try OfflineDeviceAttestationRegistration
+            .androidPreKeyGenerationChallengeHash(
+                version: vector.version,
+                deviceId: vector.deviceId,
+                accountId: vector.accountId,
+                assetDefinitionId: vector.assetDefinitionId,
+                iosTeamId: vector.iosTeamId,
+                iosBundleId: vector.iosBundleId,
+                iosEnvironment: vector.iosEnvironment,
+                androidPackageName: vector.androidPackageName,
+                androidSigningCertificateSha256: signingDigest,
+                publicKey: try Self.base64(vector.publicKey),
+                assertionScheme: vector.assertionScheme,
+                assertionKeyAlgorithm: vector.assertionKeyAlgorithm,
+                assertionUsageCountLimit: vector.assertionUsageCountLimit,
+                oneUse: vector.oneUse,
+                recentBlockHeight: vector.recentBlockHeight,
+                recentBlockHash: try Self.hex(vector.recentBlockHash),
+                expiresAtMs: vector.expiresAtMs
+            )
+        XCTAssertEqual(challenge.hexLowercased(), vector.challengeHash)
+
+        var changedDigest = signingDigest
+        changedDigest[changedDigest.startIndex] ^= 0x01
+        let changedChallenge = try OfflineDeviceAttestationRegistration
+            .androidPreKeyGenerationChallengeHash(
+                version: vector.version,
+                deviceId: vector.deviceId,
+                accountId: vector.accountId,
+                assetDefinitionId: vector.assetDefinitionId,
+                iosTeamId: vector.iosTeamId,
+                iosBundleId: vector.iosBundleId,
+                iosEnvironment: vector.iosEnvironment,
+                androidPackageName: vector.androidPackageName,
+                androidSigningCertificateSha256: changedDigest,
+                publicKey: try Self.base64(vector.publicKey),
+                assertionScheme: vector.assertionScheme,
+                assertionKeyAlgorithm: vector.assertionKeyAlgorithm,
+                assertionUsageCountLimit: vector.assertionUsageCountLimit,
+                oneUse: vector.oneUse,
+                recentBlockHeight: vector.recentBlockHeight,
+                recentBlockHash: try Self.hex(vector.recentBlockHash),
+                expiresAtMs: vector.expiresAtMs
+            )
+        XCTAssertNotEqual(challenge, changedChallenge)
+
+        XCTAssertThrowsError(try OfflineDeviceAttestationRegistration
+            .androidPreKeyGenerationChallengeHash(
+                version: vector.version,
+                deviceId: vector.deviceId,
+                accountId: vector.accountId,
+                assetDefinitionId: vector.assetDefinitionId,
+                iosTeamId: vector.iosTeamId,
+                iosBundleId: vector.iosBundleId,
+                iosEnvironment: vector.iosEnvironment,
+                androidPackageName: vector.androidPackageName,
+                androidSigningCertificateSha256: signingDigest,
+                publicKey: try Self.base64(vector.publicKey),
+                assertionScheme: "android-keymint-ecdsa-p256-usage-limit",
+                assertionKeyAlgorithm: vector.assertionKeyAlgorithm,
+                assertionUsageCountLimit: vector.assertionUsageCountLimit,
+                oneUse: vector.oneUse,
+                recentBlockHeight: vector.recentBlockHeight,
+                recentBlockHash: try Self.hex(vector.recentBlockHash),
+                expiresAtMs: vector.expiresAtMs
+            ))
+    }
+
     func testAttestedOfflineNotePaymentTransactionBuildersAreRetiredAndRegistrationStillSigns() throws {
         let fixture = try Self.loadFixture()
         let keypair = try Keypair(privateKeyBytes: Data(0..<32))
@@ -1896,6 +1969,7 @@ private struct OfflineChainVectors: Decodable {
     let audit: OfflineAuditVector
     let redeem: OfflineRedeemVector
     let attestationRegistration: OfflineAttestationRegistrationVector
+    let androidKeyMintChallenge: OfflineAndroidKeyMintChallengeVector
 
     private enum CodingKeys: String, CodingKey {
         case certificates
@@ -1903,6 +1977,7 @@ private struct OfflineChainVectors: Decodable {
         case audit
         case redeem
         case attestationRegistration = "attestation_registration"
+        case androidKeyMintChallenge = "android_keymint_challenge"
     }
 }
 
@@ -1961,6 +2036,50 @@ private struct OfflineRedeemVector: Decodable {
         case amount
         case publicInputsHash = "public_inputs_hash"
         case noritoBase64 = "norito_base64"
+    }
+}
+
+private struct OfflineAndroidKeyMintChallengeVector: Decodable {
+    let version: UInt16
+    let platform: String
+    let deviceId: String
+    let accountId: String
+    let assetDefinitionId: String?
+    let iosTeamId: String?
+    let iosBundleId: String?
+    let iosEnvironment: String?
+    let androidPackageName: String
+    let androidSigningCertificateSha256: String
+    let publicKey: String
+    let assertionScheme: String
+    let assertionKeyAlgorithm: String
+    let assertionUsageCountLimit: UInt32?
+    let oneUse: Bool
+    let recentBlockHeight: UInt64
+    let recentBlockHash: String
+    let expiresAtMs: UInt64
+    let challengeHash: String
+
+    private enum CodingKeys: String, CodingKey {
+        case version
+        case platform
+        case deviceId = "device_id"
+        case accountId = "account_id"
+        case assetDefinitionId = "asset_definition_id"
+        case iosTeamId = "ios_team_id"
+        case iosBundleId = "ios_bundle_id"
+        case iosEnvironment = "ios_environment"
+        case androidPackageName = "android_package_name"
+        case androidSigningCertificateSha256 = "android_signing_certificate_sha256"
+        case publicKey = "public_key"
+        case assertionScheme = "assertion_scheme"
+        case assertionKeyAlgorithm = "assertion_key_algorithm"
+        case assertionUsageCountLimit = "assertion_usage_count_limit"
+        case oneUse = "one_use"
+        case recentBlockHeight = "recent_block_height"
+        case recentBlockHash = "recent_block_hash"
+        case expiresAtMs = "expires_at_ms"
+        case challengeHash = "challenge_hash"
     }
 }
 

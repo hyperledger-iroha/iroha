@@ -19921,12 +19921,30 @@ test("registerContractCode rejects forged branded manifest declarations before f
     "match",
     "int",
     "state_map_get",
+    "__kotodama_quantity_ratio_round",
+    "__kotodama_decimal_to_int_trunc",
+    "__kotodama_decimal_to_int_round",
     "__kotodama_link_forged",
     "９ledger",
   ]) {
     await assert.rejects(
       submit({ seiyakuName }),
       /seiyaku_name must (?:not be empty|be a canonical Kotodama V1 identifier)/u,
+    );
+  }
+  for (const retired of ["U128", "Amount"]) {
+    await assert.rejects(
+      submit({
+        entrypoints: [{
+          name: "legacy_numeric",
+          kind: "View",
+          returnType: retired,
+          returnSchema: {
+            nodes: [{ kind: "Leaf", value: { kind: retired, value: null } }],
+          },
+        }],
+      }),
+      /not a V1 entrypoint value kind/u,
     );
   }
   await assert.rejects(
@@ -21229,6 +21247,7 @@ test("listMultisigProposals decodes proposal entries", async () => {
         terminal_at_ms: null,
       },
     ],
+    next_cursor: "page-2",
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async (url, init) => {
@@ -21243,11 +21262,15 @@ test("listMultisigProposals decodes proposal entries", async () => {
   const result = await client.listMultisigProposals({
     multisigAccountAlias: "cbdc@banka",
     status: ["collecting_signatures"],
+    cursor: "page-1",
+    limit: 25,
   });
   assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/list`);
   assert.deepEqual(JSON.parse(captured.init.body), {
     multisig_account_alias: "cbdc@banka",
     status: ["COLLECTING_SIGNATURES"],
+    cursor: "page-1",
+    limit: 25,
   });
   assert.deepEqual(result, responsePayload);
 });
@@ -21301,6 +21324,23 @@ test("listMultisigProposals rejects unsupported request and response statuses", 
         status: ["READY_TO_SUBMIT"],
       }),
     /must be one of COLLECTING_SIGNATURES, FINALIZED, CANCELED, EXPIRED/,
+  );
+  await assert.rejects(
+    () =>
+      noFetchClient.listMultisigProposals({
+        multisigAccountId: FIXTURE_ALICE_ID,
+        multisigAccountAlias: "cbdc@banka",
+      }),
+    /requires exactly one/,
+  );
+  await assert.rejects(
+    () =>
+      noFetchClient.getMultisigProposal({
+        multisigAccountId: FIXTURE_ALICE_ID,
+        proposalId: "f".repeat(64),
+        instructionsHash: "f".repeat(64),
+      }),
+    /requires exactly one/,
   );
 
   const invalidResponseClient = new ToriiClient(BASE_URL, {

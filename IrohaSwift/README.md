@@ -701,11 +701,10 @@ used, `load` records issued notes as `.issuePending` until `sync()`
 observes matching `IssueOfflineNote` finality; rejected issue outcomes cancel
 the pending note.
 The first release exposes one Kagemusha production mode: `recursive_spend_v2`.
-Internal V2 request and circuit names do not define a second product selector.
 Selection requires the exact native bridge ABI 18
 capability archive, a validated `proof_backend_available` value, and the full
 native symbol inventory. `KagemushaRecursiveSpendProver.preferredMode` returns
-`.recursiveSpendV1` only when that ABI-18 backend is ready; otherwise it returns
+`.recursiveSpend` only when that ABI-18 backend is ready; otherwise it returns
 `nil`. Older proof modes and symbol-presence probes are not release fallbacks.
 
 `KagemushaRecursiveSpend` consumes the canonical V3 release manifest and its
@@ -725,13 +724,14 @@ content address. The release directory has exactly ten files:
 Treat `manifest.norito` as the canonical runtime object and verify its SHA-256
 before ingesting any payload. JSON is an operator view, not a trust anchor. For
 each of the six `KRV3KEY\0` files, begin a manifest-bound streaming ingest with
-`KagemushaRecursiveSpendArtifactInstallSession.beginArtifact`, write bounded chunks, finalize only after the
-complete file has been validated, and cancel the handle on every error path.
+`KagemushaRecursiveSpendArtifactInstallSessionV3.beginArtifact`, write bounded
+chunks, finalize only after the complete file has been validated, and cancel
+the handle on every error path.
 The native begin/write/finalize/cancel operations bind the manifest digest,
 artifact digest, framing header, descriptor, payload size, and payload digest.
 Successful ingestion alone does not advertise proof readiness. The six finalized
 streams must be installed atomically through
-`KagemushaRecursiveSpendArtifactInstallSession`; partial generations remain
+`KagemushaRecursiveSpendArtifactInstallSessionV3`; partial generations remain
 unavailable and failed installation retains the prior active generation.
 The SDK also exposes the recursive-spend compact projection verifier for raw
 Norito compact-token and verifier-record archives. Call

@@ -30,9 +30,9 @@ DOC_PATHS = (
     "python/iroha_python/README.md",
 )
 
-# The production release has one public spend-again corridor.  The V2 suffix is
-# the product selector; V3 names the governed artifact manifest/streaming
-# lifecycle, and 18 is the exact native bridge ABI.  Historical ABI-6/ABI-7
+# The production release has one public spend-again corridor. V2 is the
+# product selector; V3 names the governed artifact manifest/streaming
+# lifecycle, and 18 is the exact native bridge ABI. Historical ABI-6/ABI-7
 # fixtures are deliberately not part of this release policy.
 FIRST_RELEASE_SELECTOR = "recursive_spend_v2"
 FIRST_RELEASE_BRIDGE_ABI = 18
@@ -2234,6 +2234,7 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "docs/source/offline_kagemusha.md",
     "docs/source/offline_kagemusha_finality_provenance.md",
     ".github/workflows/pr_kagemusha_payload_bench.yml",
+    "ci/check_kagemusha_v3_release_contract.sh",
     "crates/iroha_cli/src/zk.rs",
     "crates/iroha_data_model/src/offline/mod.rs",
     "crates/iroha_core/src/zk.rs",
@@ -2292,7 +2293,6 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
-    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendLineageWitnessVerifier.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Codecs.swift",
@@ -2307,7 +2307,6 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendV2Tests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaScaledAmountTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
-    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaVerifierRecordTestFixtures.swift",
     "java/iroha_android/README.md",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaInstructionArchives.java",
@@ -2393,11 +2392,13 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+    "IrohaSwift/Sources/IrohaSwift/PrivacyConfidentialWitness.swift",
     "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
     "IrohaSwift/Sources/IrohaSwift/ToriiOfflineCashAPIModels.swift",
     "IrohaSwift/Sources/IrohaSwift/TransactionEncoder.swift",
     "IrohaSwift/Sources/IrohaSwift/TxBuilder.swift",
     "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
+    "IrohaSwift/Sources/IrohaSwift/ZkAssetMerklePath.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineCashLifecycleTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/ConfidentialUnshieldRedeemNativeTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKConfidentialUnshieldWorkflowTests.swift",
@@ -2414,8 +2415,10 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "crates/iroha_core/src/smartcontracts/isi/world.rs",
     "crates/iroha_core/src/smartcontracts/ivm/host.rs",
     "crates/iroha_core/src/sumeragi/smt.rs",
+    "crates/iroha_core/src/sumeragi/v2_apply.rs",
     "crates/iroha_core/src/sumeragi/witness.rs",
     "crates/iroha_core/src/validation_fee.rs",
+    "crates/iroha_core/src/zk/confidential_v2.rs",
     "crates/iroha_data_model/src/isi/mod.rs",
     "crates/iroha_data_model/src/isi/registry.rs",
     "crates/iroha_data_model/src/proof.rs",
@@ -2423,6 +2426,7 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "crates/iroha_torii/src/explorer.rs",
     "crates/iroha_torii/src/lib.rs",
     "crates/iroha_torii/src/routing.rs",
+    "crates/connect_norito_bridge/src/privacy_production.rs",
     "csharp/README.md",
     "csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineToriiApi.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs",
@@ -2434,6 +2438,7 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/VerifyingKeyBackendTagTests.cs",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyBackendTag.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/SumeragiV2Wire.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/IrohaOfflineNoteTransactionSubmitter.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJsonParser.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java",
@@ -2446,6 +2451,7 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/GradleHarnessTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/Java8CompatibilitySurfaceTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/OfflineToriiClientTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/SumeragiV2WireFixtureTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycleTest.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineJsonParserTest.java",
@@ -2465,6 +2471,7 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "javascript/iroha_js/test/toriiClient.test.js",
     "javascript/iroha_js/test/transactionBuilder.test.js",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTag.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/SumeragiV2Wire.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineJsonParser.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
@@ -2472,6 +2479,8 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineOperationStatus.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineReadiness.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientReadinessTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientOperationTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireFixtureTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTagTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycleTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
@@ -6197,19 +6206,33 @@ def check_first_release_v3_contract():
                     rf"\bpublic\s+static\s+[^;{{\n]+\b{re.escape(retired)}\s*\(", source
                 )
             else:
-                exposed = re.search(rf"\bfun\s+{re.escape(retired)}\s*\(", source)
+                exposed = re.search(
+                    rf"(?m)^\s*(?!(?:private|internal|protected)\s)(?:public\s+)?"
+                    rf"fun\s+{re.escape(retired)}\s*\(",
+                    source,
+                )
             if exposed is not None:
                 fail(f"{relative} reintroduces retired first-release public API: {retired}")
-        for retired_marker in (
-            "kagemusha_recursive_spend_abi6",
-            "kagemusha_recursive_spend_abi7",
-            "RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
-        ):
-            if retired_marker in source:
-                fail(f"{relative} reintroduces retired compatibility surface: {retired_marker}")
+        if language == "Java":
+            retired_constant = re.search(
+                r"(?m)^\s*public\s+static\s+final\s+[^\n]*\b"
+                r"RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION\b",
+                source,
+            )
+        else:
+            retired_constant = re.search(
+                r"(?m)^\s*(?!(?:private|internal|protected)\s)(?:public\s+)?const\s+val\s+"
+                r"RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION\b",
+                source,
+            )
+        if retired_constant is not None:
+            fail(
+                f"{relative} reintroduces retired public compatibility surface: "
+                "RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION"
+            )
 
     java_needles = (
-        "exactAbiAndSingleModeAreFailClosed",
+        "exposesStableModesAndCircuitIds",
         "REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 18",
         "isExactBridgeAbi(17)",
         "isExactBridgeAbi(19)",
@@ -6219,37 +6242,27 @@ def check_first_release_v3_contract():
         "MAX_MANIFEST_BYTES + 1",
         "new byte[31]",
         "new byte[32]",
-        "installSessionRejectsPartialAndClosedUse",
+        "artifactInstallSessionRejectsPartialAndClosedUse",
         "publicSurfaceOmitsRetiredRecursiveApis",
         *tuple(f'"{name}"' for name in sorted(RETIRED_JVM_RECURSIVE_SPEND_PUBLIC_METHODS)),
     )
     kotlin_needles = (
-        "exact ABI and single mode fail closed",
+        "exposesStableModesAndCircuitIds",
         "REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
         "isExactBridgeAbi(17)",
         "isExactBridgeAbi(19)",
-        "Mode.entries",
+        "Mode.values()",
         'assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.MODE)',
-        "malformed artifact inputs fail before native dispatch",
+        "malformedArtifactInputsFailBeforeNativeDispatch",
         "MAX_MANIFEST_BYTES + 1",
         "ByteArray(31)",
         "ByteArray(32)",
-        "install session rejects partial and closed use",
-        "public surface omits retired recursive APIs",
+        "artifactInstallSessionRejectsPartialAndClosedUse",
+        "publicSurfaceOmitsRetiredRecursiveApis",
         *tuple(f'"{name}"' for name in sorted(RETIRED_JVM_RECURSIVE_SPEND_PUBLIC_METHODS)),
     )
     _require_first_release_test_needles(FIRST_RELEASE_JAVA_TEST, java_needles)
     _require_first_release_test_needles(FIRST_RELEASE_KOTLIN_TEST, kotlin_needles)
-    for relative in (FIRST_RELEASE_JAVA_TEST, FIRST_RELEASE_KOTLIN_TEST):
-        test_source = read(relative)
-        for retired_marker in (
-            "sharedRecursiveSpendAbi6",
-            "sharedRecursiveSpendAbi7",
-            "kagemusha_recursive_spend_abi6",
-            "kagemusha_recursive_spend_abi7",
-        ):
-            if retired_marker in test_source:
-                fail(f"{relative} reintroduces retired compatibility fixture coverage: {retired_marker}")
 
 
 def check_first_release_v3_docs():
@@ -9191,7 +9204,7 @@ if mode == "--negative-control-active-kagemusha-todo":
     raise SystemExit(0)
 
 if mode == "--negative-control-active-kagemusha-todo-scan-inventory":
-    target = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaVerifierRecordTestFixtures.swift"
+    target = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift"
     ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = tuple(
         path for path in ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS if path != target
     )

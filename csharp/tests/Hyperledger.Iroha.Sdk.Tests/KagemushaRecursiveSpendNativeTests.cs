@@ -22,11 +22,12 @@ public sealed class KagemushaRecursiveSpendNativeTests
     [Fact]
     public void RecursiveSpendNativeAvailabilityRequiresCompleteAbiSurface()
     {
-        Assert.True(KagemushaRecursiveSpendNative.IsAvailable(() => 6u, () => true));
-        Assert.True(KagemushaRecursiveSpendNative.IsAvailable(() => 7u, () => true));
+        Assert.True(KagemushaRecursiveSpendNative.IsAvailable(() => 18u, () => true));
+        Assert.False(KagemushaRecursiveSpendNative.IsAvailable(() => 17u, () => true));
+        Assert.False(KagemushaRecursiveSpendNative.IsAvailable(() => 19u, () => true));
         Assert.False(KagemushaRecursiveSpendNative.IsAvailable(() => null, () => true));
         Assert.False(KagemushaRecursiveSpendNative.IsAvailable(() => 5u, () => true));
-        Assert.False(KagemushaRecursiveSpendNative.IsAvailable(() => 6u, () => false));
+        Assert.False(KagemushaRecursiveSpendNative.IsAvailable(() => 18u, () => false));
         Assert.False(KagemushaRecursiveSpendNative.IsAvailable(
             () => throw new DllNotFoundException("missing bridge"),
             () => true));
@@ -37,10 +38,10 @@ public sealed class KagemushaRecursiveSpendNativeTests
             () => throw new BadImageFormatException("wrong architecture"),
             () => true));
         Assert.False(KagemushaRecursiveSpendNative.IsAvailable(
-            () => 6u,
+            () => 18u,
             () => throw new EntryPointNotFoundException("missing recursive spend symbol")));
         Assert.False(KagemushaRecursiveSpendNative.IsAvailable(
-            () => 6u,
+            () => 18u,
             () => throw new InvalidOperationException("symbol probe failed")));
         Assert.False(KagemushaRecursiveSpendNative.IsAvailable(
             () => throw new ArgumentException("malformed ABI probe"),
@@ -49,34 +50,34 @@ public sealed class KagemushaRecursiveSpendNativeTests
             () => throw new NullReferenceException("broken ABI probe"),
             () => true));
         Assert.False(KagemushaRecursiveSpendNative.IsAvailable(
-            () => 6u,
+            () => 18u,
             () => throw new ArgumentException("malformed symbol probe")));
         Assert.False(KagemushaRecursiveSpendNative.IsAvailable(
-            () => 6u,
+            () => 18u,
             () => throw new NullReferenceException("broken symbol probe")));
         Assert.True(KagemushaRecursiveSpendNative.IsCompactPaymentTokenProverAvailable(
-            () => 6u,
+            () => 18u,
             () => true));
-        Assert.True(KagemushaRecursiveSpendNative.IsCompactPaymentTokenProverAvailable(
+        Assert.False(KagemushaRecursiveSpendNative.IsCompactPaymentTokenProverAvailable(
             () => 7u,
             () => true));
         Assert.False(KagemushaRecursiveSpendNative.IsCompactPaymentTokenProverAvailable(
             () => 5u,
             () => true));
         Assert.False(KagemushaRecursiveSpendNative.IsCompactPaymentTokenProverAvailable(
-            () => 6u,
+            () => 18u,
             () => false));
-        Assert.True(KagemushaRecursiveSpendNative.IsRecursiveAggregationProofBundleProverAvailable(
-            () => 6u,
+        Assert.False(KagemushaRecursiveSpendNative.IsRecursiveAggregationProofBundleProverAvailable(
+            () => 19u,
             () => true));
         Assert.True(KagemushaRecursiveSpendNative.IsRecursiveAggregationProofBundleProverAvailable(
-            () => 7u,
+            () => 18u,
             () => true));
         Assert.False(KagemushaRecursiveSpendNative.IsRecursiveAggregationProofBundleProverAvailable(
             () => 5u,
             () => true));
         Assert.False(KagemushaRecursiveSpendNative.IsRecursiveAggregationProofBundleProverAvailable(
-            () => 6u,
+            () => 18u,
             () => false));
         Assert.True(KagemushaRecursiveSpendNative.IsPallasOpenEnvelopeBuilderAvailable(
             () => 7u,
@@ -192,22 +193,22 @@ public sealed class KagemushaRecursiveSpendNativeTests
     }
 
     [Fact]
-    public void RecursiveSpendNativePreferredModeSelectsOnlySpendAgainV1()
+    public void RecursiveSpendNativePreferredModeSelectsOnlyFirstReleaseMode()
     {
         Assert.Equal(
-            KagemushaOfflineSpendMode.RecursiveSpendV1,
+            KagemushaOfflineSpendMode.RecursiveSpend,
             KagemushaRecursiveSpendNative.PreferredMode(true));
         Assert.Null(KagemushaRecursiveSpendNative.PreferredMode(false));
         Assert.Equal(
-            "recursive_spend_v1",
-            KagemushaOfflineSpendMode.RecursiveSpendV1.WireName());
-        Assert.True(KagemushaRecursiveSpendNative.IsSpendAgainMode("recursive_spend_v1"));
-        Assert.False(KagemushaRecursiveSpendNative.IsSpendAgainMode("recursive_spend_v2"));
+            "recursive_spend_v2",
+            KagemushaOfflineSpendMode.RecursiveSpend.WireName());
+        Assert.True(KagemushaRecursiveSpendNative.IsSpendAgainMode("recursive_spend_v2"));
+        Assert.False(KagemushaRecursiveSpendNative.IsSpendAgainMode("recursive_spend_v1"));
         Assert.False(KagemushaRecursiveSpendNative.IsSpendAgainMode("recursive_compact_v1"));
         Assert.DoesNotContain(
             "checked_prefold_v1",
             Enum.GetValues<KagemushaOfflineSpendMode>().Select(mode => mode.WireName()));
-        Assert.Equal(6u, KagemushaRecursiveSpendNative.RequiredNativeBridgeAbiVersion);
+        Assert.Equal(18u, KagemushaRecursiveSpendNative.RequiredNativeBridgeAbiVersion);
         Assert.Equal(7u, KagemushaRecursiveSpendNative.RecursiveCompactRequiredNativeBridgeAbiVersion);
         Assert.Equal(15u, KagemushaRecursiveSpendNative.TopUpRequiredNativeBridgeAbiVersion);
         Assert.Equal(

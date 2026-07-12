@@ -306,6 +306,10 @@ impl PreparedContract {
         &self.inner.contract_interface
     }
 
+    pub(crate) fn shared_contract_interface(&self) -> Arc<EmbeddedContractInterfaceV1> {
+        Arc::clone(&self.inner.contract_interface)
+    }
+
     /// Resolve an entrypoint to its absolute PC in IVM code memory.
     #[must_use]
     pub fn entrypoint_pc(&self, name: &str) -> Option<u64> {

@@ -1008,17 +1008,17 @@ fn semantic_rejects_zk_vrf_read_helper_args() {
 fn compile_emits_state_introspection_helpers() {
     let src = r#"
         seiyaku StateIntrospection {
-        fn f() {
+        fn f() -> bytes {
             let prefix = Name::parse("Orders");
             let keys = state::keys(path: prefix, offset: 0, limit: 2);
             let present = state::contains(prefix);
             let len = state::len(prefix);
             let count = state::count(prefix);
-            debug::info(codec::tlv_len(keys));
             if present {
                 debug::info(len);
             }
             debug::info(count);
+            return keys;
         }
         }
     "#;
@@ -1058,13 +1058,11 @@ fn semantic_rejects_state_introspection_helper_args() {
 fn compile_emits_extended_hash_syscalls() {
     let src = r#"
         seiyaku HashFunctions {
-        fn f(bytes payload) {
+        fn f(bytes payload) -> Json {
             let b = crypto::blake2b256(payload);
             let k = crypto::keccak256(payload);
             let i = crypto::iroha_hash(payload);
-            debug::info(codec::tlv_len(b));
-            debug::info(codec::tlv_len(k));
-            debug::info(codec::tlv_len(i));
+            return json { blake2b: b, keccak: k, iroha: i };
         }
         }
     "#;
@@ -2777,7 +2775,7 @@ fn typed_vrf_syscalls_are_present() {
     let src = r#"
         module VrfVerification {
             fn main(bytes input, bytes public_key, bytes proof, bytes batch) {
-                let _out = crypto::vrf::verify(message: input, proof: public_key, public_key: proof, variant: 2);
+                let _out = crypto::vrf::verify(request: input);
                 let _batch = crypto::vrf::verify_batch(batch);
             }
         }

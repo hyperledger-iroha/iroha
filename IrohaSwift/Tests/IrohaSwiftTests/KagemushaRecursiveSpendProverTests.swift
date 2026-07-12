@@ -9,7 +9,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             KagemushaRecursiveSpendProver.preferredMode(
                 pastaCycleV3BackendAvailable: true
             ),
-            .recursiveSpendV1
+            .recursiveSpend
         )
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredMode(
@@ -21,7 +21,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             KagemushaRecursiveSpendProver.preferredSpendableCashMode(
                 pastaCycleV3BackendAvailable: true
             ),
-            .recursiveSpendV1
+            .recursiveSpend
         )
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredSpendableCashMode(
@@ -30,7 +30,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             nil
         )
         XCTAssertEqual(KagemushaOfflineSpendMode.allCases.count, 1)
-        XCTAssertEqual(KagemushaOfflineSpendMode.recursiveSpendV1.rawValue, "recursive_spend_v1")
+        XCTAssertEqual(KagemushaOfflineSpendMode.recursiveSpend.rawValue, "recursive_spend_v2")
     }
 
     func testLineageKeyArtifactPackagesValidateReleaseProfiles() throws {

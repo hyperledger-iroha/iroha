@@ -3265,8 +3265,8 @@ test("Kagemusha JavaScript record-backed native builders stay in parity", () => 
         '"recordBundleArchive"',
         '"pallasOpenEnvelopesArchive"',
         '"previousBundleArchive"',
-        "Kagemusha compact payment-token prover requires native bridge ABI 6",
-        "Kagemusha recursive aggregation proof-bundle prover requires native bridge ABI 6",
+        "Kagemusha compact payment-token prover requires native bridge ABI 18",
+        "Kagemusha recursive aggregation proof-bundle prover requires native bridge ABI 18",
         "Kagemusha Pallas open-envelope builders require native bridge ABI 7",
       ],
       `${relative} record-backed Kagemusha and Pallas builder wrappers`,
@@ -3390,7 +3390,7 @@ test("Kagemusha JavaScript record-backed native builders stay in parity", () => 
   );
 });
 
-test("recursive Kagemusha ABI-6 availability probes require transition-profile, boundary, and lineage-witness helpers", () => {
+test("recursive Kagemusha ABI-18 availability probes require transition-profile, boundary, and lineage-witness helpers", () => {
   for (const relative of ["javascript/iroha_js/src/crypto.js", "javascript/iroha_js/dist/crypto.js"]) {
     assertContainsAll(
       source(relative),
@@ -3490,7 +3490,7 @@ test("recursive Kagemusha ABI probes reject unsafe and out-of-range versions", (
         "Number.POSITIVE_INFINITY",
         "Number.MAX_SAFE_INTEGER + 1",
         "0x1_0000_0000",
-        "6.5",
+        "18.5",
         "-1",
         "isKagemushaRecursiveCompactPaymentTokenNativeAvailable(), false",
       ],
@@ -3513,7 +3513,7 @@ test("recursive Kagemusha ABI probes reject unsafe and out-of-range versions", (
   assertContainsAll(
     source("javascript/iroha_js/test/package_dist.test.js"),
     [
-      "package dist Kagemusha recursive spend availability rejects partial ABI-6 surfaces",
+      "package dist Kagemusha recursive spend availability rejects partial ABI-18 surfaces",
       "const requiredMethods = [",
       '"kagemushaRecursiveSpendTransitionProfileInit"',
       '"kagemushaRecursiveSpendTransitionProfileAppend"',
@@ -3523,7 +3523,7 @@ test("recursive Kagemusha ABI probes reject unsafe and out-of-range versions", (
       "delete binding[missingMethod]",
       "preferredKagemushaOfflineSpendMode()",
     ],
-    "JavaScript package dist recursive spend partial ABI-6 availability tests",
+    "JavaScript package dist recursive spend partial ABI-18 availability tests",
   );
   assertContainsAll(
     source("javascript/iroha_js/test/package_dist.test.js"),
@@ -3609,9 +3609,9 @@ test("recursive Kagemusha ABI probes reject unsafe and out-of-range versions", (
   assertContainsAll(
     source("python/iroha_python/tests/kagemusha_test.py"),
     [
-      "test_recursive_kagemusha_availability_requires_bridge_abi_6",
-      '"6"',
-      "6.5",
+      "test_recursive_kagemusha_availability_requires_exact_bridge_abi_18",
+      '"18"',
+      "18.5",
       "0x1_0000_0000",
       "10**100",
       "is_kagemusha_recursive_compact_payment_token_prover_available",
@@ -7074,13 +7074,13 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-sdk-default",
-      /Some\(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1\)[\s\S]*?"        None",/u,
+      /Some\(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2\)[\s\S]*?"        None",/u,
       "ABI-18 first-release selector",
     ],
     [
       "--negative-control-sdk-default-cross-sdk",
-      /KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1[\s\S]*?case recursiveSpendV1[\s\S]*?RECURSIVE_SPEND_V1[\s\S]*?unsupported_mode/u,
-      "cross-SDK ABI-18\/V1 production selector",
+      /KAGEMUSHA_RECURSIVE_SPEND_MODE_V2[\s\S]*?case recursiveSpend[\s\S]*?RECURSIVE_SPEND[\s\S]*?unsupported_mode/u,
+      "cross-SDK ABI-18\/V2 production selector",
     ],
     [
       "--negative-control-v3-release-inventory",
@@ -15312,12 +15312,12 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-android-device-lab-family-override-binding",
     "--negative-control-android-device-lab-assembler-identity-fields",
     "--negative-control-native-c-bridge-abi-version",
-    "--negative-control-abi18-pasta-cycle-mode-v1",
+    "--negative-control-abi18-pasta-cycle-mode-v2",
     "--negative-control-native-bridge-zero-envelope-pallas-guard",
     "--negative-control-native-bridge-recursive-compact-invalid-proof-isolation",
     "--negative-control-bridge-zk1-i10p-parser-exactness",
     "--negative-control-kagemusha-abi-probe-bounds",
-    "--negative-control-js-package-dist-recursive-spend-partial-abi6",
+    "--negative-control-js-package-dist-recursive-spend-partial-abi18",
     "--negative-control-js-package-dist-compact-projection",
     "--negative-control-js-package-dist-record-backed-pallas-builders",
     "--negative-control-kagemusha-probe-rejection-shape",
@@ -17712,7 +17712,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const androidDeviceLabAssemblerIdentityBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-android-device-lab-assembler-identity-fields":'),
-    guard.indexOf('if mode == "--negative-control-abi18-pasta-cycle-mode-v1":'),
+    guard.indexOf('if mode == "--negative-control-abi18-pasta-cycle-mode-v2":'),
   );
   assert.match(
     guard,
@@ -17735,23 +17735,23 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "Android device-lab assembler identity negative control must not pass unconditionally after run_checks",
   );
   const abi18PastaCycleModeBranch = guard.slice(
-    guard.indexOf('if mode == "--negative-control-abi18-pasta-cycle-mode-v1":'),
+    guard.indexOf('if mode == "--negative-control-abi18-pasta-cycle-mode-v2":'),
     guard.indexOf('if mode == "--negative-control-native-c-bridge-abi-version":'),
   );
   assert.match(
     guard,
-    /KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: &str = "recursive_spend_v1";[\s\S]*?Swift ABI-18 Pasta-cycle first-release mode V1 contract[\s\S]*?Kotlin ABI-18 Pasta-cycle first-release mode V1 contract[\s\S]*?Android Java ABI-18 Pasta-cycle first-release mode V1 contract[\s\S]*?native bridge ABI-18 Pasta-cycle first-release mode V1 fixture[\s\S]*?ABI-18 recursion adapter contract mode/u,
-    "SDK parity guard must pin recursive_spend_v1 across every ABI-18 Pasta-cycle surface",
+    /KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";[\s\S]*?Swift ABI-18 Pasta-cycle first-release mode V2 contract[\s\S]*?Kotlin ABI-18 Pasta-cycle first-release mode V2 contract[\s\S]*?Android Java ABI-18 Pasta-cycle first-release mode V2 contract[\s\S]*?native bridge ABI-18 Pasta-cycle first-release mode V2 fixture[\s\S]*?ABI-18 recursion adapter contract mode/u,
+    "SDK parity guard must pin recursive_spend_v2 across every ABI-18 Pasta-cycle surface",
   );
   assert.match(
     guard,
     /KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 18;[\s\S]*?requiredNativeBridgeAbiVersion: UInt32 = 18[\s\S]*?REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18[\s\S]*?REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18;[\s\S]*?CONNECT_NORITO_BRIDGE_ABI_VERSION:\\s\*u32\\s\*=\\s\*18;[\s\S]*?ABI-18 recursion adapter contract mode/u,
-    "SDK parity guard must pin ABI 18 with the first-release V1 Pasta-cycle mode across Rust, Swift, Kotlin, Java, bridge, and docs",
+    "SDK parity guard must pin ABI 18 with the first-release V2 Pasta-cycle mode across Rust, Swift, Kotlin, Java, bridge, and docs",
   );
   assert.match(
     abi18PastaCycleModeBranch,
-    /recursive_spend_v1[\s\S]*?unsupported_mode[\s\S]*?for target, old, new, expected_label in cases:[\s\S]*?negative control rejected every one-sided ABI-18 Pasta-cycle V1 substitution/u,
-    "ABI-18 Pasta-cycle mode negative control must reject one-sided recursive_spend_v1 substitutions",
+    /recursive_spend_v2[\s\S]*?unsupported_mode[\s\S]*?for target, old, new, expected_label in cases:[\s\S]*?negative control rejected every one-sided ABI-18 Pasta-cycle V2 substitution/u,
+    "ABI-18 Pasta-cycle mode negative control must reject one-sided recursive_spend_v2 substitutions",
   );
   const nativeCBridgeAbiVersionBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-native-c-bridge-abi-version":'),
@@ -25914,7 +25914,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const kagemushaAbiProbeBoundsBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-kagemusha-abi-probe-bounds":'),
-    guard.indexOf('if mode == "--negative-control-js-package-dist-recursive-spend-partial-abi6":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-recursive-spend-partial-abi18":'),
   );
   assert.match(
     kagemushaAbiProbeBoundsBranch,
@@ -25951,12 +25951,12 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Kagemusha ABI probe bounds negative control must not unconditionally pass after run_checks",
   );
-  const jsPackageDistPartialAbi6Branch = guard.slice(
-    guard.indexOf('if mode == "--negative-control-js-package-dist-recursive-spend-partial-abi6":'),
+  const jsPackageDistPartialAbi18Branch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-package-dist-recursive-spend-partial-abi18":'),
     guard.indexOf('if mode == "--negative-control-js-package-dist-compact-projection":'),
   );
   assertContainsAll(
-    jsPackageDistPartialAbi6Branch,
+    jsPackageDistPartialAbi18Branch,
     [
       "javascript/iroha_js/test/package_dist.test.js",
       "delete binding[missingMethod]",
@@ -25997,7 +25997,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "package dist Kagemusha recursive spend helpers ignore native semantic rejections",
       "package dist Kagemusha recursive spend availability rejects broken and permissive native probes",
       "package dist Kagemusha recursive spend availability accepts broken and permissive native probes",
-      "JavaScript package dist recursive spend partial ABI-6 availability coverage",
+      "JavaScript package dist recursive spend partial ABI-18 availability coverage",
       "JavaScript package dist recursive spend broken/permissive probe coverage",
       "JavaScript package dist recursive spend unsafe native output coverage",
       "JavaScript package dist recursive spend invalid request archive coverage",
@@ -26005,37 +26005,37 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "JavaScript package dist recursive spend native semantic rejection coverage",
       "run_checks(mutated)",
     ],
-    "package dist recursive spend partial ABI-6 negative control must mutate availability, broken-probe, unsafe-output, invalid-request, missing-request, and semantic-rejection coverage",
+    "package dist recursive spend partial ABI-18 negative control must mutate availability, broken-probe, unsafe-output, invalid-request, missing-request, and semantic-rejection coverage",
   );
   assert.match(
-    jsPackageDistPartialAbi6Branch,
-    /def expected_js_package_dist_recursive_spend_partial_abi6_label\(old, label\):[\s\S]*?block start test\("\{old\}", \(\) => \{[\s\S]*?block_bounds = None[\s\S]*?package dist Kagemusha recursive spend helpers reject unsafe native outputs[\s\S]*?package dist Kagemusha recursive spend helpers reject invalid request archives before native dispatch[\s\S]*?old_count_before[\s\S]*?old_count_after[\s\S]*?old_count_before - old_count_after != 1/u,
-    "package dist recursive spend partial ABI-6 negative control must mutate each exact package-dist marker independently",
+    jsPackageDistPartialAbi18Branch,
+    /def expected_js_package_dist_recursive_spend_partial_abi18_label\(old, label\):[\s\S]*?block start test\("\{old\}", \(\) => \{[\s\S]*?block_bounds = None[\s\S]*?package dist Kagemusha recursive spend helpers reject unsafe native outputs[\s\S]*?package dist Kagemusha recursive spend helpers reject invalid request archives before native dispatch[\s\S]*?old_count_before[\s\S]*?old_count_after[\s\S]*?old_count_before - old_count_after != 1/u,
+    "package dist recursive spend partial ABI-18 negative control must mutate each exact package-dist marker independently",
   );
   assert.match(
-    jsPackageDistPartialAbi6Branch,
-    /expected = expected_js_package_dist_recursive_spend_partial_abi6_label\(old, label\)[\s\S]*?if expected not in message:[\s\S]*?package dist recursive spend partial ABI-6 drift was rejected for the wrong reason/u,
-    "package dist recursive spend partial ABI-6 negative control must require every exact mutated diagnostic",
+    jsPackageDistPartialAbi18Branch,
+    /expected = expected_js_package_dist_recursive_spend_partial_abi18_label\(old, label\)[\s\S]*?if expected not in message:[\s\S]*?package dist recursive spend partial ABI-18 drift was rejected for the wrong reason/u,
+    "package dist recursive spend partial ABI-18 negative control must require every exact mutated diagnostic",
   );
   assert.match(
-    jsPackageDistPartialAbi6Branch,
+    jsPackageDistPartialAbi18Branch,
     /detected_messages\.append\(first_lines_for_labels\(message, \(expected,\)\)\[0\]\)[\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
-    "package dist recursive spend partial ABI-6 negative control must print diagnostics for every mutated package-dist surface",
+    "package dist recursive spend partial ABI-18 negative control must print diagnostics for every mutated package-dist surface",
   );
   assert.match(
-    jsPackageDistPartialAbi6Branch,
+    jsPackageDistPartialAbi18Branch,
     /finally:[\s\S]*?mutated\[target\]\s*=\s*original/u,
-    "package dist recursive spend partial ABI-6 negative control must restore the package-dist snapshot between mutations",
+    "package dist recursive spend partial ABI-18 negative control must restore the package-dist snapshot between mutations",
   );
   assert.match(
-    jsPackageDistPartialAbi6Branch,
-    /package dist recursive spend partial ABI-6 drift was not detected for[\s\S]*?if not detected_messages:[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: package dist recursive spend partial ABI-6 drift was not detected"[\s\S]*?raise\s+SystemExit\(0\)/u,
-    "package dist recursive spend partial ABI-6 negative control must only pass after detecting every injected drift",
+    jsPackageDistPartialAbi18Branch,
+    /package dist recursive spend partial ABI-18 drift was not detected for[\s\S]*?if not detected_messages:[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: package dist recursive spend partial ABI-18 drift was not detected"[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "package dist recursive spend partial ABI-18 negative control must only pass after detecting every injected drift",
   );
   assert.doesNotMatch(
-    jsPackageDistPartialAbi6Branch,
+    jsPackageDistPartialAbi18Branch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
-    "package dist recursive spend partial ABI-6 negative control must not unconditionally pass after run_checks",
+    "package dist recursive spend partial ABI-18 negative control must not unconditionally pass after run_checks",
   );
   const jsPackageDistCompactProjectionBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-package-dist-compact-projection":'),

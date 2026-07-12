@@ -37,6 +37,7 @@ import re
 import secrets
 import time
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import (
     Any,
     Callable,
@@ -61,6 +62,7 @@ from .norito_frame import validate_norito_frame
 from .sccp import (
     SccpBridgeSubmitResponse,
     SccpCapabilities,
+    SccpRecentCursor,
     SccpRecentMessages,
     SccpRegistry,
     SccpRegistryLimits,
@@ -364,6 +366,7 @@ __all__ = [
     "SccpRegistryLimits",
     "SccpResourceLimits",
     "SccpRegistry",
+    "SccpRecentCursor",
     "SccpRecentMessages",
     "SccpBridgeSubmitResponse",
     "RuntimeAbiActive",
@@ -2965,6 +2968,10 @@ def _snapshot_offline_json(
         return value
     if isinstance(value, int):
         return _offline_unsigned(value, context, _OFFLINE_MAX_U128)
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise RuntimeError(f"{context} must not contain non-finite numbers")
+        return value
     if isinstance(value, float):
         raise RuntimeError(f"{context} must not contain floating-point numbers")
 
@@ -6032,7 +6039,11 @@ class ToriiClient:
         )
 
     def get_sccp_recent_messages(
-        self, *, from_height: Optional[int] = None, limit: Optional[int] = None
+        self,
+        *,
+        from_height: Optional[int] = None,
+        after_index: Optional[int] = None,
+        limit: Optional[int] = None,
     ) -> SccpRecentMessages:
         """Fetch newest-first SCCP messages (`GET /v1/sccp/messages/recent`)."""
 
@@ -6045,6 +6056,18 @@ class ToriiClient:
             ):
                 raise ValueError("SCCP recent-message from_height must be a positive u64")
             params_dict["from"] = str(from_height)
+        if after_index is not None:
+            if from_height is None:
+                raise ValueError(
+                    "SCCP recent-message after_index requires the paired from_height"
+                )
+            if (
+                isinstance(after_index, bool)
+                or not isinstance(after_index, int)
+                or not 0 <= after_index <= 511
+            ):
+                raise ValueError("SCCP recent-message after_index must be an integer in 0..511")
+            params_dict["after_index"] = str(after_index)
         if limit is not None:
             if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
                 raise ValueError("SCCP recent-message limit must be an integer in 1..50")
@@ -7375,6 +7398,7 @@ class ToriiClient:
             payload = json.loads(
                 text,
                 object_pairs_hook=_offline_json_object_without_duplicates,
+                parse_float=Decimal,
                 parse_constant=_offline_reject_json_constant,
             )
         except (ValueError, RecursionError) as error:

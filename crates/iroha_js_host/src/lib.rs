@@ -15480,8 +15480,8 @@ mod tests {
         let source = r#"
 seiyaku Privacy {
   kotoage fn commit() authorize("CanCommitPrivateInput") {
-    let value: Secret<i64> = crypto::private_input(0);
-    let blinding: Secret<i64> = crypto::private_input(1);
+    let Secret<int> value = crypto::private_input(0);
+    let Secret<int> blinding = crypto::private_input(1);
     let nullifier = crypto::valcom(left: value, right: blinding);
     crypto::use_nullifier(nullifier);
     crypto::commit_output();

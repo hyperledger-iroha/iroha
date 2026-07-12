@@ -75,7 +75,6 @@ Este archivo se genera a partir de `crates/ivm_abi/src/syscalls.rs`. Para cambia
 | SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT | 0x8D |  |
 | SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT | 0x8E |  |
 | SYSCALL_SCHEMA_INFO_DIRECT | 0x8F |  |
-| SYSCALL_BUILD_PATH_MAP_KEY | 0x54 |  |
 | SYSCALL_ENCODE_INT | 0x55 |  |
 | SYSCALL_BUILD_PATH_KEY_NORITO | 0x56 |  |
 | SYSCALL_JSON_ENCODE | 0x57 |  |

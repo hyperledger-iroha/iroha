@@ -2743,6 +2743,10 @@ mod tests {
             "contracts/contract_flow_demo.ko",
             r#"
             seiyaku Demo {
+                error enum DemoError {
+                    Rejected = 1,
+                }
+
                 state int counter;
                 state AccountId last_actor;
 
@@ -2764,7 +2768,7 @@ mod tests {
                 }
 
                 kotoage fn reject_me() authorize("Test") {
-                    test::assert_eq(actual: 1, expected: 2);
+                    require(false, DemoError::Rejected);
                 }
             }
             "#,
@@ -2953,6 +2957,10 @@ mod tests {
             "contracts/contract_flow_demo.ko",
             r#"
             seiyaku Demo {
+                error enum DemoError {
+                    Rejected = 1,
+                }
+
                 state int counter;
                 state AccountId last_actor;
 
@@ -2974,7 +2982,7 @@ mod tests {
                 }
 
                 kotoage fn reject_me() authorize("Test") {
-                    test::assert_eq(actual: 1, expected: 2);
+                    require(false, DemoError::Rejected);
                 }
             }
             "#,
@@ -2997,8 +3005,8 @@ mod tests {
 
                     let pk = test::actor_public_key("issuer");
                     let sig = test::actor_sign("issuer", b"native-flow");
-                    test::assert(codec::tlv_len(pk) > 0);
-                    test::assert(codec::tlv_len(sig) > 0);
+                    test::assert(pk != b"");
+                    test::assert(sig != b"");
                 }}
 
                 #[test(fixture="actors")]

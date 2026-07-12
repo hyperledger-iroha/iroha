@@ -4438,6 +4438,20 @@ def test_offline_readiness_uses_finite_codes_and_strips_unknown_members() -> Non
     assert readiness.blockers[0].code == "1_future_code"
     assert not hasattr(readiness, "unknown_member")
 
+    exact_numeric_session = RecordingSession()
+    exact_numeric_json = json.dumps(_offline_readiness_payload())[:-1]
+    exact_numeric_json += ',"future_numeric":[1.25,1e400]}'
+    exact_numeric_session.queue(
+        StubResponse(
+            text=exact_numeric_json,
+            headers={"Content-Type": "application/json"},
+        )
+    )
+    exact_numeric = ToriiClient(
+        "http://node.test", session=exact_numeric_session
+    ).get_offline_readiness(CANONICAL_ASSET_DEFINITION_ID)
+    assert exact_numeric.asset_definition_id == CANONICAL_ASSET_DEFINITION_ID
+
     expected_unavailable_session = RecordingSession()
     expected_unavailable_session.queue(
         StubResponse(

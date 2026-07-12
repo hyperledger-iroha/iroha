@@ -70,6 +70,9 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun exposesStableModesAndCircuitIds() {
         assertEquals(18, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
+        assertTrue(KagemushaRecursiveSpendProver.isExactBridgeAbi(18))
+        assertFalse(KagemushaRecursiveSpendProver.isExactBridgeAbi(17))
+        assertFalse(KagemushaRecursiveSpendProver.isExactBridgeAbi(19))
         assertEquals(15, KagemushaRecursiveSpendProver.TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(
             18,
@@ -79,8 +82,8 @@ class KagemushaRecursiveSpendProverTest {
             "kagemusha.offline.recursive_spend.artifact_manifest.v3",
             KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA,
         )
-        assertEquals("recursive_spend_v1", KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_MODE)
-        assertEquals("recursive_spend_v1", KagemushaRecursiveSpendProver.MODE)
+        assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_MODE)
+        assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.MODE)
         assertEquals(
             "halo2/ipa-pasta-cycle-v1",
             KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_PROOF_BACKEND,
@@ -670,15 +673,15 @@ class KagemushaRecursiveSpendProverTest {
         )
         assertFalse(KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(null, 1))
         assertFalse(KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend("", 1))
-        assertEquals("recursive_spend_v1", KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1.wireName)
+        assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND.wireName)
         assertEquals(1, KagemushaRecursiveSpendProver.Mode.values().size)
         assertEquals(
-            KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
+            KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND,
             KagemushaRecursiveSpendProver.preferredMode(true),
         )
         assertEquals(null, KagemushaRecursiveSpendProver.preferredMode(false))
-        assertTrue(KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_spend_v1"))
-        assertFalse(KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_spend_v2"))
+        assertTrue(KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_spend_v2"))
+        assertFalse(KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_spend_v1"))
         assertFalse(KagemushaRecursiveSpendProver.isSpendAgainMode(null))
         assertEquals(7, KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(
@@ -1029,6 +1032,33 @@ class KagemushaRecursiveSpendProverTest {
                     validRecursiveCompactInput,
                     null as BigInteger?,
                 )
+        }
+    }
+
+    @Test
+    fun publicSurfaceOmitsRetiredRecursiveApis() {
+        val publicMethods =
+            KagemushaRecursiveSpendProver::class.java.declaredMethods
+                .filter { java.lang.reflect.Modifier.isPublic(it.modifiers) }
+                .mapTo(mutableSetOf()) { it.name }
+        for (
+            retired in
+                setOf(
+                    "initSpend",
+                    "appendSpend",
+                    "topUpSpend",
+                    "verifySpend",
+                    "redeemSpend",
+                    "transitionProfileInit",
+                    "transitionProfileAppend",
+                    "lineageAppendBoundary",
+                    "lineageWitnessFromInitResult",
+                    "lineageWitnessAppendResult",
+                    "buildPallasOpenEnvelopesArchive",
+                    "buildPreviousProofOpenEnvelopesArchive",
+                )
+        ) {
+            assertFalse(retired in publicMethods, "retired public method remains: $retired")
         }
     }
 

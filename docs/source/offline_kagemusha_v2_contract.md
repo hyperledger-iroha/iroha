@@ -277,6 +277,11 @@ and duplicate token fields therefore fail with the typed authentication
 response without reading a malformed command body. With a valid token,
 route-level access/rate policy runs before exact media and command-header
 validation; typed body decoding is the final admission-boundary step.
+Malformed or unacceptable `Accept` input likewise cannot mask a pre-auth or
+token rejection: Torii emits the primary rejection as deterministic JSON when
+the preference itself cannot be used. Strict negotiation resumes immediately
+after successful authentication and returns `406 response_not_acceptable`
+before command-body admission.
 
 The public Norito headers use stable schema names rather than Rust module or
 implementation-type names:

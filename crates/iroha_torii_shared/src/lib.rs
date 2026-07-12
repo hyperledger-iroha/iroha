@@ -69,8 +69,8 @@ pub mod uri {
     pub const CONFIGURATION: &str = "/v1/configuration";
     /// URI for reading the Nexus lifecycle catalog commitment.
     ///
-    /// `POST` on this URI is retained only as an explicit deprecated rejection;
-    /// lifecycle changes are signed `SetParameter` transactions.
+    /// Lifecycle changes are signed `SetParameter` transactions; no HTTP
+    /// mutation or compatibility route is mounted at this path.
     pub const NEXUS_LANE_LIFECYCLE: &str = "/v1/nexus/lifecycle";
     /// URI to report status for administration
     pub const STATUS: &str = "/status";

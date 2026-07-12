@@ -9800,6 +9800,10 @@ pub struct Zk {
 /// SCCP proof-admission and deterministic verifier-work limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Sccp {
+    /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
+    pub max_pending_outbound_messages: NonZeroU64,
+    /// Maximum canonical outbound payload bytes awaiting destination proof acceptance.
+    pub max_pending_outbound_payload_bytes: NonZeroU64,
     /// Maximum closed SCCP proofs in one transaction.
     pub max_proofs_per_transaction: NonZeroU32,
     /// Maximum closed SCCP proofs committed in one block.
@@ -9843,6 +9847,9 @@ pub struct Sccp {
 impl Default for Sccp {
     fn default() -> Self {
         Self {
+            max_pending_outbound_messages: defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES,
+            max_pending_outbound_payload_bytes:
+                defaults::zk::sccp::MAX_PENDING_OUTBOUND_PAYLOAD_BYTES,
             max_proofs_per_transaction: defaults::zk::sccp::MAX_PROOFS_PER_TRANSACTION,
             max_proofs_per_block: defaults::zk::sccp::MAX_PROOFS_PER_BLOCK,
             max_proof_bytes_per_proof: defaults::zk::sccp::MAX_PROOF_BYTES_PER_PROOF,

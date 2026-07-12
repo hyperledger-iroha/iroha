@@ -511,8 +511,17 @@ export type MultisigProposalStatus =
   | "CANCELED"
   | "EXPIRED";
 
-export interface MultisigProposalQuery extends MultisigAccountSelector {
+export interface MultisigProposalsListRequest extends MultisigAccountSelector {
   status?: ReadonlyArray<MultisigProposalStatus>;
+  cursor?: string | null;
+  limit?: number | string | bigint | null;
+}
+
+export interface MultisigProposalGetRequest extends MultisigAccountSelector {
+  proposalId?: string | null;
+  instructionsHash?: string | null;
+  proposal_id?: string | null;
+  instructions_hash?: string | null;
 }
 
 export type MultisigProposeInstructionInput =
@@ -693,6 +702,7 @@ export interface MultisigProposalEntry {
 export interface MultisigProposalListResponse {
   resolved_multisig_account_id: string;
   proposals: ReadonlyArray<MultisigProposalEntry>;
+  next_cursor: string | null;
 }
 
 export interface MultisigProposalGetResponse extends MultisigProposalEntry {
@@ -780,6 +790,10 @@ export interface SccpRegistryLimits {
   readonly max_retained_native_trust_anchors_per_lane: 4096;
 }
 export interface SccpResourceLimits {
+  readonly max_outbound_messages_per_block: 512;
+  readonly max_outbound_message_payload_bytes: 4096;
+  readonly max_pending_outbound_messages: number;
+  readonly max_pending_outbound_payload_bytes: number;
   readonly max_proofs_per_transaction: number;
   readonly max_proofs_per_block: number;
   readonly max_proof_bytes_per_proof: number;
@@ -927,8 +941,9 @@ export interface SccpTransferProjectionV1 {
   readonly route_id: SccpCanonicalTextValueV1;
 }
 export interface SccpPayloadProjectionV1 { readonly Transfer: SccpTransferProjectionV1; }
-export interface SccpRecentMessage { readonly height: number; readonly message_id_hex: string; readonly kind: "transfer"; readonly source_profile: "sora-taira"; readonly target_profile: Exclude<SccpNetworkProfile, "sora-taira">; readonly destination_binding_hash: string; readonly route_configuration_hash: string; readonly target_domain: 1 | 2 | 5; readonly asset_id: string | null; readonly route_id: string | null; readonly recipient: string | null; readonly amount: string; readonly payload_projection: SccpPayloadProjectionV1; readonly links: Readonly<{ bundle_path: string; proof_request_path: string }>; }
-export interface SccpRecentMessages { readonly items: readonly SccpRecentMessage[]; }
+export interface SccpRecentMessage { readonly height: number; readonly commitment_index: number; readonly message_id_hex: string; readonly kind: "transfer"; readonly source_profile: "sora-taira"; readonly target_profile: Exclude<SccpNetworkProfile, "sora-taira">; readonly destination_binding_hash: string; readonly route_configuration_hash: string; readonly target_domain: 1 | 2 | 5; readonly asset_id: string | null; readonly route_id: string | null; readonly recipient: string | null; readonly amount: string; readonly payload_projection: SccpPayloadProjectionV1; readonly links: Readonly<{ bundle_path: string; proof_request_path: string }>; }
+export interface SccpRecentCursor { readonly from: number; readonly after_index: number; }
+export interface SccpRecentMessages { readonly items: readonly SccpRecentMessage[]; readonly next: SccpRecentCursor | null; }
 export interface SccpMessageBundle { readonly version: 1; readonly commitment_root: string; readonly commitment: Readonly<Record<string, unknown>>; readonly merkle_proof: Readonly<Record<string, unknown>>; readonly payload: Readonly<{ Transfer: Readonly<Record<string, unknown>> }>; readonly finality_proof: string; }
 export interface SccpMessagePublicInputsV1 { readonly version: 1; readonly message_id: string; readonly payload_hash: string; readonly target_domain: 1 | 2 | 5; readonly commitment_root: string; readonly finality_height: string; readonly finality_block_hash: string; }
 export type SccpDestinationProofBackendV1 =
@@ -5094,14 +5109,15 @@ type NoritoRuntimeNamespaceExport =
   | "noritoEncodeMultisigContractCallProposeRequest"
   | "noritoEncodeMultisigProposeRequest"
   | "noritoEncodePrivacyProofEnvelope"
-  | "noritoEncodeTransactionPayloadBatch";
+  | "noritoEncodeTransactionPayloadBatch"
+  | "validateNoritoFrame";
 
 type CryptoRuntimeNamespaceExport =
     "CRYPTO_ALGORITHMS"
   | "KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS"
   | "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES"
   | "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1"
-  | "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1"
+  | "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2"
   | "KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME"
   | "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND"
   | "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1"
@@ -5230,7 +5246,6 @@ type CryptoRuntimeNamespaceExport =
   | "normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId"
   | "normalizeRecoveryPhrase"
   | "preferredKagemushaOfflineSpendMode"
-  | "preferredKagemushaOfflineSpendModeForCapabilities"
   | "preferredKagemushaRecursiveSpendAppendOutputProofCircuitId"
   | "privacyBuildProofV1"
   | "privacyCapabilitiesV1"
@@ -9321,10 +9336,10 @@ export interface ContractEntrypointKindRecord {
 
 export type ContractEntrypointValueKindName =
   | "Int"
-  | "U128"
+  | "Decimal"
+  | "Quantity"
   | "Bool"
   | "String"
-  | "Amount"
   | "Json"
   | "Name"
   | "AccountId"
@@ -11593,38 +11608,13 @@ export declare class ToriiBrowserClient {
     options?: Record<string, unknown>,
   ): Promise<MultisigSpecResponse>;
   listMultisigProposals(
-    selector: MultisigProposalQuery,
+    selector: MultisigProposalsListRequest,
     options?: Record<string, unknown>,
   ): Promise<MultisigProposalListResponse>;
   getMultisigProposal(
-    request: MultisigAccountSelector & {
-      proposalId?: string;
-      instructionsHash?: string;
-      proposal_id?: string;
-      instructions_hash?: string;
-    },
+    request: MultisigProposalGetRequest,
     options?: Record<string, unknown>,
   ): Promise<MultisigProposalGetResponse>;
-  getMultisigProposal(
-    accountId: string,
-    proposalId: string,
-    options?: Record<string, unknown>,
-  ): Promise<MultisigProposalGetResponse>;
-  listMultisigApprovals(
-    request?: Record<string, unknown>,
-    options?: Record<string, unknown>,
-  ): Promise<unknown>;
-  getMultisigApproval(
-    request: Record<string, unknown>,
-    options?: Record<string, unknown>,
-  ): Promise<unknown>;
-  listPendingMultisigApprovals(
-    options?: Record<string, unknown>,
-  ): Promise<unknown>;
-  getPendingMultisigApproval(
-    operationId: string,
-    options?: Record<string, unknown>,
-  ): Promise<unknown>;
   submitMultisigPropose(
     request: Record<string, unknown>,
     options?: Record<string, unknown>,
@@ -12239,6 +12229,7 @@ export declare class ToriiClient {
   ): Promise<Uint8Array>;
   getSccpRecentMessages(options?: {
     from?: number;
+    after_index?: number;
     limit?: number;
     signal?: AbortSignal;
   }): Promise<ToriiSccpRecentMessages>;
@@ -12775,14 +12766,11 @@ export declare class ToriiClient {
     options?: { signal?: AbortSignal },
   ): Promise<MultisigSpecResponse>;
   listMultisigProposals(
-    request: MultisigProposalQuery,
+    request: MultisigProposalsListRequest,
     options?: { signal?: AbortSignal },
   ): Promise<MultisigProposalListResponse>;
   getMultisigProposal(
-    request: MultisigAccountSelector & {
-      proposalId?: string | null;
-      instructionsHash?: string | null;
-    },
+    request: MultisigProposalGetRequest,
     options?: { signal?: AbortSignal },
   ): Promise<MultisigProposalGetResponse>;
   getContractManifest(
@@ -13096,7 +13084,7 @@ export function deriveConfidentialNullifierV2(input: {
 }): { nullifier: Buffer; nullifierHex: string };
 
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1: "recursive_compact_v1";
-export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: "recursive_spend_v1";
+export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2: "recursive_spend_v2";
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 18;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 7;
 export const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 15;
@@ -13164,12 +13152,7 @@ export interface KagemushaRecursiveSpendLineageKeyArtifacts {
 }
 export function preferredKagemushaOfflineSpendMode(): KagemushaOfflineSpendMode | null;
 export function preferredKagemushaOfflineSpendMode(
-  recursiveCompactAvailable: boolean,
-  recursiveSpendAvailable: boolean,
-): KagemushaOfflineSpendMode | null;
-export function preferredKagemushaOfflineSpendModeForCapabilities(
-  recursiveCompactAvailable: boolean,
-  recursiveSpendAvailable: boolean,
+  pastaCycleV3BackendAvailable: boolean,
 ): KagemushaOfflineSpendMode | null;
 export function isKagemushaSpendAgainMode(
   value: unknown,

@@ -13,12 +13,12 @@ import java.util.Map;
 /** Exact ABI-18 Kagemusha recursive-spend bridge. */
 public final class KagemushaRecursiveSpendProver {
   public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18;
-  public static final int RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7;
-  public static final int TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 15;
-  public static final int PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18;
+  static final int RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7;
+  static final int TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 15;
+  static final int PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18;
   public static final String PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA =
       "kagemusha.offline.recursive_spend.artifact_manifest.v3";
-  public static final String MODE = "recursive_spend_v1";
+  public static final String MODE = "recursive_spend_v2";
   public static final String PASTA_CYCLE_V3_MODE = MODE;
   public static final String PASTA_CYCLE_V3_PROOF_BACKEND =
       "halo2/ipa-pasta-cycle-v1";
@@ -93,7 +93,7 @@ public final class KagemushaRecursiveSpendProver {
   private static final boolean PASTA_CYCLE_V3_BACKEND_AVAILABLE = loadPastaCycleV3Backend();
 
   public enum Mode {
-    RECURSIVE_SPEND_V1("recursive_spend_v1");
+    RECURSIVE_SPEND("recursive_spend_v2");
 
     private final String wireName;
 
@@ -107,6 +107,10 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   private KagemushaRecursiveSpendProver() {}
+
+  static boolean isExactBridgeAbi(final int abiVersion) {
+    return abiVersion == REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+  }
 
   public static boolean isNativeAvailable() {
     return NATIVE_AVAILABLE;
@@ -131,7 +135,7 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static Mode preferredMode(final boolean pastaCycleV3BackendAvailable) {
-    return pastaCycleV3BackendAvailable ? Mode.RECURSIVE_SPEND_V1 : null;
+    return pastaCycleV3BackendAvailable ? Mode.RECURSIVE_SPEND : null;
   }
 
   /** True only for the sole first-release spend-again product selector. */
@@ -725,16 +729,16 @@ public final class KagemushaRecursiveSpendProver {
         && previousHopCount >= 1;
   }
 
-  public static byte[] initSpend(final byte[] requestArchive) {
+  static byte[] initSpend(final byte[] requestArchive) {
     return call("init", requestArchive, KagemushaRecursiveSpendProver::nativeInitSpend);
   }
 
-  public static byte[] initSpend(
+  static byte[] initSpend(
       final KagemushaRecursiveSpendRequestCodecs.InitSpendRequest request) {
     return initSpend(KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(request));
   }
 
-  public static byte[] topUpSpend(final byte[] requestArchive) {
+  static byte[] topUpSpend(final byte[] requestArchive) {
     return call(
         "top-up",
         requestArchive,
@@ -742,35 +746,35 @@ public final class KagemushaRecursiveSpendProver {
         TOP_UP_NATIVE_AVAILABLE);
   }
 
-  public static byte[] topUpSpend(
+  static byte[] topUpSpend(
       final KagemushaRecursiveSpendRequestCodecs.TopUpSpendRequest request) {
     return topUpSpend(KagemushaRecursiveSpendRequestCodecs.encodeTopUpRequest(request));
   }
 
-  public static byte[] appendSpend(final byte[] requestArchive) {
+  static byte[] appendSpend(final byte[] requestArchive) {
     return call("append", requestArchive, KagemushaRecursiveSpendProver::nativeAppendSpend);
   }
 
-  public static byte[] appendSpend(
+  static byte[] appendSpend(
       final KagemushaRecursiveSpendRequestCodecs.AppendSpendRequest request) {
     return appendSpend(KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(request));
   }
 
-  public static byte[] transitionProfileInit(final byte[] requestArchive) {
+  static byte[] transitionProfileInit(final byte[] requestArchive) {
     return call(
         "transition profile init",
         requestArchive,
         KagemushaRecursiveSpendProver::nativeTransitionProfileInit);
   }
 
-  public static byte[] transitionProfileAppend(final byte[] requestArchive) {
+  static byte[] transitionProfileAppend(final byte[] requestArchive) {
     return call(
         "transition profile append",
         requestArchive,
         KagemushaRecursiveSpendProver::nativeTransitionProfileAppend);
   }
 
-  public static byte[] lineageAppendBoundary(final byte[] profileArchive) {
+  static byte[] lineageAppendBoundary(final byte[] profileArchive) {
     return callArchive(
         "lineage append boundary",
         "profileArchive",
@@ -778,7 +782,7 @@ public final class KagemushaRecursiveSpendProver {
         KagemushaRecursiveSpendProver::nativeLineageAppendBoundary);
   }
 
-  public static byte[] lineageWitnessFromInitResult(
+  static byte[] lineageWitnessFromInitResult(
       final byte[] requestArchive, final byte[] bundleArchive) {
     return call(
         "lineage witness from init result",
@@ -787,7 +791,7 @@ public final class KagemushaRecursiveSpendProver {
         KagemushaRecursiveSpendProver::nativeLineageWitnessFromInitResult);
   }
 
-  public static byte[] lineageWitnessAppendResult(
+  static byte[] lineageWitnessAppendResult(
       final byte[] previousWitnessArchive,
       final byte[] requestArchive,
       final byte[] bundleArchive) {
@@ -799,26 +803,26 @@ public final class KagemushaRecursiveSpendProver {
         KagemushaRecursiveSpendProver::nativeLineageWitnessAppendResult);
   }
 
-  public static byte[] verifySpend(final byte[] requestArchive) {
+  static byte[] verifySpend(final byte[] requestArchive) {
     return call("verify", requestArchive, KagemushaRecursiveSpendProver::nativeVerifySpend);
   }
 
-  public static KagemushaRecursiveSpendRequestCodecs.VerifySpendResult verifySpend(
+  static KagemushaRecursiveSpendRequestCodecs.VerifySpendResult verifySpend(
       final KagemushaRecursiveSpendRequestCodecs.VerifySpendRequest request) {
     return KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
         verifySpend(KagemushaRecursiveSpendRequestCodecs.encodeVerifyRequest(request)));
   }
 
-  public static byte[] redeemSpend(final byte[] requestArchive) {
+  static byte[] redeemSpend(final byte[] requestArchive) {
     return call("redeem", requestArchive, KagemushaRecursiveSpendProver::nativeRedeemSpend);
   }
 
-  public static byte[] redeemSpend(
+  static byte[] redeemSpend(
       final KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest request) {
     return redeemSpend(KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(request));
   }
 
-  public static byte[] buildPallasOpenEnvelopesArchive(final byte[] recordBundleArchive) {
+  static byte[] buildPallasOpenEnvelopesArchive(final byte[] recordBundleArchive) {
     return callArchive(
         "build Pallas open envelopes",
         "recordBundleArchive",
@@ -826,7 +830,7 @@ public final class KagemushaRecursiveSpendProver {
         KagemushaRecursiveSpendProver::nativeBuildPallasOpenEnvelopesArchive);
   }
 
-  public static byte[] buildPreviousProofOpenEnvelopesArchive(final byte[] previousBundleArchive) {
+  static byte[] buildPreviousProofOpenEnvelopesArchive(final byte[] previousBundleArchive) {
     return callArchive(
         "build previous proof open envelopes",
         "previousBundleArchive",

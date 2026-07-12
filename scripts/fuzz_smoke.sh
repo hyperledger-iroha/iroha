@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run short libFuzzer sessions for Norito JSON fuzz targets.
+# Run short libFuzzer sessions for Norito JSON and IVM boundary fuzz targets.
 # Intended for CI smoke: limited iterations to catch regressions quickly.
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -42,7 +42,7 @@ for t in "${targets[@]}"; do
 done
 
 popd >/dev/null
-echo "[fuzz-smoke] all targets passed"
+echo "[fuzz-smoke] Norito targets passed"
 
 # Run IVM fuzz smoke if available.
 IVM_FUZZ_DIR="$ROOT_DIR/crates/ivm/fuzz"
@@ -51,6 +51,7 @@ if [ -d "$IVM_FUZZ_DIR" ]; then
   ivm_targets=(
     tlv_validate
     kotodama_lower
+    numeric_v1
   )
   for t in "${ivm_targets[@]}"; do
     echo "[fuzz-smoke] running ivm::$t for $RUNS runs"
@@ -61,3 +62,5 @@ if [ -d "$IVM_FUZZ_DIR" ]; then
   done
   popd >/dev/null
 fi
+
+echo "[fuzz-smoke] all targets passed"

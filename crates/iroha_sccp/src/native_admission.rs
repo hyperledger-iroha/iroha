@@ -41,7 +41,8 @@ pub const SCCP_NATIVE_ADMISSION_MAX_BASE64_BYTES_V1: usize =
 /// the allocation bound input-dependent.
 pub const SCCP_NATIVE_ADMISSION_MAX_JSON_BYTES_V1: usize = 40 * 1024 * 1024;
 /// Maximum canonical SCCP application-payload size admitted by the wrapper.
-pub const SCCP_NATIVE_ADMISSION_MAX_PAYLOAD_BYTES_V1: usize = 64 * 1024;
+pub const SCCP_NATIVE_ADMISSION_MAX_PAYLOAD_BYTES_V1: usize =
+    iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1;
 
 const SCCP_NATIVE_ADMISSION_MAX_ENCODED_BYTES_U64_V1: u64 = 16 * 1024 * 1024;
 const NORITO_COMPRESSION_OFFSET: usize = 4 + 1 + 1 + 16;

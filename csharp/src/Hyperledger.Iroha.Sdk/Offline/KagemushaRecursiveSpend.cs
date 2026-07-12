@@ -387,18 +387,18 @@ public sealed class KagemushaRecursiveSpendVerifyResult
 
 public enum KagemushaOfflineSpendMode
 {
-    RecursiveSpendV1 = 0,
+    RecursiveSpend = 0,
 }
 
 public static class KagemushaOfflineSpendModeExtensions
 {
-    public const string RecursiveSpendV1WireName = "recursive_spend_v1";
+    public const string RecursiveSpendWireName = "recursive_spend_v2";
 
     public static string WireName(this KagemushaOfflineSpendMode mode)
     {
         return mode switch
         {
-            KagemushaOfflineSpendMode.RecursiveSpendV1 => RecursiveSpendV1WireName,
+            KagemushaOfflineSpendMode.RecursiveSpend => RecursiveSpendWireName,
             _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown Kagemusha offline spend mode."),
         };
     }
@@ -625,7 +625,7 @@ public static class KagemushaRecursiveSpendNative
         {
             var version = abiVersionProbe();
             return version is not null
-                && version.Value >= RequiredNativeBridgeAbiVersion
+                && version.Value == RequiredNativeBridgeAbiVersion
                 && requiredSymbolsProbe();
         }
         catch (DllNotFoundException)
@@ -755,7 +755,7 @@ public static class KagemushaRecursiveSpendNative
         {
             var version = abiVersionProbe();
             return version is not null
-                && version.Value >= RequiredNativeBridgeAbiVersion
+                && version.Value == RequiredNativeBridgeAbiVersion
                 && compactTokenSymbolProbe();
         }
         catch (DllNotFoundException)
@@ -799,7 +799,7 @@ public static class KagemushaRecursiveSpendNative
         {
             var version = abiVersionProbe();
             return version is not null
-                && version.Value >= RequiredNativeBridgeAbiVersion
+                && version.Value == RequiredNativeBridgeAbiVersion
                 && recursiveAggregationSymbolProbe();
         }
         catch (DllNotFoundException)
@@ -968,13 +968,13 @@ public static class KagemushaRecursiveSpendNative
     public static KagemushaOfflineSpendMode? PreferredMode(bool recursiveSpendAvailable)
     {
         return recursiveSpendAvailable
-            ? KagemushaOfflineSpendMode.RecursiveSpendV1
+            ? KagemushaOfflineSpendMode.RecursiveSpend
             : null;
     }
 
     public static bool IsSpendAgainMode(string? value)
     {
-        return value == KagemushaOfflineSpendModeExtensions.RecursiveSpendV1WireName;
+        return value == KagemushaOfflineSpendModeExtensions.RecursiveSpendWireName;
     }
 
     public static bool CanRedeemWitnessless(string? circuitId, uint hopCount)
@@ -5616,7 +5616,7 @@ public static class KagemushaRecursiveSpendNative
                 $"{LibraryName} is unavailable; install the native bridge before using recursive Kagemusha.");
         }
 
-        if (version < RequiredNativeBridgeAbiVersion)
+        if (version != RequiredNativeBridgeAbiVersion)
         {
             throw new InvalidOperationException(
                 $"{LibraryName} ABI v{RequiredNativeBridgeAbiVersion} is required for recursive Kagemusha, found v{version}.");

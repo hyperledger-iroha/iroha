@@ -11,14 +11,22 @@ ABI policy
   are rejected uniformly across all hosts. The list is kept sorted/deduplicated and the golden test
   fails if ordering or contents drift.
 - `abi_hash` commits to every sorted allowed syscall number, its canonical argument and return
-  signatures, its conservative host-access class, and every sorted allowed pointer-ABI type ID.
-  Display names and gas prices are not part of this digest. `ivm::gas::schedule_hash()` commits to
-  the canonical gas schedule independently.
+  signatures, its conservative host-access class, every sorted allowed pointer-ABI type ID, and
+  the complete ABI-v1 semantic descriptor. That descriptor includes numeric domains, arithmetic
+  rules, canonical JSON grammars, fault ordering, the CNTR marker/framing, nominal contract-interface
+  and state-type schema identities, every embedded state-type tag/layout/sample frame, admission and
+  depth rules, and typed durable-state schema/record identities, enum tags, layouts, traversal rules,
+  pointer mappings, caps, operation-specific state paths, and CNTR-bound read/write record validation.
+  Display names and gas prices are not part of this digest.
+  `ivm::gas::schedule_hash()` commits to the canonical gas schedule and every staged-metering phase
+  name/tag independently.
 - Every allowed syscall must have exactly one explicit row in `spec/syscalls.toml`. Documentation
   generation rejects missing, duplicate, or extra rows instead of inventing an ABI signature from
   naming heuristics.
 - First release: ABI v1 is the only supported policy. `abi_version != 1` is rejected at admission,
-  and runtime upgrades must keep `abi_version = 1` without expanding the syscall or pointer‑ABI surface.
+  and runtime upgrades must keep `abi_version = 1` without expanding the syscall or pointer‑ABI
+  surface. Tightening the unreleased V1 descriptor changes its hash, not its version; artifacts with
+  any older V1 hash fail closed at admission.
 
 Admission/host guardrails
 - Admission enforces manifest `code_hash`/`abi_hash` equality for both inline metadata manifests and
@@ -31,10 +39,11 @@ Admission/host guardrails
   surfaces the failure during validation so contracts cannot rely on undefined syscalls. Allowed
   syscall numbers that are not meaningful for a specific host return a metered
   `VMError::NotImplemented` instead.
-- Every runtime host must compute a deterministic, side-effect-free upper gas quote before
-  dispatch. The VM debits that quote before invoking the host, so an unaffordable syscall returns
-  `OutOfGas` without entering host code. After dispatch, the VM refunds the difference between the
-  quote and the reported actual cost; an actual cost above the quote is a host invariant failure.
+- Reserved-metering host calls compute a deterministic, side-effect-free upper gas quote before
+  dispatch, debit it before effects, and reconcile unused reserve afterward. Numeric V1 calls use
+  staged metering instead: each phase is debited immediately before its bounded work, and no staged
+  charge is refunded. The schedule hash binds both the per-syscall metering mode and every staged
+  phase tag.
 - Regression tests cover host-side `UnknownSyscall` rejections, admission-time `SCALL` gating
   (including manifest-backed programs), and manifest `abi_hash` enforcement across both metadata and
   WSV manifests to keep the ABI surface deterministic end-to-end.
@@ -89,7 +98,9 @@ Legend
 Gas enforcement (CoreHost)
 - Syscall quotes are reserved before host effects. The reserved amount remains visible to host
   budget checks, but nested contract bytecode can spend only the unreserved parent gas. Unused
-  reserve is refunded after the host reports the actual deterministic cost.
+  reserve is refunded after the host reports the actual deterministic cost. This lifecycle applies
+  only to calls whose registry entry is `Reserved`; numeric V1 registry entries are `Staged` and
+  debit their hash-bound work phases without reservation or refund.
 - `JSON_GET_JSON` quotes heap-backed JSON input against the owned HEAP/INPUT payload bound and
   reserves that same HEAP-capable result bound plus its sum handle, so a valid field beyond the
   fixed INPUT arena cannot be rejected during preparation or exceed its pre-dispatch quote.
@@ -326,8 +337,15 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010024 SYSVAR_CONTRACT_ADDRESS — Args: none → `ptr (&NoritoBytes(ContractAddress))` or `0` — Gas: G_sysvar + bytes
 - 0x010025 SYSVAR_ENTRYPOINT — Args: none → `ptr (&Blob(entrypoint))` or `0` — Gas: G_sysvar + bytes
 - 0x010026 DECODE_ARGUMENT_RECORD — Args: raw hosts use `r10=&NoritoBytes(EntrypointArgumentRecordV1)`; prepared contract calls use the exact host-issued `&NoritoBytes(domain-separated record binding)`; `r11=&NoritoBytes(EntrypointArgumentSchemaV1)` → `r10=&Blob(pad:u8 then [u64; word_count])` — Gas: G_argument_decode + record + schema + materialized output. Prepared calls first validate the trusted flat schema and derive its conservative maximum aggregate and pointer-allocation bound; that bound must be affordable before the untrusted canonical record is decoded. Raw syscall quoting authenticates neither payload: it uses only bounded record/schema envelope lengths and reserves the full HEAP before schema and record authentication. For prepared calls, the complete signed record remains host-owned and the guest sees only its domain-separated binding. Before any allocation, the host preflights the complete aligned TLV sequence plus raw aggregate storage. Pointer TLVs and the output word table prefer INPUT and spill into owned HEAP, while raw `List` and sum storage is always owned HEAP. The record limit is inclusive at 1 MiB. Raw hosts then validate the schema hash, canonical flat atoms, inactive sum payloads, and every embedded typed pointer. JSON-to-record conversion occurs only at Torii/CLI tooling boundaries.
+- 0x010027 SYSVAR_CONTRACT_SUBJECT — Args: none → `ptr (&AccountId(contract subject))` — Gas: G_sysvar + bytes. Calls outside a deployed-contract scope fail closed.
+- 0x010200 SET_ASSET_TRANSFER_FREEZE — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=frozen:0/1` → 0 — Gas: G_sci + bytes
+- 0x010201 SET_ASSET_TRANSFER_DAILY_LIMIT — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity or 0` → 0 — Gas: G_sci + bytes
+- 0x010210 ACCOUNT_RECOVERY_PROPOSE — Args: `r10=&Blob(alias), r11=&AccountId(replacement)` → 0 — Gas: G_sci + bytes
+- 0x010211 ACCOUNT_RECOVERY_APPROVE — Args: `r10=&Blob(alias)` → 0 — Gas: G_sci + bytes
+- 0x010212 ACCOUNT_RECOVERY_CANCEL — Args: `r10=&Blob(alias)` → 0 — Gas: G_sci + bytes
+- 0x010213 ACCOUNT_RECOVERY_FINALIZE — Args: `r10=&Blob(alias)` → 0 — Gas: G_sci + bytes
 - 0x010030 STATE_KEYS — Args: `r10=&Name(prefix), r11=offset, r12=limit` (`0..=64`, where `0` returns an empty page) → `ptr (&NoritoBytes(Vec<Name>))`, `r11=total`, `r12=count` — Gas: G_state_keys + count + bytes
-  - Enumerates durable-state keys in canonical sorted order. In contract-runtime scope, internal storage prefixes are stripped before return, and staged tombstones are applied before pagination. The ledger host seeks directly to the scoped ordered prefix and does not materialize unrelated global keys; its `count` gas component conservatively includes every textual-prefix candidate examined across persisted state and the transaction overlay. Limits above 64 are rejected by every host.
+  - Enumerates durable-state keys in canonical sorted order. With CNTR metadata, the prefix must resolve to a declared path; a bare `StateMap` base is accepted here and by `STATE_COUNT`, but rejected by value operations. In contract-runtime scope, internal storage prefixes are stripped before return, and staged tombstones are applied before pagination. The ledger host seeks directly to the scoped ordered prefix and does not materialize unrelated global keys; its `count` gas component conservatively includes every textual-prefix candidate examined across persisted state and the transaction overlay. Limits above 64 are rejected by every host.
 - 0x010031 STATE_HAS — Args: `r10=&Name(path)` → `r10=present` — Gas: G_state_has
   - Tests durable-state key presence with the same scoped overlay, base-state, and tombstone resolution as `STATE_GET`.
 - 0x010032 STATE_LEN — Args: `r10=&Name(path)` → `r10=len`, `r11=found` — Gas: G_state_len + bytes
@@ -335,7 +353,7 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010033 STATE_COUNT — Args: `r10=&Name(prefix)` → `r10=total` — Gas: G_state_count + count
   - Counts durable-state keys with the same canonical sorted prefix matching, scope stripping, overlay, and tombstone resolution as `STATE_KEYS`, without cloning or returning the key list. The ledger host charges for every ordered-range candidate examined, including candidates rejected by path-segment matching and overlay tombstones.
 - 0x010034 STATE_MAP_KEY_AT — Args: `r10=&NoritoBytes(Vec<Name>), r11=&Name(base), r12=index` → `ptr (&NoritoBytes(canonical key))` or `0` — Gas: G_path + bytes
-  - Compiler-internal decoder for bounded `StateMap` iteration. It accepts at most 64 paths in a 1 MiB page, requires an exact `base/<lowercase hex>` child, and rejects malformed, non-canonical, or over-4-KiB keys.
+  - Compiler-internal decoder for bounded `StateMap` iteration. It accepts at most 64 paths in a 1 MiB page, requires an exact `base/<lowercase hex>` child, binds the recovered key to the base's CNTR-declared nominal key type, and rejects missing schemas, type confusion, malformed, non-canonical, or over-4-KiB keys.
 - 0x010035 STATE_VALUE_ENCODE — Args: `r10=&NoritoBytes(StateValueSchemaV1), r11=&[u64], r12=word_count` → `ptr (&NoritoBytes(StateValueRecordV1))` — Gas: G_state_value + schema + words + pointers + output
   - Compiler-internal encoder for one canonical typed durable value. The schema is validated, active pointer leaves must carry canonical payloads of their declared ABI types, inactive `Option`/`Result` branches must be all-zero/null, and the stored record is bound to the exact schema by a domain-separated hash.
 - 0x010036 STATE_VALUE_DECODE — Args: `r10=&NoritoBytes(StateValueSchemaV1), r11=&NoritoBytes(StateValueRecordV1)` → `ptr (&Blob(pad:u8 then [u64; word_count]))` — Gas: G_state_value + schema + record + pointers + output
@@ -531,7 +549,6 @@ node enforces that policy unconditionally.
 | 0x51 | STATE_SET | r10=&Name, r11=&NoritoBytes | u64=0 | asset:gas/G_state_set@ivm.core/v2 + bytes |
 | 0x52 | STATE_DEL | r10=&Name | u64=0 | asset:gas/G_state_del@ivm.core/v2 |
 | 0x53 | DECODE_INT | r10=&NoritoBytes(Norito-framed i64) | r10=i64 | asset:gas/G_numeric@ivm.core/v2 + bytes |
-| 0x54 | BUILD_PATH_MAP_KEY | r10=&Name(base), r11=key:i64 | r10=ptr (&Name) | asset:gas/G_path@ivm.core/v2 + bytes |
 | 0x55 | ENCODE_INT | r10=value:i64 | r10=ptr (&NoritoBytes(Norito-framed i64)) | asset:gas/G_numeric@ivm.core/v2 + bytes |
 | 0x56 | BUILD_PATH_KEY_NORITO | r10=&Name(base), r11=&NoritoBytes(key) | r10=ptr (&Name) | asset:gas/G_path@ivm.core/v2 + bytes |
 | 0x57 | JSON_ENCODE | r10=&Json | ptr (&NoritoBytes) | asset:gas/G_json_encode@ivm.core/v2 + bytes |
@@ -652,6 +669,7 @@ node enforces that policy unconditionally.
 | 0x10024 | SYSVAR_CONTRACT_ADDRESS | - | r10=ptr (&NoritoBytes(ContractAddress)) or 0 | asset:gas/G_sysvar@ivm.core/v2 + bytes |
 | 0x10025 | SYSVAR_ENTRYPOINT | - | r10=ptr (&Blob(entrypoint)) or 0 | asset:gas/G_sysvar@ivm.core/v2 + bytes |
 | 0x10026 | DECODE_ARGUMENT_RECORD | r10=&NoritoBytes(EntrypointArgumentRecordV1), r11=&NoritoBytes(EntrypointArgumentSchemaV1) | r10=ptr (&Blob(pad:u8 then [u64; word_count])) | asset:gas/G_argument_decode@ivm.core/v2 + record + schema + output |
+| 0x10027 | SYSVAR_CONTRACT_SUBJECT | - | r10=ptr (&AccountId(contract subject)) | asset:gas/G_sysvar@ivm.core/v2 + bytes |
 | 0x10030 | STATE_KEYS | r10=&Name(prefix), r11=offset:u64, r12=limit:u64 (0..=64) | r10=ptr (&NoritoBytes(Vec<Name>)), r11=total:u64, r12=count:u64 | asset:gas/G_state_keys@ivm.core/v2 + count + bytes |
 | 0x10031 | STATE_HAS | r10=&Name(path) | r10=present:u64 | asset:gas/G_state_has@ivm.core/v2 |
 | 0x10032 | STATE_LEN | r10=&Name(path) | r10=len:u64, r11=found:u64 | asset:gas/G_state_len@ivm.core/v2 + bytes |
@@ -718,6 +736,12 @@ node enforces that policy unconditionally.
 | 0x10163 | JSON_GET_INT_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<&Int> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x10164 | JSON_GET_DECIMAL_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<&Decimal> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x10165 | JSON_GET_QUANTITY_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<&Quantity> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x10200 | SET_ASSET_TRANSFER_FREEZE | r10=&AccountId, r11=&AssetDefinitionId, r12=frozen:0/1 | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10201 | SET_ASSET_TRANSFER_DAILY_LIMIT | r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity or 0 | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10210 | ACCOUNT_RECOVERY_PROPOSE | r10=&Blob(alias), r11=&AccountId(replacement) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10211 | ACCOUNT_RECOVERY_APPROVE | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10212 | ACCOUNT_RECOVERY_CANCEL | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10213 | ACCOUNT_RECOVERY_FINALIZE | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 <!-- END GENERATED SYSCALLS -->
 
 
@@ -760,10 +784,9 @@ node enforces that policy unconditionally.
 
 Codec helpers
 - 0x53 DECODE_INT — Args: `r10=&NoritoBytes(Norito-framed i64)` → Return: `r10=i64` — Gas: G_numeric + bytes
-- 0x54 BUILD_PATH_MAP_KEY — Args: `r10=&Name(base), r11=key:i64` → Return: `ptr (&Name)` — Gas: G_path + bytes
 - 0x55 ENCODE_INT — Args: `r10=value:i64` → Return: `ptr (&NoritoBytes(Norito-framed i64))` — Gas: G_numeric + bytes
 - 0x56 BUILD_PATH_KEY_NORITO — Args: `r10=&Name(base), r11=&NoritoBytes(key)` → Return: `ptr (&Name)` — Gas: G_path + bytes
-  - Produces the injective path `base/<lowercase hex of canonical key bytes>`. The exact suffix is reversible, lexicographic path order equals unsigned canonical-Norito byte order, and keys larger than 4 KiB are rejected.
+  - Compiler-internal schema-bound helper. The base must name exactly one CNTR-declared `StateMap`; the key must be the unique canonical encoding of that map's nominal key type. It produces `base/<lowercase hex of canonical key bytes>`, rejects missing schemas, type confusion, malformed/noncanonical frames, and keys larger than 4 KiB. The exact suffix is reversible and lexicographic path order equals unsigned canonical-byte order.
 - 0x57 JSON_ENCODE — Args: `r10=&Json` → Return: `ptr (&NoritoBytes(Json))` — Gas: G_json_encode + bytes
 - 0x58 JSON_DECODE — Args: `r10=&NoritoBytes(Json)` or `r10=&Blob(JSON text)` → Return: `ptr (&Json)` — Gas: G_json_decode + bytes
 - 0x59 SCHEMA_ENCODE — Args: `r10=&Name(schema), r11=&Json` → Return: `ptr (&NoritoBytes)` — Gas: G_schema + bytes

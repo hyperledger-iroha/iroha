@@ -27,10 +27,12 @@ the same request target.
 ## Representation negotiation
 
 Representation negotiation is independent of API evolution. Typed endpoints
-support `application/json` and `application/x-norito`; JSON suffix media types
-such as `application/problem+json` also select the JSON mapping. Media-type
-parameters do not change the selected representation, so
-`application/json; charset=utf-8` is JSON.
+emit exactly `application/json` and `application/x-norito`. A concrete
+structured-suffix type such as `application/problem+json` or
+`application/vnd.api+json` is a different representation and does not select
+Torii's `application/json` mapping. `application/*` and `*/*` still match by
+the ordinary wildcard rules. Supported media-type parameters do not change the
+selected representation, so `application/json; charset=utf-8` is JSON.
 
 Torii evaluates each supported representation against the most-specific
 matching `Accept` range: an exact type takes precedence over `application/*`,
@@ -72,6 +74,7 @@ Norito:
 | `application/json;q=0.8, */*;q=0.9` | `application/x-norito` (JSON's exact range fixes its quality at 0.8) |
 | `application/x-norito;q=0, */*;q=1` | `application/json` (the exact zero forbids Norito) |
 | `application/*;q=0.7` | `application/x-norito` (wildcard-only tie uses the endpoint default) |
+| `application/vnd.api+json` | `406`; Torii emits `application/json`, not the requested vendor representation |
 | `image/png` | `406` with a JSON `ErrorEnvelope` whose code is `response_not_acceptable` |
 
 Typed request bodies require `Content-Type`. A request body uses exactly
@@ -190,6 +193,14 @@ extractor or handler runs. After a valid singleton token, Torii applies
 route-level access/rate policy, then exact `Content-Type` validation, then
 command-header validation, and only then decodes the body.
 
+Those admission and authentication failures also take precedence over strict
+`Accept` coalescing and negotiation. A syntactically valid supported `Accept`
+preference is honored for the primary rejection; malformed, non-ASCII, or
+unacceptable preferences receive that rejection as deterministic JSON rather
+than replacing it with `406`. Once authentication succeeds, the ordinary
+negotiation algorithm applies and malformed or unacceptable `Accept` input
+fails with `406 response_not_acceptable` before a command handler runs.
+
 ## Reviewed protocol exceptions
 
 These endpoints do not imply SDK or MCP generation. They are explicit media or
@@ -243,10 +254,13 @@ deterministic for ordered maps.
 
 Unsigned 64-bit and 128-bit values are emitted as unquoted, lossless decimal
 JSON integers. Clients must use an integer representation that preserves their
-full range and must not round them through an IEEE-754 `double`. Optional fields
-encode as either their typed value or `null` unless the DTO explicitly declares
-that `None` is omitted. Decoders reject duplicate declared members, unknown
-enum discriminator values, out-of-range integers, and non-finite
+full range and must not round them through an IEEE-754 `double`. Every declared
+integer field must use the JSON integer production: fraction and exponent
+spellings such as `1.0` and `1e3` are rejected even when they denote a whole
+mathematical value, and unsigned fields also reject lexical `-0`. Optional
+fields encode as either their typed value or `null` unless the DTO explicitly
+declares that `None` is omitted. Decoders reject duplicate declared members,
+unknown enum discriminator values, out-of-range integers, and non-finite
 numbers. They ignore unknown object members so an independently produced JSON
 object can carry unrelated metadata without changing the typed value. For a
 unit enum variant, decoders accept either an explicit `null` content member or

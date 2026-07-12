@@ -1152,7 +1152,7 @@ fn validate_state_descriptors(
                 state.name
             )));
         }
-        validate_state_type(&state.ty)?;
+        validate_state_type(&state.ty, true)?;
     }
     Ok(())
 }
@@ -1191,17 +1191,49 @@ fn validate_error_codes(
     Ok(())
 }
 
-fn validate_state_type(ty: &EmbeddedStateType) -> Result<(), ContractArtifactError> {
+fn is_supported_state_map_key(ty: &EmbeddedStateType) -> bool {
+    matches!(
+        ty,
+        EmbeddedStateType::Int
+            | EmbeddedStateType::Decimal
+            | EmbeddedStateType::Quantity
+            | EmbeddedStateType::Bool
+            | EmbeddedStateType::String
+            | EmbeddedStateType::Bytes
+            | EmbeddedStateType::DataSpaceId
+            | EmbeddedStateType::AccountId
+            | EmbeddedStateType::AssetDefinitionId
+            | EmbeddedStateType::AssetId
+            | EmbeddedStateType::NftId
+            | EmbeddedStateType::DomainId
+            | EmbeddedStateType::Name
+    )
+}
+
+fn validate_state_type(
+    ty: &EmbeddedStateType,
+    allow_state_map: bool,
+) -> Result<(), ContractArtifactError> {
     match ty {
         EmbeddedStateType::Tuple(items) => {
+            if items.len() < 2 {
+                return Err(ContractArtifactError::invalid(
+                    "CNTR durable tuples require at least two elements",
+                ));
+            }
             for item in items {
-                validate_state_type(item)?;
+                validate_state_type(item, false)?;
             }
         }
         EmbeddedStateType::Struct { name, fields } => {
             if !is_canonical_source_declaration_name(name, false) {
                 return Err(ContractArtifactError::invalid(format!(
                     "CNTR struct `{name}` is not a canonical Kotodama V1 identifier"
+                )));
+            }
+            if fields.is_empty() {
+                return Err(ContractArtifactError::invalid(format!(
+                    "CNTR struct `{name}` must contain at least one field"
                 )));
             }
             let mut field_names = BTreeSet::new();
@@ -1218,17 +1250,34 @@ fn validate_state_type(ty: &EmbeddedStateType) -> Result<(), ContractArtifactErr
                         field.name
                     )));
                 }
-                validate_state_type(&field.ty)?;
+                validate_state_type(&field.ty, false)?;
             }
         }
         EmbeddedStateType::StateMap { key, value } => {
-            validate_state_type(key)?;
-            validate_state_type(value)?;
+            if !allow_state_map {
+                return Err(ContractArtifactError::invalid(
+                    "CNTR StateMap is a top-level durable collection and cannot be nested",
+                ));
+            }
+            if !is_supported_state_map_key(key) {
+                return Err(ContractArtifactError::invalid(
+                    "CNTR StateMap key must be a supported canonical scalar type",
+                ));
+            }
+            validate_state_type(value, false)?;
         }
-        EmbeddedStateType::Option(value) => validate_state_type(value)?,
+        EmbeddedStateType::Option(value) => validate_state_type(value, false)?,
         EmbeddedStateType::Result { ok, err } => {
-            validate_state_type(ok)?;
-            validate_state_type(err)?;
+            validate_state_type(ok, false)?;
+            validate_state_type(err, false)?;
+        }
+        EmbeddedStateType::List { element, capacity } => {
+            if !(1..=64).contains(capacity) {
+                return Err(ContractArtifactError::invalid(
+                    "CNTR List capacity must be in 1..=64",
+                ));
+            }
+            validate_state_type(element, false)?;
         }
         _ => {}
     }
@@ -1333,6 +1382,87 @@ mod tests {
             .extend_from_slice(&crate::encoding::wide::encode_literal(opcode, 5, 0).to_le_bytes());
         artifact.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
         artifact
+    }
+
+    fn interface_with_state(ty: EmbeddedStateType) -> EmbeddedContractInterfaceV1 {
+        EmbeddedContractInterfaceV1 {
+            seiyaku_name: "StateAdmission".to_owned(),
+            compiler_fingerprint: "ivm-unit-tests".to_owned(),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: Vec::new(),
+            states: vec![crate::metadata::EmbeddedStateDescriptor {
+                name: "value".to_owned(),
+                ty,
+            }],
+            error_codes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn cntr_state_admission_rejects_unexecutable_type_trees() {
+        let valid = EmbeddedStateType::StateMap {
+            key: Box::new(EmbeddedStateType::Decimal),
+            value: Box::new(EmbeddedStateType::List {
+                element: Box::new(EmbeddedStateType::Quantity),
+                capacity: 64,
+            }),
+        };
+        validate_state_descriptors(&interface_with_state(valid))
+            .expect("canonical map and aggregate value remain admissible");
+
+        let invalid = [
+            EmbeddedStateType::StateMap {
+                key: Box::new(EmbeddedStateType::Json),
+                value: Box::new(EmbeddedStateType::Int),
+            },
+            EmbeddedStateType::Option(Box::new(EmbeddedStateType::StateMap {
+                key: Box::new(EmbeddedStateType::Int),
+                value: Box::new(EmbeddedStateType::Int),
+            })),
+            EmbeddedStateType::Tuple(vec![EmbeddedStateType::Int]),
+            EmbeddedStateType::Struct {
+                name: "Empty".to_owned(),
+                fields: Vec::new(),
+            },
+            EmbeddedStateType::List {
+                element: Box::new(EmbeddedStateType::Int),
+                capacity: 0,
+            },
+        ];
+        for ty in invalid {
+            let error = validate_state_descriptors(&interface_with_state(ty))
+                .expect_err("unexecutable CNTR state type must fail admission");
+            assert!(error.to_string().contains("CNTR"), "{error}");
+        }
+    }
+
+    #[test]
+    fn cntr_state_map_admission_accepts_every_runtime_key_domain() {
+        let keys = [
+            EmbeddedStateType::Int,
+            EmbeddedStateType::Decimal,
+            EmbeddedStateType::Quantity,
+            EmbeddedStateType::Bool,
+            EmbeddedStateType::String,
+            EmbeddedStateType::Bytes,
+            EmbeddedStateType::DataSpaceId,
+            EmbeddedStateType::AccountId,
+            EmbeddedStateType::AssetDefinitionId,
+            EmbeddedStateType::AssetId,
+            EmbeddedStateType::NftId,
+            EmbeddedStateType::DomainId,
+            EmbeddedStateType::Name,
+        ];
+        for key in keys {
+            let map = EmbeddedStateType::StateMap {
+                key: Box::new(key),
+                value: Box::new(EmbeddedStateType::Bytes),
+            };
+            validate_state_descriptors(&interface_with_state(map))
+                .expect("runtime-supported map key must pass admission");
+        }
     }
 
     #[test]

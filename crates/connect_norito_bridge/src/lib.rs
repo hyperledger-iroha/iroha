@@ -9346,8 +9346,10 @@ const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_DECLARED_BYTES_V3: u64 =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3 * 6;
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V3: c_ulong = 1024 * 1024;
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_HEADER_BYTES_V3: usize = 64 * 1024;
-// TODO: Flip these gates only after release-envelope authentication and the
-// init-to-finality binding are implemented and covered by adversarial tests.
+// Release invariant: these entrypoints remain fail-closed until both
+// release-envelope authentication and init-to-finality binding are present
+// and covered by adversarial tests. Capability negotiation must not advertise
+// the prover while either invariant is absent.
 const KAGEMUSHA_RECURSIVE_SPEND_AUTHENTICATED_RELEASE_ENVELOPE_WIRED_V3: bool = false;
 const KAGEMUSHA_RECURSIVE_SPEND_INIT_BINDS_TOPUP_FINALITY_V2: bool = false;
 

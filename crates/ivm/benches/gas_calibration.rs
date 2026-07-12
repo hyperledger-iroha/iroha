@@ -13,7 +13,10 @@ use iroha_primitives::{
     bigint::BigInt,
     numeric::{Numeric, RoundingMode},
 };
-use ivm::{IVM, encoding, instruction};
+use ivm::{
+    IVM, ProgramMetadata, VMError, encoding, host::DefaultHost, instruction,
+    numeric::PointerAbiFaultV1,
+};
 
 // Assemble header + code (mode=0, max_cycles=0, abi=1) — copied from tests/common.rs
 fn assemble(code: &[u8]) -> Vec<u8> {
@@ -61,6 +64,28 @@ fn bench_instr(c: &mut Criterion, name: &str, instr: u32, reps: usize) {
     group.finish();
 }
 
+fn bench_empty_harness(c: &mut Criterion) {
+    let code = program_for_repeated(0, 0);
+    let mut group = c.benchmark_group("ivm-gas-cal");
+    group.bench_function("EMPTY_HARNESS", |b| {
+        b.iter_batched(
+            || {
+                let mut vm = IVM::new(1_000_000_000);
+                vm.load_program(&code)
+                    .expect("load empty calibration program");
+                vm
+            },
+            |mut vm| {
+                let start_remaining = vm.remaining_gas();
+                vm.run().expect("run empty calibration program");
+                std::hint::black_box(start_remaining - vm.remaining_gas());
+            },
+            BatchSize::SmallInput,
+        )
+    });
+    group.finish();
+}
+
 fn positive_with_limbs(limbs: usize, low: u8) -> BigInt {
     let mut bytes = vec![0_u8; limbs * 8];
     bytes[0] = low;
@@ -79,6 +104,61 @@ fn wrap_v1(value: &BigInt) -> BigInt {
 
 fn bench_numeric_limb_work(c: &mut Criterion) {
     let mut group = c.benchmark_group("ivm-numeric-limb-cal");
+
+    let entry_instruction = encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_INT_NEG);
+    let mut entry_program = ProgramMetadata::default_for(1, 0, 1).encode();
+    entry_program.extend_from_slice(&entry_instruction.to_le_bytes());
+    entry_program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    // Keep the benchmark denominator scoped to the staged numeric lifecycle.
+    // The VM additionally charges the generic SCALLX opcode, which is asserted
+    // below but deliberately excluded from the numeric-constant calibration.
+    let staged_entry_failure_gas =
+        ivm::numeric_gas::NUMERIC_ENTRY_GAS + ivm::numeric_gas::POINTER_HEADER_BYTES;
+    let total_entry_failure_gas = staged_entry_failure_gas
+        + ivm::gas::cost_of(entry_instruction).expect("SCALLX has a gas schedule entry");
+    {
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&entry_program)
+            .expect("load numeric entry calibration proof");
+        vm.set_host(DefaultHost::new());
+        let start_remaining = vm.remaining_gas();
+        assert_eq!(
+            vm.run(),
+            Err(VMError::PointerAbiFault(PointerAbiFaultV1::InvalidAddress)),
+        );
+        assert_eq!(
+            start_remaining - vm.remaining_gas(),
+            total_entry_failure_gas
+        );
+    }
+    group.bench_with_input(
+        BenchmarkId::new(
+            "entry_control_pipeline",
+            format!("gas={staged_entry_failure_gas}"),
+        ),
+        &total_entry_failure_gas,
+        |b, expected_total_gas| {
+            b.iter_batched(
+                || {
+                    let mut vm = IVM::new(u64::MAX);
+                    vm.load_program(&entry_program)
+                        .expect("load numeric entry calibration program");
+                    vm.set_host(DefaultHost::new());
+                    vm
+                },
+                |mut vm| {
+                    let start_remaining = vm.remaining_gas();
+                    let _ = std::hint::black_box(vm.run());
+                    std::hint::black_box((
+                        start_remaining - vm.remaining_gas(),
+                        expected_total_gas,
+                    ));
+                },
+                BatchSize::SmallInput,
+            );
+        },
+    );
+
     for limbs in 1_usize..=8 {
         let lhs = positive_with_limbs(limbs, 0x5b);
         let rhs = positive_with_limbs(limbs, 0x13);
@@ -289,6 +369,7 @@ fn run_benchmarks(c: &mut Criterion) {
 
     // Repeat count large enough to amortize overhead
     let reps = 50_000;
+    bench_empty_harness(c);
     bench_instr(c, "ADD", add, reps);
     bench_instr(c, "MUL", mul, reps);
     bench_instr(c, "DIVU", divu, reps);

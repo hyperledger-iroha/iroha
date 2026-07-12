@@ -8,17 +8,17 @@ import java.security.MessageDigest
 /** Exact ABI-18 Kagemusha recursive-spend bridge. */
 class KagemushaRecursiveSpendProver private constructor() {
     enum class Mode(val wireName: String) {
-        RECURSIVE_SPEND_V1("recursive_spend_v1"),
+        RECURSIVE_SPEND("recursive_spend_v2"),
     }
 
     companion object {
         const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18
-        const val RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 7
-        const val TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 15
-        const val PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18
+        internal const val RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 7
+        internal const val TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 15
+        internal const val PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18
         const val PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA: String =
             "kagemusha.offline.recursive_spend.artifact_manifest.v3"
-        const val MODE: String = "recursive_spend_v1"
+        const val MODE: String = "recursive_spend_v2"
         const val PASTA_CYCLE_V3_MODE: String = MODE
         const val PASTA_CYCLE_V3_PROOF_BACKEND: String = "halo2/ipa-pasta-cycle-v1"
         const val PASTA_CYCLE_V3_TRANSCRIPT_PROFILE: String =
@@ -115,6 +115,9 @@ class KagemushaRecursiveSpendProver private constructor() {
             val offset: Int,
         )
 
+        internal fun isExactBridgeAbi(abiVersion: Int): Boolean =
+            abiVersion == REQUIRED_NATIVE_BRIDGE_ABI_VERSION
+
         @JvmStatic
         fun isNativeAvailable(): Boolean = nativeAvailable
 
@@ -135,7 +138,7 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic
         fun preferredMode(pastaCycleV3BackendAvailable: Boolean): Mode? =
-            if (pastaCycleV3BackendAvailable) Mode.RECURSIVE_SPEND_V1 else null
+            if (pastaCycleV3BackendAvailable) Mode.RECURSIVE_SPEND else null
 
         /** True only for the sole first-release spend-again product selector. */
         @JvmStatic
@@ -763,16 +766,13 @@ class KagemushaRecursiveSpendProver private constructor() {
             isLineageAppendOutputCircuitId(normalizeAppendOutputCircuitId(outputCircuitId)) &&
                 previousHopCount >= 1
 
-        @JvmStatic
-        fun initSpend(requestArchive: ByteArray?): ByteArray =
+        internal fun initSpend(requestArchive: ByteArray?): ByteArray =
             call("init", requestArchive, ::nativeInitSpend)
 
-        @JvmStatic
-        fun initSpend(request: InitSpendRequest): ByteArray =
+        internal fun initSpend(request: InitSpendRequest): ByteArray =
             initSpend(KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(request))
 
-        @JvmStatic
-        fun topUpSpend(requestArchive: ByteArray?): ByteArray =
+        internal fun topUpSpend(requestArchive: ByteArray?): ByteArray =
             call(
                 "top-up",
                 requestArchive,
@@ -780,28 +780,22 @@ class KagemushaRecursiveSpendProver private constructor() {
                 bridgeAvailable = nativeTopUpAvailable,
             )
 
-        @JvmStatic
-        fun topUpSpend(request: TopUpSpendRequest): ByteArray =
+        internal fun topUpSpend(request: TopUpSpendRequest): ByteArray =
             topUpSpend(KagemushaRecursiveSpendRequestCodecs.encodeTopUpRequest(request))
 
-        @JvmStatic
-        fun appendSpend(requestArchive: ByteArray?): ByteArray =
+        internal fun appendSpend(requestArchive: ByteArray?): ByteArray =
             call("append", requestArchive, ::nativeAppendSpend)
 
-        @JvmStatic
-        fun appendSpend(request: AppendSpendRequest): ByteArray =
+        internal fun appendSpend(request: AppendSpendRequest): ByteArray =
             appendSpend(KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(request))
 
-        @JvmStatic
-        fun transitionProfileInit(requestArchive: ByteArray?): ByteArray =
+        internal fun transitionProfileInit(requestArchive: ByteArray?): ByteArray =
             call("transition profile init", requestArchive, ::nativeTransitionProfileInit)
 
-        @JvmStatic
-        fun transitionProfileAppend(requestArchive: ByteArray?): ByteArray =
+        internal fun transitionProfileAppend(requestArchive: ByteArray?): ByteArray =
             call("transition profile append", requestArchive, ::nativeTransitionProfileAppend)
 
-        @JvmStatic
-        fun lineageAppendBoundary(profileArchive: ByteArray?): ByteArray =
+        internal fun lineageAppendBoundary(profileArchive: ByteArray?): ByteArray =
             callArchive(
                 "lineage append boundary",
                 "profileArchive",
@@ -809,8 +803,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 ::nativeLineageAppendBoundary,
             )
 
-        @JvmStatic
-        fun lineageWitnessFromInitResult(
+        internal fun lineageWitnessFromInitResult(
             requestArchive: ByteArray?,
             bundleArchive: ByteArray?,
         ): ByteArray =
@@ -821,8 +814,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 ::nativeLineageWitnessFromInitResult,
             )
 
-        @JvmStatic
-        fun lineageWitnessAppendResult(
+        internal fun lineageWitnessAppendResult(
             previousWitnessArchive: ByteArray?,
             requestArchive: ByteArray?,
             bundleArchive: ByteArray?,
@@ -835,26 +827,21 @@ class KagemushaRecursiveSpendProver private constructor() {
                 ::nativeLineageWitnessAppendResult,
             )
 
-        @JvmStatic
-        fun verifySpend(requestArchive: ByteArray?): ByteArray =
+        internal fun verifySpend(requestArchive: ByteArray?): ByteArray =
             call("verify", requestArchive, ::nativeVerifySpend)
 
-        @JvmStatic
-        fun verifySpend(request: VerifySpendRequest): VerifySpendResult =
+        internal fun verifySpend(request: VerifySpendRequest): VerifySpendResult =
             KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
                 verifySpend(KagemushaRecursiveSpendRequestCodecs.encodeVerifyRequest(request)),
             )
 
-        @JvmStatic
-        fun redeemSpend(requestArchive: ByteArray?): ByteArray =
+        internal fun redeemSpend(requestArchive: ByteArray?): ByteArray =
             call("redeem", requestArchive, ::nativeRedeemSpend)
 
-        @JvmStatic
-        fun redeemSpend(request: RedeemSpendRequest): ByteArray =
+        internal fun redeemSpend(request: RedeemSpendRequest): ByteArray =
             redeemSpend(KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(request))
 
-        @JvmStatic
-        fun buildPallasOpenEnvelopesArchive(recordBundleArchive: ByteArray?): ByteArray =
+        internal fun buildPallasOpenEnvelopesArchive(recordBundleArchive: ByteArray?): ByteArray =
             callArchive(
                 "build Pallas open envelopes",
                 "recordBundleArchive",
@@ -862,8 +849,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 ::nativeBuildPallasOpenEnvelopesArchive,
             )
 
-        @JvmStatic
-        fun buildPreviousProofOpenEnvelopesArchive(previousBundleArchive: ByteArray?): ByteArray =
+        internal fun buildPreviousProofOpenEnvelopesArchive(previousBundleArchive: ByteArray?): ByteArray =
             callArchive(
                 "build previous proof open envelopes",
                 "previousBundleArchive",

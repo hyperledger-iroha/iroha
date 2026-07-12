@@ -13,7 +13,7 @@ from typing import Any, Literal, Mapping, Optional, Union
 from ._native import load_crypto_extension
 
 BytesLike = Union[bytes, bytearray, memoryview]
-KagemushaOfflineSpendMode = Literal["recursive_spend_v1"]
+KagemushaOfflineSpendMode = Literal["recursive_spend_v2"]
 KagemushaInstructionArchiveType = Literal[
     "KagemushaTransfer",
     "RedeemKagemushaRecursive",
@@ -21,7 +21,7 @@ KagemushaInstructionArchiveType = Literal[
 ]
 
 KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1 = "recursive_compact_v1"
-KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1"
+KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2 = "recursive_spend_v2"
 KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER = "KagemushaTransfer"
 KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE = "RedeemKagemushaRecursive"
 KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TOPUP_RECURSIVE = "TopUpKagemushaRecursive"
@@ -80,7 +80,7 @@ KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES = {
         KAGEMUSHA_TOPUP_RECURSIVE_INSTRUCTION_WIRE_NAME
     ),
 }
-KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6
+KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18
 KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7
 KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 15
 KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION = 0xFFFF_FFFF
@@ -169,7 +169,7 @@ _RECURSIVE_SPEND_COMPACT_TOKEN_PROJECTION_VERIFY_AT_HEIGHT_METHOD = (
 
 __all__ = [
     "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
-    "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
+    "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TOPUP_RECURSIVE",
@@ -258,7 +258,6 @@ __all__ = [
     "is_kagemusha_recursive_compact_unavailable",
     "is_kagemusha_recursive_spend_available",
     "is_kagemusha_recursive_spend_topup_available",
-    "preferred_kagemusha_offline_spend_mode_for_capabilities",
     "preferred_kagemusha_offline_spend_mode",
     "is_kagemusha_spend_again_mode",
     "kagemusha_prove_verified_compact_payment_token_with_records",
@@ -764,7 +763,7 @@ def _has_recursive_spend_abi(module: object) -> bool:
     version = _recursive_spend_abi_version(module)
     return (
         version is not None
-        and version >= KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION
+        and version == KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION
     )
 
 
@@ -1024,44 +1023,32 @@ def _probe_recursive_spend_surface(module: object) -> bool:
     )
 
 
+_PREFERRED_MODE_AUTODETECT = object()
+
+
 def preferred_kagemusha_offline_spend_mode(
     *,
-    recursive_compact_available: bool | None = None,
-    recursive_spend_available: bool | None = None,
+    pasta_cycle_v3_backend_available: object = _PREFERRED_MODE_AUTODETECT,
 ) -> Optional[KagemushaOfflineSpendMode]:
-    if recursive_compact_available is None and recursive_spend_available is None:
-        recursive_compact_available = (
-            is_kagemusha_recursive_compact_payment_token_prover_available()
-        )
-        recursive_spend_available = is_kagemusha_recursive_spend_available()
-    elif recursive_compact_available is None or recursive_spend_available is None:
-        raise ValueError(
-            "preferred_kagemusha_offline_spend_mode requires either no "
-            "capability arguments or both recursive_compact_available and "
-            "recursive_spend_available"
-        )
-    return preferred_kagemusha_offline_spend_mode_for_capabilities(
-        recursive_compact_available,
-        recursive_spend_available,
-    )
+    """Select the sole first-release mode from the exact V3 backend capability."""
 
-
-def preferred_kagemusha_offline_spend_mode_for_capabilities(
-    recursive_compact_available: bool,
-    recursive_spend_available: bool,
-) -> Optional[KagemushaOfflineSpendMode]:
-    # Compact availability describes an admission-neutral projection only; it
-    # must never select spend-again cash.
-    del recursive_compact_available
-    if recursive_spend_available:
-        return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+    if pasta_cycle_v3_backend_available is _PREFERRED_MODE_AUTODETECT:
+        available = is_kagemusha_recursive_spend_available()
+    elif type(pasta_cycle_v3_backend_available) is bool:
+        available = pasta_cycle_v3_backend_available
+    else:
+        raise TypeError(
+            "pasta_cycle_v3_backend_available must be a boolean when provided"
+        )
+    if available:
+        return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2
     return None
 
 
 def is_kagemusha_spend_again_mode(value: object) -> bool:
     """Return whether *value* is the sole first-release cash selector."""
 
-    return value == KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+    return value == KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2
 
 
 def can_redeem_kagemusha_recursive_spend_witnessless(

@@ -20,7 +20,7 @@ internal static class ToriiContractManifestJson
 
     private static readonly HashSet<string> ReservedDeclarationNames = new(StringComparer.Ordinal)
     {
-        "i64", "u128", "bool", "string", "bytes", "Amount", "Json", "AccountId",
+        "int", "decimal", "quantity", "bool", "string", "bytes", "Json", "AccountId",
         "AssetDefinitionId", "AssetId", "DomainId", "Name", "NftId", "DataSpaceId",
         "Option", "Result", "List", "StateMap", "Secret", "AccountView", "AssetView",
         "AssetDefinitionView", "DomainView", "NftView", "QueryPage", "AxtDescriptor",
@@ -28,17 +28,19 @@ internal static class ToriiContractManifestJson
         "state_map_get", "__kotodama_list_len", "__kotodama_list_get",
         "__kotodama_list_try_set", "__kotodama_list_try_push", "__kotodama_list_pop",
         "__kotodama_list_contains", "__kotodama_list_take", "__kotodama_list_enumerate",
-        "__kotodama_amount_div_round",
+        "__kotodama_decimal_div_round", "__kotodama_quantity_div_round",
+        "__kotodama_quantity_ratio_round", "__kotodama_decimal_to_int_trunc",
+        "__kotodama_decimal_to_int_round",
     };
 
     private static readonly IReadOnlyDictionary<string, ToriiEntrypointValueKindV1> ValueKinds =
         new Dictionary<string, ToriiEntrypointValueKindV1>(StringComparer.Ordinal)
         {
             ["Int"] = ToriiEntrypointValueKindV1.Int,
-            ["U128"] = ToriiEntrypointValueKindV1.U128,
+            ["Decimal"] = ToriiEntrypointValueKindV1.Decimal,
+            ["Quantity"] = ToriiEntrypointValueKindV1.Quantity,
             ["Bool"] = ToriiEntrypointValueKindV1.Bool,
             ["String"] = ToriiEntrypointValueKindV1.String,
-            ["Amount"] = ToriiEntrypointValueKindV1.Amount,
             ["Json"] = ToriiEntrypointValueKindV1.Json,
             ["Name"] = ToriiEntrypointValueKindV1.Name,
             ["AccountId"] = ToriiEntrypointValueKindV1.AccountId,
@@ -582,7 +584,7 @@ internal static class ToriiContractManifestJson
                             || viewName is null
                             || !string.Equals(
                                 children[1].TypeName,
-                                "Option<i64>",
+                                "Option<int>",
                                 StringComparison.Ordinal))
                         {
                             throw new JsonException(
@@ -751,7 +753,7 @@ internal static class ToriiContractManifestJson
                 break;
             case "AssetView":
                 expectedFields = new[] { "id", "amount" };
-                expectedTypes = new[] { "AssetId", "Amount" };
+                expectedTypes = new[] { "AssetId", "quantity" };
                 break;
             case "AssetDefinitionView":
                 expectedFields = new[]
@@ -760,7 +762,7 @@ internal static class ToriiContractManifestJson
                 };
                 expectedTypes = new[]
                 {
-                    "AssetDefinitionId", "string", "Option<string>", "AccountId", "Amount", "Json",
+                    "AssetDefinitionId", "string", "Option<string>", "AccountId", "quantity", "Json",
                 };
                 break;
             case "DomainView":
@@ -782,11 +784,11 @@ internal static class ToriiContractManifestJson
     {
         return kind switch
         {
-            ToriiEntrypointValueKindV1.Int => "i64",
-            ToriiEntrypointValueKindV1.U128 => "u128",
+            ToriiEntrypointValueKindV1.Int => "int",
+            ToriiEntrypointValueKindV1.Decimal => "decimal",
+            ToriiEntrypointValueKindV1.Quantity => "quantity",
             ToriiEntrypointValueKindV1.Bool => "bool",
             ToriiEntrypointValueKindV1.String => "string",
-            ToriiEntrypointValueKindV1.Amount => "Amount",
             ToriiEntrypointValueKindV1.Json => "Json",
             ToriiEntrypointValueKindV1.Name => "Name",
             ToriiEntrypointValueKindV1.AccountId => "AccountId",

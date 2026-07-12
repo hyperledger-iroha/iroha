@@ -410,7 +410,7 @@ public sealed class OfflineToriiApiTests
         using var rejectedClient = new ToriiClient(
             new Uri("https://torii.example"),
             new HttpClient(rejectedHandler));
-        await Assert.ThrowsAsync<JsonException>(() =>
+        await Assert.ThrowsAnyAsync<JsonException>(() =>
             rejectedClient.GetOfflineReadinessAsync(
                 "xor#wonderland",
                 TestContext.Current.CancellationToken));

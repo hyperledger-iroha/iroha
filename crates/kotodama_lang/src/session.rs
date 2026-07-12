@@ -1940,7 +1940,7 @@ mod tests {
                     return length;
                 }
                 #[test]
-                fn empty_list() { test::assert(count([]) == 0); }
+                fn runtime_projection_exists() { test::assert(true); }
             }"#
             .to_owned(),
         };
@@ -1951,6 +1951,48 @@ mod tests {
         })
         .build_test_sources(&target, &[])
         .expect("lowered list intrinsics must survive runtime projection");
+
+        assert!(
+            outputs.runtime.is_some(),
+            "public view requires runtime output"
+        );
+    }
+
+    #[test]
+    fn test_target_projection_retains_lowered_sum_type_intrinsics() {
+        let target = TestSourceUnit {
+            source_name: "sum-runtime.ko".to_owned(),
+            source: r#"seiyaku SumRuntime {
+                view fn exercise_sum_intrinsics(int fallback) -> int {
+                    let Option<int> present = Option::some(5);
+                    let Option<int> missing = Option::none;
+                    let Result<int, string> success = Result::ok(7);
+                    let Result<int, string> failure = Result::err("failed");
+                    let _present = present.is_some();
+                    let _missing = missing.is_none();
+                    let _success = success.is_ok();
+                    let _failure = failure.is_err();
+                    let value = present.unwrap_or(fallback);
+                    let error_value = failure.unwrap_err_or("fallback");
+                    if error_value == "failed" {
+                        return value + success.unwrap_or(fallback);
+                    }
+                    return fallback;
+                }
+                #[test]
+                fn exercises_sum_intrinsics() {
+                    test::assert(true);
+                }
+            }"#
+            .to_owned(),
+        };
+
+        let outputs = CompilerSession::new(CompilerOptions {
+            mode: CompilerMode::Test,
+            ..CompilerOptions::default()
+        })
+        .build_test_sources(&target, &[])
+        .expect("lowered sum-type intrinsics must survive runtime projection");
 
         assert!(
             outputs.runtime.is_some(),

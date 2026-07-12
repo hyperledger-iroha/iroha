@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-11
+Last updated: 2026-07-12
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -793,8 +793,8 @@ scan limited to repository policy text plus intentional guard-test fixtures.
 
 ## SCCP Launch Scope
 
-**Status:** exact V1 implementation complete; integrated validation and live
-deployment evidence pending.
+**Status:** exact V1 implementation and local release-fixture validation
+complete; audited live deployment evidence pending.
 
 The first release has exactly three production remote profiles: Ethereum
 mainnet, BNB Smart Chain mainnet, and TRON mainnet, each paired with SORA Taira
@@ -861,14 +861,15 @@ Multisig authorities use preparation followed by the multisig workflow, never
 the direct detached-signature shortcut. The unified response uses
 `route_configuration_hash_hex`; the retired manifest alias is not accepted.
 
-The remaining SCCP release work is final integrated validation plus external
-evidence:
+The remaining SCCP release work is external deployment and audit evidence,
+plus the blocked broad workspace lanes:
 
-- complete the clean-build Core/Torii/CLI, production-validator, consolidated
-  cross-SDK, and four-peer admission matrix; the full SCCP library suite and
-  pinned EVM/Ethereum/BSC/TRON contract corridor are green, as are the Swift,
-  Python, JavaScript, Kotlin/JVM, and Android Java exact-schema/padding suites,
-  while Windows .NET execution still requires its host runtime;
+- complete the clean-build Core/Torii/CLI and four-peer admission matrix once
+  unrelated current-tree Core test fixtures compile; the full SCCP library and
+  production-validator suites, test-only release fixture, pinned
+  EVM/Ethereum/BSC/TRON contract corridor, Torii source schema, and focused
+  Swift, Python, JavaScript, and TypeScript lanes are green, while Java and
+  Windows .NET execution still require their host runtimes;
 - obtain independently audited, reproducible semantic circuit, witness
   generator, proving key, verifying key, toolchain, and audit-report artifacts
   for all three production profiles;
@@ -4431,12 +4432,13 @@ launch-scope section and are not current roadmap work.
   event suppression, and the localhost Torii mock-server harness pinned in the
   focused JVM gate and parity inventory.
   Kotlin/JVM and Android Java SCCP runner coverage must stay pinned in the
-  same focused JVM gate for EVM-family, TRON, TON, Solana, and shared source
-  proof-hash helpers. The runner and parity inventory must keep deterministic
-  proof-request/result wrapping, callback request snapshots, route-canary
-  hashes, source verifier material hashes, destination-binding hashes,
-  malformed Groth16 proof rejection, noncanonical TON bundle rejection, Solana
-  deployment binding, and EVM/BSC inbound drift checks visible to SDK CI.
+  same focused JVM gate for EVM-family, TRON, and the shared eleven-signal,
+  38-word, mandatory-policy proof helpers. The runner and parity inventory must
+  keep deterministic proof-request/result wrapping, callback request snapshots,
+  both outbound-policy hashes, route-canary hashes, source verifier material
+  hashes, destination-binding hashes, malformed Groth16 proof rejection, and
+  EVM/BSC inbound drift checks visible to SDK CI. Solana and TON are not SCCP
+  V1 runner or parity requirements.
   Kotlin/JVM and Android Java recursive-spend request codecs must keep
   init/append/verify/redeem archive schemas, compact request payload layouts,
   raw embedded archive payloads, Norito `Option` child-length framing, Rust
@@ -11437,9 +11439,10 @@ launch-scope section and are not current roadmap work.
   This does not close the live deployment gaps above; it prevents
   production promotion from being claimed until those lane gates all pass
   together for the same deployment.
-- SCCP launch scope is limited to Ethereum, BSC, Solana, TON, and TRON. Proof
-  manifests, checked encoders, verifier dispatch, Torii public discovery, SDK
-  helpers, and production readiness surfaces must stay limited to those lanes.
+- SCCP V1 production launch scope is limited to Ethereum, BSC, and TRON. Proof
+  policies, checked encoders, verifier dispatch, Torii public discovery, SDK
+  helpers, and production readiness surfaces must stay limited to those lanes;
+  Solana and TON are rejected first-release profiles, not deferred launch work.
   Retired runtime-network families outside that launch scope are explicitly
   unsupported for now.
   SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
@@ -12121,10 +12124,13 @@ launch-scope section and are not current roadmap work.
   witness and total-weight overflow details, including witness indexes and raw
   overflow weights, cannot appear in public summaries, and the release
   public-scalar inventory pins those regressions.
+- The current SCCP release-evidence matrix enumerates only Ethereum, BSC, and
+  TRON. Solana/TON clauses retained in the pre-release implementation history
+  below are non-normative and cannot satisfy or block SCCP V1 readiness.
 - SCCP source-material evidence must reject built-in template verifier hashes as
   a release gate, not only as local script behavior. The
   `source_material_template_rejection_gate` source inventory pins ETH, BSC,
-  Solana, TON, and TRON evidence-script guards plus negative tests so
+  and TRON evidence-script guards plus negative tests so
   template-derived source verifier material cannot satisfy production readiness
   silently. The aggregate all-lanes evidence validator also rejects copied
   source-material records that replay those built-in template component hashes
@@ -12137,7 +12143,7 @@ launch-scope section and are not current roadmap work.
   preflight now rejects the same source-record template replay for ready and
   not-ready summaries before emitting public JSON. Copied source-adapter gate
   hashes and audit verifier hashes for
-  ETH, BSC, Solana, TON, and TRON are rejected at the same boundary if they
+  ETH, BSC, and TRON are rejected at the same boundary if they
   replay built-in source-material template component hashes, and strict
   release-bundle public JSON validation rejects the same replay in copied
   cryptographic-evidence rows and all-lanes source-adapter gate summaries. The
@@ -12159,7 +12165,7 @@ launch-scope section and are not current roadmap work.
   evidence is checked. The
   all-lanes release checklist now rejects copied source-adapter gate hashes and
   audit hashes that replay the same built-in template material across ETH, BSC,
-  Solana, TON, and TRON before governed deployment readiness can pass. The
+  and TRON before governed deployment readiness can pass. The
   source-gate audit-key emission controls must also stay exact booleans before
   bundle-builder or strict-verifier helper paths can suppress audit-key shape
   diagnostics. The source-material role validation release inventory now also
@@ -12170,7 +12176,7 @@ launch-scope section and are not current roadmap work.
   while BSC's material-only envelope profile stays fail-closed. Rust source-adapter
   readiness now also
   tests material-only admission across every active remote launch lane, so
-  deployed source material for ETH, BSC, Solana, TON, or TRON can be recognized
+  deployed source material for ETH, BSC, or TRON can be recognized
   as well-shaped without opening production readiness until the external
   consensus, inclusion, and trust-anchor engines are ready. The BSC fixture in
   that guard uses source bridge network/owner/config-bound deployed material
@@ -12185,7 +12191,7 @@ launch-scope section and are not current roadmap work.
   admission or mint/match a governed deployment descriptor. Release-readiness
   and strict-bundle source inventories must pin those all-lane and BSC
   fail-closed/config-bound readiness markers before
-  production evidence can pass. ETH, BSC, Solana, TON, and TRON source
+  production evidence can pass. ETH, BSC, and TRON source
   bridge/state evidence must also keep wrong
   source/target lane-domain diagnostics tied to named `SCCP_DOMAIN_*` and
   `SCCP_DOMAIN_SORA` constants, with readiness and strict-bundle source
@@ -12209,7 +12215,7 @@ launch-scope section and are not current roadmap work.
   audit hash profile explicitly, so structurally inspectable full-light-client
   audit descriptors with changed role hashes cannot open readiness. Full lane
   production-readiness coverage now also rebuilds production-shaped destination
-  rollout and route-canary records for Ethereum, BSC, Solana, TON, and TRON, then
+  rollout and route-canary records for Ethereum, BSC, and TRON, then
   proves replayed source-adapter deployment receipt drift and shape-valid
   route-canary evidence drift both keep the route allowlist closed at the
   canonical lane-evidence join. The Python all-lanes evidence regression now also
@@ -26456,8 +26462,9 @@ operator-provided rollout bundles.
   generation and wallet/liteserver packaging. Because SCCP launch support
   excludes retired runtime-network families for now, the SDKs ship no builders,
   prover facades, or retired codec runtime-call submission helpers for them.
-  Torii and the SDK release checks now keep the production SCCP surface limited
-  to ETH, BSC, Solana, TON, and TRON explicitly.
+  The surrounding Solana/TON SDK notes are retained pre-release history and do
+  not describe exported SCCP V1 APIs. Torii and the SDK release checks keep the
+  production SCCP surface limited to ETH, BSC, and TRON explicitly.
   The package root also re-exports the SCCP source-adapter OpenVerify circuit id, FastPQ
   parameter-set id, and verifier VK hash helper used by portal evidence
   checks, keeping declared TypeScript imports runtime-available.
@@ -27501,11 +27508,12 @@ operator-provided rollout bundles.
 - Keep live-network signing inputs runtime-only and continue using generated
   per-validator deployment bundles rather than hand-edited production configs.
 
-**Next checkpoints:** continue replacing remaining SCCP source-chain verifier
-placeholders behind the typed adapter variants so ETH/BSC/Solana/TON/TRON
-consensus/finality and receipt/message inclusion are checked against external
-chain rules. Rust SCCP adversarial coverage now starts from production-ready
-source-verifier material for every active launch lane and replays each built-in
+**Next checkpoints:** obtain independently audited deployment and source-chain
+evidence for Ethereum, BSC, and TRON, then complete bidirectional live canaries
+against the exact governed hashes. Solana/TON verifier work in the pre-release
+history below is not SCCP V1 work. Rust SCCP adversarial coverage now starts
+from production-ready source-verifier material for every active launch lane and
+replays each built-in
 placeholder role field one at a time, proving the placeholder detector itself
 classifies required source-state, source-bridge emitter, and source-bridge
 config sentinel replays into otherwise deployment-bound material before the
@@ -27519,7 +27527,7 @@ trust-anchor, consensus, message-inclusion, finality-policy, source-state,
 source-bridge emitter, or source-bridge config sentinels remains fail-closed
 even when verifier evidence and adapter OpenVerify are rebuilt around the
 forged descriptor. The descriptor-only replay regression now also runs across
-ETH, BSC, Solana, TON, and TRON, proving standalone shape,
+ETH, BSC, and TRON, proving standalone shape,
 material/deployment matching, and readiness all reject template role replay for
 every active launch lane. That regression now also mutates built-in placeholder
 IDs and hashes in the standalone deployment descriptor itself, proving shape,
@@ -27537,7 +27545,7 @@ role hashes remain valid.
 That rejection now scans every active launch lane's profile-template component
 hashes, including Solana and TON full-light-client audit descriptor fields, so a
 foreign lane template hash cannot be repackaged as governed audit material.
-Python ETH, BSC, Solana, TON, and TRON source-material evidence scripts now use
+Python ETH, BSC, and TRON source-material evidence scripts now use
 a shared active-template denylist and mirror that rule before source-material,
 source-adapter deployment, or Solana/TON audit hashes are rendered, so generated
 operator evidence fails closed on cross-role or cross-lane template hash replay
@@ -27581,11 +27589,11 @@ OpenVerify rebuild regressions now distinguish malformed evidence that is
 rejected before a rebuildable FastPQ statement from evidence that rebuilds and is
 then rejected by the verifier-commitment helper. The detailed
 readiness regression now also pins the exact external source-verifier blocker
-for ETH, BSC, Solana, TON, and TRON so the remaining governed deployment work
+for ETH, BSC, and TRON so the remaining governed deployment work
 cannot be collapsed into a generic source-adapter failure or silently omitted
 from a launch lane while default placeholder material keeps readiness closed.
 Generated readiness Markdown now also carries those exact lane blockers in the
-Required Release Evidence section for ETH, BSC, Solana, TON, and TRON; strict
+Required Release Evidence section for ETH, BSC, and TRON; strict
 bundle verification treats replacing a lane-specific blocker with generic
 source-verifier wording as Markdown drift. Strict Required Release Evidence
 verification now also pins the sentence that offline placeholder or

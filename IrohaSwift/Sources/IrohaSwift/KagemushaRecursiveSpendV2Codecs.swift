@@ -344,11 +344,10 @@ public enum KagemushaRecursiveSpendCodecs {
             field: "topUpAnchor"
         ))
         writer.writeField(try nestedPayload(
-            request.recordBundle,
-            schema: KagemushaRecursiveSpend.verifiedFoldRecordBundleWireName,
-            field: "recordBundle"
+            request.topUpFinalityProof.noritoArchive,
+            schema: KagemushaRecursiveSpend.topUpFinalityProofWireName,
+            field: "topUpFinalityProof"
         ))
-        writer.writeField(bytes(request.pallasOpenEnvelopesArchive))
         writer.writeField(uint32(request.lineageMode.rawValue))
         writer.writeField(option(request.lineageArtifact.map(artifactReference)))
         return frame(KagemushaRecursiveSpend.initRequestWireName, payload: writer.data)
@@ -366,13 +365,9 @@ public enum KagemushaRecursiveSpendCodecs {
             KagemushaRecursiveSpend.topUpAnchorWireName,
             payload: try reader.field()
         )
-        let recordBundle = frame(
-            KagemushaRecursiveSpend.verifiedFoldRecordBundleWireName,
+        let finalityProof = frame(
+            KagemushaRecursiveSpend.topUpFinalityProofWireName,
             payload: try reader.field()
-        )
-        let pallasOpenEnvelopesArchive = try decodeBytes(
-            reader.field(),
-            field: "pallasOpenEnvelopesArchive"
         )
         let mode = try decodeLineageMode(reader.field())
         let artifact = try decodeOption(reader.field(), field: "lineageArtifact")
@@ -380,8 +375,9 @@ public enum KagemushaRecursiveSpendCodecs {
         try reader.finish("initRequest")
         let request = try KagemushaRecursiveSpendInitRequest(
             topUpAnchor: decodeTopUpAnchor(anchorArchive),
-            recordBundle: recordBundle,
-            pallasOpenEnvelopesArchive: pallasOpenEnvelopesArchive,
+            topUpFinalityProof: KagemushaTopUpFinalityProofArchive(
+                noritoArchive: finalityProof
+            ),
             lineageMode: mode,
             lineageArtifact: artifact
         )
@@ -398,12 +394,7 @@ public enum KagemushaRecursiveSpendCodecs {
         writer.writeField(try assetID(request.assetID))
         writer.writeField(try scaledAmount(request.amount))
         writer.writeField(try note(request.currentNote))
-        writer.writeField(try nestedPayload(
-            request.recordBundle,
-            schema: KagemushaRecursiveSpend.verifiedFoldRecordBundleWireName,
-            field: "recordBundle"
-        ))
-        writer.writeField(bytes(request.pallasOpenEnvelopesArchive))
+        writer.writeField(try topUpShieldEvidence(request.shieldEvidence))
         writer.writeField(string(request.artifactGeneration))
         writer.writeField(request.operationID)
         return frame(KagemushaRecursiveSpend.topUpUnsignedWireName, payload: writer.data)
@@ -416,12 +407,7 @@ public enum KagemushaRecursiveSpendCodecs {
         writer.writeField(try assetID(request.assetID))
         writer.writeField(try scaledAmount(request.amount))
         writer.writeField(try note(request.currentNote))
-        writer.writeField(try nestedPayload(
-            request.recordBundle,
-            schema: KagemushaRecursiveSpend.verifiedFoldRecordBundleWireName,
-            field: "recordBundle"
-        ))
-        writer.writeField(bytes(request.pallasOpenEnvelopesArchive))
+        writer.writeField(try topUpShieldEvidence(request.shieldEvidence))
         writer.writeField(string(request.artifactGeneration))
         writer.writeField(request.operationID)
         writer.writeField(try nestedPayload(
@@ -444,11 +430,11 @@ public enum KagemushaRecursiveSpendCodecs {
         writer.writeField(try scaledAmount(anchor.amount))
         writer.writeField(anchor.initialRoot)
         writer.writeField(anchor.finalizedRoot)
-        writer.writeField(try sequence(anchor.topUpAnchorNullifiers.map(constVec)))
+        writer.writeField(uint32(anchor.shieldLeafIndex))
         writer.writeField(try note(anchor.currentNote))
         writer.writeField(anchor.topUpOperationID)
-        writer.writeField(try verifierKeyID(anchor.transferVerifierID))
-        writer.writeField(anchor.transferVerifierCommitment)
+        writer.writeField(try verifierKeyID(anchor.shieldVerifierID))
+        writer.writeField(anchor.shieldVerifierCommitment)
         writer.writeField(string(anchor.artifactGeneration))
         writer.writeField(uint64(anchor.finalizedHeight))
         writer.writeField(anchor.finalizedTransactionHash)
@@ -472,12 +458,12 @@ public enum KagemushaRecursiveSpendCodecs {
         let amount = try decodeScaledAmount(reader.field())
         let initialRoot = try packedFixed(reader.field(), count: 32, field: "initialRoot")
         let finalizedRoot = try packedFixed(reader.field(), count: 32, field: "finalizedRoot")
-        let anchors = try decodeFixed32Vector(reader.field(), field: "topUpAnchorNullifiers")
+        let shieldLeafIndex = try scalarUInt32(reader.field(), field: "shieldLeafIndex")
         let currentNote = try decodeNote(reader.field())
         let operationID = try packedFixed(reader.field(), count: 32, field: "topUpOperationID")
         let verifierID = try decodeVerifierKeyID(reader.field())
         let verifierCommitment = try packedFixed(
-            reader.field(), count: 32, field: "transferVerifierCommitment"
+            reader.field(), count: 32, field: "shieldVerifierCommitment"
         )
         let generation = try decodeString(reader.field(), field: "artifactGeneration")
         let height = try scalarUInt64(reader.field(), field: "finalizedHeight")
@@ -495,11 +481,11 @@ public enum KagemushaRecursiveSpendCodecs {
             amount: amount,
             initialRoot: initialRoot,
             finalizedRoot: finalizedRoot,
-            topUpAnchorNullifiers: anchors,
+            shieldLeafIndex: shieldLeafIndex,
             currentNote: currentNote,
             topUpOperationID: operationID,
-            transferVerifierID: verifierID,
-            transferVerifierCommitment: verifierCommitment,
+            shieldVerifierID: verifierID,
+            shieldVerifierCommitment: verifierCommitment,
             artifactGeneration: generation,
             finalizedHeight: height,
             finalizedTransactionHash: transactionHash,
@@ -1558,6 +1544,41 @@ public enum KagemushaRecursiveSpendCodecs {
             noteCommitment: commitment,
             spendNullifier: nullifier,
             amount: amount
+        )
+    }
+
+    private static func topUpShieldEvidence(
+        _ value: KagemushaTopUpShieldEvidence
+    ) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(value.initialRoot)
+        writer.writeField(value.finalizedRoot)
+        writer.writeField(uint32(value.leafIndex))
+        writer.writeField(try nestedPayload(
+            value.proofAttachment,
+            schema: KagemushaRecursiveSpend.proofAttachmentWireName,
+            field: "shieldEvidence.proofAttachment"
+        ))
+        return writer.data
+    }
+
+    private static func decodeTopUpShieldEvidence(
+        _ data: Data
+    ) throws -> KagemushaTopUpShieldEvidence {
+        var reader = KagemushaV2Reader(data)
+        let initialRoot = try packedFixed(reader.field(), count: 32, field: "initialRoot")
+        let finalizedRoot = try packedFixed(reader.field(), count: 32, field: "finalizedRoot")
+        let leafIndex = try scalarUInt32(reader.field(), field: "leafIndex")
+        let proofAttachment = frame(
+            KagemushaRecursiveSpend.proofAttachmentWireName,
+            payload: try reader.field()
+        )
+        try reader.finish("shieldEvidence")
+        return try KagemushaTopUpShieldEvidence(
+            initialRoot: initialRoot,
+            finalizedRoot: finalizedRoot,
+            leafIndex: leafIndex,
+            proofAttachment: proofAttachment
         )
     }
 

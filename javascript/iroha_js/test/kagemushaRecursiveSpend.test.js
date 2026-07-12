@@ -8,7 +8,7 @@ import { AccountAddress } from "../src/address.js";
 import {
   KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
   KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
-  KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
+  KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2,
   KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT,
   KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT,
@@ -103,7 +103,6 @@ import {
   kagemushaRecursiveSpendVerifyTyped,
   normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId,
   preferredKagemushaOfflineSpendMode,
-  preferredKagemushaOfflineSpendModeForCapabilities,
   preferredKagemushaRecursiveSpendAppendOutputProofCircuitId,
   requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput,
   requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit,
@@ -155,7 +154,7 @@ function kagemushaRequestCodecError(kind, field, messagePattern) {
 function completeRecursiveSpendBinding(overrides = {}) {
   return {
     connectNoritoBridgeAbiVersion() {
-      return KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+      return KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
     },
     kagemushaRecursiveSpendInit(request) {
       rejectMalformedProbe("init", request);
@@ -2002,8 +2001,9 @@ test("Kagemusha recursive spend shared ABI-6 fixture matches SDK surface", () =>
   );
   assert.equal(
     manifest.native_bridge_abi_version,
-    KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+    6,
   );
+  assert.equal(KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION, 18);
   assert.equal(manifest.operation_count, 9);
   assert.equal(manifest.operations.length, manifest.operation_count);
   assert.deepEqual(
@@ -4808,7 +4808,7 @@ test("confidential v2 derivation helpers reject padded chain and asset IDs befor
   assert.deepEqual(calls, []);
 });
 
-test("Kagemusha offline spend mode prefers recursive compact when ABI-7 support is complete", () => {
+test("Kagemusha offline spend mode exposes only recursive spend V2", () => {
   const completeBinding = completeRecursiveSpendBinding();
 
   assert.equal(
@@ -4843,40 +4843,21 @@ test("Kagemusha offline spend mode prefers recursive compact when ABI-7 support 
   );
   assert.equal(isKagemushaRecursiveCompactUnavailable(null), false);
   assert.equal(
-    preferredKagemushaOfflineSpendModeForCapabilities(true, true),
-    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
+    preferredKagemushaOfflineSpendMode(true),
+    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2,
   );
-  assert.equal(
-    preferredKagemushaOfflineSpendModeForCapabilities(true, false),
-    null,
-  );
-  assert.equal(
-    preferredKagemushaOfflineSpendModeForCapabilities(false, true),
-    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
-  );
-  assert.equal(
-    preferredKagemushaOfflineSpendModeForCapabilities(false, false),
-    null,
-  );
-  assert.equal(
-    preferredKagemushaOfflineSpendMode(false, true),
-    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
-  );
-  assert.equal(
-    preferredKagemushaOfflineSpendMode(false, false),
-    null,
-  );
-  assert.equal(isKagemushaSpendAgainMode("recursive_spend_v1"), true);
-  assert.equal(isKagemushaSpendAgainMode("recursive_spend_v2"), false);
+  assert.equal(preferredKagemushaOfflineSpendMode(false), null);
+  assert.equal(isKagemushaSpendAgainMode("recursive_spend_v2"), true);
+  assert.equal(isKagemushaSpendAgainMode("recursive_spend_v1"), false);
   assert.equal(isKagemushaSpendAgainMode("recursive_compact_v1"), false);
   assert.throws(
-    () => preferredKagemushaOfflineSpendMode(true),
-    /requires either zero arguments or both recursiveCompactAvailable and recursiveSpendAvailable/u,
+    () => preferredKagemushaOfflineSpendMode(false, true),
+    /requires zero arguments or one boolean pastaCycleV3BackendAvailable argument/u,
   );
   withNativeBinding(completeBinding, () => {
     assert.equal(
       preferredKagemushaOfflineSpendMode(),
-      KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
+      KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2,
     );
     assert.equal(isKagemushaRecursiveCompactPaymentTokenNativeAvailable(), false);
     assert.equal(
@@ -4908,7 +4889,7 @@ test("Kagemusha offline spend mode prefers recursive compact when ABI-7 support 
       );
       assert.equal(
         preferredKagemushaOfflineSpendMode(),
-        KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
+        KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2,
       );
       assert.throws(
         () =>
@@ -5073,7 +5054,7 @@ test("Kagemusha offline spend mode prefers recursive compact when ABI-7 support 
       );
       assert.equal(
         preferredKagemushaOfflineSpendMode(),
-        KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
+        KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2,
       );
       assert.deepEqual(
         kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
@@ -5469,7 +5450,7 @@ test("Kagemusha record-backed JS builders probe availability and validate native
   const pallasOpenEnvelopes = kagemushaInputArchive(0xdb);
   const binding = {
     connectNoritoBridgeAbiVersion() {
-      return 6;
+      return KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
     },
     kagemushaProveVerifiedCompactPaymentTokenWithRecords(record) {
       rejectMalformedProbe("compact-token", record);
@@ -5512,7 +5493,7 @@ test("Kagemusha record-backed JS builders probe availability and validate native
       assert.equal(isKagemushaRecursiveAggregationProofBundleNativeAvailable(), false);
       assert.throws(
         () => kagemushaProveVerifiedCompactPaymentTokenWithRecords(recordBundle),
-        /Kagemusha compact payment-token prover requires native bridge ABI 6/,
+        /Kagemusha compact payment-token prover requires native bridge ABI 18/,
       );
       assert.throws(
         () =>
@@ -5520,7 +5501,7 @@ test("Kagemusha record-backed JS builders probe availability and validate native
             recordBundle,
             pallasOpenEnvelopes,
           ),
-        /Kagemusha recursive aggregation proof-bundle prover requires native bridge ABI 6/,
+        /Kagemusha recursive aggregation proof-bundle prover requires native bridge ABI 18/,
       );
     },
   );
@@ -5660,7 +5641,7 @@ test("Kagemusha Pallas open-envelope JS builders probe availability and validate
 });
 
 test("Kagemusha recursive spend exports stable proof circuit ids", () => {
-  assert.equal(KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION, 6);
+  assert.equal(KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION, 18);
   assert.equal(KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION, 15);
   assert.equal(
     KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME,
@@ -6849,7 +6830,7 @@ test("Kagemusha recursive spend helpers probe native availability and return Buf
   const redeemRequest = kagemushaInputArchive(0x6c);
   const binding = {
     connectNoritoBridgeAbiVersion() {
-      return 6;
+      return KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
     },
     kagemushaRecursiveSpendInit(request) {
       rejectMalformedProbe("init", request);
@@ -6972,7 +6953,7 @@ test("Kagemusha recursive spend top-up availability requires ABI 15 and native s
       },
     }),
     () => {
-      assert.equal(isKagemushaRecursiveSpendNativeAvailable(), true);
+      assert.equal(isKagemushaRecursiveSpendNativeAvailable(), false);
       assert.equal(isKagemushaRecursiveSpendTopUpNativeAvailable(), false);
       assert.throws(
         () => kagemushaRecursiveSpendTopUp(request),
@@ -6988,7 +6969,7 @@ test("Kagemusha recursive spend top-up availability requires ABI 15 and native s
   });
   delete missingSymbol.kagemushaRecursiveSpendTopUp;
   withNativeBinding(missingSymbol, () => {
-    assert.equal(isKagemushaRecursiveSpendNativeAvailable(), true);
+    assert.equal(isKagemushaRecursiveSpendNativeAvailable(), false);
     assert.equal(isKagemushaRecursiveSpendTopUpNativeAvailable(), false);
     assert.throws(
       () => kagemushaRecursiveSpendTopUp(request),
@@ -7008,7 +6989,7 @@ test("Kagemusha recursive spend top-up availability requires ABI 15 and native s
       },
     }),
     () => {
-      assert.equal(isKagemushaRecursiveSpendNativeAvailable(), true);
+      assert.equal(isKagemushaRecursiveSpendNativeAvailable(), false);
       assert.equal(isKagemushaRecursiveSpendTopUpNativeAvailable(), true);
       assert.deepEqual(kagemushaRecursiveSpendTopUp(request), transferArchive);
     },
@@ -7071,10 +7052,10 @@ test("Kagemusha recursive spend lineage helpers pass owned archive copies to nat
   ]);
 });
 
-test("Kagemusha recursive spend availability requires native bridge ABI 6", () => {
+test("Kagemusha recursive spend availability requires exact native bridge ABI 18", () => {
   const binding = {
     connectNoritoBridgeAbiVersion() {
-      return 5;
+      return 17;
     },
     kagemushaRecursiveSpendInit() {
       throw new Error("Kagemusha probe rejected");
@@ -7106,10 +7087,11 @@ test("Kagemusha recursive spend availability requires native bridge ABI 6", () =
   });
 
   for (const abiVersion of [
-    "6",
+    "18",
+    19,
     true,
     -1,
-    6.5,
+    18.5,
     Number.NaN,
     Number.POSITIVE_INFINITY,
     Number.MAX_SAFE_INTEGER + 1,
@@ -7188,7 +7170,7 @@ test("Kagemusha recursive spend availability rejects permissive native probes", 
   }
 });
 
-test("Kagemusha recursive spend availability rejects every partial ABI-6 surface", () => {
+test("Kagemusha recursive spend availability rejects every partial ABI-18 surface", () => {
   const requiredMethods = [
     "kagemushaRecursiveSpendInit",
     "kagemushaRecursiveSpendAppend",
@@ -7223,7 +7205,7 @@ test("Kagemusha recursive spend availability rejects every partial ABI-6 surface
 test("Kagemusha recursive spend helpers reject empty native outputs", () => {
   const binding = {
     connectNoritoBridgeAbiVersion() {
-      return 6;
+      return KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
     },
     kagemushaRecursiveSpendInit(request) {
       rejectMalformedProbe("init", request);
@@ -7392,7 +7374,7 @@ test("Kagemusha recursive spend helpers reject empty-payload Norito native outpu
 test("Kagemusha recursive spend helpers reject missing native outputs", () => {
   const binding = {
     connectNoritoBridgeAbiVersion() {
-      return 6;
+      return KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
     },
     kagemushaRecursiveSpendInit(request) {
       rejectMalformedProbe("init", request);
@@ -7484,7 +7466,7 @@ test("Kagemusha recursive spend helpers reject missing native outputs", () => {
 test("Kagemusha recursive spend helpers reject native text outputs", () => {
   const binding = {
     connectNoritoBridgeAbiVersion() {
-      return 6;
+      return KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
     },
     kagemushaRecursiveSpendInit(request) {
       rejectMalformedProbe("init", request);

@@ -178,6 +178,10 @@ class SccpRegistryLimits:
 class SccpResourceLimits:
     """Consensus-critical SCCP proof and deterministic verifier-work limits."""
 
+    max_outbound_messages_per_block: int
+    max_outbound_message_payload_bytes: int
+    max_pending_outbound_messages: int
+    max_pending_outbound_payload_bytes: int
     max_proofs_per_transaction: int
     max_proofs_per_block: int
     max_proof_bytes_per_proof: int
@@ -224,10 +228,19 @@ class SccpRegistry:
 
 
 @dataclass(frozen=True)
+class SccpRecentCursor:
+    """Exact compound continuation for newest-first SCCP discovery."""
+
+    from_height: int
+    after_index: int
+
+
+@dataclass(frozen=True)
 class SccpRecentMessages:
     """Newest-first SCCP message discovery page."""
 
     items: Tuple[Mapping[str, Any], ...]
+    next: Optional[SccpRecentCursor]
 
 
 @dataclass(frozen=True)
@@ -859,6 +872,7 @@ def _normalize_registry_limits(value: Any) -> SccpRegistryLimits:
 def _normalize_resource_limits(value: Any) -> SccpResourceLimits:
     count_fields = frozenset(
         {
+            "max_outbound_messages_per_block",
             "max_proofs_per_transaction",
             "max_proofs_per_block",
             "max_native_headers_per_transaction",
@@ -877,6 +891,7 @@ def _normalize_resource_limits(value: Any) -> SccpResourceLimits:
     )
     byte_fields = frozenset(
         {
+            "max_outbound_message_payload_bytes",
             "max_proof_bytes_per_proof",
             "max_proof_bytes_per_transaction",
             "max_proof_bytes_per_block",
@@ -884,7 +899,13 @@ def _normalize_resource_limits(value: Any) -> SccpResourceLimits:
             "max_native_header_bytes_per_block",
         }
     )
-    fields = count_fields | byte_fields
+    json_safe_fields = frozenset(
+        {
+            "max_pending_outbound_messages",
+            "max_pending_outbound_payload_bytes",
+        }
+    )
+    fields = count_fields | byte_fields | json_safe_fields
     record = _exact_fields(value, fields, "SCCP resource limits")
     parsed = {
         field: _integer(
@@ -896,6 +917,13 @@ def _normalize_resource_limits(value: Any) -> SccpResourceLimits:
         for field in fields
     }
     limits = SccpResourceLimits(**parsed)
+    if (
+        limits.max_outbound_messages_per_block != 512
+        or limits.max_outbound_message_payload_bytes != 4_096
+    ):
+        raise ValueError(
+            "SCCP fixed outbound message limits must equal 512 messages and 4,096 payload bytes"
+        )
     if limits.max_proof_bytes_per_proof > limits.max_proof_bytes_per_transaction:
         raise ValueError("SCCP per-proof byte limit exceeds its transaction limit")
     ordered_pairs = (
@@ -1559,11 +1587,18 @@ def _payload_projection(value: Any, expected_domain: int, label: str) -> Any:
 def normalize_sccp_recent_messages(value: Any) -> SccpRecentMessages:
     """Normalize newest-first discovery with only bundle and proof-request links."""
 
-    root = _exact_fields(value, frozenset({"items"}), "SCCP recent messages")
+    root = _exact_fields(
+        value,
+        frozenset({"items", "next"}),
+        "SCCP recent messages",
+        frozenset({"items"}),
+    )
     items = []
+    message_ids = set()
     allowed = frozenset(
         {
             "height",
+            "commitment_index",
             "message_id_hex",
             "kind",
             "source_profile",
@@ -1582,6 +1617,7 @@ def normalize_sccp_recent_messages(value: Any) -> SccpRecentMessages:
     required = frozenset(
         {
             "height",
+            "commitment_index",
             "message_id_hex",
             "kind",
             "source_profile",
@@ -1605,6 +1641,9 @@ def normalize_sccp_recent_messages(value: Any) -> SccpRecentMessages:
         if source[0] != "sora-taira" or target[3] or record["kind"] != "transfer":
             raise ValueError(f"{label} must describe a Taira-origin external transfer")
         message_id = _lower_hex(record["message_id_hex"], f"{label}.message_id_hex", 32)
+        if message_id in message_ids:
+            raise ValueError("SCCP recent messages contain duplicate message ids")
+        message_ids.add(message_id)
         links = _exact_fields(
             record["links"], frozenset({"bundle_path", "proof_request_path"}), f"{label}.links"
         )
@@ -1660,7 +1699,10 @@ def normalize_sccp_recent_messages(value: Any) -> SccpRecentMessages:
         items.append(
             _deep_freeze(
                 {
-                    "height": _integer(record["height"], f"{label}.height", 1),
+                    "height": _integer(record["height"], f"{label}.height", 1, _MAX_U64),
+                    "commitment_index": _integer(
+                        record["commitment_index"], f"{label}.commitment_index", 0, 511
+                    ),
                     "message_id_hex": message_id,
                     "kind": "transfer",
                     "source_profile": source[0],
@@ -1680,11 +1722,44 @@ def normalize_sccp_recent_messages(value: Any) -> SccpRecentMessages:
                 }
             )
         )
-    if any(items[index - 1]["height"] < items[index]["height"] for index in range(1, len(items))):
-        raise ValueError("SCCP recent messages must be newest-first")
-    if len({item["message_id_hex"] for item in items}) != len(items):
-        raise ValueError("SCCP recent messages contain duplicate message ids")
-    return SccpRecentMessages(tuple(items))
+    for index in range(1, len(items)):
+        previous = items[index - 1]
+        current = items[index]
+        if current["height"] > previous["height"]:
+            raise ValueError("SCCP recent messages must be newest-first")
+        if current["height"] == previous["height"]:
+            if current["commitment_index"] != previous["commitment_index"] + 1:
+                raise ValueError(
+                    "same-height SCCP recent messages must have contiguous ascending commitment indices"
+                )
+        elif current["commitment_index"] != 0:
+            raise ValueError("an older SCCP block must begin at commitment index zero")
+    cursor = None
+    if "next" in root:
+        next_record = _exact_fields(
+            root["next"],
+            frozenset({"from", "after_index"}),
+            "SCCP recent messages.next",
+        )
+        cursor = SccpRecentCursor(
+            from_height=_integer(
+                next_record["from"], "SCCP recent messages.next.from", 1, _MAX_U64
+            ),
+            after_index=_integer(
+                next_record["after_index"],
+                "SCCP recent messages.next.after_index",
+                0,
+                511,
+            ),
+        )
+        if not items:
+            raise ValueError("an empty SCCP recent page must not advertise a continuation")
+        if (
+            cursor.from_height != items[-1]["height"]
+            or cursor.after_index != items[-1]["commitment_index"]
+        ):
+            raise ValueError("SCCP recent continuation must identify the last returned item")
+    return SccpRecentMessages(tuple(items), cursor)
 
 
 def _validate_codec_value(
@@ -2220,6 +2295,7 @@ __all__ = [
     "SccpCapabilities",
     "SccpRegistry",
     "SccpRecentMessages",
+    "SccpRecentCursor",
     "SccpBridgeSubmitResponse",
     "normalize_sccp_codec_value",
     "sccp_source_event_digest",

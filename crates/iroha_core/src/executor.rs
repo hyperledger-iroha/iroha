@@ -6701,30 +6701,42 @@ pub(crate) fn enforce_named_contract_entrypoint_permission(
         return Ok(());
     };
     const SCOPED_PERMISSION_NAME: &str = "CanInvokeContractEntrypoint";
-    if permission_name != SCOPED_PERMISSION_NAME {
-        return Err(ValidationFail::NotPermitted(format!(
-            "contract entrypoint `{entrypoint}` declares unsupported permission marker `{permission_name}`; expected `{SCOPED_PERMISSION_NAME}`"
-        )));
-    }
-    if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
+    if permission_name.is_empty()
+        || permission_name.trim() != permission_name
+        || entrypoint.is_empty()
+        || entrypoint.trim() != entrypoint
+    {
         return Err(ValidationFail::NotPermitted(
-            "contract entrypoint must use a non-empty canonical selector".to_owned(),
+            "contract entrypoint and permission must use non-empty canonical spellings".to_owned(),
         ));
     }
 
-    let target: Permission =
+    let target: Permission = if permission_name == SCOPED_PERMISSION_NAME {
         iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
             contract: contract_address.clone(),
             entrypoint: entrypoint.to_owned(),
         }
-        .into();
+        .into()
+    } else {
+        // The artifact carries only a permission name for custom authorization
+        // classes, so its one canonical token is that name with an empty
+        // payload. Matching by name alone would let a differently scoped token
+        // with the same name authorize this entrypoint.
+        Permission::new(permission_name.to_owned(), Json::new(()))
+    };
     if authority_has_permission(world, authority, &target)? {
         return Ok(());
     }
 
-    Err(ValidationFail::NotPermitted(format!(
-        "contract entrypoint `{entrypoint}` on `{contract_address}` requires an exact `{SCOPED_PERMISSION_NAME}` grant"
-    )))
+    if permission_name == SCOPED_PERMISSION_NAME {
+        Err(ValidationFail::NotPermitted(format!(
+            "contract entrypoint `{entrypoint}` on `{contract_address}` requires an exact `{SCOPED_PERMISSION_NAME}` grant"
+        )))
+    } else {
+        Err(ValidationFail::NotPermitted(format!(
+            "contract entrypoint `{entrypoint}` requires permission `{permission_name}` with the canonical empty payload"
+        )))
+    }
 }
 
 fn enforce_transaction_contract_permission_before_proof_verification<R>(
@@ -10310,14 +10322,14 @@ mod tests {
             amount,
             initial_root: [0x44; 32],
             finalized_root: [0x45; 32],
-            topup_anchor_nullifiers: vec![[0x46; 32]],
+            shield_leaf_index: 0,
             current_note: note.clone(),
             topup_operation_id,
-            transfer_verifier_id: VerifyingKeyId::new(
+            shield_verifier_id: VerifyingKeyId::new(
                 "halo2/ipa",
-                "fee-policy-confidential-transfer-v2",
+                "fee-policy-kagemusha-topup-shield-v2",
             ),
-            transfer_verifier_commitment: [0x53; 32],
+            shield_verifier_commitment: [0x53; 32],
             artifact_generation: artifact_generation.to_owned(),
             finalized_height: 1,
             finalized_tx_hash: [0x54; 32],
@@ -13294,7 +13306,7 @@ seiyaku IdentityRequired {
         );
         metadata.insert(
             "contract_payload".parse().expect("payload key"),
-            Json::from(norito::json!({ "value": 7 })),
+            Json::from(norito::json!({ "value": "7" })),
         );
         let bytecode = IvmBytecode::from_compiled(program);
         let raw = TransactionBuilder::new(chain_id.clone(), authority.clone())
@@ -13679,7 +13691,7 @@ seiyaku IdentityRequired {
     #[test]
     fn trigger_dispatch_rejects_static_payload_and_implicit_entrypoint() {
         let contract = prepared_parameterized_trigger_contract();
-        let event_args = Json::from(norito::json!({"val": 7}));
+        let event_args = Json::from(norito::json!({"val": "7"}));
 
         let err = parse_prepared_trigger_call_execution_context(
             &Metadata::default(),
@@ -13701,7 +13713,7 @@ seiyaku IdentityRequired {
         );
         metadata.insert(
             Name::from_str("contract_payload").expect("static name"),
-            Json::from(norito::json!({"val": 99})),
+            Json::from(norito::json!({"val": "99"})),
         );
         let err = parse_prepared_trigger_call_execution_context(
             &metadata,
@@ -13760,12 +13772,12 @@ seiyaku IdentityRequired {
         let role_context = contract_permission_context(contract_address.clone(), "role_admin");
         let role_id: RoleId = "contract_admin_role".parse().expect("role id");
         let role: iroha_data_model::role::NewRole = Role::new(role_id.clone(), authority.clone())
-            .add_permission(
+            .add_permission(Permission::from(
             iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
                 contract: contract_address.clone(),
                 entrypoint: "role_admin".to_owned(),
             },
-        );
+        ));
         Register::role(role)
             .execute(&authority, &mut tx)
             .expect("register contract role");
@@ -13795,9 +13807,44 @@ seiyaku IdentityRequired {
         )
         .execute(&authority, &mut tx)
         .expect("store malformed name-only compatibility fixture");
-        let malformed_only = contract_permission_context(contract_address, "malformed_only");
+        let malformed_only =
+            contract_permission_context(contract_address.clone(), "malformed_only");
         enforce_contract_entrypoint_permission(&tx.world, &authority, &malformed_only)
             .expect_err("a name-only permission must never bypass exact payload matching");
+
+        let custom_name = "ContractOperations";
+        let noncanonical_custom = Permission::new(
+            custom_name.to_owned(),
+            Json::from(norito::json!({ "scope": "different-contract" })),
+        );
+        Grant::account_permission(noncanonical_custom.clone(), authority.clone())
+            .execute(&authority, &mut tx)
+            .expect("store same-name custom permission with a noncanonical payload");
+        enforce_named_contract_entrypoint_permission(
+            &tx.world,
+            &authority,
+            &contract_address,
+            "custom_admin",
+            Some(custom_name),
+        )
+        .expect_err("a same-name custom payload must not authorize an entrypoint");
+        Revoke::account_permission(noncanonical_custom, authority.clone())
+            .execute(&authority, &mut tx)
+            .expect("remove noncanonical custom permission");
+        Grant::account_permission(
+            Permission::new(custom_name.to_owned(), Json::new(())),
+            authority.clone(),
+        )
+        .execute(&authority, &mut tx)
+        .expect("grant canonical custom entrypoint permission");
+        enforce_named_contract_entrypoint_permission(
+            &tx.world,
+            &authority,
+            &contract_address,
+            "custom_admin",
+            Some(custom_name),
+        )
+        .expect("the exact empty-payload custom permission must authorize its marker");
     }
 
     fn generate_denied_program(message: &str) -> Vec<u8> {

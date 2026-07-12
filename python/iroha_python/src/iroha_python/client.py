@@ -4322,12 +4322,12 @@ _KOTODAMA_RESERVED_IDENTIFIERS = frozenset(
 )
 _KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS = frozenset(
     {
-        "i64",
-        "u128",
+        "int",
+        "decimal",
+        "quantity",
         "bool",
         "string",
         "bytes",
-        "Amount",
         "Json",
         "AccountId",
         "AssetDefinitionId",
@@ -4353,9 +4353,25 @@ _KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS = frozenset(
         "SoracloudRequest",
         "SoracloudResponse",
         "state_map_get",
+        "__kotodama_list_len",
+        "__kotodama_list_get",
+        "__kotodama_list_try_set",
+        "__kotodama_list_try_push",
+        "__kotodama_list_pop",
+        "__kotodama_list_contains",
+        "__kotodama_list_take",
+        "__kotodama_list_enumerate",
+        "__kotodama_decimal_div_round",
+        "__kotodama_quantity_div_round",
+        "__kotodama_quantity_ratio_round",
+        "__kotodama_decimal_to_int_trunc",
+        "__kotodama_decimal_to_int_round",
     }
 )
 _KOTODAMA_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_KOTODAMA_RETIRED_NUMERIC_TYPE_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(?:i64|u128|Amount|num|number|float|money)(?![A-Za-z0-9_])"
+)
 
 
 def _contract_object(value: Any, path: str) -> Mapping[str, Any]:
@@ -4385,6 +4401,13 @@ def _contract_optional_string(value: Any, path: str) -> Optional[str]:
     if value is None:
         return None
     return _contract_required_string(value, path)
+
+
+def _contract_type_name(value: Any, path: str) -> str:
+    type_name = _contract_required_string(value, path)
+    if _KOTODAMA_RETIRED_NUMERIC_TYPE_RE.search(type_name) is not None:
+        raise TypeError(f"{path} contains a retired Kotodama numeric type")
+    return type_name
 
 
 def _contract_string_tuple(value: Any, path: str) -> Tuple[str, ...]:
@@ -4477,10 +4500,10 @@ class EntrypointValueKindV1(str, Enum):
     """Leaf representation used by the exact V1 public boundary schema."""
 
     INT = "Int"
-    U128 = "U128"
+    DECIMAL = "Decimal"
+    QUANTITY = "Quantity"
     BOOL = "Bool"
     STRING = "String"
-    AMOUNT = "Amount"
     JSON = "Json"
     NAME = "Name"
     ACCOUNT_ID = "AccountId"
@@ -4722,11 +4745,11 @@ class EntrypointValueTypeV1:
         """Render the exact canonical Kotodama V1 type name."""
 
         leaf_names = {
-            EntrypointValueKindV1.INT: "i64",
-            EntrypointValueKindV1.U128: "u128",
+            EntrypointValueKindV1.INT: "int",
+            EntrypointValueKindV1.DECIMAL: "decimal",
+            EntrypointValueKindV1.QUANTITY: "quantity",
             EntrypointValueKindV1.BOOL: "bool",
             EntrypointValueKindV1.STRING: "string",
-            EntrypointValueKindV1.AMOUNT: "Amount",
             EntrypointValueKindV1.JSON: "Json",
             EntrypointValueKindV1.NAME: "Name",
             EntrypointValueKindV1.ACCOUNT_ID: "AccountId",
@@ -4740,7 +4763,7 @@ class EntrypointValueTypeV1:
 
         core_views = {
             "AccountView": (["id", "metadata"], ["AccountId", "Json"]),
-            "AssetView": (["id", "amount"], ["AssetId", "Amount"]),
+            "AssetView": (["id", "amount"], ["AssetId", "quantity"]),
             "AssetDefinitionView": (
                 [
                     "id",
@@ -4755,7 +4778,7 @@ class EntrypointValueTypeV1:
                     "string",
                     "Option<string>",
                     "AccountId",
-                    "Amount",
+                    "quantity",
                     "Json",
                 ],
             ),
@@ -4810,7 +4833,7 @@ class EntrypointValueTypeV1:
                         or children[0].get("kind") != "List"
                         or children[0].get("capacity") != 64
                         or children[0].get("list_element_core_view") is None
-                        or children[1]["text"] != "Option<i64>"
+                        or children[1]["text"] != "Option<int>"
                     ):
                         raise ValueError("forged QueryPage schema")
                     result = {
@@ -4905,7 +4928,7 @@ class ContractEntrypointParameter:
         value = _contract_object(payload, "entrypoint parameter")
         return cls(
             name=_contract_required_string(value.get("name"), "entrypoint parameter.name"),
-            type_name=_contract_required_string(
+            type_name=_contract_type_name(
                 value.get("type_name"), "entrypoint parameter.type_name"
             ),
         )
@@ -5030,8 +5053,12 @@ class ContractEntrypointDescriptor:
             ),
             params=params,
             argument_schema=argument_schema,
-            return_type=_contract_optional_string(
-                value.get("return_type"), "entrypoint descriptor.return_type"
+            return_type=(
+                None
+                if value.get("return_type") is None
+                else _contract_type_name(
+                    value.get("return_type"), "entrypoint descriptor.return_type"
+                )
             ),
             return_schema=return_schema,
             permission=_contract_optional_string(
@@ -5137,7 +5164,7 @@ class ContractStateDescriptor:
             raise TypeError("state descriptor.name must be a canonical Kotodama identifier")
         return cls(
             name=name,
-            type_name=_contract_required_string(
+            type_name=_contract_type_name(
                 value.get("type_name"), "state descriptor.type_name"
             ),
         )
@@ -5189,7 +5216,7 @@ class ContractDynamicAccessHint:
             base_key=_contract_required_string(
                 value.get("base_key"), "dynamic access hint.base_key"
             ),
-            key_type=_contract_required_string(
+            key_type=_contract_type_name(
                 value.get("key_type"), "dynamic access hint.key_type"
             ),
             bound_kind=_contract_required_string(

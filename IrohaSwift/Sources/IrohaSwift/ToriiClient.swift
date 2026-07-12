@@ -11448,6 +11448,8 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         "__kotodama_list_try_set", "__kotodama_list_try_push", "__kotodama_list_pop",
         "__kotodama_list_contains", "__kotodama_list_take", "__kotodama_list_enumerate",
         "__kotodama_decimal_div_round", "__kotodama_quantity_div_round",
+        "__kotodama_quantity_ratio_round", "__kotodama_decimal_to_int_trunc",
+        "__kotodama_decimal_to_int_round",
     ]
 
     fileprivate static func isCanonicalIdentifier(_ value: String) -> Bool {
@@ -13988,15 +13990,30 @@ public struct ToriiMultisigSpecResponse: Decodable, Sendable, Equatable {
     }
 }
 
+public enum ToriiMultisigProposalStatus: String, Codable, CaseIterable, Hashable, Sendable {
+    case collectingSignatures = "COLLECTING_SIGNATURES"
+    case finalized = "FINALIZED"
+    case canceled = "CANCELED"
+    case expired = "EXPIRED"
+}
+
 public struct ToriiMultisigProposalEntry: Decodable, Sendable, Equatable {
     public let proposalId: String
     public let instructionsHash: String
+    public let operationType: String
+    public let intent: ToriiJSONValue?
     public let proposal: ToriiJSONValue
+    public let status: ToriiMultisigProposalStatus
+    public let terminalAtMs: UInt64?
 
     private enum CodingKeys: String, CodingKey {
         case proposalId = "proposal_id"
         case instructionsHash = "instructions_hash"
+        case operationType = "operation_type"
+        case intent
         case proposal
+        case status
+        case terminalAtMs = "terminal_at_ms"
     }
 
     public init(from decoder: Decoder) throws {
@@ -14008,37 +14025,72 @@ public struct ToriiMultisigProposalEntry: Decodable, Sendable, Equatable {
             field: "instructions_hash",
             codingPath: container.codingPath + [CodingKeys.instructionsHash]
         )
+        operationType = try container.decode(String.self, forKey: .operationType)
+        intent = try container.decodeIfPresent(ToriiJSONValue.self, forKey: .intent)
         proposal = try container.decode(ToriiJSONValue.self, forKey: .proposal)
+        status = try container.decode(ToriiMultisigProposalStatus.self, forKey: .status)
+        terminalAtMs = try container.decodeIfPresent(UInt64.self, forKey: .terminalAtMs)
     }
 }
 
 public struct ToriiMultisigProposalsListRequest: Encodable, Sendable {
     public var selector: ToriiMultisigAccountSelector
+    public var status: [ToriiMultisigProposalStatus]
+    public var cursor: String?
+    public var limit: UInt64?
 
-    public init(selector: ToriiMultisigAccountSelector) {
+    public init(selector: ToriiMultisigAccountSelector,
+                status: [ToriiMultisigProposalStatus] = [],
+                cursor: String? = nil,
+                limit: UInt64? = nil) {
         self.selector = selector
+        self.status = status
+        self.cursor = cursor
+        self.limit = limit
     }
 
     private enum CodingKeys: String, CodingKey {
         case multisigAccountId = "multisig_account_id"
         case multisigAccountAlias = "multisig_account_alias"
+        case status
+        case cursor
+        case limit
     }
 
     public func encode(to encoder: Encoder) throws {
         let normalizedSelector = try selector.normalizedPayload(field: "multisig proposals list selector")
+        guard Set(status).count == status.count else {
+            throw ToriiClientError.invalidPayload("multisig proposal status filters must be unique.")
+        }
+        let normalizedCursor = try ToriiRequestValidation.normalizedOptionalNonEmpty(
+            cursor,
+            field: "cursor"
+        )
+        if let normalizedCursor,
+           normalizedCursor.lengthOfBytes(using: .utf8) > 512 {
+            throw ToriiClientError.invalidPayload("cursor must not exceed 512 UTF-8 bytes.")
+        }
+        if let limit, limit == 0 {
+            throw ToriiClientError.invalidPayload("limit must be greater than zero.")
+        }
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encodeIfPresent(normalizedSelector.multisigAccountId, forKey: .multisigAccountId)
         try container.encodeIfPresent(normalizedSelector.multisigAccountAlias, forKey: .multisigAccountAlias)
+        try container.encode(status, forKey: .status)
+        try container.encodeIfPresent(normalizedCursor, forKey: .cursor)
+        try container.encodeIfPresent(limit, forKey: .limit)
     }
 }
 
 public struct ToriiMultisigProposalsListResponse: Decodable, Sendable, Equatable {
     public let resolvedMultisigAccountId: String
     public let proposals: [ToriiMultisigProposalEntry]
+    public let nextCursor: String?
 
     private enum CodingKeys: String, CodingKey {
         case resolvedMultisigAccountId = "resolved_multisig_account_id"
         case proposals
+        case nextCursor = "next_cursor"
     }
 
     public init(from decoder: Decoder) throws {
@@ -14049,6 +14101,7 @@ public struct ToriiMultisigProposalsListResponse: Decodable, Sendable, Equatable
             debugName: "resolved_multisig_account_id"
         )
         proposals = try container.decode([ToriiMultisigProposalEntry].self, forKey: .proposals)
+        nextCursor = try container.decodeIfPresent(String.self, forKey: .nextCursor)
     }
 }
 
@@ -14096,13 +14149,21 @@ public struct ToriiMultisigProposalGetResponse: Decodable, Sendable, Equatable {
     public let resolvedMultisigAccountId: String
     public let proposalId: String
     public let instructionsHash: String
+    public let operationType: String
+    public let intent: ToriiJSONValue?
     public let proposal: ToriiJSONValue
+    public let status: ToriiMultisigProposalStatus
+    public let terminalAtMs: UInt64?
 
     private enum CodingKeys: String, CodingKey {
         case resolvedMultisigAccountId = "resolved_multisig_account_id"
         case proposalId = "proposal_id"
         case instructionsHash = "instructions_hash"
+        case operationType = "operation_type"
+        case intent
         case proposal
+        case status
+        case terminalAtMs = "terminal_at_ms"
     }
 
     public init(from decoder: Decoder) throws {
@@ -14119,7 +14180,11 @@ public struct ToriiMultisigProposalGetResponse: Decodable, Sendable, Equatable {
             field: "instructions_hash",
             codingPath: container.codingPath + [CodingKeys.instructionsHash]
         )
+        operationType = try container.decode(String.self, forKey: .operationType)
+        intent = try container.decodeIfPresent(ToriiJSONValue.self, forKey: .intent)
         proposal = try container.decode(ToriiJSONValue.self, forKey: .proposal)
+        status = try container.decode(ToriiMultisigProposalStatus.self, forKey: .status)
+        terminalAtMs = try container.decodeIfPresent(UInt64.self, forKey: .terminalAtMs)
     }
 }
 
@@ -21573,6 +21638,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     /// Fetch newest-first committed outbound SCCP messages.
     public func getSccpRecentMessages(
         from: UInt64? = nil,
+        afterIndex: UInt32? = nil,
         limit: UInt32? = nil
     ) async throws -> SccpRecentMessages {
         if from == 0 {
@@ -21581,9 +21647,16 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         if let limit, !(1...50).contains(limit) {
             throw ToriiClientError.invalidPayload("limit must be in 1...50")
         }
+        if afterIndex != nil, from == nil {
+            throw ToriiClientError.invalidPayload("afterIndex requires the paired from height")
+        }
+        if let afterIndex, afterIndex > 511 {
+            throw ToriiClientError.invalidPayload("afterIndex must be in 0...511")
+        }
         var components = URLComponents()
         components.queryItems = [
             from.map { URLQueryItem(name: "from", value: String($0)) },
+            afterIndex.map { URLQueryItem(name: "after_index", value: String($0)) },
             limit.map { URLQueryItem(name: "limit", value: String($0)) },
         ].compactMap { $0 }
         let query = components.percentEncodedQuery.map { "?\($0)" } ?? ""
