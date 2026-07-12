@@ -20181,18 +20181,35 @@ fn viewer_multisig_accounts(
             viewer_account_id,
         )?);
     }
+    let membership_limit = usize::try_from(app_query_limits().max_fetch_size)
+        .map_err(|_| conversion_error("multisig membership limit exceeds usize".to_owned()))?;
+    if multisig_account_ids.len() > membership_limit {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
 
     let mut accounts = Vec::new();
     for multisig_account_id in multisig_account_ids {
         match load_multisig_spec(state, &multisig_account_id) {
             Ok(spec) => accounts.push((multisig_account_id, spec)),
-            Err(err) => {
+            Err(
+                err @ (Error::AppNotFound {
+                    code: "multisig_account_not_found",
+                    ..
+                }
+                | Error::AppConflict {
+                    code: "multisig_account_not_authority",
+                    ..
+                }),
+            ) => {
                 iroha_logger::warn!(
                     ?err,
                     multisig_account_id = %multisig_account_id,
                     "skipping stale multisig signatory index entry"
                 );
             }
+            Err(err) => return Err(err),
         }
     }
     Ok(accounts)
