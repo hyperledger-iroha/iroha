@@ -1,6 +1,6 @@
 import Foundation
 
-public enum Halo2OfflineNoteV2ProverError: Error, Equatable {
+public enum Halo2AttestedOfflineNoteProverError: Error, Equatable {
     case invalidInstanceValues
     case invalidProofSize(Int)
     case invalidQuotientEvaluation
@@ -9,8 +9,8 @@ public enum Halo2OfflineNoteV2ProverError: Error, Equatable {
     case invalidZK1Payload
 }
 
-public enum Halo2OfflineNoteV2Prover {
-    public static let circuitID = OfflineNoteV2Constants.recursiveVerifierName
+public enum Halo2AttestedOfflineNoteProver {
+    public static let circuitID = AttestedOfflineNoteConstants.recursiveVerifierName
     public static let backendTag: UInt32 = 0
     public static let ipaK: UInt32 = 7
     public static let maxEnvelopeBytes = 20 * 1024
@@ -31,7 +31,7 @@ public enum Halo2OfflineNoteV2Prover {
         let params = try Halo2IPAParameters.generated(k: ipaK)
         let domain = try Halo2ExtendedEvaluationDomain(degree: proofDegree, k: ipaK)
         guard let vkRepr = PastaFp.fromCanonicalBytes(canonicalTranscriptRepresentation) else {
-            throw Halo2OfflineNoteV2ProverError.invalidInstanceValues
+            throw Halo2AttestedOfflineNoteProverError.invalidInstanceValues
         }
         var selectorLagrange = [PastaFp](repeating: .zero, count: domain.n)
         selectorLagrange[0] = .one
@@ -47,31 +47,31 @@ public enum Halo2OfflineNoteV2Prover {
         try contextResult.get()
     }
 
-    public static func prove(instanceValues: OfflineNoteV2InstanceValues) throws -> OfflineNoteRecursiveProofV2 {
+    public static func prove(instanceValues: AttestedOfflineNoteInstanceValues) throws -> AttestedOfflineNoteRecursiveProof {
         let proofPayload = try proveZK1Payload(instanceValues: instanceValues)
         let envelope = try openVerifyEnvelope(proofPayload: proofPayload)
         guard envelope.count <= maxEnvelopeBytes else {
-            throw Halo2OfflineNoteV2ProverError.invalidProofSize(envelope.count)
+            throw Halo2AttestedOfflineNoteProverError.invalidProofSize(envelope.count)
         }
-        return try OfflineNoteRecursiveProofV2(
+        return try AttestedOfflineNoteRecursiveProof(
             publicInputsHash: instanceValues.publicInputsHash(),
             proofBytes: envelope
         )
     }
 
-    public static func proveRedeem(_ redemption: OfflineNoteRedeemV2) throws -> OfflineNoteRecursiveProofV2 {
-        try prove(instanceValues: OfflineNoteV2InstanceBuilder.redeemInstanceValues(for: redemption))
+    public static func proveRedeem(_ redemption: AttestedOfflineNoteRedeem) throws -> AttestedOfflineNoteRecursiveProof {
+        try prove(instanceValues: AttestedOfflineNoteInstanceBuilder.redeemInstanceValues(for: redemption))
     }
 
-    public static func proveAudit(_ audit: OfflineNoteAuditBundleV2) throws -> OfflineNoteRecursiveProofV2 {
-        try prove(instanceValues: OfflineNoteV2InstanceBuilder.auditInstanceValues(for: audit))
+    public static func proveAudit(_ audit: AttestedOfflineNoteAuditBundle) throws -> AttestedOfflineNoteRecursiveProof {
+        try prove(instanceValues: AttestedOfflineNoteInstanceBuilder.auditInstanceValues(for: audit))
     }
 
     public static func prewarm() throws {
         _ = try context()
     }
 
-    public static func proveZK1Payload(instanceValues: OfflineNoteV2InstanceValues) throws -> Data {
+    public static func proveZK1Payload(instanceValues: AttestedOfflineNoteInstanceValues) throws -> Data {
         let context = try context()
         let params = context.params
         let domain = context.domain
@@ -79,7 +79,7 @@ public enum Halo2OfflineNoteV2Prover {
         let inputScalars = instanceValues.inputAmounts.map(PastaFp.init)
         let outputScalars = instanceValues.outputAmounts.map(PastaFp.init)
         guard publicScalars.count == 16, inputScalars.count == 4, outputScalars.count == 2 else {
-            throw Halo2OfflineNoteV2ProverError.invalidInstanceValues
+            throw Halo2AttestedOfflineNoteProverError.invalidInstanceValues
         }
 
         var rng = SystemRandomNumberGenerator()
@@ -183,7 +183,7 @@ public enum Halo2OfflineNoteV2Prover {
                 row: 0,
                 y: y
               ) * vanishingInv else {
-            throw Halo2OfflineNoteV2ProverError.invalidQuotientEvaluation
+            throw Halo2AttestedOfflineNoteProverError.invalidQuotientEvaluation
         }
 
         var queries: [Halo2IPAProverQuery] = []
@@ -212,7 +212,7 @@ public enum Halo2OfflineNoteV2Prover {
 
     public static func verifyZK1Payload(_ payload: Data, publicValues: [UInt64]) throws -> Bool {
         guard publicValues.count == 16 else {
-            throw Halo2OfflineNoteV2ProverError.invalidInstanceValues
+            throw Halo2AttestedOfflineNoteProverError.invalidInstanceValues
         }
         let (proofTranscript, encodedPublicValues) = try decodeZK1ProofPayload(payload)
         guard encodedPublicValues == publicValues else {
@@ -331,7 +331,7 @@ public enum Halo2OfflineNoteV2Prover {
         writer.writeField(OfflineCompactNorito.encodeUInt32(backendTag))
         writer.writeField(OfflineCompactNorito.encodeString(circuitID))
         writer.writeField(canonicalVKHash)
-        writer.writeField(OfflineNorito.encodeBytesVec(Data(OfflineNoteV2Constants.recursivePublicInputsSchemaV1.utf8)))
+        writer.writeField(OfflineNorito.encodeBytesVec(Data(AttestedOfflineNoteConstants.recursivePublicInputsSchemaV1.utf8)))
         writer.writeField(OfflineNorito.encodeBytesVec(proofPayload))
         writer.writeField(OfflineNorito.encodeBytesVec(Data()))
         return noritoEncode(
@@ -396,7 +396,7 @@ public enum Halo2OfflineNoteV2Prover {
 
         for (index, constraint) in constraints.enumerated() {
             guard evaluatePolynomial(constraint, at: .one) == .zero else {
-                throw Halo2OfflineNoteV2ProverError.nonVanishingGateConstraint(index: index)
+                throw Halo2AttestedOfflineNoteProverError.nonVanishingGateConstraint(index: index)
             }
         }
         let numerator = constraints.reduce([PastaFp]()) { accumulator, constraint in
@@ -452,7 +452,7 @@ public enum Halo2OfflineNoteV2Prover {
         }
     }
 
-    private static func zk1ProofPayload(proofTranscript: Data, instanceValues: OfflineNoteV2InstanceValues) -> Data {
+    private static func zk1ProofPayload(proofTranscript: Data, instanceValues: AttestedOfflineNoteInstanceValues) -> Data {
         var out = Data([0x5A, 0x4B, 0x31, 0x00])
         appendTLV(tag: "PROF", value: proofTranscript, to: &out)
 
@@ -460,7 +460,7 @@ public enum Halo2OfflineNoteV2Prover {
         appendUInt32LE(16, to: &instances)
         appendUInt32LE(1, to: &instances)
         for value in instanceValues.publicValues {
-            instances.append(OfflineNoteV2InstanceValues.instanceScalarBytes(value))
+            instances.append(AttestedOfflineNoteInstanceValues.instanceScalarBytes(value))
         }
         appendTLV(tag: "I10P", value: instances, to: &out)
         return out
@@ -469,21 +469,21 @@ public enum Halo2OfflineNoteV2Prover {
     private static func decodeZK1ProofPayload(_ payload: Data) throws -> (Data, [UInt64]) {
         let bytes = [UInt8](payload)
         guard bytes.count >= 4, bytes[0] == 0x5A, bytes[1] == 0x4B, bytes[2] == 0x31, bytes[3] == 0x00 else {
-            throw Halo2OfflineNoteV2ProverError.invalidZK1Payload
+            throw Halo2AttestedOfflineNoteProverError.invalidZK1Payload
         }
         var cursor = 4
         var proof: Data?
         var publicValues: [UInt64]?
         while cursor < bytes.count {
             guard cursor + 8 <= bytes.count else {
-                throw Halo2OfflineNoteV2ProverError.invalidZK1Payload
+                throw Halo2AttestedOfflineNoteProverError.invalidZK1Payload
             }
             let tag = String(bytes: bytes[cursor..<(cursor + 4)], encoding: .utf8)
             cursor += 4
             let length = Int(readUInt32LE(bytes, at: cursor))
             cursor += 4
             guard cursor + length <= bytes.count else {
-                throw Halo2OfflineNoteV2ProverError.invalidZK1Payload
+                throw Halo2AttestedOfflineNoteProverError.invalidZK1Payload
             }
             let value = Data(bytes[cursor..<(cursor + length)])
             cursor += length
@@ -494,7 +494,7 @@ public enum Halo2OfflineNoteV2Prover {
             }
         }
         guard let proof, !proof.isEmpty, let publicValues else {
-            throw Halo2OfflineNoteV2ProverError.invalidZK1Payload
+            throw Halo2AttestedOfflineNoteProverError.invalidZK1Payload
         }
         return (proof, publicValues)
     }
@@ -504,7 +504,7 @@ public enum Halo2OfflineNoteV2Prover {
         guard bytes.count == 8 + 16 * 32,
               readUInt32LE(bytes, at: 0) == 16,
               readUInt32LE(bytes, at: 4) == 1 else {
-            throw Halo2OfflineNoteV2ProverError.invalidZK1Payload
+            throw Halo2AttestedOfflineNoteProverError.invalidZK1Payload
         }
         var values: [UInt64] = []
         values.reserveCapacity(16)
@@ -512,14 +512,14 @@ public enum Halo2OfflineNoteV2Prover {
         for _ in 0..<16 {
             let scalarBytes = Data(bytes[cursor..<(cursor + 32)])
             guard PastaFp.fromCanonicalBytes(scalarBytes) != nil else {
-                throw Halo2OfflineNoteV2ProverError.invalidZK1Payload
+                throw Halo2AttestedOfflineNoteProverError.invalidZK1Payload
             }
             var value: UInt64 = 0
             for idx in 0..<8 {
                 value |= UInt64(bytes[cursor + idx]) << UInt64(idx * 8)
             }
             guard bytes[(cursor + 8)..<(cursor + 32)].allSatisfy({ $0 == 0 }) else {
-                throw Halo2OfflineNoteV2ProverError.invalidZK1Payload
+                throw Halo2AttestedOfflineNoteProverError.invalidZK1Payload
             }
             values.append(value)
             cursor += 32
@@ -651,11 +651,11 @@ public enum Halo2OfflineNoteV2Prover {
         }
 
         guard remainder.allSatisfy({ $0 == .zero }) else {
-            throw Halo2OfflineNoteV2ProverError.invalidQuotientEvaluation
+            throw Halo2AttestedOfflineNoteProverError.invalidQuotientEvaluation
         }
         let nonZeroOverflow = quotient.dropFirst(quotientLength).contains { $0 != .zero }
         guard !nonZeroOverflow else {
-            throw Halo2OfflineNoteV2ProverError.invalidQuotientEvaluation
+            throw Halo2AttestedOfflineNoteProverError.invalidQuotientEvaluation
         }
         if quotient.count < quotientLength {
             quotient.append(contentsOf: repeatElement(.zero, count: quotientLength - quotient.count))
@@ -677,7 +677,7 @@ private struct Halo2VerifierQuery {
     let eval: PastaFp
 }
 
-private extension OfflineNoteV2InstanceValues {
+private extension AttestedOfflineNoteInstanceValues {
     func publicInputsHash() throws -> Data {
         var out = Data()
         for value in publicValues.prefix(4) {
@@ -688,7 +688,7 @@ private extension OfflineNoteV2InstanceValues {
             }
         }
         guard out.count == 32 else {
-            throw Halo2OfflineNoteV2ProverError.invalidInstanceValues
+            throw Halo2AttestedOfflineNoteProverError.invalidInstanceValues
         }
         return out
     }

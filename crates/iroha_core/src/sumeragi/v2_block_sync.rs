@@ -49,11 +49,6 @@ pub(crate) struct DiscoveredCommitCertificate {
 }
 
 impl DiscoveredCommitCertificate {
-    /// Return the exact request hash for post-enqueue acknowledgement.
-    pub(crate) const fn request_hash(&self) -> HashOf<wire::CommitCertificateRequest> {
-        self.request_hash
-    }
-
     /// Build the only consensus input produced by v2 block sync.
     ///
     /// The returned message follows the same authentication, reducer, and WAL
@@ -463,11 +458,6 @@ impl V2BlockSyncDiscovery {
             return Err(CommitCertificateAdmissionError::RequestDisappeared);
         }
         Ok(())
-    }
-
-    /// Cancel obsolete discovery work (for example, after another path commits).
-    pub(crate) fn cancel(&mut self, request_hash: HashOf<wire::CommitCertificateRequest>) -> bool {
-        self.outstanding.cancel(request_hash)
     }
 
     /// Number of bounded outstanding requests.

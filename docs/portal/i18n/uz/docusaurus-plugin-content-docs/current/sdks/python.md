@@ -116,25 +116,21 @@ print("offline ready", readiness.ready, readiness.blockers)
 ```
 ## 6. Voqealarni translatsiya qilish
 
-Torii SSE so'nggi nuqtalari generatorlar orqali ochiladi. SDK avtomatik ravishda davom etadi
-qachon `resume=True` va siz `EventCursor` taqdim etasiz.
+Torii SSE helpers return live-only generators. They may reconnect within the
+configured retry budget, but Torii retains no replay log: reconnects can leave
+a gap. Replay cursors and resume arguments are intentionally unsupported; query
+committed ledger state when complete history is required.
 
 ```python
-from iroha_python import PipelineEventFilterBox, EventCursor
-
-cursor = EventCursor()
-
 for event in client.stream_pipeline_blocks(
     status="Committed",
-    resume=True,
-    cursor=cursor,
     with_metadata=True,
 ):
     print("Block height", event.data.block.height)
 ```
 
-Boshqa qulaylik usullari orasida `stream_pipeline_transactions`,
-`stream_events` (yozilgan filtr quruvchilar bilan) va `stream_verifying_key_events`.
+Other convenience methods include `stream_pipeline_transactions`,
+`stream_events` (with typed filter builders), and `stream_verifying_key_events`.
 
 ## 7. Keyingi qadamlar
 

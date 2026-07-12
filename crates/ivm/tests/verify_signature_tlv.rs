@@ -249,6 +249,27 @@ fn syscall_verify_signature_ed25519_rejects_malformed_signature_r() {
 }
 
 #[test]
+fn syscall_verify_signature_rejects_wide_scheme_code_without_truncation() {
+    use ed25519_dalek::Signer;
+
+    let message = b"ivm-ed25519-wide-scheme-code";
+    let signing_key = ed25519_test_key(0x46);
+    let public_key = signing_key.verifying_key().to_bytes();
+    let signature = signing_key.sign(message).to_bytes();
+
+    assert_eq!(
+        run_syscall_verify_signature_blob(message, &signature, &public_key, 1),
+        1,
+        "control signature must verify under the canonical scheme code"
+    );
+    assert_eq!(
+        run_syscall_verify_signature_blob(message, &signature, &public_key, 0x101),
+        0,
+        "a wide register value must not alias the Ed25519 scheme after narrowing"
+    );
+}
+
+#[test]
 fn syscall_verify_signature_secp256k1_via_tlv() {
     use iroha_crypto::{EcdsaSecp256k1Sha256, KeyGenOption};
 

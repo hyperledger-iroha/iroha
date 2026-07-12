@@ -1837,17 +1837,15 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
     );
 
     let any = instruction.as_any();
-    let fx_instruction = any
-        .downcast_ref::<SettleFxCorridor>()
-        .or_else(|| {
-            any.downcast_ref::<SettlementInstructionBox>()
-                .and_then(|settlement| match settlement {
-                    SettlementInstructionBox::SettleFxCorridor(fx) => Some(fx),
-                    SettlementInstructionBox::Dvp(_)
-                    | SettlementInstructionBox::Pvp(_)
-                    | SettlementInstructionBox::SetFxCorridorPolicy(_) => None,
-                })
-        });
+    let fx_instruction = any.downcast_ref::<SettleFxCorridor>().or_else(|| {
+        any.downcast_ref::<SettlementInstructionBox>()
+            .and_then(|settlement| match settlement {
+                SettlementInstructionBox::SettleFxCorridor(fx) => Some(fx),
+                SettlementInstructionBox::Dvp(_)
+                | SettlementInstructionBox::Pvp(_)
+                | SettlementInstructionBox::SetFxCorridorPolicy(_) => None,
+            })
+    });
     if let Some(fx) = fx_instruction {
         if let Some(policy) = fx_corridor_policy_with_world(world, &fx.policy_id) {
             insert_native_amx_participant(dataspaces, Some(policy.source_dataspace));
@@ -3191,16 +3189,14 @@ fn instruction_transaction_target_requires_universal_coordinator(
     let any = instruction.as_any();
 
     if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
-        return fx_corridor_policy_with_state(state_view, &fx.policy_id).is_some_and(|policy| {
-            policy.source_dataspace != policy.destination_dataspace
-        });
+        return fx_corridor_policy_with_state(state_view, &fx.policy_id)
+            .is_some_and(|policy| policy.source_dataspace != policy.destination_dataspace);
     }
     if let Some(SettlementInstructionBox::SettleFxCorridor(fx)) =
         any.downcast_ref::<SettlementInstructionBox>()
     {
-        return fx_corridor_policy_with_state(state_view, &fx.policy_id).is_some_and(|policy| {
-            policy.source_dataspace != policy.destination_dataspace
-        });
+        return fx_corridor_policy_with_state(state_view, &fx.policy_id)
+            .is_some_and(|policy| policy.source_dataspace != policy.destination_dataspace);
     }
 
     if let Some(transfer) = any.downcast_ref::<TransferBox>()
@@ -3353,16 +3349,14 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
     let any = instruction.as_any();
 
     if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
-        return fx_corridor_policy_with_world(world, &fx.policy_id).is_some_and(|policy| {
-            policy.source_dataspace != policy.destination_dataspace
-        });
+        return fx_corridor_policy_with_world(world, &fx.policy_id)
+            .is_some_and(|policy| policy.source_dataspace != policy.destination_dataspace);
     }
     if let Some(SettlementInstructionBox::SettleFxCorridor(fx)) =
         any.downcast_ref::<SettlementInstructionBox>()
     {
-        return fx_corridor_policy_with_world(world, &fx.policy_id).is_some_and(|policy| {
-            policy.source_dataspace != policy.destination_dataspace
-        });
+        return fx_corridor_policy_with_world(world, &fx.policy_id)
+            .is_some_and(|policy| policy.source_dataspace != policy.destination_dataspace);
     }
 
     if let Some(transfer) = any.downcast_ref::<TransferBox>()

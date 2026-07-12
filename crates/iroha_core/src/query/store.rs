@@ -1161,7 +1161,8 @@ mod tests {
         start.wait();
         let admitted = callers
             .into_iter()
-            .filter(|caller| caller.join().expect("capacity caller must not panic"))
+            .map(|caller| caller.join().expect("capacity caller must not panic"))
+            .filter(|admitted| *admitted)
             .count();
 
         assert_eq!(admitted, CAPACITY);

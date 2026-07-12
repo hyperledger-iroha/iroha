@@ -91,6 +91,82 @@ public sealed record OfflineReadinessBlocker
     public string Message { get; }
 }
 
+/// <summary>Stable registry identity of a verifier selected for Offline transfers.</summary>
+[JsonConverter(typeof(OfflineVerifierIdJsonConverter))]
+public sealed record OfflineVerifierId
+{
+    public OfflineVerifierId(string backend, string name)
+    {
+        Backend = OfflineApiValidation.RequireBoundedText(backend, 256, nameof(backend));
+        Name = OfflineApiValidation.RequireBoundedText(name, 256, nameof(name));
+    }
+
+    public string Backend { get; }
+
+    public string Name { get; }
+}
+
+/// <summary>Key-material-free transfer verifier active at a readiness snapshot.</summary>
+[JsonConverter(typeof(OfflineActiveTransferVerifierJsonConverter))]
+public sealed record OfflineActiveTransferVerifier
+{
+    public OfflineActiveTransferVerifier(
+        OfflineVerifierId id,
+        uint version,
+        string circuitId,
+        string commitment,
+        string publicInputsSchemaHash,
+        uint maxProofBytes,
+        ulong activationHeight,
+        ulong? withdrawalHeight)
+    {
+        Id = id ?? throw new ArgumentNullException(nameof(id));
+        Version = version;
+        CircuitId = OfflineApiValidation.RequireExactText(circuitId, nameof(circuitId));
+        Commitment = OfflineApiValidation.RequireLowercaseHash(
+            commitment,
+            nameof(commitment),
+            "Verifier commitment");
+        PublicInputsSchemaHash = OfflineApiValidation.RequireLowercaseHash(
+            publicInputsSchemaHash,
+            nameof(publicInputsSchemaHash),
+            "Public-input schema hash");
+        if (maxProofBytes == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxProofBytes),
+                maxProofBytes,
+                "Maximum proof bytes must be at least 1.");
+        }
+        if (withdrawalHeight is 0 || withdrawalHeight <= activationHeight)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(withdrawalHeight),
+                withdrawalHeight,
+                "Withdrawal height must be null or greater than the activation height.");
+        }
+        MaxProofBytes = maxProofBytes;
+        ActivationHeight = activationHeight;
+        WithdrawalHeight = withdrawalHeight;
+    }
+
+    public OfflineVerifierId Id { get; }
+
+    public uint Version { get; }
+
+    public string CircuitId { get; }
+
+    public string Commitment { get; }
+
+    public string PublicInputsSchemaHash { get; }
+
+    public uint MaxProofBytes { get; }
+
+    public ulong ActivationHeight { get; }
+
+    public ulong? WithdrawalHeight { get; }
+}
+
 /// <summary>Snapshot-bound readiness result for an asset definition.</summary>
 [JsonConverter(typeof(OfflineReadinessJsonConverter))]
 public sealed record OfflineReadiness
@@ -99,8 +175,10 @@ public sealed record OfflineReadiness
 
     public OfflineReadiness(
         string assetDefinitionId,
+        uint? assetScale,
         ulong evaluatedBlockHeight,
         string evaluatedBlockHash,
+        OfflineActiveTransferVerifier? activeTransferVerifier,
         bool ready,
         IReadOnlyList<OfflineReadinessBlocker> blockers)
     {
@@ -110,6 +188,7 @@ public sealed record OfflineReadiness
         EvaluatedBlockHash = OfflineApiValidation.RequireTransactionHash(
             evaluatedBlockHash,
             nameof(evaluatedBlockHash));
+        ActiveTransferVerifier = activeTransferVerifier;
         Ready = ready;
         this.blockers = new OfflineReadinessBlocker[blockers.Count];
         for (var index = 0; index < blockers.Count; index++)
@@ -126,13 +205,56 @@ public sealed record OfflineReadiness
         {
             throw new ArgumentException("A non-ready asset must report at least one blocker.", nameof(blockers));
         }
+        if (activeTransferVerifier is not null
+            && (activeTransferVerifier.ActivationHeight > evaluatedBlockHeight
+                || (activeTransferVerifier.WithdrawalHeight.HasValue
+                    && activeTransferVerifier.WithdrawalHeight.Value <= evaluatedBlockHeight)))
+        {
+            throw new ArgumentException(
+                "The transfer verifier must be active at the evaluated block height.",
+                nameof(activeTransferVerifier));
+        }
+
+        var scaleUnavailable = this.blockers.Any(static blocker => blocker.Code == "asset_scale_unavailable");
+        var scaleUnsupported = this.blockers.Any(static blocker => blocker.Code == "asset_scale_unsupported");
+        var verifierUnavailable = this.blockers.Any(
+            static blocker => blocker.Code == "transfer_verifier_unavailable");
+        if (scaleUnavailable != !assetScale.HasValue)
+        {
+            throw new ArgumentException(
+                "asset_scale_unavailable must be present exactly when assetScale is null.",
+                nameof(blockers));
+        }
+        if (scaleUnsupported != (assetScale is > 28))
+        {
+            throw new ArgumentException(
+                "asset_scale_unsupported must be present exactly when assetScale exceeds 28.",
+                nameof(blockers));
+        }
+        if (verifierUnavailable != (activeTransferVerifier is null))
+        {
+            throw new ArgumentException(
+                "transfer_verifier_unavailable must be present exactly when no active verifier is reported.",
+                nameof(blockers));
+        }
+        if (ready && (assetScale is null or > 28 || activeTransferVerifier is null))
+        {
+            throw new ArgumentException(
+                "A ready asset requires a supported scale and active transfer verifier.",
+                nameof(ready));
+        }
+        AssetScale = assetScale;
     }
 
     public string AssetDefinitionId { get; }
 
+    public uint? AssetScale { get; }
+
     public ulong EvaluatedBlockHeight { get; }
 
     public string EvaluatedBlockHash { get; }
+
+    public OfflineActiveTransferVerifier? ActiveTransferVerifier { get; }
 
     public bool Ready { get; }
 
@@ -1082,6 +1204,12 @@ internal static class OfflineApiValidation
     }
 
     internal static string RequireTransactionHash(string? value, string parameterName)
+        => RequireLowercaseHash(value, parameterName, "Transaction hash");
+
+    internal static string RequireLowercaseHash(
+        string? value,
+        string parameterName,
+        string label)
     {
         if (value is null
             || value.Length != 64
@@ -1089,10 +1217,22 @@ internal static class OfflineApiValidation
                 and not (>= 'a' and <= 'f')))
         {
             throw new ArgumentException(
-                "Transaction hash must be exactly 32 bytes encoded as lowercase hexadecimal.",
+                $"{label} must be exactly 32 bytes encoded as lowercase hexadecimal.",
                 parameterName);
         }
         return value;
+    }
+
+    internal static string RequireBoundedText(string? value, int maxLength, string parameterName)
+    {
+        var exact = RequireExactText(value, parameterName);
+        if (exact.Length > maxLength)
+        {
+            throw new ArgumentException(
+                $"Value must contain at most {maxLength} characters.",
+                parameterName);
+        }
+        return exact;
     }
 
     internal static string RequireCode(string? value, string parameterName)

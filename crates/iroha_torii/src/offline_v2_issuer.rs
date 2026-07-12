@@ -1280,6 +1280,10 @@ fn offline_operation_status_response(
             false,
         );
     } else {
+        ensure_unproven_pending_window_is_live(
+            kagemusha_v2_snapshot_time_ms(app),
+            record.request.authorization().expires_at_ms,
+        )?;
         pending_offline_operation_status(
             operation_id,
             kind,
@@ -1343,6 +1347,10 @@ fn admitted_offline_operation_status_response(
         return offline_operation_status_response(app, issuer, &record, Some(&finality), false);
     }
 
+    ensure_unproven_pending_window_is_live(
+        kagemusha_v2_snapshot_time_ms(app),
+        admitted.binding.expires_at_ms,
+    )?;
     let status = pending_offline_operation_status(
         operation_id,
         admitted.binding.kind,
@@ -1458,6 +1466,18 @@ fn offline_operation_index_inconsistent(message: impl Into<String>) -> Error {
         code: "offline_operation_index_inconsistent",
         message: message.into(),
     }
+}
+
+fn ensure_unproven_pending_window_is_live(
+    snapshot_time_ms: u64,
+    expires_at_ms: u64,
+) -> Result<(), Error> {
+    if snapshot_time_ms <= expires_at_ms {
+        return Ok(());
+    }
+    Err(offline_operation_index_inconsistent(
+        "The accepted offline operation expired without queue, pipeline, or canonical terminal provenance.",
+    ))
 }
 
 fn ensure_kagemusha_v2_terminal_finality_matches_record(
@@ -2868,11 +2888,32 @@ mod tests {
     }
 
     #[test]
+    fn unproven_pending_state_fails_closed_after_signed_expiry() {
+        ensure_unproven_pending_window_is_live(9_999, 10_000)
+            .expect("a pre-expiry operation may still acquire authoritative provenance");
+        ensure_unproven_pending_window_is_live(10_000, 10_000)
+            .expect("the signed expiry boundary is inclusive");
+
+        let error = ensure_unproven_pending_window_is_live(10_001, 10_000)
+            .expect_err("an expired operation without provenance must not remain pending forever");
+        assert!(matches!(
+            &error,
+            Error::AppServiceUnavailable {
+                code: "offline_operation_index_inconsistent",
+                ..
+            }
+        ));
+        assert_eq!(
+            error.into_response().status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
+    #[test]
     fn kagemusha_v2_anchor_finality_binding_rejects_identity_hash_or_height_mismatch() {
         let operation_id = [0x31; 32];
         let transaction_hash = submission_test_hash(0x73);
-        let anchor_transaction_hash = <[u8; 32]>::try_from(transaction_hash.as_ref())
-            .expect("transaction hashes are 32 bytes");
+        let anchor_transaction_hash = *transaction_hash.as_ref();
         ensure_kagemusha_v2_anchor_finality_binding(
             operation_id,
             anchor_transaction_hash,

@@ -3583,6 +3583,13 @@ non-finite values, excessive nesting, and unpaired Unicode surrogates are
 rejected before DTO normalization, so a JavaScript runtime never silently
 rounds an amount, height, or timestamp.
 
+The TypeScript surface exposes closed request DTOs and a typed
+`OfflineTopUpAnchor`; proof-bearing nested objects use named Norito-JSON DTOs
+instead of `Record<string, unknown>`. Asset scales are limited to `0..=28`.
+Applied top-up responses are accepted only when the anchor's operation ID,
+transaction hash, finality height, amount/scale, roots, note material, and
+one-or-two sorted input nullifiers are internally consistent.
+
 for await (const assetDef of torii.iterateAssetDefinitions({
   pageSize: 50,
   maxItems: 120,

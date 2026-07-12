@@ -1033,7 +1033,7 @@ mod tests {
         for _ in 0..crate::source::MAX_NESTING_DEPTH - 2 {
             ty = format!("Option<{ty}>");
         }
-        let source = format!("module Deep {{ struct Wrapper {{ value: {ty} }} }}");
+        let source = format!("module Deep {{ struct Wrapper {{ {ty} value }} }}");
         let request = CompileRequest {
             source: &source,
             source_name: Some("deep.ko"),
@@ -1144,7 +1144,7 @@ mod tests {
             "payload"
         );
 
-        let at_limit = source.replace("f13: int", "");
+        let at_limit = source.replace("int f13", "");
         session
             .build(CompileRequest {
                 source: &at_limit,
@@ -1913,6 +1913,38 @@ mod tests {
                 .source_map
                 .iter()
                 .any(|entry| entry.function_name == "smoke")
+        );
+    }
+
+    #[test]
+    fn test_target_projection_retains_lowered_list_intrinsics() {
+        let target = TestSourceUnit {
+            source_name: "list-runtime.ko".to_owned(),
+            source: r#"seiyaku ListRuntime {
+                view fn count(List<int, 4> values) -> int {
+                    let length = values.len();
+                    let _contains = values.contains(1);
+                    let _first = values.get(0);
+                    var List<int, 4> copy = [];
+                    let _pushed = copy.try_push(1);
+                    return length;
+                }
+                #[test]
+                fn empty_list() { test::assert(count([]) == 0); }
+            }"#
+            .to_owned(),
+        };
+
+        let outputs = CompilerSession::new(CompilerOptions {
+            mode: CompilerMode::Test,
+            ..CompilerOptions::default()
+        })
+        .build_test_sources(&target, &[])
+        .expect("lowered list intrinsics must survive runtime projection");
+
+        assert!(
+            outputs.runtime.is_some(),
+            "public view requires runtime output"
         );
     }
 

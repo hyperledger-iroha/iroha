@@ -227,10 +227,17 @@ impl ValidatedBodyReceipt {
     #[cfg(test)]
     pub(crate) fn for_test(durable: DurableBodyReceipt) -> Self {
         let empty = Hash::new([]);
+        let bind_frame = |domain: &[u8]| {
+            let mut preimage = Vec::with_capacity(domain.len() + 1 + Hash::LENGTH);
+            preimage.extend_from_slice(domain);
+            preimage.push(0);
+            preimage.extend_from_slice(durable.frame_hash.as_ref());
+            Hash::new(preimage)
+        };
         Self {
             execution_commitment: wire::ExecutionCommitment::new(
-                Hash::new((b"test-parent", durable.frame_hash).encode()),
-                Hash::new((b"test-post", durable.frame_hash).encode()),
+                bind_frame(b"iroha:sumeragi:v2:test-parent-state-root:v1"),
+                bind_frame(b"iroha:sumeragi:v2:test-post-state-root:v1"),
                 empty,
                 None,
                 0,

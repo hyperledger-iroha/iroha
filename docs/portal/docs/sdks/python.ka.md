@@ -118,25 +118,21 @@ print("offline ready", readiness.ready, readiness.blockers)
 ```
 ## 6. მოვლენების სტრიმინგი
 
-Torii SSE ბოლო წერტილები გამოვლენილია გენერატორების მეშვეობით. SDK ავტომატურად განახლდება
-როდესაც `resume=True` და თქვენ მოგაწოდებთ `EventCursor`.
+Torii SSE helpers return live-only generators. They may reconnect within the
+configured retry budget, but Torii retains no replay log: reconnects can leave
+a gap. Replay cursors and resume arguments are intentionally unsupported; query
+committed ledger state when complete history is required.
 
 ```python
-from iroha_python import PipelineEventFilterBox, EventCursor
-
-cursor = EventCursor()
-
 for event in client.stream_pipeline_blocks(
     status="Committed",
-    resume=True,
-    cursor=cursor,
     with_metadata=True,
 ):
     print("Block height", event.data.block.height)
 ```
 
-სხვა მოსახერხებელი მეთოდები მოიცავს `stream_pipeline_transactions`,
-`stream_events` (აკრეფილი ფილტრის შემქმნელებით) და `stream_verifying_key_events`.
+Other convenience methods include `stream_pipeline_transactions`,
+`stream_events` (with typed filter builders), and `stream_verifying_key_events`.
 
 ## 7. შემდეგი ნაბიჯები
 

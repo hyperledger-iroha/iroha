@@ -73,6 +73,7 @@ extension NoritoNativeBridge {
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong
     ) -> Int32
 
@@ -380,6 +381,7 @@ extension NoritoNativeBridge {
     func kagemushaTopUpFinalityVerifyV2(
         proofArchive: Data,
         rosterArtifactArchive: Data,
+        anchorArchive: Data,
         manifestArchive: Data,
         expectedManifestSHA256: Data
     ) throws -> Bool {
@@ -390,18 +392,22 @@ extension NoritoNativeBridge {
         ) else { return false }
         let status = proofArchive.withUnsafeBytes { proofBuffer in
             rosterArtifactArchive.withUnsafeBytes { rosterBuffer in
-                manifestArchive.withUnsafeBytes { manifestBuffer in
-                    expectedManifestSHA256.withUnsafeBytes { digestBuffer in
-                        function(
-                            proofBuffer.bindMemory(to: UInt8.self).baseAddress,
-                            CUnsignedLong(proofBuffer.count),
-                            rosterBuffer.bindMemory(to: UInt8.self).baseAddress,
-                            CUnsignedLong(rosterBuffer.count),
-                            manifestBuffer.bindMemory(to: UInt8.self).baseAddress,
-                            CUnsignedLong(manifestBuffer.count),
-                            digestBuffer.bindMemory(to: UInt8.self).baseAddress,
-                            CUnsignedLong(digestBuffer.count)
-                        )
+                anchorArchive.withUnsafeBytes { anchorBuffer in
+                    manifestArchive.withUnsafeBytes { manifestBuffer in
+                        expectedManifestSHA256.withUnsafeBytes { digestBuffer in
+                            function(
+                                proofBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(proofBuffer.count),
+                                rosterBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(rosterBuffer.count),
+                                anchorBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(anchorBuffer.count),
+                                manifestBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(manifestBuffer.count),
+                                digestBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(digestBuffer.count)
+                            )
+                        }
                     }
                 }
             }
@@ -411,6 +417,7 @@ extension NoritoNativeBridge {
         #else
         _ = proofArchive
         _ = rosterArtifactArchive
+        _ = anchorArchive
         _ = manifestArchive
         _ = expectedManifestSHA256
         return false

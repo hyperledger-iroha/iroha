@@ -380,13 +380,12 @@ pub(crate) fn build_genesis_height_context(
 
 /// Build the unique successor of one structurally valid finalized artifact.
 ///
-/// At an epoch boundary, `next_epoch_end_height` is mandatory and election
-/// inputs come only from the artifact's finalized snapshot. Away from a
-/// boundary it must be absent and the old election inputs are copied exactly.
+/// At an epoch boundary, all election inputs (including the next epoch end)
+/// come only from the parent-authenticated snapshot. Away from a boundary the
+/// old election inputs are copied exactly.
 pub(crate) fn build_successor_height_context(
     parent: &wire::finality::V2FinalityArtifact,
     nexus_amx_context_hash: Hash,
-    next_epoch_end_height: Option<wire::Height>,
     next_epoch_snapshot: Option<wire::finality::FinalizedNextEpochSnapshot>,
 ) -> Result<wire::HeightContext, V2ContextBuildError> {
     parent.validate()?;
@@ -394,7 +393,7 @@ pub(crate) fn build_successor_height_context(
         .height
         .checked_add(1)
         .ok_or(V2ContextBuildError::HeightOverflow)?;
-    let election = successor_election_inputs(parent, height, next_epoch_end_height)?;
+    let election = successor_election_inputs(parent, height)?;
     if election.epoch_end_height < height {
         return Err(V2ContextBuildError::EpochEndBeforeSuccessor);
     }
@@ -421,28 +420,22 @@ pub(crate) fn build_successor_height_context(
 fn successor_election_inputs(
     parent: &wire::finality::V2FinalityArtifact,
     height: wire::Height,
-    next_epoch_end_height: Option<wire::Height>,
 ) -> Result<FrozenElectionInputs, V2ContextBuildError> {
-    let election = match (
-        parent.height_context.next_epoch_snapshot.as_ref(),
-        next_epoch_end_height,
-    ) {
-        (Some(snapshot), Some(epoch_end_height)) => FrozenElectionInputs {
+    let election = match parent.height_context.next_epoch_snapshot.as_ref() {
+        Some(snapshot) => FrozenElectionInputs {
             epoch: snapshot.epoch,
-            epoch_end_height,
+            epoch_end_height: snapshot.epoch_end_height,
             mode: snapshot.mode,
             roster: snapshot.roster.clone(),
             leader_seed: snapshot.leader_seed,
         },
-        (None, None) => FrozenElectionInputs {
+        None => FrozenElectionInputs {
             epoch: parent.height_context.epoch,
             epoch_end_height: parent.height_context.epoch_end_height,
             mode: parent.height_context.mode,
             roster: parent.height_context.roster.clone(),
             leader_seed: parent.height_context.leader_seed,
         },
-        (Some(_), None) => return Err(V2ContextBuildError::MissingNextEpochEnd),
-        (None, Some(_)) => return Err(V2ContextBuildError::UnexpectedNextEpochEnd),
     };
     if election.epoch_end_height < height {
         return Err(V2ContextBuildError::EpochEndBeforeSuccessor);
@@ -455,22 +448,16 @@ pub(crate) fn build_successor_height_context_from_state(
     parent: &wire::finality::V2FinalityArtifact,
     state: &impl StateReadOnly,
     nexus_amx_context_hash: Hash,
-    next_epoch_end_height: Option<wire::Height>,
 ) -> Result<wire::HeightContext, V2ContextBuildError> {
     parent.validate()?;
     let height = parent
         .height
         .checked_add(1)
         .ok_or(V2ContextBuildError::HeightOverflow)?;
-    let election = successor_election_inputs(parent, height, next_epoch_end_height)?;
+    let election = successor_election_inputs(parent, height)?;
     let next_epoch_snapshot =
         finalized_next_epoch_snapshot(state, &parent.height_context.chain_id, height, &election)?;
-    build_successor_height_context(
-        parent,
-        nexus_amx_context_hash,
-        next_epoch_end_height,
-        next_epoch_snapshot,
-    )
+    build_successor_height_context(parent, nexus_amx_context_hash, next_epoch_snapshot)
 }
 
 /// Derive the complete transition committed by the old roster at an epoch's
@@ -490,6 +477,9 @@ pub(crate) fn finalized_next_epoch_snapshot(
     if height != election.epoch_end_height {
         return Ok(None);
     }
+    let successor_height = height
+        .checked_add(1)
+        .ok_or(V2ContextBuildError::HeightOverflow)?;
     let epoch = election
         .epoch
         .checked_add(1)
@@ -500,7 +490,7 @@ pub(crate) fn finalized_next_epoch_snapshot(
             let elected = epoch_validator_peer_ids_from_world(
                 state.world(),
                 state.commit_topology().iter().cloned(),
-                height,
+                successor_height,
                 state.nexus(),
                 epoch,
             )
@@ -513,6 +503,31 @@ pub(crate) fn finalized_next_epoch_snapshot(
         }
     };
     let quorum = wire::DualQuorum::from_roster(&roster)?;
+    let validator_set_pops = roster
+        .iter()
+        .map(|entry| {
+            live_consensus_key_pop_for_peer(state.world(), &entry.validator, successor_height)
+                .ok_or(V2ContextBuildError::MissingNextEpochProofOfPossession)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    wire::finality::verify_validator_power_roster_pops(&roster, &validator_set_pops)
+        .map_err(V2ContextBuildError::NextEpochCryptography)?;
+    let epoch_end_height = match election.mode {
+        wire::ConsensusMode::Permissioned => u64::MAX,
+        wire::ConsensusMode::Npos => {
+            let epoch_length = state
+                .world()
+                .sumeragi_npos_parameters()
+                .ok_or(V2ContextBuildError::MissingNposParameters)?
+                .epoch_length_blocks();
+            if epoch_length == 0 {
+                return Err(V2ContextBuildError::InvalidEpochLength);
+            }
+            height
+                .checked_add(epoch_length)
+                .ok_or(V2ContextBuildError::HeightOverflow)?
+        }
+    };
     let leader_seed = match election.mode {
         wire::ConsensusMode::Permissioned => {
             let mut preimage = b"sumeragi-v2:permissioned-next-epoch".to_vec();
@@ -520,18 +535,16 @@ pub(crate) fn finalized_next_epoch_snapshot(
             preimage.extend_from_slice(&height.to_le_bytes());
             Hash::new(preimage).into()
         }
-        wire::ConsensusMode::Npos => super::npos_seed_for_height_from_world(
-            state.world(),
-            chain_id,
-            height
-                .checked_add(1)
-                .ok_or(V2ContextBuildError::HeightOverflow)?,
-        ),
+        wire::ConsensusMode::Npos => {
+            super::npos_seed_for_epoch_from_world(state.world(), chain_id, epoch)
+        }
     };
     Ok(Some(wire::finality::FinalizedNextEpochSnapshot {
         epoch,
+        epoch_end_height,
         mode: election.mode,
         roster,
+        validator_set_pops,
         quorum,
         leader_seed,
     }))
@@ -555,15 +568,21 @@ pub(crate) enum V2ContextBuildError {
     /// NPoS state has no finalized roster for the imminent epoch.
     #[error("Sumeragi v2 NPoS boundary is missing its finalized next-epoch roster")]
     MissingFinalizedEpochRoster,
+    /// One selected next-epoch validator has no live pre-boundary PoP.
+    #[error("Sumeragi v2 next-epoch roster is missing a live proof of possession")]
+    MissingNextEpochProofOfPossession,
+    /// A selected next-epoch key or proof failed BLS verification.
+    #[error("invalid Sumeragi v2 next-epoch roster cryptography: {0}")]
+    NextEpochCryptography(wire::finality::V2QuorumCertificateVerificationError),
+    /// NPoS boundary state omitted its finalized epoch parameters.
+    #[error("Sumeragi v2 NPoS boundary is missing on-chain parameters")]
+    MissingNposParameters,
+    /// NPoS epoch length must be positive.
+    #[error("Sumeragi v2 NPoS epoch length must be positive")]
+    InvalidEpochLength,
     /// Exact NPoS voting-power extraction failed.
     #[error(transparent)]
     Stake(#[from] StrictV2StakeSnapshotError),
-    /// A finalized epoch snapshot omitted the next epoch's end height.
-    #[error("Sumeragi v2 epoch transition is missing its next end height")]
-    MissingNextEpochEnd,
-    /// A non-boundary height attempted to alter the current epoch end.
-    #[error("Sumeragi v2 non-boundary successor supplied a new epoch end")]
-    UnexpectedNextEpochEnd,
     /// Selected epoch end precedes the height it would govern.
     #[error("Sumeragi v2 epoch end precedes its successor height")]
     EpochEndBeforeSuccessor,
@@ -575,8 +594,10 @@ mod tests {
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
+        ChainId,
         account::AccountId,
         block::{BlockHeader, SignedBlock},
+        consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
         isi::RegisterPeerWithPop,
         metadata::Metadata,
         nexus::{
@@ -620,8 +641,10 @@ mod tests {
             let next_roster = roster.clone();
             wire::finality::FinalizedNextEpochSnapshot {
                 epoch: 5,
+                epoch_end_height: 5,
                 mode,
                 quorum: wire::DualQuorum::from_roster(&next_roster).expect("next quorum"),
+                validator_set_pops: vec![vec![0x43]; next_roster.len()],
                 roster: next_roster,
                 leader_seed: [0x42; 32],
             }
@@ -935,9 +958,8 @@ mod tests {
     fn non_boundary_successor_copies_frozen_election_inputs_exactly() {
         let parent_context = genesis(wire::ConsensusMode::Npos, &[7, 5, 3, 1], 3);
         let parent = artifact(parent_context.clone(), None);
-        let successor =
-            build_successor_height_context(&parent, Hash::new(b"next lanes"), None, None)
-                .expect("successor context");
+        let successor = build_successor_height_context(&parent, Hash::new(b"next lanes"), None)
+            .expect("successor context");
         assert_eq!(successor.height, 2);
         assert_eq!(successor.epoch, parent_context.epoch);
         assert_eq!(successor.epoch_end_height, parent_context.epoch_end_height);
@@ -953,15 +975,16 @@ mod tests {
         let next_roster = roster(&[2, 4, 6, 8]);
         let snapshot = wire::finality::FinalizedNextEpochSnapshot {
             epoch: parent_context.epoch + 1,
+            epoch_end_height: 5,
             mode: parent_context.mode,
             quorum: wire::DualQuorum::from_roster(&next_roster).expect("next quorum"),
+            validator_set_pops: vec![vec![0x78]; next_roster.len()],
             roster: next_roster.clone(),
             leader_seed: [0x77; 32],
         };
         let parent = artifact(parent_context, Some(snapshot));
-        let successor =
-            build_successor_height_context(&parent, Hash::new(b"next lanes"), Some(5), None)
-                .expect("epoch successor");
+        let successor = build_successor_height_context(&parent, Hash::new(b"next lanes"), None)
+            .expect("epoch successor");
         assert_eq!(successor.height, 2);
         assert_eq!(successor.epoch, 5);
         assert_eq!(successor.epoch_end_height, 5);
@@ -970,26 +993,149 @@ mod tests {
     }
 
     #[test]
-    fn epoch_end_argument_is_present_only_at_a_certified_boundary() {
+    fn successor_epoch_end_and_pops_come_only_from_the_authenticated_parent() {
         let non_boundary = artifact(genesis(wire::ConsensusMode::Npos, &[4, 3, 2, 1], 3), None);
-        assert_eq!(
-            build_successor_height_context(&non_boundary, Hash::new(b"lanes"), Some(8), None,),
-            Err(V2ContextBuildError::UnexpectedNextEpochEnd)
-        );
+        let unchanged = build_successor_height_context(&non_boundary, Hash::new(b"lanes"), None)
+            .expect("non-boundary successor");
+        assert_eq!(unchanged.epoch_end_height, 3);
+        assert_eq!(unchanged.roster, non_boundary.height_context.roster);
 
         let boundary_context = genesis(wire::ConsensusMode::Npos, &[4, 3, 2, 1], 1);
+        let next_pops = vec![vec![0x1A]; boundary_context.roster.len()];
         let snapshot = wire::finality::FinalizedNextEpochSnapshot {
             epoch: boundary_context.epoch + 1,
+            epoch_end_height: 9,
             mode: boundary_context.mode,
             roster: boundary_context.roster.clone(),
             quorum: boundary_context.quorum,
+            validator_set_pops: next_pops.clone(),
             leader_seed: [0x19; 32],
         };
         let boundary = artifact(boundary_context, Some(snapshot));
+        let rotated = build_successor_height_context(&boundary, Hash::new(b"lanes"), None)
+            .expect("boundary successor");
+        assert_eq!(rotated.epoch_end_height, 9);
         assert_eq!(
-            build_successor_height_context(&boundary, Hash::new(b"lanes"), None, None),
-            Err(V2ContextBuildError::MissingNextEpochEnd)
+            boundary
+                .height_context
+                .next_epoch_snapshot
+                .as_ref()
+                .expect("boundary snapshot")
+                .validator_set_pops,
+            next_pops
         );
+    }
+
+    #[test]
+    fn next_epoch_snapshot_obeys_successor_key_activation_and_expiry() {
+        const BOUNDARY_HEIGHT: u64 = 7;
+        const SUCCESSOR_HEIGHT: u64 = BOUNDARY_HEIGHT + 1;
+
+        let mut keys = (1_u8..=4)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic BLS validator")
+            })
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let roster = keys
+            .iter()
+            .map(|key| wire::ValidatorPower {
+                validator: PeerId::new(key.public_key().clone()),
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+
+        let chain_id = ChainId::from("v2-expiry-boundary-test");
+        let state_with_lifecycle = |expire_first: bool| {
+            let mut world = World::new();
+            for (index, key) in keys.iter().enumerate() {
+                let id =
+                    ConsensusKeyId::new(ConsensusKeyRole::Validator, format!("validator{index}"));
+                let record = ConsensusKeyRecord {
+                    id: id.clone(),
+                    public_key: key.public_key().clone(),
+                    pop: Some(
+                        iroha_crypto::bls_normal_pop_prove(key.private_key())
+                            .expect("valid BLS proof of possession"),
+                    ),
+                    activation_height: if index == 1 { SUCCESSOR_HEIGHT } else { 0 },
+                    expiry_height: (expire_first && index == 0).then_some(SUCCESSOR_HEIGHT),
+                    hsm: None,
+                    replaces: None,
+                    status: if index == 1 {
+                        ConsensusKeyStatus::Pending
+                    } else {
+                        ConsensusKeyStatus::Active
+                    },
+                };
+                world.consensus_keys.insert(id.clone(), record.clone());
+                world
+                    .consensus_keys_by_pk
+                    .insert(record.public_key.to_string(), vec![id]);
+            }
+            State::new_with_chain_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+                chain_id.clone(),
+            )
+        };
+
+        let expiring_state = state_with_lifecycle(true);
+        let expiring_view = expiring_state.view();
+        let expiring_peer = &roster[0].validator;
+        assert!(
+            live_consensus_key_pop_for_peer(expiring_view.world(), expiring_peer, BOUNDARY_HEIGHT)
+                .is_some(),
+            "fixture key must still authenticate the boundary height"
+        );
+        assert!(
+            live_consensus_key_pop_for_peer(expiring_view.world(), expiring_peer, SUCCESSOR_HEIGHT)
+                .is_none(),
+            "a key is expired at its exclusive expiry height"
+        );
+        let scheduled_peer = &roster[1].validator;
+        assert!(
+            live_consensus_key_pop_for_peer(expiring_view.world(), scheduled_peer, BOUNDARY_HEIGHT)
+                .is_none(),
+            "a scheduled key must not activate early"
+        );
+        assert!(
+            live_consensus_key_pop_for_peer(
+                expiring_view.world(),
+                scheduled_peer,
+                SUCCESSOR_HEIGHT
+            )
+            .is_some(),
+            "Pending is a durable schedule and becomes live at activation height"
+        );
+
+        let election = FrozenElectionInputs {
+            epoch: 4,
+            epoch_end_height: BOUNDARY_HEIGHT,
+            mode: wire::ConsensusMode::Permissioned,
+            roster,
+            leader_seed: [0x72; 32],
+        };
+        assert!(matches!(
+            finalized_next_epoch_snapshot(&expiring_view, &chain_id, BOUNDARY_HEIGHT, &election),
+            Err(V2ContextBuildError::MissingNextEpochProofOfPossession)
+        ));
+
+        let activating_state = state_with_lifecycle(false);
+        let activating_view = activating_state.view();
+        let snapshot =
+            finalized_next_epoch_snapshot(&activating_view, &chain_id, BOUNDARY_HEIGHT, &election)
+                .expect("derive successor snapshot")
+                .expect("boundary snapshot");
+        assert_eq!(snapshot.roster, election.roster);
+        assert_eq!(snapshot.validator_set_pops.len(), election.roster.len());
+        wire::finality::verify_validator_power_roster_pops(
+            &snapshot.roster,
+            &snapshot.validator_set_pops,
+        )
+        .expect("newly activated key is cryptographically admitted");
     }
 
     #[test]

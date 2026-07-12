@@ -265,6 +265,14 @@ types, and unrecognized parameters are rejected rather than interpreted by
 fallback. There is no object whose purpose is to wrap the entire request in a
 `*_norito_base64` field.
 
+When API-token authentication is enabled, Torii validates the exact singleton
+token after the bounded connection pre-authentication gate admits a request and
+before `Content-Type`, `Idempotency-Key`, or body decoding. Missing, invalid,
+and duplicate token fields therefore fail with the typed authentication
+response without reading a malformed command body. With a valid token,
+route-level access/rate policy runs before exact media and command-header
+validation; typed body decoding is the final admission-boundary step.
+
 The public Norito headers use stable schema names rather than Rust module or
 implementation-type names:
 
@@ -355,6 +363,11 @@ merge entry is unavailable, Torii returns `503` with
 `offline_operation_index_unavailable` or `offline_operation_history_unavailable`;
 an index/body/result disagreement returns
 `offline_operation_index_inconsistent`. These states never guess a `404`. The
+admission registry may bridge the short interval between queue admission and
+authoritative pipeline visibility, but it cannot manufacture an unbounded
+pending state. Once the signed expiry is behind the latest chain snapshot, an
+accepted binding with no queue, pipeline, or canonical terminal provenance
+returns `503 offline_operation_index_inconsistent` instead of `pending`. The
 auxiliary admission registry is a process-local optimization and is not
 restart-persistent. It retains only a fixed-size binding: command kind,
 operation id, the hash of the canonical Norito request bytes, transaction hash,
@@ -407,12 +420,14 @@ instance affinity must not expose these command routes until it provides shared
 admission coordination.
 
 Accepted operation references and pending status responses include
-`Retry-After: 1`. Accepted operation references and every response from the
-operation-status resource—including `400`, `401`, `404`, and `503`—use
-`Cache-Control: no-store`, so a pre-submission or cross-instance miss cannot be
-reused after the operation becomes visible. Economic command authorization is
-carried by the
-signed request body. Separately, when Torii's API-token policy is enabled, all
+`Retry-After: 1`. Every response from the top-up, redeem, and operation-status
+resources—including `202`, `400`, `401`, `404`, `429`, and `503`—uses
+`Cache-Control: no-store`, so neither a command outcome nor a pre-submission or
+cross-instance miss can be reused after the operation becomes visible.
+Readiness failures also use `no-store`; successful readiness evaluations use
+the explicit private revalidation policy below. Economic command authorization
+is carried by the signed request body. Separately, when Torii's API-token policy
+is enabled, all
 four lifecycle routes require the configured `x-api-token`; a missing or invalid
 token returns `401 api_token_required` with
 `WWW-Authenticate: IrohaApiToken realm="torii"`. Operation status remains
@@ -428,6 +443,10 @@ asset-definition address literal or a currently live asset alias; the response
 always contains the resolved canonical id. When Torii evaluates the requested
 asset but offline payments are not ready, it returns `200 OK` with
 `ready: false`, typed blockers, the evaluated block height, and
+the authoritative nullable `u32` asset scale. The response keeps an
+out-of-policy scale above 28 intact together with `asset_scale_unsupported` so
+clients can decode the expected unavailable state; only `ready: true` implies a
+scale in the supported 0-through-28 range. It also carries
 representation-specific strong `ETag` computed over the exact selected JSON
 or Norito response octets, the header
 `Cache-Control: private, max-age=0, must-revalidate`, and `Vary: Accept`.

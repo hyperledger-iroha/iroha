@@ -20,7 +20,9 @@ use crate::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     block::consensus_v2::{
-        ConsensusMode, DualQuorum, GlobalPhase, HeightContext, QuorumCertificate, ValidatorPower,
+        ConsensusMode, DataAvailabilityLayout, DualQuorum, GlobalPhase, HeightContext,
+        HeightContextId, PROTOCOL_VERSION, QuorumCertificate, ValidatorPower,
+        finality::FinalizedNextEpochSnapshot,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     zk::BackendTag,
@@ -172,7 +174,7 @@ pub const KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1: u16 = 2;
 /// SDK-facing Kagemusha spend mode for recursive compact tokens.
 pub const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1: &str = "recursive_compact_v1";
 /// SDK-facing Kagemusha spend mode for recursive spend-again-offline cash.
-pub const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: &str = "recursive_spend_v1";
+pub const KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";
 /// Maximum asset scale accepted by the exact Kagemusha V2 amount contract.
 pub const KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2: u32 = 28;
 /// Maximum number of branch decisions carried by one recursive spend lineage.
@@ -194,9 +196,17 @@ pub const KAGEMUSHA_TOPUP_FINALITY_MAX_SIBLINGS_V2: usize = 4;
 /// Maximum validator count accepted by an offline roster artifact.
 pub const KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2: usize = 256;
 /// Maximum roster activation windows in one authenticated finality artifact.
-pub const KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2: usize = 256;
+///
+/// Sixteen full 256-validator windows, including fixed-width PoPs, fit below
+/// the independent 1 MiB canonical-archive ingress cap.
+pub const KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2: usize = 16;
 /// Maximum canonical Norito bytes accepted for one compact top-up finality proof.
-pub const KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2: u64 = 64 * 1024;
+///
+/// The epoch-boundary case retains the complete next-epoch identity snapshot,
+/// including up to 256 bounded PoPs, so 64 KiB is not a sound worst-case cap.
+pub const KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2: u64 = 256 * 1024;
+/// Maximum canonical Norito bytes accepted for one complete validated top-up anchor.
+pub const KAGEMUSHA_TOPUP_FINALITY_ANCHOR_MAX_BYTES_V2: u64 = 64 * 1024;
 /// Development/staging-only hop cap for record-backed semantic lineage.
 pub const KAGEMUSHA_RECURSIVE_SPEND_SEMANTIC_MAX_HOPS_V2: u32 = 8;
 /// Maximum number of transition nodes accepted in one semantic-lineage DAG witness.
@@ -394,7 +404,7 @@ pub const fn preferred_kagemusha_offline_spend_mode(
     pasta_cycle_v3_backend_available: bool,
 ) -> Option<&'static str> {
     if pasta_cycle_v3_backend_available {
-        Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1)
+        Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2)
     } else {
         None
     }
@@ -1478,11 +1488,12 @@ mod model {
     use super::*;
 
     /// Compact CA-issued certificate for an Offline one-use note key.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[derive(PartialOrd, Ord)]
     pub struct OfflineNoteKeyCertificate {
         /// Certificate format marker.
         pub version: u16,
@@ -1511,7 +1522,7 @@ mod model {
     }
 
     /// Canonical payload signed by Offline key-certificate issuers.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -3090,20 +3101,58 @@ mod model {
         pub anchor_digest: [u8; 32],
     }
 
-    /// Canonical Sumeragi-v2 height context and Commit certificate.
+    /// Bounded projection of the live Sumeragi-v2 height context needed to
+    /// authenticate one Commit certificate offline.
     ///
-    /// The complete height context is required because it is part of the exact
-    /// vote preimage and carries the count-and-power quorum authenticated by the
-    /// certificate. The separately authenticated roster window must match its
-    /// mode, ordered voting powers, and quorum exactly.
+    /// `context_id` is copied from the persisted [`HeightContext`] and is part
+    /// of the exact live [`crate::block::consensus_v2::Vote::signature_preimage`]
+    /// through the certificate round. Every non-roster identity field is
+    /// retained so verification can reconstruct and validate the complete
+    /// context with the manifest-authenticated roster window, then require its
+    /// computed identifier to equal `context_id`. This avoids duplicating the
+    /// current roster in every proof without making the context identifier an
+    /// opaque, attacker-selected cross-chain binding.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaTopUpFinalityHeightContextV2 {
+        /// Typed identifier of the complete persisted height context.
+        pub context_id: HeightContextId,
+        /// Chain identifier committed by the complete height context.
+        pub chain_id: ChainId,
+        /// Live Sumeragi-v2 wire protocol revision.
+        pub protocol_version: u16,
+        /// Height governed by the projected context.
+        pub height: u64,
+        /// Finalized validator-election epoch.
+        pub epoch: u64,
+        /// Last height governed by the current frozen epoch snapshot.
+        pub epoch_end_height: u64,
+        /// Complete next-epoch transition on an epoch-boundary height.
+        pub next_epoch_snapshot: Option<FinalizedNextEpochSnapshot>,
+        /// Consensus mode governing the frozen roster.
+        pub mode: ConsensusMode,
+        /// Parent Commit certificate, absent only at genesis.
+        pub parent_commit_qc: Option<QuorumCertificate>,
+        /// Frozen Nexus/AMX context commitment.
+        pub nexus_amx_context_hash: Hash,
+        /// Frozen data-availability layout.
+        pub da_layout: DataAvailabilityLayout,
+        /// Finalized leader-rotation seed.
+        pub leader_seed: [u8; 32],
+    }
+
+    /// Canonical Sumeragi-v2 height-context projection and Commit certificate.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaTopUpFinalityCompactQcV2 {
-        /// Complete immutable consensus context governing the finalized height.
-        pub height_context: HeightContext,
+        /// Bounded immutable consensus-context projection for the finalized height.
+        pub height_context: KagemushaTopUpFinalityHeightContextV2,
         /// Exact Sumeragi-v2 Commit certificate persisted by Kura.
         pub certificate: QuorumCertificate,
     }
@@ -3129,7 +3178,7 @@ mod model {
 
     /// Offline-verifiable proof that a finalized Commit QC authenticated one
     /// exact `(operation_id, anchor_digest)` write.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -10577,7 +10626,7 @@ impl KagemushaRecursiveSpendArtifactManifestV3 {
         if self.schema != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
             || self.version != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3
             || self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
-            || self.mode != KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+            || self.mode != KAGEMUSHA_RECURSIVE_SPEND_MODE_V2
             || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
             || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
             || !is_kagemusha_v3_portable_identifier(&self.generation)
@@ -10649,7 +10698,7 @@ impl KagemushaRecursiveSpendNativeCapabilitiesV1 {
         if self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
             || self.artifact_manifest_schema
                 != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
-            || self.mode != KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+            || self.mode != KAGEMUSHA_RECURSIVE_SPEND_MODE_V2
             || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
             || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
             || self.proof_envelope_version
@@ -10677,7 +10726,7 @@ pub fn kagemusha_recursive_spend_native_capabilities_v1()
     KagemushaRecursiveSpendNativeCapabilitiesV1 {
         bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
         artifact_manifest_schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
-        mode: KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1.to_owned(),
+        mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V2.to_owned(),
         proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
         transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
         proof_envelope_version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1,
@@ -11108,27 +11157,95 @@ impl KagemushaRecursiveSpendTopUpAnchorRefV2 {
     }
 }
 
+impl KagemushaTopUpFinalityHeightContextV2 {
+    /// Validate the bounded context projection independently of a trust artifact.
+    pub fn validate_structure(&self) -> Result<(), KagemushaFoldError> {
+        let next_roster_too_large = self.next_epoch_snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.roster.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
+                || snapshot.validator_set_pops.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
+        });
+        let parent_signers_too_large = self.parent_commit_qc.as_ref().is_some_and(|parent| {
+            parent.signers.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
+        });
+        if self.protocol_version != PROTOCOL_VERSION
+            || self.height == 0
+            || !is_kagemusha_v3_chain_id(&self.chain_id)
+            || self.epoch_end_height < self.height
+            || next_roster_too_large
+            || parent_signers_too_large
+        {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "topup_finality.height_context",
+            });
+        }
+        Ok(())
+    }
+
+    /// Reconstruct and validate the exact complete height context using one
+    /// manifest-authenticated roster window.
+    pub fn reconstruct_for_roster_window(
+        &self,
+        window: &KagemushaTopUpFinalityRosterWindowV2,
+    ) -> Result<HeightContext, KagemushaFoldError> {
+        self.validate_structure()?;
+        window.validate_structure()?;
+        if self.height < window.activates_at_height
+            || self.height >= window.withdraws_at_height
+            || self.mode != window.consensus_mode
+        {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "topup_finality.height_context.roster_window",
+            });
+        }
+        let context = HeightContext {
+            chain_id: self.chain_id.clone(),
+            protocol_version: self.protocol_version,
+            height: self.height,
+            epoch: self.epoch,
+            epoch_end_height: self.epoch_end_height,
+            next_epoch_snapshot: self.next_epoch_snapshot.clone(),
+            mode: self.mode,
+            parent_commit_qc: self.parent_commit_qc.clone(),
+            roster: window.validator_set.clone(),
+            quorum: DualQuorum::from_roster(&window.validator_set).map_err(|_| {
+                KagemushaFoldError::InvalidRecursiveSpendProof {
+                    field: "topup_finality.height_context.quorum",
+                }
+            })?,
+            nexus_amx_context_hash: self.nexus_amx_context_hash,
+            da_layout: self.da_layout,
+            leader_seed: self.leader_seed,
+        };
+        if context.validate().is_err() || context.id() != self.context_id {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "topup_finality.height_context.context_id",
+            });
+        }
+        Ok(context)
+    }
+}
+
 impl KagemushaTopUpFinalityCompactQcV2 {
     /// Validate canonical bounds before consulting a trusted roster.
     pub fn validate_structure(&self) -> Result<(), KagemushaFoldError> {
         let context = &self.height_context;
         let certificate = &self.certificate;
-        let next_roster_too_large = context
-            .next_epoch_snapshot
-            .as_ref()
-            .is_some_and(|snapshot| {
-                snapshot.roster.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
-            });
-        if context.roster.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
-            || next_roster_too_large
-            || context.validate().is_err()
+        context.validate_structure()?;
+        if certificate.round.context_id != context.context_id
+            || certificate.round.height != context.height
             || certificate.phase != GlobalPhase::Commit
-            || certificate.validate(context).is_err()
             || certificate.aggregate_signature.len() != 96
+            || certificate.execution_commitment.validate().is_err()
             || certificate.execution_commitment.topup_anchor_root.is_none()
             || certificate.execution_commitment.topup_anchor_count == 0
             || certificate.execution_commitment.topup_anchor_count
                 > KAGEMUSHA_TOPUP_FINALITY_MAX_ANCHORS_PER_BLOCK_V2
+            || certificate.signers.is_empty()
+            || certificate.signers.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
+            || certificate
+                .signers
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
         {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
                 field: "topup_finality.commit_qc",
@@ -11145,21 +11262,12 @@ impl KagemushaTopUpFinalityCompactQcV2 {
         self.validate_structure()?;
         window.validate_structure()?;
         let context = &self.height_context;
-        let expected_quorum = DualQuorum::from_roster(&window.validator_set).map_err(|_| {
+        let complete = context.reconstruct_for_roster_window(window)?;
+        self.certificate.validate(&complete).map_err(|_| {
             KagemushaFoldError::InvalidRecursiveSpendProof {
                 field: "topup_finality.commit_qc.roster_window",
             }
         })?;
-        if context.height < window.activates_at_height
-            || context.height >= window.withdraws_at_height
-            || context.mode != window.consensus_mode
-            || context.roster != window.validator_set
-            || context.quorum != expected_quorum
-        {
-            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                field: "topup_finality.commit_qc.roster_window",
-            });
-        }
         Ok(())
     }
 }
@@ -11236,16 +11344,13 @@ impl KagemushaTopUpFinalityRosterWindowV2 {
             .map(|entry| &entry.validator)
             .collect::<std::collections::BTreeSet<_>>();
         if unique.len() != self.validator_set.len()
-            || self
-                .validator_set
-                .iter()
-                .any(|entry| {
-                    entry.power == 0
-                        || !matches!(
-                            entry.validator.public_key().try_algorithm(),
-                            Ok(Algorithm::BlsNormal)
-                        )
-                })
+            || self.validator_set.iter().any(|entry| {
+                entry.power == 0
+                    || !matches!(
+                        entry.validator.public_key().try_algorithm(),
+                        Ok(Algorithm::BlsNormal)
+                    )
+            })
             || (self.consensus_mode == ConsensusMode::Permissioned
                 && self.validator_set.iter().any(|entry| entry.power != 1))
             || DualQuorum::from_roster(&self.validator_set).is_err()
@@ -18255,7 +18360,7 @@ mod offline_note_tests {
             schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
             bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-            mode: KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1.to_owned(),
+            mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V2.to_owned(),
             proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
             transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
             generation: "release-generation-1".to_owned(),
@@ -21252,7 +21357,7 @@ mod offline_note_tests {
         );
         assert_eq!(
             preferred_kagemusha_offline_spend_mode(true),
-            Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1)
+            Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2)
         );
         assert_eq!(preferred_kagemusha_offline_spend_mode(false), None);
         assert_eq!(
@@ -31304,10 +31409,10 @@ mod offline_note_tests {
     ) -> KagemushaTopUpFinalityProofV2 {
         use crate::block::consensus_v2::{
             BlockSubject, ConsensusRound, DataAvailabilityLayout, ExecutionCommitment,
-            PayloadEncoding, PROTOCOL_VERSION,
+            HeightContext, PROTOCOL_VERSION, PayloadEncoding,
         };
 
-        let context = HeightContext {
+        let complete_context = HeightContext {
             chain_id: ChainId::from("kagemusha-finality-test"),
             protocol_version: PROTOCOL_VERSION,
             height: 1,
@@ -31340,11 +31445,7 @@ mod offline_note_tests {
         let topup_anchor_root = Hash::new(b"kagemusha finality topup root");
         let execution_commitment = ExecutionCommitment::new(
             Hash::new(b"kagemusha finality parent state"),
-            ExecutionCommitment::topup_post_state_root(
-                1,
-                ordinary_writes_root,
-                topup_anchor_root,
-            ),
+            ExecutionCommitment::topup_post_state_root(1, ordinary_writes_root, topup_anchor_root),
             ordinary_writes_root,
             Some(topup_anchor_root),
             1,
@@ -31352,14 +31453,14 @@ mod offline_note_tests {
         .expect("fixture execution commitment");
         let certificate = QuorumCertificate {
             round: ConsensusRound {
-                context_id: context.id(),
-                height: context.height,
+                context_id: complete_context.id(),
+                height: complete_context.height,
                 view: 3,
             },
             phase: GlobalPhase::Commit,
             subject,
             execution_commitment,
-            signers: (0..context.quorum.min_signers).collect(),
+            signers: (0..complete_context.quorum.min_signers).collect(),
             aggregate_signature: vec![0x55; 96],
         };
         KagemushaTopUpFinalityProofV2 {
@@ -31369,7 +31470,20 @@ mod offline_note_tests {
                 anchor_digest: [0x42; 32],
             },
             commit_qc: KagemushaTopUpFinalityCompactQcV2 {
-                height_context: context,
+                height_context: KagemushaTopUpFinalityHeightContextV2 {
+                    context_id: complete_context.id(),
+                    chain_id: complete_context.chain_id,
+                    protocol_version: complete_context.protocol_version,
+                    height: complete_context.height,
+                    epoch: complete_context.epoch,
+                    epoch_end_height: complete_context.epoch_end_height,
+                    next_epoch_snapshot: complete_context.next_epoch_snapshot,
+                    mode: complete_context.mode,
+                    parent_commit_qc: complete_context.parent_commit_qc,
+                    nexus_amx_context_hash: complete_context.nexus_amx_context_hash,
+                    da_layout: complete_context.da_layout,
+                    leader_seed: complete_context.leader_seed,
+                },
                 certificate,
             },
             anchor_path: KagemushaTopUpAnchorMerkleProofV2 {
@@ -31440,7 +31554,7 @@ mod offline_note_tests {
         insufficient.certificate.signers = vec![0];
         assert!(insufficient.validate_for_roster_window(&window).is_err());
         let mut wrong_roster = proof.commit_qc.clone();
-        wrong_roster.height_context.roster.swap(0, 1);
+        wrong_roster.height_context.leader_seed[0] ^= 1;
         assert!(wrong_roster.validate_for_roster_window(&window).is_err());
 
         let mut bad_pop = window.clone();
@@ -31502,5 +31616,37 @@ mod offline_note_tests {
                     )
                 });
         }
+    }
+
+    #[test]
+    fn kagemusha_topup_finality_max_roster_shape_fits_the_archive_byte_cap() {
+        let template =
+            kagemusha_finality_roster_fixture(KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2);
+        let windows = (0..KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2)
+            .map(|index| {
+                let mut window = template.clone();
+                let start = 1 + u64::try_from(index).expect("small index") * 100;
+                window.activates_at_height = start;
+                window.withdraws_at_height = start + 100;
+                window
+            })
+            .collect::<Vec<_>>();
+        let artifact = KagemushaTopUpFinalityRosterArtifactV2 {
+            version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
+            chain_id: ChainId::from("kagemusha-finality-max-shape"),
+            artifact_generation: "max-shape-generation".to_owned(),
+            windows,
+        };
+        artifact
+            .validate_structure()
+            .expect("maximum roster shape is structurally valid");
+        let bytes = to_bytes(&artifact).expect("encode maximum roster shape");
+        assert!(
+            u64::try_from(bytes.len()).expect("archive length")
+                <= KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2,
+            "maximum valid roster shape encoded to {} bytes, exceeding the {}-byte ingress cap",
+            bytes.len(),
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2,
+        );
     }
 }

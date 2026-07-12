@@ -552,6 +552,10 @@ fn canonical_gas_parameters() -> Vec<GasParameter> {
         ("escrow_base", G_ESCROW),
         ("soracloud_base", G_SORACLOUD),
         ("host_formula_version", u64::from(HOST_GAS_FORMULA_VERSION)),
+        (
+            "numeric_formula_version",
+            crate::numeric_gas::NUMERIC_GAS_FORMULA_VERSION_V1,
+        ),
         ("numeric_entry", crate::numeric_gas::NUMERIC_ENTRY_GAS),
         (
             "numeric_per_limb_work",

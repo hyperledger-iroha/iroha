@@ -79,7 +79,10 @@ use iroha_data_model::{
     governance::types::ParliamentBody,
     identifier::{IdentifierClaimRecord, IdentifierPolicy, IdentifierPolicyId},
     isi::{
-        error::{InstructionExecutionError as Error, InvalidParameterError, MathError},
+        error::{
+            InstructionExecutionError as Error, InvalidParameterError, MathError, Mismatch,
+            TypeError,
+        },
         settlement::{SettlementId, SettlementLedger},
     },
     merge::{
@@ -11015,17 +11018,19 @@ pub(crate) fn peer_consensus_key_gate(
         let expired = record
             .expiry_height
             .is_some_and(|expiry| block_height >= expiry);
-        let candidate = match record.status {
-            ConsensusKeyStatus::Active | ConsensusKeyStatus::Retiring
-                if !not_yet_active && !expired =>
-            {
-                ConsensusKeyGate::Live
-            }
-            ConsensusKeyStatus::Disabled => ConsensusKeyGate::Disabled,
-            _ if expired => ConsensusKeyGate::Expired,
-            _ if not_yet_active => ConsensusKeyGate::NotYetActive,
-            ConsensusKeyStatus::Pending => ConsensusKeyGate::NotYetActive,
-            _ => ConsensusKeyGate::Missing,
+        let candidate = if record.is_live_at(block_height, 0, 0) {
+            // Pending is the durable scheduling state. No background job is
+            // required to rewrite it at activation_height; the canonical
+            // height predicate makes it live exactly then.
+            ConsensusKeyGate::Live
+        } else if matches!(record.status, ConsensusKeyStatus::Disabled) {
+            ConsensusKeyGate::Disabled
+        } else if expired {
+            ConsensusKeyGate::Expired
+        } else if not_yet_active {
+            ConsensusKeyGate::NotYetActive
+        } else {
+            ConsensusKeyGate::Missing
         };
         if candidate == ConsensusKeyGate::Live {
             return ConsensusKeyGate::Live;
@@ -11065,19 +11070,10 @@ pub(crate) fn live_consensus_key_pop_for_peer(
         if record.public_key != *pk {
             continue;
         }
-        let not_yet_active = block_height < record.activation_height;
-        let expired = record
-            .expiry_height
-            .is_some_and(|expiry| block_height >= expiry);
-        match record.status {
-            ConsensusKeyStatus::Active | ConsensusKeyStatus::Retiring
-                if !not_yet_active && !expired =>
-            {
-                if let Some(pop) = record.pop.as_ref() {
-                    return Some(pop.clone());
-                }
-            }
-            _ => {}
+        if record.is_live_at(block_height, 0, 0)
+            && let Some(pop) = record.pop.as_ref()
+        {
+            return Some(pop.clone());
         }
     }
     None
@@ -11206,45 +11202,6 @@ where
     } else {
         BTreeSet::new()
     };
-    let validator_peer_ids_by_account: BTreeMap<AccountId, PeerId> = world
-        .public_lane_validators()
-        .iter()
-        .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
-        .filter(|(_, record)| active_lane_ids.contains(&record.lane_id))
-        .filter(|(_, record)| {
-            topology_lane_ids.is_empty() || topology_lane_ids.contains(&record.lane_id)
-        })
-        .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
-        .filter(|(_, record)| {
-            matches!(
-                nexus
-                    .staking
-                    .validator_mode(record.lane_id, &nexus.lane_catalog),
-                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
-            )
-        })
-        .filter_map(|(_, record)| {
-            let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
-                &record.self_stake,
-                nexus.staking.min_validator_stake,
-            ) else {
-                return None;
-            };
-            if !meets_min {
-                return None;
-            }
-            if !present_peers.contains(&record.peer_id) {
-                return None;
-            }
-            if enforce_topology_membership && !topology_peers.contains(&record.peer_id) {
-                return None;
-            }
-            if !peer_has_live_consensus_key(world, &record.peer_id, block_height) {
-                return None;
-            }
-            Some((record.validator.clone(), record.peer_id.clone()))
-        })
-        .collect();
     if enforce_topology_membership {
         let mut active_candidates: std::collections::BTreeSet<PeerId> =
             std::collections::BTreeSet::new();
@@ -11305,6 +11262,48 @@ where
             }
         }
     }
+    // Build the account lookup only after widening the topology. Otherwise an
+    // eligible explicit account-to-peer binding that triggered widening is
+    // absent here, and the council path silently truncates that member.
+    let validator_peer_ids_by_account: BTreeMap<AccountId, PeerId> = world
+        .public_lane_validators()
+        .iter()
+        .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
+        .filter(|(_, record)| active_lane_ids.contains(&record.lane_id))
+        .filter(|(_, record)| {
+            topology_lane_ids.is_empty() || topology_lane_ids.contains(&record.lane_id)
+        })
+        .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
+        .filter(|(_, record)| {
+            matches!(
+                nexus
+                    .staking
+                    .validator_mode(record.lane_id, &nexus.lane_catalog),
+                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+            )
+        })
+        .filter_map(|(_, record)| {
+            let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
+                &record.self_stake,
+                nexus.staking.min_validator_stake,
+            ) else {
+                return None;
+            };
+            if !meets_min {
+                return None;
+            }
+            if !present_peers.contains(&record.peer_id) {
+                return None;
+            }
+            if enforce_topology_membership && !topology_peers.contains(&record.peer_id) {
+                return None;
+            }
+            if !peer_has_live_consensus_key(world, &record.peer_id, block_height) {
+                return None;
+            }
+            Some((record.validator.clone(), record.peer_id.clone()))
+        })
+        .collect();
     // Preferred path: council-derived roster for the epoch.
     if let Some(c) = world.council().get(&epoch).cloned() {
         let ids: Vec<PeerId> = c
@@ -11371,7 +11370,25 @@ where
 
     candidates.retain(|(pid, _, _)| peer_has_live_consensus_key(world, pid, block_height));
 
-    if candidates.is_empty() {
+    // One peer may be registered on several active lanes. Canonicalize those
+    // rows before ranking so the peer occupies one roster slot and receives
+    // its maximum eligible stake. Equal-stake rows use the smallest account
+    // identity as a deterministic secondary ranking key.
+    let mut candidates_by_peer: BTreeMap<PeerId, (Numeric, AccountId)> = BTreeMap::new();
+    for (peer, stake, account) in candidates {
+        let should_replace =
+            candidates_by_peer
+                .get(&peer)
+                .is_none_or(|(current_stake, current_account)| {
+                    stake > *current_stake
+                        || (stake == *current_stake && account < *current_account)
+                });
+        if should_replace {
+            candidates_by_peer.insert(peer, (stake, account));
+        }
+    }
+
+    if candidates_by_peer.is_empty() {
         let peers: Vec<PeerId> = world
             .peers()
             .iter()
@@ -11382,13 +11399,16 @@ where
         return if peers.is_empty() { None } else { Some(peers) };
     }
 
+    let mut candidates: Vec<(PeerId, Numeric, AccountId)> = candidates_by_peer
+        .into_iter()
+        .map(|(peer, (stake, account))| (peer, stake, account))
+        .collect();
     candidates.sort_by(|lhs, rhs| {
         rhs.1
             .cmp(&lhs.1)
             .then_with(|| lhs.2.cmp(&rhs.2))
             .then_with(|| lhs.0.cmp(&rhs.0))
     });
-    candidates.dedup_by(|lhs, rhs| lhs.0 == rhs.0);
 
     let max = usize::try_from(nexus.staking.max_validators.get())
         .unwrap_or(usize::MAX)
@@ -12463,6 +12483,84 @@ mod stake_snapshot_tests {
     }
 
     #[test]
+    fn council_explicit_peer_bindings_survive_topology_widening() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.staking.min_validator_stake = 1;
+        }
+
+        let old_account_key = crate::state::checked_keypair();
+        let new_account_key = crate::state::checked_keypair();
+        let old_peer_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let new_peer_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let old_account = DMAccountId::of(old_account_key.public_key().clone());
+        let new_account = DMAccountId::of(new_account_key.public_key().clone());
+        let old_peer = PeerId::from(old_peer_key.public_key().clone());
+        let new_peer = PeerId::from(new_peer_key.public_key().clone());
+        assert_ne!(old_peer.public_key(), old_account.signatory());
+        assert_ne!(new_peer.public_key(), new_account.signatory());
+
+        let mut wb = state.world.block();
+        {
+            let peers = wb.peers.get_mut();
+            let _ = peers.push(old_peer.clone());
+            let _ = peers.push(new_peer.clone());
+        }
+        seed_consensus_key(&mut wb, &old_peer, ConsensusKeyStatus::Active, 0);
+        seed_consensus_key(&mut wb, &new_peer, ConsensusKeyStatus::Active, 0);
+        for (account, peer) in [
+            (old_account.clone(), old_peer.clone()),
+            (new_account.clone(), new_peer.clone()),
+        ] {
+            wb.public_lane_validators.insert(
+                (LaneId::SINGLE, account.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::SINGLE,
+                    validator: account.clone(),
+                    peer_id: peer,
+                    stake_account: account,
+                    total_stake: Numeric::new(10, 0),
+                    self_stake: Numeric::new(10, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+        }
+        wb.council.insert(
+            0,
+            CouncilState {
+                epoch: 0,
+                members: vec![old_account, new_account],
+                candidate_count: 2,
+                ..CouncilState::default()
+            },
+        );
+        wb.commit();
+
+        {
+            let mut topo_block = state.commit_topology.block();
+            topo_block.mutate_vec(|peers| *peers = vec![old_peer.clone()]);
+            topo_block.commit();
+        }
+
+        let sv = state.view();
+        let roster =
+            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+        assert_eq!(
+            roster,
+            vec![old_peer, new_peer],
+            "the newly widened explicit peer binding must not be dropped from the council roster"
+        );
+    }
+
+    #[test]
     fn public_lane_snapshot_filters_ineligible_validators() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -12832,6 +12930,134 @@ mod stake_snapshot_tests {
         assert_eq!(
             roster, expected,
             "epoch roster widening must stay inside the commit topology lane"
+        );
+    }
+
+    #[test]
+    fn multi_lane_duplicate_peer_uses_maximum_stake_once() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        let secondary_lane = LaneId::new(1);
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: secondary_lane,
+                    alias: "secondary".to_string(),
+                    visibility: LaneVisibility::Public,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.lane_catalog = lane_catalog.clone();
+            nexus.lane_config = DerivedLaneConfig::from_catalog(&lane_catalog);
+            nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
+            nexus.staking.min_validator_stake = 1;
+            nexus.staking.max_validators = NonZeroU32::new(3).expect("nonzero validator limit");
+        }
+
+        let peer_a_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let peer_b_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let peer_a = PeerId::from(peer_a_key.public_key().clone());
+        let peer_b = PeerId::from(peer_b_key.public_key().clone());
+        let account_a_high = DMAccountId::of(crate::state::checked_keypair().public_key().clone());
+        let account_a_low = DMAccountId::of(crate::state::checked_keypair().public_key().clone());
+        let account_b = DMAccountId::of(crate::state::checked_keypair().public_key().clone());
+
+        let mut wb = state.world.block();
+        {
+            let peers = wb.peers.get_mut();
+            let _ = peers.push(peer_a.clone());
+            let _ = peers.push(peer_b.clone());
+        }
+        seed_consensus_key(&mut wb, &peer_a, ConsensusKeyStatus::Active, 0);
+        seed_consensus_key(&mut wb, &peer_b, ConsensusKeyStatus::Active, 0);
+        wb.public_lane_validators.insert(
+            (LaneId::SINGLE, account_a_high.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: account_a_high.clone(),
+                peer_id: peer_a.clone(),
+                stake_account: account_a_high,
+                total_stake: Numeric::new(10, 0),
+                self_stake: Numeric::new(10, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+        wb.public_lane_validators.insert(
+            (secondary_lane, account_a_low.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: secondary_lane,
+                validator: account_a_low.clone(),
+                peer_id: peer_a.clone(),
+                stake_account: account_a_low,
+                total_stake: Numeric::new(1, 0),
+                self_stake: Numeric::new(1, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+        wb.public_lane_validators.insert(
+            (LaneId::SINGLE, account_b.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: account_b.clone(),
+                peer_id: peer_b.clone(),
+                stake_account: account_b,
+                total_stake: Numeric::new(5, 0),
+                self_stake: Numeric::new(5, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+        wb.commit();
+
+        let sv = state.view();
+        let roster =
+            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+        assert_eq!(
+            roster,
+            vec![peer_a.clone(), peer_b.clone()],
+            "peer A must rank by its maximum stake and occupy exactly one roster slot"
+        );
+
+        let active_lane_ids = BTreeSet::from([LaneId::SINGLE, secondary_lane]);
+        let powers = crate::sumeragi::stake_snapshot::strict_v2_voting_roster(
+            sv.world(),
+            &roster,
+            Some(&active_lane_ids),
+        )
+        .expect("strict voting powers");
+        assert_eq!(powers.len(), 2);
+        assert_eq!(
+            powers
+                .iter()
+                .find(|entry| entry.validator == peer_a)
+                .map(|entry| entry.power),
+            Some(10)
+        );
+        assert_eq!(
+            powers
+                .iter()
+                .find(|entry| entry.validator == peer_b)
+                .map(|entry| entry.power),
+            Some(5)
         );
     }
 
@@ -14365,7 +14591,10 @@ pub(crate) struct DetachedMergeContext {
     pub(crate) current_dataspace_id: Option<iroha_data_model::nexus::DataSpaceId>,
 }
 
-fn aggregate_numeric<K>(ids: &[K], qtys: &[Numeric]) -> Vec<(K, Numeric)>
+fn aggregate_numeric<K>(
+    ids: &[K],
+    qtys: &[Numeric],
+) -> Result<Vec<(K, Numeric)>, iroha_data_model::ValidationFail>
 where
     K: Ord + Clone,
 {
@@ -14373,19 +14602,25 @@ where
     let mut order: Vec<(K, Numeric)> = Vec::with_capacity(ids.len());
     let mut positions: BTreeMap<K, usize> = BTreeMap::new();
     for (id, qty) in ids.iter().zip(qtys.iter()) {
+        if qty.mantissa().is_negative() {
+            return Err(iroha_data_model::ValidationFail::InstructionFailed(
+                Error::Math(MathError::NegativeValue),
+            ));
+        }
         if let Some(existing_index) = positions.get(id) {
             let entry = &mut order[*existing_index].1;
-            *entry = entry
-                .clone()
-                .checked_add(qty.clone())
-                .expect("numeric overflow while aggregating deltas");
+            *entry = entry.clone().checked_add(qty.clone()).ok_or_else(|| {
+                iroha_data_model::ValidationFail::InstructionFailed(Error::Math(
+                    MathError::Overflow,
+                ))
+            })?;
         } else {
             let next_index = order.len();
             positions.insert(id.clone(), next_index);
             order.push((id.clone(), qty.clone()));
         }
     }
-    order
+    Ok(order)
 }
 
 fn gather_last_wins_keyed<E, V>(
@@ -15313,12 +15548,12 @@ impl DetachedStateTransactionDelta {
             stx.world.current_dataspace_id = Some(dataspace_id);
         }
         let result: Result<(), iroha_data_model::ValidationFail> = (|| {
-            let asset_adds = aggregate_numeric(&self.asset_add_ids, &self.asset_add_qtys);
-            let asset_subs = aggregate_numeric(&self.asset_sub_ids, &self.asset_sub_qtys);
+            let asset_adds = aggregate_numeric(&self.asset_add_ids, &self.asset_add_qtys)?;
+            let asset_subs = aggregate_numeric(&self.asset_sub_ids, &self.asset_sub_qtys)?;
             let asset_def_adds =
-                aggregate_numeric(&self.asset_def_add_ids, &self.asset_def_add_qtys);
+                aggregate_numeric(&self.asset_def_add_ids, &self.asset_def_add_qtys)?;
             let asset_def_subs =
-                aggregate_numeric(&self.asset_def_sub_ids, &self.asset_def_sub_qtys);
+                aggregate_numeric(&self.asset_def_sub_ids, &self.asset_def_sub_qtys)?;
             let account_kv_sets = gather_last_wins_keyed(
                 &self.account_kv_set_accounts,
                 &self.account_kv_set_key_ids,
@@ -15349,18 +15584,22 @@ impl DetachedStateTransactionDelta {
             // Validate numeric specs for all changes prior to mutating state (aggregated)
             for (id, qty) in &asset_adds {
                 let def = stx.world.asset_definition(id.definition())?;
-                if def.spec().check(qty).is_err() {
-                    return Err(iroha_data_model::ValidationFail::NotPermitted(
-                        "numeric spec mismatch".to_owned(),
-                    ));
+                let spec = def.spec();
+                ensure_asset_numeric_value(qty, spec)
+                    .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
+                if let Some(value) = stx.world.assets.get(id) {
+                    ensure_asset_numeric_value(value.as_ref(), spec)
+                        .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
                 }
             }
             for (id, qty) in &asset_subs {
                 let def = stx.world.asset_definition(id.definition())?;
-                if def.spec().check(qty).is_err() {
-                    return Err(iroha_data_model::ValidationFail::NotPermitted(
-                        "numeric spec mismatch".to_owned(),
-                    ));
+                let spec = def.spec();
+                ensure_asset_numeric_value(qty, spec)
+                    .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
+                if let Some(value) = stx.world.assets.get(id) {
+                    ensure_asset_numeric_value(value.as_ref(), spec)
+                        .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
                 }
             }
             // Enforce mintability: if a def is recorded for flip, ensure not Not; flip when Once
@@ -15424,13 +15663,24 @@ impl DetachedStateTransactionDelta {
                         ))
                     })?;
                     let qref: &mut iroha_primitives::numeric::Numeric = &mut *cur;
+                    if qref.mantissa().is_negative() {
+                        return Err(iroha_data_model::ValidationFail::InstructionFailed(
+                            Error::Math(MathError::NegativeValue),
+                        ));
+                    }
                     // Witness: record pre-value
                     crate::sumeragi::witness::record_read_asset(id, Some(qref));
-                    *qref = qref.clone().checked_sub(qty.clone()).ok_or_else(|| {
+                    let updated = qref.clone().checked_sub(qty.clone()).ok_or_else(|| {
                         iroha_data_model::ValidationFail::NotPermitted(
                             "not enough quantity".to_owned(),
                         )
                     })?;
+                    if updated.mantissa().is_negative() {
+                        return Err(iroha_data_model::ValidationFail::InstructionFailed(
+                            Error::Math(MathError::NotEnoughQuantity),
+                        ));
+                    }
+                    *qref = updated;
                     let is_zero = (**cur).is_zero();
                     // Witness: record post-value (after mutation)
                     crate::sumeragi::witness::record_write_asset(id, cur);
@@ -15447,13 +15697,24 @@ impl DetachedStateTransactionDelta {
                         .world
                         .asset_or_insert(id, iroha_primitives::numeric::Numeric::zero())?;
                     let qref: &mut iroha_primitives::numeric::Numeric = &mut *dst;
+                    if qref.mantissa().is_negative() {
+                        return Err(iroha_data_model::ValidationFail::InstructionFailed(
+                            Error::Math(MathError::NegativeValue),
+                        ));
+                    }
                     // Witness: record pre-value
                     crate::sumeragi::witness::record_read_asset(id, Some(qref));
-                    *qref = qref.clone().checked_add(qty.clone()).ok_or_else(|| {
+                    let updated = qref.clone().checked_add(qty.clone()).ok_or_else(|| {
                         iroha_data_model::ValidationFail::NotPermitted(
                             "numeric overflow".to_owned(),
                         )
                     })?;
+                    if updated.mantissa().is_negative() {
+                        return Err(iroha_data_model::ValidationFail::InstructionFailed(
+                            Error::Math(MathError::NegativeValue),
+                        ));
+                    }
+                    *qref = updated;
                     let is_nonzero = !qref.is_zero();
                     // Witness: record post-value
                     crate::sumeragi::witness::record_write_asset(id, qref);
@@ -16102,10 +16363,224 @@ impl DetachedStateTransactionDelta {
     }
 }
 
+fn ensure_asset_numeric_value(value: &Numeric, spec: NumericSpec) -> Result<(), Error> {
+    if value.mantissa().is_negative() {
+        return Err(MathError::NegativeValue.into());
+    }
+    spec.check(value).map_err(|_| {
+        TypeError::from(Mismatch {
+            expected: spec,
+            actual: NumericSpec::fractional(value.scale()),
+        })
+        .into()
+    })
+}
+
+fn ensure_persisted_non_negative(value: &Numeric, context: &str) -> Result<(), String> {
+    if value.mantissa().is_negative() {
+        return Err(format!("{context} is negative: {value}"));
+    }
+    Ok(())
+}
+
 impl World {
     /// Creates an empty `World`.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn validate_numeric_asset_invariants(&self) -> Result<(), String> {
+        let definitions = self.asset_definitions.view();
+        for (definition_id, definition) in definitions.iter() {
+            let total = definition.total_quantity();
+            if total.mantissa().is_negative() {
+                return Err(format!(
+                    "asset definition {definition_id} has negative total quantity {total}"
+                ));
+            }
+            if definition.spec().check(total).is_err() {
+                return Err(format!(
+                    "asset definition {definition_id} total quantity {total} violates numeric spec {}",
+                    definition.spec()
+                ));
+            }
+        }
+
+        let accounts = self.accounts.view();
+        for (asset_id, asset_value) in self.assets.view().iter() {
+            let balance = asset_value.as_ref();
+            if balance.mantissa().is_negative() {
+                return Err(format!("asset {asset_id} has negative balance {balance}"));
+            }
+            let definition = definitions.get(asset_id.definition()).ok_or_else(|| {
+                format!(
+                    "asset {asset_id} references missing definition {}",
+                    asset_id.definition()
+                )
+            })?;
+            if accounts.get(asset_id.account()).is_none() {
+                return Err(format!(
+                    "asset {asset_id} references missing account {}",
+                    asset_id.account()
+                ));
+            }
+            if definition.spec().check(balance).is_err() {
+                return Err(format!(
+                    "asset {asset_id} balance {balance} violates numeric spec {}",
+                    definition.spec()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_non_negative_ledger_invariants(&self) -> Result<(), String> {
+        for (rwa_id, value) in self.rwas.view().iter() {
+            let rwa = value.as_ref();
+            ensure_persisted_non_negative(&rwa.quantity, &format!("RWA {rwa_id} quantity"))?;
+            ensure_persisted_non_negative(
+                &rwa.held_quantity,
+                &format!("RWA {rwa_id} held quantity"),
+            )?;
+            if rwa.held_quantity > rwa.quantity {
+                return Err(format!(
+                    "RWA {rwa_id} held quantity {} exceeds total quantity {}",
+                    rwa.held_quantity, rwa.quantity
+                ));
+            }
+            for parent in &rwa.parents {
+                ensure_persisted_non_negative(
+                    parent.quantity(),
+                    &format!("RWA {rwa_id} parent quantity"),
+                )?;
+            }
+            for (label, quantity) in [
+                ("quantity", &rwa.quantity),
+                ("held quantity", &rwa.held_quantity),
+            ] {
+                if rwa.spec.check(quantity).is_err() {
+                    return Err(format!(
+                        "RWA {rwa_id} {label} {quantity} violates numeric spec {}",
+                        rwa.spec
+                    ));
+                }
+            }
+        }
+
+        for (escrow_id, escrow) in self.asset_escrows.view().iter() {
+            ensure_persisted_non_negative(
+                &escrow.amount,
+                &format!("asset escrow {:?} amount", escrow_id.as_hash()),
+            )?;
+            ensure_persisted_non_negative(
+                &escrow.remaining_amount,
+                &format!("asset escrow {:?} remaining amount", escrow_id.as_hash()),
+            )?;
+            if escrow.remaining_amount > escrow.amount {
+                return Err(format!(
+                    "asset escrow {:?} remaining amount {} exceeds total amount {}",
+                    escrow_id.as_hash(),
+                    escrow.remaining_amount,
+                    escrow.amount
+                ));
+            }
+            if let Some(resolution) = &escrow.resolution {
+                ensure_persisted_non_negative(
+                    &resolution.buyer_amount,
+                    &format!("asset escrow {:?} buyer resolution", escrow_id.as_hash()),
+                )?;
+                ensure_persisted_non_negative(
+                    &resolution.seller_amount,
+                    &format!("asset escrow {:?} seller resolution", escrow_id.as_hash()),
+                )?;
+            }
+        }
+
+        for (agreement_id, agreement) in self.repo_agreements.view().iter() {
+            for (label, quantity) in [
+                ("cash", agreement.cash_leg().quantity()),
+                ("collateral", agreement.collateral_leg().quantity()),
+            ] {
+                ensure_persisted_non_negative(
+                    quantity,
+                    &format!("repo agreement {agreement_id} {label} quantity"),
+                )?;
+                if quantity.is_zero() {
+                    return Err(format!(
+                        "repo agreement {agreement_id} {label} quantity must be positive"
+                    ));
+                }
+            }
+        }
+
+        for ((lane_id, validator_id), validator) in self.public_lane_validators.view().iter() {
+            ensure_persisted_non_negative(
+                &validator.total_stake,
+                &format!("lane {lane_id} validator {validator_id} total stake"),
+            )?;
+            ensure_persisted_non_negative(
+                &validator.self_stake,
+                &format!("lane {lane_id} validator {validator_id} self stake"),
+            )?;
+            if validator.self_stake > validator.total_stake {
+                return Err(format!(
+                    "lane {lane_id} validator {validator_id} self stake exceeds total stake"
+                ));
+            }
+        }
+
+        for ((lane_id, validator_id, staker_id), share) in
+            self.public_lane_stake_shares.view().iter()
+        {
+            ensure_persisted_non_negative(
+                &share.bonded,
+                &format!("lane {lane_id} validator {validator_id} staker {staker_id} bonded stake"),
+            )?;
+            for unbond in share.pending_unbonds.values() {
+                ensure_persisted_non_negative(
+                    &unbond.amount,
+                    &format!(
+                        "lane {lane_id} validator {validator_id} staker {staker_id} pending unbond"
+                    ),
+                )?;
+            }
+        }
+
+        for ((lane_id, epoch), reward) in self.public_lane_rewards.view().iter() {
+            ensure_persisted_non_negative(
+                &reward.total_reward,
+                &format!("lane {lane_id} epoch {epoch} total reward"),
+            )?;
+            let mut total = Numeric::zero();
+            for share in &reward.shares {
+                ensure_persisted_non_negative(
+                    &share.amount,
+                    &format!("lane {lane_id} epoch {epoch} reward share"),
+                )?;
+                total = total.checked_add(share.amount.clone()).ok_or_else(|| {
+                    format!("lane {lane_id} epoch {epoch} reward share total overflowed")
+                })?;
+            }
+            if total != reward.total_reward {
+                return Err(format!(
+                    "lane {lane_id} epoch {epoch} reward shares total {total} does not match {}",
+                    reward.total_reward
+                ));
+            }
+        }
+
+        for (settlement_id, ledger) in self.settlement_ledgers.view().iter() {
+            for entry in ledger.entries() {
+                for leg in &entry.legs {
+                    ensure_persisted_non_negative(
+                        leg.leg.quantity(),
+                        &format!("settlement {settlement_id} leg quantity"),
+                    )?;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Bind or update a contract alias record and keep both alias indexes consistent.
@@ -16549,6 +17024,12 @@ impl World {
             parliament_bodies: Storage::default(),
             ..Self::new()
         };
+        world
+            .validate_numeric_asset_invariants()
+            .expect("invalid numeric asset state in world constructor");
+        world
+            .validate_non_negative_ledger_invariants()
+            .expect("invalid non-negative ledger state in world constructor");
         world
             .rebuild_domain_selector_index()
             .expect("duplicate domain selector in world constructor");
@@ -21665,6 +22146,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ///
     /// # Errors
     /// - There is no account with such name.
+    /// - The default or existing asset balance is negative or violates the definition's numeric spec.
     #[allow(clippy::missing_panics_doc)]
     pub fn asset_or_insert(
         &mut self,
@@ -21683,6 +22165,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ///
     /// # Errors
     /// - There is no account with such name.
+    /// - The default or existing asset balance is negative or violates the definition's numeric spec.
     #[allow(clippy::missing_panics_doc)]
     pub fn asset_or_insert_exact(
         &mut self,
@@ -21690,11 +22173,17 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         default_asset_value: impl Into<Numeric>,
     ) -> Result<&mut AssetValue, Error> {
         let resolved_id = asset_id.clone();
-        self.asset_definition(resolved_id.definition())?;
+        let spec = self.asset_definition(resolved_id.definition())?.spec();
         self.account(resolved_id.account())?;
+        let default_asset_value = default_asset_value.into();
+        ensure_asset_numeric_value(&default_asset_value, spec)?;
+
+        if let Some(value) = self.assets.get(&resolved_id) {
+            ensure_asset_numeric_value(value.as_ref(), spec)?;
+        }
 
         if self.assets.get(&resolved_id).is_none() {
-            let asset = Asset::new(resolved_id.clone(), default_asset_value.into());
+            let asset = Asset::new(resolved_id.clone(), default_asset_value);
 
             self.emit_events(Some(AssetEvent::Created(asset.clone())));
             let (asset_id, asset_value) = asset.into_key_value();
@@ -21732,23 +22221,28 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ///
     /// # Errors
     /// - Asset definition not found
+    /// - Negative increment or stored total, or a numeric-spec mismatch
     /// - Overflow on addition
     pub fn increase_asset_total_amount(
         &mut self,
         definition_id: &AssetDefinitionId,
         increment: &Numeric,
     ) -> Result<(), Error> {
+        let spec = self.asset_definition(definition_id)?.spec();
+        ensure_asset_numeric_value(increment, spec)?;
         // Update the aggregate based on the stored value rather than recomputing
         // from the current storage view (which would already include the change)
         // to avoid double-counting.
         // Compute and persist the new total first, then emit events.
         let new_total = {
             let def = self.asset_definition_mut(definition_id)?;
+            ensure_asset_numeric_value(&def.total_quantity, spec)?;
             let new_total = def
                 .total_quantity
                 .clone()
                 .checked_add(increment.clone())
                 .ok_or(MathError::Overflow)?;
+            ensure_asset_numeric_value(&new_total, spec)?;
             def.total_quantity = new_total.clone();
             new_total
         };
@@ -21781,22 +22275,30 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ///
     /// # Errors
     /// - Asset definition not found
+    /// - Negative decrement or stored total, or a numeric-spec mismatch
     /// - Underflow (attempt to burn more than exists)
     pub fn decrease_asset_total_amount(
         &mut self,
         definition_id: &AssetDefinitionId,
         decrement: &Numeric,
     ) -> Result<(), Error> {
+        let spec = self.asset_definition(definition_id)?.spec();
+        ensure_asset_numeric_value(decrement, spec)?;
         // Update the aggregate directly to avoid double-counting when storage
         // has already been mutated by the caller.
         // Compute and persist the new total first, then emit events.
         let new_total = {
             let def = self.asset_definition_mut(definition_id)?;
+            ensure_asset_numeric_value(&def.total_quantity, spec)?;
+            if &def.total_quantity < decrement {
+                return Err(MathError::NotEnoughQuantity.into());
+            }
             let new_total = def
                 .total_quantity
                 .clone()
                 .checked_sub(decrement.clone())
                 .ok_or(MathError::NotEnoughQuantity)?;
+            ensure_asset_numeric_value(&new_total, spec)?;
             def.total_quantity = new_total.clone();
             new_total
         };
@@ -24269,6 +24771,12 @@ impl State {
         query_handle: LiveQueryStoreHandle,
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> Self {
+        world
+            .validate_numeric_asset_invariants()
+            .expect("initial world contains invalid numeric asset state");
+        world
+            .validate_non_negative_ledger_invariants()
+            .expect("initial world contains invalid non-negative ledger state");
         crate::smartcontracts::code::initialize_current_contract_subject_bindings(&mut world)
             .expect("new v2 world must contain valid contract subject bindings");
         crate::sns::seed_default_namespace_policies(&mut world);
@@ -30947,6 +31455,20 @@ impl State {
                 "fee asset mismatch: expected `{fee_asset_id}`, got `{}`",
                 receipt.fee_asset_id
             )));
+        }
+        for (label, value) in [
+            ("fee_amount", &receipt.fee_amount),
+            ("base_fee", &receipt.schedule.base_fee),
+            ("per_byte_fee", &receipt.schedule.per_byte_fee),
+            ("per_instruction_fee", &receipt.schedule.per_instruction_fee),
+            ("per_gas_unit_fee", &receipt.schedule.per_gas_unit_fee),
+        ] {
+            if value.mantissa().is_negative() {
+                return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                    "{label} must be non-negative for receipt {}",
+                    hex::encode(receipt.source_id)
+                )));
+            }
         }
         let expected = Self::recompute_nexus_fee_amount(receipt)?;
         if expected != receipt.fee_amount.clone().trim_trailing_zeros() {
@@ -42889,7 +43411,7 @@ mod tiered_snapshot_diff_tests {
         let high_water_key =
             SccpInboundAnchorHighWaterKeyV1::new(key.lane, record.trust_anchor.anchor_hash)
                 .expect("valid inbound high-water key");
-        let mut world = World::default();
+        let world = World::default();
         {
             let mut block = world.block();
             {
@@ -42922,7 +43444,7 @@ mod tiered_snapshot_diff_tests {
     #[test]
     fn sccp_outbound_record_locator_and_index_apply_and_commit_atomically() {
         let (key, record, index, proof_record) = sample_sccp_outbound_proof();
-        let mut world = World::default();
+        let world = World::default();
         {
             let mut block = world.block();
             {
@@ -43231,7 +43753,7 @@ mod tiered_snapshot_diff_tests {
             );
         }
 
-        let (mut missing_message, key, _, index, _) = world_with_outbound_proof();
+        let (missing_message, key, _, index, _) = world_with_outbound_proof();
         {
             let mut messages = missing_message.sccp_outbound_messages.block();
             messages.remove(key);
@@ -51234,6 +51756,13 @@ pub(crate) mod deserialize {
             world.space_directory_manifests =
                 decode_space_directory_manifest_sets(space_directory_manifests)?;
 
+            world
+                .validate_non_negative_ledger_invariants()
+                .map_err(|message| json::Error::InvalidField {
+                    field: "state.world.numeric_ledgers".to_owned(),
+                    message,
+                })?;
+
             let state = build_state(BuildStateInputs {
                 world,
                 block_hashes: BlockHashes::new(block_hashes_vec),
@@ -52748,6 +53277,18 @@ pub(crate) mod deserialize {
             consensus_evidence: Storage::default(),
             external_event_buf,
         };
+        world
+            .validate_numeric_asset_invariants()
+            .map_err(|message| json::Error::InvalidField {
+                field: "world.assets".into(),
+                message,
+            })?;
+        world
+            .validate_non_negative_ledger_invariants()
+            .map_err(|message| json::Error::InvalidField {
+                field: "world.numeric_ledgers".into(),
+                message,
+            })?;
         world
             .rebuild_domain_selector_index()
             .map_err(|message| json::Error::InvalidField {
@@ -54295,6 +54836,189 @@ mod tests {
             telemetry: crate::telemetry::StateTelemetry::default(),
         }
         .into_state_from_json(value)
+    }
+
+    fn snapshot_state_with_numeric_asset() -> (State, AssetDefinitionId, AssetId) {
+        let domain_id = DomainId::try_new("numeric_snapshot", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let definition_id = AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
+        let definition = AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+            .with_name("coin".to_owned())
+            .build(&ALICE_ID);
+        let asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
+        let asset = Asset::new(asset_id.clone(), Numeric::new(5_u32, 0));
+        let world = World::with_assets([domain], [account], [definition], [asset], []);
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        (state, definition_id, asset_id)
+    }
+
+    #[test]
+    #[should_panic(expected = "negative balance")]
+    fn world_with_assets_rejects_negative_initial_balance() {
+        let domain_id = DomainId::try_new("negative_balance", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let definition_id = AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
+        let definition = AssetDefinition::numeric(definition_id.clone())
+            .with_name("coin".to_owned())
+            .build(&ALICE_ID);
+        let asset = Asset::new(
+            AssetId::new(definition_id, ALICE_ID.clone()),
+            Numeric::new(-1_i32, 0),
+        );
+
+        let _ = World::with_assets([domain], [account], [definition], [asset], []);
+    }
+
+    #[test]
+    #[should_panic(expected = "negative total quantity")]
+    fn world_with_assets_rejects_negative_initial_total() {
+        let domain_id = DomainId::try_new("negative_total", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let definition_id = AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
+        let mut definition = AssetDefinition::numeric(definition_id)
+            .with_name("coin".to_owned())
+            .build(&ALICE_ID);
+        definition.total_quantity = Numeric::new(-1_i32, 0);
+
+        let _ = World::with([domain], [account], [definition]);
+    }
+
+    #[test]
+    #[should_panic(expected = "violates numeric spec")]
+    fn world_with_assets_rejects_initial_balance_outside_numeric_spec() {
+        let domain_id = DomainId::try_new("invalid_scale", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let definition_id = AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
+        let definition = AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+            .with_name("coin".to_owned())
+            .build(&ALICE_ID);
+        let asset = Asset::new(
+            AssetId::new(definition_id, ALICE_ID.clone()),
+            Numeric::new(1_u32, 1),
+        );
+
+        let _ = World::with_assets([domain], [account], [definition], [asset], []);
+    }
+
+    #[test]
+    fn state_snapshot_rejects_negative_numeric_asset_state() {
+        let (state, definition_id, asset_id) = snapshot_state_with_numeric_asset();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        **block.world.assets.get_mut(&asset_id).expect("asset exists") = Numeric::new(-1_i32, 0);
+        block
+            .commit()
+            .expect("commit adversarial negative-balance snapshot fixture");
+        let value = norito::json::to_value(&state).expect("serialize negative balance snapshot");
+        let error = deserialize_state_snapshot_value(value)
+            .err()
+            .expect("negative persisted balance must fail closed");
+        assert!(error.to_string().contains("negative balance"), "{error}");
+
+        let (state, definition_id_again, _) = snapshot_state_with_numeric_asset();
+        assert_eq!(definition_id_again, definition_id);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        block
+            .world
+            .asset_definitions
+            .get_mut(&definition_id_again)
+            .expect("asset definition exists")
+            .total_quantity = Numeric::new(-1_i32, 0);
+        block
+            .commit()
+            .expect("commit adversarial negative-total snapshot fixture");
+        let value = norito::json::to_value(&state).expect("serialize negative total snapshot");
+        let error = deserialize_state_snapshot_value(value)
+            .err()
+            .expect("negative persisted total must fail closed");
+        assert!(
+            error.to_string().contains("negative total quantity"),
+            "{error}"
+        );
+
+        let (state, _, asset_id) = snapshot_state_with_numeric_asset();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        **block.world.assets.get_mut(&asset_id).expect("asset exists") = Numeric::new(1_u32, 1);
+        block
+            .commit()
+            .expect("commit adversarial invalid-scale snapshot fixture");
+        let value = norito::json::to_value(&state).expect("serialize invalid-scale snapshot");
+        let error = deserialize_state_snapshot_value(value)
+            .err()
+            .expect("persisted balance outside its numeric spec must fail closed");
+        assert!(
+            error.to_string().contains("violates numeric spec"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn detached_merge_rejects_negative_delta_even_when_aggregation_would_cancel_it() {
+        let (state, _, asset_id) = snapshot_state_with_numeric_asset();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut delta = DetachedStateTransactionDelta::default();
+        delta.add_asset_add(asset_id.clone(), Numeric::one());
+        delta.add_asset_add(asset_id.clone(), Numeric::new(-1_i32, 0));
+
+        let error = delta
+            .merge_into(&mut block, &ALICE_ID)
+            .expect_err("negative detached delta must not be hidden by aggregation");
+        assert!(matches!(
+            error,
+            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                iroha_data_model::ValidationFail::InstructionFailed(
+                    InstructionExecutionError::Math(MathError::NegativeValue)
+                )
+            )
+        ));
+        assert_eq!(
+            state
+                .view()
+                .world()
+                .assets()
+                .get(&asset_id)
+                .expect("asset remains")
+                .as_ref(),
+            &Numeric::new(5_u32, 0)
+        );
+    }
+
+    #[test]
+    fn state_snapshot_rejects_negative_consensus_stake() {
+        let mut state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let lane_id = LaneId::new(0);
+        state.world.public_lane_stake_shares.insert(
+            (lane_id, ALICE_ID.clone(), BOB_ID.clone()),
+            PublicLaneStakeShare {
+                lane_id,
+                validator: ALICE_ID.clone(),
+                staker: BOB_ID.clone(),
+                bonded: Numeric::new(-1_i32, 0),
+                pending_unbonds: BTreeMap::new(),
+                metadata: Metadata::default(),
+            },
+        );
+
+        let value = norito::json::to_value(&state).expect("serialize negative stake snapshot");
+        let error = deserialize_state_snapshot_value(value)
+            .err()
+            .expect("negative persisted consensus stake must fail closed");
+        assert!(error.to_string().contains("bonded stake"), "{error}");
     }
 
     fn mutate_snapshot_incarnation_lineage(
@@ -87133,7 +87857,7 @@ mod tests {
     fn record_lane_relay_rejects_autoscale_elastic_non_live_manifest_binding_without_topology_fallback()
      {
         for (case, status, activation_height, expiry_height, height) in [
-            ("pending", ConsensusKeyStatus::Pending, 0, None, 1_u64),
+            ("pending", ConsensusKeyStatus::Pending, 5, None, 1_u64),
             ("future-active", ConsensusKeyStatus::Active, 5, None, 1_u64),
             ("disabled", ConsensusKeyStatus::Disabled, 0, None, 1_u64),
             ("expired", ConsensusKeyStatus::Active, 0, Some(2_u64), 2_u64),
@@ -87282,7 +88006,7 @@ mod tests {
     #[test]
     fn record_lane_relay_rejects_autoscale_elastic_non_live_lifecycle_topology_signer() {
         for (case, status, activation_height, expiry_height, height) in [
-            ("pending", ConsensusKeyStatus::Pending, 0, None, 1_u64),
+            ("pending", ConsensusKeyStatus::Pending, 5, None, 1_u64),
             ("future-active", ConsensusKeyStatus::Active, 5, None, 1_u64),
             ("disabled", ConsensusKeyStatus::Disabled, 0, None, 1_u64),
             ("expired", ConsensusKeyStatus::Active, 0, Some(2_u64), 2_u64),
@@ -99386,7 +100110,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_called_trigger_accepts_staged_mint_like_json_args() {
+    fn raw_ivm_trigger_enforces_entrypoint_authorization_before_argument_decode() {
         use iroha_data_model::{
             events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
             smart_contract::ContractAddress,
@@ -99399,111 +100123,30 @@ mod tests {
         use iroha_test_samples::ALICE_KEYPAIR;
         use ivm::KotodamaCompiler;
 
+        use crate::smartcontracts::code::{
+            activate_instance, register_code_bytes, register_manifest,
+        };
+
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
 
-        let trigger_id: TriggerId = "staged_mint_like".parse().unwrap();
+        const REQUIRED_PERMISSION: &str = "raw_trigger_run";
+        let trigger_id: TriggerId = "protected_raw_callback".parse().expect("trigger id");
         let src = r#"
-            seiyaku StagedMintRequest {
-              state MintRequestNextSequence: i64;
-              state MintRequestSequenceById: StateMap<Name, i64>;
-              state MintRequestSequences: StateMap<i64, i64>;
-              state MintRequestRequestIds: StateMap<i64, Name>;
-              state MintRequestFiIds: StateMap<i64, Name>;
-              state MintRequestFiAuthorities: StateMap<i64, AccountId>;
-              state MintRequestToAccounts: StateMap<i64, AccountId>;
-              state MintRequestAmounts: StateMap<i64, i64>;
-              state MintRequestRequestedBy: StateMap<i64, Json>;
-              state MintRequestStates: StateMap<i64, i64>;
-              state MintRequestCreatedAt: StateMap<i64, i64>;
-              state MintRequestExpiresAt: StateMap<i64, i64>;
-              state MintRequestFinalizedAt: StateMap<i64, i64>;
-              state MintRequestCanceledAt: StateMap<i64, i64>;
-
-              hajimari() {
-                MintRequestNextSequence = 0;
-              }
-
-              fn update_record(sequence: i64,
-                               request_id: Name,
-                               fi_id: Name,
-                               fi_multisig_account_id: AccountId,
-                               to_account_id: AccountId,
-                               amount_i64: i64,
-                               requested_by_actor_id: Json,
-                               state_code: i64,
-                               created_at_ms: i64,
-                               expires_at_ms: i64,
-                               finalized_at_ms: i64,
-                               canceled_at_ms: i64) {
-                MintRequestSequences[sequence] = sequence;
-                MintRequestRequestIds[sequence] = request_id;
-                MintRequestFiIds[sequence] = fi_id;
-                MintRequestFiAuthorities[sequence] = fi_multisig_account_id;
-                MintRequestToAccounts[sequence] = to_account_id;
-                MintRequestAmounts[sequence] = amount_i64;
-                MintRequestRequestedBy[sequence] = requested_by_actor_id;
-                MintRequestStates[sequence] = state_code;
-                MintRequestCreatedAt[sequence] = created_at_ms;
-                MintRequestExpiresAt[sequence] = expires_at_ms;
-                MintRequestFinalizedAt[sequence] = finalized_at_ms;
-                MintRequestCanceledAt[sequence] = canceled_at_ms;
-              }
-
-              fn main_impl(ev: Json) -> Option<bool> {
-                let action_key = Name::parse("action");
-                let request_id_key = Name::parse("request_id");
-                let fi_id_key = Name::parse("fi_id");
-                let to_account_id_key = Name::parse("to_account_id");
-                let amount_i64_key = Name::parse("amount_i64");
-                let requested_by_actor_id_key = Name::parse("requested_by_actor_id");
-                let created_at_ms_key = Name::parse("created_at_ms");
-                let expires_at_ms_key = Name::parse("expires_at_ms");
-
-                let action = ev.get_name(action_key)?;
-
-                if (action == Name::parse("create")) {
-                  let request_id = ev.get_name(request_id_key)?;
-                  assert(!MintRequestSequenceById.contains(request_id), "mint request already exists");
-
-                  let sequence = MintRequestNextSequence + 1;
-                  let fi_id = ev.get_name(fi_id_key)?;
-                  let to_account_id = ev.get_account_id(to_account_id_key)?;
-                  let amount_i64 = ev.get_int(amount_i64_key)?;
-                  let requested_by_actor_id = ev.get_json(requested_by_actor_id_key)?;
-                  let created_at_ms = ev.get_int(created_at_ms_key)?;
-                  let expires_at_ms = ev.get_int(expires_at_ms_key)?;
-
-                  MintRequestNextSequence = sequence;
-                  MintRequestSequenceById[request_id] = sequence;
-                  update_record(sequence: sequence,
-                                request_id: request_id,
-                                fi_id: fi_id,
-                                fi_multisig_account_id: to_account_id,
-                                to_account_id: to_account_id,
-                                amount_i64: amount_i64,
-                                requested_by_actor_id: requested_by_actor_id,
-                                state_code: 0,
-                                created_at_ms: created_at_ms,
-                                expires_at_ms: expires_at_ms,
-                                finalized_at_ms: 0,
-                                canceled_at_ms: 0);
-                  return Option::some(true);
-                }
-
-                assert(false, "unsupported staged mint action");
-                Option::none
-              }
-
-              kotoage fn main(ev: Json) authorize("staged_mint_request_run") {
-                assert(main_impl(ev).is_some(), "missing or invalid staged mint field");
+            seiyaku ProtectedRawTrigger {
+              kotoage fn main(Json event) authorize("raw_trigger_run") {
+                ledger::account::set_detail(
+                  account: context::authority(),
+                  key: Name::parse("raw_trigger_marker"),
+                  value: event
+                );
               }
             }
         "#;
-        let (program, manifest) = KotodamaCompiler::new()
-            .compile_source_with_manifest(&src)
-            .expect("compile staged-mint-like contract");
+        let (program, mut manifest) = KotodamaCompiler::new()
+            .compile_source_with_manifest(src)
+            .expect("compile protected raw trigger contract");
         let code_hash = ivm::contract_code_hash(&program);
         let bytecode = IvmBytecode::from_compiled(program.clone());
         let contract_address = ContractAddress::derive(
@@ -99530,16 +100173,14 @@ mod tests {
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(new_sample_account(&BOB_ID))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
-            stx.world.contract_code.insert(code_hash, program);
-            stx.world
-                .contract_manifests
-                .insert(code_hash, manifest.signed(&ALICE_KEYPAIR));
-            stx.world
-                .contract_instances
-                .insert(contract_address.clone(), code_hash);
+            let registered_hash = register_code_bytes(&ALICE_ID, program, &mut stx)
+                .expect("register raw trigger bytecode");
+            assert_eq!(registered_hash, code_hash);
+            manifest.code_hash = Some(code_hash);
+            register_manifest(&ALICE_ID, manifest.signed(&ALICE_KEYPAIR), &mut stx)
+                .expect("register raw trigger manifest");
+            activate_instance(&ALICE_ID, contract_address.clone(), code_hash, &mut stx)
+                .expect("activate raw trigger contract");
             let mut callback_metadata = Metadata::default();
             callback_metadata.insert(
                 "contract_entrypoint".parse().expect("metadata key"),
@@ -99576,32 +100217,21 @@ mod tests {
         {
             let mut state_block = state.block(block2.as_ref().header());
             let mut stx = state_block.transaction();
-            let contract_scope =
-                hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
-            let durable_marker: Name = format!("sc/{contract_scope}/MintRequestNextSequence")
+            let metadata_marker: Name = "raw_trigger_marker"
                 .parse()
-                .expect("valid scoped raw-trigger marker");
-            let opaque_asset_id = AssetDefinitionId::from_uuid_bytes([
-                0x2e, 0x3d, 0x34, 0xbe, 0xb8, 0xa8, 0x42, 0x39, 0xb3, 0xd9, 0x59, 0x07, 0x70, 0xf1,
-                0x18, 0x9e,
-            ])
-            .expect("opaque asset definition id");
-            let args_json = format!(
-                r#"{{"action":"create","request_id":"cd38ea58-bc66-4844-921f-22af49b6cf3d","asset_id":"{}","asset_definition_blob_hex":"4e5254300000035dc38f291ebaa4035dc38f291ebaa4000900000000000000003666540b910988cf0001000000000000002e01000000000000003d0100000000000000340100000000000000be0100000000000000b80100000000000000a80100000000000000420100000000000000390100000000000000b30100000000000000d90100000000000000590100000000000000070100000000000000700100000000000000f101000000000000001801000000000000009e","fi_id":"banka","to_account_id":"{}","amount_i64":53378,"requested_by_actor_id":"operator1@banka","created_at_ms":1773904751245,"expires_at_ms":1773905351245}}"#,
-                opaque_asset_id,
-                (*BOB_ID).to_string()
-            );
+                .expect("valid raw-trigger metadata marker");
             let event = ExecuteTriggerEvent {
                 trigger_id: trigger_id.clone(),
                 authority: ALICE_ID.clone(),
-                args: Json::from_string_unchecked(args_json),
+                args: Json::from(norito::json!({ "marker": "authorized" })),
             };
+            let denied_events_before = stx.world.external_event_buf.len();
             ivm::reset_argument_record_decode_count();
             let denied = stx
                 .execute_called_trigger(&trigger_id, &event)
                 .expect_err("raw IVM trigger must enforce its kotoage permission before decoding");
             assert!(
-                denied.to_string().contains("staged_mint_request_run"),
+                denied.to_string().contains(REQUIRED_PERMISSION),
                 "unexpected raw trigger authorization error: {denied}"
             );
             assert_eq!(
@@ -99611,19 +100241,25 @@ mod tests {
             );
             assert!(
                 stx.world
-                    .smart_contract_state
-                    .get(&durable_marker)
+                    .account(&ALICE_ID)
+                    .expect("trigger authority account")
+                    .metadata()
+                    .get(&metadata_marker)
                     .is_none(),
-                "denied raw IVM trigger must apply no durable state"
+                "denied raw IVM trigger must apply no queued effect"
+            );
+            assert_eq!(
+                stx.world.external_event_buf.len(),
+                denied_events_before,
+                "denied raw IVM trigger must emit no completion event"
             );
 
-            let callback_permission =
-                Permission::new("staged_mint_request_run".into(), Json::new(()));
+            let callback_permission = Permission::new(REQUIRED_PERMISSION.into(), Json::new(()));
             Grant::account_permission(callback_permission.clone(), ALICE_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("grant raw IVM trigger entrypoint permission");
             stx.execute_called_trigger(&trigger_id, &event)
-                .expect("staged-mint-like trigger should accept live create args");
+                .expect("granted raw trigger should execute");
             assert_eq!(
                 ivm::argument_record_decode_count(),
                 1,
@@ -99631,10 +100267,13 @@ mod tests {
             );
             let authorized_marker = stx
                 .world
-                .smart_contract_state
-                .get(&durable_marker)
+                .account(&ALICE_ID)
+                .expect("trigger authority account")
+                .metadata()
+                .get(&metadata_marker)
                 .cloned()
-                .expect("authorized raw trigger writes its durable marker");
+                .expect("authorized raw trigger writes its metadata marker");
+            let authorized_events = stx.world.external_event_buf.len();
 
             Revoke::account_permission(callback_permission.clone(), ALICE_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
@@ -99644,7 +100283,7 @@ mod tests {
                 .execute_called_trigger(&trigger_id, &event)
                 .expect_err("revoked raw IVM trigger permission must deny callback dispatch");
             assert!(
-                revoked.to_string().contains("staged_mint_request_run"),
+                revoked.to_string().contains(REQUIRED_PERMISSION),
                 "unexpected revoked raw trigger error: {revoked}"
             );
             assert_eq!(
@@ -99653,9 +100292,18 @@ mod tests {
                 "revoked raw trigger event arguments must remain undecoded"
             );
             assert_eq!(
-                stx.world.smart_contract_state.get(&durable_marker),
+                stx.world
+                    .account(&ALICE_ID)
+                    .expect("trigger authority account")
+                    .metadata()
+                    .get(&metadata_marker),
                 Some(&authorized_marker),
                 "revoked raw IVM trigger must preserve the last authorized state"
+            );
+            assert_eq!(
+                stx.world.external_event_buf.len(),
+                authorized_events,
+                "revoked raw IVM trigger must emit no completion event"
             );
 
             Grant::account_permission(callback_permission, ALICE_ID.clone())
@@ -99678,9 +100326,18 @@ mod tests {
                 "deactivated raw trigger event arguments must remain undecoded"
             );
             assert_eq!(
-                stx.world.smart_contract_state.get(&durable_marker),
+                stx.world
+                    .account(&ALICE_ID)
+                    .expect("trigger authority account")
+                    .metadata()
+                    .get(&metadata_marker),
                 Some(&authorized_marker),
-                "deactivated raw IVM trigger must apply no durable state"
+                "deactivated raw IVM trigger must apply no queued effect"
+            );
+            assert_eq!(
+                stx.world.external_event_buf.len(),
+                authorized_events,
+                "deactivated raw IVM trigger must emit no completion event"
             );
             stx.apply();
             state_block.commit().unwrap();
@@ -99708,7 +100365,7 @@ mod tests {
             .compile_source(
                 r#"
 seiyaku IdentitylessRawCallback {
-  kotoage fn main(ev: Json) {
+  kotoage fn main(Json ev) authorize("identityless_raw_callback_run") {
     let _ev = ev;
   }
 }
@@ -99787,7 +100444,7 @@ seiyaku IdentitylessRawCallback {
     }
 
     #[test]
-    fn execute_called_contract_call_trigger_uses_event_args_for_trigger_event() {
+    fn contract_call_trigger_enforces_entrypoint_authorization_before_argument_decode() {
         use iroha_data_model::{
             events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
             smart_contract::ContractAddress,
@@ -99811,22 +100468,21 @@ seiyaku IdentitylessRawCallback {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
 
+        const REQUIRED_PERMISSION: &str = "contract_trigger_run";
         let src = r#"
-            seiyaku TriggerPayloadProbe {
-              state last_condition: i64;
-
-              kotoage fn native_by_call_settle(marker: i64) authorize("trigger_payload_probe_run") {
-                let ev = context::trigger_event();
-                if let Option::some(condition_code) = ev.get_int(Name::parse("condition_code")) {
-                  assert(condition_code == 7, "condition_code mismatch");
-                } else {
-                  assert(false, "missing condition_code");
-                }
-                last_condition = marker;
+            seiyaku ProtectedContractCallTrigger {
+              kotoage fn run(int marker) authorize("contract_trigger_run") {
+                let _marker = marker;
+                let event = context::trigger_event();
+                ledger::account::set_detail(
+                  account: context::authority(),
+                  key: Name::parse("contract_trigger_marker"),
+                  value: event
+                );
               }
 
-              trigger semantic_probe_decl -> native_by_call_settle {
-                on execute trigger semantic_probe_decl;
+              trigger protected_contract_callback -> run {
+                on execute trigger protected_contract_callback;
               }
             }
         "#;
@@ -99841,13 +100497,13 @@ seiyaku IdentitylessRawCallback {
                 interface
                     .entrypoints
                     .iter()
-                    .find(|entrypoint| entrypoint.name == "native_by_call_settle")
+                    .find(|entrypoint| entrypoint.name == "run")
             })
             .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
             .expect("parameterized trigger callback schema");
         let callback_arguments = ivm::encode_argument_record_from_json(
             argument_schema,
-            &Json::from(norito::json!({ "marker": 9 })),
+            &Json::from(norito::json!({ "marker": "9" })),
         )
         .expect("encode trigger callback arguments");
         let callback_arguments = ContractArgumentRecord::try_new(callback_arguments)
@@ -99891,7 +100547,7 @@ seiyaku IdentitylessRawCallback {
                 Action::new(
                     Executable::ContractCall(ContractInvocation {
                         contract_address: contract_address.clone(),
-                        entrypoint: "native_by_call_settle".to_owned(),
+                        entrypoint: "run".to_owned(),
                         arguments: Some(callback_arguments),
                     }),
                     Repeats::Indefinitely,
@@ -99916,22 +100572,21 @@ seiyaku IdentitylessRawCallback {
         {
             let mut state_block = state.block(block2.as_ref().header());
             let mut stx = state_block.transaction();
-            let contract_scope =
-                hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
-            let durable_marker: Name = format!("sc/{contract_scope}/last_condition")
+            let metadata_marker: Name = "contract_trigger_marker"
                 .parse()
-                .expect("valid scoped trigger marker");
+                .expect("valid ContractCall trigger metadata marker");
             let event = ExecuteTriggerEvent {
                 trigger_id: trigger_id.clone(),
                 authority: ALICE_ID.clone(),
                 args: Json::from_string_unchecked(r#"{"condition_code":7}"#.to_owned()),
             };
+            let denied_events_before = stx.world.external_event_buf.len();
             ivm::reset_argument_record_decode_count();
             let denied = stx
                 .execute_called_trigger(&trigger_id, &event)
                 .expect_err("trigger authority without the entrypoint permission must be denied");
             assert!(
-                denied.to_string().contains("trigger_payload_probe_run"),
+                denied.to_string().contains(REQUIRED_PERMISSION),
                 "unexpected trigger authorization error: {denied}"
             );
             assert_eq!(
@@ -99941,14 +100596,20 @@ seiyaku IdentitylessRawCallback {
             );
             assert!(
                 stx.world
-                    .smart_contract_state
-                    .get(&durable_marker)
+                    .account(&ALICE_ID)
+                    .expect("trigger authority account")
+                    .metadata()
+                    .get(&metadata_marker)
                     .is_none(),
-                "denied ContractCall trigger must apply no durable state"
+                "denied ContractCall trigger must apply no queued effect"
+            );
+            assert_eq!(
+                stx.world.external_event_buf.len(),
+                denied_events_before,
+                "denied ContractCall trigger must emit no completion event"
             );
 
-            let callback_permission =
-                Permission::new("trigger_payload_probe_run".into(), Json::new(()));
+            let callback_permission = Permission::new(REQUIRED_PERMISSION.into(), Json::new(()));
             Grant::account_permission(callback_permission.clone(), ALICE_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("grant trigger entrypoint permission");
@@ -99961,10 +100622,13 @@ seiyaku IdentitylessRawCallback {
             );
             let authorized_marker = stx
                 .world
-                .smart_contract_state
-                .get(&durable_marker)
+                .account(&ALICE_ID)
+                .expect("trigger authority account")
+                .metadata()
+                .get(&metadata_marker)
                 .cloned()
-                .expect("authorized trigger writes its durable marker");
+                .expect("authorized trigger writes its metadata marker");
+            let authorized_events = stx.world.external_event_buf.len();
 
             Revoke::account_permission(callback_permission.clone(), ALICE_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
@@ -99974,7 +100638,7 @@ seiyaku IdentitylessRawCallback {
                 .execute_called_trigger(&trigger_id, &event)
                 .expect_err("revoked ContractCall trigger permission must deny callback dispatch");
             assert!(
-                revoked.to_string().contains("trigger_payload_probe_run"),
+                revoked.to_string().contains(REQUIRED_PERMISSION),
                 "unexpected revoked trigger authorization error: {revoked}"
             );
             assert_eq!(
@@ -99983,9 +100647,18 @@ seiyaku IdentitylessRawCallback {
                 "revoked ContractCall trigger event arguments must remain undecoded"
             );
             assert_eq!(
-                stx.world.smart_contract_state.get(&durable_marker),
+                stx.world
+                    .account(&ALICE_ID)
+                    .expect("trigger authority account")
+                    .metadata()
+                    .get(&metadata_marker),
                 Some(&authorized_marker),
                 "revoked ContractCall trigger must preserve the last authorized state"
+            );
+            assert_eq!(
+                stx.world.external_event_buf.len(),
+                authorized_events,
+                "revoked ContractCall trigger must emit no completion event"
             );
 
             Grant::account_permission(callback_permission, ALICE_ID.clone())
@@ -100008,9 +100681,18 @@ seiyaku IdentitylessRawCallback {
                 "deactivated ContractCall trigger event arguments must remain undecoded"
             );
             assert_eq!(
-                stx.world.smart_contract_state.get(&durable_marker),
+                stx.world
+                    .account(&ALICE_ID)
+                    .expect("trigger authority account")
+                    .metadata()
+                    .get(&metadata_marker),
                 Some(&authorized_marker),
-                "deactivated ContractCall trigger must apply no durable state"
+                "deactivated ContractCall trigger must apply no queued effect"
+            );
+            assert_eq!(
+                stx.world.external_event_buf.len(),
+                authorized_events,
+                "deactivated ContractCall trigger must emit no completion event"
             );
         }
     }
@@ -102752,6 +103434,64 @@ seiyaku IdentitylessRawCallback {
     }
 
     #[test]
+    fn nexus_fee_receipt_rejects_negative_amounts_and_schedule_rates() {
+        let fee_asset_id = iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
+        let payer = gen_account_in("fee_receipt_negative").0;
+        let receipt = NexusFeeReceipt {
+            version: 1,
+            source_id: [0xA9; 32],
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_id: LaneId::new(0),
+            block_height: 1,
+            payer_account_id: payer,
+            fee_asset_id: fee_asset_id.clone(),
+            fee_amount: Numeric::one(),
+            schedule: NexusFeeScheduleInputs {
+                tx_bytes_len: 0,
+                instruction_count: 0,
+                gas_used: 0,
+                base_fee: Numeric::one(),
+                per_byte_fee: Numeric::zero(),
+                per_instruction_fee: Numeric::zero(),
+                per_gas_unit_fee: Numeric::zero(),
+            },
+        };
+        let negative = Numeric::new(-1_i32, 0);
+        let mut cases = Vec::new();
+        let mut case = receipt.clone();
+        case.fee_amount = negative.clone();
+        case.schedule.base_fee = negative.clone();
+        cases.push(case);
+        let mut case = receipt.clone();
+        case.schedule.base_fee = negative.clone();
+        cases.push(case);
+        let mut case = receipt.clone();
+        case.schedule.per_byte_fee = negative.clone();
+        cases.push(case);
+        let mut case = receipt.clone();
+        case.schedule.per_instruction_fee = negative.clone();
+        cases.push(case);
+        let mut case = receipt;
+        case.schedule.per_gas_unit_fee = negative;
+        cases.push(case);
+
+        for case in cases {
+            let error = State::validate_nexus_fee_receipt(
+                &case,
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                1,
+                &fee_asset_id,
+            )
+            .expect_err("negative Nexus fee receipt field must be rejected");
+            assert!(matches!(
+                error,
+                MergeLedgerCommitError::InvalidNexusFeeReceipt(_)
+            ));
+        }
+    }
+
+    #[test]
     fn commit_merge_entry_burns_nexus_fee_receipts_once() {
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
             setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), [0x42; 32]);
@@ -104258,7 +104998,8 @@ seiyaku IdentitylessRawCallback {
         let ids = vec![1, 1, 2];
         let qtys = vec![Numeric::new(5, 0), Numeric::new(3, 0), Numeric::new(2, 0)];
 
-        let aggregated = aggregate_numeric(&ids, &qtys);
+        let aggregated = aggregate_numeric(&ids, &qtys)
+            .expect("valid non-negative quantities should aggregate without overflow");
 
         assert_eq!(aggregated.len(), 2, "duplicate ids should coalesce");
         assert_eq!(aggregated[0], (1, Numeric::new(8, 0)));

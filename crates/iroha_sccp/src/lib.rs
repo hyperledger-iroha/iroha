@@ -4261,9 +4261,7 @@ pub fn verify_taira_bridge_finality_proof_structure(proof: &TairaBridgeFinalityP
         return false;
     }
 
-    artifact
-        .validate_for_block(proof.block_header.height().get(), proof.block_header.hash())
-        .is_ok()
+    artifact.validate_for_header(&proof.block_header).is_ok()
 }
 
 /// Verify a Taira finality proof's canonical header, validator set, `PoPs`, and commit signature.
@@ -5369,7 +5367,7 @@ mod tests {
         .expect("TRON contract route config");
         assert_eq!(
             route_config,
-            hex32("604815ec629f4d8438f44fccc63ff37ac3a96cd71e23495b86779fd0fe68295f")
+            hex32("1ac12d420c355f9dc77c5e891ccfa6db9e23a0c00153f27470720564d59d15f4")
         );
 
         let request = &fixture().request;
@@ -5481,11 +5479,37 @@ mod tests {
             1);
         reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
             .sora_finality_anchor
+            .version = 2);
+        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
+            .sora_finality_anchor
+            .source_network =
+            SccpNetworkV1::EthereumMainnet);
+        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
+            .sora_finality_anchor
+            .protocol_version =
+            candidate
+                .sora_finality_anchor
+                .protocol_version
+                .saturating_add(1));
+        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
+            .sora_finality_anchor
+            .chain_id_hash[0] ^=
+            1);
+        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
+            .sora_finality_anchor
             .checkpoint_height +=
             1);
         reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
             .sora_finality_anchor
-            .validator_set_hash[0] ^=
+            .checkpoint_block_hash[0] ^=
+            1);
+        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
+            .sora_finality_anchor
+            .checkpoint_context_id[0] ^=
+            1);
+        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
+            .sora_finality_anchor
+            .checkpoint_finality_artifact_hash[0] ^=
             1);
         reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
             .sora_finality_anchor_hash[0] ^=
@@ -5691,7 +5715,7 @@ mod tests {
             .is_none()
         );
         let other_network = governed_route(
-            SccpNetworkV1::EthereumSepolia,
+            SccpNetworkV1::BscMainnet,
             1,
             SccpRouteActivationV1::Bidirectional,
         );

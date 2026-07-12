@@ -33,10 +33,11 @@ public final class SccpClientExactTests {
   private static final String MESSAGE_ID = "11".repeat(32);
   private static final String AUTHORITY = canonicalAuthority(0x11);
   private static final String OTHER_AUTHORITY = canonicalAuthority(0x12);
+  // These authenticate this fixture's semantic commitments and deployment code hashes.
   private static final String BSC_ROUTE_CONFIG_HASH =
-      "0FC9AACAB4FDA553FFF88AC434294FA879B4205E723C377A82754BDC2DB152C6";
+      "553B2E9D6165A499853AC061D91678A2C41DE8F660EA0E8DBA0BFF19618D5DAD";
   private static final String TRON_ROUTE_CONFIG_HASH =
-      "0D8A9CFD7501B39865633FAAC108852E9D045A9D1643799F84D920913BB60EB7";
+      "C09C131C9C76D46A5A49F21C1BD8128D2958E46528EDC9FBBDA10B8ABCF97BD6";
 
   private SccpClientExactTests() {}
 

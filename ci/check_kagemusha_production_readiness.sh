@@ -7911,7 +7911,9 @@ TEXT_REQUIREMENTS = {
         "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
         "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
         "recursive_spend_v3_artifact_set_installs_atomically_and_gates_proof_entrypoints",
+        "recursive_spend_v3_artifact_set_ffi_rejects_invalid_buffers_without_mutating_active_set",
         "recursive_spend_v3_artifact_set_rejects_manifest_generation_and_spool_substitution",
+        "recursive_spend_v3_artifact_set_rotation_preserves_active_generation_until_commit",
         "KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_ENTRYPOINTS_CALLABLE: bool = false",
         "fn recursive_spend_capabilities_advertise_v3_and_remain_fail_closed()",
         "assert!(!capabilities.proof_backend_available);",
@@ -7960,6 +7962,7 @@ TEXT_REQUIREMENTS = {
     ),
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendV2Tests.swift": (
         "testABI18InventoryRequiresExplicitFailClosedCapabilities",
+        "testV3ArtifactInstallSessionValidatesLocallyAndCannotReopenAfterCancel",
         "KagemushaRecursiveSpendV2.requiredNativeBridgeAbiVersion, 18",
         "The ABI-18 Kagemusha recursive spend V2 bridge is unavailable.",
         "connect_norito_kagemusha_recursive_spend_capabilities_v1",
@@ -8083,25 +8086,34 @@ EXACT_LINE_REQUIREMENTS = {
 
 SDK_SELECTOR_REQUIREMENTS = {
     "crates/iroha_data_model/src/offline/mod.rs": (
-        "pasta_cycle_v3_backend_available: bool",
-        "if pasta_cycle_v3_backend_available",
-        "Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1)",
-        "None",
+        "pub const fn preferred_kagemusha_offline_spend_mode(\n"
+        "    pasta_cycle_v3_backend_available: bool,\n"
+        ") -> Option<&'static str> {\n"
+        "    if pasta_cycle_v3_backend_available {\n"
+        "        Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1)\n"
+        "    } else {\n"
+        "        None\n"
+        "    }\n"
+        "}",
     ),
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift": (
         'case recursiveSpendV1 = "recursive_spend_v1"',
-        "pastaCycleV3BackendAvailable: Bool",
-        "pastaCycleV3BackendAvailable ? .recursiveSpendV1 : nil",
+        "public static func preferredMode(\n"
+        "        pastaCycleV3BackendAvailable: Bool\n"
+        "    ) -> KagemushaOfflineSpendMode? {\n"
+        "        pastaCycleV3BackendAvailable ? .recursiveSpendV1 : nil\n"
+        "    }",
     ),
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt": (
         'RECURSIVE_SPEND_V1("recursive_spend_v1")',
-        "pastaCycleV3BackendAvailable: Boolean",
-        "if (pastaCycleV3BackendAvailable) Mode.RECURSIVE_SPEND_V1 else null",
+        "fun preferredMode(pastaCycleV3BackendAvailable: Boolean): Mode? =\n"
+        "            if (pastaCycleV3BackendAvailable) Mode.RECURSIVE_SPEND_V1 else null",
     ),
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java": (
         'RECURSIVE_SPEND_V1("recursive_spend_v1")',
-        "pastaCycleV3BackendAvailable",
-        "return pastaCycleV3BackendAvailable ? Mode.RECURSIVE_SPEND_V1 : null;",
+        "public static Mode preferredMode(final boolean pastaCycleV3BackendAvailable) {\n"
+        "    return pastaCycleV3BackendAvailable ? Mode.RECURSIVE_SPEND_V1 : null;\n"
+        "  }",
     ),
 }
 

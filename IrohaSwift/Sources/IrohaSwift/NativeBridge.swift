@@ -726,7 +726,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         defer {
             free(pointer)
         }
-        guard length <= CUnsignedLong(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) else {
+        guard length <= CUnsignedLong(KagemushaRecursiveSpend.artifactMaximumFileBytes) else {
             throw NativeBridgeError.kagemushaProve
         }
         return Data(bytes: pointer, count: Int(length))
@@ -4525,19 +4525,17 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    /// Whether ABI 18 exposes the V3 capability and reserved proof stubs.
+    /// Whether ABI 18 exposes the complete first-release recursive-spend symbol set.
     ///
-    /// This does not mean the V2 proof backend is available; every stub must
+    /// This does not mean the proof backend is available; every reserved entrypoint must
     /// return the canonical unavailable status until that backend is enabled.
-    public var isKagemushaRecursiveSpendV2StubAvailable: Bool {
+    public var hasKagemushaRecursiveSpendContractSymbols: Bool {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         let hasRequiredSymbols = (
-            KagemushaRecursiveSpendV2.requiredNativeSymbols + ["connect_norito_free"]
+            KagemushaRecursiveSpend.requiredNativeSymbols + ["connect_norito_free"]
         ).allSatisfy { hasKagemushaV2Symbol($0) }
-        return loadedBridgeAbiVersion.map {
-            $0 >= KagemushaRecursiveSpendV2.requiredNativeBridgeAbiVersion
-        } == true
+        return loadedBridgeAbiVersion == KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion
             && hasRequiredSymbols
         #else
         return false

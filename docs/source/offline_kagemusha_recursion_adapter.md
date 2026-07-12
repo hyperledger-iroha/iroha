@@ -293,8 +293,14 @@ proof envelopes bind the final authenticated manifest digest instead.
 
 The bridge exports a capability archive plus bounded, manifest-bound V3
 streaming ingestion. Ingestion checks header/descriptor fields plus raw and
-framed hashes, but never authorizes proving. The capability record names every
-missing gate and reports `proof_backend_available = false`; all proof-gated
+framed hashes, but never authorizes proving. Exactly one finalized handle for
+each of the six roles must be installed as a single manifest-bound set. Native
+installation revalidates the held anonymous files, stores them in canonical
+manifest role order, consumes all six handles only after every check succeeds,
+and leaves the prior generation unchanged on failure. Rotation is atomic;
+in-flight calls retain the selected generation by reference, and digest-guarded
+uninstall cannot remove a replacement generation. The capability record names
+every missing gate and reports `proof_backend_available = false`; all proof-gated
 entrypoints fail closed. Symbol presence and successful ingestion are not
 readiness signals; the retired V2 artifact spool is not exported in the
 first-release surface. `authenticated_release_envelope` remains an explicit

@@ -76,6 +76,12 @@ readiness = client.get_offline_readiness(asset_definition_id="xor#wonderland")
 print("offline ready", readiness.ready, readiness.blockers)
 ```
 
+`OfflineTopUpRequest` and `OfflineRedeemRequest` are exported `TypedDict`
+contracts, and an applied top-up returns a frozen `OfflineTopUpAnchor` rather
+than an untyped mapping. The decoder enforces the `0..=28` scale bound and
+cross-checks the anchor's operation ID, transaction hash, finality height,
+amount, roots, current note, and sorted nullifier set before returning it.
+
 For app-facing offline cash flows, use `iroha_python.offline_cash` to keep the
 online load lifecycle separate from local exchange. The lifecycle controller
 syncs pending audit receipts before loading more cash, and the transport helper

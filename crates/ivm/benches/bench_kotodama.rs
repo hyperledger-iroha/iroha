@@ -7,6 +7,7 @@ use iroha_data_model::prelude::Name;
 use iroha_primitives::{
     json::Json,
     numeric::{Quantity, RoundingMode},
+    numeric_abi::IntValueV1,
 };
 use ivm::{
     IVM, ProgramMetadata, encoding,
@@ -47,6 +48,18 @@ fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(payload);
     out.extend_from_slice(Hash::new(payload).as_ref());
     out
+}
+
+fn int_result_i64(vm: &IVM) -> i64 {
+    let tlv = vm
+        .validate_tlv(vm.register(10))
+        .expect("benchmark returned an int TLV");
+    assert_eq!(tlv.type_id, PointerType::Int);
+    IntValueV1::decode_frame(tlv.payload)
+        .expect("benchmark returned a canonical int frame")
+        .into_int()
+        .try_to_i64()
+        .expect("benchmark int result fits i64")
 }
 
 fn add_argument_host(program: &[u8]) -> DefaultHost {
@@ -99,7 +112,7 @@ fn bench_kotodama(c: &mut Criterion) {
         .expect("select benchmark entrypoint");
     verification_vm.set_host(host.clone());
     verification_vm.run().expect("execute benchmark add");
-    assert_eq!(verification_vm.register(10), 11);
+    assert_eq!(int_result_i64(&verification_vm), 11);
 
     c.bench_function("kotodama_runtime_cold_add", |b| {
         b.iter(|| {
@@ -360,7 +373,7 @@ fn warm_list_runtime(source: &str) -> (IVM, ivm::RuntimeTemplate) {
         .expect("select bounded List runtime benchmark entrypoint");
     let template = vm.runtime_template();
     vm.run().expect("verify bounded List runtime benchmark");
-    assert_eq!(vm.register(10), 64);
+    assert_eq!(int_result_i64(&vm), 64);
     vm.reset_from_runtime_template(&template);
     (vm, template)
 }

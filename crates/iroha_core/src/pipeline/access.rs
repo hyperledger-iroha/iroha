@@ -2732,19 +2732,19 @@ mod tests {
     fn compiler_dynamic_state_writes_and_helper_writes_fall_back_to_global() {
         let source = r#"
 seiyaku DynamicAccessCounter {
-  state Counters: StateMap<i64, i64>;
+  state StateMap<int, int> Counters;
 
-  fn bump_hidden(key: i64, delta: i64) {
+  fn bump_hidden(int key, int delta) {
     let current = Counters.get(key).unwrap_or(0);
     Counters[key] = current + delta;
   }
 
-  kotoage fn bump_direct(key: i64, delta: i64) authorize("CanEnactGovernance") {
+  kotoage fn bump_direct(int key, int delta) authorize("CanEnactGovernance") {
     let current = Counters.get(key).unwrap_or(0);
     Counters[key] = current + delta;
   }
 
-  kotoage fn bump_via_helper(key: i64, delta: i64) authorize("CanEnactGovernance") {
+  kotoage fn bump_via_helper(int key, int delta) authorize("CanEnactGovernance") {
     bump_hidden(key, delta);
   }
 }

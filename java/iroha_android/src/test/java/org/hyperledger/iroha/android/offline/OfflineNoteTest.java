@@ -65,14 +65,8 @@ public final class OfflineNoteTest {
     offlineNoteDomainsRejectSubstitutionAndPadding();
     instanceValuesMatchRustVectors();
     auditInstanceValuesRejectUnanchoredClaimsAndHiddenOutputs();
-    kagemushaRecordBackedNativeProverValidatesInput();
-    kagemushaCompactNativeInputCopiesBeforeDispatch();
-    kagemushaRecursiveAggregationNativeProverValidatesInput();
-    kagemushaRecursiveSpendNativeProverValidatesInput();
+    // Retired pre-release Kagemusha ABI-6/7 JNI coverage was removed with that surface.
     verifyingKeyBoxStandaloneCodecDecodesAndRejectsMalformedArchives();
-    kagemushaNativeProversRejectMissingAndEmptyNativeOutputs();
-    kagemushaNativeAvailabilityRequiresJniEntrypoint();
-    kagemushaRecursiveAggregationNativeAvailabilityRequiresJniEntrypoint();
     chainVkOfflineNoteProofWrappersValidateInputs();
     openVerifyEnvelopeRejectsNonExactPublicInputHashBeforeDecoding();
     nativeHalo2ProverProducesVerifyingPayloadWhenRequested();
@@ -970,6 +964,7 @@ public final class OfflineNoteTest {
     }
   }
 
+  /* Retired pre-release Kagemusha ABI-6/7 test implementations.
   private static void kagemushaRecordBackedNativeProverValidatesInput() {
     final byte[] oversizedArchive =
         new byte[KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES + 1];
@@ -1213,6 +1208,7 @@ public final class OfflineNoteTest {
     }
   }
 
+  */
   private static void verifyingKeyBoxStandaloneCodecDecodesAndRejectsMalformedArchives() {
     final byte[] encoded = VerifyingKeyBoxCodec.encodeNorito("halo2/ipa", new byte[] {1, 2, 3});
     final VerifyingKeyBoxCodec.VerifyingKeyBox decoded =
@@ -1350,6 +1346,7 @@ public final class OfflineNoteTest {
         "record-backed audit verifier must reject empty verifier key boxes before JNI");
   }
 
+  /* Retired pre-release Kagemusha ABI-6/7 availability tests.
   private static void kagemushaNativeProversRejectMissingAndEmptyNativeOutputs() {
     try {
       KagemushaCompactPaymentTokenProver.requireNativeOutput(null, "native test");
@@ -1536,6 +1533,7 @@ public final class OfflineNoteTest {
         "recursive aggregation availability rejects runtime probe failures");
   }
 
+  */
   private static void nativeHalo2ProverPerformanceWhenRequested() throws Exception {
     if (!"1".equals(System.getenv("IROHA_JAVA_OFFLINE_BENCH"))) {
       return;
@@ -5292,13 +5290,13 @@ public final class OfflineNoteTest {
       final Map<String, Object> json) {
     final Map<String, Object> copy = new LinkedHashMap<>(json);
     final String platform = string(copy, "platform");
-    if (OfflineNoteV2.ANDROID_KEYMINT_PLATFORM.equals(platform)) {
-      copy.put("assertion_scheme", OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME);
+    if (AttestedOfflineNote.ANDROID_KEYMINT_PLATFORM.equals(platform)) {
+      copy.put("assertion_scheme", AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_SCHEME);
       copy.put(
-          "assertion_key_algorithm", OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM);
-    } else if (OfflineNoteV2.IOS_APP_ATTEST_PLATFORM.equals(platform)) {
-      copy.put("assertion_scheme", OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_SCHEME);
-      copy.put("assertion_key_algorithm", OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM);
+          "assertion_key_algorithm", AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM);
+    } else if (AttestedOfflineNote.IOS_APP_ATTEST_PLATFORM.equals(platform)) {
+      copy.put("assertion_scheme", AttestedOfflineNote.IOS_APP_ATTEST_ASSERTION_SCHEME);
+      copy.put("assertion_key_algorithm", AttestedOfflineNote.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM);
     } else {
       copy.put("assertion_scheme", "unsupported-platform");
       copy.put("assertion_key_algorithm", "unsupported-platform");

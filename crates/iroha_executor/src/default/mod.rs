@@ -44,6 +44,7 @@ use iroha_smart_contract::data_model::{
         defi::DeFiInstructionBox,
         governance::{EnactReferendum, ProposeSccpRouteGovernance},
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
+        settlement::SettlementInstructionBox,
     },
     prelude::*,
     visit::Visit,
@@ -314,6 +315,10 @@ impl InstructionDispatch for InstructionBox {
         if let Some(isi) = any.downcast_ref::<DeFiInstructionBox>() {
             execute!(executor, isi);
         }
+        if let Some(isi) = any.downcast_ref::<SettlementInstructionBox>() {
+            settlement::visit_settlement_instruction(executor, isi);
+            return;
+        }
         if let Some(isi) = any.downcast_ref::<RegisterPinManifest>() {
             sorafs::visit_register_pin_manifest(executor, isi);
             return;
@@ -396,6 +401,60 @@ impl InstructionDispatch for InstructionBox {
         }
 
         deny!(executor, "unexpected instruction type");
+    }
+}
+
+/// Permission-checked visitors for native settlement instructions.
+pub mod settlement {
+    use iroha_executor_data_model::permission::settlement::{
+        CanManageFxCorridors, CanSetFxCorridorPolicy, CanSettleFxCorridor,
+    };
+
+    use super::*;
+
+    /// Dispatch a settlement instruction, enforcing typed corridor policy scopes.
+    pub fn visit_settlement_instruction<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SettlementInstructionBox,
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+
+        let authority = &executor.context().authority;
+        match isi {
+            SettlementInstructionBox::SetFxCorridorPolicy(set) => {
+                let exact = CanSetFxCorridorPolicy {
+                    policy_id: set.policy.policy_id.clone(),
+                };
+                if CanManageFxCorridors.is_owned_by(authority, executor.host())
+                    || exact.is_owned_by(authority, executor.host())
+                {
+                    execute!(executor, isi);
+                }
+                deny!(
+                    executor,
+                    "FX corridor policy updates require an exact typed policy permission"
+                );
+            }
+            SettlementInstructionBox::SettleFxCorridor(settle) => {
+                let exact = CanSettleFxCorridor {
+                    policy_id: settle.policy_id.clone(),
+                };
+                if CanManageFxCorridors.is_owned_by(authority, executor.host())
+                    || exact.is_owned_by(authority, executor.host())
+                {
+                    execute!(executor, isi);
+                }
+                deny!(
+                    executor,
+                    "FX settlement requires an exact typed corridor permission"
+                );
+            }
+            SettlementInstructionBox::Dvp(_) | SettlementInstructionBox::Pvp(_) => {
+                execute!(executor, isi);
+            }
+        }
     }
 }
 
@@ -922,6 +981,12 @@ pub mod domain {
             AnyPermission::CanModifyAssetMetadata(permission) => {
                 asset_definition_matches_domain(permission.asset.definition())
             }
+            AnyPermission::CanSetAssetTransferFreeze(permission) => {
+                asset_definition_matches_domain(&permission.asset_definition)
+            }
+            AnyPermission::CanSetAssetTransferDailyLimit(permission) => {
+                asset_definition_matches_domain(&permission.asset_definition)
+            }
             AnyPermission::CanManageZkAceIdentityForAccount(permission) => {
                 asset_definition_matches_domain(&permission.asset)
             }
@@ -946,6 +1011,10 @@ pub mod domain {
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
+            | AnyPermission::CanInvokeContractEntrypoint(_)
+            | AnyPermission::CanManageFxCorridors(_)
+            | AnyPermission::CanSetFxCorridorPolicy(_)
+            | AnyPermission::CanSettleFxCorridor(_)
             | AnyPermission::CanRegisterSorafsPin(_)
             | AnyPermission::CanApproveSorafsPin(_)
             | AnyPermission::CanRetireSorafsPin(_)
@@ -1211,6 +1280,9 @@ pub mod account {
                 permission.account == *account_id
             }
             AnyPermission::CanUseFeeSponsor(permission) => permission.sponsor == *account_id,
+            AnyPermission::CanInvokeContractEntrypoint(permission) => {
+                permission.contract.subject_id() == *account_id
+            }
             AnyPermission::CanRegisterTrigger(permission) => permission.authority == *account_id,
             AnyPermission::CanUnregisterTrigger(_)
             | AnyPermission::CanExecuteTrigger(_)
@@ -1230,6 +1302,8 @@ pub mod account {
             | AnyPermission::CanBurnAssetWithDefinition(_)
             | AnyPermission::CanTransferAssetWithDefinition(_)
             | AnyPermission::CanModifyAssetMetadataWithDefinition(_)
+            | AnyPermission::CanSetAssetTransferFreeze(_)
+            | AnyPermission::CanSetAssetTransferDailyLimit(_)
             | AnyPermission::CanRegisterNft(_)
             | AnyPermission::CanUnregisterNft(_)
             | AnyPermission::CanTransferNft(_)
@@ -1239,6 +1313,9 @@ pub mod account {
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
+            | AnyPermission::CanManageFxCorridors(_)
+            | AnyPermission::CanSetFxCorridorPolicy(_)
+            | AnyPermission::CanSettleFxCorridor(_)
             | AnyPermission::CanRegisterSorafsPin(_)
             | AnyPermission::CanApproveSorafsPin(_)
             | AnyPermission::CanRetireSorafsPin(_)
@@ -1452,6 +1529,12 @@ pub mod asset_definition {
             AnyPermission::CanManageZkAceIdentityForAccount(permission) => {
                 &permission.asset == asset_definition_id
             }
+            AnyPermission::CanSetAssetTransferFreeze(permission) => {
+                &permission.asset_definition == asset_definition_id
+            }
+            AnyPermission::CanSetAssetTransferDailyLimit(permission) => {
+                &permission.asset_definition == asset_definition_id
+            }
             AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
             | AnyPermission::CanReplaceAccountController(_)
@@ -1477,6 +1560,10 @@ pub mod asset_definition {
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
+            | AnyPermission::CanInvokeContractEntrypoint(_)
+            | AnyPermission::CanManageFxCorridors(_)
+            | AnyPermission::CanSetFxCorridorPolicy(_)
+            | AnyPermission::CanSettleFxCorridor(_)
             | AnyPermission::CanRegisterSorafsPin(_)
             | AnyPermission::CanApproveSorafsPin(_)
             | AnyPermission::CanRetireSorafsPin(_)
@@ -1507,7 +1594,8 @@ pub mod asset_definition {
 pub mod asset {
     use iroha_executor_data_model::permission::asset::{
         CanBurnAsset, CanBurnAssetWithDefinition, CanMintAsset, CanMintAssetWithDefinition,
-        CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition, CanTransferAsset,
+        CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition,
+        CanSetAssetTransferDailyLimit, CanSetAssetTransferFreeze, CanTransferAsset,
         CanTransferAssetWithDefinition,
     };
     use iroha_smart_contract::data_model::isi::{
@@ -1518,27 +1606,34 @@ pub mod asset {
     use super::*;
     use crate::permission::{asset::is_asset_owner, asset_definition::is_asset_definition_owner};
 
-    fn execute_transfer_control<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        asset_definition_id: &AssetDefinitionId,
-        isi: &(impl BuiltInInstruction + NoritoSerialize),
-    ) {
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
+    fn target_account_domain(
+        executor: &(impl Execute + Visit + ?Sized),
+        account_id: &AccountId,
+    ) -> Result<AccountAliasDomain, String> {
+        let accounts = executor
+            .host()
+            .query(FindAccounts)
+            .execute()
+            .map_err(|err| format!("failed to query transfer-control target account: {err}"))?;
+        for account in accounts {
+            let account = account
+                .map_err(|err| format!("failed to read transfer-control target account: {err}"))?;
+            if account.id() != account_id {
+                continue;
+            }
+            return account
+                .label()
+                .and_then(|label| label.domain.as_ref())
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "transfer-control target account `{account_id}` has no canonical on-chain domain label"
+                    )
+                });
         }
-        match is_asset_definition_owner(
-            asset_definition_id,
-            &executor.context().authority,
-            executor.host(),
-        ) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
-        }
-        deny!(
-            executor,
-            "Only the asset-definition owner can manage transfer controls"
-        );
+        Err(format!(
+            "transfer-control target account `{account_id}` does not exist"
+        ))
     }
 
     /// Sets an account transfer freeze when genesis or the asset-definition owner invokes it.
@@ -1546,7 +1641,32 @@ pub mod asset {
         executor: &mut V,
         isi: &SetAssetTransferFreeze,
     ) {
-        execute_transfer_control(executor, &isi.asset_definition_id, isi);
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        match is_asset_definition_owner(
+            &isi.asset_definition_id,
+            &executor.context().authority,
+            executor.host(),
+        ) {
+            Err(err) => deny!(executor, err),
+            Ok(true) => execute!(executor, isi),
+            Ok(false) => {}
+        }
+
+        let account_domain = target_account_domain(executor, &isi.account_id)
+            .unwrap_or_else(|err| deny!(executor, err));
+        let permission = CanSetAssetTransferFreeze {
+            asset_definition: isi.asset_definition_id.clone(),
+            account_domain,
+        };
+        if permission.is_owned_by(&executor.context().authority, executor.host()) {
+            execute!(executor, isi);
+        }
+        deny!(
+            executor,
+            "transfer freeze requires an asset- and account-domain-scoped permission"
+        );
     }
 
     /// Sets account transfer limits when genesis or the asset-definition owner invokes it.
@@ -1554,7 +1674,39 @@ pub mod asset {
         executor: &mut V,
         isi: &SetAssetTransferControl,
     ) {
-        execute_transfer_control(executor, &isi.asset_definition_id, isi);
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        match is_asset_definition_owner(
+            &isi.asset_definition_id,
+            &executor.context().authority,
+            executor.host(),
+        ) {
+            Err(err) => deny!(executor, err),
+            Ok(true) => execute!(executor, isi),
+            Ok(false) => {}
+        }
+
+        if isi.limits.len() != 1 || isi.limits[0].window != AssetTransferControlWindow::Day {
+            deny!(
+                executor,
+                "delegated daily-limit permission accepts exactly one DAY limit"
+            );
+        }
+
+        let account_domain = target_account_domain(executor, &isi.account_id)
+            .unwrap_or_else(|err| deny!(executor, err));
+        let permission = CanSetAssetTransferDailyLimit {
+            asset_definition: isi.asset_definition_id.clone(),
+            account_domain,
+        };
+        if permission.is_owned_by(&executor.context().authority, executor.host()) {
+            execute!(executor, isi);
+        }
+        deny!(
+            executor,
+            "daily limit requires an asset- and account-domain-scoped permission"
+        );
     }
 
     fn execute_mint_asset<V, Q>(executor: &mut V, isi: &Mint<Q, Asset>)
@@ -2732,6 +2884,8 @@ pub mod trigger {
             | AnyPermission::CanBurnAsset(_)
             | AnyPermission::CanModifyAssetMetadata(_)
             | AnyPermission::CanTransferAsset(_)
+            | AnyPermission::CanSetAssetTransferFreeze(_)
+            | AnyPermission::CanSetAssetTransferDailyLimit(_)
             | AnyPermission::CanManageZkAceIdentityForAccount(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
@@ -2742,6 +2896,10 @@ pub mod trigger {
             | AnyPermission::CanModifyNftMetadata(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
+            | AnyPermission::CanInvokeContractEntrypoint(_)
+            | AnyPermission::CanManageFxCorridors(_)
+            | AnyPermission::CanSetFxCorridorPolicy(_)
+            | AnyPermission::CanSettleFxCorridor(_)
             | AnyPermission::CanRegisterSorafsPin(_)
             | AnyPermission::CanApproveSorafsPin(_)
             | AnyPermission::CanRetireSorafsPin(_)

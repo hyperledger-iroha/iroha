@@ -16,7 +16,10 @@ use iroha_data_model::{
     prelude::*,
     query::error::FindError,
 };
-use iroha_primitives::{json::Json, numeric::{Numeric, NumericSpec}};
+use iroha_primitives::{
+    json::Json,
+    numeric::{Numeric, NumericSpec},
+};
 
 use super::*;
 use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
@@ -332,6 +335,9 @@ fn ensure_leg_funding(stx: &StateTransaction<'_, '_>, leg: &SettlementLeg) -> Re
 }
 
 fn ensure_leg_quantity(leg: &SettlementLeg) -> Result<(), Error> {
+    if leg.quantity().mantissa().is_negative() {
+        return Err(MathError::NegativeValue.into());
+    }
     if leg.quantity().is_zero() {
         return Err(InstructionExecutionError::InvariantViolation(
             "settlement legs must specify non-zero quantities".into(),
@@ -423,11 +429,7 @@ fn scoped_fx_leg_asset_ids(leg: &SettlementLeg, dataspace: DataSpaceId) -> (Asse
             leg.from().clone(),
             scope.clone(),
         ),
-        AssetId::with_scope(
-            leg.asset_definition_id().clone(),
-            leg.to().clone(),
-            scope,
-        ),
+        AssetId::with_scope(leg.asset_definition_id().clone(), leg.to().clone(), scope),
     )
 }
 
@@ -1572,7 +1574,11 @@ mod tests {
         zero_rate.rate_denominator = 0;
         cases.push(zero_rate);
 
-        assert!(cases.iter().all(|candidate| candidate.invariant_error().is_some()));
+        assert!(
+            cases
+                .iter()
+                .all(|candidate| candidate.invariant_error().is_some())
+        );
     }
 
     #[test]
@@ -2808,5 +2814,26 @@ mod tests {
 
         let math = InstructionExecutionError::Math(MathError::Overflow);
         assert_eq!(super::settlement_failure_reason(&math), "math_error");
+    }
+
+    #[test]
+    fn settlement_legs_reject_negative_quantities_before_funding_checks() {
+        let definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "usd".parse().expect("asset name"),
+        );
+        let leg = SettlementLeg::new(
+            definition_id,
+            Numeric::new(-1, 0),
+            ALICE_ID.clone(),
+            BOB_ID.clone(),
+        );
+
+        assert!(matches!(
+            super::ensure_leg_quantity(&leg),
+            Err(InstructionExecutionError::Math(
+                crate::smartcontracts::isi::error::MathError::NegativeValue
+            ))
+        ));
     }
 }

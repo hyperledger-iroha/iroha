@@ -46,6 +46,7 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[norito(deny_unknown_fields)]
     pub struct BlockHeader {
         /// Number of blocks in the chain including this block.
         #[getset(get_copy = "pub", set = "pub")]

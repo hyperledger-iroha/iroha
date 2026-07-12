@@ -5226,7 +5226,7 @@ fn lower_signature_builtin_call(
             });
         }
         Builtin::VerifySignature => {
-            let scheme = lower_expr(ctx, &args[3], vars);
+            let scheme = lower_expr_as_u64(ctx, &args[3], vars);
             ctx.current_instr(Instr::VerifySignature {
                 dest,
                 message,
@@ -5267,7 +5267,7 @@ fn lower_sm4_builtin_call(
             ciphertext_and_tag: data,
         }),
         Builtin::Sm4CcmSeal => {
-            let tag_len = args.get(4).map(|arg| lower_expr(ctx, arg, vars));
+            let tag_len = args.get(4).map(|arg| lower_expr_as_u64(ctx, arg, vars));
             ctx.current_instr(Instr::Sm4CcmSeal {
                 dest,
                 key,
@@ -5278,7 +5278,7 @@ fn lower_sm4_builtin_call(
             });
         }
         Builtin::Sm4CcmOpen => {
-            let tag_len = args.get(4).map(|arg| lower_expr(ctx, arg, vars));
+            let tag_len = args.get(4).map(|arg| lower_expr_as_u64(ctx, arg, vars));
             ctx.current_instr(Instr::Sm4CcmOpen {
                 dest,
                 key,
@@ -6106,7 +6106,10 @@ fn lower_surface_builtin_call(
         Builtin::BuildUnshieldInline => {
             let asset = lower_expr(ctx, &args[0], vars);
             let to = lower_expr(ctx, &args[1], vars);
-            let amount = lower_expr_as_u64(ctx, &args[2], vars);
+            // The protocol field is `u128`, so retain the canonical source
+            // `int` pointer here. Code generation requires a literal and
+            // performs the explicit non-negative u128 conversion.
+            let amount = lower_expr(ctx, &args[2], vars);
             let inputs = lower_expr(ctx, &args[3], vars);
             let (outputs, backend_idx) = if args.len() == 8 {
                 (Some(lower_expr(ctx, &args[4], vars)), 5)
@@ -6253,7 +6256,15 @@ fn lower_surface_builtin_call(
         Builtin::AssertEq => {
             let left = lower_expr(ctx, &args[0], vars);
             let right = lower_expr(ctx, &args[1], vars);
-            ctx.current_instr(Instr::AssertEq { left, right });
+            let equal = ctx.new_temp();
+            ctx.current_instr(Instr::NumericCompare {
+                dest: equal,
+                op: BinaryOp::Eq,
+                left,
+                right,
+                kind: WideNumericKind::Int,
+            });
+            ctx.current_instr(Instr::Assert { cond: equal });
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
             t
@@ -6395,8 +6406,8 @@ fn lower_surface_builtin_call(
         Builtin::RegisterAsset => {
             let asset = lower_expr(ctx, &args[0], vars);
             let symbol = lower_expr(ctx, &args[1], vars);
-            let quantity = lower_expr_as_numeric(ctx, &args[2], vars);
-            let mintable = lower_expr(ctx, &args[3], vars);
+            let quantity = lower_expr_as_u64(ctx, &args[2], vars);
+            let mintable = lower_expr_as_u64(ctx, &args[3], vars);
             ctx.current_instr(Instr::RegisterAsset {
                 asset,
                 symbol,
@@ -6410,9 +6421,9 @@ fn lower_surface_builtin_call(
         Builtin::CreateNewAsset => {
             let asset = lower_expr(ctx, &args[0], vars);
             let symbol = lower_expr(ctx, &args[1], vars);
-            let quantity = lower_expr_as_numeric(ctx, &args[2], vars);
+            let quantity = lower_expr_as_u64(ctx, &args[2], vars);
             let account = lower_expr(ctx, &args[3], vars);
-            let mintable = lower_expr(ctx, &args[4], vars);
+            let mintable = lower_expr_as_u64(ctx, &args[4], vars);
             ctx.current_instr(Instr::CreateNewAsset {
                 asset,
                 symbol,
@@ -6461,7 +6472,7 @@ fn lower_surface_builtin_call(
         }
         Builtin::SetTriggerEnabled => {
             let name = lower_expr(ctx, &args[0], vars);
-            let enabled = lower_expr(ctx, &args[1], vars);
+            let enabled = lower_expr_as_u64(ctx, &args[1], vars);
             ctx.current_instr(Instr::SetTriggerEnabled { name, enabled });
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
@@ -6792,7 +6803,7 @@ fn lower_surface_builtin_call(
             let input = lower_expr(ctx, &args[0], vars);
             let public_key = lower_expr(ctx, &args[1], vars);
             let proof = lower_expr(ctx, &args[2], vars);
-            let variant = lower_expr(ctx, &args[3], vars);
+            let variant = lower_expr_as_u64(ctx, &args[3], vars);
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::VrfVerify {
                 dest,
@@ -7568,9 +7579,18 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
         }
         semantic::ExprKind::DecimalLiteral { value, .. } => {
             let t = ctx.new_temp();
+            let kind = pointer_kind_for_type(&expr.ty)
+                .filter(|kind| matches!(kind, DataRefKind::Decimal | DataRefKind::Quantity))
+                .unwrap_or_else(|| {
+                    ctx.record_error(format!(
+                        "decimal literal reached lowering with non-decimal type {}",
+                        semantic::type_name(&expr.ty)
+                    ));
+                    DataRefKind::Decimal
+                });
             ctx.current_instr(Instr::DataRef {
                 dest: t,
-                kind: DataRefKind::Decimal,
+                kind,
                 value: value.to_string(),
             });
             t
@@ -9060,7 +9080,7 @@ mod tests {
     #[test]
     fn named_quantity_intrinsic_evaluates_dynamic_arguments_in_source_order() {
         let source = r#"
-            fn divisor() -> quantity { 2 }
+            fn divisor() -> decimal { 2 }
             fn scale() -> int { 2 }
             fn rounded(quantity value) -> quantity {
                 value.div_round(
@@ -9333,8 +9353,8 @@ mod tests {
                 view fn run(
                     Request request,
                     (int, bool) pair,
-                    Option<int>,
-                    outcome: Result<int, bool> maybe
+                    Option<int> maybe,
+                    Result<int, bool> outcome
                 ) -> int {
                     return request.count + pair.0
                         + maybe.unwrap_or(0) + outcome.unwrap_or(0);
@@ -10014,6 +10034,94 @@ mod tests {
     }
 
     #[test]
+    fn scalar_protocol_arguments_use_checked_adaptive_int_conversion() {
+        let source = r#"
+            fn boundaries(
+                bytes payload,
+                int scheme,
+                int tag_length,
+                int enabled,
+                int variant,
+            ) {
+                let _verified = crypto::verify_signature(
+                    message: payload,
+                    signature: payload,
+                    public_key: payload,
+                    scheme: scheme,
+                );
+                let _sealed = crypto::sm4_ccm::seal(
+                    key: payload,
+                    nonce: payload,
+                    aad: payload,
+                    payload: payload,
+                    tag_length: tag_length,
+                );
+                ledger::trigger::set_enabled(Name::parse("scheduled"), enabled);
+                let _vrf = crypto::vrf::verify(
+                    message: payload,
+                    proof: payload,
+                    public_key: payload,
+                    variant: variant,
+                );
+            }
+        "#;
+        let lowered = lower(
+            &analyze(&parse(source).expect("parse checked scalar boundaries"))
+                .expect("analyze checked scalar boundaries"),
+        )
+        .expect("lower checked scalar boundaries");
+        let instructions = lowered.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .collect::<Vec<_>>();
+        let converted = instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                Instr::IntTryToU64 { dest, .. } => Some(*dest),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(converted.len(), 4);
+        for scalar in instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                Instr::VerifySignature { scheme, .. } => Some(*scheme),
+                Instr::Sm4CcmSeal {
+                    tag_len: Some(tag_len),
+                    ..
+                } => Some(*tag_len),
+                Instr::SetTriggerEnabled { enabled, .. } => Some(*enabled),
+                Instr::VrfVerify { variant, .. } => Some(*variant),
+                _ => None,
+            })
+        {
+            assert!(
+                converted.contains(&scalar),
+                "scalar protocol register must receive a checked u64 conversion"
+            );
+        }
+    }
+
+    #[test]
+    fn scalar_protocol_literals_outside_u64_fail_lowering() {
+        for value in ["-1", "18446744073709551616"] {
+            let source = format!(
+                "fn verify(bytes payload) {{ let _ok = crypto::verify_signature(\
+                    message: payload, signature: payload, public_key: payload, scheme: {value}); }}"
+            );
+            let typed = analyze(&parse(&source).expect("parse scalar boundary overflow"))
+                .expect("analyze scalar boundary overflow");
+            let error = lower(&typed).expect_err("out-of-range scalar argument must fail closed");
+            assert!(
+                error.contains("outside the unsigned 64-bit range required by this host boundary"),
+                "unexpected error for {value}: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn state_map_int_keys_are_encoded_from_the_canonical_int_pointer() {
         let source = "state StateMap<int, int> balances; fn set(int key, int value) { balances[key] = value; }";
         let lowered = lower(
@@ -10194,8 +10302,8 @@ mod tests {
     fn recursive_list_contains_dereferences_aggregate_handles() {
         let source = r#"
             struct Envelope {
-                Option<List<int, 2>>,
-                outcome: Result<(int, bool), int> labels,
+                Option<List<int, 2>> labels,
+                Result<(int, bool), int> outcome,
             }
 
             fn contains_nested(Envelope needle) -> bool {
@@ -10440,6 +10548,7 @@ mod tests {
         let mut saw_override_get = false;
         let mut saw_override_set = false;
         let mut saw_override_clear = false;
+        let mut saw_numeric_assertion = false;
         for block in &test_fn.blocks {
             for instr in &block.instrs {
                 match instr {
@@ -10450,6 +10559,14 @@ mod tests {
                     Instr::StateGet { .. } => saw_override_get = true,
                     Instr::StateSet { .. } => saw_override_set = true,
                     Instr::StateDel { .. } => saw_override_clear = true,
+                    Instr::NumericCompare {
+                        op: BinaryOp::Eq,
+                        kind: WideNumericKind::Int,
+                        ..
+                    } => saw_numeric_assertion = true,
+                    Instr::AssertEq { .. } => {
+                        panic!("adaptive int assertions must not compare pointer addresses")
+                    }
                     _ => {}
                 }
             }
@@ -10474,6 +10591,10 @@ mod tests {
         assert!(
             saw_override_clear,
             "invoke_entrypoint should clear the override when none existed"
+        );
+        assert!(
+            saw_numeric_assertion,
+            "test::assert_eq must use canonical numeric equality"
         );
     }
 
@@ -10572,8 +10693,8 @@ mod tests {
                     } => {
                         saw_invoke = true;
                         assert!(
-                            !returns_pointer,
-                            "int-returning invoke_entrypoint_as should stay scalar"
+                            *returns_pointer,
+                            "adaptive int returns through its canonical pointer ABI"
                         );
                     }
                     Instr::ExpectRejectAs { .. } => saw_expect_reject = true,
@@ -10818,7 +10939,11 @@ fn either(bool value) -> bool { return value || rhs(); }
             .instrs
             .iter()
             .find_map(|instruction| match instruction {
-                Instr::Const { dest, value: 7 } => Some(*dest),
+                Instr::DataRef {
+                    dest,
+                    kind: DataRefKind::Int,
+                    value,
+                } if value == "7" => Some(*dest),
                 _ => None,
             })
             .expect("invariant constant");
@@ -10965,7 +11090,11 @@ fn either(bool value) -> bool { return value || rhs(); }
             .iter()
             .flat_map(|block| block.instrs.iter())
             .find_map(|instruction| match instruction {
-                Instr::Const { dest, value: 9 } => Some(*dest),
+                Instr::DataRef {
+                    dest,
+                    kind: DataRefKind::Int,
+                    value,
+                } if value == "9" => Some(*dest),
                 _ => None,
             })
             .expect("invariant constant");
@@ -11910,7 +12039,11 @@ fn either(bool value) -> bool { return value || rhs(); }
             .iter()
             .flat_map(|block| &block.instrs)
             .filter_map(|instruction| match instruction {
-                Instr::Const { dest, value } => Some((*dest, *value)),
+                Instr::DataRef {
+                    dest,
+                    kind: DataRefKind::Int,
+                    value,
+                } => Some((*dest, value.as_str())),
                 _ => None,
             })
             .collect::<HashMap<_, _>>();
@@ -11923,8 +12056,8 @@ fn either(bool value) -> bool { return value || rhs(); }
                 _ => None,
             })
             .expect("struct TuplePack");
-        assert_eq!(constants.get(&items[0]), Some(&1));
-        assert_eq!(constants.get(&items[1]), Some(&2));
+        assert_eq!(constants.get(&items[0]), Some(&"1"));
+        assert_eq!(constants.get(&items[1]), Some(&"2"));
     }
 
     #[test]
@@ -12224,26 +12357,30 @@ fn either(bool value) -> bool { return value || rhs(); }
 
     #[test]
     fn checked_integer_constants_fold_without_wrapping() {
-        let safe = parse("fn main() -> int { return (9223372036854775807 - 1) + 1; }")
-            .expect("parse safe constant expression");
+        const MAXIMUM: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
+        let safe = parse(&format!(
+            "fn main() -> int {{ return ({MAXIMUM} - 1) + 1; }}"
+        ))
+        .expect("parse safe constant expression");
         let safe = lower(&analyze(&safe).expect("analyze safe constant expression"))
             .expect("lower safe constant expression");
         assert!(safe.functions[0].blocks.iter().any(|block| {
-            block
-                .instrs
-                .iter()
-                .any(|instr| matches!(instr, Instr::Const { value, .. } if *value == i64::MAX))
+            block.instrs.iter().any(|instr| {
+                matches!(
+                    instr,
+                    Instr::DataRef {
+                        kind: DataRefKind::Int,
+                        value,
+                        ..
+                    } if value == MAXIMUM
+                )
+            })
         }));
 
-        let overflow = parse("fn main() -> int { return 9223372036854775807 + 1; }")
+        let overflow = parse(&format!("fn main() -> int {{ return {MAXIMUM} + 1; }}"))
             .expect("parse overflowing constant expression");
-        let error =
-            lower(&analyze(&overflow).expect("ordinary type analysis accepts runtime arithmetic"))
-                .expect_err("constant overflow must not wrap");
-        assert!(
-            error.contains("E_INT_OVERFLOW"),
-            "unexpected error: {error}"
-        );
+        let error = analyze(&overflow).expect_err("constant overflow must not wrap");
+        assert!(error.code == "E_INT_OVERFLOW", "unexpected error: {error}");
     }
 
     #[test]

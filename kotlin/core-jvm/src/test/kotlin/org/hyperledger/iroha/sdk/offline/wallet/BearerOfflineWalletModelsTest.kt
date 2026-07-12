@@ -9,7 +9,7 @@ import kotlin.test.assertNull
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
 import org.hyperledger.iroha.sdk.offline.OfflineNote
-import org.hyperledger.iroha.sdk.offline.OfflineNoteV2
+import org.hyperledger.iroha.sdk.offline.AttestedOfflineNote
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 
@@ -64,19 +64,19 @@ class BearerOfflineWalletModelsTest {
             compactKeyCertificate(assertionUsageCountLimit = 2)
         }
         assertEquals(
-            OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_SCHEME,
+            AttestedOfflineNote.IOS_APP_ATTEST_ASSERTION_SCHEME,
             compactKeyCertificate(
-                platform = OfflineNoteV2.IOS_APP_ATTEST_PLATFORM,
-                assertionScheme = OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_SCHEME,
-                assertionKeyAlgorithm = OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM,
+                platform = AttestedOfflineNote.IOS_APP_ATTEST_PLATFORM,
+                assertionScheme = AttestedOfflineNote.IOS_APP_ATTEST_ASSERTION_SCHEME,
+                assertionKeyAlgorithm = AttestedOfflineNote.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM,
                 assertionUsageCountLimit = null,
             ).assertionScheme,
         )
         assertFailsWith<IllegalArgumentException> {
             compactKeyCertificate(
-                platform = OfflineNoteV2.IOS_APP_ATTEST_PLATFORM,
-                assertionScheme = OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_SCHEME,
-                assertionKeyAlgorithm = OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM,
+                platform = AttestedOfflineNote.IOS_APP_ATTEST_PLATFORM,
+                assertionScheme = AttestedOfflineNote.IOS_APP_ATTEST_ASSERTION_SCHEME,
+                assertionKeyAlgorithm = AttestedOfflineNote.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM,
                 assertionUsageCountLimit = 1,
             )
         }
@@ -295,11 +295,11 @@ class BearerOfflineWalletModelsTest {
     fun attestationReceiptRejectsNonCanonicalProfileAndEncodingFields() {
         assertEquals(1, attestationReceipt().assertionUsageCountLimit)
         assertEquals(
-            OfflineNoteV2.IOS_APP_ATTEST_PLATFORM,
+            AttestedOfflineNote.IOS_APP_ATTEST_PLATFORM,
             attestationReceipt(
-                platform = OfflineNoteV2.IOS_APP_ATTEST_PLATFORM,
-                assertionScheme = OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_SCHEME,
-                assertionKeyAlgorithm = OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM,
+                platform = AttestedOfflineNote.IOS_APP_ATTEST_PLATFORM,
+                assertionScheme = AttestedOfflineNote.IOS_APP_ATTEST_ASSERTION_SCHEME,
+                assertionKeyAlgorithm = AttestedOfflineNote.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM,
                 assertionUsageCountLimit = null,
             ).platform,
         )
@@ -321,13 +321,13 @@ class BearerOfflineWalletModelsTest {
             )
         }
         assertEquals(
-            "assertion_scheme must be ${OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME}",
+            "assertion_scheme must be ${AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_SCHEME}",
             assertFailsWith<IllegalArgumentException> {
                 attestationReceipt(assertionScheme = "android-keymint-ecdsa-p256-usage-limit")
             }.message,
         )
         assertEquals(
-            "assertion_key_algorithm must be ${OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM}",
+            "assertion_key_algorithm must be ${AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM}",
             assertFailsWith<IllegalArgumentException> {
                 attestationReceipt(assertionKeyAlgorithm = "ed25519")
             }.message,
@@ -342,9 +342,9 @@ class BearerOfflineWalletModelsTest {
             "assertion_usage_count_limit must be absent",
             assertFailsWith<IllegalArgumentException> {
                 attestationReceipt(
-                    platform = OfflineNoteV2.IOS_APP_ATTEST_PLATFORM,
-                    assertionScheme = OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_SCHEME,
-                    assertionKeyAlgorithm = OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM,
+                    platform = AttestedOfflineNote.IOS_APP_ATTEST_PLATFORM,
+                    assertionScheme = AttestedOfflineNote.IOS_APP_ATTEST_ASSERTION_SCHEME,
+                    assertionKeyAlgorithm = AttestedOfflineNote.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM,
                     assertionUsageCountLimit = 1,
                 )
             }.message,
@@ -1013,13 +1013,13 @@ class BearerOfflineWalletModelsTest {
 
     private fun attestationReceipt(
         version: Long = 1,
-        platform: String = OfflineNoteV2.ANDROID_KEYMINT_PLATFORM,
+        platform: String = AttestedOfflineNote.ANDROID_KEYMINT_PLATFORM,
         accountId: String = "alice@hbl.sbp",
         deviceId: String = "device-1",
         offlinePublicKeyBase64: String = base64(ByteArray(32) { 1 }),
         assertionPublicKeyBase64: String = base64(ByteArray(65) { 2 }),
-        assertionScheme: String = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME,
-        assertionKeyAlgorithm: String = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+        assertionScheme: String = AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_SCHEME,
+        assertionKeyAlgorithm: String = AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
         assertionUsageCountLimit: Int? = 1,
         attestationKeyId: String = "attest-key",
         hardwareOneUse: Boolean = true,
@@ -1068,8 +1068,8 @@ class BearerOfflineWalletModelsTest {
             deviceId = "device-1",
             offlinePublicKey = base64(ByteArray(32) { 1 }),
             attestationReportBase64 = base64(ByteArray(8) { 2 }),
-            assertionScheme = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME,
-            assertionKeyAlgorithm = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+            assertionScheme = AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_SCHEME,
+            assertionKeyAlgorithm = AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
             assertionPublicKey = base64(ByteArray(65) { 4 }),
             assertionUsageCountLimit = 1,
         )

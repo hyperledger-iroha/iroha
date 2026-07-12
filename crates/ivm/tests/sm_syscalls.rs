@@ -1120,6 +1120,83 @@ fn syscall_sm4_ccm_open_rejects_bad_tag() {
 }
 
 #[test]
+fn syscall_sm4_ccm_seal_rejects_wide_tag_length_without_truncation() {
+    use ivm::IVM;
+
+    let key = [0x77u8; 16];
+    let nonce = [0x88u8; 7];
+    let plaintext = [0x99u8; 8];
+
+    let mut vm = IVM::new(10_000);
+    vm.set_host(ivm::host::DefaultHost::new().with_sm_enabled(true));
+    let mut offset = 0u64;
+    let p_key = preload_blob(&mut vm, &mut offset, &key);
+    let p_nonce = preload_blob(&mut vm, &mut offset, &nonce);
+    let p_pt = preload_blob(&mut vm, &mut offset, &plaintext);
+
+    vm.set_register(10, p_key);
+    vm.set_register(11, p_nonce);
+    vm.set_register(12, 0);
+    vm.set_register(13, p_pt);
+    // This aliases tag length 4 if a 64-bit protocol register is narrowed to
+    // a 32-bit usize with `as`.
+    vm.set_register(14, u64::from(u32::MAX) + 5);
+
+    let syscall = encoding::wide::encode_sys(
+        instruction::wide::system::SCALL,
+        ivm::syscalls::SYSCALL_SM4_CCM_SEAL as u8,
+    );
+    let halt = encoding::wide::encode_halt();
+    let mut program = Vec::new();
+    program.extend_from_slice(&syscall.to_le_bytes());
+    program.extend_from_slice(&halt.to_le_bytes());
+    vm.load_program(&assemble(&program)).expect("load program");
+    vm.run().expect("vm run");
+
+    assert_eq!(vm.register(10), 0);
+}
+
+#[test]
+fn syscall_sm4_ccm_open_rejects_wide_tag_length_without_truncation() {
+    use ivm::IVM;
+
+    let key = decode("404142434445464748494a4b4c4d4e4f").expect("hex key");
+    let nonce = decode("10111213141516").expect("hex nonce");
+    let aad = decode("000102030405060708090a0b0c0d0e0f").expect("hex aad");
+    let cipher = decode("a9550cebab5f227d9590e8979caafd1f").expect("hex cipher");
+    let tag = decode("03a1f305").expect("hex tag");
+    let mut cipher_tag = cipher;
+    cipher_tag.extend_from_slice(&tag);
+
+    let mut vm = IVM::new(10_000);
+    vm.set_host(ivm::host::DefaultHost::new().with_sm_enabled(true));
+    let mut offset = 0u64;
+    let p_key = preload_blob(&mut vm, &mut offset, &key);
+    let p_nonce = preload_blob(&mut vm, &mut offset, &nonce);
+    let p_aad = preload_blob(&mut vm, &mut offset, &aad);
+    let p_ct = preload_blob(&mut vm, &mut offset, &cipher_tag);
+
+    vm.set_register(10, p_key);
+    vm.set_register(11, p_nonce);
+    vm.set_register(12, p_aad);
+    vm.set_register(13, p_ct);
+    vm.set_register(14, u64::from(u32::MAX) + 5);
+
+    let syscall = encoding::wide::encode_sys(
+        instruction::wide::system::SCALL,
+        ivm::syscalls::SYSCALL_SM4_CCM_OPEN as u8,
+    );
+    let halt = encoding::wide::encode_halt();
+    let mut program = Vec::new();
+    program.extend_from_slice(&syscall.to_le_bytes());
+    program.extend_from_slice(&halt.to_le_bytes());
+    vm.load_program(&assemble(&program)).expect("load program");
+    vm.run().expect("vm run");
+
+    assert_eq!(vm.register(10), 0);
+}
+
+#[test]
 fn syscall_sm4_gcm_seal_requires_enable_flag() {
     use ivm::IVM;
 

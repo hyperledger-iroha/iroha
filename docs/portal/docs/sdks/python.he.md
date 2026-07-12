@@ -104,23 +104,21 @@ print("offline ready", readiness.ready, readiness.blockers)
 ```
 ## 6. זרימת אירועים
 
-נקודות SSE של Torii נחשפות באמצעות גנרטורים. ה‑SDK ממשיך אוטומטית כאשר `resume=True` ואתם מספקים `EventCursor`.
+Torii SSE helpers return live-only generators. They may reconnect within the
+configured retry budget, but Torii retains no replay log: reconnects can leave
+a gap. Replay cursors and resume arguments are intentionally unsupported; query
+committed ledger state when complete history is required.
 
 ```python
-from iroha_python import PipelineEventFilterBox, EventCursor
-
-cursor = EventCursor()
-
 for event in client.stream_pipeline_blocks(
     status="Committed",
-    resume=True,
-    cursor=cursor,
     with_metadata=True,
 ):
     print("Block height", event.data.block.height)
 ```
 
-שיטות נוחות נוספות כוללות `stream_pipeline_transactions`, `stream_events` (עם builders של פילטרים טיפוסיים) ו‑`stream_verifying_key_events`.
+Other convenience methods include `stream_pipeline_transactions`,
+`stream_events` (with typed filter builders), and `stream_verifying_key_events`.
 
 ## 7. צעדים הבאים
 

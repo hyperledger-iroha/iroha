@@ -180,6 +180,16 @@ containing no tokens reports `503 api_token_unavailable`. Every canonical
 finite `429` or `503` response includes both `Retry-After` and a matching typed
 retry hint.
 
+Connection-level pre-authentication capacity and rate gates run before
+credential validation. For Offline command routes admitted by that bounded
+gate, API-token authentication is completed before request media-type,
+idempotency-key, or body validation. An unauthenticated or duplicate-token
+request therefore receives the authentication failure even if its
+`Content-Type`, idempotency key, and body are also malformed; no command body
+extractor or handler runs. After a valid singleton token, Torii applies
+route-level access/rate policy, then exact `Content-Type` validation, then
+command-header validation, and only then decodes the body.
+
 ## Reviewed protocol exceptions
 
 These endpoints do not imply SDK or MCP generation. They are explicit media or

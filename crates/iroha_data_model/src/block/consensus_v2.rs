@@ -29,6 +29,9 @@ pub mod fingerprint;
 pub const PROTOCOL_VERSION: u16 = 2;
 /// Consensus-wide upper bound for one voting roster.
 pub const MAX_VALIDATORS_PER_HEIGHT: usize = 4_096;
+/// Tight allocation bound for one consensus signature or aggregate.
+pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 256;
+const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 1;
 /// Permissioned Sumeragi v2 handshake and domain-separation tag.
 pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v2";
 /// NPoS Sumeragi v2 handshake and domain-separation tag.
@@ -66,7 +69,12 @@ pub type ValidatorIndex = u32;
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[norito(tag = "mode", content = "details", rename_all = "snake_case")]
+#[norito(
+    tag = "mode",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ConsensusMode {
     /// Every validator has voting power one.
     Permissioned,
@@ -80,6 +88,7 @@ pub enum ConsensusMode {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct ValidatorPower {
     /// Validator identity and consensus public key.
     pub validator: PeerId,
@@ -97,6 +106,7 @@ pub struct ValidatorPower {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct DualQuorum {
     /// Required number of distinct validator signatures.
     pub min_signers: u32,
@@ -180,6 +190,7 @@ impl DualQuorum {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct DataAvailabilityLayout {
     /// Payload encoding used before chunk dissemination.
     pub encoding: PayloadEncoding,
@@ -201,7 +212,12 @@ pub struct DataAvailabilityLayout {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[norito(tag = "encoding", content = "details", rename_all = "snake_case")]
+#[norito(
+    tag = "encoding",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum PayloadEncoding {
     /// Split the canonical payload into unencoded chunks.
     Plain,
@@ -289,6 +305,7 @@ pub type GenesisActiveNexusLaneRecord = ((LaneId, AccountId), PublicLaneValidato
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct HeightContext {
     /// Chain identifier used for replay protection.
     pub chain_id: ChainId,
@@ -336,11 +353,13 @@ impl HeightContext {
     #[must_use]
     pub fn id(&self) -> HeightContextId {
         let identity = HeightContextIdentity {
+            identity_version: HEIGHT_CONTEXT_IDENTITY_VERSION,
             chain_id: self.chain_id.clone(),
             protocol_version: self.protocol_version,
             height: self.height,
             epoch: self.epoch,
             epoch_end_height: self.epoch_end_height,
+            next_epoch_snapshot: self.next_epoch_snapshot.clone(),
             mode: self.mode,
             parent_commit: self
                 .parent_commit_qc
@@ -358,16 +377,7 @@ impl HeightContext {
             da_layout: self.da_layout,
             leader_seed: self.leader_seed,
         };
-        let encoded = match self.next_epoch_snapshot.as_ref() {
-            None => identity.encode(),
-            Some(next_epoch_snapshot) => EpochBoundaryHeightContextIdentity {
-                domain: b"iroha:sumeragi:v2:height-context:epoch-transition:v1".to_vec(),
-                base: identity,
-                next_epoch_snapshot: next_epoch_snapshot.clone(),
-            }
-            .encode(),
-        };
-        HeightContextId(HashOf::from_untyped_unchecked(Hash::new(encoded)))
+        HeightContextId(HashOf::from_untyped_unchecked(Hash::new(identity.encode())))
     }
 
     /// Validate the immutable context and its quorum snapshot.
@@ -416,6 +426,16 @@ impl HeightContext {
             }
             (_, Some(_)) => {}
         }
+        if let Some(parent) = &self.parent_commit_qc {
+            parent.execution_commitment.validate()?;
+            if parent.signers.len() > MAX_VALIDATORS_PER_HEIGHT {
+                return Err(ValidationError::TooManySigners);
+            }
+            if parent.signers.windows(2).any(|pair| pair[0] >= pair[1]) {
+                return Err(ValidationError::SignersNotStrictlySorted);
+            }
+            require_aggregate_signature(&parent.aggregate_signature)?;
+        }
         if self.da_layout.chunk_size_bytes == 0
             || self.da_layout.max_payload_size_bytes == 0
             || self.da_layout.max_chunk_count == 0
@@ -457,7 +477,12 @@ impl HeightContext {
     /// frequency.
     #[must_use]
     pub fn leader(&self, view: View) -> ValidatorIndex {
-        debug_assert!(!self.roster.is_empty(), "validated contexts have a roster");
+        if self.roster.is_empty() {
+            // Empty rosters are rejected by `validate`; retaining a total
+            // function here keeps hostile decoded-but-unvalidated values from
+            // turning an admission error into a modulo-by-zero panic.
+            return 0;
+        }
         let digest = Hash::new((self.leader_seed, self.height).encode());
         let modulus = u64::try_from(self.roster.len()).unwrap_or(u64::MAX);
         let start = digest.as_ref().iter().fold(0_u64, |remainder, byte| {
@@ -470,11 +495,13 @@ impl HeightContext {
 
 #[derive(Encode)]
 struct HeightContextIdentity {
+    identity_version: u16,
     chain_id: ChainId,
     protocol_version: u16,
     height: Height,
     epoch: u64,
     epoch_end_height: Height,
+    next_epoch_snapshot: Option<finality::FinalizedNextEpochSnapshot>,
     mode: ConsensusMode,
     parent_commit: Option<ParentCommitIdentity>,
     roster: Vec<ValidatorPower>,
@@ -482,13 +509,6 @@ struct HeightContextIdentity {
     nexus_amx_context_hash: Hash,
     da_layout: DataAvailabilityLayout,
     leader_seed: [u8; 32],
-}
-
-#[derive(Encode)]
-struct EpochBoundaryHeightContextIdentity {
-    domain: Vec<u8>,
-    base: HeightContextIdentity,
-    next_epoch_snapshot: finality::FinalizedNextEpochSnapshot,
 }
 
 #[derive(Encode)]
@@ -518,6 +538,7 @@ pub struct HeightContextId(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct ConsensusRound {
     /// Context governing this round.
     pub context_id: HeightContextId,
@@ -537,7 +558,12 @@ pub struct ConsensusRound {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[norito(tag = "phase", content = "details", rename_all = "snake_case")]
+#[norito(
+    tag = "phase",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum GlobalPhase {
     /// Certifies durable availability and deterministic validation.
     #[codec(index = 1)]
@@ -581,6 +607,7 @@ impl IntoSchema for GlobalPhase {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct BlockSubject {
     /// Parent block hash, absent only for the genesis block.
     #[norito(default)]
@@ -602,6 +629,7 @@ pub struct BlockSubject {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct ExecutionCommitment {
     /// Root of the witnessed pre-state values for keys changed by the block.
     pub parent_state_root: Hash,
@@ -704,6 +732,7 @@ impl ExecutionCommitment {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct Vote {
     /// Round in which the vote was issued.
     pub round: ConsensusRound,
@@ -757,6 +786,7 @@ impl Vote {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct VoteSignaturePayload {
     /// Sumeragi protocol revision.
     pub protocol_version: u16,
@@ -776,6 +806,7 @@ pub struct VoteSignaturePayload {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct QuorumCertificateRef {
     /// Certified round.
     pub round: ConsensusRound,
@@ -811,6 +842,7 @@ impl QuorumCertificateRef {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct QuorumCertificate {
     /// Certified round.
     pub round: ConsensusRound,
@@ -850,11 +882,10 @@ impl QuorumCertificate {
     pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
         validate_round(self.round, context)?;
         self.execution_commitment.validate()?;
-        context.validate_signers(&self.signers)?;
-        if self.aggregate_signature.is_empty() {
-            return Err(ValidationError::MissingAggregateSignature);
-        }
-        Ok(())
+        context
+            .quorum
+            .validate_signers(&self.signers, &context.roster)?;
+        require_aggregate_signature(&self.aggregate_signature)
     }
 
     /// Reconstruct the canonical vote preimage for one certified signer.
@@ -1051,9 +1082,7 @@ impl TimeoutCertificate {
             if group.signers.is_empty() {
                 return Err(ValidationError::EmptyTimeoutGroup);
             }
-            if group.aggregate_signature.is_empty() {
-                return Err(ValidationError::MissingAggregateSignature);
-            }
+            require_aggregate_signature(&group.aggregate_signature)?;
             if group.signers.windows(2).any(|pair| pair[0] >= pair[1]) {
                 return Err(ValidationError::SignersNotStrictlySorted);
             }
@@ -1089,7 +1118,9 @@ impl TimeoutCertificate {
             }
         }
         let all_signers: Vec<_> = all_signers.into_iter().collect();
-        context.validate_signers(&all_signers)
+        context
+            .quorum
+            .validate_signers(&all_signers, &context.roster)
     }
 }
 
@@ -1276,6 +1307,9 @@ impl PayloadChunk {
     ) -> Result<(), ValidationError> {
         if self.signature.is_empty() {
             return Err(ValidationError::MissingChunkSignature);
+        }
+        if self.signature.len() > MAX_CONSENSUS_SIGNATURE_BYTES {
+            return Err(ValidationError::SignatureTooLarge);
         }
         self.signature_payload(context, manifest).map(|_| ())
     }
@@ -1992,10 +2026,18 @@ pub enum ValidationError {
     UnexpectedNextEpochSnapshot,
     /// The next-epoch number is not the immediate successor or overflowed.
     InvalidNextEpoch,
+    /// The next epoch ends before the first height it would govern.
+    NextEpochEndsBeforeSuccessor,
     /// The next-epoch snapshot changes the genesis-selected consensus mode.
     NextEpochModeMismatch,
     /// The next-epoch quorum is not canonically derived from its roster.
     NextEpochQuorumMismatch,
+    /// Next-epoch PoPs are not aligned one-for-one with its roster.
+    NextEpochProofOfPossessionCount,
+    /// A next-epoch roster slot contains no proof of possession.
+    MissingNextEpochProofOfPossession,
+    /// A next-epoch proof of possession exceeds the protocol bound.
+    NextEpochProofOfPossessionTooLarge,
     /// A permissioned next-epoch snapshot assigned non-unit voting power.
     NextEpochPermissionedPowerNotOne,
     /// The parent certificate is not a CommitQC for the previous height.
@@ -2022,6 +2064,8 @@ pub enum ValidationError {
     ExecutionCommitmentPostRootMismatch,
     /// An aggregate certificate or timeout group carries no aggregate signature.
     MissingAggregateSignature,
+    /// A signature or aggregate exceeds the protocol allocation bound.
+    SignatureTooLarge,
     /// Too few distinct validators signed.
     InsufficientSignerCount,
     /// Signed voting power is not strictly greater than two thirds.
@@ -2116,11 +2160,23 @@ impl fmt::Display for ValidationError {
             Self::InvalidNextEpoch => {
                 f.write_str("next-epoch snapshot is not for the immediate successor epoch")
             }
+            Self::NextEpochEndsBeforeSuccessor => {
+                f.write_str("next epoch ends before its first governed height")
+            }
             Self::NextEpochModeMismatch => {
                 f.write_str("next-epoch snapshot changes the frozen consensus mode")
             }
             Self::NextEpochQuorumMismatch => {
                 f.write_str("next-epoch quorum is not canonical for its roster")
+            }
+            Self::NextEpochProofOfPossessionCount => {
+                f.write_str("next-epoch PoP count does not match its roster")
+            }
+            Self::MissingNextEpochProofOfPossession => {
+                f.write_str("next-epoch snapshot contains an empty PoP")
+            }
+            Self::NextEpochProofOfPossessionTooLarge => {
+                f.write_str("next-epoch snapshot contains an oversized PoP")
             }
             Self::NextEpochPermissionedPowerNotOne => {
                 f.write_str("permissioned next-epoch validators must each have voting power one")
@@ -2151,6 +2207,7 @@ impl fmt::Display for ValidationError {
             Self::MissingAggregateSignature => {
                 f.write_str("certificate has an empty aggregate signature")
             }
+            Self::SignatureTooLarge => f.write_str("consensus signature exceeds protocol bound"),
             Self::InsufficientSignerCount => {
                 f.write_str("insufficient distinct validator signatures")
             }
@@ -2334,6 +2391,18 @@ fn validate_validator_index(
 fn require_signature(signature: &[u8]) -> Result<(), ValidationError> {
     if signature.is_empty() {
         Err(ValidationError::MissingSignature)
+    } else if signature.len() > MAX_CONSENSUS_SIGNATURE_BYTES {
+        Err(ValidationError::SignatureTooLarge)
+    } else {
+        Ok(())
+    }
+}
+
+fn require_aggregate_signature(signature: &[u8]) -> Result<(), ValidationError> {
+    if signature.is_empty() {
+        Err(ValidationError::MissingAggregateSignature)
+    } else if signature.len() > MAX_CONSENSUS_SIGNATURE_BYTES {
+        Err(ValidationError::SignatureTooLarge)
     } else {
         Ok(())
     }
@@ -2539,6 +2608,11 @@ mod tests {
 
     #[test]
     fn height_context_rejects_noncanonical_rosters_and_quorums() {
+        let mut empty = context(&[1, 1, 1, 1]);
+        empty.roster.clear();
+        assert_eq!(empty.leader(u64::MAX), 0);
+        assert_eq!(empty.validate(), Err(ValidationError::EmptyRoster));
+
         let mut invalid = context(&[1, 1, 1, 1]);
         invalid.roster[1].validator = invalid.roster[0].validator.clone();
         assert_eq!(invalid.validate(), Err(ValidationError::DuplicateValidator));
@@ -2548,6 +2622,81 @@ mod tests {
         assert_eq!(
             invalid.validate(),
             Err(ValidationError::CountThresholdMismatch)
+        );
+
+        let mut oversized = context(&[1, 1, 1, 1]);
+        let repeated = oversized.roster[0].clone();
+        oversized
+            .roster
+            .resize(MAX_VALIDATORS_PER_HEIGHT + 1, repeated);
+        assert_eq!(oversized.validate(), Err(ValidationError::RosterTooLarge));
+
+        let mut invalid_parent_execution = context(&[1, 1, 1, 1]);
+        invalid_parent_execution.height = 2;
+        invalid_parent_execution.parent_commit_qc = Some(QuorumCertificate {
+            round: ConsensusRound {
+                context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                    b"invalid parent execution context",
+                ))),
+                height: 1,
+                view: 0,
+            },
+            phase: GlobalPhase::Commit,
+            subject: subject(0x61),
+            execution_commitment: ExecutionCommitment {
+                parent_state_root: Hash::new(b"parent state"),
+                post_state_root: Hash::new(b"post state"),
+                ordinary_writes_root: Hash::new(b"ordinary writes"),
+                topup_anchor_root: None,
+                topup_anchor_count: 1,
+            },
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0x62; 48],
+        });
+        assert_eq!(
+            invalid_parent_execution.validate(),
+            Err(ValidationError::InvalidExecutionCommitment)
+        );
+    }
+
+    #[test]
+    fn non_boundary_height_context_id_is_pinned() {
+        let context = context(&[7, 5, 3, 1]);
+        context.validate().expect("valid non-boundary context");
+        assert_eq!(
+            *context.id().0.as_ref(),
+            [
+                0xad, 0x99, 0x8b, 0x5a, 0x9f, 0x19, 0xea, 0x89, 0xdf, 0xb4, 0x3c, 0xdc, 0x9d, 0xdd,
+                0xb3, 0xf5, 0x10, 0x91, 0x64, 0xc0, 0xb4, 0x97, 0xa2, 0xfb, 0x8e, 0x67, 0x26, 0x81,
+                0xea, 0x7e, 0x21, 0x9b,
+            ],
+            "intentional identity-projection changes require updating this golden"
+        );
+    }
+
+    #[test]
+    fn boundary_height_context_id_pins_the_complete_transition() {
+        let mut context = context(&[7, 5, 3, 1]);
+        context.epoch_end_height = context.height;
+        let next_roster = roster(&[11, 9, 7, 5]);
+        context.next_epoch_snapshot = Some(finality::FinalizedNextEpochSnapshot {
+            epoch: context.epoch + 1,
+            epoch_end_height: 41,
+            mode: context.mode,
+            quorum: DualQuorum::from_roster(&next_roster).expect("valid next-epoch quorum"),
+            roster: next_roster,
+            validator_set_pops: vec![vec![0x81], vec![0x82, 0x83], vec![0x84], vec![0x85, 0x86]],
+            leader_seed: [0x87; 32],
+        });
+        context.validate().expect("valid boundary context");
+        assert_eq!(
+            *context.id().0.as_ref(),
+            [
+                0xfa, 0xc2, 0x0e, 0xa9, 0xbb, 0xf7, 0xba, 0xe7, 0x7e, 0xee, 0x55, 0xec, 0xbe, 0x68,
+                0x98, 0x95, 0xf9, 0x8f, 0x35, 0x0b, 0xcb, 0x9b, 0x05, 0x8d, 0x99, 0xce, 0x05, 0x07,
+                0x78, 0x6a, 0xa9, 0x55,
+            ],
+            "intentional transition-identity changes require updating this golden"
         );
     }
 
@@ -2612,6 +2761,17 @@ mod tests {
             b"different parent context",
         )));
         assert_ne!(left.id(), right.id());
+
+        let mut oversized_parent = left;
+        oversized_parent
+            .parent_commit_qc
+            .as_mut()
+            .expect("parent certificate")
+            .aggregate_signature = vec![0x33; MAX_CONSENSUS_SIGNATURE_BYTES + 1];
+        assert_eq!(
+            oversized_parent.validate(),
+            Err(ValidationError::SignatureTooLarge)
+        );
     }
 
     #[test]
@@ -3066,6 +3226,13 @@ mod tests {
             timeout
                 .signature_preimage()
                 .starts_with(b"iroha:sumeragi:v2:timeout-vote")
+        );
+
+        let mut oversized = vote.clone();
+        oversized.signature = vec![0x45; MAX_CONSENSUS_SIGNATURE_BYTES + 1];
+        assert_eq!(
+            oversized.validate(&context),
+            Err(ValidationError::SignatureTooLarge)
         );
 
         let mut unsigned = vote;

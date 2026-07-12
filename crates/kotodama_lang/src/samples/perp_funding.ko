@@ -3,9 +3,9 @@ seiyaku PerpFunding {
     // Compute an unsigned funding-payment magnitude. Direction is selected by
     // comparing mark and index prices before any checked subtraction.
     fn funding_payment(quantity position_size_magnitude, decimal price_delta, decimal funding_bps) -> quantity {
-        let num = position_size_magnitude * price_delta * funding_bps;
+        let numerator = position_size_magnitude * price_delta * funding_bps;
         let decimal bps_scale = 10_000;
-        let pay = num / bps_scale;
+        let pay = numerator / bps_scale;
         return pay;
     }
 

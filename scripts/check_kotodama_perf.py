@@ -2,7 +2,7 @@
 """Enforce the Kotodama V1 Criterion regression budget.
 
 The gate compares every pre-reset compiler/runtime workload against Criterion's
-real ``base`` samples or an explicit checked-in baseline. New V1 List, Amount,
+real ``base`` samples or an explicit checked-in baseline. New V1 List, quantity,
 pipeline-phase, and typed-query workloads are mandatory candidate evidence;
 missing or malformed samples fail closed. A comparable workload fails when its
 median is more than five percent slower, and List sugar has an independent
@@ -44,13 +44,13 @@ REPRESENTATIVE_BENCHMARKS = (
     "kotodama_list_contains_64",
     LIST_SUGAR_BENCHMARK,
     LIST_MANUAL_BENCHMARK,
-    "kotodama_amount_add",
-    "kotodama_amount_sub",
-    "kotodama_amount_mul",
-    "kotodama_amount_div_exact",
-    "kotodama_amount_div_round_floor",
-    "kotodama_amount_div_round_ceil",
-    "kotodama_amount_div_round_nearest_even",
+    "kotodama_quantity_add",
+    "kotodama_quantity_sub",
+    "kotodama_quantity_mul",
+    "kotodama_quantity_div_exact",
+    "kotodama_quantity_div_round_floor",
+    "kotodama_quantity_div_round_ceil",
+    "kotodama_quantity_div_round_nearest_even",
     "typed_core_query_accounts_page_64",
     "typed_core_query_assets_page_64",
     "typed_core_query_asset_definitions_page_64",

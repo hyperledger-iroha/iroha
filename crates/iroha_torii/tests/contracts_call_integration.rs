@@ -33,24 +33,34 @@ use mv::storage::StorageReadOnly;
 use norito::json;
 use tower::ServiceExt as _;
 
+fn decode_stored_int(payload: &[u8]) -> i64 {
+    let tlv = ivm::pointer_abi::validate_tlv_bytes(payload).expect("stored int TLV");
+    assert_eq!(tlv.type_id, ivm::PointerType::Int);
+    iroha_primitives::numeric_abi::IntValueV1::decode_frame(tlv.payload)
+        .expect("decode stored canonical int")
+        .into_int()
+        .try_to_i64()
+        .expect("fixture int fits i64")
+}
+
 fn contract_call_dispatch_program() -> Vec<u8> {
     let src = format!(
         r#"
 seiyaku ContractCallDispatchTest {{
 
-  state call_amount: i64;
-  state call_asset: AssetDefinitionId;
+  state int call_amount;
+  state AssetDefinitionId call_asset;
 
-  hajimari(asset_definition_id: AssetDefinitionId) {{
+  hajimari(AssetDefinitionId asset_definition_id) {{
     call_amount = 0;
     call_asset = asset_definition_id;
   }}
 
-  kotoage fn credit_by_payload(amount: i64) authorize("CanEnactGovernance") {{
+  kotoage fn credit_by_payload(int amount) authorize("CanEnactGovernance") {{
     call_amount = amount;
   }}
 
-  kotoage fn record_asset_by_payload(asset_definition_id: AssetDefinitionId) authorize("CanEnactGovernance") {{
+  kotoage fn record_asset_by_payload(AssetDefinitionId asset_definition_id) authorize("CanEnactGovernance") {{
     call_asset = asset_definition_id;
   }}
 }}
@@ -66,23 +76,23 @@ fn contract_call_declared_state_program() -> Vec<u8> {
         r#"
 seiyaku ContractCallDeclaredStateTest {{
 
-  state CallAmount: i64;
-  state CallAsset: AssetDefinitionId;
+  state int CallAmount;
+  state AssetDefinitionId CallAsset;
 
-  hajimari(asset_definition_id: AssetDefinitionId) {{
+  hajimari(AssetDefinitionId asset_definition_id) {{
     CallAmount = 0;
     CallAsset = asset_definition_id;
   }}
 
-  kotoage fn credit_by_payload(amount: i64) authorize("CanEnactGovernance") {{
+  kotoage fn credit_by_payload(int amount) authorize("CanEnactGovernance") {{
     CallAmount = amount;
   }}
 
-  kotoage fn record_asset_by_payload(asset_definition_id: AssetDefinitionId) authorize("CanEnactGovernance") {{
+  kotoage fn record_asset_by_payload(AssetDefinitionId asset_definition_id) authorize("CanEnactGovernance") {{
     CallAsset = asset_definition_id;
   }}
 
-  view fn declared_state() -> (i64, AssetDefinitionId) {{
+  view fn declared_state() -> (int, AssetDefinitionId) {{
     return (CallAmount, CallAsset);
   }}
 }}
@@ -98,18 +108,18 @@ fn contract_call_declared_state_with_isi_program() -> Vec<u8> {
         r#"
 seiyaku ContractCallDeclaredStateWithIsiTest {{
 
-  state CallAmount: i64;
+  state int CallAmount;
 
   hajimari() {{
     CallAmount = 0;
   }}
 
-  kotoage fn write_with_isi(amount: i64) authorize("CanEnactGovernance") {{
+  kotoage fn write_with_isi(int amount) authorize("CanEnactGovernance") {{
     ledger::account::set_detail(account: context::authority(), key: Name::parse("cursor"), value: Json::parse("{{\"phase\":\"write_with_isi\"}}"));
     CallAmount = amount;
   }}
 
-  view fn declared_state() -> i64 {{
+  view fn declared_state() -> int {{
     return CallAmount;
   }}
 }}
@@ -125,20 +135,20 @@ fn contract_call_declared_state_with_mint_program() -> Vec<u8> {
         r#"
 seiyaku ContractCallDeclaredStateWithMintTest {{
 
-  state CallAmount: i64;
+  state int CallAmount;
 
   hajimari() {{
     CallAmount = 0;
   }}
 
-  kotoage fn write_with_mint(amount: i64,
-                           user: AccountId,
-                           asset_definition_id: AssetDefinitionId) authorize("CanEnactGovernance") {{
-    ledger::asset::mint(account: user, asset_definition: asset_definition_id, amount: Amount::from_i64(1));
+  kotoage fn write_with_mint(int amount,
+                           AccountId user,
+                           AssetDefinitionId asset_definition_id) authorize("CanEnactGovernance") {{
+    ledger::asset::mint(account: user, asset_definition: asset_definition_id, amount: 1);
     CallAmount = amount;
   }}
 
-  view fn declared_state() -> i64 {{
+  view fn declared_state() -> int {{
     return CallAmount;
   }}
 }}
@@ -162,11 +172,11 @@ seiyaku ContractCallN3xLikeTest {{
     ZeroRedemption = 5
   }}
 
-  state HubInitialized: i64;
-  state BasketUsdt: i64;
-  state BasketUsdc: i64;
-  state BasketKusd: i64;
-  state TotalN3x: i64;
+  state int HubInitialized;
+  state quantity BasketUsdt;
+  state quantity BasketUsdc;
+  state quantity BasketKusd;
+  state quantity TotalN3x;
 
   fn init_impl() {{
     HubInitialized = 1;
@@ -184,48 +194,49 @@ seiyaku ContractCallN3xLikeTest {{
     init_impl();
   }}
 
-  fn deposit_impl(user: AccountId,
-                  asset: AssetDefinitionId,
-                  usdt_in: i64,
-                  usdc_in: i64,
-                  kusd_in: i64) {{
+  fn deposit_impl(AccountId user,
+                  AssetDefinitionId asset,
+                  quantity usdt_in,
+                  quantity usdc_in,
+                  quantity kusd_in) {{
     require(HubInitialized == 1, HubError::NotInitialized);
     let minted = usdt_in + usdc_in + kusd_in;
-    ledger::asset::mint(account: user, asset_definition: asset, amount: Amount::from_i64(minted));
+    ledger::asset::mint(account: user, asset_definition: asset, amount: minted);
     BasketUsdt = BasketUsdt + usdt_in;
     BasketUsdc = BasketUsdc + usdc_in;
     BasketKusd = BasketKusd + kusd_in;
     TotalN3x = TotalN3x + minted;
   }}
 
-  kotoage fn deposit_like(user: AccountId,
-                        asset_definition_id: AssetDefinitionId,
-                        usdt_in: i64,
-                        usdc_in: i64,
-                        kusd_in: i64) authorize("CanEnactGovernance") {{
+  kotoage fn deposit_like(AccountId user,
+                        AssetDefinitionId asset_definition_id,
+                        quantity usdt_in,
+                        quantity usdc_in,
+                        quantity kusd_in) authorize("CanEnactGovernance") {{
     deposit_impl(user, asset_definition_id, usdt_in, usdc_in, kusd_in);
   }}
 
-  kotoage fn burn_like(user: AccountId,
-                     asset_definition_id: AssetDefinitionId,
-                     n3x_amount: i64) authorize("CanEnactGovernance") {{
+  kotoage fn burn_like(AccountId user,
+                     AssetDefinitionId asset_definition_id,
+                     quantity n3x_amount) authorize("CanEnactGovernance") {{
     let total = TotalN3x;
     require(total > 0, HubError::EmptyHub);
     require(n3x_amount > 0, HubError::InvalidAmount);
     require(n3x_amount <= total, HubError::InsufficientSupply);
-    let usdt_out = (BasketUsdt * n3x_amount) / total;
-    let usdc_out = (BasketUsdc * n3x_amount) / total;
-    let kusd_out = (BasketKusd * n3x_amount) / total;
+    let decimal redemption_ratio = n3x_amount / total;
+    let quantity usdt_out = BasketUsdt * redemption_ratio;
+    let quantity usdc_out = BasketUsdc * redemption_ratio;
+    let quantity kusd_out = BasketKusd * redemption_ratio;
     let redeemed = usdt_out + usdc_out + kusd_out;
     require(redeemed > 0, HubError::ZeroRedemption);
-    ledger::asset::burn(account: user, asset_definition: asset_definition_id, amount: Amount::from_i64(n3x_amount));
+    ledger::asset::burn(account: user, asset_definition: asset_definition_id, amount: n3x_amount);
     BasketUsdt = BasketUsdt - usdt_out;
     BasketUsdc = BasketUsdc - usdc_out;
     BasketKusd = BasketKusd - kusd_out;
     TotalN3x = total - n3x_amount;
   }}
 
-  view fn state_snapshot() -> (i64, i64, i64, i64, i64) {{
+  view fn state_snapshot() -> (int, quantity, quantity, quantity, quantity) {{
     return (HubInitialized, BasketUsdt, BasketUsdc, BasketKusd, TotalN3x);
   }}
 }}
@@ -244,7 +255,7 @@ seiyaku ContractViewTrapTest {
     Boom = 1
   }
 
-  view fn explode() -> i64 {
+  view fn explode() -> int {
     require(false, ViewError::Boom);
     return 1;
   }
@@ -263,19 +274,19 @@ fn contract_view_bytes_program() -> Vec<u8> {
     let src = r#"
 seiyaku ContractViewBytesTest {
 
-  state Asset: AssetDefinitionId;
-  state Target: bytes;
+  state AssetDefinitionId Asset;
+  state bytes Target;
 
-  fn configure_impl(asset: AssetDefinitionId, target: bytes) {
+  fn configure_impl(AssetDefinitionId asset, bytes target) {
     Asset = asset;
     Target = target;
   }
 
-  hajimari(asset: AssetDefinitionId, target: bytes) {
+  hajimari(AssetDefinitionId asset, bytes target) {
     configure_impl(asset, target);
   }
 
-  kotoage fn configure(asset: AssetDefinitionId, target: bytes) authorize("CanEnactGovernance") {
+  kotoage fn configure(AssetDefinitionId asset, bytes target) authorize("CanEnactGovernance") {
     configure_impl(asset, target);
   }
 
@@ -301,17 +312,17 @@ fn contract_view_account_id_program() -> Vec<u8> {
     let src = r#"
 seiyaku ContractViewAccountIdTest {
 
-  state Stored: AccountId;
+  state AccountId Stored;
 
-  fn bind_impl(account_id: AccountId) {
+  fn bind_impl(AccountId account_id) {
     Stored = account_id;
   }
 
-  hajimari(account_id: AccountId) {
+  hajimari(AccountId account_id) {
     bind_impl(account_id);
   }
 
-  kotoage fn bind(account_id: AccountId) authorize("CanEnactGovernance") {
+  kotoage fn bind(AccountId account_id) authorize("CanEnactGovernance") {
     bind_impl(account_id);
   }
 
@@ -323,7 +334,7 @@ seiyaku ContractViewAccountIdTest {
     return Stored;
   }
 
-  view fn stored_tuple() -> (AccountId, i64) {
+  view fn stored_tuple() -> (AccountId, int) {
     return (Stored, 1);
   }
 }
@@ -342,8 +353,8 @@ seiyaku ContractCallConfigureAccountMapTest {
     UnauthorizedInitial = 2
   }
 
-  state ConfigAccount: StateMap<Name, AccountId>;
-  state ConfigInt: StateMap<Name, i64>;
+  state StateMap<Name, AccountId> ConfigAccount;
+  state StateMap<Name, int> ConfigInt;
 
   fn key_admin() -> Name {
     return Name::parse("admin");
@@ -363,7 +374,7 @@ seiyaku ContractCallConfigureAccountMapTest {
     }
   }
 
-  kotoage fn configure(admin: AccountId, inori: AccountId) authorize("CanEnactGovernance") {
+  kotoage fn configure(AccountId admin, AccountId inori) authorize("CanEnactGovernance") {
     let has_admin = ConfigAccount.contains(key_admin());
     if (has_admin) {
       require(context::authority() == ConfigAccount.get(key_admin()).unwrap_or(admin), ConfigureError::UnauthorizedExisting);
@@ -383,7 +394,7 @@ seiyaku ContractCallConfigureAccountMapTest {
     return ConfigAccount.get(key_inori()).unwrap_or(context::authority());
   }
 
-  view fn paused() -> i64 {
+  view fn paused() -> int {
     return ConfigInt.get(key_paused()).unwrap_or(0);
   }
 }
@@ -1205,7 +1216,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
 
-    let payload = norito::json!({ "amount": 7 });
+    let payload = norito::json!({ "amount": "7" });
     let call_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         &creds.private_key,
@@ -1237,8 +1248,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         .smart_contract_state()
         .get(&state_path)
         .expect("recorded state payload");
-    let tlv = ivm::pointer_abi::validate_tlv_bytes(stored).expect("stored tlv");
-    let recorded: i64 = norito::decode_from_bytes(tlv.payload).expect("decode state payload");
+    let recorded = decode_stored_int(stored);
     assert_eq!(recorded, 7);
 
     let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
@@ -1567,7 +1577,10 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
     );
 
     let paused = run_contract_view(&app, &creds.account, &contract_address, "paused", None).await;
-    assert_eq!(paused.get("result").and_then(json::Value::as_i64), Some(0));
+    assert_eq!(
+        paused.get("result").and_then(json::Value::as_str),
+        Some("0")
+    );
 }
 
 #[tokio::test]
@@ -1624,7 +1637,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
 
-    let credit_payload = norito::json!({ "amount": 7 });
+    let credit_payload = norito::json!({ "amount": "7" });
     let credit_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         &creds.private_key,
@@ -1688,8 +1701,8 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         .and_then(json::Value::as_array)
         .expect("view result array");
     assert_eq!(
-        view_result.first().and_then(json::Value::as_i64),
-        Some(7),
+        view_result.first().and_then(json::Value::as_str),
+        Some("7"),
         "unexpected declared amount from view",
     );
     assert_eq!(
@@ -1708,9 +1721,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         .smart_contract_state()
         .get(&call_amount_path)
         .expect("stored declared amount");
-    let amount_tlv = ivm::pointer_abi::validate_tlv_bytes(stored_amount).expect("amount tlv");
-    let declared_amount: i64 =
-        norito::decode_from_bytes(amount_tlv.payload).expect("decode declared amount");
+    let declared_amount = decode_stored_int(stored_amount);
     assert_eq!(declared_amount, 7);
 
     let stored_asset = view
@@ -1785,7 +1796,7 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
 
-    let write_payload = norito::json!({ "amount": 7 });
+    let write_payload = norito::json!({ "amount": "7" });
     let write_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         &creds.private_key,
@@ -1821,9 +1832,9 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
     assert_eq!(
         view_json
             .get("result")
-            .and_then(json::Value::as_i64)
-            .expect("view i64 result"),
-        7
+            .and_then(json::Value::as_str)
+            .expect("view int result"),
+        "7"
     );
 
     let declared_amount_path: Name = "CallAmount".parse().expect("declared amount path");
@@ -1834,9 +1845,7 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
         .smart_contract_state()
         .get(&declared_amount_path)
         .expect("stored declared amount");
-    let amount_tlv = ivm::pointer_abi::validate_tlv_bytes(stored_amount).expect("amount tlv");
-    let declared_amount: i64 =
-        norito::decode_from_bytes(amount_tlv.payload).expect("decode declared amount");
+    let declared_amount = decode_stored_int(stored_amount);
     assert_eq!(declared_amount, 7);
 }
 
@@ -1918,7 +1927,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     assert_eq!(applied_deploy, 1);
 
     let write_payload = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("amount", 7),
+        iroha_torii::json_entry("amount", "7"),
         iroha_torii::json_entry("user", creds.account.clone()),
         iroha_torii::json_entry("asset_definition_id", asset_definition_id.to_string()),
     ]);
@@ -1957,9 +1966,9 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     assert_eq!(
         view_json
             .get("result")
-            .and_then(json::Value::as_i64)
-            .expect("view i64 result"),
-        7
+            .and_then(json::Value::as_str)
+            .expect("view int result"),
+        "7"
     );
 
     let declared_amount_path: Name = "CallAmount".parse().expect("declared amount path");
@@ -1970,9 +1979,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
         .smart_contract_state()
         .get(&declared_amount_path)
         .expect("stored declared amount");
-    let amount_tlv = ivm::pointer_abi::validate_tlv_bytes(stored_amount).expect("amount tlv");
-    let declared_amount: i64 =
-        norito::decode_from_bytes(amount_tlv.payload).expect("decode declared amount");
+    let declared_amount = decode_stored_int(stored_amount);
     assert_eq!(declared_amount, 7);
 }
 
@@ -2080,9 +2087,9 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     let deposit_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("user", creds.account.clone()),
         iroha_torii::json_entry("asset_definition_id", asset_definition_id.to_string()),
-        iroha_torii::json_entry("usdt_in", 1),
-        iroha_torii::json_entry("usdc_in", 2),
-        iroha_torii::json_entry("kusd_in", 3),
+        iroha_torii::json_entry("usdt_in", "1"),
+        iroha_torii::json_entry("usdc_in", "2"),
+        iroha_torii::json_entry("kusd_in", "3"),
     ]);
     let deposit_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -2120,11 +2127,11 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
         .get("result")
         .and_then(json::Value::as_array)
         .expect("state snapshot array");
-    assert_eq!(snapshot.first().and_then(json::Value::as_i64), Some(1));
-    assert_eq!(snapshot.get(1).and_then(json::Value::as_i64), Some(1));
-    assert_eq!(snapshot.get(2).and_then(json::Value::as_i64), Some(2));
-    assert_eq!(snapshot.get(3).and_then(json::Value::as_i64), Some(3));
-    assert_eq!(snapshot.get(4).and_then(json::Value::as_i64), Some(6));
+    assert_eq!(snapshot.first().and_then(json::Value::as_str), Some("1"));
+    assert_eq!(snapshot.get(1).and_then(json::Value::as_str), Some("1"));
+    assert_eq!(snapshot.get(2).and_then(json::Value::as_str), Some("2"));
+    assert_eq!(snapshot.get(3).and_then(json::Value::as_str), Some("3"));
+    assert_eq!(snapshot.get(4).and_then(json::Value::as_str), Some("6"));
 }
 
 #[tokio::test]
@@ -2231,9 +2238,9 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     let deposit_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("user", creds.account.clone()),
         iroha_torii::json_entry("asset_definition_id", asset_definition_id.to_string()),
-        iroha_torii::json_entry("usdt_in", 1),
-        iroha_torii::json_entry("usdc_in", 2),
-        iroha_torii::json_entry("kusd_in", 3),
+        iroha_torii::json_entry("usdt_in", "1"),
+        iroha_torii::json_entry("usdc_in", "2"),
+        iroha_torii::json_entry("kusd_in", "3"),
     ]);
     let deposit_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -2262,7 +2269,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     let burn_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("user", creds.account.clone()),
         iroha_torii::json_entry("asset_definition_id", asset_definition_id.to_string()),
-        iroha_torii::json_entry("n3x_amount", 6),
+        iroha_torii::json_entry("n3x_amount", "6"),
     ]);
     let burn_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -2300,9 +2307,9 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         .get("result")
         .and_then(json::Value::as_array)
         .expect("state snapshot array");
-    assert_eq!(snapshot.first().and_then(json::Value::as_i64), Some(1));
-    assert_eq!(snapshot.get(1).and_then(json::Value::as_i64), Some(0));
-    assert_eq!(snapshot.get(2).and_then(json::Value::as_i64), Some(0));
-    assert_eq!(snapshot.get(3).and_then(json::Value::as_i64), Some(0));
-    assert_eq!(snapshot.get(4).and_then(json::Value::as_i64), Some(0));
+    assert_eq!(snapshot.first().and_then(json::Value::as_str), Some("1"));
+    assert_eq!(snapshot.get(1).and_then(json::Value::as_str), Some("0"));
+    assert_eq!(snapshot.get(2).and_then(json::Value::as_str), Some("0"));
+    assert_eq!(snapshot.get(3).and_then(json::Value::as_str), Some("0"));
+    assert_eq!(snapshot.get(4).and_then(json::Value::as_str), Some("0"));
 }

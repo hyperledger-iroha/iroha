@@ -3396,7 +3396,9 @@ mod tests {
             payload_hash: [0x5A; 32],
             recorded_at_height: u64::try_from(state.view().height()).expect("height fits u64"),
         };
-        state.insert_sccp_outbound_message_for_testing(key.clone(), record);
+        state
+            .insert_sccp_outbound_message_for_testing(key.clone(), record)
+            .expect("insert canonical SCCP outbound snapshot fixture");
         let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();

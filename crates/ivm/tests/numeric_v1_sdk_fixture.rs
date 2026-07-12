@@ -1,5 +1,6 @@
 //! Cross-SDK golden verification for Kotodama V1 numeric frames and envelopes.
 
+#[allow(dead_code)]
 #[path = "../examples/numeric_v1_fixture.rs"]
 mod fixture_generator;
 
@@ -123,6 +124,8 @@ fn frame_error_category(error: NumericAbiError) -> &'static str {
         NumericAbiError::InvalidScale => "invalid_scale",
         NumericAbiError::NegativeQuantity => "negative_quantity",
         NumericAbiError::SchemaMismatch => "schema_mismatch",
+        NumericAbiError::CompressionNotAllowed => "compression_not_allowed",
+        NumericAbiError::LayoutFlagsNotAllowed => "layout_flags_not_allowed",
         NumericAbiError::Norito(message) if message.contains("checksum") => "checksum_mismatch",
         other => panic!("unpinned numeric frame error: {other:?}"),
     }

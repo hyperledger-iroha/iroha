@@ -178,7 +178,6 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
         "halo2/pasta/offline-note-recursive",
         "halo2/pasta/kagemusha-folded-v1",
         "halo2/pasta/kagemusha-recursive-aggregation-v1",
-        "halo2/pasta/kagemusha-recursive-compact-v1",
         "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
         "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
         "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",

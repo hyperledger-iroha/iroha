@@ -499,11 +499,6 @@ impl LoadedCandidateBody {
         self.subject
     }
 
-    /// Canonical `SignedBlockWire` bytes retained by the durable body store.
-    pub(crate) fn canonical_wire(&self) -> &[u8] {
-        &self.canonical_wire
-    }
-
     /// Consume the completion into exact canonical bytes.
     pub(crate) fn into_canonical_wire(self) -> Vec<u8> {
         self.canonical_wire

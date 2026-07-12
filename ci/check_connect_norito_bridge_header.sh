@@ -311,6 +311,8 @@ expected_recursive_signatures = {
             ulong("proof_norito_len"),
             const_u8_ptr("roster_norito_ptr"),
             ulong("roster_norito_len"),
+            const_u8_ptr("anchor_norito_ptr"),
+            ulong("anchor_norito_len"),
             const_u8_ptr("manifest_norito_ptr"),
             ulong("manifest_norito_len"),
             const_u8_ptr("expected_manifest_sha256_ptr"),
@@ -549,6 +551,14 @@ expected_recursive_signatures = {
         "out_instruction_len",
     ),
 }
+# The dictionary also documents retired unsuffixed signatures for historical
+# negative-control fixtures. Only the exact ABI-18/V3 export inventory is a
+# required first-release surface.
+expected_recursive_signatures = {
+    name: signature
+    for name, signature in expected_recursive_signatures.items()
+    if name in required_kagemusha_native_exports
+}
 required_recursive_ffi = set(expected_recursive_signatures)
 
 expected_kagemusha_v2_signatures = {
@@ -707,6 +717,7 @@ expected_kagemusha_v2_rust_signatures = {
         [
             rust_const_u8_ptr("proof_norito_ptr"), rust_ulong("proof_norito_len"),
             rust_const_u8_ptr("roster_norito_ptr"), rust_ulong("roster_norito_len"),
+            rust_const_u8_ptr("anchor_norito_ptr"), rust_ulong("anchor_norito_len"),
             rust_const_u8_ptr("manifest_norito_ptr"), rust_ulong("manifest_norito_len"),
             rust_const_u8_ptr("expected_manifest_sha256_ptr"),
             rust_ulong("expected_manifest_sha256_len"),

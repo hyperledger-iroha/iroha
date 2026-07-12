@@ -118,25 +118,21 @@ print("offline ready", readiness.ready, readiness.blockers)
 ```
 ## 6. የዥረት ክስተቶች
 
-Torii SSE የመጨረሻ ነጥቦች በጄነሬተሮች በኩል ይጋለጣሉ። ኤስዲኬ በራስ-ሰር ከቆመበት ይቀጥላል
-`resume=True` እና `EventCursor` ሲያቀርቡ።
+Torii SSE helpers return live-only generators. They may reconnect within the
+configured retry budget, but Torii retains no replay log: reconnects can leave
+a gap. Replay cursors and resume arguments are intentionally unsupported; query
+committed ledger state when complete history is required.
 
 ```python
-from iroha_python import PipelineEventFilterBox, EventCursor
-
-cursor = EventCursor()
-
 for event in client.stream_pipeline_blocks(
     status="Committed",
-    resume=True,
-    cursor=cursor,
     with_metadata=True,
 ):
     print("Block height", event.data.block.height)
 ```
 
-ሌሎች የምቾት ዘዴዎች `stream_pipeline_transactions`፣
-`stream_events` (ከተተየቡ የማጣሪያ ግንበኞች ጋር) እና `stream_verifying_key_events`።
+Other convenience methods include `stream_pipeline_transactions`,
+`stream_events` (with typed filter builders), and `stream_verifying_key_events`.
 
 ## 7. ቀጣይ ደረጃዎች
 

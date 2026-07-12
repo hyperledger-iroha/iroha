@@ -118,25 +118,21 @@ print("offline ready", readiness.ready, readiness.blockers)
 ```
 ## 6. Ағым ваҡиғалары
 
-Torii SSE ос нөктәләре генераторҙар аша асыҡлана. SDK автоматик рәүештә тергеҙелә
-Ҡасан I18NI000000043X һәм һеҙ I18NI00000044ХХХХ.
+Torii SSE helpers return live-only generators. They may reconnect within the
+configured retry budget, but Torii retains no replay log: reconnects can leave
+a gap. Replay cursors and resume arguments are intentionally unsupported; query
+committed ledger state when complete history is required.
 
 ```python
-from iroha_python import PipelineEventFilterBox, EventCursor
-
-cursor = EventCursor()
-
 for event in client.stream_pipeline_blocks(
     status="Committed",
-    resume=True,
-    cursor=cursor,
     with_metadata=True,
 ):
     print("Block height", event.data.block.height)
 ```
 
-Башҡа уңайлыҡтар ысулдары I18NI000000045X,
-I18NI000000046X (типлаштырылған фильтр төҙөүселәр менән), һәм I18NI000000047X.
+Other convenience methods include `stream_pipeline_transactions`,
+`stream_events` (with typed filter builders), and `stream_verifying_key_events`.
 
 ## 7. Киләһе аҙымдар
 

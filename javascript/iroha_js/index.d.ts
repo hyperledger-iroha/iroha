@@ -6459,38 +6459,310 @@ export interface SubscriptionActionResponse {
 
 export type OfflineByteArray = ReadonlyArray<number>;
 export type OfflineJsonUnsignedInteger = number | bigint;
-
+export type OfflineAssetScale =
+  | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14
+  | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28
+  | 0n | 1n | 2n | 3n | 4n | 5n | 6n | 7n | 8n | 9n | 10n | 11n | 12n
+  | 13n | 14n | 15n | 16n | 17n | 18n | 19n | 20n | 21n | 22n | 23n
+  | 24n | 25n | 26n | 27n | 28n;
+export type OfflineFixed32Bytes = readonly [
+  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number,
+];
+export type OfflineFixed8Bytes = readonly [
+  number, number, number, number, number, number, number, number,
+];
 export interface OfflineScaledAmountJson {
   atomic_units: OfflineJsonUnsignedInteger;
-  scale: OfflineJsonUnsignedInteger;
+  scale: OfflineAssetScale;
 }
 
-export interface OfflineAuthorizationJson extends Record<string, unknown> {
-  operation_id: OfflineByteArray;
+export interface OfflineVerifierKeyIdJson {
+  backend: string;
+  name: string;
 }
 
-export interface OfflineTopUpRequestJson extends Record<string, unknown> {
+export interface OfflineSpendableNoteJson {
+  chain_id: string;
+  asset: string;
+  note_commitment: OfflineFixed32Bytes;
+  spend_nullifier: OfflineFixed32Bytes;
+  amount: OfflineScaledAmountJson;
+}
+
+export interface OfflineAuthorizationJson {
+  authority: string;
+  device_id: string;
+  operation_id: OfflineFixed32Bytes;
+  issued_at_ms: OfflineJsonUnsignedInteger;
+  expires_at_ms: OfflineJsonUnsignedInteger;
+  nonce: OfflineFixed32Bytes;
+  payload_digest: OfflineFixed32Bytes;
+  app_attest_evidence_sha256?: OfflineFixed32Bytes | null;
+  app_attest_evidence?: OfflineByteArray | null;
+  signature: string;
+}
+
+export interface OfflineProofBoxJson {
+  backend: string;
+  bytes: OfflineByteArray;
+}
+
+export interface OfflineVerifyingKeyJson {
+  backend: string;
+  bytes: OfflineByteArray;
+}
+
+export type OfflineProofBackend =
+  | "halo2-ipa-pasta"
+  | "halo2-bn254"
+  | "groth16"
+  | "stark"
+  | "unsupported"
+  | "halo2-ipa-orchard"
+  | "groth16-bls12-377"
+  | "fcmp-plus-plus-curve-tree"
+  | "lattice-pcs-sis"
+  | "miden-stark"
+  | "aztec-plonkish-private-kernel"
+  | "pq-masp-stark-fri"
+  | "anonymous-pgc"
+  | "verange"
+  | "zkat"
+  | "recursive-anonymous-admission"
+  | "vega-existing-credential-zk"
+  | "silent-threshold-anoncred"
+  | "zk-x509"
+  | "sis-with-hints";
+
+export type OfflineVerifierStatus = "Proposed" | "Active" | "Withdrawn";
+
+export interface OfflineMerkleProofJson {
+  leaf_index: OfflineJsonUnsignedInteger;
+  audit_path: ReadonlyArray<string | null>;
+}
+
+export interface OfflineLanePrivacyMerkleWitnessJson {
+  leaf: OfflineFixed32Bytes;
+  proof: OfflineMerkleProofJson;
+}
+
+export interface OfflineLanePrivacySnarkWitnessJson {
+  public_inputs: string;
+  proof: string;
+}
+
+export type OfflineLanePrivacyWitnessJson =
+  | { kind: "merkle"; payload: OfflineLanePrivacyMerkleWitnessJson }
+  | { kind: "snark"; payload: OfflineLanePrivacySnarkWitnessJson };
+
+export interface OfflineLanePrivacyProofJson {
+  commitment_id: readonly [number];
+  witness: OfflineLanePrivacyWitnessJson;
+}
+
+export interface OfflineProofAttachmentJson {
+  backend: string;
+  proof: OfflineProofBoxJson;
+  vk_ref: OfflineVerifierKeyIdJson;
+  vk_commitment?: OfflineFixed32Bytes | null;
+  envelope_hash?: OfflineFixed32Bytes | null;
+  lane_privacy?: OfflineLanePrivacyProofJson | null;
+}
+
+export interface OfflineVerifiedFoldStepJson {
+  root_before: OfflineFixed32Bytes;
+  input_nullifiers: ReadonlyArray<OfflineFixed32Bytes>;
+  output_commitments: ReadonlyArray<OfflineFixed32Bytes>;
+  root_after: OfflineFixed32Bytes;
+  attachment: OfflineProofAttachmentJson;
+  verifier_key: OfflineVerifyingKeyJson;
+}
+
+export interface OfflineVerifiedFoldBundleJson {
+  chain_id: string;
+  asset: string;
+  steps: ReadonlyArray<OfflineVerifiedFoldStepJson>;
+}
+
+export interface OfflineVerifyingKeyRecordJson {
+  version: OfflineJsonUnsignedInteger;
+  circuit_id: string;
+  owner_manifest_id?: string | null;
+  namespace: string;
+  backend: OfflineProofBackend;
+  curve: string;
+  public_inputs_schema_hash: OfflineFixed32Bytes;
+  commitment: OfflineFixed32Bytes;
+  vk_len: OfflineJsonUnsignedInteger;
+  max_proof_bytes: OfflineJsonUnsignedInteger;
+  gas_schedule_id?: string | null;
+  metadata_uri_cid?: string | null;
+  vk_bytes_cid?: string | null;
+  activation_height?: OfflineJsonUnsignedInteger | null;
+  withdraw_height?: OfflineJsonUnsignedInteger | null;
+  key?: OfflineVerifyingKeyJson | null;
+  status: OfflineVerifierStatus;
+}
+
+export interface OfflineVerifiedFoldVerifierRecordJson {
+  id: OfflineVerifierKeyIdJson;
+  record: OfflineVerifyingKeyRecordJson;
+}
+
+export interface OfflineVerifiedFoldRecordBundleJson {
+  bundle: OfflineVerifiedFoldBundleJson;
+  verifier_records: ReadonlyArray<OfflineVerifiedFoldVerifierRecordJson>;
+}
+
+export interface OfflineTopUpRequestJson {
   asset: string;
   amount: OfflineScaledAmountJson;
-  current_note: Record<string, unknown>;
-  record_bundle: Record<string, unknown>;
+  current_note: OfflineSpendableNoteJson;
+  record_bundle: OfflineVerifiedFoldRecordBundleJson;
   pallas_open_envelopes_archive: OfflineByteArray;
   artifact_generation: string;
-  operation_id: OfflineByteArray;
+  operation_id: OfflineFixed32Bytes;
   authorization: OfflineAuthorizationJson;
 }
 
-export interface OfflineRedeemRequestJson extends Record<string, unknown> {
-  bundle: Record<string, unknown>;
+export interface OfflineTopUpAnchorReferenceJson {
+  topup_operation_id: OfflineFixed32Bytes;
+  anchor_digest: OfflineFixed32Bytes;
+}
+
+export interface OfflineBranchPathJson {
+  lineage_root: OfflineFixed32Bytes;
+  depth: OfflineJsonUnsignedInteger;
+  path_bits: OfflineFixed8Bytes;
+}
+
+export interface OfflineBranchClaimJson {
+  path: OfflineBranchPathJson;
+  transition_tags: string;
+}
+
+export type OfflineLineageModeJson = {
+  mode: "reserved" | "semantic";
+  value?: null;
+};
+
+export interface OfflineSpendBranchJson {
+  branch: "recipient" | "change";
+  value?: null;
+}
+
+export interface OfflinePeerSplitTransitionJson {
+  binding_digest: OfflineFixed32Bytes;
+  branch: OfflineSpendBranchJson;
+  recipient_request_digest: OfflineFixed32Bytes;
+  operation_id: OfflineFixed32Bytes;
+  parent_max_proof_step_count: OfflineJsonUnsignedInteger;
+  parent_max_peer_hop_count: OfflineJsonUnsignedInteger;
+}
+
+export interface OfflineRedemptionChangeTransitionJson {
+  binding_digest: OfflineFixed32Bytes;
+  parent_bundle_digest: OfflineFixed32Bytes;
+  operation_id: OfflineFixed32Bytes;
+  parent_proof_step_count: OfflineJsonUnsignedInteger;
+  parent_peer_hop_count: OfflineJsonUnsignedInteger;
+}
+
+export type OfflineRecursiveSpendTransitionJson =
+  | { transition: "peer_split"; value: OfflinePeerSplitTransitionJson }
+  | { transition: "redemption_change"; value: OfflineRedemptionChangeTransitionJson };
+
+export interface OfflineRecursiveSpendStatementJson {
+  chain_id: string;
+  asset: string;
+  asset_scale: OfflineAssetScale;
+  final_root: OfflineFixed32Bytes;
+  topup_anchor_refs: ReadonlyArray<OfflineTopUpAnchorReferenceJson>;
+  proof_step_count: OfflineJsonUnsignedInteger;
+  peer_hop_count: OfflineJsonUnsignedInteger;
+  current_note: OfflineSpendableNoteJson;
+  branch_claims: ReadonlyArray<OfflineBranchClaimJson>;
+  transition?: OfflineRecursiveSpendTransitionJson | null;
+  artifact_generation: string;
+  lineage_mode: OfflineLineageModeJson;
+  verifier_key_id: OfflineVerifierKeyIdJson;
+}
+
+export interface OfflineRecursiveSpendProofJson {
+  verifier_key_id: OfflineVerifierKeyIdJson;
+  public_statement_digest: OfflineFixed32Bytes;
+  proof: OfflineProofBoxJson;
+}
+
+export interface OfflineRecursiveSpendBundleJson {
+  statement: OfflineRecursiveSpendStatementJson;
+  recursive_proof: OfflineRecursiveSpendProofJson;
+}
+
+export interface OfflineUnshieldPublicInputsJson {
+  input_commitment_0: OfflineFixed32Bytes;
+  input_commitment_1: OfflineFixed32Bytes;
+  nullifier_0: OfflineFixed32Bytes;
+  nullifier_1: OfflineFixed32Bytes;
+  change_output_commitment: OfflineFixed32Bytes;
+  root: OfflineFixed32Bytes;
+  public_amount: OfflineFixed32Bytes;
+  asset_tag: OfflineFixed32Bytes;
+  chain_tag: OfflineFixed32Bytes;
+}
+
+export interface OfflineRedemptionIntentJson {
+  chain_id: string;
+  asset: string;
+  input_note: OfflineSpendableNoteJson;
+  parent_branch_claims: ReadonlyArray<OfflineBranchClaimJson>;
+  parent_topup_anchor_refs: ReadonlyArray<OfflineTopUpAnchorReferenceJson>;
+  parent_proof_step_count: OfflineJsonUnsignedInteger;
+  parent_peer_hop_count: OfflineJsonUnsignedInteger;
+  parent_bundle_digest: OfflineFixed32Bytes;
+  input_root: OfflineFixed32Bytes;
+  recipient: string;
+  public_amount: OfflineScaledAmountJson;
+  change_output?: OfflineSpendableNoteJson | null;
+  change_artifact_generation?: string | null;
+  unshield_public_inputs: OfflineUnshieldPublicInputsJson;
+  unshield_public_inputs_digest: OfflineFixed32Bytes;
+  operation_id: OfflineFixed32Bytes;
+}
+
+export interface OfflineLineageWitnessJson {
+  nodes: ReadonlyArray<OfflineLineageNodeJson>;
+  final_bundle_digest: OfflineFixed32Bytes;
+}
+
+export interface OfflineLineageNodeJson {
+  result_bundle_digest: OfflineFixed32Bytes;
+  parent_bundle_digests: ReadonlyArray<OfflineFixed32Bytes>;
+  proof_step_count: OfflineJsonUnsignedInteger;
+  verified_at_block_height: OfflineJsonUnsignedInteger;
+  transition_archive: OfflineByteArray;
+}
+
+export interface OfflineRedeemChangeJson {
+  output: OfflineSpendableNoteJson;
+  branch_claims: ReadonlyArray<OfflineBranchClaimJson>;
+  bundle: OfflineRecursiveSpendBundleJson;
+}
+
+export interface OfflineRedeemRequestJson {
+  bundle: OfflineRecursiveSpendBundleJson;
   recipient: string;
   amount: OfflineScaledAmountJson;
-  redeem_proof: Record<string, unknown>;
-  redemption: Record<string, unknown>;
-  lineage_witness?: Record<string, unknown> | null;
-  lineage_verifier_record: Record<string, unknown>;
-  offline_change?: Record<string, unknown> | null;
+  redeem_proof: OfflineProofAttachmentJson;
+  redemption: OfflineRedemptionIntentJson;
+  lineage_witness?: OfflineLineageWitnessJson | null;
+  lineage_verifier_record: OfflineVerifyingKeyRecordJson;
+  offline_change?: OfflineRedeemChangeJson | null;
   block_height: OfflineJsonUnsignedInteger;
-  operation_id: OfflineByteArray;
+  operation_id: OfflineFixed32Bytes;
   authorization: OfflineAuthorizationJson;
 }
 
@@ -6526,11 +6798,33 @@ export interface OfflineOperationReference {
   submitted_at_ms: number | bigint;
 }
 
+export interface OfflineTopUpAnchor {
+  version: 2 | 2n;
+  chain_id: string;
+  payer: string;
+  asset: string;
+  asset_scale: OfflineAssetScale;
+  amount: OfflineScaledAmountJson;
+  initial_root: OfflineFixed32Bytes;
+  finalized_root: OfflineFixed32Bytes;
+  topup_anchor_nullifiers:
+    | readonly [OfflineFixed32Bytes]
+    | readonly [OfflineFixed32Bytes, OfflineFixed32Bytes];
+  current_note: OfflineSpendableNoteJson;
+  topup_operation_id: OfflineFixed32Bytes;
+  transfer_verifier_id: OfflineVerifierKeyIdJson;
+  transfer_verifier_commitment: OfflineFixed32Bytes;
+  artifact_generation: string;
+  finalized_height: OfflineJsonUnsignedInteger;
+  finalized_tx_hash: OfflineFixed32Bytes;
+  anchor_digest: OfflineFixed32Bytes;
+}
+
 export interface OfflineTopUpResult {
   transaction_hash: string;
   finalized_block_height: number | bigint;
   server_time_ms: number | bigint;
-  anchor: Record<string, unknown>;
+  anchor: OfflineTopUpAnchor;
 }
 
 export interface OfflineRedeemResult {

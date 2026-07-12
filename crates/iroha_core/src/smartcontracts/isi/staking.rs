@@ -174,11 +174,7 @@ impl Execute for RegisterPublicLaneValidator {
             &self.peer_id,
         )?;
 
-        if self.initial_stake.is_zero() {
-            return Err(Error::InvariantViolation(
-                "initial stake must be greater than zero".into(),
-            ));
-        }
+        ensure_positive_amount(&self.initial_stake, "initial stake")?;
         let meets_min = meets_min_stake(
             &self.initial_stake,
             state_transaction.nexus.staking.min_validator_stake,
@@ -1297,6 +1293,9 @@ fn stake_key(
 }
 
 fn ensure_positive_amount(amount: &Numeric, label: &str) -> Result<(), Error> {
+    if amount.mantissa().is_negative() {
+        return Err(Error::Math(MathError::NegativeValue));
+    }
     if amount.is_zero() {
         return Err(Error::InvariantViolation(
             format!("{label} must be greater than zero").into(),
@@ -2001,6 +2000,17 @@ mod tests {
             checked_keypair_with_algorithm(Algorithm::BlsNormal).algorithm(),
             Algorithm::BlsNormal
         );
+    }
+
+    #[test]
+    fn staking_amount_guard_rejects_negative_values() {
+        let error = ensure_positive_amount(&Numeric::new(-1_i32, 0), "stake amount")
+            .expect_err("negative stake amount must be rejected");
+        assert!(matches!(error, Error::Math(MathError::NegativeValue)));
+
+        let error = ensure_positive_amount(&Numeric::zero(), "stake amount")
+            .expect_err("zero stake amount must be rejected");
+        assert!(matches!(error, Error::InvariantViolation(_)));
     }
 
     fn new_block() -> crate::block::CommittedBlock {

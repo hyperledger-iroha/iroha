@@ -146,18 +146,17 @@ pub mod payloads {
 /// Metadata key tracking the next public contract deploy nonce for an account.
 pub const CONTRACT_DEPLOY_NONCE_METADATA_KEY: &str = "contract_deploy_nonce";
 
-/// Runtime permission required to invoke a contract's `hajimari`/`始まり` lifecycle entrypoint.
+/// Runtime permission marker required for a contract's `hajimari`/`始まり` lifecycle entrypoint.
 ///
-/// Lifecycle authorization is deliberately defined by the host rather than by
-/// source-level `authorize(...)` declarations. For ABI V1, running `hajimari`/`始まり`
-/// for a deployed contract requires the same authority as registering contract code.
-pub const CONTRACT_HAJIMARI_PERMISSION_NAME: &str = "CanRegisterSmartContractCode";
+/// The host materializes this marker as an exact `CanInvokeContractEntrypoint`
+/// token bound to the deployed address and lifecycle selector.
+pub const CONTRACT_HAJIMARI_PERMISSION_NAME: &str = "CanInvokeContractEntrypoint";
 
 /// Runtime permission required to invoke a contract's `kaizen`/`改善` lifecycle entrypoint.
 ///
-/// ABI V1 uses the contract-code registration authority for both deployment
-/// lifecycle operations so callers cannot weaken lifecycle policy in source.
-pub const CONTRACT_KAIZEN_PERMISSION_NAME: &str = "CanRegisterSmartContractCode";
+/// ABI V1 uses the same address-and-selector scoped invocation permission for
+/// lifecycle operations as it does for permissioned public entrypoints.
+pub const CONTRACT_KAIZEN_PERMISSION_NAME: &str = "CanInvokeContractEntrypoint";
 
 /// Default mainnet contract HRP used for Bech32m-encoded contract addresses.
 pub const CONTRACT_ADDRESS_HRP_MAINNET: &str = "sorac";

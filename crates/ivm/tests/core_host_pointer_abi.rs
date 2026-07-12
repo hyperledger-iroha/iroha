@@ -60,7 +60,7 @@ fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
+fn make_quantity_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
     let quantity = Quantity::try_from_numeric(amount.into()).expect("canonical quantity");
     ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity pointer envelope")
 }
@@ -181,7 +181,7 @@ fn transfer_asset_validates_tlvs() {
         12,
         Memory::INPUT_START + from.len() as u64 + to.len() as u64 + 16,
     );
-    let amount = make_numeric_tlv(42_u64);
+    let amount = make_quantity_tlv(42_u64);
     let amount_offset = from.len() as u64 + to.len() as u64 + asset.len() as u64 + 24;
     vm.memory
         .preload_input(amount_offset, &amount)
@@ -227,7 +227,7 @@ fn transfer_asset_rejects_wrong_asset_type() {
         12,
         Memory::INPUT_START + from.len() as u64 + to.len() as u64 + 16,
     );
-    let amount = make_numeric_tlv(1_u64);
+    let amount = make_quantity_tlv(1_u64);
     let amount_offset = from.len() as u64 + to.len() as u64 + wrong.len() as u64 + 24;
     vm.memory
         .preload_input(amount_offset, &amount)

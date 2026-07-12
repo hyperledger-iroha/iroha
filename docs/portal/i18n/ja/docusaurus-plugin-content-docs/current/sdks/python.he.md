@@ -112,23 +112,21 @@ print("offline ready", readiness.ready, readiness.blockers)
 ```
 ## 6. イベントストリーム
 
-Torii の SSE エンドポイントはジェネレータとして公開されています。`resume=True` と `EventCursor` を指定すると SDK が自動的に再開します。
+Torii SSE helpers return live-only generators. They may reconnect within the
+configured retry budget, but Torii retains no replay log: reconnects can leave
+a gap. Replay cursors and resume arguments are intentionally unsupported; query
+committed ledger state when complete history is required.
 
 ```python
-from iroha_python import PipelineEventFilterBox, EventCursor
-
-cursor = EventCursor()
-
 for event in client.stream_pipeline_blocks(
     status="Committed",
-    resume=True,
-    cursor=cursor,
     with_metadata=True,
 ):
     print("Block height", event.data.block.height)
 ```
 
-他の便利メソッドには `stream_pipeline_transactions`、`stream_events`（型付きフィルタビルダー付き）、`stream_verifying_key_events` があります。
+Other convenience methods include `stream_pipeline_transactions`,
+`stream_events` (with typed filter builders), and `stream_verifying_key_events`.
 
 ## 7. 次のステップ
 

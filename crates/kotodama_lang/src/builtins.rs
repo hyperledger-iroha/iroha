@@ -2428,9 +2428,10 @@ impl Builtin {
             Self::SetAssetTransferFreeze => {
                 S::new(&["AccountId", "AssetDefinitionId", "bool"], "()")
             }
-            Self::SetAssetTransferDailyLimit => {
-                S::new(&["AccountId", "AssetDefinitionId", "quantity"], "()")
-            }
+            Self::SetAssetTransferDailyLimit => S::new(
+                &["AccountId", "AssetDefinitionId", "Option<quantity>"],
+                "()",
+            ),
             Self::AccountRecoveryPropose => S::new(&["string", "AccountId"], "()"),
             Self::AccountRecoveryApprove
             | Self::AccountRecoveryCancel
@@ -2536,7 +2537,7 @@ impl Builtin {
                 S::new(&["SoracloudRequest"], "SoracloudResponse")
             }
             Self::AddSignatory | Self::RemoveSignatory => S::new(&["AccountId", "Json"], "()"),
-            Self::SetAccountQuorum => S::new(&["AccountId", "quantity"], "()"),
+            Self::SetAccountQuorum => S::new(&["AccountId", "int"], "()"),
             Self::Path => S::new(&["Name", "int|bytes"], "Name"),
             Self::NameDecode => S::new(&["bytes"], "Name"),
             Self::TlvEq => S::new(&["pointer-ABI", "pointer-ABI"], "bool"),
@@ -3151,7 +3152,7 @@ mod tests {
                 "set_asset_transfer_daily_limit",
                 "ledger::asset::set_transfer_daily_limit",
                 s::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT,
-                &["AccountId", "AssetDefinitionId", "quantity"][..],
+                &["AccountId", "AssetDefinitionId", "Option<quantity>"][..],
                 &["account", "asset_definition", "cap"][..],
             ),
             (

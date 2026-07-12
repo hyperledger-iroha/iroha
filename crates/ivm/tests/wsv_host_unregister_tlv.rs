@@ -28,7 +28,7 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
+fn make_quantity_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
     let quantity = Quantity::try_from_numeric(amount.into()).expect("canonical quantity");
     ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity pointer envelope")
 }
@@ -130,7 +130,7 @@ fn unregister_flow_with_opaque_asset_definition_dependencies() {
     vm.memory
         .preload_input(tlv_bob.len() as u64 + 8, &tlv_rose)
         .expect("preload input");
-    let tlv_amount = make_numeric_tlv(7_u64);
+    let tlv_amount = make_quantity_tlv(7_u64);
     let amount_offset = tlv_bob.len() as u64 + tlv_rose.len() as u64 + 16;
     vm.memory
         .preload_input(amount_offset, &tlv_amount)
@@ -167,7 +167,7 @@ fn unregister_flow_with_opaque_asset_definition_dependencies() {
     vm.memory
         .preload_input(tlv_bob.len() as u64 + 8, &tlv_rose)
         .expect("preload input");
-    let tlv_amount = make_numeric_tlv(7_u64);
+    let tlv_amount = make_quantity_tlv(7_u64);
     let amount_offset = tlv_bob.len() as u64 + tlv_rose.len() as u64 + 16;
     vm.memory
         .preload_input(amount_offset, &tlv_amount)

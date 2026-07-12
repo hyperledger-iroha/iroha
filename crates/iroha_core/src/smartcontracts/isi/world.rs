@@ -26148,7 +26148,6 @@ seiyaku GovernanceLifecycle {
                 .insert(key.message_id, key);
             stx.world.sccp_outbound_proofs.insert(key, replay);
             iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
-            crate::bridge::reset_sccp_local_bls_verifications_for_tests();
 
             let error = SubmitBridgeProof::new(proof)
                 .execute(&ALICE_ID, &mut stx)
@@ -26166,7 +26165,6 @@ seiyaku GovernanceLifecycle {
                     bls_verifications: 0,
                 }
             );
-            assert_eq!(crate::bridge::sccp_local_bls_verifications_for_tests(), 0);
         }
 
         #[test]

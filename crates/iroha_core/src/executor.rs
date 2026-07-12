@@ -21,7 +21,7 @@ use iroha_data_model::{
     Identifiable as _, Registrable as _, ValidationFail,
     account::{AccountId, address::AccountAddress},
     asset::{
-        AssetBalancePolicy, AssetDefinition, AssetTransferControlWindow,
+        AssetBalancePolicy, AssetDefinition,
         id::{AssetBalanceScope, AssetDefinitionId, AssetId},
         value::Asset,
     },
@@ -29,8 +29,10 @@ use iroha_data_model::{
     executor::{self as data_model_executor, ExecutorDataModel},
     isi::{
         CustomInstruction, GrantBox, InstructionBox, InstructionBox as DMInstructionBox,
-        RemoveKeyValueBox, SetAssetTransferControl, SetAssetTransferFreeze, SetKeyValueBox,
-        TransferBox, error::InstructionExecutionError, mint_burn::MintBox, register::RegisterBox,
+        RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox,
+        error::{InstructionExecutionError, MathError},
+        mint_burn::MintBox,
+        register::RegisterBox,
     },
     metadata::Metadata,
     name::Name,
@@ -227,6 +229,15 @@ impl FixtureExecutorKind {
     }
 }
 
+fn ensure_detached_asset_quantity_non_negative(quantity: &Numeric) -> Result<(), ValidationFail> {
+    if quantity.mantissa().is_negative() {
+        return Err(ValidationFail::InstructionFailed(
+            InstructionExecutionError::Math(MathError::NegativeValue),
+        ));
+    }
+    Ok(())
+}
+
 /// Execute a single instruction in a detached overlay, recording only the state deltas.
 ///
 /// This helper is used by the parallel validator to pre-apply side-effect-free
@@ -298,6 +309,7 @@ pub(crate) fn execute_instruction_detached(
             MintBox::Asset(m) => {
                 let asset_id = m.destination.clone();
                 let qty = m.object.clone();
+                ensure_detached_asset_quantity_non_negative(&qty)?;
                 // Record per-account balance increase and total supply increase
                 delta.add_asset_add(asset_id.clone(), qty.clone());
                 delta.add_total_add(asset_id.definition().clone(), qty);
@@ -317,6 +329,7 @@ pub(crate) fn execute_instruction_detached(
             BurnBox::Asset(b) => {
                 let asset_id = b.destination.clone();
                 let qty = b.object.clone();
+                ensure_detached_asset_quantity_non_negative(&qty)?;
                 // Record per-account balance decrease and total supply decrease
                 delta.add_asset_sub(asset_id.clone(), qty.clone());
                 delta.add_total_sub(asset_id.definition().clone(), qty);
@@ -353,6 +366,7 @@ pub(crate) fn execute_instruction_detached(
             TransferBox::Asset(t) => {
                 let src = t.source.clone();
                 let qty = t.object.clone();
+                ensure_detached_asset_quantity_non_negative(&qty)?;
                 delta.transfer_asset(src, t.destination.clone(), qty);
             }
             TransferBox::Domain(t) => {
@@ -1091,6 +1105,12 @@ fn unsettled_verified_nexus_fee_amount(
             if world.smart_contract_state().get(&marker).is_some() {
                 continue;
             }
+            if receipt.fee_amount.mantissa().is_negative() {
+                return Err(NexusFeeAdmissionError::ConfigInvalid(format!(
+                    "verified lane relay contains negative Nexus fee receipt {}",
+                    hex::encode(receipt.source_id)
+                )));
+            }
             total = checked_nexus_fee_add(total, receipt.fee_amount.clone(), "unsettled receipts")?;
         }
     }
@@ -1116,6 +1136,11 @@ fn check_lane_relay_burn_fee_budget(
         return Err(NexusFeeAdmissionError::Rejected(format!(
             "verified Nexus fee budget record does not match payer `{payer}` and asset `{}`",
             cfg.fee_asset_id
+        )));
+    }
+    if record.verified_balance.mantissa().is_negative() {
+        return Err(NexusFeeAdmissionError::ConfigInvalid(format!(
+            "verified Nexus fee budget for payer `{payer}` has a negative balance"
         )));
     }
     if record.manifest_root.iter().all(|byte| *byte == 0)
@@ -1699,6 +1724,7 @@ impl ContractEntrypointAuthorizationSnapshot {
         enforce_named_contract_entrypoint_permission(
             world,
             &self.authority,
+            &self.contract_address,
             &self.entrypoint,
             self.permission.as_deref(),
         )
@@ -1716,39 +1742,6 @@ impl ContractEntrypointAuthorizationSnapshot {
             ));
         }
         self.validate(world)
-    }
-}
-
-impl ContractRuntimeExecutionContext {
-    fn allows_benefit_runtime_asset_transfer_bypass(&self) -> bool {
-        self.contract_alias.as_ref().is_some_and(|contract_alias| {
-            contract_alias.name_segment() == "benefit"
-                && contract_alias.dataspace_segment() == "benefit"
-        }) && matches!(self.entrypoint.as_str(), "spend_to_merchant" | "spend_many")
-    }
-
-    fn allows_bisp_spend_permission_grant_bypass(&self) -> bool {
-        self.contract_alias.as_ref().is_some_and(|contract_alias| {
-            contract_alias.name_segment() == "bisp_bisp"
-                && contract_alias.dataspace_segment() == "sbp"
-        }) && matches!(
-            self.entrypoint.as_str(),
-            "create_tranche" | "set_beneficiary_spend_authority"
-        )
-    }
-
-    fn allows_freeze_control_bypass(&self) -> bool {
-        self.contract_alias.as_ref().is_some_and(|contract_alias| {
-            contract_alias.name_segment() == "apps_freeze"
-                && contract_alias.dataspace_segment() == "sbp"
-        }) && self.entrypoint == "apply_freeze"
-    }
-
-    fn allows_daily_limit_control_bypass(&self) -> bool {
-        self.contract_alias.as_ref().is_some_and(|contract_alias| {
-            contract_alias.name_segment() == "apps_limits_update"
-                && contract_alias.dataspace_segment() == "sbp"
-        }) && self.entrypoint == "apply_limits"
     }
 }
 
@@ -2470,40 +2463,6 @@ fn parse_contract_call_execution_context_from_source(
     }))
 }
 
-/// Replace caller-supplied contract identity metadata with the canonical active WSV binding.
-///
-/// A contract alias is security-sensitive runtime context and must never be trusted merely
-/// because it was signed by the transaction authority. When an address is present, reject a
-/// conflicting claimed alias and install only the alias stored for that active instance.
-pub(crate) fn canonicalize_contract_call_execution_context<R: StateReadOnly>(
-    state: &R,
-    context: &mut ContractCallExecutionContext,
-) -> Result<(), ValidationFail> {
-    let Some(contract_address) = context.contract_address.as_ref() else {
-        if context.contract_alias.is_some() {
-            return Err(ValidationFail::NotPermitted(
-                "contract_alias metadata requires contract_address metadata".to_owned(),
-            ));
-        }
-        return Ok(());
-    };
-    let record = code::fetch_bound_contract_record(state, contract_address).ok_or_else(|| {
-        ValidationFail::NotPermitted(format!(
-            "contract instance `{contract_address}` not found in WSV"
-        ))
-    })?;
-    if let Some(claimed_alias) = context.contract_alias.as_ref()
-        && record.contract_alias.as_ref() != Some(claimed_alias)
-    {
-        return Err(ValidationFail::NotPermitted(format!(
-            "contract_alias metadata `{claimed_alias}` does not match the active binding for `{contract_address}`"
-        )));
-    }
-    context.contract_alias = record.contract_alias;
-    context.contract_subject = Some(record.contract_subject);
-    Ok(())
-}
-
 pub(crate) fn parse_contract_invocation_execution_context(
     invocation: &ContractInvocation,
     bytecode: &[u8],
@@ -2639,6 +2598,23 @@ pub(crate) fn compute_nexus_fee_amount(
     instruction_count: usize,
     gas_used: u64,
 ) -> Result<Numeric, ValidationFail> {
+    for (label, value) in [
+        ("base_fee", &cfg.base_fee),
+        ("per_byte_fee", &cfg.per_byte_fee),
+        ("per_instruction_fee", &cfg.per_instruction_fee),
+        ("per_gas_unit_fee", &cfg.per_gas_unit_fee),
+        ("sponsor_max_fee", &cfg.sponsor_max_fee),
+        (
+            "sponsor_verified_balance_safety_floor",
+            &cfg.sponsor_verified_balance_safety_floor,
+        ),
+    ] {
+        if value.mantissa().is_negative() {
+            return Err(ValidationFail::InternalError(format!(
+                "nexus.fees.{label} must be non-negative"
+            )));
+        }
+    }
     let tx_bytes_u64 = u64::try_from(tx_bytes_len).map_err(|_| {
         ValidationFail::InternalError("transaction too large for fee accounting".to_owned())
     })?;
@@ -3791,16 +3767,14 @@ impl Executor {
                                 || context.contract_address != authorization.contract_address
                                 || context.contract_alias != authorization.contract_alias
                                 || context.entrypoint != authorization.entrypoint
+                                || queued.authority != context.contract_subject
                             {
                                 return Err(ValidationFail::NotPermitted(
                                     "proved overlay effect runtime context does not match its immutable authorization snapshot"
                                         .to_owned(),
                                 ));
                             }
-                            authorization.validate_for_authority(
-                                &state_transaction.world,
-                                &queued.authority,
-                            )?;
+                            authorization.validate(&state_transaction.world)?;
                         }
                         (Some(_), None) => {
                             return Err(ValidationFail::NotPermitted(
@@ -3823,8 +3797,7 @@ impl Executor {
                         queued.contract_runtime_context.as_ref(),
                     )?;
                     if let Some(authorization) = queued.entrypoint_authorization.as_ref() {
-                        authorization
-                            .validate_for_authority(&state_transaction.world, &queued.authority)?;
+                        authorization.validate(&state_transaction.world)?;
                     }
                 }
                 crate::smartcontracts::ivm::host::HostExecutionArtifacts::record_completed_axt_states(
@@ -5102,67 +5075,39 @@ impl Executor {
         let is_genesis =
             state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty();
 
-        if !is_genesis
-            && let Some(context) = contract_runtime_context
-        {
-            if let Some(GrantBox::Permission(grant)) =
-                instruction.as_any().downcast_ref::<GrantBox>()
-            {
-                if context.allows_bisp_spend_permission_grant_bypass()
-                    && grant.object().name() == "BispSpend"
+        if let Some(context) = contract_runtime_context {
+            let contract_permission = instruction
+                .as_any()
+                .downcast_ref::<GrantBox>()
+                .and_then(|grant| match grant {
+                    GrantBox::Permission(grant) => Some(&grant.object),
+                    GrantBox::Role(_) | GrantBox::RolePermission(_) => None,
+                })
+                .or_else(|| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<RevokeBox>()
+                        .and_then(|revoke| match revoke {
+                            RevokeBox::Permission(revoke) => Some(&revoke.object),
+                            RevokeBox::Role(_) | RevokeBox::RolePermission(_) => None,
+                        })
+                });
+            if let Some(permission) = contract_permission {
+                let scoped = iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint::try_from(permission)
+                    .map_err(|_| ValidationFail::NotPermitted(
+                        "deployed contracts may grant or revoke only exact CanInvokeContractEntrypoint tokens"
+                            .to_owned(),
+                    ))?;
+                if authority != &context.contract_subject
+                    || scoped.contract != context.contract_address
+                    || scoped.entrypoint.is_empty()
+                    || scoped.entrypoint.trim() != scoped.entrypoint
                 {
-                    return grant
-                        .clone()
-                        .execute(authority, state_transaction)
-                        .map_err(ValidationFail::from);
-                }
-                return Err(ValidationFail::NotPermitted(format!(
-                    "contract alias/entrypoint `{}` cannot grant permission `{}`",
-                    context.entrypoint,
-                    grant.object().name()
-                )));
-            }
-
-            if let Some(freeze) = instruction.as_any().downcast_ref::<SetAssetTransferFreeze>() {
-                if !context.allows_freeze_control_bypass() {
                     return Err(ValidationFail::NotPermitted(
-                        "only apps_freeze::sbp/apply_freeze may emit SetAssetTransferFreeze"
+                        "deployed contract permission mutation must be bound to its immutable subject, address, and a canonical selector"
                             .to_owned(),
                     ));
                 }
-                let owner = state_transaction
-                    .world
-                    .asset_definition(&freeze.asset_definition_id)
-                    .map(|definition| definition.owned_by().clone())
-                    .map_err(|err| {
-                        ValidationFail::InstructionFailed(InstructionExecutionError::Find(err))
-                    })?;
-                return freeze
-                    .clone()
-                    .execute(&owner, state_transaction)
-                    .map_err(ValidationFail::from);
-            }
-
-            if let Some(control) = instruction.as_any().downcast_ref::<SetAssetTransferControl>() {
-                let daily_only = control.limits.len() == 1
-                    && control.limits[0].window == AssetTransferControlWindow::Day;
-                if !context.allows_daily_limit_control_bypass() || !daily_only {
-                    return Err(ValidationFail::NotPermitted(
-                        "only apps_limits_update::sbp/apply_limits may emit one daily SetAssetTransferControl"
-                            .to_owned(),
-                    ));
-                }
-                let owner = state_transaction
-                    .world
-                    .asset_definition(&control.asset_definition_id)
-                    .map(|definition| definition.owned_by().clone())
-                    .map_err(|err| {
-                        ValidationFail::InstructionFailed(InstructionExecutionError::Find(err))
-                    })?;
-                return control
-                    .clone()
-                    .execute(&owner, state_transaction)
-                    .map_err(ValidationFail::from);
             }
         }
 
@@ -6667,51 +6612,26 @@ fn authority_has_permission(
     Ok(false)
 }
 
-fn authority_has_named_permission(
-    world: &impl WorldReadOnly,
-    authority: &AccountId,
-    permission_name: &str,
-) -> Result<bool, ValidationFail> {
-    let permission_name = permission_name.trim();
-    if permission_name.is_empty() {
-        return Err(ValidationFail::NotPermitted(
-            "contract entrypoint permission must not be empty".to_owned(),
-        ));
-    }
-
-    let permissions = world
-        .account_permissions_iter(authority)
-        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
-    if permissions
-        .into_iter()
-        .any(|permission| permission.name() == permission_name)
-    {
-        return Ok(true);
-    }
-
-    for role_id in world.account_roles_iter(authority) {
-        if let Some(role) = world.roles().get(role_id)
-            && role
-                .permissions()
-                .any(|permission| permission.name() == permission_name)
-        {
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
-}
-
 pub(crate) fn enforce_contract_entrypoint_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     context: &ContractCallExecutionContext,
 ) -> Result<(), ValidationFail> {
+    let permission = context.entrypoint_permission();
+    if permission.is_none() {
+        return Ok(());
+    }
+    let contract_address = context.contract_address.as_ref().ok_or_else(|| {
+        ValidationFail::NotPermitted(
+            "permissioned contract entrypoint is missing its immutable contract address".to_owned(),
+        )
+    })?;
     enforce_named_contract_entrypoint_permission(
         world,
         authority,
+        contract_address,
         context.entrypoint.as_deref().unwrap_or("main"),
-        context.entrypoint_permission(),
+        permission,
     )
 }
 
@@ -6773,20 +6693,37 @@ pub(crate) fn authorize_prepared_raw_contract_selector(
 pub(crate) fn enforce_named_contract_entrypoint_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
     permission_name: Option<&str>,
 ) -> Result<(), ValidationFail> {
     let Some(permission_name) = permission_name else {
         return Ok(());
     };
+    const SCOPED_PERMISSION_NAME: &str = "CanInvokeContractEntrypoint";
+    if permission_name != SCOPED_PERMISSION_NAME {
+        return Err(ValidationFail::NotPermitted(format!(
+            "contract entrypoint `{entrypoint}` declares unsupported permission marker `{permission_name}`; expected `{SCOPED_PERMISSION_NAME}`"
+        )));
+    }
+    if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
+        return Err(ValidationFail::NotPermitted(
+            "contract entrypoint must use a non-empty canonical selector".to_owned(),
+        ));
+    }
 
-    if authority_has_named_permission(world, authority, permission_name)? {
+    let target: Permission =
+        iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+            contract: contract_address.clone(),
+            entrypoint: entrypoint.to_owned(),
+        }
+        .into();
+    if authority_has_permission(world, authority, &target)? {
         return Ok(());
     }
 
     Err(ValidationFail::NotPermitted(format!(
-        "contract entrypoint `{entrypoint}` requires permission `{}`",
-        permission_name.trim()
+        "contract entrypoint `{entrypoint}` on `{contract_address}` requires an exact `{SCOPED_PERMISSION_NAME}` grant"
     )))
 }
 
@@ -7690,8 +7627,9 @@ mod tests {
     use iroha_config::parameters::actual::{GasLiquidity, GasRate, GasVolatility};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
+        asset::AssetTransferControlWindow,
         executor::{self as data_model_executor, ExecutorDataModel},
-        isi::Grant,
+        isi::{Grant, SetAssetTransferControl, SetAssetTransferFreeze},
         name::Name,
         nexus::{
             FeeSponsorContractSelector, FeeSponsorExecutableKind, FeeSponsorPolicy,
@@ -8324,6 +8262,45 @@ mod tests {
         assert!(
             matches!(err, ValidationFail::InternalError(msg) if msg.contains("peer management"))
         );
+    }
+
+    #[test]
+    fn detached_asset_instructions_reject_negative_quantities_before_recording() {
+        let definition_id = AssetDefinitionId::new(
+            DomainId::try_new("detached_negative", "universal").expect("domain id"),
+            "coin".parse().expect("asset name"),
+        );
+        let asset_id = AssetId::new(definition_id, alice());
+        let negative = Numeric::new(-1_i32, 0);
+        let instructions: [InstructionBox; 3] = [
+            Mint::asset_numeric(negative.clone(), asset_id.clone()).into(),
+            Burn::asset_numeric(negative.clone(), asset_id.clone()).into(),
+            Transfer::asset_numeric(asset_id, negative, BOB_ID.clone()).into(),
+        ];
+
+        for instruction in instructions {
+            let mut delta = crate::state::DetachedStateTransactionDelta::default();
+            let error = execute_instruction_detached(&alice(), &instruction, &mut delta)
+                .expect_err("negative detached asset quantity must be rejected");
+            assert!(matches!(
+                error,
+                ValidationFail::InstructionFailed(InstructionExecutionError::Math(
+                    MathError::NegativeValue
+                ))
+            ));
+        }
+    }
+
+    #[test]
+    fn nexus_fee_computation_rejects_negative_runtime_schedule() {
+        let mut fees = iroha_config::parameters::actual::NexusFees::default();
+        fees.base_fee = Numeric::new(-1_i32, 0);
+        let error = compute_nexus_fee_amount(&fees, 1, 1, 1)
+            .expect_err("negative runtime fee schedule must fail closed");
+        assert!(matches!(
+            error,
+            ValidationFail::InternalError(message) if message.contains("must be non-negative")
+        ));
     }
 
     #[test]
@@ -9412,7 +9389,7 @@ mod tests {
     }
 
     #[test]
-    fn initial_executor_scopes_bisp_spend_grants_to_v1_contract_entrypoints() {
+    fn initial_executor_contract_alias_never_bypasses_permission_grant_validation() {
         fn execute_case(
             alias: &str,
             entrypoint: &str,
@@ -9438,8 +9415,7 @@ mod tests {
                 .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
                 .commit()
                 .expect("commit bootstrap block");
-            let mut block =
-                state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
             let contract_address = ContractAddress::derive(
                 iroha_config::parameters::defaults::common::chain_discriminant(),
                 &alice_id,
@@ -9457,7 +9433,7 @@ mod tests {
                 Permission::new(permission_name.to_owned(), Json::new(())),
                 beneficiary,
             ));
-            Executor::Initial.execute_instruction_with_contract_runtime_context(
+            super::Executor::Initial.execute_instruction_with_contract_runtime_context(
                 &mut block.transaction(),
                 &alice_id,
                 instruction,
@@ -9466,8 +9442,10 @@ mod tests {
         }
 
         for entrypoint in ["create_tranche", "set_beneficiary_spend_authority"] {
-            execute_case("bisp_bisp::sbp", entrypoint, "BispSpend")
-                .expect("V1 BISP entrypoint may grant only BispSpend");
+            assert!(matches!(
+                execute_case("bisp_bisp::sbp", entrypoint, "BispSpend"),
+                Err(ValidationFail::NotPermitted(_))
+            ));
         }
         for (alias, entrypoint, permission) in [
             (
@@ -9490,7 +9468,7 @@ mod tests {
     }
 
     #[test]
-    fn initial_executor_scopes_contract_transfer_controls_to_branded_entrypoints() {
+    fn initial_executor_contract_alias_never_bypasses_transfer_control_validation() {
         fn execute_case(
             alias: &str,
             entrypoint: &str,
@@ -9523,13 +9501,13 @@ mod tests {
                 .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
                 .commit()
                 .expect("commit bootstrap block");
-            let mut block =
-                state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
             let instruction = match instruction_kind {
                 "freeze" => InstructionBox::from(SetAssetTransferFreeze::new(
                     target,
                     asset_definition_id,
                     true,
+                    Some("branded contract freeze fixture".to_owned()),
                 )),
                 "limit" => InstructionBox::from(SetAssetTransferControl::new(
                     target,
@@ -9554,7 +9532,7 @@ mod tests {
                 contract_alias: Some(alias.parse().expect("contract alias")),
                 entrypoint: entrypoint.to_owned(),
             };
-            Executor::Initial.execute_instruction_with_contract_runtime_context(
+            super::Executor::Initial.execute_instruction_with_contract_runtime_context(
                 &mut block.transaction(),
                 &caller,
                 instruction,
@@ -9562,20 +9540,24 @@ mod tests {
             )
         }
 
-        execute_case(
-            "apps_freeze::sbp",
-            "apply_freeze",
-            "freeze",
-            AssetTransferControlWindow::Day,
-        )
-        .expect("freeze contract may emit the freeze instruction");
-        execute_case(
-            "apps_limits_update::sbp",
-            "apply_limits",
-            "limit",
-            AssetTransferControlWindow::Day,
-        )
-        .expect("limits contract may emit one daily limit instruction");
+        assert!(matches!(
+            execute_case(
+                "apps_freeze::sbp",
+                "apply_freeze",
+                "freeze",
+                AssetTransferControlWindow::Day,
+            ),
+            Err(ValidationFail::NotPermitted(_))
+        ));
+        assert!(matches!(
+            execute_case(
+                "apps_limits_update::sbp",
+                "apply_limits",
+                "limit",
+                AssetTransferControlWindow::Day,
+            ),
+            Err(ValidationFail::NotPermitted(_))
+        ));
 
         for (alias, entrypoint, kind, window) in [
             (
@@ -13050,7 +13032,7 @@ mod tests {
     fn prepared_parameterized_trigger_contract() -> ivm::PreparedContract {
         let source = r#"
 seiyaku TriggerArguments {
-  kotoage fn run(val: Amount) authorize("Admin") {
+  kotoage fn run(Quantity val) authorize("Admin") {
     let _val = val;
   }
 }
@@ -13064,15 +13046,17 @@ seiyaku TriggerArguments {
 
     #[test]
     fn protected_contract_call_is_denied_before_argument_record_decode() {
-        const REQUIRED_PERMISSION: &str = "CanWriteGuardedValue";
+        const REQUIRED_PERMISSION: &str = "CanInvokeContractEntrypoint";
         let (program, manifest) = ivm::KotodamaCompiler::new()
             .compile_source_with_manifest(
                 r#"
 seiyaku GuardedValue {
-  state guarded_value: i64;
-
-  kotoage fn write(value: i64) authorize("CanWriteGuardedValue") {
-    guarded_value = value;
+  kotoage fn write(int value) authorize("CanInvokeContractEntrypoint") {
+    ledger::account::set_detail(
+      account: context::authority(),
+      key: Name::parse("guarded_value"),
+      value: Json::parse("{\"authorized\":true}")
+    );
   }
 }
 "#,
@@ -13092,7 +13076,7 @@ seiyaku GuardedValue {
             .expect("write argument schema");
         let arguments = ivm::encode_argument_record_from_json(
             schema,
-            &Json::from(norito::json!({ "value": 7 })),
+            &Json::from(norito::json!({ "value": "7" })),
         )
         .expect("encode valid protected arguments");
         let arguments =
@@ -13114,11 +13098,9 @@ seiyaku GuardedValue {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
-        let contract_scope =
-            hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
-        let durable_marker: Name = format!("sc/{contract_scope}/guarded_value")
+        let metadata_marker: Name = "guarded_value"
             .parse()
-            .expect("valid scoped direct-call marker");
+            .expect("valid direct-call metadata marker");
         world.contract_code.insert(code_hash, program);
         world
             .contract_manifests
@@ -13171,13 +13153,20 @@ seiyaku GuardedValue {
         assert!(
             state_tx
                 .world
-                .smart_contract_state
-                .get(&durable_marker)
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&metadata_marker)
                 .is_none(),
-            "denied direct contract call must apply no durable state"
+            "denied direct contract call must apply no queued effect"
         );
 
-        let entrypoint_permission = Permission::new(REQUIRED_PERMISSION.to_owned(), Json::new(()));
+        let entrypoint_permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: contract_address.clone(),
+                entrypoint: "write".to_owned(),
+            }
+            .into();
         Grant::account_permission(entrypoint_permission.clone(), authority.clone())
             .execute(&authority, &mut state_tx)
             .expect("grant direct-call entrypoint permission");
@@ -13197,10 +13186,12 @@ seiyaku GuardedValue {
         );
         let authorized_marker = state_tx
             .world
-            .smart_contract_state
-            .get(&durable_marker)
+            .account(&authority)
+            .expect("authority account")
+            .metadata()
+            .get(&metadata_marker)
             .cloned()
-            .expect("authorized direct call writes its durable marker");
+            .expect("authorized direct call writes its metadata marker");
 
         Revoke::account_permission(entrypoint_permission.clone(), authority.clone())
             .execute(&authority, &mut state_tx)
@@ -13221,7 +13212,12 @@ seiyaku GuardedValue {
             "revoked direct-call arguments must remain undecoded"
         );
         assert_eq!(
-            state_tx.world.smart_contract_state.get(&durable_marker),
+            state_tx
+                .world
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&metadata_marker),
             Some(&authorized_marker),
             "revoked direct contract call must preserve authorized state"
         );
@@ -13247,9 +13243,14 @@ seiyaku GuardedValue {
             "deactivated direct-call arguments must remain undecoded"
         );
         assert_eq!(
-            state_tx.world.smart_contract_state.get(&durable_marker),
+            state_tx
+                .world
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&metadata_marker),
             Some(&authorized_marker),
-            "deactivated direct contract call must apply no durable state"
+            "deactivated direct contract call must apply no queued effect"
         );
     }
 
@@ -13264,7 +13265,7 @@ seiyaku GuardedValue {
             .compile_source(
                 r#"
 seiyaku IdentityRequired {
-  kotoage fn write(value: i64) {
+  kotoage fn write(int value) {
     let _value = value;
   }
 }
@@ -13338,14 +13339,17 @@ seiyaku IdentityRequired {
         }
     }
 
-    fn contract_permission_context(permission: &str) -> ContractCallExecutionContext {
+    fn contract_permission_context(
+        contract_address: ContractAddress,
+        entrypoint: &str,
+    ) -> ContractCallExecutionContext {
         ContractCallExecutionContext {
-            contract_address: None,
-            contract_subject: None,
+            contract_subject: Some(contract_address.subject_id()),
+            contract_address: Some(contract_address),
             contract_alias: None,
-            entrypoint: Some("admin".to_owned()),
+            entrypoint: Some(entrypoint.to_owned()),
             entrypoint_pc: Some(0),
-            entrypoint_permission: Some(permission.to_owned()),
+            entrypoint_permission: Some("CanInvokeContractEntrypoint".to_owned()),
             args: Json::new(()),
             argument_record: None,
         }
@@ -13725,36 +13729,76 @@ seiyaku IdentityRequired {
         let mut block = state.block(header);
         let mut tx = block.transaction();
 
-        let direct_context = contract_permission_context("ContractAdmin");
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &authority,
+            91,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let direct_context = contract_permission_context(contract_address.clone(), "admin");
         let err = enforce_contract_entrypoint_permission(&tx.world, &authority, &direct_context)
             .expect_err("missing permission should reject contract entrypoint");
         assert!(matches!(
             err,
             ValidationFail::NotPermitted(message)
-                if message.contains("requires permission `ContractAdmin`")
+                if message.contains("requires an exact `CanInvokeContractEntrypoint` grant")
         ));
 
-        Grant::account_permission(
-            Permission::new("ContractAdmin".to_owned(), Json::new(())),
-            authority.clone(),
-        )
-        .execute(&authority, &mut tx)
-        .expect("grant direct contract permission");
+        let direct_permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: contract_address.clone(),
+                entrypoint: "admin".to_owned(),
+            }
+            .into();
+        Grant::account_permission(direct_permission, authority.clone())
+            .execute(&authority, &mut tx)
+            .expect("grant direct contract permission");
         enforce_contract_entrypoint_permission(&tx.world, &authority, &direct_context)
             .expect("direct permission should allow contract entrypoint");
 
-        let role_context = contract_permission_context("RoleContractAdmin");
+        let role_context = contract_permission_context(contract_address.clone(), "role_admin");
         let role_id: RoleId = "contract_admin_role".parse().expect("role id");
         let role: iroha_data_model::role::NewRole = Role::new(role_id.clone(), authority.clone())
-            .add_permission(Permission::new(
-                "RoleContractAdmin".to_owned(),
-                Json::new(()),
-            ));
+            .add_permission(
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: contract_address.clone(),
+                entrypoint: "role_admin".to_owned(),
+            }
+            .into(),
+        );
         Register::role(role)
             .execute(&authority, &mut tx)
             .expect("register contract role");
         enforce_contract_entrypoint_permission(&tx.world, &authority, &role_context)
             .expect("role permission should allow contract entrypoint");
+
+        for denied_context in [
+            contract_permission_context(contract_address.clone(), "wrong_entrypoint"),
+            contract_permission_context(
+                ContractAddress::derive(
+                    iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+                    &authority,
+                    92,
+                    DataSpaceId::UNIVERSAL,
+                )
+                .expect("derive distinct contract address"),
+                "admin",
+            ),
+        ] {
+            enforce_contract_entrypoint_permission(&tx.world, &authority, &denied_context)
+                .expect_err("a grant for another contract or selector must fail closed");
+        }
+
+        Grant::account_permission(
+            Permission::new("CanInvokeContractEntrypoint".to_owned(), Json::new(())),
+            authority.clone(),
+        )
+        .execute(&authority, &mut tx)
+        .expect("store malformed name-only compatibility fixture");
+        let malformed_only = contract_permission_context(contract_address, "malformed_only");
+        enforce_contract_entrypoint_permission(&tx.world, &authority, &malformed_only)
+            .expect_err("a name-only permission must never bypass exact payload matching");
     }
 
     fn generate_denied_program(message: &str) -> Vec<u8> {

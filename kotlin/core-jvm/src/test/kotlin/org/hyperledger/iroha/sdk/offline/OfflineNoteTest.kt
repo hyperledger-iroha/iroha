@@ -177,6 +177,7 @@ class OfflineNoteTest {
         }
     }
 
+    /* Retired pre-release recursive-aggregation JNI test.
     @Test
     fun kagemushaRecursiveAggregationNativeProverValidatesInput() {
         val validArchive = kagemushaNoritoFrameWithPayload(0x4b)
@@ -240,6 +241,7 @@ class OfflineNoteTest {
         }
     }
 
+    */
     @Test
     fun kagemushaCompactNativeInputCopiesBeforeDispatch() {
         val archive = kagemushaNoritoFrameWithPayload(0x4b)
@@ -259,6 +261,7 @@ class OfflineNoteTest {
         assertIllegalArgumentContains("recordBundleArchive must not be empty") {
             KagemushaCompactPaymentTokenProver.proveVerifiedCompactPaymentTokenWithRecords(null)
         }
+        /* Retired pre-release recursive-aggregation JNI null-input checks.
         assertIllegalArgumentContains("recordBundleArchive must not be empty") {
             KagemushaRecursiveAggregationProofBundleProver
                 .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
@@ -273,6 +276,7 @@ class OfflineNoteTest {
                     null,
                 )
         }
+        */
     }
 
     @Test
@@ -331,6 +335,7 @@ class OfflineNoteTest {
         }
     }
 
+    /* Retired pre-release ABI-6 recursive-spend JNI test.
     @Test
     fun kagemushaRecursiveSpendNativeProverValidatesInput() {
         assertEquals(
@@ -482,6 +487,7 @@ class OfflineNoteTest {
         }
     }
 
+    */
     @Test
     fun chainVkOfflineNoteProofWrappersValidateInputs() {
         assertFailsWith<IllegalArgumentException> {
@@ -655,6 +661,7 @@ class OfflineNoteTest {
         )
     }
 
+    /* Retired pre-release recursive-aggregation availability test.
     @Test
     fun kagemushaRecursiveAggregationNativeAvailabilityRequiresJniEntrypoint() {
         assertTrue(
@@ -711,6 +718,7 @@ class OfflineNoteTest {
         )
     }
 
+    */
     @Test
     fun publicNoritoDecodersRoundTripFixturePayloads() {
         val fixture = loadFixture()
@@ -5024,13 +5032,13 @@ class OfflineNoteTest {
     private fun currentIssuerCertificateJson(json: Map<String, Any?>): LinkedHashMap<String, Any?> {
         val copy = LinkedHashMap(json)
         when (string(copy, "platform")) {
-            OfflineNoteV2.ANDROID_KEYMINT_PLATFORM -> {
-                copy["assertion_scheme"] = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME
-                copy["assertion_key_algorithm"] = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM
+            AttestedOfflineNote.ANDROID_KEYMINT_PLATFORM -> {
+                copy["assertion_scheme"] = AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_SCHEME
+                copy["assertion_key_algorithm"] = AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM
             }
-            OfflineNoteV2.IOS_APP_ATTEST_PLATFORM -> {
-                copy["assertion_scheme"] = OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_SCHEME
-                copy["assertion_key_algorithm"] = OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM
+            AttestedOfflineNote.IOS_APP_ATTEST_PLATFORM -> {
+                copy["assertion_scheme"] = AttestedOfflineNote.IOS_APP_ATTEST_ASSERTION_SCHEME
+                copy["assertion_key_algorithm"] = AttestedOfflineNote.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM
             }
             else -> {
                 copy["assertion_scheme"] = "unsupported-platform"

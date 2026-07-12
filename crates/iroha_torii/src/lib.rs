@@ -3509,6 +3509,124 @@ mod preauth_connection_lifetime_tests {
         let response = router.oneshot(single).await.expect("single-token response");
         assert_eq!(response.status(), StatusCode::OK);
     }
+
+    #[tokio::test]
+    async fn offline_command_authentication_precedes_media_and_idempotency_validation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        async fn error_code(response: Response) -> String {
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("collect typed error response")
+                .to_bytes();
+            let envelope: ErrorEnvelope =
+                norito::json::from_slice(&body).expect("decode typed error response");
+            envelope.code().to_owned()
+        }
+
+        let mut app = app_with_scheme_cap("http");
+        let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
+        state.require_api_token = true;
+        state.api_tokens_set = Arc::new(HashSet::from(["valid-token".to_owned()]));
+
+        let handler_calls = Arc::new(AtomicUsize::new(0));
+        let router = Router::new()
+            .route(
+                route_catalog::offline::TOP_UP.path(),
+                axum::routing::post({
+                    let handler_calls = Arc::clone(&handler_calls);
+                    move || {
+                        let handler_calls = Arc::clone(&handler_calls);
+                        async move {
+                            handler_calls.fetch_add(1, Ordering::SeqCst);
+                            StatusCode::OK
+                        }
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_offline_command_prebody_admission,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_api_token,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_preauth,
+            ))
+            .layer(axum::middleware::from_fn(enforce_typed_error_contract));
+
+        let offline_request = |token_count: usize, content_type: &'static str| {
+            let mut request = Request::builder()
+                .method(axum::http::Method::POST)
+                .uri(route_catalog::offline::TOP_UP.path())
+                .header(header::ACCEPT, "application/json")
+                .header(header::CONTENT_TYPE, content_type)
+                .body(Body::from("{malformed-json"))
+                .expect("offline command request");
+            request
+                .extensions_mut()
+                .insert(MatchedRouteMetadata::from_descriptor(
+                    route_catalog::offline::TOP_UP,
+                ));
+            for _ in 0..token_count {
+                request
+                    .headers_mut()
+                    .append(HEADER_API_TOKEN, HeaderValue::from_static("valid-token"));
+            }
+            request
+        };
+
+        let occupying_guard = app
+            .acquire_preauth(None, ConnScheme::Http)
+            .await
+            .expect("occupy the HTTP pre-auth slot");
+        let at_capacity = router
+            .clone()
+            .oneshot(offline_request(0, "application/json; charset==utf-8"))
+            .await
+            .expect("pre-auth capacity response");
+        assert_eq!(at_capacity.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(error_code(at_capacity).await, "preauth_scheme_capacity");
+        drop(occupying_guard);
+
+        let missing = router
+            .clone()
+            .oneshot(offline_request(0, "application/json; charset==utf-8"))
+            .await
+            .expect("missing-token response");
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+        assert!(missing.headers().contains_key(header::WWW_AUTHENTICATE));
+        assert_eq!(error_code(missing).await, "api_token_required");
+
+        let duplicate = router
+            .clone()
+            .oneshot(offline_request(2, "application/json; charset==utf-8"))
+            .await
+            .expect("duplicate-token response");
+        assert_eq!(duplicate.status(), StatusCode::UNAUTHORIZED);
+        assert!(duplicate.headers().contains_key(header::WWW_AUTHENTICATE));
+        assert_eq!(error_code(duplicate).await, "api_token_required");
+
+        let missing_idempotency_key = router
+            .oneshot(offline_request(1, "application/json"))
+            .await
+            .expect("missing-idempotency-key response");
+        assert_eq!(missing_idempotency_key.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            error_code(missing_idempotency_key).await,
+            "idempotency_key_missing"
+        );
+        assert_eq!(
+            handler_calls.load(Ordering::SeqCst),
+            0,
+            "admission failures must not invoke a handler or consume its body extractor"
+        );
+    }
 }
 
 fn api_token_rejection(app: &AppState, headers: &HeaderMap) -> Option<Response> {
@@ -4220,6 +4338,8 @@ async fn enforce_offline_cache_policy(
 ) -> Result<axum::response::Response, Infallible> {
     const OPERATION_PREFIX: &str = "/v1/offline/operations/";
     const READINESS_PATH: &str = "/v1/offline/readiness";
+    const TOP_UP_PATH: &str = "/v1/offline/top-up";
+    const REDEEM_PATH: &str = "/v1/offline/redeem";
 
     let route = req.extensions().get::<MatchedRouteMetadata>();
     let operation_status = route.is_some_and(|route| {
@@ -4229,8 +4349,13 @@ async fn enforce_offline_cache_policy(
         route.stable_route_id() == route_catalog::offline::READINESS.stable_route_id()
     }) || req.uri().path() == READINESS_PATH
         || req.uri().path().starts_with("/v1/offline/readiness/");
+    let command = route.is_some_and(|route| {
+        let id = route.stable_route_id();
+        id == route_catalog::offline::TOP_UP.stable_route_id()
+            || id == route_catalog::offline::REDEEM.stable_route_id()
+    }) || matches!(req.uri().path(), TOP_UP_PATH | REDEEM_PATH);
     let mut response = next.run(req).await;
-    let policy = if operation_status {
+    let policy = if operation_status || command {
         Some("no-store")
     } else if readiness {
         if matches!(response.status(), StatusCode::OK | StatusCode::NOT_MODIFIED) {
@@ -5313,15 +5438,6 @@ mod strict_request_target_tests {
                 mount(Arc::clone(&counter)),
             )
             .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST
-                    .path(),
-                mount(Arc::clone(&counter)),
-            )
-            .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST.path(),
-                mount(Arc::clone(&counter)),
-            )
-            .route(
                 route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST
                     .path(),
                 mount(Arc::clone(&counter)),
@@ -5520,11 +5636,13 @@ mod strict_request_target_tests {
     }
 
     #[tokio::test]
-    async fn canonical_query_routes_keep_required_multisig_compatibility_paths() {
+    async fn canonical_query_routes_do_not_resolve_retired_action_aliases() {
         let counter = Arc::new(AtomicUsize::new(0));
         let router = catalog_cutover_test_router(Arc::clone(&counter));
 
         for retired_path in [
+            "/v1/multisig/proposals/list",
+            "/v1/multisig/proposals/get",
             "/v1/multisig/approvals/list_for_authority",
             "/v1/controls/asset-transfer/get",
         ] {
@@ -5543,11 +5661,9 @@ mod strict_request_target_tests {
         }
         assert_eq!(counter.load(Ordering::SeqCst), 0);
 
-        for supported_path in [
+        for canonical_path in [
             "/v1/multisig/proposals/query",
             "/v1/multisig/proposals/lookup",
-            "/v1/multisig/proposals/list",
-            "/v1/multisig/proposals/get",
             "/v1/multisig/approvals/query-for-authority",
             "/v1/controls/asset-transfer/query",
         ] {
@@ -5556,7 +5672,7 @@ mod strict_request_target_tests {
                 .oneshot(
                     Request::builder()
                         .method("POST")
-                        .uri(supported_path)
+                        .uri(canonical_path)
                         .body(Body::empty())
                         .expect("request"),
                 )
@@ -5565,17 +5681,15 @@ mod strict_request_target_tests {
             assert_eq!(
                 response.status(),
                 StatusCode::NO_CONTENT,
-                "{supported_path}"
+                "{canonical_path}"
             );
         }
-        assert_eq!(counter.load(Ordering::SeqCst), 6);
+        assert_eq!(counter.load(Ordering::SeqCst), 4);
 
         for adversarial_path in [
             "/v1/multisig/proposals//query",
             "/v1/multisig/proposals/%2fquery",
             "/v1/multisig/proposals/query/",
-            "/v1/multisig/proposals/list/",
-            "/v1/multisig/proposals/get/",
         ] {
             let response = router
                 .clone()
@@ -5596,19 +5710,19 @@ mod strict_request_target_tests {
                 "{adversarial_path}"
             );
         }
-        assert_eq!(counter.load(Ordering::SeqCst), 6);
+        assert_eq!(counter.load(Ordering::SeqCst), 4);
     }
 }
 
 #[cfg(test)]
-mod offline_operation_cache_policy_tests {
+mod offline_cache_policy_tests {
     use axum::{
         Router,
         body::Body,
         extract::Path,
         http::{Request, StatusCode, header},
         response::IntoResponse as _,
-        routing::get,
+        routing::{get, post},
     };
     use tower::ServiceExt as _;
 
@@ -5644,6 +5758,24 @@ mod offline_operation_cache_policy_tests {
                         )
                             .into_response()
                     }
+                }),
+            )
+            .route(
+                "/v1/offline/top-up",
+                post(|| async {
+                    (
+                        [(header::CACHE_CONTROL, "public, max-age=86400")],
+                        StatusCode::ACCEPTED,
+                    )
+                }),
+            )
+            .route(
+                "/v1/offline/redeem",
+                post(|| async {
+                    (
+                        [(header::CACHE_CONTROL, "public, max-age=86400")],
+                        StatusCode::SERVICE_UNAVAILABLE,
+                    )
                 }),
             )
             .route("/health", get(|| async { StatusCode::NOT_FOUND }))
@@ -5707,6 +5839,29 @@ mod offline_operation_cache_policy_tests {
                 "private, max-age=0, must-revalidate"
             ))
         );
+
+        for (path, status) in [
+            ("/v1/offline/top-up", StatusCode::ACCEPTED),
+            ("/v1/offline/redeem", StatusCode::SERVICE_UNAVAILABLE),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(axum::http::Method::POST)
+                        .uri(path)
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), status, "path={path}");
+            assert_eq!(
+                response.headers().get(header::CACHE_CONTROL),
+                Some(&axum::http::HeaderValue::from_static("no-store")),
+                "path={path}"
+            );
+        }
 
         let response = router
             .oneshot(
@@ -7175,13 +7330,24 @@ fn route_scoped_rate_limit_key(
 }
 
 async fn rate_limit_requests(app: &SharedAppState, key: &str) -> Result<(), Error> {
-    if !limits::allow_conditionally(&app.rate_limiter, key, true).await {
+    rate_limit_requests_with_cost(app, key, 1).await
+}
+
+async fn rate_limit_requests_with_cost(
+    app: &SharedAppState,
+    key: &str,
+    cost: u64,
+) -> Result<(), Error> {
+    if !limits::allow_cost_conditionally(&app.rate_limiter, key, cost.max(1), true).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
     Ok(())
 }
+
+const FINALITY_HEAVY_QUERY_RATE_COST: u64 = 8;
+const SCCP_RECENT_QUERY_RATE_COST: u64 = 4;
 
 #[cfg(test)]
 fn loopback_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
@@ -10055,34 +10221,156 @@ fn offline_kagemusha_readiness_error(message: impl Into<String>) -> Error {
 }
 
 #[cfg(feature = "app_api")]
-fn offline_kagemusha_readiness_verifier_available(
+fn offline_kagemusha_readiness_verifier_record(
     world: &impl WorldReadOnly,
     block_height: u64,
     circuit_id: &str,
     role: &str,
-) -> Result<bool, Error> {
-    let selected = world
-        .verifying_keys_by_circuit()
-        .iter()
-        .filter(|((registered_circuit_id, _), _)| registered_circuit_id == circuit_id)
-        .filter_map(|((_, version), id)| {
-            world
-                .verifying_keys()
-                .get(id)
-                .filter(|record| record.version == *version && record.is_active_at(block_height))
-                .map(|record| (*version, record))
-        })
-        .max_by_key(|(version, _)| *version);
-    let Some((_, record)) = selected else {
-        return Ok(false);
-    };
-    if record.circuit_id != circuit_id {
-        return Err(offline_kagemusha_readiness_error(format!(
-            "active {role} verifier index points at circuit `{}` instead of `{circuit_id}`",
-            record.circuit_id
-        )));
+) -> Result<Option<iroha_torii_shared::offline_api::OfflineActiveTransferVerifier>, Error> {
+    let mut selected = None;
+    for ((registered_circuit_id, indexed_version), id) in world.verifying_keys_by_circuit().iter() {
+        if registered_circuit_id != circuit_id {
+            continue;
+        }
+        let record = world.verifying_keys().get(id).ok_or_else(|| {
+            offline_kagemusha_readiness_error(format!(
+                "{role} verifier index version {indexed_version} points at missing key `{}/{}`",
+                id.backend, id.name
+            ))
+        })?;
+        if record.version != *indexed_version {
+            return Err(offline_kagemusha_readiness_error(format!(
+                "{role} verifier index version {indexed_version} points at record version {}",
+                record.version
+            )));
+        }
+        if record.circuit_id != circuit_id {
+            return Err(offline_kagemusha_readiness_error(format!(
+                "{role} verifier index points at circuit `{}` instead of `{circuit_id}`",
+                record.circuit_id
+            )));
+        }
+        if !id.is_portable_registry_id() {
+            return Err(offline_kagemusha_readiness_error(format!(
+                "{role} verifier index contains a non-portable key id"
+            )));
+        }
+        if record.commitment == [0; 32]
+            || record.public_inputs_schema_hash == [0; 32]
+            || record.max_proof_bytes == 0
+        {
+            return Err(offline_kagemusha_readiness_error(format!(
+                "{role} verifier record is missing required proof metadata"
+            )));
+        }
+        if record.is_active_at(block_height)
+            && selected
+                .as_ref()
+                .is_none_or(|(version, _, _)| indexed_version > version)
+        {
+            selected = Some((*indexed_version, id, record));
+        }
     }
-    Ok(true)
+
+    Ok(selected.map(|(_, id, record)| {
+        iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
+            id: iroha_torii_shared::offline_api::OfflineVerifierId {
+                backend: id.backend.as_str().to_owned(),
+                name: id.name.clone(),
+            },
+            version: record.version,
+            circuit_id: record.circuit_id.clone(),
+            commitment: hex::encode(record.commitment),
+            public_inputs_schema_hash: hex::encode(record.public_inputs_schema_hash),
+            max_proof_bytes: record.max_proof_bytes,
+            activation_height: record.activation_height.unwrap_or(0),
+            withdrawal_height: record.withdraw_height,
+        }
+    }))
+}
+
+#[cfg(feature = "app_api")]
+fn offline_kagemusha_asset_transfer_verifier_record(
+    world: &impl WorldReadOnly,
+    asset: &AssetDefinitionId,
+    block_height: u64,
+) -> Result<Option<iroha_torii_shared::offline_api::OfflineActiveTransferVerifier>, Error> {
+    let Some(zk_asset) = world.zk_assets().get(asset) else {
+        return Ok(None);
+    };
+    let Some(binding) = zk_asset.vk_transfer.as_ref() else {
+        return Ok(None);
+    };
+    let record = world.verifying_keys().get(&binding.id).ok_or_else(|| {
+        offline_kagemusha_readiness_error(format!(
+            "asset-bound transfer verifier `{}/{}` is missing from the registry",
+            binding.id.backend, binding.id.name
+        ))
+    })?;
+    let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+    let expected_schema_hash: [u8; 32] = iroha_crypto::Hash::new(
+        iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+    )
+    .into();
+    if record.circuit_id != circuit_id
+        || record.namespace != iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE
+        || record.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta
+        || record.curve != "pallas"
+        || binding.commitment == [0; 32]
+        || binding.commitment != record.commitment
+        || !binding.id.is_portable_registry_id()
+        || record.public_inputs_schema_hash != expected_schema_hash
+        || record.max_proof_bytes == 0
+    {
+        return Err(offline_kagemusha_readiness_error(
+            "asset-bound transfer verifier metadata is inconsistent with Kagemusha",
+        ));
+    }
+    let circuit_key = (record.circuit_id.clone(), record.version);
+    if world.verifying_keys_by_circuit().get(&circuit_key) != Some(&binding.id) {
+        return Err(offline_kagemusha_readiness_error(
+            "asset-bound transfer verifier is not the active registry entry for its circuit version",
+        ));
+    }
+    let Some(verifier_key) = record.key.as_ref() else {
+        return Err(offline_kagemusha_readiness_error(
+            "asset-bound transfer verifier key is not available inline",
+        ));
+    };
+    if verifier_key.backend.as_str() != iroha_core::zk::ZK_BACKEND_HALO2_IPA
+        || verifier_key.bytes.is_empty()
+        || u32::try_from(verifier_key.bytes.len()).ok() != Some(record.vk_len)
+        || iroha_core::zk::hash_vk(verifier_key) != record.commitment
+    {
+        return Err(offline_kagemusha_readiness_error(
+            "asset-bound transfer verifier key material is inconsistent",
+        ));
+    }
+    iroha_core::zk::confidential_v2::ensure_confidential_transfer_v2_canonical_vk_box(verifier_key)
+        .map_err(|error| {
+            offline_kagemusha_readiness_error(format!(
+                "asset-bound transfer verifier is not canonical: {error}"
+            ))
+        })?;
+    if !record.is_active_at(block_height) {
+        return Ok(None);
+    }
+
+    Ok(Some(
+        iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
+            id: iroha_torii_shared::offline_api::OfflineVerifierId {
+                backend: binding.id.backend.as_str().to_owned(),
+                name: binding.id.name.clone(),
+            },
+            version: record.version,
+            circuit_id: record.circuit_id.clone(),
+            commitment: hex::encode(record.commitment),
+            public_inputs_schema_hash: hex::encode(record.public_inputs_schema_hash),
+            max_proof_bytes: record.max_proof_bytes,
+            activation_height: record.activation_height.unwrap_or(0),
+            withdrawal_height: record.withdraw_height,
+        },
+    ))
 }
 
 #[cfg(feature = "app_api")]
@@ -10155,41 +10443,44 @@ async fn handler_offline_readiness(
         )
     })?;
     let evaluated_block_hash = hex::encode(block_hash.as_ref().as_ref());
-    let transfer = offline_kagemusha_readiness_verifier_available(
+    let transfer = offline_kagemusha_asset_transfer_verifier_record(
         world,
+        &asset_definition_id,
         block_height,
-        iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
     )?;
-    let unshield = offline_kagemusha_readiness_verifier_available(
+    let unshield = offline_kagemusha_readiness_verifier_record(
         world,
         block_height,
         iroha_core::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
         iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
-    )?;
-    let lineage_init = offline_kagemusha_readiness_verifier_available(
+    )?
+    .is_some();
+    let lineage_init = offline_kagemusha_readiness_verifier_record(
         world,
         block_height,
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
         iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_LINEAGE_INIT_V2,
-    )?;
-    let lineage_append = offline_kagemusha_readiness_verifier_available(
+    )?
+    .is_some();
+    let lineage_append = offline_kagemusha_readiness_verifier_record(
         world,
         block_height,
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_APPEND_PROOF_CIRCUIT_ID_V2,
         iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_LINEAGE_APPEND_V2,
-    )?;
-    let redeem_change = offline_kagemusha_readiness_verifier_available(
+    )?
+    .is_some();
+    let redeem_change = offline_kagemusha_readiness_verifier_record(
         world,
         block_height,
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_REDEEM_CHANGE_PROOF_CIRCUIT_ID_V2,
         iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_REDEEM_CHANGE_V2,
-    )?;
+    )?
+    .is_some();
     let proof_backend_available =
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE;
-    // First-release safety boundary: readiness remains fail-closed until an
-    // audited native capability archive and an active signed-artifact registry
-    // are authoritative for these capabilities.
+    // TODO(kagemusha-v2-release): Source these from the audited native
+    // capability archive and active signed-artifact registry once those
+    // authorities are available. Hard-coded false keeps readiness fail-closed.
     let witnessless_reserved_lineage_supported = false;
     let artifacts_ready = false;
     let mut blockers = Vec::new();
@@ -10220,7 +10511,7 @@ async fn handler_offline_readiness(
     }
     for (available, code, message) in [
         (
-            transfer,
+            transfer.is_some(),
             "transfer_verifier_unavailable",
             "The transfer verifier is not active at the evaluated block.",
         ),
@@ -10269,8 +10560,10 @@ async fn handler_offline_readiness(
     }
     let payload = iroha_torii_shared::offline_api::OfflineReadiness {
         asset_definition_id: asset_definition_id.to_string(),
+        asset_scale,
         evaluated_block_height: block_height,
         evaluated_block_hash,
+        active_transfer_verifier: transfer,
         ready: blockers.is_empty(),
         blockers,
     };
@@ -10323,10 +10616,51 @@ async fn handler_offline_readiness(
 
 #[cfg(all(test, feature = "app_api"))]
 mod offline_kagemusha_readiness_tests {
+    use iroha_data_model::asset::AssetDefinitionId;
+
     use super::{
-        encode_offline_readiness_representation, offline_readiness_blocker,
+        encode_offline_readiness_representation, offline_kagemusha_asset_transfer_verifier_record,
+        offline_kagemusha_readiness_verifier_record, offline_readiness_blocker,
         strong_etag_for_representation,
     };
+
+    fn transfer_verifier_world(
+        version: u32,
+        activation_height: Option<u64>,
+        withdrawal_height: Option<u64>,
+    ) -> iroha_core::state::World {
+        use iroha_data_model::{
+            confidential::ConfidentialStatus,
+            proof::{VerifyingKeyId, VerifyingKeyRecord},
+            zk::BackendTag,
+        };
+
+        let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+        let id = VerifyingKeyId::new("halo2/ipa", "readiness-transfer");
+        let mut record = VerifyingKeyRecord::new_with_owner(
+            version,
+            circuit_id,
+            Some("offline-cash".to_owned()),
+            iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
+            BackendTag::Halo2IpaPasta,
+            "pallas",
+            [0x22; 32],
+            [0x33; 32],
+        );
+        record.status = ConfidentialStatus::Active;
+        record.activation_height = activation_height;
+        record.withdraw_height = withdrawal_height;
+        record.max_proof_bytes = 4096;
+
+        let mut world = iroha_core::state::World::new();
+        world
+            .verifying_keys_mut_for_testing()
+            .insert(id.clone(), record);
+        world
+            .verifying_keys_by_circuit_mut_for_testing()
+            .insert((circuit_id.to_owned(), version), id);
+        world
+    }
 
     #[test]
     fn readiness_blockers_have_stable_codes() {
@@ -10339,13 +10673,21 @@ mod offline_kagemusha_readiness_tests {
     fn readiness_etag_hashes_the_exact_selected_representation() {
         let payload = iroha_torii_shared::offline_api::OfflineReadiness {
             asset_definition_id: "xor#wonderland".to_owned(),
+            asset_scale: Some(9),
             evaluated_block_height: 7,
             evaluated_block_hash: "11".repeat(32),
+            active_transfer_verifier: None,
             ready: false,
-            blockers: vec![offline_readiness_blocker(
-                "proof_backend_unavailable",
-                "The proof backend is unavailable.",
-            )],
+            blockers: vec![
+                offline_readiness_blocker(
+                    "transfer_verifier_unavailable",
+                    "The transfer verifier is unavailable.",
+                ),
+                offline_readiness_blocker(
+                    "proof_backend_unavailable",
+                    "The proof backend is unavailable.",
+                ),
+            ],
         };
         let (json_content_type, json) =
             encode_offline_readiness_representation(&payload, crate::utils::ResponseFormat::Json)
@@ -10368,6 +10710,102 @@ mod offline_kagemusha_readiness_tests {
             strong_etag_for_representation(&changed_json),
             "a strong validator must change whenever representation octets change"
         );
+    }
+
+    #[test]
+    fn readiness_exposes_the_exact_active_transfer_verifier_window() {
+        let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+        let world = transfer_verifier_world(7, Some(5), Some(10));
+
+        let selected = offline_kagemusha_readiness_verifier_record(
+            &world,
+            9,
+            circuit_id,
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
+        )
+        .expect("evaluate transfer verifier")
+        .expect("verifier is active before withdrawal");
+        assert_eq!(selected.id.backend, "halo2/ipa");
+        assert_eq!(selected.id.name, "readiness-transfer");
+        assert_eq!(selected.version, 7);
+        assert_eq!(selected.circuit_id, circuit_id);
+        assert_eq!(selected.commitment, "33".repeat(32));
+        assert_eq!(selected.public_inputs_schema_hash, "22".repeat(32));
+        assert_eq!(selected.max_proof_bytes, 4096);
+        assert_eq!(selected.activation_height, 5);
+        assert_eq!(selected.withdrawal_height, Some(10));
+
+        assert!(
+            offline_kagemusha_readiness_verifier_record(
+                &world,
+                10,
+                circuit_id,
+                iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
+            )
+            .expect("evaluate at the exclusive withdrawal bound")
+            .is_none(),
+            "the registry withdrawal height is exclusive"
+        );
+    }
+
+    #[test]
+    fn readiness_does_not_substitute_a_global_verifier_for_the_asset_binding() {
+        let world = transfer_verifier_world(7, None, None);
+        let asset: AssetDefinitionId = "xor#wonderland".parse().expect("asset definition id");
+
+        assert!(
+            offline_kagemusha_asset_transfer_verifier_record(&world, &asset, 9)
+                .expect("evaluate asset-bound transfer verifier")
+                .is_none(),
+            "a globally active circuit is not the verifier selected by an unbound asset"
+        );
+    }
+
+    #[test]
+    fn readiness_rejects_a_stale_verifier_index_version() {
+        let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+        let mut world = transfer_verifier_world(7, None, None);
+        let id = world
+            .verifying_keys_by_circuit_mut_for_testing()
+            .remove(&(circuit_id.to_owned(), 7))
+            .expect("indexed verifier id");
+        world
+            .verifying_keys_by_circuit_mut_for_testing()
+            .insert((circuit_id.to_owned(), 8), id);
+
+        let error = offline_kagemusha_readiness_verifier_record(
+            &world,
+            9,
+            circuit_id,
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
+        )
+        .expect_err("a stale index must fail closed instead of hiding the inconsistency");
+        assert!(format!("{error:?}").contains("record version 7"));
+    }
+
+    #[test]
+    fn readiness_rejects_an_active_verifier_without_proof_metadata() {
+        let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+        let mut world = transfer_verifier_world(7, None, None);
+        let id = world
+            .verifying_keys_by_circuit_mut_for_testing()
+            .get(&(circuit_id.to_owned(), 7))
+            .expect("indexed verifier id")
+            .clone();
+        world
+            .verifying_keys_mut_for_testing()
+            .get_mut(&id)
+            .expect("verifier record")
+            .max_proof_bytes = 0;
+
+        let error = offline_kagemusha_readiness_verifier_record(
+            &world,
+            9,
+            circuit_id,
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
+        )
+        .expect_err("an unusable active verifier record must fail closed");
+        assert!(format!("{error:?}").contains("missing required proof metadata"));
     }
 }
 
@@ -33309,7 +33747,6 @@ async fn handler_sumeragi_commit_qcs(
         .into_response())
 }
 
-#[cfg(feature = "telemetry")]
 async fn handler_bridge_finality_proof(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<u64>,
@@ -33337,7 +33774,9 @@ async fn handler_bridge_finality_proof(
         "/v1/bridge/finality/{height}",
         app.api_token_enforced(),
     );
-    rate_limit_requests(&app, &key).await?;
+    rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
+    #[cfg(feature = "telemetry")]
     if let Some(api_token) = token_hdr {
         crate::telemetry::report_torii_api_hit(&app.telemetry, &api_token, "v1/bridge/finality");
     }
@@ -33349,7 +33788,6 @@ async fn handler_bridge_finality_proof(
     )
 }
 
-#[cfg(feature = "telemetry")]
 async fn handler_bridge_finality_bundle(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<u64>,
@@ -33377,7 +33815,9 @@ async fn handler_bridge_finality_bundle(
         "/v1/bridge/finality/bundle/{height}",
         app.api_token_enforced(),
     );
-    rate_limit_requests(&app, &key).await?;
+    rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
+    #[cfg(feature = "telemetry")]
     if let Some(api_token) = token_hdr {
         crate::telemetry::report_torii_api_hit(
             &app.telemetry,
@@ -33422,7 +33862,8 @@ async fn handler_sccp_message_proof(
         "/v1/sccp/proofs/message/{message_id}",
         app.api_token_enforced(),
     );
-    rate_limit_requests(&app, &key).await?;
+    rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
     #[cfg(feature = "telemetry")]
     if let Some(api_token) = token_hdr {
         crate::telemetry::report_torii_api_hit(
@@ -33433,7 +33874,7 @@ async fn handler_sccp_message_proof(
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     Ok(
-        routing::handle_v1_sccp_message_bundle(app.state.as_ref(), message_id, accept)
+        routing::handle_v1_sccp_message_bundle(Arc::clone(&app.state), message_id, accept)
             .await?
             .into_response(),
     )
@@ -33507,7 +33948,8 @@ async fn handler_sccp_proof_request(
         "/v1/sccp/proof-requests/{message_id}",
         app.api_token_enforced(),
     );
-    rate_limit_requests(&app, &key).await?;
+    rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
     #[cfg(feature = "telemetry")]
     if let Some(api_token) = token_hdr {
         crate::telemetry::report_torii_api_hit(
@@ -33518,7 +33960,7 @@ async fn handler_sccp_proof_request(
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     Ok(
-        routing::handle_v1_sccp_proof_request(app.state.as_ref(), message_id, accept)
+        routing::handle_v1_sccp_proof_request(Arc::clone(&app.state), message_id, accept)
             .await?
             .into_response(),
     )
@@ -33592,7 +34034,8 @@ async fn handler_sccp_messages_recent(
         "/v1/sccp/messages/recent",
         app.api_token_enforced(),
     );
-    rate_limit_requests(&app, &key).await?;
+    rate_limit_requests_with_cost(&app, &key, SCCP_RECENT_QUERY_RATE_COST).await?;
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
     #[cfg(feature = "telemetry")]
     if let Some(api_token) = token_hdr {
         crate::telemetry::report_torii_api_hit(
@@ -33603,7 +34046,7 @@ async fn handler_sccp_messages_recent(
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     Ok(
-        routing::handle_v1_sccp_messages_recent(app.state.as_ref(), window, accept)
+        routing::handle_v1_sccp_messages_recent(Arc::clone(&app.state), window, accept)
             .await?
             .into_response(),
     )
@@ -43764,6 +44207,8 @@ impl Torii {
         mount_get!(SCCP_REGISTRY, handler_sccp_registry);
         mount_get!(VRF_PENALTIES, handler_sumeragi_vrf_penalties);
         mount_get!(VRF_EPOCH, handler_sumeragi_vrf_epoch);
+        mount_get!(BRIDGE_FINALITY, handler_bridge_finality_proof);
+        mount_get!(BRIDGE_FINALITY_BUNDLE, handler_bridge_finality_bundle);
 
         #[cfg(feature = "telemetry")]
         {
@@ -43784,8 +44229,6 @@ impl Torii {
             mount_get!(QC, handler_sumeragi_qc);
             mount_get!(CHECKPOINTS, handler_sumeragi_checkpoints);
             mount_get!(COMMIT_CERTIFICATES, handler_sumeragi_commit_qcs);
-            mount_get!(BRIDGE_FINALITY, handler_bridge_finality_proof);
-            mount_get!(BRIDGE_FINALITY_BUNDLE, handler_bridge_finality_bundle);
             mount_get!(VALIDATOR_SETS, handler_sumeragi_validator_sets);
             mount_get!(
                 VALIDATOR_SET_BY_HEIGHT,
@@ -44333,14 +44776,6 @@ impl Torii {
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
-            catalog_post(handler_post_multisig_proposals_get),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST,
-            catalog_post(handler_post_multisig_proposals_list),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST,
             catalog_post(handler_post_multisig_proposals_get),
         );
         builder.route(
@@ -47628,7 +48063,23 @@ impl Torii {
         let mut router = router
             .fallback(handler_route_not_found)
             .method_not_allowed_fallback(handler_method_not_allowed)
-            .layer(axum::middleware::from_fn(enforce_route_timeout))
+            .layer(axum::middleware::from_fn(enforce_route_timeout));
+        #[cfg(feature = "app_api")]
+        {
+            // Route-specific command guards stay inside the global pre-auth
+            // and API-token gates. They may inspect or buffer request bodies,
+            // so unauthenticated or over-capacity callers must never reach
+            // them.
+            router = router.layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                enforce_soracloud_signed_mutation_request,
+            ));
+            router = router.layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                enforce_offline_command_prebody_admission,
+            ));
+        }
+        let mut router = router
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 enforce_api_token,
@@ -47645,17 +48096,6 @@ impl Torii {
                 inject_remote_addr_header,
             ))
             .layer(axum::middleware::from_fn(capture_response_format));
-        #[cfg(feature = "app_api")]
-        {
-            router = router.layer(axum::middleware::from_fn_with_state(
-                app_state.clone(),
-                enforce_soracloud_signed_mutation_request,
-            ));
-            router = router.layer(axum::middleware::from_fn_with_state(
-                app_state.clone(),
-                enforce_offline_command_prebody_admission,
-            ));
-        }
         if let Some(cors_layer) = self.build_cors_layer() {
             router = router.layer(cors_layer);
         }
@@ -47685,11 +48125,11 @@ impl Torii {
         // handler selection, to the required UTF-8 media type.
         let router = router.layer(axum::middleware::from_fn(enforce_json_utf8_charset));
 
-        // Operation-status responses and readiness failures are never
-        // cacheable, including early validation, authorization, not-found,
-        // and recovery failures. Successful readiness responses receive the
-        // exact private revalidation policy even if an inner layer supplied a
-        // conflicting cache directive.
+        // Offline command and operation-status responses, plus readiness
+        // failures, are never cacheable, including early validation,
+        // authorization, not-found, and recovery failures. Successful
+        // readiness responses receive the exact private revalidation policy
+        // even if an inner layer supplied a conflicting cache directive.
         let router = router.layer(axum::middleware::from_fn(enforce_offline_cache_policy));
 
         // Metrics wrap every response-producing layer, including CORS,
@@ -49944,7 +50384,14 @@ pub(crate) mod tests_runtime_handlers {
     use iroha_data_model::{
         ChainId, Registrable, ValidationFail,
         account::{Account, AccountAlias, AccountId, OpaqueAccountId},
-        block::{BlockHeader, BlockSignature, SignedBlock},
+        block::{
+            BlockHeader, BlockSignature, SignedBlock,
+            consensus_v2::{
+                BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
+                ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
+                QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
+            },
+        },
         consensus::{
             ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus, Qc,
             QcAggregate, VALIDATOR_SET_HASH_VERSION_V1,
@@ -59136,7 +59583,10 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(proofs.entry_hash, entry_hash);
     }
 
-    fn app_with_indexed_sccp_message_for_test(height: u64) -> (SharedAppState, [u8; 32]) {
+    fn app_with_indexed_sccp_message_for_test(
+        persist_finality: bool,
+    ) -> (SharedAppState, [u8; 32], V2FinalityArtifact) {
+        const HEIGHT: u64 = 1;
         let keypair = checked_torii_test_ed25519_keypair(
             0x31,
             "derive indexed Torii SCCP-message fixture key",
@@ -59186,7 +59636,7 @@ pub(crate) mod tests_runtime_handlers {
         );
         let entry_hash = tx.hash_as_entrypoint();
         let header = BlockHeader::new(
-            std::num::NonZeroU64::new(height).expect("nonzero height"),
+            std::num::NonZeroU64::new(HEIGHT).expect("nonzero height"),
             None,
             None,
             None,
@@ -59207,17 +59657,17 @@ pub(crate) mod tests_runtime_handlers {
                 vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
             )
             .expect("test block entrypoint hash should match payload");
+        let legacy_post_state_root = block
+            .header()
+            .result_merkle_root()
+            .map(|hash| iroha_crypto::Hash::prehashed(*hash.as_ref()))
+            .expect("SCCP fixture result root");
         let messages = iroha_core::bridge::collect_sccp_messages_from_signed_block(&block);
         assert_eq!(messages.len(), 1);
         let message = &messages[0];
         let commitment_root = iroha_core::bridge::sccp_commitment_root_from_messages(&messages)
             .expect("SCCP commitment root");
         block.set_sccp_commitment_root(Some(commitment_root));
-        let expected_root = block
-            .header()
-            .result_merkle_root()
-            .map(|hash| iroha_crypto::Hash::prehashed(*hash.as_ref()))
-            .expect("result root");
         let block_hash = block.hash();
         let message_id = message.commitment.message_id;
         let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1::new(context.lane, message_id)
@@ -59226,39 +59676,151 @@ pub(crate) mod tests_runtime_handlers {
             destination_binding_hash: context.destination_binding_hash,
             route_configuration_hash: context.route_configuration_hash,
             payload_hash: message.commitment.payload_hash,
-            recorded_at_height: height,
+            recorded_at_height: HEIGHT,
         };
         app.state
             .insert_sccp_outbound_message_for_testing(key, durable)
             .expect("insert indexed outbound record");
-        store_block(&app, block);
+        let mut validator_keys = (1_u8..=4)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("derive deterministic SCCP finality validator")
+            })
+            .collect::<Vec<_>>();
+        validator_keys.sort_by(|left, right| {
+            PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
+        });
+        let roster = validator_keys
+            .iter()
+            .zip([40_u64, 30, 20, 10])
+            .map(|(key, power)| ValidatorPower {
+                validator: PeerId::new(key.public_key().clone()),
+                power,
+            })
+            .collect::<Vec<_>>();
+        let context = HeightContext {
+            chain_id: app.state.chain_id_ref().clone(),
+            protocol_version: PROTOCOL_VERSION,
+            height: HEIGHT,
+            epoch: 0,
+            epoch_end_height: 10,
+            next_epoch_snapshot: None,
+            mode: ConsensusMode::Npos,
+            parent_commit_qc: None,
+            quorum: DualQuorum::from_roster(&roster).expect("valid SCCP finality roster"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"Torii SCCP exact-v2 finality context"),
+            da_layout: DataAvailabilityLayout {
+                encoding: PayloadEncoding::Plain,
+                chunk_size_bytes: 1024,
+                data_shards: 0,
+                parity_shards: 0,
+                max_payload_size_bytes: 4096,
+                max_chunk_count: 4,
+            },
+            leader_seed: [0x42; 32],
+        };
+        let subject = BlockSubject {
+            parent_block_hash: block.header().prev_block_hash(),
+            block_hash,
+            payload_hash: Hash::new(
+                block
+                    .canonical_wire()
+                    .expect("encode exact SCCP fixture block")
+                    .as_framed(),
+            ),
+        };
+        let mut commit_qc = QuorumCertificate {
+            round: ConsensusRound {
+                context_id: context.id(),
+                height: HEIGHT,
+                view: block.header().view_change_index(),
+            },
+            phase: GlobalPhase::Commit,
+            subject,
+            execution_commitment: ExecutionCommitment::without_topups(
+                Hash::new(b"Torii SCCP exact-v2 parent state"),
+                Hash::new(b"Torii SCCP exact-v2 post state"),
+                Hash::new(b"Torii SCCP exact-v2 ordinary writes"),
+            ),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![1],
+        };
+        let preimage = commit_qc
+            .signer_preimage(&context, 0)
+            .expect("valid SCCP finality signer");
+        let signatures = commit_qc
+            .signers
+            .iter()
+            .map(|index| {
+                Signature::try_new(
+                    validator_keys[usize::try_from(*index).expect("fixture signer index")]
+                        .private_key(),
+                    &preimage,
+                )
+                .expect("sign exact SCCP Commit vote")
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        commit_qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+            &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        )
+        .expect("aggregate exact SCCP Commit votes");
+        let validator_set_pops = validator_keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("derive SCCP finality validator PoP")
+            })
+            .collect();
+        let artifact = V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops);
+        artifact
+            .validate_for_header(&block.header())
+            .expect("SCCP finality fixture binds the exact block header");
+        artifact
+            .verify()
+            .expect("SCCP finality fixture is cryptographically valid");
 
-        let (qc, validator_pop) = sample_commit_qc(
+        // Seed the retired QC model as an adversarial control. Proof routes
+        // must still require the exact durable v2 artifact below; a valid
+        // legacy QC in world state is not an alternative finality source.
+        let (legacy_qc, legacy_validator_pop) = sample_commit_qc(
             app.state.chain_id_ref(),
             block_hash,
-            expected_root,
-            height,
-            height.saturating_add(1),
+            legacy_post_state_root,
+            HEIGHT,
+            HEIGHT.saturating_add(1),
             0,
         );
-        record_commit_qc(qc.clone());
+
+        store_block(&app, block);
+        if persist_finality {
+            app.kura
+                .store_v2_finality_artifact(&artifact)
+                .expect("persist exact SCCP v2 finality artifact");
+        }
         let mut app = app;
-        let app_mut = Arc::get_mut(&mut app).expect("unique app state for test");
-        let state = Arc::get_mut(&mut app_mut.state).expect("unique core state for test");
+        let app_mut = Arc::get_mut(&mut app).expect("unique app state for SCCP fixture");
+        let state = Arc::get_mut(&mut app_mut.state).expect("unique core state for SCCP fixture");
         state.world.register_validator_pop_for_testing(
-            qc.validator_set[0].public_key().clone(),
-            validator_pop,
+            legacy_qc.validator_set[0].public_key().clone(),
+            legacy_validator_pop,
         );
-        state.insert_commit_qc_for_testing(block_hash, qc);
-        (app, message_id)
+        state.insert_commit_qc_for_testing(block_hash, legacy_qc);
+        assert!(
+            state.world.commit_qcs().get(&block_hash).is_some(),
+            "SCCP adversarial fixture retains a valid legacy QC"
+        );
+        (app, message_id, artifact)
     }
 
     #[tokio::test]
-    async fn sccp_bundle_and_recent_endpoints_use_authoritative_indexes() {
-        let (app, message_id) = app_with_indexed_sccp_message_for_test(1);
+    async fn sccp_bundle_endpoint_uses_exact_v2_artifact_and_authoritative_index() {
+        let (app, message_id, expected_artifact) = app_with_indexed_sccp_message_for_test(true);
         let message_id_hex = hex::encode(message_id);
         let bundle_response = routing::handle_v1_sccp_message_bundle(
-            app.state.as_ref(),
+            Arc::clone(&app.state),
             message_id_hex.clone(),
             None,
         )
@@ -59271,19 +59833,47 @@ pub(crate) mod tests_runtime_handlers {
             .expect("typed bundle JSON");
         assert_eq!(bundle.commitment.message_id, message_id);
         assert!(iroha_sccp::verify_message_bundle_structure(&bundle));
+        let verified_finality =
+            iroha_sccp::verified_sccp_message_taira_finality_proof_cryptographically_self_consistent(
+                &bundle,
+            )
+            .expect("bundle carries a cryptographically self-consistent exact-v2 proof");
+        assert_eq!(verified_finality.finality_artifact, expected_artifact);
+
+        let request_error =
+            routing::handle_v1_sccp_proof_request(Arc::clone(&app.state), message_id_hex, None)
+                .await
+                .expect_err("proof request must require its historical governed route");
+        let Error::Query(ValidationFail::InternalError(message)) = request_error else {
+            panic!("unexpected missing-route error: {request_error}");
+        };
+        assert!(message.contains("retained destination binding"));
+    }
+
+    #[tokio::test]
+    async fn sccp_recent_endpoint_never_reads_or_verifies_finality_sidecars() {
+        let (app, message_id, _) = app_with_indexed_sccp_message_for_test(false);
+        let message_id_hex = hex::encode(message_id);
+        let sidecar = app
+            .kura
+            .store_root()
+            .join("blocks")
+            .join("v2_finality")
+            .join("00000000000000000001.norito");
+        assert!(!sidecar.exists(), "fixture starts without finality sidecar");
 
         let recent_response = routing::handle_v1_sccp_messages_recent(
-            app.state.as_ref(),
+            Arc::clone(&app.state),
             crate::NoritoQuery(routing::HistoryWindowQuery::default()),
             None,
         )
         .await
-        .expect("indexed recent response");
-        let recent_bytes = axum::body::to_bytes(recent_response.into_body(), usize::MAX)
+        .expect("recent metadata does not require finality");
+        let recent_before = axum::body::to_bytes(recent_response.into_body(), usize::MAX)
             .await
             .expect("recent body");
         let recent =
-            norito::json::from_slice::<norito::json::Value>(&recent_bytes).expect("recent JSON");
+            norito::json::from_slice::<norito::json::Value>(&recent_before).expect("recent JSON");
         let item = recent
             .get("items")
             .and_then(norito::json::Value::as_array)
@@ -59303,14 +59893,139 @@ pub(crate) mod tests_runtime_handlers {
         assert!(links.contains_key("bundle_path"));
         assert!(links.contains_key("proof_request_path"));
 
-        let request_error =
-            routing::handle_v1_sccp_proof_request(app.state.as_ref(), message_id_hex, None)
-                .await
-                .expect_err("proof request must require its historical governed route");
-        let Error::Query(ValidationFail::InternalError(message)) = request_error else {
-            panic!("unexpected missing-route error: {request_error}");
-        };
-        assert!(message.contains("retained destination binding"));
+        assert!(
+            matches!(
+                routing::handle_v1_sccp_message_bundle(
+                    Arc::clone(&app.state),
+                    message_id_hex.clone(),
+                    None,
+                )
+                .await,
+                Err(Error::Query(ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::NotFound
+                )))
+            ),
+            "a valid legacy QC must not substitute for a missing exact-v2 artifact"
+        );
+
+        std::fs::create_dir_all(sidecar.parent().expect("sidecar directory"))
+            .expect("create adversarial finality directory");
+        std::fs::write(&sidecar, b"malformed-finality-sidecar")
+            .expect("write adversarial finality sidecar");
+        let recent_response = routing::handle_v1_sccp_messages_recent(
+            Arc::clone(&app.state),
+            crate::NoritoQuery(routing::HistoryWindowQuery::default()),
+            None,
+        )
+        .await
+        .expect("malformed finality remains outside recent metadata path");
+        let recent_after = axum::body::to_bytes(recent_response.into_body(), usize::MAX)
+            .await
+            .expect("recent body after sidecar corruption");
+        assert_eq!(recent_after, recent_before);
+
+        assert!(matches!(
+            routing::handle_v1_sccp_message_bundle(app.state.clone(), message_id_hex, None).await,
+            Err(Error::Query(ValidationFail::InternalError(_)))
+        ));
+    }
+
+    #[tokio::test]
+    async fn finality_and_sccp_proof_routes_require_heavy_query_admission() {
+        let mut app = mk_app_state_for_tests();
+        let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
+        app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+        app_mut.query_queue_timeout = Duration::from_millis(1);
+        let message_id = "11".repeat(32);
+
+        let errors = [
+            handler_bridge_finality_proof(
+                State(app.clone()),
+                axum::extract::Path(1),
+                HeaderMap::new(),
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect_err("finality proof must acquire heavy admission"),
+            handler_bridge_finality_bundle(
+                State(app.clone()),
+                axum::extract::Path(1),
+                HeaderMap::new(),
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect_err("finality bundle must acquire heavy admission"),
+            handler_sccp_message_proof(
+                State(app.clone()),
+                axum::extract::Path(message_id.clone()),
+                axum::extract::RawQuery(None),
+                HeaderMap::new(),
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect_err("SCCP message proof must acquire heavy admission"),
+            handler_sccp_proof_request(
+                State(app.clone()),
+                axum::extract::Path(message_id),
+                axum::extract::RawQuery(None),
+                HeaderMap::new(),
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect_err("SCCP proof request must acquire heavy admission"),
+            handler_sccp_messages_recent(
+                State(app),
+                crate::NoritoQuery(routing::HistoryWindowQuery::default()),
+                axum::extract::RawQuery(None),
+                HeaderMap::new(),
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect_err("SCCP recent query must acquire heavy admission"),
+        ];
+        for error in errors {
+            assert!(
+                matches!(
+                    error,
+                    Error::Query(ValidationFail::QueryFailed(
+                        iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+                    ))
+                ),
+                "unexpected heavy-admission error: {error}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn finality_rate_weight_rejects_cost_above_burst_without_throttling_light_registry() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique Torii app fixture")
+            .rate_limiter = limits::RateLimiter::new(Some(1), Some(7));
+
+        let finality_error = handler_bridge_finality_proof(
+            State(app.clone()),
+            axum::extract::Path(1),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+        )
+        .await
+        .expect_err("eight-token finality query must exceed seven-token burst");
+        assert!(matches!(
+            finality_error,
+            Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+            ))
+        ));
+
+        handler_sccp_registry(
+            State(app),
+            axum::extract::RawQuery(None),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+        )
+        .await
+        .expect("one-token SCCP registry read remains available");
     }
 
     #[tokio::test]
