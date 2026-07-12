@@ -552,13 +552,8 @@ mod tests {
             "xor".parse::<Name>().expect("asset name"),
         );
         let (destination, _) = gen_account_in(&format!("{label}-destination"));
-        let instruction: InstructionBox = OpenAssetLock::new(
-            escrow_id,
-            asset_definition,
-            destination,
-            iroha_primitives::numeric::Numeric::from(20_u64),
-        )
-        .into();
+        let instruction: InstructionBox =
+            OpenAssetLock::new(escrow_id, asset_definition, destination, 20_u64).into();
         record_with_instruction(label, instruction)
     }
 

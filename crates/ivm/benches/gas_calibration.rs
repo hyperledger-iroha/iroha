@@ -298,7 +298,7 @@ fn bench_numeric_limb_work(c: &mut Criterion) {
         .parse()
         .expect("scale-28 decimal");
     let comparison_work =
-        ivm::numeric_gas::aligned_work(8, 28, 10, 1, 0, 1).expect("bounded scale-alignment work");
+        ivm::numeric_gas::aligned_work(511, 28, 10, 1, 0, 1).expect("bounded scale-alignment work");
     group.bench_with_input(
         BenchmarkId::new(
             "decimal_compare",

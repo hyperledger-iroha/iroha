@@ -2,13 +2,14 @@
 title: Contract Deployment (.to) — API & Workflow
 ---
 
-Status: implemented and exercised by Torii, CLI, and core admission tests (May 2026).
+Status: implemented and exercised by Torii, CLI, and core admission tests (July 2026).
 
 ## Overview
 
-- Deploy compiled IVM bytecode (`.to`) by submitting it to Torii or by issuing
-  `RegisterSmartContractCode`/`RegisterSmartContractBytes` instructions
-  directly.
+- Deploy compiled IVM bytecode (`.to`) through the bounded native upload
+  protocol used by Torii and the CLI. `RegisterSmartContractBytes` remains a
+  low-level atomic instruction for callers that already operate within a
+  bounded transaction envelope.
 - Contract `.to` artifacts are self-describing: the required `CNTR` section
   embeds the contract interface ahead of the executable stream, and Torii
   derives the on-chain `ContractManifest` from that section after verification.
@@ -39,6 +40,45 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (May 2
 - Retention is unbounded: manifests and code remain available until explicitly
   removed in a future governance workflow. There is no TTL or automatic GC.
 
+## Native chunk upload lifecycle
+
+User-facing deployment splits every artifact into fixed 65,536-byte chunks.
+The consensus API consists of:
+
+- `UploadSmartContractCodeChunk { code_hash, total_size, chunk_index,
+  chunk_count, chunk }`;
+- `FinalizeSmartContractCodeUpload { code_hash, total_size, chunk_count }`; and
+- `CancelSmartContractCodeUpload { code_hash }`.
+
+Pending uploads are owned by `(authority, code_hash)` and survive ordinary
+state snapshots and tiered-state restoration. The descriptor must use the
+exact ceiling chunk count for `total_size`; every non-final chunk is exactly
+65,536 bytes and the final chunk has the exact remaining length. Checked
+integer conversions reject unrepresentable sizes or indices. An authority may
+have at most four pending uploads, and the sum of their declared sizes may not
+exceed that authority's current `max_contract_code_bytes` cap. A parameter
+update that would lower the cap below any authority's pending declared total is
+rejected before changing configuration. The configured cap and each declared
+artifact are also bounded at 2,147,483,647 bytes so descriptor acceptance is
+identical on supported 32-bit and 64-bit peers.
+
+Chunks may arrive out of order. Replaying the same bytes at the same index is
+idempotent, while changing a descriptor or replaying an index with different
+bytes is rejected. Finalization requires every index, rebuilds bytes in index
+order, and rechecks the exact size, domain-separated code hash, IVM/CNTR
+artifact, cycle ceiling, and current code-size cap. It then registers through
+the same atomic helper as `RegisterSmartContractBytes` and removes the pending
+upload. A failed finalization keeps all staged chunks so the caller can retry
+after correcting the missing prerequisite. `CancelSmartContractCodeUpload` is
+owner-scoped, idempotent cleanup.
+
+Safe retry behavior follows directly from those rules: resend any uncertain
+chunk unchanged, inspect or wait for committed progress, then retry
+finalization. Cancel only when the artifact should be abandoned; another
+authority cannot cancel or overwrite the owner's upload. This is a
+first-release state format, so nodes do not migrate snapshots containing the
+retired IVM state-staging scheme.
+
 ## Admission pipeline
 
 - Contract deployment parses the artifact, requires IVM `1.1`, requires the
@@ -61,13 +101,36 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (May 2
   - Request body: `DeployContractDto` (see `docs/source/torii_contracts_api.md` for field details).
   - Torii decodes the base64 payload, verifies the embedded `CNTR` interface,
     derives the manifest from the artifact itself, allocates a fresh immutable
-    `contract_address`, binds the requested stable `contract_alias` to that
-    address, prepends a domainless self-registration for the authority, and
-    submits the resulting transaction on behalf of the caller.
+    `contract_address`, and executes the native chunk plan on behalf of the
+    caller. For multi-chunk artifacts it commits the first upload together with
+    any required domainless authority bootstrap, submits the remaining
+    pre-stage chunks in order, and waits until their committed progress is
+    visible before admitting the final transaction. That final transaction
+    uploads the last chunk, finalizes code registration, registers the
+    manifest, activates the instance, and binds the requested alias.
+  - When the signing authority does not exist at transaction start, its first
+    deployment transaction begins with the exact ordered prefix
+    `Register<Account>(self)`, `Grant<CanRegisterSmartContractCode>(self)`,
+    then either `UploadSmartContractCodeChunk` or, for matching code already
+    stored on-chain, `RegisterSmartContractCode`. The default executor permits
+    this one atomic deployment bootstrap only for an absent transaction
+    authority. It does not permit an existing account to self-grant, a grant to
+    another account, a differently encoded permission, or a reordered prefix.
+    For a one-chunk artifact this prefix, chunk upload, finalization, manifest
+    registration, and activation all occur in the final transaction.
+  - Matching code already present under `code_hash` skips the upload stages.
+    The final transaction still registers the manifest and activates/binds the
+    new instance; for a missing authority it uses the manifest form of the
+    bootstrap prefix above. A rejected stage fails immediately. A progress
+    timeout reports expected and observed committed chunks while retaining
+    resumable pending state.
   - Redeploying the same `contract_alias` performs an in-place `kaizen`/`改善`:
     Torii deploys a new address, rebinds the alias atomically, and deactivates
     the previous address.
-  - Response: `DeployContractBundleReceiptDto` with bundle metadata plus one entry in `contracts[]` for this single-contract shortcut.
+  - Response: `DeployContractBundleReceiptDto` with bundle metadata plus one
+    entry in `contracts[]` for this single-contract shortcut. Every contract
+    receipt contains required `upload_stage_tx_hashes`; `tx_hash_hex` is the
+    final deployment transaction hash.
   - Errors: invalid base64, invalid contract artifact, size cap exceeded,
     governance gating for protected namespaces, or fee/balance failures.
 - `GET /v1/contracts/code/{code_hash}`
@@ -122,6 +185,16 @@ returns HTTP 429; any handler error increments
 
 - `iroha contract deploy --authority <id> --private-key <hex> --code-file <path> --contract-alias <name::dataspace>`
   submits the alias-first Torii deploy request (computing hashes on the fly).
+- `ivm_contract_deploy` uses the same native plan in blocking and emit modes.
+  Transactions 1 through N-1 each carry one chunk; the final registration
+  transaction carries chunk N plus finalization. Manifest registration and
+  activation remain separate transactions. Emit mode names files
+  `register-bytes-chunk-NNNN-of-NNNN`, `register-bytes-finalize`,
+  `register-manifest`, and `activate` in submission order. Its JSON reports
+  `register_bytes_tx_strategy = "native_chunks"`, chunk size/count,
+  `register_bytes_stage_tx_hashes`, and the finalization hash in
+  `register_bytes_tx_hash`. `--skip-register-bytes` omits the complete
+  upload/finalize sequence.
 - `iroha contract manifest build --code-file <path> [--sign-with <hex>]` computes
   `code_hash`/`abi_hash` for compiled `.to`, derives the manifest from the
   embedded `CNTR`, and optionally signs it for inspection, printing JSON or
@@ -139,13 +212,20 @@ returns HTTP 429; any handler error increments
 
 ## Testing & coverage
 
-- Unit tests under `crates/iroha_core/tests/contract_code_bytes.rs` cover code
-  storage, idempotency, and the size cap.
+- Unit tests under `crates/iroha_core/tests/contract_code_bytes.rs` cover shape,
+  quota, authorization, out-of-order and duplicate handling, missing/corrupt
+  chunks, hash/artifact failure retention, direct-registration races,
+  cancellation, event emission, cleanup, and cap enforcement. State tests
+  cover snapshot and tiered restoration of partial uploads.
 - `crates/iroha_core/tests/gov_enact_deploy.rs` validates manifest insertion via
   enactment, and `crates/iroha_core/tests/gov_protected_gate.rs` exercises
   protected-namespace admission end-to-end.
-- Torii routes include request/response unit tests, and the CLI commands have
-  integration tests ensuring JSON round-trips remain stable.
+- Kura has a two-lane interrupted-`FilesApplied` restart regression for exact
+  path rollback and chain preservation. CLI tests cover multi-MiB bounded
+  transactions, one-chunk and skip behavior, stable metadata, and ordered emit
+  files. Torii tests cover bounded plans, bootstrap, committed progress,
+  rejection, timeout retention, registered-code skips, and required receipt
+  fields.
 
 Refer to `docs/source/governance_api.md` for detailed referendum payloads and
 ballot workflows.

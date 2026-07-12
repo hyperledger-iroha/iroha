@@ -48,7 +48,7 @@ use iroha::{
         },
         parameter::{BlockParameter, Parameter, SumeragiParameter, system::SumeragiNposParameters},
         peer::PeerId,
-        prelude::{FindAccountById, FindAssetById, Numeric},
+        prelude::{FindAccountById, FindAssetById, Numeric, Quantity},
         ram_lfe::{
             RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
             RamLfeProgramId, RamLfeProgramPolicy, RamLfeReceiptAttestation,
@@ -1184,7 +1184,7 @@ fn verify_realistic_transfer_balances(
             account.id.clone(),
         )))?;
         ensure!(
-            *asset.value() == Numeric::from(expected_balance),
+            *asset.value() == Quantity::from(expected_balance),
             "unexpected final transfer balance for {}: expected {}, got {:?}",
             account.id,
             expected_balance,

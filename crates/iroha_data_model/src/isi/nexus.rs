@@ -5,7 +5,7 @@ use crate::{
     nexus::{FeeSponsorPolicy, FeeSponsorPolicyId, LaneId, LaneRelayEnvelope, ProofBlob},
     peer::PeerId,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 isi! {
     /// Set or clear emergency validator peers used for lane relay quorum recovery.
@@ -61,7 +61,7 @@ iroha_data_model_derive::model_single! {
         /// Fee asset selector used for the verified balance, fixed operationally to public XOR.
         pub fee_asset_id: String,
         /// Verified public Nexus balance for the sponsor and fee asset.
-        pub verified_balance: Numeric,
+        pub verified_balance: Quantity,
         /// Manifest root committed by the balance proof.
         pub manifest_root: [u8; 32],
         /// FASTPQ/AXT proof blob used to verify the public balance claim.
@@ -248,7 +248,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterVerifiedNexusFeeBudget {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
-        let verified_balance = super::decode_aos_canonical_field::<Numeric>(
+        let verified_balance = super::decode_aos_canonical_field::<Quantity>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
@@ -322,8 +322,8 @@ mod tests {
     use std::num::NonZeroU64;
 
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_primitives::numeric::Quantity;
-    use norito::codec::Encode;
+    use iroha_primitives::numeric::{Numeric, Quantity};
+    use norito::codec::{Decode, Encode};
     use norito::core::DecodeFromSlice;
 
     use super::*;
@@ -333,6 +333,15 @@ mod tests {
             FeeSponsorPolicy, FeeSponsorPolicyId, FeeSponsorRule, FeeSponsorRuleEffect, LaneId,
         },
     };
+
+    #[derive(Encode)]
+    struct ForgedRegisterVerifiedNexusFeeBudget {
+        sponsor_account_id: AccountId,
+        fee_asset_id: String,
+        verified_balance: Numeric,
+        manifest_root: [u8; 32],
+        proof_blob: ProofBlob,
+    }
 
     fn sample_commitment(height: u64) -> LaneBlockCommitment {
         LaneBlockCommitment {
@@ -420,7 +429,7 @@ mod tests {
         RegisterVerifiedNexusFeeBudget {
             sponsor_account_id: sponsor_account_id(),
             fee_asset_id: "xor#universal".to_owned(),
-            verified_balance: Numeric::from(10_u32),
+            verified_balance: Quantity::from(10_u32),
             manifest_root: [0x11; 32],
             proof_blob: sample_proof_blob(0x02),
         }
@@ -511,6 +520,23 @@ mod tests {
             policy: policy.clone(),
         });
         assert_slice_roundtrip(RemoveFeeSponsorPolicy { id: policy.id });
+    }
+
+    #[test]
+    fn negative_numeric_payload_cannot_decode_as_verified_nexus_balance() {
+        let forged = ForgedRegisterVerifiedNexusFeeBudget {
+            sponsor_account_id: sponsor_account_id(),
+            fee_asset_id: "xor#universal".to_owned(),
+            verified_balance: Numeric::new(-1_i32, 0),
+            manifest_root: [0x11; 32],
+            proof_blob: sample_proof_blob(0x02),
+        };
+        let encoded = forged.encode();
+
+        assert!(
+            RegisterVerifiedNexusFeeBudget::decode(&mut encoded.as_slice()).is_err(),
+            "a signed negative payload must not cross the verified-balance boundary"
+        );
     }
 
     #[test]

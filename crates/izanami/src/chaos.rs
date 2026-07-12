@@ -7933,7 +7933,7 @@ mod tests {
                             validator: validator.clone(),
                             peer_id: PeerId::new(key_pair.public_key().clone()),
                             stake_account: validator.clone(),
-                            initial_stake: Numeric::from(stake),
+                            initial_stake: iroha_primitives::numeric::Quantity::from(stake),
                             metadata: Metadata::default(),
                         }),
                     ),

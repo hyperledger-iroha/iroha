@@ -31,7 +31,7 @@ use iroha_data_model::{
         ManifestEntry, ManifestVersion, SmartContractId, UniversalAccountId,
     },
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use norito::json::{self, JsonDeserialize, JsonSerialize, Value as JsonValue};
 use reqwest::{
     blocking::Client as BlockingHttpClient,
@@ -616,7 +616,7 @@ impl ManifestScaffoldAllowArgs {
         };
         let allowance = Allowance {
             max_amount: match self.max_amount.as_deref() {
-                Some(value) => Some(parse_numeric_decimal(value, "--allow-max-amount")?),
+                Some(value) => Some(parse_quantity(value, "--allow-max-amount")?),
                 None => None,
             },
             window: parse_allowance_window(self.window.as_deref())?,
@@ -1183,10 +1183,10 @@ fn write_json<T: JsonSerialize>(path: &Path, value: &T) -> Result<()> {
     fs::write(path, bytes).wrap_err_with(|| format!("failed to write {}", path.display()))
 }
 
-fn parse_numeric_decimal(value: &str, flag: &str) -> Result<Numeric> {
+fn parse_quantity(value: &str, flag: &str) -> Result<Quantity> {
     value
-        .parse::<Numeric>()
-        .wrap_err_with(|| format!("{flag} must be a decimal number"))
+        .parse::<Quantity>()
+        .wrap_err_with(|| format!("{flag} must be a non-negative decimal quantity"))
 }
 
 fn parse_allowance_window(value: Option<&str>) -> Result<AllowanceWindow> {
@@ -1206,6 +1206,18 @@ fn parse_allowance_window(value: Option<&str>) -> Result<AllowanceWindow> {
                 }
             },
         )
+}
+
+#[cfg(test)]
+mod quantity_tests {
+    use super::*;
+
+    #[test]
+    fn allowance_cap_parser_rejects_negative_quantity() {
+        let error = parse_quantity("-1", "--allow-max-amount")
+            .expect_err("negative manifest cap must fail");
+        assert!(error.to_string().contains("non-negative decimal quantity"));
+    }
 }
 
 fn opt_program(value: Option<&str>, flag: &str) -> Result<Option<SmartContractId>> {

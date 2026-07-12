@@ -13,6 +13,7 @@ use iroha_data_model::{
     },
     prelude::*,
 };
+use iroha_primitives::numeric::Quantity;
 
 use super::prelude::*;
 
@@ -86,16 +87,9 @@ fn write_account_record(
     Ok(())
 }
 
-fn ensure_non_zero(value: &Numeric, label: &str) -> Result<(), Error> {
-    if value.is_zero() || value.mantissa().is_negative() {
+fn ensure_quantity_non_zero(value: &Quantity, label: &str) -> Result<(), Error> {
+    if value.is_zero() {
         return Err(invalid(format!("{label} must be greater than zero")));
-    }
-    Ok(())
-}
-
-fn ensure_non_negative(value: &Numeric, label: &str) -> Result<(), Error> {
-    if value.mantissa().is_negative() {
-        return Err(invalid(format!("{label} must be non-negative")));
     }
     Ok(())
 }
@@ -155,8 +149,8 @@ impl Execute for SubmitDefiIntent {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        ensure_non_zero(&self.amount_in, "intent amount_in")?;
-        ensure_non_zero(&self.min_out, "intent min_out")?;
+        ensure_quantity_non_zero(&self.amount_in, "intent amount_in")?;
+        ensure_quantity_non_zero(&self.min_out, "intent min_out")?;
         ensure_bps(self.solver_fee_bps, "solver fee")?;
         state_transaction
             .world
@@ -213,7 +207,7 @@ impl Execute for SettleDefiIntent {
         if &self.solver != authority {
             return Err(invalid("intent settlement solver must match authority"));
         }
-        ensure_non_zero(&self.amount_out, "intent amount_out")?;
+        ensure_quantity_non_zero(&self.amount_out, "intent amount_out")?;
         state_transaction.world.account(&self.owner)?;
         state_transaction.world.account(&self.solver)?;
         ensure_terminal_status(&self.status)?;
@@ -274,7 +268,7 @@ impl Execute for RecordDefiVaultRequest {
         if &self.account != authority {
             return Err(invalid("vault request account must match authority"));
         }
-        ensure_non_zero(&self.amount, "vault request amount")?;
+        ensure_quantity_non_zero(&self.amount, "vault request amount")?;
         state_transaction.world.account(&self.account)?;
         let key = metadata_key("vault_request", &self.request_id)?;
         ensure_account_record_missing(
@@ -307,7 +301,7 @@ impl Execute for RegisterDefiOperator {
         if &self.operator != authority {
             return Err(invalid("operator registration must match authority"));
         }
-        ensure_non_zero(&self.min_bond, "operator min_bond")?;
+        ensure_quantity_non_zero(&self.min_bond, "operator min_bond")?;
         state_transaction.world.asset_definition(&self.bond_asset)?;
         let key = metadata_key("operator_registration", &self.service)?;
         ensure_account_record_missing(state_transaction, &self.operator, &key, "DeFi operator")?;
@@ -335,7 +329,6 @@ impl Execute for RecordDefiOperatorHeartbeat {
             return Err(invalid("operator heartbeat must match authority"));
         }
         ensure_bps(self.health_bps, "operator health")?;
-        ensure_non_negative(&self.fees_accrued, "operator fees_accrued")?;
         write_account_record(
             state_transaction,
             self.operator.clone(),
@@ -380,8 +373,8 @@ impl Execute for RecordDefiHookExecution {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        ensure_non_zero(&self.amount_in, "hook amount_in")?;
-        ensure_non_zero(&self.amount_out, "hook amount_out")?;
+        ensure_quantity_non_zero(&self.amount_in, "hook amount_in")?;
+        ensure_quantity_non_zero(&self.amount_out, "hook amount_out")?;
         let key = metadata_key("amm_hook_execution", &self.order_id)?;
         ensure_account_record_missing(state_transaction, authority, &key, "DeFi hook execution")?;
         write_account_record(
@@ -489,8 +482,7 @@ impl Execute for ReportDefiRwaNav {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        ensure_non_zero(&self.nav_per_share, "rwa nav_per_share")?;
-        ensure_non_negative(&self.total_shares, "rwa total_shares")?;
+        ensure_quantity_non_zero(&self.nav_per_share, "rwa nav_per_share")?;
         write_account_record(
             state_transaction,
             authority.clone(),
@@ -533,10 +525,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defi_quantity_guards_reject_negative_values() {
-        let negative = Numeric::new(-1_i32, 0);
-        assert!(ensure_non_zero(&negative, "amount").is_err());
-        assert!(ensure_non_negative(&negative, "amount").is_err());
-        assert!(ensure_non_negative(&Numeric::zero(), "amount").is_ok());
+    fn defi_quantity_guards_reject_invalid_values() {
+        assert!(ensure_quantity_non_zero(&Quantity::zero(), "amount").is_err());
+        assert!(ensure_quantity_non_zero(&Quantity::one(), "amount").is_ok());
     }
 }

@@ -847,11 +847,11 @@ mod tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: asset,
-            amount: Numeric::from(u32::from(seed) + 1),
-            from_balance_before: Numeric::from(100u32 + u32::from(seed)),
-            from_balance_after: Numeric::from(95u32 + u32::from(seed)),
-            to_balance_before: Numeric::from(u32::from(seed)),
-            to_balance_after: Numeric::from(5u32 + u32::from(seed)),
+            amount: Quantity::from(u32::from(seed) + 1),
+            from_balance_before: Quantity::from(100u32 + u32::from(seed)),
+            from_balance_after: Quantity::from(95u32 + u32::from(seed)),
+            to_balance_before: Quantity::from(u32::from(seed)),
+            to_balance_after: Quantity::from(5u32 + u32::from(seed)),
             from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
@@ -1546,7 +1546,6 @@ mod tests {
             asset::id::AssetDefinitionId,
             fastpq::{TransferDeltaTranscript, TransferTranscript},
         };
-        use iroha_primitives::numeric::Numeric;
         use iroha_test_samples::{ALICE_ID, BOB_ID};
 
         let _guard = exec_witness_guard();
@@ -1559,11 +1558,11 @@ mod tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: asset,
-            amount: Numeric::from(5u32),
-            from_balance_before: Numeric::from(100u32),
-            from_balance_after: Numeric::from(95u32),
-            to_balance_before: Numeric::from(0u32),
-            to_balance_after: Numeric::from(5u32),
+            amount: Quantity::from(5u32),
+            from_balance_before: Quantity::from(100u32),
+            from_balance_after: Quantity::from(95u32),
+            to_balance_before: Quantity::from(0u32),
+            to_balance_after: Quantity::from(5u32),
             from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
@@ -1598,7 +1597,6 @@ mod tests {
             asset::id::AssetDefinitionId,
             fastpq::{TransferDeltaTranscript, TransferTranscript},
         };
-        use iroha_primitives::numeric::Numeric;
         use iroha_test_samples::{ALICE_ID, BOB_ID};
 
         let _guard = exec_witness_guard();
@@ -1611,11 +1609,11 @@ mod tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: asset,
-            amount: Numeric::from(5u32),
-            from_balance_before: Numeric::from(100u32),
-            from_balance_after: Numeric::from(95u32),
-            to_balance_before: Numeric::from(0u32),
-            to_balance_after: Numeric::from(5u32),
+            amount: Quantity::from(5u32),
+            from_balance_before: Quantity::from(100u32),
+            from_balance_after: Quantity::from(95u32),
+            to_balance_before: Quantity::from(0u32),
+            to_balance_after: Quantity::from(5u32),
             from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
@@ -1651,7 +1649,6 @@ mod tests {
             asset::id::AssetDefinitionId,
             fastpq::{TransferDeltaTranscript, TransferTranscript},
         };
-        use iroha_primitives::numeric::Numeric;
         use iroha_test_samples::{ALICE_ID, BOB_ID};
 
         let _guard = exec_witness_guard();
@@ -1664,11 +1661,11 @@ mod tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: asset,
-            amount: Numeric::from(5u32),
-            from_balance_before: Numeric::from(100u32),
-            from_balance_after: Numeric::from(95u32),
-            to_balance_before: Numeric::from(0u32),
-            to_balance_after: Numeric::from(5u32),
+            amount: Quantity::from(5u32),
+            from_balance_before: Quantity::from(100u32),
+            from_balance_after: Quantity::from(95u32),
+            to_balance_before: Quantity::from(0u32),
+            to_balance_after: Quantity::from(5u32),
             from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };

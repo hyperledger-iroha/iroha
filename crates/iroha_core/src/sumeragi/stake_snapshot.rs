@@ -9,7 +9,7 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use iroha_logger::prelude::*;
-use iroha_primitives::numeric::{Numeric, NumericSpec};
+use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 
@@ -23,7 +23,7 @@ pub struct CommitStakeSnapshotEntry {
     /// Peer identifier for the validator.
     pub peer_id: PeerId,
     /// Total stake attributed to the validator.
-    pub stake: Numeric,
+    pub stake: Quantity,
 }
 
 /// Stake snapshot aligned to a commit roster.
@@ -103,9 +103,13 @@ pub fn stake_quorum_reached_for_world_with_active_lanes(
     let signed = selected_stake_for_roster(roster, signers, &stake_map)?;
 
     let signed_scaled = signed
+        .as_numeric()
+        .clone()
         .checked_mul(Numeric::from(3_u64), NumericSpec::default())
         .ok_or(StakeQuorumError::Overflow)?;
     let total_scaled = total
+        .as_numeric()
+        .clone()
         .checked_mul(Numeric::from(2_u64), NumericSpec::default())
         .ok_or(StakeQuorumError::Overflow)?;
     Ok(signed_scaled > total_scaled)
@@ -136,10 +140,12 @@ pub fn stake_coverage_bps_for_world_with_active_lanes(
     let selected = selected_stake_for_roster(roster, signers, &stake_map)?;
 
     let selected_scaled = selected
+        .as_numeric()
+        .clone()
         .checked_mul(Numeric::from(10_000_u64), NumericSpec::unconstrained())
         .ok_or(StakeQuorumError::Overflow)?;
     let bps = selected_scaled
-        .checked_div(total, NumericSpec::integer())
+        .checked_div(total.as_numeric().clone(), NumericSpec::integer())
         .and_then(|numeric| numeric.try_mantissa_u128())
         .ok_or(StakeQuorumError::Overflow)?;
     Ok(bps.min(10_000) as u16)
@@ -151,7 +157,7 @@ pub(super) fn signed_stake_for_world_with_active_lanes(
     roster: &[PeerId],
     signers: &BTreeSet<PeerId>,
     active_lane_ids: Option<&BTreeSet<LaneId>>,
-) -> Result<Numeric, StakeQuorumError> {
+) -> Result<Quantity, StakeQuorumError> {
     let stake_map = stake_map_for_roster(world, roster, active_lane_ids);
     selected_stake_for_roster(roster, signers, &stake_map)
 }
@@ -160,7 +166,7 @@ fn stake_map_for_roster(
     world: &impl WorldReadOnly,
     roster: &[PeerId],
     active_lane_ids: Option<&BTreeSet<LaneId>>,
-) -> BTreeMap<PeerId, Numeric> {
+) -> BTreeMap<PeerId, Quantity> {
     let fallback_stake = fallback_stake_for_world(world);
     let mut stake_map = stake_map_from_world_with_active_lanes(world, active_lane_ids);
     if stake_map.is_empty() {
@@ -188,16 +194,16 @@ fn stake_map_for_roster(
 
 fn total_stake_for_roster(
     roster: &[PeerId],
-    stake_map: &BTreeMap<PeerId, Numeric>,
-) -> Result<Numeric, StakeQuorumError> {
-    let mut total = Numeric::from(0_u64);
+    stake_map: &BTreeMap<PeerId, Quantity>,
+) -> Result<Quantity, StakeQuorumError> {
+    let mut total = Quantity::zero();
     for peer in roster {
         let Some(stake) = stake_map.get(peer) else {
             return Err(StakeQuorumError::MissingStake);
         };
         total = total
-            .checked_add(stake.clone())
-            .ok_or(StakeQuorumError::Overflow)?;
+            .checked_add(stake)
+            .map_err(|_| StakeQuorumError::Overflow)?;
     }
     Ok(total)
 }
@@ -205,10 +211,10 @@ fn total_stake_for_roster(
 fn selected_stake_for_roster(
     roster: &[PeerId],
     signers: &BTreeSet<PeerId>,
-    stake_map: &BTreeMap<PeerId, Numeric>,
-) -> Result<Numeric, StakeQuorumError> {
+    stake_map: &BTreeMap<PeerId, Quantity>,
+) -> Result<Quantity, StakeQuorumError> {
     let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
-    let mut signed = Numeric::from(0_u64);
+    let mut signed = Quantity::zero();
     for peer in signers {
         if !roster_set.contains(peer) {
             return Err(StakeQuorumError::SignerOutOfRoster);
@@ -217,8 +223,8 @@ fn selected_stake_for_roster(
             return Err(StakeQuorumError::MissingStake);
         };
         signed = signed
-            .checked_add(stake.clone())
-            .ok_or(StakeQuorumError::Overflow)?;
+            .checked_add(stake)
+            .map_err(|_| StakeQuorumError::Overflow)?;
     }
     Ok(signed)
 }
@@ -242,7 +248,7 @@ pub fn stake_quorum_reached_for_snapshot(
     if !snapshot.matches_roster(roster) {
         return Err(StakeQuorumError::SnapshotMismatch);
     }
-    let mut stake_map: BTreeMap<PeerId, Numeric> = BTreeMap::new();
+    let mut stake_map: BTreeMap<PeerId, Quantity> = BTreeMap::new();
     for entry in &snapshot.entries {
         let entry_stake = stake_map
             .entry(entry.peer_id.clone())
@@ -253,20 +259,20 @@ pub fn stake_quorum_reached_for_snapshot(
     }
 
     let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
-    let mut total = Numeric::from(0_u64);
+    let mut total = Quantity::zero();
     for peer in roster {
         let Some(stake) = stake_map.get(peer) else {
             return Err(StakeQuorumError::MissingStake);
         };
         total = total
-            .checked_add(stake.clone())
-            .ok_or(StakeQuorumError::Overflow)?;
+            .checked_add(stake)
+            .map_err(|_| StakeQuorumError::Overflow)?;
     }
     if total.is_zero() {
         return Err(StakeQuorumError::ZeroTotal);
     }
 
-    let mut signed = Numeric::from(0_u64);
+    let mut signed = Quantity::zero();
     for peer in signers {
         if !roster_set.contains(peer) {
             return Err(StakeQuorumError::SignerOutOfRoster);
@@ -275,14 +281,18 @@ pub fn stake_quorum_reached_for_snapshot(
             return Err(StakeQuorumError::MissingStake);
         };
         signed = signed
-            .checked_add(stake.clone())
-            .ok_or(StakeQuorumError::Overflow)?;
+            .checked_add(stake)
+            .map_err(|_| StakeQuorumError::Overflow)?;
     }
 
     let signed_scaled = signed
+        .as_numeric()
+        .clone()
         .checked_mul(Numeric::from(3_u64), NumericSpec::default())
         .ok_or(StakeQuorumError::Overflow)?;
     let total_scaled = total
+        .as_numeric()
+        .clone()
         .checked_mul(Numeric::from(2_u64), NumericSpec::default())
         .ok_or(StakeQuorumError::Overflow)?;
     Ok(signed_scaled > total_scaled)
@@ -291,7 +301,7 @@ pub fn stake_quorum_reached_for_snapshot(
 /// Build a stake map keyed by peer id using the largest stake seen per peer.
 #[cfg(test)]
 #[must_use]
-pub(super) fn stake_map_from_world(world: &impl WorldReadOnly) -> BTreeMap<PeerId, Numeric> {
+pub(super) fn stake_map_from_world(world: &impl WorldReadOnly) -> BTreeMap<PeerId, Quantity> {
     stake_map_from_world_with_active_lanes(world, None)
 }
 
@@ -300,8 +310,8 @@ pub(super) fn stake_map_from_world(world: &impl WorldReadOnly) -> BTreeMap<PeerI
 pub(super) fn stake_map_from_world_with_active_lanes(
     world: &impl WorldReadOnly,
     active_lane_ids: Option<&BTreeSet<LaneId>>,
-) -> BTreeMap<PeerId, Numeric> {
-    let mut stake_map: BTreeMap<PeerId, Numeric> = BTreeMap::new();
+) -> BTreeMap<PeerId, Quantity> {
+    let mut stake_map: BTreeMap<PeerId, Quantity> = BTreeMap::new();
     for (key, record) in world.public_lane_validators().iter() {
         if !public_lane_validator_record_matches_key(key, record) {
             continue;
@@ -314,11 +324,12 @@ pub(super) fn stake_map_from_world_with_active_lanes(
             continue;
         }
         let peer_id = record.peer_id.clone();
+        let total_stake = &record.total_stake;
         let entry = stake_map
             .entry(peer_id)
-            .or_insert_with(|| record.total_stake.clone());
-        if record.total_stake > *entry {
-            *entry = record.total_stake.clone();
+            .or_insert_with(|| total_stake.clone());
+        if total_stake > &*entry {
+            *entry = total_stake.clone();
         }
     }
     stake_map
@@ -352,8 +363,7 @@ pub(crate) fn strict_v2_voting_roster(
         let stake = stake_map
             .get(validator)
             .ok_or(StrictV2StakeSnapshotError::MissingStake)?
-            .clone()
-            .trim_trailing_zeros();
+            .as_numeric();
         if stake.scale() != 0 {
             return Err(StrictV2StakeSnapshotError::FractionalStake);
         }
@@ -396,17 +406,17 @@ pub(crate) enum StrictV2StakeSnapshotError {
     PowerOutOfRange,
 }
 
-pub(super) fn fallback_stake_for_world(world: &impl WorldReadOnly) -> Numeric {
+pub(super) fn fallback_stake_for_world(world: &impl WorldReadOnly) -> Quantity {
     let min_self_bond = world
         .sumeragi_npos_parameters()
         .map_or(1, |params| params.min_self_bond);
-    Numeric::from(min_self_bond.max(1))
+    Quantity::from(min_self_bond.max(1))
 }
 
 pub(super) fn commit_stake_snapshot_from_map(
     roster: &[PeerId],
-    stake_map: &BTreeMap<PeerId, Numeric>,
-    fallback_stake: &Numeric,
+    stake_map: &BTreeMap<PeerId, Quantity>,
+    fallback_stake: &Quantity,
 ) -> Option<CommitStakeSnapshot> {
     if roster.is_empty() {
         return None;
@@ -462,7 +472,7 @@ mod tests {
         nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
         prelude::PeerId,
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::{Numeric, Quantity};
 
     use super::*;
     use crate::{
@@ -471,12 +481,31 @@ mod tests {
         state::{State, World},
     };
 
+    #[derive(Encode)]
+    struct ForgedCommitStakeSnapshotEntry {
+        peer_id: PeerId,
+        stake: Numeric,
+    }
+
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("stake snapshot fixture key generation should succeed")
     }
 
     fn checked_random_peer_id() -> PeerId {
         PeerId::new(checked_random_keypair().public_key().clone())
+    }
+
+    #[test]
+    fn negative_numeric_payload_cannot_decode_as_durable_commit_stake() {
+        let forged = ForgedCommitStakeSnapshotEntry {
+            peer_id: checked_random_peer_id(),
+            stake: Numeric::new(-1_i32, 0),
+        };
+        let encoded = forged.encode();
+        assert!(
+            CommitStakeSnapshotEntry::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a durable commit stake"
+        );
     }
 
     fn active_validator_record(
@@ -490,8 +519,8 @@ mod tests {
             validator: account.clone(),
             peer_id: peer.clone(),
             stake_account: account.clone(),
-            total_stake: Numeric::new(stake, 0),
-            self_stake: Numeric::new(stake, 0),
+            total_stake: Quantity::from(stake),
+            self_stake: Quantity::from(stake),
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
             activation_epoch: None,
@@ -524,8 +553,8 @@ mod tests {
                     validator: account_a.clone(),
                     peer_id: peer_a.clone(),
                     stake_account: account_a.clone(),
-                    total_stake: Numeric::new(10, 0),
-                    self_stake: Numeric::new(10, 0),
+                    total_stake: Quantity::from(10_u64),
+                    self_stake: Quantity::from(10_u64),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_epoch: None,
@@ -540,8 +569,8 @@ mod tests {
                     validator: account_a.clone(),
                     peer_id: peer_a.clone(),
                     stake_account: account_a.clone(),
-                    total_stake: Numeric::new(25, 0),
-                    self_stake: Numeric::new(25, 0),
+                    total_stake: Quantity::from(25_u64),
+                    self_stake: Quantity::from(25_u64),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_epoch: None,
@@ -556,8 +585,8 @@ mod tests {
                     validator: account_b.clone(),
                     peer_id: peer_b.clone(),
                     stake_account: account_b.clone(),
-                    total_stake: Numeric::new(15, 0),
-                    self_stake: Numeric::new(15, 0),
+                    total_stake: Quantity::from(15_u64),
+                    self_stake: Quantity::from(15_u64),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_epoch: None,
@@ -572,8 +601,8 @@ mod tests {
                     validator: account_a.clone(),
                     peer_id: peer_a.clone(),
                     stake_account: account_a.clone(),
-                    total_stake: Numeric::new(9_000, 0),
-                    self_stake: Numeric::new(9_000, 0),
+                    total_stake: Quantity::from(9_000_u64),
+                    self_stake: Quantity::from(9_000_u64),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_epoch: None,
@@ -588,8 +617,8 @@ mod tests {
                     validator: account_a.clone(),
                     peer_id: peer_a.clone(),
                     stake_account: account_mismatched,
-                    total_stake: Numeric::new(8_000, 0),
-                    self_stake: Numeric::new(8_000, 0),
+                    total_stake: Quantity::from(8_000_u64),
+                    self_stake: Quantity::from(8_000_u64),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_epoch: None,
@@ -602,13 +631,13 @@ mod tests {
 
         let view = state.view();
         let stake_map = stake_map_from_world(view.world());
-        assert_eq!(stake_map.get(&peer_a), Some(&Numeric::new(25, 0)));
+        assert_eq!(stake_map.get(&peer_a), Some(&Quantity::from(25_u32)));
         assert_ne!(
             stake_map.get(&peer_a),
-            Some(&Numeric::new(9_000, 0)),
+            Some(&Quantity::from(9_000_u32)),
             "mismatched key/record lane rows must not inflate stake"
         );
-        assert_eq!(stake_map.get(&peer_b), Some(&Numeric::new(15, 0)));
+        assert_eq!(stake_map.get(&peer_b), Some(&Quantity::from(15_u32)));
 
         let roster = vec![peer_b.clone(), peer_a.clone()];
         let snapshot = CommitStakeSnapshot::from_roster(view.world(), &roster).expect("snapshot");
@@ -616,7 +645,7 @@ mod tests {
         assert!(!snapshot.matches_roster(&[peer_a.clone(), peer_b.clone()]));
         assert_eq!(snapshot.entries[0].peer_id, peer_b);
         assert_eq!(snapshot.entries[1].peer_id, peer_a);
-        assert_eq!(snapshot.entries[1].stake, Numeric::new(25, 0));
+        assert_eq!(snapshot.entries[1].stake, Quantity::from(25_u32));
     }
 
     #[test]
@@ -639,8 +668,8 @@ mod tests {
                     validator: account.clone(),
                     peer_id: peer.clone(),
                     stake_account: account.clone(),
-                    total_stake: Numeric::new(10, 0),
-                    self_stake: Numeric::new(10, 0),
+                    total_stake: Quantity::from(10_u64),
+                    self_stake: Quantity::from(10_u64),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_epoch: None,
@@ -655,8 +684,8 @@ mod tests {
                     validator: account.clone(),
                     peer_id: peer.clone(),
                     stake_account: account,
-                    total_stake: Numeric::new(10_000, 0),
-                    self_stake: Numeric::new(10_000, 0),
+                    total_stake: Quantity::from(10_000_u64),
+                    self_stake: Quantity::from(10_000_u64),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_epoch: None,
@@ -671,8 +700,8 @@ mod tests {
         let active_lane_ids = BTreeSet::from([LaneId::SINGLE]);
         let unfiltered = stake_map_from_world(view.world());
         let filtered = stake_map_from_world_with_active_lanes(view.world(), Some(&active_lane_ids));
-        assert_eq!(unfiltered.get(&peer), Some(&Numeric::new(10_000, 0)));
-        assert_eq!(filtered.get(&peer), Some(&Numeric::new(10, 0)));
+        assert_eq!(unfiltered.get(&peer), Some(&Quantity::from(10_000_u32)));
+        assert_eq!(filtered.get(&peer), Some(&Quantity::from(10_u32)));
 
         let snapshot = CommitStakeSnapshot::from_roster_with_active_lanes(
             view.world(),
@@ -681,7 +710,7 @@ mod tests {
         )
         .expect("filtered stake snapshot");
         assert_eq!(snapshot.entries[0].peer_id, peer);
-        assert_eq!(snapshot.entries[0].stake, Numeric::new(10, 0));
+        assert_eq!(snapshot.entries[0].stake, Quantity::from(10_u32));
     }
 
     #[test]
@@ -763,7 +792,8 @@ mod tests {
         {
             let mut block = state.world.public_lane_validators.block();
             let mut record = active_validator_record(LaneId::SINGLE, &account, &peer, 1);
-            record.total_stake = Numeric::new(15, 1);
+            record.total_stake =
+                Quantity::try_from_numeric(Numeric::new(15_u32, 1)).expect("non-negative stake");
             block.insert((LaneId::SINGLE, account.clone()), record);
             block.commit();
         }
@@ -862,7 +892,7 @@ mod tests {
                 &signers,
                 Some(&active_lane_ids),
             ),
-            Ok(Numeric::new(1, 0))
+            Ok(Quantity::from(1_u32))
         );
     }
 
@@ -888,8 +918,8 @@ mod tests {
                     validator: account_active.clone(),
                     peer_id: peer_active.clone(),
                     stake_account: account_active,
-                    total_stake: Numeric::new(5, 0),
-                    self_stake: Numeric::new(5, 0),
+                    total_stake: Quantity::from(5_u64),
+                    self_stake: Quantity::from(5_u64),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_epoch: None,
@@ -904,8 +934,8 @@ mod tests {
                     validator: account_pending.clone(),
                     peer_id: peer_pending.clone(),
                     stake_account: account_pending,
-                    total_stake: Numeric::new(9, 0),
-                    self_stake: Numeric::new(9, 0),
+                    total_stake: Quantity::from(9_u64),
+                    self_stake: Quantity::from(9_u64),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::PendingActivation(0),
                     activation_epoch: None,
@@ -918,7 +948,7 @@ mod tests {
 
         let view = state.view();
         let stake_map = stake_map_from_world(view.world());
-        assert_eq!(stake_map.get(&peer_active), Some(&Numeric::new(5, 0)));
+        assert_eq!(stake_map.get(&peer_active), Some(&Quantity::from(5_u32)));
         assert!(!stake_map.contains_key(&peer_pending));
     }
 
@@ -930,15 +960,15 @@ mod tests {
         let peer_b = PeerId::new(keypair_b.public_key().clone());
         let roster = vec![peer_a.clone(), peer_b.clone()];
         let mut stake_map = BTreeMap::new();
-        stake_map.insert(peer_a.clone(), Numeric::from(10_u64));
-        let fallback = Numeric::from(3_u64);
+        stake_map.insert(peer_a.clone(), Quantity::from(10_u64));
+        let fallback = Quantity::from(3_u64);
 
         let snapshot =
             commit_stake_snapshot_from_map(&roster, &stake_map, &fallback).expect("snapshot");
 
         assert_eq!(snapshot.entries.len(), 2);
         assert_eq!(snapshot.entries[0].peer_id, peer_a);
-        assert_eq!(snapshot.entries[0].stake, Numeric::from(10_u64));
+        assert_eq!(snapshot.entries[0].stake, Quantity::from(10_u64));
         assert_eq!(snapshot.entries[1].peer_id, peer_b);
         assert_eq!(snapshot.entries[1].stake, fallback);
     }
@@ -962,8 +992,8 @@ mod tests {
                     validator: account.clone(),
                     peer_id: peer.clone(),
                     stake_account: account,
-                    total_stake: Numeric::new(10, 0),
-                    self_stake: Numeric::new(10, 0),
+                    total_stake: Quantity::from(10_u64),
+                    self_stake: Quantity::from(10_u64),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_epoch: None,
@@ -984,7 +1014,7 @@ mod tests {
         assert_eq!(snapshot.entries[0].stake, fallback);
 
         let snapshot = CommitStakeSnapshot::from_roster(view.world(), &[peer]).expect("snapshot");
-        assert_eq!(snapshot.entries[0].stake, Numeric::new(10, 0));
+        assert_eq!(snapshot.entries[0].stake, Quantity::from(10_u32));
     }
 
     #[test]
@@ -1005,8 +1035,8 @@ mod tests {
         assert_eq!(snapshot.entries.len(), roster.len());
         assert_eq!(snapshot.entries[0].peer_id, peer_a);
         assert_eq!(snapshot.entries[1].peer_id, peer_b);
-        assert_eq!(snapshot.entries[0].stake, Numeric::from(1_u64));
-        assert_eq!(snapshot.entries[1].stake, Numeric::from(1_u64));
+        assert_eq!(snapshot.entries[0].stake, Quantity::from(1_u64));
+        assert_eq!(snapshot.entries[1].stake, Quantity::from(1_u64));
     }
 
     #[test]
@@ -1022,7 +1052,7 @@ mod tests {
                 .cloned()
                 .map(|peer_id| CommitStakeSnapshotEntry {
                     peer_id,
-                    stake: Numeric::from(1_u64),
+                    stake: Quantity::from(1_u64),
                 })
                 .collect(),
         };
@@ -1137,8 +1167,8 @@ mod tests {
                     validator: account_id.clone(),
                     peer_id: peer_a.clone(),
                     stake_account: account_id,
-                    total_stake: Numeric::new(10, 0),
-                    self_stake: Numeric::new(10, 0),
+                    total_stake: Quantity::from(10_u64),
+                    self_stake: Quantity::from(10_u64),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_epoch: None,

@@ -104,6 +104,7 @@ fn exact_v2_fixture(chain_id: ChainId) -> (Arc<SignedBlock>, V2FinalityArtifact)
         next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,
         parent_commit_qc: None,
+        snapshot_bootstrap: None,
         quorum: DualQuorum::from_roster(&roster).expect("valid powered fixture roster"),
         roster,
         nexus_amx_context_hash: Hash::new(b"Torii exact-v2 bridge context"),

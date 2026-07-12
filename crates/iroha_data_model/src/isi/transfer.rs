@@ -46,11 +46,7 @@ impl Transfer<Account, AssetDefinitionId, Account> {
 
 impl Transfer<Asset, Quantity, Account> {
     /// Constructs a new [`Transfer`] for a non-negative [`Asset`] quantity.
-    pub fn asset_quantity(
-        asset_id: AssetId,
-        quantity: impl Into<Quantity>,
-        to: AccountId,
-    ) -> Self {
+    pub fn asset_quantity(asset_id: AssetId, quantity: impl Into<Quantity>, to: AccountId) -> Self {
         Self {
             source: asset_id,
             object: quantity.into(),

@@ -14,7 +14,11 @@ use concread::{
 };
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 
-use crate::{Key, Value, cell::Cell, storage::Storage};
+use crate::{
+    Key, Value,
+    cell::{Block as CellBlock, Cell},
+    storage::{Block as StorageBlock, Storage, StorageReadOnly},
+};
 
 /// Helper interface for parsing JSON object keys into typed values.
 pub trait KeySeed: Clone {
@@ -493,6 +497,35 @@ where
     }
 }
 
+impl<K, V> JsonSerialize for StorageBlock<'_, K, V>
+where
+    K: JsonKeyCodec + Key,
+    V: JsonSerialize + Value,
+{
+    fn json_serialize(&self, out: &mut String) {
+        out.push('{');
+        out.push_str("\"revert\":");
+        write_revert(self.revert_map(), out);
+        out.push(',');
+        out.push_str("\"blocks\":");
+        out.push('{');
+        let mut iter = self.iter();
+        if let Some((key, value)) = iter.next() {
+            key.encode_json_key(out);
+            out.push(':');
+            value.json_serialize(out);
+            for (key, value) in iter {
+                out.push(',');
+                key.encode_json_key(out);
+                out.push(':');
+                value.json_serialize(out);
+            }
+        }
+        out.push('}');
+        out.push('}');
+    }
+}
+
 impl<V> JsonSerialize for Cell<V>
 where
     V: JsonSerialize + Value,
@@ -507,6 +540,21 @@ where
         out.push(',');
         out.push_str("\"blocks\":");
         JsonSerialize::json_serialize(blocks.deref(), out);
+        out.push('}');
+    }
+}
+
+impl<V> JsonSerialize for CellBlock<'_, V>
+where
+    V: JsonSerialize + Value,
+{
+    fn json_serialize(&self, out: &mut String) {
+        out.push('{');
+        out.push_str("\"revert\":");
+        JsonSerialize::json_serialize(self.revert.deref(), out);
+        out.push(',');
+        out.push_str("\"blocks\":");
+        JsonSerialize::json_serialize(self.blocks.deref(), out);
         out.push('}');
     }
 }

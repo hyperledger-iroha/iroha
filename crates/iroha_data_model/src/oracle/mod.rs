@@ -15,7 +15,7 @@ use std::{
 };
 
 use iroha_crypto::{Hash, HashOf, SignatureOf};
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -1304,7 +1304,7 @@ pub struct OraclePenalty {
     /// Kind of penalty that was applied.
     pub kind: OraclePenaltyKind,
     /// Amount slashed from the provider.
-    pub amount: Numeric,
+    pub amount: Quantity,
 }
 
 /// Reward record emitted when a provider is paid for an inlier observation.
@@ -1325,7 +1325,7 @@ pub struct OracleReward {
     /// Provider that earned the reward.
     pub oracle_id: OracleId,
     /// Amount paid to the provider.
-    pub amount: Numeric,
+    pub amount: Quantity,
 }
 
 /// Key identifying per-provider aggregation statistics for a feed.
@@ -1486,7 +1486,7 @@ pub struct OracleDispute {
     /// Provider being challenged.
     pub target: OracleId,
     /// Bond amount staked by the challenger.
-    pub bond: Numeric,
+    pub bond: Quantity,
     /// Evidence hashes supplied by the challenger.
     #[cfg_attr(feature = "json", norito(default))]
     pub evidence: Vec<Hash>,

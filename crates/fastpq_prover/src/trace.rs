@@ -2167,7 +2167,7 @@ mod tests {
         asset::id::AssetDefinitionId,
         fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::to_bytes;
 
@@ -2957,7 +2957,7 @@ mod tests {
     #[test]
     fn build_trace_rejects_invalid_transfer_transcripts() {
         let (mut batch, mut transcript) = batch_with_transfer_metadata();
-        transcript.deltas[0].from_balance_after = Numeric::from(1u32);
+        transcript.deltas[0].from_balance_after = Quantity::from(1u32);
         batch.metadata.insert(
             TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
             to_bytes(&vec![transcript]).expect("encode transcripts"),
@@ -3055,11 +3055,11 @@ mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
-            amount: Numeric::from(42u32),
-            from_balance_before: Numeric::from(200u32),
-            from_balance_after: Numeric::from(158u32),
-            to_balance_before: Numeric::from(1u32),
-            to_balance_after: Numeric::from(43u32),
+            amount: Quantity::from(42u32),
+            from_balance_before: Quantity::from(200u32),
+            from_balance_after: Quantity::from(158u32),
+            to_balance_before: Quantity::from(1u32),
+            to_balance_after: Quantity::from(43u32),
             from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
@@ -3101,9 +3101,9 @@ mod tests {
         )
     }
 
-    fn numeric_to_u64(value: &Numeric, target_scale: u32) -> u64 {
-        iroha_data_model::fastpq::normalized_numeric_to_u64(value, target_scale)
-            .expect("numeric fits")
+    fn numeric_to_u64(value: &Quantity, target_scale: u32) -> u64 {
+        iroha_data_model::fastpq::normalized_numeric_to_u64(value.as_numeric(), target_scale)
+            .expect("quantity fits")
     }
 
     fn sample_transitions(transcript: &TransferTranscript) -> Vec<StateTransition> {
@@ -3128,8 +3128,12 @@ mod tests {
             .collect()
     }
 
-    fn numeric_to_bytes(value: &Numeric) -> Vec<u8> {
-        let amount: u64 = value.clone().try_into().expect("numeric fits u64");
+    fn numeric_to_bytes(value: &Quantity) -> Vec<u8> {
+        let amount: u64 = value
+            .as_numeric()
+            .clone()
+            .try_into()
+            .expect("quantity fits u64");
         amount.to_le_bytes().to_vec()
     }
 }

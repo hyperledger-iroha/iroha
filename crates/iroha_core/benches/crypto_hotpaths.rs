@@ -10,7 +10,7 @@ use iroha_data_model::{
     domain::DomainId,
     fastpq::{FastpqPublicInputs, TransferDeltaTranscript, TransferSmtWitness, TransferTranscript},
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use iroha_zkp_halo2::poseidon::{self, PoseidonByteHasher};
 
@@ -22,11 +22,11 @@ fn sample_transfer_delta() -> TransferDeltaTranscript {
             DomainId::try_new("wonderland", "universal").expect("valid domain"),
             "rose".parse().expect("valid asset name"),
         ),
-        amount: Numeric::from(42u32),
-        from_balance_before: Numeric::from(200u32),
-        from_balance_after: Numeric::from(158u32),
-        to_balance_before: Numeric::from(1u32),
-        to_balance_after: Numeric::from(43u32),
+        amount: Quantity::from(42u32),
+        from_balance_before: Quantity::from(200u32),
+        from_balance_after: Quantity::from(158u32),
+        to_balance_before: Quantity::from(1u32),
+        to_balance_after: Quantity::from(43u32),
         from_smt_witness: TransferSmtWitness::default(),
         to_smt_witness: TransferSmtWitness::default(),
     }
@@ -53,11 +53,11 @@ fn sample_transfer_transcripts(count: usize, precompute_digest: bool) -> Vec<Tra
             let from_before = 100_000u64 - amount * idx_u64;
             let to_before = 1u64 + amount * idx_u64;
             let mut delta = sample_transfer_delta();
-            delta.amount = Numeric::from(amount);
-            delta.from_balance_before = Numeric::from(from_before);
-            delta.from_balance_after = Numeric::from(from_before - amount);
-            delta.to_balance_before = Numeric::from(to_before);
-            delta.to_balance_after = Numeric::from(to_before + amount);
+            delta.amount = Quantity::from(amount);
+            delta.from_balance_before = Quantity::from(from_before);
+            delta.from_balance_after = Quantity::from(from_before - amount);
+            delta.to_balance_before = Quantity::from(to_before);
+            delta.to_balance_after = Quantity::from(to_before + amount);
             let batch_hash = Hash::prehashed(
                 [u8::try_from(idx).expect("crypto hotpath bench sample count fits in u8"); 32],
             );

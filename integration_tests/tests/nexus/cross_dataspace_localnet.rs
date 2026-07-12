@@ -4040,13 +4040,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
             "ds1ds2swapok".parse().expect("settlement id"),
             SettlementLeg::new(
                 ds1_asset_def.clone(),
-                Numeric::from(30_u32),
+                Quantity::from(30_u32),
                 ALICE_ID.clone(),
                 BOB_ID.clone(),
             ),
             SettlementLeg::new(
                 ds2_asset_def.clone(),
-                Numeric::from(45_u32),
+                Quantity::from(45_u32),
                 BOB_ID.clone(),
                 ALICE_ID.clone(),
             ),
@@ -4245,13 +4245,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                             .expect("settlement id"),
                         SettlementLeg::new(
                             ds1_asset_def.clone(),
-                            Numeric::from(5_u32),
+                            Quantity::from(5_u32),
                             ALICE_ID.clone(),
                             BOB_ID.clone(),
                         ),
                         SettlementLeg::new(
                             ds2_asset_def.clone(),
-                            Numeric::from(5_u32),
+                            Quantity::from(5_u32),
                             BOB_ID.clone(),
                             ALICE_ID.clone(),
                         ),
@@ -4266,13 +4266,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                             .expect("settlement id"),
                         SettlementLeg::new(
                             ds2_asset_def.clone(),
-                            Numeric::from(5_u32),
+                            Quantity::from(5_u32),
                             ALICE_ID.clone(),
                             BOB_ID.clone(),
                         ),
                         SettlementLeg::new(
                             ds1_asset_def.clone(),
-                            Numeric::from(5_u32),
+                            Quantity::from(5_u32),
                             BOB_ID.clone(),
                             ALICE_ID.clone(),
                         ),
@@ -4543,13 +4543,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                 settlement_id.parse().expect("settlement id"),
                 SettlementLeg::new(
                     ds1_asset_def.clone(),
-                    Numeric::from(10_u32),
+                    Quantity::from(10_u32),
                     ALICE_ID.clone(),
                     BOB_ID.clone(),
                 ),
                 SettlementLeg::new(
                     ds2_asset_def.clone(),
-                    Numeric::from(10_000_u32),
+                    Quantity::from(10_000_u32),
                     BOB_ID.clone(),
                     ALICE_ID.clone(),
                 ),

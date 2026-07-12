@@ -70,16 +70,12 @@ use iroha_data_model::{
     },
     taikai::TaikaiAvailabilityClass,
 };
-use iroha_primitives::{
-    addr::SocketAddr,
-    numeric::{Numeric, Quantity},
-    unique_vec::UniqueVec,
-};
+use iroha_primitives::{addr::SocketAddr, numeric::Quantity, unique_vec::UniqueVec};
 use norito::{codec::Encode, streaming::EntropyMode};
 use rust_decimal::Decimal;
 use thiserror::Error;
 use url::Url;
-pub use user::{DevTelemetry, Logger, Snapshot};
+pub use user::{DevTelemetry, Logger, Snapshot, SnapshotBootstrapPolicy};
 
 use crate::{
     kura::{FsyncMode, InitMode},
@@ -2060,15 +2056,15 @@ pub struct ViralIncentives {
     /// Asset definition used for rewards/escrows.
     pub reward_asset_definition_id: AssetDefinitionId,
     /// Amount paid for a valid follow binding.
-    pub follow_reward_amount: Numeric,
+    pub follow_reward_amount: Quantity,
     /// Bonus paid back to the sender on first delivery.
-    pub sender_bonus_amount: Numeric,
+    pub sender_bonus_amount: Quantity,
     /// Maximum rewards a UAID may claim per day.
     pub max_daily_claims_per_uaid: u32,
     /// Maximum rewards allowed per binding (lifetime).
     pub max_claims_per_binding: u32,
     /// Daily reward budget (spent + bonuses) in reward units.
-    pub daily_budget: Numeric,
+    pub daily_budget: Quantity,
     /// When true, reward/escrow flows are halted.
     pub halt: bool,
     /// Denied UAIDs that cannot receive payouts.
@@ -2080,7 +2076,7 @@ pub struct ViralIncentives {
     /// Optional promotion window end (Unix timestamp ms). `None` = unbounded.
     pub promo_ends_at_ms: Option<u64>,
     /// Aggregate campaign budget cap across the promo window (0 = unlimited).
-    pub campaign_cap: Numeric,
+    pub campaign_cap: Quantity,
 }
 
 impl Default for ViralIncentives {
@@ -5081,25 +5077,25 @@ pub struct OracleEconomics {
     /// Account that funds oracle rewards.
     pub reward_pool: AccountId,
     /// Fixed reward amount for an inlier observation.
-    pub reward_amount: Numeric,
+    pub reward_amount: Quantity,
     /// Asset debited when applying penalties.
     pub slash_asset: AssetDefinitionId,
     /// Account credited with collected penalties.
     pub slash_receiver: AccountId,
     /// Penalty applied to outlier observations.
-    pub slash_outlier_amount: Numeric,
+    pub slash_outlier_amount: Quantity,
     /// Penalty applied when a provider reports an error.
-    pub slash_error_amount: Numeric,
+    pub slash_error_amount: Quantity,
     /// Penalty applied when a provider misses a slot.
-    pub slash_no_show_amount: Numeric,
+    pub slash_no_show_amount: Quantity,
     /// Asset staked as a bond when opening disputes.
     pub dispute_bond_asset: AssetDefinitionId,
     /// Bond amount required to open a dispute.
-    pub dispute_bond_amount: Numeric,
+    pub dispute_bond_amount: Quantity,
     /// Reward paid to successful challengers.
-    pub dispute_reward_amount: Numeric,
+    pub dispute_reward_amount: Quantity,
     /// Penalty charged for frivolous disputes.
-    pub frivolous_slash_amount: Numeric,
+    pub frivolous_slash_amount: Quantity,
 }
 
 /// Approval thresholds for classed oracle governance stages.
@@ -7355,7 +7351,7 @@ pub struct ToriiFaucet {
     /// on-chain asset alias that must be resolved against world state.
     pub asset_definition_id: String,
     /// Fixed quantity transferred by each accepted faucet claim.
-    pub amount: Numeric,
+    pub amount: Quantity,
     /// Difficulty in leading zero bits for faucet proof-of-work (0 disables PoW).
     pub pow_difficulty_bits: u8,
     /// Scrypt `log2(N)` cost parameter for faucet proof-of-work.
@@ -7384,7 +7380,7 @@ pub struct ToriiKagemushaCommands {
     /// Key pair used only to submit typed Kagemusha instructions.
     pub key_pair: KeyPair,
     /// Maximum value accepted for one Kagemusha command.
-    pub max_tx_value: Numeric,
+    pub max_tx_value: Quantity,
     /// Maximum number of accepted bindings plus in-flight reservations retained in memory.
     pub operation_registry_max_entries: NonZeroUsize,
     /// Maximum canonical bytes reserved by accepted bindings and in-flight operations.
@@ -11153,8 +11149,8 @@ mod tests {
             validator: validator.clone(),
             peer_id: peer,
             stake_account: validator.clone(),
-            total_stake: Numeric::from(10_u64),
-            self_stake: Numeric::from(10_u64),
+            total_stake: iroha_primitives::numeric::Quantity::from(10_u64),
+            self_stake: iroha_primitives::numeric::Quantity::from(10_u64),
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
             activation_epoch: Some(0),

@@ -2,7 +2,7 @@
 
 use std::{format, string::String, vec::Vec};
 
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -73,7 +73,7 @@ pub struct AssetTransferLimit {
     pub window: AssetTransferControlWindow,
     /// Maximum cumulative outbound amount in the window. `None` clears the limit.
     #[norito(default)]
-    pub cap_amount: Option<Numeric>,
+    pub cap_amount: Option<Quantity>,
 }
 
 /// Usage bucket tracking actual spent amount in a UTC calendar window.
@@ -89,7 +89,7 @@ pub struct AssetTransferUsageBucket {
     /// UTC bucket start in unix epoch milliseconds.
     pub bucket_start_ms: u64,
     /// Amount already spent in the bucket.
-    pub spent_amount: Numeric,
+    pub spent_amount: Quantity,
 }
 
 /// Control state for one `(account_id, asset_definition_id)` pair.
@@ -190,5 +190,49 @@ impl AssetTransferControlStoreV1 {
                 .cmp(&right.asset_definition_id)
                 .then_with(|| left.updated_at_ms.cmp(&right.updated_at_ms))
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_primitives::numeric::Numeric;
+
+    use super::*;
+
+    #[derive(Encode)]
+    struct ForgedAssetTransferLimit {
+        window: AssetTransferControlWindow,
+        cap_amount: Option<Numeric>,
+    }
+
+    #[derive(Encode)]
+    struct ForgedAssetTransferUsageBucket {
+        window: AssetTransferControlWindow,
+        bucket_start_ms: u64,
+        spent_amount: Numeric,
+    }
+
+    #[test]
+    fn negative_numeric_payloads_cannot_decode_as_transfer_control_quantities() {
+        let forged_limit = ForgedAssetTransferLimit {
+            window: AssetTransferControlWindow::Day,
+            cap_amount: Some(Numeric::new(-1_i32, 0)),
+        };
+        let encoded = forged_limit.encode();
+        assert!(
+            AssetTransferLimit::decode(&mut encoded.as_slice()).is_err(),
+            "a signed negative payload must not cross the transfer-cap quantity boundary"
+        );
+
+        let forged_usage = ForgedAssetTransferUsageBucket {
+            window: AssetTransferControlWindow::Day,
+            bucket_start_ms: 0,
+            spent_amount: Numeric::new(-1_i32, 0),
+        };
+        let encoded = forged_usage.encode();
+        assert!(
+            AssetTransferUsageBucket::decode(&mut encoded.as_slice()).is_err(),
+            "a signed negative payload must not cross the transfer-usage quantity boundary"
+        );
     }
 }

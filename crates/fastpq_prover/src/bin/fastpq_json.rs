@@ -464,25 +464,28 @@ fn handle_inspect_transfers(
                 asset_definition_id,
                 normalized_scale,
                 amount: delta.amount.to_string(),
-                amount_units: normalized_numeric_to_u64(&delta.amount, normalized_scale),
+                amount_units: normalized_numeric_to_u64(
+                    delta.amount.as_numeric(),
+                    normalized_scale,
+                ),
                 from_balance_before: delta.from_balance_before.to_string(),
                 from_balance_before_units: normalized_numeric_to_u64(
-                    &delta.from_balance_before,
+                    delta.from_balance_before.as_numeric(),
                     normalized_scale,
                 ),
                 from_balance_after: delta.from_balance_after.to_string(),
                 from_balance_after_units: normalized_numeric_to_u64(
-                    &delta.from_balance_after,
+                    delta.from_balance_after.as_numeric(),
                     normalized_scale,
                 ),
                 to_balance_before: delta.to_balance_before.to_string(),
                 to_balance_before_units: normalized_numeric_to_u64(
-                    &delta.to_balance_before,
+                    delta.to_balance_before.as_numeric(),
                     normalized_scale,
                 ),
                 to_balance_after: delta.to_balance_after.to_string(),
                 to_balance_after_units: normalized_numeric_to_u64(
-                    &delta.to_balance_after,
+                    delta.to_balance_after.as_numeric(),
                     normalized_scale,
                 ),
             });

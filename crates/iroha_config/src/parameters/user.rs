@@ -180,11 +180,7 @@ use iroha_data_model::{
     sorafs::{pin_registry::StorageClass as SorafsStorageClass, pricing::PricingScheduleRecord},
     taikai::TaikaiAvailabilityClass,
 };
-use iroha_primitives::{
-    addr::SocketAddr,
-    numeric::{Numeric, Quantity},
-    unique_vec::UniqueVec,
-};
+use iroha_primitives::{addr::SocketAddr, numeric::Quantity, unique_vec::UniqueVec};
 use norito::{
     json::{self, JsonDeserialize, JsonSerialize, Map, Value},
     streaming::{BUNDLED_RANS_GPU_BUILD_AVAILABLE, EntropyMode, load_bundle_tables_from_toml},
@@ -818,6 +814,9 @@ pub enum ParseError {
     /// Torii configuration contained invalid or incomplete values.
     #[error("Invalid Torii configuration")]
     InvalidToriiConfig,
+    /// Snapshot configuration contained an invalid audited-bootstrap policy.
+    #[error("Invalid snapshot configuration")]
+    InvalidSnapshotConfig,
     /// Common address-related configuration contained invalid values.
     #[error("Invalid common configuration")]
     InvalidCommonConfig,
@@ -1100,6 +1099,9 @@ impl Root {
                 "ivm.memory_budget_profile `{}` missing from compute.resource_profiles",
                 ivm.memory_budget_profile
             )));
+        }
+        if let Err(message) = snapshot.bootstrap.validate() {
+            emitter.emit(Report::new(ParseError::InvalidSnapshotConfig).attach(message));
         }
 
         zk.max_proof_size_bytes = confidential.max_proof_size_bytes;
@@ -1977,13 +1979,13 @@ pub struct Governance {
         env = "GOV_VIRAL_FOLLOW_REWARD_AMOUNT",
         default = "defaults::governance::viral_follow_reward_amount()"
     )]
-    pub viral_follow_reward_amount: Numeric,
+    pub viral_follow_reward_amount: Quantity,
     /// Sender bonus applied on first delivery.
     #[config(
         env = "GOV_VIRAL_SENDER_BONUS_AMOUNT",
         default = "defaults::governance::viral_sender_bonus_amount()"
     )]
-    pub viral_sender_bonus_amount: Numeric,
+    pub viral_sender_bonus_amount: Quantity,
     /// Maximum rewards a UAID may claim per day.
     #[config(
         env = "GOV_VIRAL_MAX_DAILY_CLAIMS_PER_UAID",
@@ -2001,7 +2003,7 @@ pub struct Governance {
         env = "GOV_VIRAL_DAILY_BUDGET",
         default = "defaults::governance::viral_daily_budget()"
     )]
-    pub viral_daily_budget: Numeric,
+    pub viral_daily_budget: Quantity,
     /// Optional promotion start timestamp (ms since Unix epoch).
     #[config(env = "GOV_VIRAL_PROMO_START_MS")]
     pub viral_promo_start_ms: Option<u64>,
@@ -2013,7 +2015,7 @@ pub struct Governance {
         env = "GOV_VIRAL_CAMPAIGN_CAP",
         default = "defaults::governance::viral_campaign_cap()"
     )]
-    pub viral_campaign_cap: Numeric,
+    pub viral_campaign_cap: Quantity,
     /// Deny-list of UAIDs that cannot claim viral rewards.
     #[config(default = "Vec::new()")]
     pub viral_deny_uaids: Vec<String>,
@@ -3503,7 +3505,7 @@ pub struct Oracle {
     pub reward_pool: AccountId,
     /// Fixed reward amount for inlier observations.
     #[config(default = "defaults::oracle::reward_amount()")]
-    pub reward_amount: Numeric,
+    pub reward_amount: Quantity,
     /// Asset debited when slashing providers.
     #[config(default = "defaults::oracle::slash_asset()")]
     pub slash_asset: AssetDefinitionId,
@@ -3512,25 +3514,25 @@ pub struct Oracle {
     pub slash_receiver: AccountId,
     /// Penalty applied to outlier observations.
     #[config(default = "defaults::oracle::slash_outlier_amount()")]
-    pub slash_outlier_amount: Numeric,
+    pub slash_outlier_amount: Quantity,
     /// Penalty applied to explicit error observations.
     #[config(default = "defaults::oracle::slash_error_amount()")]
-    pub slash_error_amount: Numeric,
+    pub slash_error_amount: Quantity,
     /// Penalty applied when a provider misses a slot.
     #[config(default = "defaults::oracle::slash_no_show_amount()")]
-    pub slash_no_show_amount: Numeric,
+    pub slash_no_show_amount: Quantity,
     /// Asset staked as a bond when opening disputes.
     #[config(default = "defaults::oracle::dispute_bond_asset()")]
     pub dispute_bond_asset: AssetDefinitionId,
     /// Bond amount required to open a dispute.
     #[config(default = "defaults::oracle::dispute_bond_amount()")]
-    pub dispute_bond_amount: Numeric,
+    pub dispute_bond_amount: Quantity,
     /// Reward paid to successful challengers.
     #[config(default = "defaults::oracle::dispute_reward_amount()")]
-    pub dispute_reward_amount: Numeric,
+    pub dispute_reward_amount: Quantity,
     /// Penalty for frivolous disputes.
     #[config(default = "defaults::oracle::frivolous_slash_amount()")]
-    pub frivolous_slash_amount: Numeric,
+    pub frivolous_slash_amount: Quantity,
     /// SLA (blocks) for the intake stage.
     #[config(default = "defaults::oracle::intake_sla_blocks()")]
     pub intake_sla_blocks: u64,
@@ -10497,7 +10499,9 @@ mod nexus_asset_selector_tests {
                 .validate_decimal()
                 .expect("fee quantity is canonical");
         }
-        assert!(Quantity::try_from_numeric(Numeric::new(-1_i32, 0)).is_err());
+        assert!(
+            Quantity::try_from_numeric(iroha_primitives::numeric::Numeric::new(-1_i32, 0)).is_err()
+        );
     }
 }
 
@@ -12860,6 +12864,85 @@ pub struct Snapshot {
     pub verification_public_key: Option<PublicKey>,
     /// Optional private key used to sign snapshots (defaults to node identity key).
     pub signing_private_key: Option<ExposedPrivateKey>,
+    /// Explicit authorization for a one-time audited hash-only snapshot boundary.
+    #[config(nested)]
+    pub bootstrap: SnapshotBootstrapPolicy,
+}
+
+/// Fail-closed authorization for importing one audited hash-only snapshot boundary.
+#[derive(Debug, Clone, Default, ReadConfig)]
+pub struct SnapshotBootstrapPolicy {
+    /// Whether the audited bootstrap path is enabled.
+    #[config(default = "false")]
+    pub enabled: bool,
+    /// Exact SHA-256 digest of the authorized snapshot payload.
+    pub audited_sha256: Option<String>,
+    /// Exact terminal height committed by the authorized snapshot.
+    pub audited_height: Option<u64>,
+    /// Optional last local Kura height whose existing hash must remain authoritative.
+    /// Hashes after this boundary may be replaced only by the exact audited snapshot payload.
+    pub replace_kura_suffix_after_height: Option<u64>,
+}
+
+impl SnapshotBootstrapPolicy {
+    /// Validate that the policy is either fully disabled or fully and canonically specified.
+    pub fn validate(&self) -> core::result::Result<(), String> {
+        if !self.enabled {
+            if self.audited_sha256.is_some()
+                || self.audited_height.is_some()
+                || self.replace_kura_suffix_after_height.is_some()
+            {
+                return Err(
+                    "snapshot.bootstrap digest/height require snapshot.bootstrap.enabled=true"
+                        .to_owned(),
+                );
+            }
+            return Ok(());
+        }
+        let digest = self
+            .audited_sha256
+            .as_deref()
+            .ok_or_else(|| "snapshot.bootstrap.enabled requires audited_sha256".to_owned())?;
+        if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(
+                "snapshot.bootstrap.audited_sha256 must contain exactly 64 hexadecimal digits"
+                    .to_owned(),
+            );
+        }
+        let height = self
+            .audited_height
+            .ok_or_else(|| "snapshot.bootstrap.enabled requires audited_height".to_owned())?;
+        if height == 0 {
+            return Err("snapshot.bootstrap.audited_height must be non-zero".to_owned());
+        }
+        if self
+            .replace_kura_suffix_after_height
+            .is_some_and(|boundary| boundary > height)
+        {
+            return Err(
+                "snapshot.bootstrap.replace_kura_suffix_after_height cannot exceed audited_height"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Return whether this policy authorizes the exact payload digest.
+    #[must_use]
+    pub fn authorizes_digest(&self, actual_sha256: &str) -> bool {
+        self.validate().is_ok()
+            && self.enabled
+            && self
+                .audited_sha256
+                .as_deref()
+                .is_some_and(|expected| expected.eq_ignore_ascii_case(actual_sha256))
+    }
+
+    /// Return whether this policy authorizes the exact payload digest and terminal height.
+    #[must_use]
+    pub fn authorizes(&self, actual_sha256: &str, height: u64) -> bool {
+        self.authorizes_digest(actual_sha256) && self.audited_height == Some(height)
+    }
 }
 
 /// User-level configuration container for the embedded Soracloud runtime manager.
@@ -15445,9 +15528,9 @@ impl ToriiFaucet {
             "torii.faucet.asset_definition_id",
             &self.asset_definition_id,
         );
-        let amount = Numeric::from_str(self.amount.trim())
+        let amount = Quantity::from_str(self.amount.trim())
             .unwrap_or_else(|err| panic!("invalid torii.faucet.amount `{}`: {err}", self.amount));
-        if amount <= Numeric::zero() {
+        if amount.is_zero() {
             panic!("torii.faucet.amount must be greater than zero");
         }
         if self.pow_scrypt_log_n == 0 {
@@ -15523,12 +15606,12 @@ impl ToriiKagemushaCommands {
                     "torii.kagemusha_commands.private_key or TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY is required"
                 )
             });
-        let key_pair = KeyPair::from_private_key(private_key.0.clone()).unwrap_or_else(|err| {
-            panic!("invalid torii.kagemusha_commands.private_key: {err}")
-        });
-        let algorithm = key_pair.public_key().try_algorithm().unwrap_or_else(|err| {
-            panic!("invalid torii.kagemusha_commands.public_key: {err}")
-        });
+        let key_pair = KeyPair::from_private_key(private_key.0.clone())
+            .unwrap_or_else(|err| panic!("invalid torii.kagemusha_commands.private_key: {err}"));
+        let algorithm = key_pair
+            .public_key()
+            .try_algorithm()
+            .unwrap_or_else(|err| panic!("invalid torii.kagemusha_commands.public_key: {err}"));
         if !matches!(algorithm, Algorithm::Ed25519 | Algorithm::Secp256k1) {
             panic!("torii.kagemusha_commands.private_key must use ed25519 or secp256k1");
         }
@@ -15565,10 +15648,10 @@ impl ToriiKagemushaCommands {
         })
     }
 
-    fn parse_positive_amount(field: &'static str, raw: &str) -> Numeric {
-        let amount = Numeric::from_str(raw.trim())
+    fn parse_positive_amount(field: &'static str, raw: &str) -> Quantity {
+        let amount = Quantity::from_str(raw.trim())
             .unwrap_or_else(|err| panic!("invalid {field} `{raw}`: {err}"));
-        if amount <= Numeric::zero() {
+        if amount.is_zero() {
             panic!("{field} must be greater than zero");
         }
         amount
@@ -15600,7 +15683,7 @@ mod torii_kagemusha_commands_tests {
             parsed.operation_registry_max_entries.get(),
             defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_ENTRIES
         );
-        assert!(parsed.max_tx_value > Numeric::zero());
+        assert!(!parsed.max_tx_value.is_zero());
     }
 
     #[test]
@@ -19950,6 +20033,78 @@ initial_delay_seconds = 17
             actual.snapshot.store_dir.value(),
             &PathBuf::from("/snapshots/paynet-1")
         );
+    }
+
+    #[test]
+    fn snapshot_bootstrap_policy_parses_only_complete_exact_authority() {
+        let digest = "1a0861b04fa35fd0d8ea4c2f38baaa478c7430df3466e9401c53f934671747bd";
+        let mut table = base_table();
+        let snapshot = table
+            .entry("snapshot")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("snapshot table");
+        let mut bootstrap = Table::new();
+        bootstrap.insert("enabled".into(), Value::Boolean(true));
+        bootstrap.insert("audited_sha256".into(), Value::String(digest.to_owned()));
+        bootstrap.insert("audited_height".into(), Value::Integer(42));
+        bootstrap.insert(
+            "replace_kura_suffix_after_height".into(),
+            Value::Integer(17),
+        );
+        snapshot.insert("bootstrap".into(), Value::Table(bootstrap));
+
+        let actual = load_root(table);
+        assert!(actual.snapshot.bootstrap.authorizes(digest, 42));
+        assert_eq!(
+            actual
+                .snapshot
+                .bootstrap
+                .replace_kura_suffix_after_height,
+            Some(17)
+        );
+    }
+
+    #[test]
+    fn snapshot_bootstrap_policy_rejects_partial_or_invalid_authority() {
+        for bootstrap in [
+            {
+                let mut value = Table::new();
+                value.insert("enabled".into(), Value::Boolean(true));
+                value.insert("audited_height".into(), Value::Integer(42));
+                value
+            },
+            {
+                let mut value = Table::new();
+                value.insert("enabled".into(), Value::Boolean(true));
+                value.insert("audited_sha256".into(), Value::String("00".repeat(32)));
+                value.insert("audited_height".into(), Value::Integer(42));
+                value.insert(
+                    "replace_kura_suffix_after_height".into(),
+                    Value::Integer(43),
+                );
+                value
+            },
+            {
+                let mut value = Table::new();
+                value.insert("enabled".into(), Value::Boolean(false));
+                value.insert("audited_sha256".into(), Value::String("00".repeat(32)));
+                value.insert("audited_height".into(), Value::Integer(42));
+                value
+            },
+        ] {
+            let mut table = base_table();
+            let snapshot = table
+                .entry("snapshot")
+                .or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut()
+                .expect("snapshot table");
+            snapshot.insert("bootstrap".into(), Value::Table(bootstrap));
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+                "invalid snapshot bootstrap authority must fail configuration parsing"
+            );
+        }
     }
 
     #[test]

@@ -1577,31 +1577,43 @@ fn minimal_config_snapshot() {
                 fees: NexusFees {
                     fee_asset_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
                     fee_sink_account_id: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-                    base_fee: Numeric {
-                        mantissa: 0,
-                        scale: 0,
-                    },
-                    per_byte_fee: Numeric {
-                        mantissa: 0,
-                        scale: 0,
-                    },
-                    per_instruction_fee: Numeric {
-                        mantissa: 1,
-                        scale: 3,
-                    },
-                    per_gas_unit_fee: Numeric {
-                        mantissa: 5,
-                        scale: 5,
-                    },
+                    base_fee: Quantity(
+                        Numeric {
+                            mantissa: 0,
+                            scale: 0,
+                        },
+                    ),
+                    per_byte_fee: Quantity(
+                        Numeric {
+                            mantissa: 0,
+                            scale: 0,
+                        },
+                    ),
+                    per_instruction_fee: Quantity(
+                        Numeric {
+                            mantissa: 1,
+                            scale: 3,
+                        },
+                    ),
+                    per_gas_unit_fee: Quantity(
+                        Numeric {
+                            mantissa: 5,
+                            scale: 5,
+                        },
+                    ),
                     sponsorship_enabled: false,
-                    sponsor_max_fee: Numeric {
-                        mantissa: 0,
-                        scale: 0,
-                    },
-                    sponsor_verified_balance_safety_floor: Numeric {
-                        mantissa: 0,
-                        scale: 0,
-                    },
+                    sponsor_max_fee: Quantity(
+                        Numeric {
+                            mantissa: 0,
+                            scale: 0,
+                        },
+                    ),
+                    sponsor_verified_balance_safety_floor: Quantity(
+                        Numeric {
+                            mantissa: 0,
+                            scale: 0,
+                        },
+                    ),
                     canonical_sponsor_account_id: None,
                     fee_receipts_activation_height: 18446744073709551615,
                     external_settlement_enabled: false,
@@ -1825,6 +1837,12 @@ fn minimal_config_snapshot() {
                 merkle_chunk_size_bytes: 1048576,
                 verification_public_key: None,
                 signing_private_key: None,
+                bootstrap: SnapshotBootstrapPolicy {
+                    enabled: false,
+                    audited_sha256: None,
+                    audited_height: None,
+                    replace_kura_suffix_after_height: None,
+                },
             },
             telemetry_enabled: true,
             telemetry_profile: Operator,
@@ -2301,29 +2319,37 @@ fn minimal_config_snapshot() {
                         ],
                         projection: None,
                     },
-                    follow_reward_amount: Numeric {
-                        mantissa: 1,
-                        scale: 0,
-                    },
-                    sender_bonus_amount: Numeric {
-                        mantissa: 1,
-                        scale: 1,
-                    },
+                    follow_reward_amount: Quantity(
+                        Numeric {
+                            mantissa: 1,
+                            scale: 0,
+                        },
+                    ),
+                    sender_bonus_amount: Quantity(
+                        Numeric {
+                            mantissa: 1,
+                            scale: 1,
+                        },
+                    ),
                     max_daily_claims_per_uaid: 1,
                     max_claims_per_binding: 1,
-                    daily_budget: Numeric {
-                        mantissa: 1000,
-                        scale: 0,
-                    },
+                    daily_budget: Quantity(
+                        Numeric {
+                            mantissa: 1000,
+                            scale: 0,
+                        },
+                    ),
                     halt: false,
                     deny_uaids: [],
                     deny_binding_digests: [],
                     promo_starts_at_ms: None,
                     promo_ends_at_ms: None,
-                    campaign_cap: Numeric {
-                        mantissa: 0,
-                        scale: 0,
-                    },
+                    campaign_cap: Quantity(
+                        Numeric {
+                            mantissa: 0,
+                            scale: 0,
+                        },
+                    ),
                 },
                 sorafs_pin_policy: SorafsPinPolicyConstraints {
                     min_replicas_floor: 1,

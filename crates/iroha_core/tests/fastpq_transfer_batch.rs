@@ -29,7 +29,7 @@ fn single_transfer_finalizes_canonical_poseidon_digest_on_block_drain() {
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
     let alice_asset = Asset::new(
         AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
-        Numeric::from(100_u32),
+        Quantity::from(100_u32),
     );
 
     let world = World::with_assets(
@@ -48,13 +48,9 @@ fn single_transfer_finalizes_canonical_poseidon_digest_on_block_drain() {
     let mut tx = block.transaction();
     tx.tx_call_hash = Some(Hash::prehashed([0xCD; Hash::LENGTH]));
 
-    Transfer::asset_quantity(
-        AssetId::new(asset_def_id, ALICE_ID.clone()),
-        10_u32,
-        bob_id,
-    )
-    .execute(&ALICE_ID, &mut tx)
-    .expect("transfer executes successfully");
+    Transfer::asset_quantity(AssetId::new(asset_def_id, ALICE_ID.clone()), 10_u32, bob_id)
+        .execute(&ALICE_ID, &mut tx)
+        .expect("transfer executes successfully");
     tx.apply();
 
     let transcripts = block.drain_transfer_transcripts();
@@ -91,7 +87,7 @@ fn transfer_asset_batch_records_multi_delta_transcript() {
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
     let alice_asset = Asset::new(
         AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
-        Numeric::from(100_u32),
+        Quantity::from(100_u32),
     );
 
     let world = World::with_assets(

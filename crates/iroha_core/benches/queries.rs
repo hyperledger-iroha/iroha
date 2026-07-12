@@ -297,10 +297,7 @@ fn build_state_for_typed_core_query_pages() -> (State, AccountId, [u64; 5]) {
             .push(AssetDefinition::numeric(asset_definition_id.clone()).build(&authority));
         assets.push(Asset::new(
             AssetId::of(asset_definition_id, authority.clone()),
-            iroha_primitives::numeric::Numeric::new(
-                u64::try_from(i).expect("fixture index fits u64") + 1,
-                0,
-            ),
+            Quantity::from(u64::try_from(i).expect("fixture index fits u64") + 1),
         ));
 
         let nft_id: NftId = format!("ticket{i}$typed{i}.universal")
@@ -604,7 +601,7 @@ fn bench_snapshot_vs_live_find_assets_first_batch(c: &mut Criterion) {
         let asset_id = AssetId::new(asset_def_id.clone(), acc_id.clone());
         assets.push(iroha_data_model::asset::Asset::new(
             asset_id,
-            iroha_primitives::numeric::Numeric::from(1_u32),
+            Quantity::from(1_u32),
         ));
     }
     let domain = Domain::new(domain_id).build(&accounts[0].id().clone());

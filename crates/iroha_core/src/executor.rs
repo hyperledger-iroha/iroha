@@ -30,9 +30,7 @@ use iroha_data_model::{
     isi::{
         CustomInstruction, GrantBox, InstructionBox, InstructionBox as DMInstructionBox,
         RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox,
-        error::InstructionExecutionError,
-        mint_burn::MintBox,
-        register::RegisterBox,
+        error::InstructionExecutionError, mint_burn::MintBox, register::RegisterBox,
     },
     metadata::Metadata,
     name::Name,
@@ -837,7 +835,7 @@ fn redeem_funded_nexus_fee_capacity(
             }
             candidate_redeems.push((
                 redeem.request.bundle.statement.asset.clone(),
-                redeem.request.amount.public_numeric(),
+                redeem.request.amount.public_quantity().into_numeric(),
             ));
             continue;
         }
@@ -1097,11 +1095,6 @@ fn check_lane_relay_burn_fee_budget(
             cfg.fee_asset_id
         )));
     }
-    if record.verified_balance.mantissa().is_negative() {
-        return Err(NexusFeeAdmissionError::ConfigInvalid(format!(
-            "verified Nexus fee budget for payer `{payer}` has a negative balance"
-        )));
-    }
     if record.manifest_root.iter().all(|byte| *byte == 0)
         || record.fastpq_binding.verified_effect_type != "nexus_fee_budget"
     {
@@ -1120,7 +1113,7 @@ fn check_lane_relay_burn_fee_budget(
             .clone(),
         "safety floor",
     )?;
-    if record.verified_balance < required {
+    if record.verified_balance.as_numeric() < &required {
         return Err(NexusFeeAdmissionError::Rejected(format!(
             "verified Nexus fee budget for payer `{payer}` is insufficient: requires {required}, available {}",
             record.verified_balance
@@ -8529,7 +8522,7 @@ mod tests {
         state: &State,
         sponsor: &AccountId,
         fee_asset_id: &str,
-        verified_balance: Numeric,
+        verified_balance: Quantity,
     ) {
         let binding = iroha_data_model::nexus::AxtFastpqBinding {
             parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
@@ -8738,7 +8731,7 @@ mod tests {
 
         let payload = json::to_value(&FixtureMintAssetForAllAccounts {
             asset_definition: asset_definition_id.clone(),
-            quantity: Numeric::from(1_u32),
+            quantity: Quantity::from(1_u32),
         })
         .expect("serialize fixture payload");
         let mut root = BTreeMap::new();
@@ -8769,8 +8762,8 @@ mod tests {
             .map(|value| value.as_ref().clone())
             .expect("bob rose");
 
-        assert_eq!(alice_value, Numeric::from(1_u32));
-        assert_eq!(bob_value, Numeric::from(1_u32));
+        assert_eq!(alice_value, Quantity::from(1_u32));
+        assert_eq!(bob_value, Quantity::from(1_u32));
     }
 
     #[test]
@@ -9420,7 +9413,7 @@ mod tests {
         let instruction = iroha_data_model::isi::escrow::OpenAssetEscrow::new(
             escrow_id,
             asset_definition_id.clone(),
-            Numeric::from(40_u64),
+            40_u64,
         );
         let res = super::Executor::Initial.execute_instruction(
             &mut stx,
@@ -9450,8 +9443,8 @@ mod tests {
             .get(&custody_asset_id)
             .map(|value| value.as_ref().clone())
             .expect("custody balance");
-        assert_eq!(seller_balance, Numeric::from(60_u64));
-        assert_eq!(custody_balance, Numeric::from(40_u64));
+        assert_eq!(seller_balance, Quantity::from(60_u64));
+        assert_eq!(custody_balance, Quantity::from(40_u64));
     }
 
     #[test]
@@ -9737,7 +9730,7 @@ mod tests {
             .with_name("coin".to_owned())
             .build(&user1);
         let transfer_asset_id = AssetId::new(asset_definition_id.clone(), user1.clone());
-        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10));
+        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10_u64));
 
         let world = World::with_assets(
             [alice_domain, users_domain, defs_domain],
@@ -9819,7 +9812,7 @@ mod tests {
             .with_name("coin".to_owned())
             .build(&user1);
         let transfer_asset_id = AssetId::new(asset_definition_id.clone(), user1.clone());
-        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10));
+        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10_u64));
 
         let world = World::with_assets(
             [alice_domain, users_domain, defs_domain],
@@ -10064,7 +10057,7 @@ mod tests {
                     asset_definition_id,
                     vec![iroha_data_model::asset::AssetTransferLimit {
                         window,
-                        cap_amount: Some(Numeric::from(100_u32)),
+                        cap_amount: Some(Quantity::from(100_u32)),
                     }],
                 )),
                 other => panic!("unsupported test instruction kind {other}"),
@@ -10755,20 +10748,17 @@ mod tests {
         signer: &KeyPair,
     ) -> iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2 {
         use iroha_data_model::{
-            confidential::ConfidentialStatus,
             offline::{
                 KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
-                KagemushaRecursiveSpendArtifactBindingV3,
-                KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBundleV2,
-                KagemushaRecursiveSpendProofV2, KagemushaRecursiveSpendPublicStatementV2,
-                KagemushaRecursiveSpendRedeemRequestV2,
+                KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendBranchClaimV2,
+                KagemushaRecursiveSpendBundleV2, KagemushaRecursiveSpendProofV2,
+                KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendRedeemRequestV2,
                 KagemushaRecursiveSpendRedemptionIntentBuildRequestV2,
                 KagemushaRecursiveSpendTopUpAnchorV2, KagemushaRequestAuthorizationV2,
                 KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
                 KagemushaUnshieldPublicInputsBindingV2, kagemusha_recursive_spend_lineage_root_v2,
             },
-            proof::{ProofBox, VerifyingKeyId, VerifyingKeyRecord},
-            zk::BackendTag,
+            proof::{ProofBox, VerifyingKeyId},
         };
 
         let chain_id = ChainId::from("fee-policy-chain");
@@ -11703,11 +11693,11 @@ mod tests {
         .build(&authority_id);
         let sponsor_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
-            Numeric::new(10_000, 0),
+            Quantity::from(10_000_u64),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
-            Numeric::new(0, 0),
+            Quantity::from(0_u64),
         );
         let world = World::with_assets(
             [domain],
@@ -11774,6 +11764,7 @@ mod tests {
             .get(&AssetId::of(asset_def_id.clone(), sponsor_id.clone()))
             .expect("sponsor asset exists")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(sponsor_balance_after, 9_999);
@@ -11783,6 +11774,7 @@ mod tests {
             .get(&AssetId::of(asset_def_id.clone(), sink_id.clone()))
             .expect("sink asset exists")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(sink_balance_after, 0);
@@ -11821,11 +11813,11 @@ mod tests {
         .build(&authority_id);
         let sponsor_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
-            Numeric::new(10_000, 0),
+            Quantity::from(10_000_u64),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
-            Numeric::new(0, 0),
+            Quantity::from(0_u64),
         );
         let world = World::with_assets(
             [domain],
@@ -11887,6 +11879,7 @@ mod tests {
             .get(&AssetId::of(asset_def_id.clone(), sponsor_id.clone()))
             .expect("sponsor asset exists")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(sponsor_balance_after, 9_999);
@@ -11896,6 +11889,7 @@ mod tests {
             .get(&AssetId::of(asset_def_id.clone(), sink_id.clone()))
             .expect("sink asset exists")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(sink_balance_after, 0);
@@ -12024,7 +12018,7 @@ mod tests {
         .build(&authority_id);
         let sponsor_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
-            Numeric::new(10_000, 0),
+            Quantity::from(10_000_u64),
         );
         let world = World::with_assets(
             [domain],
@@ -12092,6 +12086,7 @@ mod tests {
             .get(&sponsor_asset_id)
             .expect("sponsor asset exists")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(sponsor_balance_after, 9_999);
@@ -12136,7 +12131,7 @@ mod tests {
             nexus.fees.fee_receipts_activation_height = 2;
             nexus.fees.canonical_sponsor_account_id = Some(payer_id.to_string());
         }
-        seed_verified_nexus_fee_budget(&state, &payer_id, fee_asset_id, Numeric::from(10_u32));
+        seed_verified_nexus_fee_budget(&state, &payer_id, fee_asset_id, Quantity::from(10_u32));
 
         let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
             payer_id.clone(),
@@ -12168,8 +12163,8 @@ mod tests {
         let receipt = pending.get(&tx_hash).expect("receipt recorded for tx");
         assert_eq!(receipt.payer_account_id, payer_id);
         assert_eq!(receipt.fee_asset_id, fee_asset_id);
-        assert_eq!(receipt.fee_amount, Numeric::from(1_u32));
-        assert_eq!(receipt.schedule.base_fee, Numeric::from(1_u32));
+        assert_eq!(receipt.fee_amount, Quantity::from(1_u32));
+        assert_eq!(receipt.schedule.base_fee, Quantity::from(1_u32));
     }
 
     #[test]
@@ -12243,7 +12238,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedNexusFeeBudget {
             sponsor_account_id: authority_id.clone(),
             fee_asset_id: "xor#universal".to_owned(),
-            verified_balance: Numeric::from(1_u32),
+            verified_balance: Quantity::from(1_u32),
             manifest_root: [0x42; 32],
             proof_blob: iroha_data_model::nexus::ProofBlob {
                 payload: Vec::new(),
@@ -12316,10 +12311,7 @@ mod tests {
         let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
             .with_name(asset_def_id.name().to_string())
             .build(&payer_id);
-        let payer_asset = Asset::new(
-            AssetId::of(asset_def_id.clone(), payer_id.clone()),
-            1_u32,
-        );
+        let payer_asset = Asset::new(AssetId::of(asset_def_id.clone(), payer_id.clone()), 1_u32);
         let world = World::with_assets([domain], [payer], [asset_definition], [payer_asset], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -12355,7 +12347,7 @@ mod tests {
         let receipt = pending.get(&tx_hash).expect("fee receipt recorded");
         assert_eq!(receipt.payer_account_id, payer_id);
         assert_eq!(receipt.fee_asset_id, asset_def_id.to_string());
-        assert_eq!(receipt.fee_amount, Numeric::from(1_u32));
+        assert_eq!(receipt.fee_amount, Quantity::from(1_u32));
     }
 
     #[test]
@@ -12412,7 +12404,7 @@ mod tests {
             .build(&payer_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), payer_id.clone()),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
         );
         let world = World::with_assets(
             [domain],
@@ -12478,7 +12470,7 @@ mod tests {
             .value()
             .as_ref()
             .clone();
-        assert_eq!(payer_balance, Numeric::from(9_u32));
+        assert_eq!(payer_balance, Quantity::from(9_u32));
     }
 
     #[test]
@@ -12570,13 +12562,13 @@ mod tests {
             &state,
             &payer_id,
             asset_def_id.to_string().as_str(),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
         );
         seed_verified_lane_relay_nexus_fee_receipt(
             &state,
             &payer_id,
             asset_def_id.to_string().as_str(),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
             [0xA5; 32],
         );
 
@@ -12617,7 +12609,7 @@ mod tests {
         .build(&authority_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), authority_id.clone()),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
         );
         let world = World::with_assets(
             [domain],
@@ -12680,11 +12672,11 @@ mod tests {
             .build(&authority_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), authority_id.clone()),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
-            Numeric::zero(),
+            Quantity::zero(),
         );
         let world = World::with_assets(
             [domain],
@@ -12740,8 +12732,8 @@ mod tests {
             .value()
             .as_ref()
             .clone();
-        assert_eq!(payer_balance, Numeric::from(9_u32));
-        assert_eq!(sink_balance, Numeric::zero());
+        assert_eq!(payer_balance, Quantity::from(9_u32));
+        assert_eq!(sink_balance, Quantity::zero());
     }
 
     #[test]
@@ -12889,7 +12881,7 @@ mod tests {
         }
         .build(&alice_id);
         let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
-        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000));
+        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000_u64));
         let world = World::with_assets([dom], [alice, sink], [ad], [payer_balance], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -12964,15 +12956,15 @@ mod tests {
                 .build(&payer_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), payer_id.clone()),
-            Numeric::from_str("10").unwrap(),
+            Quantity::from_str("10").unwrap(),
         );
         let recipient_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), recipient_id.clone()),
-            Numeric::zero(),
+            Quantity::zero(),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
-            Numeric::zero(),
+            Quantity::zero(),
         );
         let world = World::with_assets(
             [dom],
@@ -13072,11 +13064,11 @@ mod tests {
                 .build(&payer_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), payer_id.clone()),
-            Numeric::from_str("10").unwrap(),
+            Quantity::from_str("10").unwrap(),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
-            Numeric::zero(),
+            Quantity::zero(),
         );
         let world = World::with_assets([dom], [payer, sink], [ad], [payer_asset, sink_asset], []);
         let kura = Kura::blank_kura_for_testing();
@@ -13160,7 +13152,7 @@ mod tests {
         }
         .build(&payer_id);
         let payer_asset = AssetId::of(asset_def_id.clone(), payer_id.clone());
-        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000));
+        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000_u64));
         let world = World::with_assets([dom], [payer, tech], [ad], [payer_balance], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();

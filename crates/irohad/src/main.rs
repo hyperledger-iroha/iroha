@@ -76,7 +76,10 @@ use iroha_core::{
     query::store::LiveQueryStore,
     queue::{ConfigLaneRouter, LaneRouter, Queue, SingleLaneRouter},
     smartcontracts::isi::Registrable as _,
-    snapshot::{SnapshotMaker, TryReadError as TryReadSnapshotError, try_read_snapshot},
+    snapshot::{
+        SnapshotMaker, TryReadError as TryReadSnapshotError,
+        try_read_snapshot_with_bootstrap_policy,
+    },
     state::{State, World},
     streaming::{FilesystemSoranetProvisioner, ManifestPublisher, run_ticket_event_listener},
     sumeragi::{
@@ -115,14 +118,8 @@ use tokio::{
 };
 
 const NODE_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
-const HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP";
-
 fn startup_trace_enabled() -> bool {
     env::var_os("IROHA_STARTUP_TRACE").is_some()
-}
-
-fn hard_fork_snapshot_bootstrap_enabled() -> bool {
-    env::var_os(HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV).is_some()
 }
 
 fn log_startup_trace(stage: &'static str, started_at: Instant) {
@@ -3376,7 +3373,7 @@ mod network_relay_tests {
 }
 
 fn snapshot_read_error_is_recoverable(error: &TryReadSnapshotError) -> bool {
-    snapshot_read_error_is_recoverable_for_bootstrap(error, hard_fork_snapshot_bootstrap_enabled())
+    snapshot_read_error_is_recoverable_for_bootstrap(error, false)
 }
 
 fn snapshot_read_error_is_recoverable_for_bootstrap(
@@ -3407,6 +3404,21 @@ fn refresh_block_count_after_snapshot_load(
         "Loaded snapshot is ahead of the startup block count; refreshing block count"
     );
     block_count.0 = committed_height;
+}
+
+fn authorize_kura_runtime_start(
+    policy: &iroha_config::parameters::actual::SnapshotBootstrapPolicy,
+    authenticated_snapshot_bootstrap: bool,
+) -> Result<(), &'static str> {
+    match (policy.enabled, authenticated_snapshot_bootstrap) {
+        (true, false) => Err(
+            "snapshot.bootstrap is enabled but no authenticated snapshot trust root is installed",
+        ),
+        (false, true) => Err(
+            "an authenticated snapshot trust root is installed while snapshot.bootstrap is disabled",
+        ),
+        (true, true) | (false, false) => Ok(()),
+    }
 }
 
 fn apply_state_config_before_kura_replay(
@@ -3493,30 +3505,6 @@ fn nexus_config_for_startup_replay(
 /// process configuration is no longer authoritative at this boundary.
 fn nexus_for_runtime_surfaces(state: &State) -> iroha_config::parameters::actual::Nexus {
     state.nexus_snapshot()
-}
-
-fn checkpointed_snapshot_catchup_prune_height(
-    state_height: usize,
-    block_count: usize,
-    latest_checkpoint_height: Option<u64>,
-) -> Option<u64> {
-    if block_count <= state_height {
-        return None;
-    }
-
-    let state_height = u64::try_from(state_height).ok()?;
-    let block_count = u64::try_from(block_count).ok()?;
-    let latest_checkpoint_height = latest_checkpoint_height?;
-
-    (latest_checkpoint_height >= state_height && latest_checkpoint_height < block_count)
-        .then_some(latest_checkpoint_height)
-}
-
-fn hard_fork_snapshot_bootstrap_prune_height(
-    state_height: usize,
-    block_count: usize,
-) -> Option<u64> {
-    (block_count > state_height).then(|| u64::try_from(state_height).ok())?
 }
 
 #[cfg(test)]
@@ -3688,47 +3676,24 @@ mod snapshot_read_error_tests {
     }
 
     #[test]
-    fn checkpointed_snapshot_catchup_prune_height_handles_uncheckpointed_suffix() {
-        assert_eq!(
-            checkpointed_snapshot_catchup_prune_height(2_594, 2_595, Some(2_594)),
-            Some(2_594)
-        );
-        assert_eq!(
-            checkpointed_snapshot_catchup_prune_height(2_594, 2_596, Some(2_595)),
-            Some(2_595)
-        );
-        assert_eq!(
-            checkpointed_snapshot_catchup_prune_height(2_594, 2_596, Some(2_596)),
-            None
-        );
-        assert_eq!(
-            checkpointed_snapshot_catchup_prune_height(2_594, 2_596, Some(2_593)),
-            None
-        );
-        assert_eq!(
-            checkpointed_snapshot_catchup_prune_height(2_594, 2_596, None),
-            None
-        );
-        assert_eq!(
-            checkpointed_snapshot_catchup_prune_height(2_594, 2_594, Some(2_594)),
-            None
-        );
-    }
+    fn audited_kura_runtime_and_height_refresh_require_authenticated_snapshot_root() {
+        let policy = iroha_config::parameters::actual::SnapshotBootstrapPolicy {
+            enabled: true,
+            audited_sha256: Some("ab".repeat(32)),
+            audited_height: Some(7),
+            replace_kura_suffix_after_height: None,
+        };
+        let mut block_count = iroha_core::kura::BlockCount(0);
+        assert!(authorize_kura_runtime_start(&policy, false).is_err());
+        assert_eq!(block_count.0, 0, "failed auth cannot promote Kura height");
+        authorize_kura_runtime_start(&policy, true)
+            .expect("authenticated snapshot authorizes Kura runtime start");
+        refresh_block_count_after_snapshot_load(&mut block_count, 7);
+        assert_eq!(block_count.0, 7);
 
-    #[test]
-    fn hard_fork_snapshot_bootstrap_prune_height_drops_untrusted_suffix() {
-        assert_eq!(
-            hard_fork_snapshot_bootstrap_prune_height(23_485, 23_486),
-            Some(23_485)
-        );
-        assert_eq!(
-            hard_fork_snapshot_bootstrap_prune_height(23_485, 23_485),
-            None
-        );
-        assert_eq!(
-            hard_fork_snapshot_bootstrap_prune_height(23_486, 23_485),
-            None
-        );
+        let disabled = iroha_config::parameters::actual::SnapshotBootstrapPolicy::default();
+        authorize_kura_runtime_start(&disabled, false).expect("ordinary startup has no token");
+        assert!(authorize_kura_runtime_start(&disabled, true).is_err());
     }
 
     #[test]
@@ -3894,23 +3859,23 @@ impl Iroha {
             }
         });
 
-        let (kura, mut block_count) = Kura::new_with_configured_lane_catalog(
-            &config.kura,
-            &config.nexus.lane_config,
-            &config.nexus.configured_lane_catalog,
-        )
-        .map_err(|err| {
-            let resolved = config.kura.store_dir.resolve_relative_path();
-            Report::new(err).attach(format!(
-                "failed to initialize Kura for store_dir {} (raw {})",
-                resolved.display(),
-                config.kura.store_dir.value().display(),
-            ))
-        })
-        .change_context(StartError::InitKura)?;
+        let (kura, mut block_count) =
+            Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap(
+                &config.kura,
+                &config.nexus.lane_config,
+                &config.nexus.configured_lane_catalog,
+                &config.snapshot.bootstrap,
+            )
+            .map_err(|err| {
+                let resolved = config.kura.store_dir.resolve_relative_path();
+                Report::new(err).attach(format!(
+                    "failed to initialize Kura for store_dir {} (raw {})",
+                    resolved.display(),
+                    config.kura.store_dir.value().display(),
+                ))
+            })
+            .change_context(StartError::InitKura)?;
         kura.configure_fastpq_proof_sidecar_limits(&config.zk.fastpq);
-        let child = Kura::start(kura.clone(), supervisor.shutdown_signal());
-        supervisor.monitor(child);
 
         let (live_query_store, child) =
             LiveQueryStore::from_config(config.live_query_store, supervisor.shutdown_signal())
@@ -3955,30 +3920,31 @@ impl Iroha {
             |key| iroha_crypto::KeyPair::from(key.0.clone()),
         );
 
-        let stored_genesis_block = read_stored_genesis_block(kura.as_ref(), block_count)?;
+        let stored_genesis_block = read_stored_genesis_block(
+            kura.as_ref(),
+            block_count,
+            config.snapshot.bootstrap.enabled,
+        )?;
         let stored_genesis_hash = stored_genesis_block.as_ref().map(|block| block.0.hash());
         if block_count.0 == 0 && stored_genesis_block.is_none() && genesis.is_none() {
             return Err(Report::new(StartError::InitKura).attach(
                 "fresh Sumeragi v2 startup requires a local signed genesis; peer bootstrap cannot authenticate the genesis-selected handshake context",
             ));
         }
-        let effective_genesis = stored_genesis_block
-            .as_ref()
-            .or(genesis.as_ref())
-            .ok_or_else(|| {
-                Report::new(StartError::InitKura).attach(
-                    "Sumeragi v2 requires signed genesis metadata before opening network ingress",
-                )
-            })?;
-        let (signed_consensus_mode, signed_v2_genesis_context) =
-            signed_v2_genesis_context_metadata(effective_genesis)
-                .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
-        if config.nexus.enabled
-            && signed_consensus_mode != iroha_data_model::block::consensus_v2::ConsensusMode::Npos
-        {
-            return Err(Report::new(StartError::InitKura)
-                .attach("Nexus requires the signed genesis Sumeragi v2 mode to be NPoS"));
+        let effective_genesis = stored_genesis_block.as_ref().or(genesis.as_ref());
+        if effective_genesis.is_none() && !config.snapshot.bootstrap.enabled {
+            return Err(Report::new(StartError::InitKura).attach(
+                "Sumeragi v2 requires signed genesis metadata unless an explicitly authorized audited snapshot bootstrap is being authenticated",
+            ));
         }
+        let signed_genesis_context = if config.snapshot.bootstrap.enabled {
+            None
+        } else {
+            effective_genesis
+                .map(signed_v2_genesis_context_metadata)
+                .transpose()
+                .map_err(|error| Report::new(StartError::InitKura).attach(error))?
+        };
 
         let effective_genesis_public_key = if let Some(stored_genesis) =
             stored_genesis_block.as_ref()
@@ -4008,42 +3974,8 @@ impl Iroha {
             config.genesis.public_key.clone()
         };
 
-        if block_count.0 > 0 {
-            match kura
-                .v2_finality_artifact(1)
-                .map_err(|error| Report::new(StartError::InitKura).attach(error))?
-            {
-                Some(artifact) => {
-                    let context = &artifact.height_context;
-                    if context.chain_id != config.common.chain
-                        || context.height != 1
-                        || context.mode != signed_consensus_mode
-                        || context.da_layout != signed_v2_genesis_context.da_layout
-                        || context.nexus_amx_context_hash
-                            != iroha_crypto::Hash::prehashed(
-                                signed_v2_genesis_context.nexus_amx_context_hash,
-                            )
-                    {
-                        return Err(Report::new(StartError::InitKura).attach(
-                            "stored Sumeragi v2 genesis finality context differs from signed genesis metadata",
-                        ));
-                    }
-                }
-                None if block_count.0 == 1 => {
-                    iroha_logger::warn!(
-                        "genesis block is durable without its v2 finality sidecar; safety-WAL recovery must complete it before ingress"
-                    );
-                }
-                None => {
-                    return Err(Report::new(StartError::InitKura).attach(
-                        "stored Sumeragi v2 chain is missing its genesis finality artifact",
-                    ));
-                }
-            }
-        }
-
         let mut loaded_state_from_snapshot = false;
-        let mut state = match try_read_snapshot(
+        let mut state = match try_read_snapshot_with_bootstrap_policy(
             config.snapshot.store_dir.resolve_relative_path(),
             &kura,
             || live_query_store.clone(),
@@ -4052,6 +3984,7 @@ impl Iroha {
             verification_key,
             &config.common.chain,
             &config.zk,
+            &config.snapshot.bootstrap,
             #[cfg(feature = "telemetry")]
             state_telemetry.clone(),
         ) {
@@ -4064,7 +3997,7 @@ impl Iroha {
                 refresh_block_count_after_snapshot_load(&mut block_count, state.committed_height());
                 state
             }
-            Err(TryReadSnapshotError::NotFound) => {
+            Err(TryReadSnapshotError::NotFound) if !config.snapshot.bootstrap.enabled => {
                 iroha_logger::info!("Didn't find a state snapshot; creating an empty state");
                 let genesis_public_key = effective_genesis_public_key.clone();
                 let mut world = World::with(
@@ -4089,7 +4022,7 @@ impl Iroha {
                 )
             }
             Err(error) if snapshot_read_error_is_recoverable(&error) => {
-                if hard_fork_snapshot_bootstrap_enabled() {
+                if config.snapshot.bootstrap.enabled {
                     iroha_logger::error!(
                         ?error,
                         "hard-fork snapshot bootstrap refused to rebuild state from Kura after snapshot load failure"
@@ -4126,13 +4059,6 @@ impl Iroha {
                 return Err(Report::new(error).change_context(StartError::InitKura));
             }
         };
-        if loaded_state_from_snapshot
-            && snapshot_missing_public_lane_state(&state, stored_genesis_block.as_ref())
-        {
-            iroha_logger::warn!(
-                "Loaded snapshot is missing public-lane staking state; accepting snapshot to avoid replaying an existing Taira ledger from genesis"
-            );
-        }
         #[cfg(feature = "telemetry")]
         {
             kura.attach_telemetry(state.telemetry.clone());
@@ -4147,65 +4073,109 @@ impl Iroha {
         }
         apply_state_config_before_kura_replay(&mut state, &config)?;
 
-        if loaded_state_from_snapshot && block_count.0 > state.committed_height() {
-            let latest_checkpoint_height = kura
-                .latest_wsv_checkpoint_height_at_or_before(
-                    u64::try_from(block_count.0)
-                        .map_err(|err| Report::new(StartError::InitKura).attach(err))?,
-                )
-                .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
-            if let Some(prune_height) = checkpointed_snapshot_catchup_prune_height(
-                state.committed_height(),
-                block_count.0,
-                latest_checkpoint_height,
-            ) {
-                iroha_logger::warn!(
-                    state_height = state.committed_height(),
-                    block_count = block_count.0,
-                    latest_checkpoint_height = prune_height,
-                    "Kura contains an uncheckpointed suffix after loaded snapshot; pruning suffix before replay"
-                );
-                kura.prune_to_height(prune_height)
-                    .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
-                block_count.0 = usize::try_from(prune_height)
-                    .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+        let authenticated_snapshot_bootstrap = state.authenticated_snapshot_v2_bootstrap().cloned();
+        let snapshot_bootstrap_active = authenticated_snapshot_bootstrap.is_some();
+        let (signed_consensus_mode, signed_v2_genesis_context) = if let Some(bootstrap) =
+            authenticated_snapshot_bootstrap.as_ref()
+        {
+            if !config.snapshot.bootstrap.enabled {
+                return Err(Report::new(StartError::InitKura).attach(
+                        "state contains an authenticated snapshot bootstrap record while snapshot.bootstrap is disabled",
+                    ));
+            }
+            (bootstrap.context.mode, None)
+        } else {
+            let (mode, context) = signed_genesis_context.clone().ok_or_else(|| {
+                    Report::new(StartError::InitKura).attach(
+                        "startup has neither an authenticated snapshot bootstrap record nor signed genesis metadata",
+                    )
+                })?;
+            (mode, Some(context))
+        };
+        if config.nexus.enabled
+            && signed_consensus_mode != iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+        {
+            return Err(Report::new(StartError::InitKura)
+                .attach("Nexus requires the authenticated Sumeragi v2 mode to be NPoS"));
+        }
+
+        if !snapshot_bootstrap_active && block_count.0 > 0 {
+            let signed_v2_genesis_context = signed_v2_genesis_context
+                .as_ref()
+                .expect("normal startup selected signed genesis metadata");
+            match kura
+                .v2_finality_artifact(1)
+                .map_err(|error| Report::new(StartError::InitKura).attach(error))?
+            {
+                Some(artifact) => {
+                    let context = &artifact.height_context;
+                    if context.chain_id != config.common.chain
+                        || context.height != 1
+                        || context.mode != signed_consensus_mode
+                        || context.da_layout != signed_v2_genesis_context.da_layout
+                        || context.nexus_amx_context_hash
+                            != iroha_crypto::Hash::prehashed(
+                                signed_v2_genesis_context.nexus_amx_context_hash,
+                            )
+                    {
+                        return Err(Report::new(StartError::InitKura).attach(
+                            "stored Sumeragi v2 genesis finality context differs from signed genesis metadata",
+                        ));
+                    }
+                }
+                None if block_count.0 == 1 => {
+                    iroha_logger::warn!(
+                        "genesis block is durable without its v2 finality sidecar; safety-WAL recovery must complete it before ingress"
+                    );
+                }
+                None => {
+                    return Err(Report::new(StartError::InitKura).attach(
+                        "stored Sumeragi v2 chain is missing its genesis finality artifact",
+                    ));
+                }
             }
         }
 
-        if loaded_state_from_snapshot && hard_fork_snapshot_bootstrap_enabled() {
-            let snapshot_hashes = state.committed_block_hashes_snapshot();
-            kura.hard_fork_extend_hash_only_from_snapshot(&snapshot_hashes)
-                .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
-            if let Some(prune_height) =
-                hard_fork_snapshot_bootstrap_prune_height(state.committed_height(), block_count.0)
-            {
-                iroha_logger::warn!(
-                    state_height = state.committed_height(),
-                    block_count = block_count.0,
-                    prune_height,
-                    "hard-fork snapshot bootstrap: pruning untrusted Kura suffix above loaded snapshot before replay"
-                );
-                kura.prune_to_height(prune_height)
-                    .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
-                block_count.0 = usize::try_from(prune_height)
-                    .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
-            }
-            if state.committed_height() > block_count.0 {
-                block_count.0 = state.committed_height();
-                iroha_logger::warn!(
-                    state_height = state.committed_height(),
-                    "hard-fork snapshot bootstrap: promoted Kura block count to snapshot state height"
-                );
-            }
+        // Generic state replay is authorized only through the contiguous prefix whose every
+        // full-body height is checkpoint-, manifest-, and cryptographic-finality-complete. One
+        // Kura-first durable tip may remain outside that prefix; the v2 reducer resumes its exact
+        // WAL Decision/body marker through V2ApplyService after all runtime dependencies exist.
+        // Never prune or generically replay that tip: either action would discard or execute a
+        // merely leader-signed block without proving quorum authority.
+        let v2_replay_plan = iroha_core::sumeragi::plan_v2_startup_replay(kura.as_ref())
+            .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+        v2_replay_plan
+            .validate_restored_state_height(state.committed_height())
+            .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+        if v2_replay_plan.durable_height() != block_count.0 {
+            return Err(Report::new(StartError::InitKura).attach(format!(
+                "Sumeragi v2 startup replay plan height {} differs from Kura block count {}",
+                v2_replay_plan.durable_height(),
+                block_count.0
+            )));
         }
+        iroha_core::sumeragi::authenticate_v2_snapshot_replay_boundary(
+            kura.as_ref(),
+            &state,
+            &v2_replay_plan,
+        )
+        .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+        authorize_kura_runtime_start(&config.snapshot.bootstrap, snapshot_bootstrap_active)
+            .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
+        // Keep provisional audited-prefix storage read-only until both the signed snapshot reader
+        // and the v2 replay-boundary verifier have authenticated the exact same trust root.
+        let child = Kura::start(kura.clone(), supervisor.shutdown_signal());
+        supervisor.monitor(child);
 
         let state_height = state.committed_height();
-        if block_count.0 > state_height {
+        let generic_replay_height = v2_replay_plan.complete_prefix_height();
+        if generic_replay_height > state_height {
             let start_height = state_height.saturating_add(1);
             iroha_logger::info!(
                 start_height,
-                block_count = block_count.0,
-                "Replaying stored blocks to catch up with Kura"
+                generic_replay_height,
+                pending_v2_tip = ?v2_replay_plan.pending_tip_height(),
+                "Replaying authenticated complete Kura prefix"
             );
             let trusted = config.common.trusted_peers.value();
             let mut commit_topology = filter_validators_from_trusted(trusted);
@@ -4218,7 +4188,7 @@ impl Iroha {
                 &mut state,
                 &topology,
                 start_height,
-                block_count.0,
+                generic_replay_height,
                 signed_consensus_mode,
             )
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
@@ -4419,8 +4389,10 @@ impl Iroha {
         )?;
         let proto = iroha_core::sumeragi::consensus::PROTO_VERSION;
 
-        // Peer admission is frozen by the signed genesis. There is no runtime
-        // fallback: a node must validate this context before opening ingress.
+        // Peer admission is frozen by exactly one authenticated startup root. Ordinary startup
+        // uses signed genesis metadata. An audited hash-only import instead derives the handshake
+        // from the authenticated snapshot WSV and its frozen v2 mode; it must not depend on an
+        // unavailable legacy genesis body.
         let (
             computed_mode_tag,
             computed_bls_domain,
@@ -4436,17 +4408,34 @@ impl Iroha {
                 view.sccp_registry.as_ref(),
                 height,
             );
-            let (mode_tag, bls_domain, caps, block_cadence_ms) = consensus_caps_from_genesis(
-                effective_genesis,
-                &config.common.chain,
-                &config_caps,
-                &config.sumeragi,
-            )
-            .ok_or_else(|| {
-                Report::new(StartError::InitKura).attach(
-                    "signed genesis does not contain one canonical Sumeragi v2 handshake context",
+            let (mode_tag, bls_domain, caps, block_cadence_ms) = if snapshot_bootstrap_active {
+                let (mode_tag, bls_domain, caps) = compute_consensus_handshake_caps(
+                    view.world(),
+                    height,
+                    &config,
+                    &config_caps,
+                    signed_consensus_mode,
+                    None,
+                )?;
+                (
+                    mode_tag,
+                    bls_domain,
+                    caps,
+                    view.world().parameters().sumeragi().block_time_ms(),
                 )
-            })?;
+            } else {
+                consensus_caps_from_genesis(
+                        effective_genesis.expect("normal startup has signed genesis metadata"),
+                        &config.common.chain,
+                        &config_caps,
+                        &config.sumeragi,
+                    )
+                    .ok_or_else(|| {
+                        Report::new(StartError::InitKura).attach(
+                            "signed genesis does not contain one canonical Sumeragi v2 handshake context",
+                        )
+                    })?
+            };
             (
                 mode_tag,
                 bls_domain,
@@ -4462,15 +4451,17 @@ impl Iroha {
             "Consensus handshake caps"
         );
         let mut staged_v2_genesis = None;
-        verify_genesis_metadata(
-            effective_genesis,
-            &config,
-            &consensus_caps,
-            &computed_mode_tag,
-            &computed_bls_domain,
-            proto,
-        )
-        .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
+        if !snapshot_bootstrap_active {
+            verify_genesis_metadata(
+                effective_genesis.expect("normal startup has signed genesis metadata"),
+                &config,
+                &consensus_caps,
+                &computed_mode_tag,
+                &computed_bls_domain,
+                proto,
+            )
+            .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
+        }
 
         // If a genesis manifest JSON is provided via CLI, validate consensus fields.
         let cfg_manifest = config
@@ -4478,7 +4469,7 @@ impl Iroha {
             .manifest_json
             .as_ref()
             .map(WithOrigin::resolve_relative_path);
-        if let Some(json_path) = cfg_manifest {
+        if !snapshot_bootstrap_active && let Some(json_path) = cfg_manifest {
             let manifest = read_genesis_manifest(&json_path)?;
             if let Err(err) = ensure_manifest_crypto_matches(&manifest, &config) {
                 return Err(Report::new(StartError::InitKura).attach(format!(
@@ -4597,8 +4588,13 @@ impl Iroha {
         bootstrapper.seed_topology(&peer_seed);
         bootstrapper.spawn_listener().await;
 
-        // Allow peers to fetch genesis if we already have it locally (storage or file).
-        if let Some(stored_genesis) = stored_genesis_block.as_ref() {
+        // Audited snapshot bootstrap is a complete alternative trust root and must not advertise
+        // an unrelated local legacy genesis file as if it authenticated the imported history.
+        if snapshot_bootstrap_active {
+            iroha_logger::info!(
+                "authenticated snapshot bootstrap: legacy genesis request serving is disabled"
+            );
+        } else if let Some(stored_genesis) = stored_genesis_block.as_ref() {
             if let Err(err) = bootstrapper.set_payload(stored_genesis).await {
                 iroha_logger::warn!(
                     ?err,
@@ -4685,7 +4681,7 @@ impl Iroha {
             }
         }
 
-        if let Some(genesis_block) = genesis.as_ref() {
+        if !snapshot_bootstrap_active && let Some(genesis_block) = genesis.as_ref() {
             // On non-empty storage, avoid re-validating the provided genesis signature.
             // Instead, ensure the optional provided payload matches the genesis already
             // persisted at height 1 and continue replay from stored data.
@@ -4832,7 +4828,7 @@ impl Iroha {
                     }
                 }
             }
-        } else if block_count.0 == 0 {
+        } else if !snapshot_bootstrap_active && block_count.0 == 0 {
             return Err(Report::new(StartError::InitKura)
                 .attach("missing genesis file for empty storage; provide `--genesis.file`"));
         }
@@ -5105,7 +5101,7 @@ impl Iroha {
         #[cfg(not(feature = "telemetry"))]
         let torii_telemetry = iroha_torii::MaybeTelemetry::from_profile(None, telemetry_profile);
 
-        let genesis_for_consensus = if stored_genesis_block.is_some() {
+        let genesis_for_consensus = if snapshot_bootstrap_active || stored_genesis_block.is_some() {
             None
         } else {
             genesis
@@ -5819,23 +5815,23 @@ fn broadcast_pow_payload(
 fn read_stored_genesis_block(
     kura: &Kura,
     block_count: iroha_core::kura::BlockCount,
+    audited_bootstrap_enabled: bool,
 ) -> ReportResult<Option<GenesisBlock>, StartError> {
     if block_count.0 == 0 {
         return Ok(None);
     }
-    if hard_fork_snapshot_bootstrap_enabled() {
-        iroha_logger::warn!(
-            block_count = block_count.0,
-            "hard-fork snapshot bootstrap: using configured genesis public key without decoding stored legacy genesis block"
-        );
+    let nz = std::num::NonZeroUsize::new(1).expect("nonzero");
+    if audited_bootstrap_enabled {
+        if kura.get_durable_block_hash(nz).is_none() {
+            return Err(Report::new(StartError::InitKura)
+                .attach("audited snapshot bootstrap has no durable height-one hash anchor"));
+        }
         return Ok(None);
     }
-
-    let nz = std::num::NonZeroUsize::new(1).expect("nonzero");
-    let stored = kura.get_block(nz).ok_or_else(|| {
-        Report::new(StartError::InitKura)
-            .attach("non-empty block store is missing genesis block at height 1")
-    })?;
+    let Some(stored) = kura.get_block(nz) else {
+        return Err(Report::new(StartError::InitKura)
+            .attach("non-empty block store is missing genesis block at height 1"));
+    };
     Ok(Some(GenesisBlock((*stored).clone())))
 }
 
@@ -5860,37 +5856,6 @@ fn genesis_account(public_key: PublicKey) -> Account {
 fn genesis_domain(public_key: PublicKey) -> Domain {
     let genesis_account_id = AccountId::new(public_key);
     Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id)
-}
-
-fn genesis_bootstraps_public_lane_validators(block: &GenesisBlock) -> bool {
-    block.0.external_transactions().any(|tx| {
-        let Executable::Instructions(batch) = tx.instructions() else {
-            return false;
-        };
-        batch.iter().any(|instruction| {
-            instruction
-                .as_any()
-                .downcast_ref::<iroha_data_model::isi::staking::RegisterPublicLaneValidator>()
-                .is_some()
-                || instruction
-                    .as_any()
-                    .downcast_ref::<iroha_data_model::isi::staking::ActivatePublicLaneValidator>()
-                    .is_some()
-        })
-    })
-}
-
-fn snapshot_missing_public_lane_state(
-    state: &State,
-    stored_genesis: Option<&GenesisBlock>,
-) -> bool {
-    stored_genesis.is_some_and(genesis_bootstraps_public_lane_validators)
-        && state
-            .world_view()
-            .public_lane_validators()
-            .iter()
-            .next()
-            .is_none()
 }
 
 #[cfg(test)]
@@ -6246,25 +6211,101 @@ pub fn read_config_and_genesis(
         *config.common.chain_discriminant.value(),
     );
 
-    let genesis = if let Some(signed_file) = &config.genesis.file {
-        if hard_fork_snapshot_bootstrap_enabled() {
-            iroha_logger::warn!(
-                path = %signed_file.resolve_relative_path().display(),
-                "hard-fork snapshot bootstrap: skipping configured legacy genesis file decode"
-            );
-            None
-        } else {
-            let genesis = read_genesis(&signed_file.resolve_relative_path())
-                .attach(signed_file.clone().into_attachment().display_path())?;
-            Some(genesis)
-        }
-    } else {
-        None
-    };
+    let genesis =
+        read_genesis_for_snapshot_policy(&config.snapshot.bootstrap, config.genesis.file.as_ref())?;
 
     config.logger.terminal_colors = args.terminal_colors;
 
     Ok((config, genesis))
+}
+
+fn read_genesis_for_snapshot_policy(
+    policy: &iroha_config::parameters::actual::SnapshotBootstrapPolicy,
+    signed_file: Option<&WithOrigin<PathBuf>>,
+) -> ReportResult<Option<GenesisBlock>, ConfigError> {
+    policy
+        .validate()
+        .map_err(|error| Report::new(ConfigError::ParseConfig).attach(error))?;
+    if policy.enabled {
+        return Ok(None);
+    }
+    let Some(signed_file) = signed_file else {
+        return Ok(None);
+    };
+    let genesis = read_genesis(&signed_file.resolve_relative_path())
+        .attach(signed_file.clone().into_attachment().display_path())?;
+    Ok(Some(genesis))
+}
+
+#[cfg(test)]
+mod snapshot_bootstrap_genesis_tests {
+    use super::*;
+
+    fn enabled_policy() -> iroha_config::parameters::actual::SnapshotBootstrapPolicy {
+        iroha_config::parameters::actual::SnapshotBootstrapPolicy {
+            enabled: true,
+            audited_sha256: Some("ab".repeat(32)),
+            audited_height: Some(7),
+            replace_kura_suffix_after_height: None,
+        }
+    }
+
+    #[test]
+    fn enabled_audited_snapshot_does_not_read_missing_or_invalid_genesis() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let invalid = temp.path().join("invalid-genesis.nrt");
+        fs::write(&invalid, b"not a signed genesis").expect("write invalid fixture");
+        let invalid = WithOrigin::inline(invalid);
+        assert!(
+            read_genesis_for_snapshot_policy(&enabled_policy(), Some(&invalid))
+                .expect("enabled snapshot bootstrap ignores legacy genesis bytes")
+                .is_none()
+        );
+
+        let missing = WithOrigin::inline(temp.path().join("missing-genesis.nrt"));
+        assert!(
+            read_genesis_for_snapshot_policy(&enabled_policy(), Some(&missing))
+                .expect("enabled snapshot bootstrap does not require a legacy genesis file")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn disabled_or_partial_snapshot_policy_never_bypasses_genesis_validation() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let invalid = temp.path().join("invalid-genesis.nrt");
+        fs::write(&invalid, b"not a signed genesis").expect("write invalid fixture");
+        let invalid = WithOrigin::inline(invalid);
+        assert!(
+            read_genesis_for_snapshot_policy(
+                &iroha_config::parameters::actual::SnapshotBootstrapPolicy::default(),
+                Some(&invalid),
+            )
+            .is_err(),
+            "disabled policy must decode and reject invalid configured genesis"
+        );
+
+        let partial = iroha_config::parameters::actual::SnapshotBootstrapPolicy {
+            enabled: true,
+            audited_sha256: None,
+            audited_height: Some(7),
+            replace_kura_suffix_after_height: None,
+        };
+        assert!(
+            read_genesis_for_snapshot_policy(&partial, Some(&invalid)).is_err(),
+            "partial authorization must fail before it can suppress genesis validation"
+        );
+        let disabled_with_authority = iroha_config::parameters::actual::SnapshotBootstrapPolicy {
+            enabled: false,
+            audited_sha256: Some("ab".repeat(32)),
+            audited_height: Some(7),
+            replace_kura_suffix_after_height: None,
+        };
+        assert!(
+            read_genesis_for_snapshot_policy(&disabled_with_authority, Some(&invalid)).is_err(),
+            "disabled policy must reject dangling audited authorization fields"
+        );
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -8544,7 +8585,6 @@ fn consensus_entry_caps(
     (mode_tag.to_string(), consensus_params, fingerprint)
 }
 
-#[cfg(test)]
 fn compute_consensus_handshake_caps(
     world: &impl iroha_core::state::WorldReadOnly,
     height: u64,

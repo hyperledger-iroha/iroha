@@ -3188,7 +3188,7 @@ where
     resolve_vk_cached_for_type::<C, F>(backend, params, vk_box, builder)
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
 /// Resolve a packaged verifier key without falling back to runtime keygen.
 fn resolve_packaged_vk_cached<C>(
     backend: &str,
@@ -3243,31 +3243,6 @@ macro_rules! cached_vk_for {
             }
             Err(_) => false,
         }
-    }};
-}
-
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-macro_rules! packaged_vk_for {
-    ($params:expr, $backend:expr, $vk_box:expr, $circuit:expr, |$vk:ident| $body:block) => {{
-        let params_ref = $params;
-        let vk_ref = $vk_box;
-        let circuit = $circuit;
-        match resolve_packaged_vk_cached($backend, params_ref, vk_ref, &circuit) {
-            Ok(arc) => {
-                let $vk = arc.as_ref();
-                $body
-            }
-            Err(_) => false,
-        }
-    }};
-}
-
-#[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
-#[allow(unused_macros)]
-macro_rules! packaged_vk_for {
-    ($params:expr, $backend:expr, $vk_box:expr, $circuit:expr, |$vk:ident| $body:block) => {{
-        let _ = ($params, $backend, $vk_box, $circuit);
-        false
     }};
 }
 
@@ -10328,12 +10303,7 @@ mod pasta_tiny {
 
     use halo2_proofs::{
         circuit::{Layouter, SimpleFloorPlanner, Value},
-        halo2curves::{
-            CurveAffine as _,
-            ff::{Field as _, PrimeField as _},
-            group::{Curve as _, GroupEncoding as _, prime::PrimeCurveAffine as _},
-            pasta::{EqAffine as VestaAffine, Fp as Scalar},
-        },
+        halo2curves::pasta::Fp as Scalar,
         plonk::{Circuit, ConstraintSystem, Error as PlonkError, Expression, Selector},
         poly::Rotation,
     };

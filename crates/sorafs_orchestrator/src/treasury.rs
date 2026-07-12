@@ -29,7 +29,10 @@ use iroha_data_model::{
         },
     },
 };
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{
+    json::Json,
+    numeric::{Numeric, Quantity},
+};
 use thiserror::Error;
 
 use crate::incentives::RelayRewardEngine;
@@ -108,7 +111,7 @@ impl RelayPayoutService {
         for (relay_id, entry) in self.ledger.iter() {
             for (&epoch, record) in &entry.payouts {
                 if let Some(summary) = record.transfer_summary(epoch)
-                    && summary.amount != Numeric::zero()
+                    && !summary.amount.is_zero()
                 {
                     let record = LedgerTransferRecord::from_summary(
                         *relay_id,
@@ -129,7 +132,7 @@ impl RelayPayoutService {
                 }
 
                 for adjustment in &record.adjustments {
-                    if adjustment.amount == Numeric::zero() {
+                    if adjustment.amount.is_zero() {
                         continue;
                     }
                     let base_instruction = &record.instruction;
@@ -263,7 +266,7 @@ impl RelayPayoutService {
         let instruction =
             self.reward_engine
                 .compute_reward(metrics, bond_entry, beneficiary, metadata);
-        let transfer = instruction.to_transfer_instruction(self.treasury_account())?;
+        let transfer = instruction.to_transfer_instruction(self.treasury_account());
         let snapshot = self
             .ledger
             .record_reward(instruction.clone(), transfer.clone())
@@ -281,7 +284,7 @@ impl RelayPayoutService {
         &mut self,
         instruction: RelayRewardInstructionV1,
     ) -> Result<(), PayoutServiceError> {
-        let transfer = instruction.to_transfer_instruction(self.treasury_account())?;
+        let transfer = instruction.to_transfer_instruction(self.treasury_account());
         self.ledger
             .record_reward(instruction, transfer)
             .map(|_| ())
@@ -295,7 +298,7 @@ impl RelayPayoutService {
         relay_id: RelayId,
         epoch: u32,
         submitted_by: AccountId,
-        requested_amount: Numeric,
+        requested_amount: Quantity,
         reason: impl Into<String>,
         filed_at_unix: u64,
         requested_adjustment: Option<AdjustmentRequest>,
@@ -400,11 +403,8 @@ impl RelayPayoutService {
                         .map_err(PayoutServiceError::Ledger)?;
 
                     let asset = AssetId::new(asset_def.clone(), self.treasury_account().clone());
-                    let quantity = iroha_primitives::numeric::Quantity::try_from_numeric(
-                        amount.clone(),
-                    )?;
                     let transfer: InstructionBox =
-                        Transfer::asset_quantity(asset, quantity, beneficiary.clone()).into();
+                        Transfer::asset_quantity(asset, amount.clone(), beneficiary.clone()).into();
 
                     (
                         snapshot,
@@ -438,12 +438,9 @@ impl RelayPayoutService {
                         .map_err(PayoutServiceError::Ledger)?;
 
                     let asset = AssetId::new(asset_def, beneficiary.clone());
-                    let quantity = iroha_primitives::numeric::Quantity::try_from_numeric(
-                        amount.clone(),
-                    )?;
                     let transfer: InstructionBox = Transfer::asset_quantity(
                         asset,
-                        quantity,
+                        amount.clone(),
                         self.treasury_account().clone(),
                     )
                     .into();
@@ -540,7 +537,7 @@ pub struct TransferSummary {
     /// Account receiving the transfer.
     pub destination: AccountId,
     /// Amount of XOR moved as part of the transfer.
-    pub amount: Numeric,
+    pub amount: Quantity,
 }
 
 /// Direction of a treasury transfer recorded in the incentive ledger.
@@ -592,7 +589,7 @@ pub struct LedgerTransferRecord {
     #[norito(default)]
     pub dispute_id: Option<DisputeId>,
     /// Amount of XOR transferred.
-    pub amount: Numeric,
+    pub amount: Quantity,
     /// Source account/asset debited by the transfer.
     pub source_asset: AssetId,
     /// Destination account that received the transfer.
@@ -687,11 +684,11 @@ pub enum LedgerAmountSource {
     Exported,
 }
 
-/// Numeric-to-nanos conversion failure.
+/// Quantity-to-nanos conversion failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NumericToNanosError {
-    /// The amount was negative or too wide to view as an unsigned mantissa.
-    NegativeOrTooWideMantissa,
+pub enum QuantityToNanosError {
+    /// The amount was too wide to view as an unsigned mantissa.
+    TooWideMantissa,
     /// Scaling the amount to nanos required an unrepresentable power of ten.
     ScaleOverflow,
     /// Scaling the amount to nanos overflowed `u128`.
@@ -708,7 +705,7 @@ pub struct LedgerAmountConversionError {
     /// Transfer whose amount could not be represented as XOR nanos.
     pub record: LedgerTransferRecord,
     /// Conversion failure reason.
-    pub error: NumericToNanosError,
+    pub error: QuantityToNanosError,
 }
 
 /// Dimension along which a mismatch occurred.
@@ -784,12 +781,15 @@ pub struct EarningsRow {
     /// Relay identifier.
     pub relay_id: RelayId,
     /// Total XOR released via standard payouts.
-    pub total_paid: Numeric,
+    pub total_paid: Quantity,
     /// Additional XOR awarded through dispute credits.
-    pub total_rebated: Numeric,
+    pub total_rebated: Quantity,
     /// XOR withheld due to claw-backs.
-    pub total_withheld: Numeric,
+    pub total_withheld: Quantity,
     /// Net XOR earned by the relay (`paid + rebated - withheld`).
+    ///
+    /// This remains a signed decimal because it is an accounting difference;
+    /// snapshot construction currently rejects a negative result.
     pub net_paid: Numeric,
     /// Number of epochs recorded for the relay.
     pub epochs_recorded: usize,
@@ -827,9 +827,6 @@ impl EarningsRow {
 /// Errors surfaced by the payout service.
 #[derive(Debug, Error)]
 pub enum PayoutServiceError {
-    /// Reward arithmetic produced a value outside the non-negative asset domain.
-    #[error("invalid payout quantity: {0}")]
-    InvalidPayoutQuantity(#[from] iroha_primitives::numeric::NumericOperationError),
     /// Dispute registry rejected the operation.
     #[error("dispute registry error: {0}")]
     Registry(#[from] DisputeRegistryError),
@@ -872,7 +869,7 @@ impl RewardLedger {
         relay: RelayId,
         epoch: u32,
         dispute_id: DisputeId,
-        amount: Numeric,
+        amount: Quantity,
         notes: String,
         applied_at_unix: u64,
     ) -> Result<RewardLedgerSnapshot, RewardLedgerError> {
@@ -889,7 +886,7 @@ impl RewardLedger {
         relay: RelayId,
         epoch: u32,
         dispute_id: DisputeId,
-        amount: Numeric,
+        amount: Quantity,
         notes: String,
         applied_at_unix: u64,
     ) -> Result<RewardLedgerSnapshot, RewardLedgerError> {
@@ -929,9 +926,10 @@ impl RewardLedger {
 #[derive(Debug, Clone)]
 pub struct RewardLedgerSnapshot {
     pub relay_id: RelayId,
-    pub total_paid: Numeric,
-    pub total_rebated: Numeric,
-    pub total_withheld: Numeric,
+    pub total_paid: Quantity,
+    pub total_rebated: Quantity,
+    pub total_withheld: Quantity,
+    /// Signed accounting difference (`paid + rebated - withheld`).
     pub net_paid: Numeric,
     pub epochs_recorded: usize,
     pub last_epoch: Option<u32>,
@@ -960,7 +958,8 @@ pub enum RewardLedgerError {
     InsufficientNet {
         relay: RelayId,
         epoch: u32,
-        requested: Numeric,
+        requested: Quantity,
+        /// Signed net accounting result available before applying the debit.
         available: Numeric,
     },
     /// Net amount became negative after adjustments.
@@ -972,9 +971,9 @@ pub enum RewardLedgerError {
 struct RewardLedgerEntry {
     relay_id: RelayId,
     payouts: BTreeMap<u32, PayoutRecord>,
-    total_paid: Numeric,
-    total_rebated: Numeric,
-    total_withheld: Numeric,
+    total_paid: Quantity,
+    total_rebated: Quantity,
+    total_withheld: Quantity,
     epochs_recorded: usize,
     last_epoch: Option<u32>,
     last_reward_score: Option<u64>,
@@ -985,9 +984,9 @@ impl RewardLedgerEntry {
         Self {
             relay_id,
             payouts: BTreeMap::new(),
-            total_paid: Numeric::zero(),
-            total_rebated: Numeric::zero(),
-            total_withheld: Numeric::zero(),
+            total_paid: Quantity::zero(),
+            total_rebated: Quantity::zero(),
+            total_withheld: Quantity::zero(),
             epochs_recorded: 0,
             last_epoch: None,
             last_reward_score: None,
@@ -1007,9 +1006,8 @@ impl RewardLedgerEntry {
         let payout_amount = record.instruction.payout_amount.clone();
         self.total_paid = self
             .total_paid
-            .clone()
-            .checked_add(payout_amount)
-            .ok_or(RewardLedgerError::NumericOverflow)?;
+            .checked_add(&payout_amount)
+            .map_err(|_| RewardLedgerError::NumericOverflow)?;
         self.payouts.insert(epoch, record);
         self.epochs_recorded = self.epochs_recorded.saturating_add(1);
         self.last_epoch = Some(epoch);
@@ -1021,7 +1019,7 @@ impl RewardLedgerEntry {
         &mut self,
         epoch: u32,
         dispute_id: DisputeId,
-        amount: Numeric,
+        amount: Quantity,
         notes: String,
         applied_at_unix: u64,
     ) -> Result<(), RewardLedgerError> {
@@ -1043,9 +1041,8 @@ impl RewardLedgerEntry {
         );
         self.total_rebated = self
             .total_rebated
-            .clone()
-            .checked_add(amount_for_totals)
-            .ok_or(RewardLedgerError::NumericOverflow)?;
+            .checked_add(&amount_for_totals)
+            .map_err(|_| RewardLedgerError::NumericOverflow)?;
         self.ensure_non_negative_net()
     }
 
@@ -1053,7 +1050,7 @@ impl RewardLedgerEntry {
         &mut self,
         epoch: u32,
         dispute_id: DisputeId,
-        amount: Numeric,
+        amount: Quantity,
         notes: String,
         applied_at_unix: u64,
     ) -> Result<(), RewardLedgerError> {
@@ -1067,7 +1064,7 @@ impl RewardLedgerEntry {
             })?;
 
         let available = record.net_amount()?;
-        if amount > available {
+        if amount.as_numeric() > &available {
             return Err(RewardLedgerError::InsufficientNet {
                 relay: self.relay_id,
                 epoch,
@@ -1085,22 +1082,21 @@ impl RewardLedgerEntry {
         );
         self.total_withheld = self
             .total_withheld
-            .clone()
-            .checked_add(amount_for_totals)
-            .ok_or(RewardLedgerError::NumericOverflow)?;
+            .checked_add(&amount_for_totals)
+            .map_err(|_| RewardLedgerError::NumericOverflow)?;
         self.ensure_non_negative_net()
     }
 
     fn snapshot(&self) -> Result<RewardLedgerSnapshot, RewardLedgerError> {
         let net = self
             .total_paid
-            .clone()
-            .checked_add(self.total_rebated.clone())
-            .ok_or(RewardLedgerError::NumericOverflow)?
-            .checked_sub(self.total_withheld.clone())
-            .ok_or(RewardLedgerError::NegativeNet {
+            .checked_add(&self.total_rebated)
+            .map_err(|_| RewardLedgerError::NumericOverflow)?
+            .checked_sub(&self.total_withheld)
+            .map_err(|_| RewardLedgerError::NegativeNet {
                 relay: self.relay_id,
-            })?;
+            })?
+            .into_numeric();
 
         Ok(RewardLedgerSnapshot {
             relay_id: self.relay_id,
@@ -1145,7 +1141,7 @@ impl PayoutRecord {
         &mut self,
         dispute_id: DisputeId,
         kind: AdjustmentKind,
-        amount: Numeric,
+        amount: Quantity,
         notes: String,
         applied_at_unix: u64,
     ) {
@@ -1159,14 +1155,14 @@ impl PayoutRecord {
     }
 
     fn net_amount(&self) -> Result<Numeric, RewardLedgerError> {
-        let mut net = self.instruction.payout_amount.clone();
+        let mut net = self.instruction.payout_amount.as_numeric().clone();
         for adjustment in &self.adjustments {
             net = match adjustment.kind {
                 AdjustmentKind::Credit => net
-                    .checked_add(adjustment.amount.clone())
+                    .checked_add(adjustment.amount.as_numeric().clone())
                     .ok_or(RewardLedgerError::NumericOverflow)?,
                 AdjustmentKind::Debit => net
-                    .checked_sub(adjustment.amount.clone())
+                    .checked_sub(adjustment.amount.as_numeric().clone())
                     .ok_or(RewardLedgerError::NumericOverflow)?,
             };
         }
@@ -1182,7 +1178,7 @@ impl PayoutRecord {
             epoch,
             source_asset: transfer.source.clone(),
             destination: transfer.destination.clone(),
-            amount: transfer.object.as_numeric().clone(),
+            amount: transfer.object.clone(),
         })
     }
 }
@@ -1192,7 +1188,7 @@ impl PayoutRecord {
 pub struct AdjustmentRecord {
     pub dispute_id: DisputeId,
     pub kind: AdjustmentKind,
-    pub amount: Numeric,
+    pub amount: Quantity,
     pub notes: String,
     pub applied_at_unix: u64,
 }
@@ -1201,7 +1197,7 @@ impl AdjustmentRecord {
     fn new(
         dispute_id: DisputeId,
         kind: AdjustmentKind,
-        amount: Numeric,
+        amount: Quantity,
         notes: String,
         applied_at_unix: u64,
     ) -> Self {
@@ -1228,7 +1224,7 @@ pub enum AdjustmentKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdjustmentRequest {
     pub kind: AdjustmentKind,
-    pub amount: Numeric,
+    pub amount: Quantity,
 }
 
 /// Record describing a lifecycle-managed dispute.
@@ -1273,7 +1269,7 @@ pub enum DisputeStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedDispute {
     pub kind: ResolutionKind,
-    pub amount: Option<Numeric>,
+    pub amount: Option<Quantity>,
     pub notes: String,
 }
 
@@ -1294,9 +1290,9 @@ pub enum DisputeResolution {
     /// Close without modifications.
     NoChange { notes: String },
     /// Credit the relay with additional XOR.
-    Credit { amount: Numeric, notes: String },
+    Credit { amount: Quantity, notes: String },
     /// Debit XOR from the relay.
-    Debit { amount: Numeric, notes: String },
+    Debit { amount: Quantity, notes: String },
 }
 
 /// Registry tracking disputes keyed by identifier and relay.
@@ -1508,9 +1504,9 @@ fn record_dispute_metric(action: &str) {
     }
 }
 
-fn record_adjustment_metric(relay_id: RelayId, amount: &Numeric, kind: &str) {
+fn record_adjustment_metric(relay_id: RelayId, amount: &Quantity, kind: &str) {
     if let Some(metrics) = iroha_telemetry::metrics::global()
-        && let Ok(nanos) = numeric_to_nanos(amount)
+        && let Ok(nanos) = quantity_to_nanos(amount)
     {
         metrics.record_soranet_adjustment(&hex_encode(relay_id), nanos, kind);
     }
@@ -1522,10 +1518,10 @@ fn accumulate_reconciliation_amount(
     source: LedgerAmountSource,
     record: &LedgerTransferRecord,
 ) {
-    match numeric_to_nanos(&record.amount).and_then(|nanos| {
+    match quantity_to_nanos(&record.amount).and_then(|nanos| {
         total
             .checked_add(nanos)
-            .ok_or(NumericToNanosError::TotalOverflow)
+            .ok_or(QuantityToNanosError::TotalOverflow)
     }) {
         Ok(next_total) => *total = next_total,
         Err(error) => errors.push(LedgerAmountConversionError {
@@ -1536,25 +1532,26 @@ fn accumulate_reconciliation_amount(
     }
 }
 
-fn numeric_to_nanos(amount: &Numeric) -> Result<u128, NumericToNanosError> {
+fn quantity_to_nanos(amount: &Quantity) -> Result<u128, QuantityToNanosError> {
     let scale = amount.scale();
     let mantissa = amount
+        .as_numeric()
         .try_mantissa_u128()
-        .ok_or(NumericToNanosError::NegativeOrTooWideMantissa)?;
+        .ok_or(QuantityToNanosError::TooWideMantissa)?;
     if scale >= 9 {
         let divisor = 10u128
             .checked_pow(scale.saturating_sub(9))
-            .ok_or(NumericToNanosError::ScaleOverflow)?;
+            .ok_or(QuantityToNanosError::ScaleOverflow)?;
         mantissa
             .checked_div(divisor)
-            .ok_or(NumericToNanosError::ScaleOverflow)
+            .ok_or(QuantityToNanosError::ScaleOverflow)
     } else {
         let multiplier = 10u128
             .checked_pow(9 - scale)
-            .ok_or(NumericToNanosError::ScaleOverflow)?;
+            .ok_or(QuantityToNanosError::ScaleOverflow)?;
         mantissa
             .checked_mul(multiplier)
-            .ok_or(NumericToNanosError::NanosOverflow)
+            .ok_or(QuantityToNanosError::NanosOverflow)
     }
 }
 
@@ -1600,8 +1597,8 @@ mod tests {
     use super::*;
     use crate::incentives::RewardConfig;
 
-    fn numeric(value: u32) -> Numeric {
-        Numeric::from(value)
+    fn quantity(value: u32) -> Quantity {
+        Quantity::from(value)
     }
 
     fn asset_id() -> AssetDefinitionId {
@@ -1637,7 +1634,7 @@ mod tests {
     fn bond_entry(amount: u32) -> RelayBondLedgerEntryV1 {
         RelayBondLedgerEntryV1 {
             relay_id: [0xAB; 32],
-            bonded_amount: numeric(amount),
+            bonded_amount: quantity(amount),
             bond_asset_id: asset_id(),
             bonded_since_unix: 1,
             exit_capable: true,
@@ -1661,7 +1658,7 @@ mod tests {
 
     fn reward_engine() -> RelayRewardEngine {
         let policy = RelayBondPolicyV1 {
-            minimum_exit_bond: numeric(500),
+            minimum_exit_bond: quantity(500),
             bond_asset_id: asset_id(),
             uptime_floor_per_mille: 900,
             slash_penalty_basis_points: 100,
@@ -1669,7 +1666,7 @@ mod tests {
         };
         let config = RewardConfig {
             policy,
-            base_reward: numeric(100),
+            base_reward: quantity(100),
             uptime_weight_per_mille: 500,
             bandwidth_weight_per_mille: 500,
             compliance_penalty_basis_points: 0,
@@ -1713,9 +1710,12 @@ mod tests {
             .process_epoch(&metrics, &bond, account(1), Metadata::default())
             .expect("payout recorded");
 
-        assert_eq!(outcome.instruction.payout_amount, numeric(100));
-        assert_eq!(outcome.ledger_snapshot.total_paid, numeric(100));
-        assert_eq!(outcome.ledger_snapshot.net_paid, numeric(100));
+        assert_eq!(outcome.instruction.payout_amount, quantity(100));
+        assert_eq!(outcome.ledger_snapshot.total_paid, quantity(100));
+        assert_eq!(
+            outcome.ledger_snapshot.net_paid,
+            quantity(100).into_numeric()
+        );
     }
 
     #[test]
@@ -1768,12 +1768,12 @@ mod tests {
                 [0xAB; 32],
                 2,
                 account(9),
-                numeric(125),
+                quantity(125),
                 "missing bytes",
                 50,
                 Some(AdjustmentRequest {
                     kind: AdjustmentKind::Credit,
-                    amount: numeric(25),
+                    amount: quantity(25),
                 }),
             )
             .expect("dispute filed");
@@ -1786,7 +1786,7 @@ mod tests {
             .resolve_dispute(
                 dispute.id,
                 DisputeResolution::Credit {
-                    amount: numeric(25),
+                    amount: quantity(25),
                     notes: "approved".into(),
                 },
                 60,
@@ -1808,7 +1808,7 @@ mod tests {
         };
         assert_eq!(transfer.source, AssetId::new(asset_id(), treasury));
         assert_eq!(transfer.destination, beneficiary);
-        assert_eq!(transfer.object.as_numeric(), &numeric(25));
+        assert_eq!(transfer.object, quantity(25));
     }
 
     #[test]
@@ -1826,12 +1826,12 @@ mod tests {
                 [0xAB; 32],
                 3,
                 account(10),
-                numeric(60),
+                quantity(60),
                 "incorrect measurement",
                 55,
                 Some(AdjustmentRequest {
                     kind: AdjustmentKind::Debit,
-                    amount: numeric(40),
+                    amount: quantity(40),
                 }),
             )
             .expect("dispute filed");
@@ -1840,7 +1840,7 @@ mod tests {
             .resolve_dispute(
                 dispute.id,
                 DisputeResolution::Debit {
-                    amount: numeric(40),
+                    amount: quantity(40),
                     notes: "clawed back".into(),
                 },
                 70,
@@ -1856,7 +1856,7 @@ mod tests {
         };
         assert_eq!(transfer.source, AssetId::new(asset_id(), beneficiary));
         assert_eq!(transfer.destination, treasury);
-        assert_eq!(transfer.object.as_numeric(), &numeric(40));
+        assert_eq!(transfer.object, quantity(40));
     }
 
     #[test]
@@ -1873,7 +1873,7 @@ mod tests {
                 [0xAB; 32],
                 4,
                 account(11),
-                numeric(100),
+                quantity(100),
                 "late measurement",
                 80,
                 None,
@@ -1919,12 +1919,12 @@ mod tests {
                 metrics.relay_id,
                 metrics.epoch,
                 account(19),
-                numeric(80),
+                quantity(80),
                 "measurement dispute",
                 1_000,
                 Some(AdjustmentRequest {
                     kind: AdjustmentKind::Credit,
-                    amount: numeric(25),
+                    amount: quantity(25),
                 }),
             )
             .expect("dispute filed");
@@ -1933,7 +1933,7 @@ mod tests {
             .resolve_dispute(
                 dispute.id,
                 DisputeResolution::Credit {
-                    amount: numeric(25),
+                    amount: quantity(25),
                     notes: "approved".into(),
                 },
                 1_020,
@@ -1954,7 +1954,8 @@ mod tests {
             .get() as u64;
 
         let expected_credit =
-            u64::try_from(numeric_to_nanos(&numeric(25)).expect("convert numeric")).expect("u64");
+            u64::try_from(quantity_to_nanos(&quantity(25)).expect("convert quantity"))
+                .expect("u64");
 
         assert!(
             filed_after >= filed_before.saturating_add(1),
@@ -1990,7 +1991,7 @@ mod tests {
                 metrics.relay_id,
                 metrics.epoch,
                 account(20),
-                numeric(40),
+                quantity(40),
                 "rejection test",
                 1_000,
                 None,
@@ -2027,7 +2028,7 @@ mod tests {
                 [0xAB; 32],
                 6,
                 account(12),
-                numeric(100),
+                quantity(100),
                 "late measurement",
                 100,
                 None,
@@ -2054,7 +2055,7 @@ mod tests {
         assert_eq!(last_transfer.epoch, 6);
         assert_eq!(last_transfer.source_asset.account, treasury);
         assert_eq!(last_transfer.destination, account(5));
-        assert_eq!(last_transfer.amount, numeric(80));
+        assert_eq!(last_transfer.amount, quantity(80));
     }
 
     #[test]
@@ -2135,7 +2136,7 @@ mod tests {
             .expect("epoch recorded");
 
         let mut exports = expected_exports(&service);
-        exports[0].amount = numeric(999);
+        exports[0].amount = quantity(999);
 
         let report = service.reconcile_ledger(&exports);
         assert!(!report.is_clean());
@@ -2150,7 +2151,7 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_reports_unconvertible_export_amount_without_zeroing_total() {
+    fn reconcile_reports_too_wide_export_amount_without_zeroing_total() {
         let (mut service, _) = payout_service();
         let bond = bond_entry(1_000);
 
@@ -2159,7 +2160,10 @@ mod tests {
             .expect("epoch recorded");
 
         let mut exports = expected_exports(&service);
-        exports[0].amount = Numeric::new(-1_i128, 0);
+        let too_wide = "340282366920938463463374607431768211456"
+            .parse::<Quantity>()
+            .expect("2^128 is a valid 512-bit quantity");
+        exports[0].amount = too_wide.clone();
 
         let report = service.reconcile_ledger(&exports);
 
@@ -2167,8 +2171,8 @@ mod tests {
         assert_eq!(report.amount_conversion_errors.len(), 1);
         let error = &report.amount_conversion_errors[0];
         assert_eq!(error.source, LedgerAmountSource::Exported);
-        assert_eq!(error.error, NumericToNanosError::NegativeOrTooWideMantissa);
-        assert_eq!(error.record.amount, Numeric::new(-1_i128, 0));
+        assert_eq!(error.error, QuantityToNanosError::TooWideMantissa);
+        assert_eq!(error.record.amount, too_wide);
         assert_eq!(report.exported_amount_nanos, 0);
         assert!(report.expected_amount_nanos > 0);
         assert!(
@@ -2198,12 +2202,12 @@ mod tests {
                 relay_id,
                 20,
                 account(90),
-                numeric(125),
+                quantity(125),
                 "credit adjustment",
                 1_000,
                 Some(AdjustmentRequest {
                     kind: AdjustmentKind::Credit,
-                    amount: numeric(25),
+                    amount: quantity(25),
                 }),
             )
             .expect("credit dispute filed");
@@ -2211,7 +2215,7 @@ mod tests {
             .resolve_dispute(
                 credit_dispute.id,
                 DisputeResolution::Credit {
-                    amount: numeric(25),
+                    amount: quantity(25),
                     notes: "approved".into(),
                 },
                 1_010,
@@ -2224,12 +2228,12 @@ mod tests {
                 relay_id,
                 20,
                 account(91),
-                numeric(10),
+                quantity(10),
                 "debit adjustment",
                 1_020,
                 Some(AdjustmentRequest {
                     kind: AdjustmentKind::Debit,
-                    amount: numeric(10),
+                    amount: quantity(10),
                 }),
             )
             .expect("debit dispute filed");
@@ -2237,7 +2241,7 @@ mod tests {
             .resolve_dispute(
                 debit_dispute.id,
                 DisputeResolution::Debit {
-                    amount: numeric(10),
+                    amount: quantity(10),
                     notes: "claw back".into(),
                 },
                 1_030,

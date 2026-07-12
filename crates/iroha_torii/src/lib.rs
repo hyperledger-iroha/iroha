@@ -59944,6 +59944,7 @@ pub(crate) mod tests_runtime_handlers {
             next_epoch_snapshot: None,
             mode: ConsensusMode::Npos,
             parent_commit_qc: None,
+            snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid SCCP finality roster"),
             roster,
             nexus_amx_context_hash: Hash::new(b"Torii SCCP exact-v2 finality context"),

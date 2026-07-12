@@ -29,7 +29,7 @@ use iroha_data_model::{
     },
 };
 use iroha_logger::warn;
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{json::Json, numeric::Quantity};
 use thiserror::Error;
 
 /// Declarative configuration for the relay reward engine.
@@ -38,7 +38,7 @@ pub struct RewardConfig {
     /// Bonding policy enforced for relay payouts.
     pub policy: RelayBondPolicyV1,
     /// Base reward (in XOR) allocated per relay per epoch before applying weights.
-    pub base_reward: Numeric,
+    pub base_reward: Quantity,
     /// Weight applied to the uptime ratio (`0‒1000`, interpreted as per-mille).
     pub uptime_weight_per_mille: u16,
     /// Weight applied to the bandwidth ratio (`0‒1000`, interpreted as per-mille).
@@ -71,6 +71,12 @@ impl RewardConfig {
             return Err(RewardConfigError::BandwidthTargetZero);
         }
 
+        if self.base_reward.scale() > 9 {
+            return Err(RewardConfigError::BaseRewardScale {
+                scale: self.base_reward.scale(),
+            });
+        }
+
         if self.compliance_penalty_basis_points > 10_000 {
             return Err(RewardConfigError::CompliancePenaltyOverflow {
                 penalty: self.compliance_penalty_basis_points,
@@ -99,6 +105,12 @@ pub enum RewardConfigError {
     /// Bandwidth target must be greater than zero.
     #[error("bandwidth target must be non-zero")]
     BandwidthTargetZero,
+    /// Base rewards must fit the nano-XOR precision domain.
+    #[error("base reward scale {scale} exceeds nano-XOR scale 9")]
+    BaseRewardScale {
+        /// Configured decimal scale.
+        scale: u32,
+    },
     /// Compliance penalties cannot exceed 100%.
     #[error("compliance penalty must not exceed 100% (got {penalty} bps)")]
     CompliancePenaltyOverflow {
@@ -178,6 +190,9 @@ impl RelayRewardEngine {
                 bandwidth: config.bandwidth_weight_per_mille,
             },
             RelayIncentiveError::ZeroBandwidthTarget => RewardConfigError::BandwidthTargetZero,
+            RelayIncentiveError::InvalidBasePayoutScale { scale } => {
+                RewardConfigError::BaseRewardScale { scale }
+            }
             other => RewardConfigError::Invariant(other),
         })?;
 
@@ -190,7 +205,7 @@ impl RelayRewardEngine {
         };
 
         if let Some(handle) = iroha_telemetry::metrics::global()
-            && let Some(base_nanos) = numeric_to_nanos(&base_reward)
+            && let Some(base_nanos) = quantity_to_nanos(&base_reward)
         {
             handle.set_soranet_reward_base_payout(base_nanos);
         }
@@ -352,7 +367,7 @@ impl RelayRewardEngine {
             epoch: metrics.epoch,
             beneficiary,
             payout_asset_id: self.calculator.config().policy.bond_asset_id.clone(),
-            payout_amount: Numeric::zero(),
+            payout_amount: Quantity::zero(),
             reward_score: 0,
             budget_approval_id: self.budget_approval_id,
             metadata,
@@ -383,13 +398,13 @@ fn skip_reason_label(reason: RewardSkipReason) -> &'static str {
 
 fn record_reward_telemetry(
     relay_id: RelayId,
-    amount: &Numeric,
+    amount: &Quantity,
     result: &str,
     skip_reason: Option<&'static str>,
 ) {
     if let Some(handle) = iroha_telemetry::metrics::global() {
         let relay_label = hex_encode(relay_id);
-        let Some(nanos) = numeric_to_nanos(amount) else {
+        let Some(nanos) = quantity_to_nanos(amount) else {
             warn!(
                 relay_id = %relay_label,
                 amount = %amount,
@@ -404,9 +419,9 @@ fn record_reward_telemetry(
     }
 }
 
-pub(crate) fn numeric_to_nanos(amount: &Numeric) -> Option<u128> {
+pub(crate) fn quantity_to_nanos(amount: &Quantity) -> Option<u128> {
     let scale = amount.scale();
-    let mantissa = amount.try_mantissa_u128()?;
+    let mantissa = amount.as_numeric().try_mantissa_u128()?;
     if scale >= 9 {
         let divisor = 10u128.checked_pow(scale.saturating_sub(9))?;
         mantissa.checked_div(divisor)
@@ -575,8 +590,8 @@ mod tests {
 
     use super::*;
 
-    fn numeric(value: u32) -> Numeric {
-        Numeric::from(value)
+    fn quantity(value: u32) -> Quantity {
+        Quantity::from(value)
     }
 
     fn asset_id() -> AssetDefinitionId {
@@ -587,7 +602,7 @@ mod tests {
 
     fn policy() -> RelayBondPolicyV1 {
         RelayBondPolicyV1 {
-            minimum_exit_bond: numeric(1_000),
+            minimum_exit_bond: quantity(1_000),
             bond_asset_id: asset_id(),
             uptime_floor_per_mille: 900,
             slash_penalty_basis_points: 250,
@@ -602,7 +617,7 @@ mod tests {
     fn bond_entry(amount: u32, exit_capable: bool) -> RelayBondLedgerEntryV1 {
         RelayBondLedgerEntryV1 {
             relay_id: [0_u8; 32],
-            bonded_amount: numeric(amount),
+            bonded_amount: quantity(amount),
             bond_asset_id: asset_id(),
             bonded_since_unix: 1,
             exit_capable,
@@ -637,7 +652,7 @@ mod tests {
     fn engine(uptime_weight: u16, bandwidth_weight: u16, penalty_bps: u16) -> RelayRewardEngine {
         let config = RewardConfig {
             policy: policy(),
-            base_reward: numeric(100),
+            base_reward: quantity(100),
             uptime_weight_per_mille: uptime_weight,
             bandwidth_weight_per_mille: bandwidth_weight,
             compliance_penalty_basis_points: penalty_bps,
@@ -652,7 +667,7 @@ mod tests {
     fn weight_validation_rejects_overflow() {
         let config = RewardConfig {
             policy: policy(),
-            base_reward: numeric(100),
+            base_reward: quantity(100),
             uptime_weight_per_mille: 800,
             bandwidth_weight_per_mille: 300,
             compliance_penalty_basis_points: 0,
@@ -670,7 +685,7 @@ mod tests {
     fn compliance_penalty_rejects_overflow() {
         let config = RewardConfig {
             policy: policy(),
-            base_reward: numeric(100),
+            base_reward: quantity(100),
             uptime_weight_per_mille: 500,
             bandwidth_weight_per_mille: 500,
             compliance_penalty_basis_points: 12_500,
@@ -688,7 +703,7 @@ mod tests {
     fn missing_budget_approval_is_rejected() {
         let config = RewardConfig {
             policy: policy(),
-            base_reward: numeric(100),
+            base_reward: quantity(100),
             uptime_weight_per_mille: 500,
             bandwidth_weight_per_mille: 500,
             compliance_penalty_basis_points: 0,
@@ -703,11 +718,23 @@ mod tests {
     }
 
     #[test]
+    fn sub_nano_base_reward_is_rejected() {
+        let mut config = engine(500, 500, 0).config().clone();
+        config.base_reward = "0.0000000001"
+            .parse::<Quantity>()
+            .expect("scale-10 quantity");
+        assert!(matches!(
+            RelayRewardEngine::new(config),
+            Err(RewardConfigError::BaseRewardScale { scale: 10 })
+        ));
+    }
+
+    #[test]
     fn reward_engine_sets_base_payout_metric() {
         let metrics = iroha_telemetry::metrics::global_or_default();
         metrics.soranet_reward_base_payout_nanos.set(0);
 
-        let expected_nanos = numeric_to_nanos(&numeric(100)).expect("base reward convertible");
+        let expected_nanos = quantity_to_nanos(&quantity(100)).expect("base reward convertible");
 
         let _ = engine(500, 500, 0);
 
@@ -719,8 +746,8 @@ mod tests {
     }
 
     #[test]
-    fn numeric_to_nanos_rejects_negative_amount_without_panic() {
-        assert_eq!(numeric_to_nanos(&Numeric::new(-1_i128, 0)), None);
+    fn quantity_to_nanos_accepts_zero_without_panic() {
+        assert_eq!(quantity_to_nanos(&Quantity::zero()), Some(0));
     }
 
     #[test]
@@ -733,7 +760,7 @@ mod tests {
             sample_account(),
             Metadata::default(),
         );
-        assert_eq!(instruction.payout_amount, numeric(100));
+        assert_eq!(instruction.payout_amount, quantity(100));
     }
 
     #[test]
@@ -747,8 +774,8 @@ mod tests {
             sample_account(),
             Metadata::default(),
         );
-        assert!(instruction.payout_amount < numeric(100));
-        assert!(instruction.payout_amount > Numeric::zero());
+        assert!(instruction.payout_amount < quantity(100));
+        assert!(instruction.payout_amount > Quantity::zero());
     }
 
     #[test]
@@ -762,7 +789,7 @@ mod tests {
             sample_account(),
             Metadata::default(),
         );
-        assert_eq!(instruction.payout_amount, Numeric::zero());
+        assert_eq!(instruction.payout_amount, Quantity::zero());
     }
 
     #[test]
@@ -774,7 +801,7 @@ mod tests {
             sample_account(),
             Metadata::default(),
         );
-        assert_eq!(instruction.payout_amount, Numeric::zero());
+        assert_eq!(instruction.payout_amount, Quantity::zero());
     }
 
     #[test]
@@ -784,7 +811,7 @@ mod tests {
 
         let config = RewardConfig {
             policy: policy(),
-            base_reward: numeric(100),
+            base_reward: quantity(100),
             uptime_weight_per_mille: 500,
             bandwidth_weight_per_mille: 500,
             compliance_penalty_basis_points: 0,

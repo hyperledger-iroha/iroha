@@ -20,8 +20,8 @@ use iroha_data_model::{
     DomainId, asset::AssetDefinitionId, name::Name, smart_contract::ContractAddress,
     transaction::SignedTransaction,
 };
-use ivm::kotodama::session::{CompileRequest, CompilerSession};
 use iroha_version::codec::DecodeVersioned as _;
+use ivm::kotodama::session::{CompileRequest, CompilerSession};
 use mv::storage::StorageReadOnly;
 use norito::json;
 use tower::ServiceExt as _;

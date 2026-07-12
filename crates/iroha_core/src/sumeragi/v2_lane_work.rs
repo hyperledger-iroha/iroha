@@ -14,6 +14,9 @@ use std::{
     time::Instant,
 };
 
+#[cfg(test)]
+use std::sync::{Barrier, mpsc};
+
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     block::{
@@ -40,6 +43,7 @@ use super::{
     InboundBlockMessage, LaneRelayMessage,
     lane_planner::{prepare_v2_lane_payload_plan, proposal_lookahead_enabled},
     message::BlockMessage,
+    output_guard::ConsensusOutputGuard,
     v2_candidate::{
         CandidateDescriptor, CandidateWorkProvider, CandidateWorkUnavailable, PreparedCandidateWork,
     },
@@ -302,6 +306,9 @@ pub(crate) enum V2LaneIngressOutcome {
 /// Fail-closed adapter construction or durable-retention error.
 #[derive(Debug, Error)]
 pub(crate) enum V2LaneWorkError {
+    /// A fatal consensus effect requires process restart before more lane work.
+    #[error("Sumeragi v2 lane work requires process restart")]
+    RestartRequired,
     /// Frozen context is malformed.
     #[error("invalid Sumeragi v2 height context: {0}")]
     InvalidContext(String),
@@ -361,6 +368,12 @@ enum PendingMergeStage {
     Certified(MergeLedgerEntry),
 }
 
+#[cfg(test)]
+struct LanePersistencePause {
+    entered: mpsc::SyncSender<()>,
+    release: Arc<Barrier>,
+}
+
 /// Authoritative bounded adapter retained for exactly one global height.
 pub(crate) struct V2LaneWorkAdapter {
     context: wire::HeightContext,
@@ -369,6 +382,7 @@ pub(crate) struct V2LaneWorkAdapter {
     voting_enabled: bool,
     state: Arc<State>,
     kura: Arc<Kura>,
+    output_guard: Arc<ConsensusOutputGuard>,
     limits: V2LaneWorkLimits,
     lane_sessions: LaneBlockSessionCache,
     native_sessions: NativeAmxSessionCache,
@@ -408,6 +422,10 @@ pub(crate) struct V2LaneWorkAdapter {
     lane_artifact_cursor: usize,
     native_retransmit_cursor: usize,
     regular_retransmit_class_cursor: usize,
+    #[cfg(test)]
+    persistence_pause: Option<LanePersistencePause>,
+    #[cfg(test)]
+    persistence_failure: Option<String>,
 }
 
 impl V2LaneWorkAdapter {
@@ -418,6 +436,7 @@ impl V2LaneWorkAdapter {
     /// Returns [`V2LaneWorkError`] for malformed context, local-key drift, or
     /// committed-state/context drift. `recovered_applied_height` is accepted
     /// only when it identifies this exact context and canonical post-apply tip.
+    #[cfg(test)]
     pub(crate) fn new(
         context: wire::HeightContext,
         local_peer: PeerId,
@@ -428,6 +447,36 @@ impl V2LaneWorkAdapter {
         limits: V2LaneWorkLimits,
         recovered_applied_height: Option<super::v2_recovery::PendingKuraApply>,
     ) -> Result<Self, V2LaneWorkError> {
+        Self::new_with_output_guard(
+            context,
+            local_peer,
+            key_pair,
+            voting_enabled,
+            state,
+            kura,
+            limits,
+            recovered_applied_height,
+            ConsensusOutputGuard::isolated(),
+        )
+    }
+
+    /// Open one production adapter under the process-lifetime consensus output guard.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_output_guard(
+        context: wire::HeightContext,
+        local_peer: PeerId,
+        key_pair: KeyPair,
+        voting_enabled: bool,
+        state: Arc<State>,
+        kura: Arc<Kura>,
+        limits: V2LaneWorkLimits,
+        recovered_applied_height: Option<super::v2_recovery::PendingKuraApply>,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) -> Result<Self, V2LaneWorkError> {
+        let construction_guard = Arc::clone(&output_guard);
+        let construction = construction_guard
+            .begin_fail_stop_operation()
+            .ok_or(V2LaneWorkError::RestartRequired)?;
         context
             .validate()
             .map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?;
@@ -481,6 +530,7 @@ impl V2LaneWorkAdapter {
             voting_enabled,
             state,
             kura,
+            output_guard,
             limits,
             lane_sessions: LaneBlockSessionCache::new(limits.session_capacity.get()),
             native_sessions: NativeAmxSessionCache::with_limits(
@@ -519,6 +569,10 @@ impl V2LaneWorkAdapter {
             lane_artifact_cursor: 0,
             native_retransmit_cursor: 0,
             regular_retransmit_class_cursor: 0,
+            #[cfg(test)]
+            persistence_pause: None,
+            #[cfg(test)]
+            persistence_failure: None,
         };
         let finalized_cleanup_height = if is_post_apply {
             adapter.context.height
@@ -532,6 +586,7 @@ impl V2LaneWorkAdapter {
         adapter.repair_globally_applied_lane_receipts()?;
         adapter.hydrate_canonical_lane_artifacts();
         adapter.drive_lane_sessions();
+        construction.complete();
         Ok(adapter)
     }
 
@@ -604,6 +659,10 @@ impl V2LaneWorkAdapter {
         round: wire::ConsensusRound,
         block_hash: HashOf<BlockHeader>,
     ) -> V2LaneIngressOutcome {
+        let output_guard = Arc::clone(&self.output_guard);
+        let Some(_permit) = output_guard.acquire() else {
+            return V2LaneIngressOutcome::Rejected;
+        };
         if !self.round_is_current(round) {
             return V2LaneIngressOutcome::Rejected;
         }
@@ -650,6 +709,10 @@ impl V2LaneWorkAdapter {
     /// signable.
     #[must_use]
     pub(crate) fn mark_global_body_locked(&mut self, block_hash: HashOf<BlockHeader>) -> bool {
+        let output_guard = Arc::clone(&self.output_guard);
+        let Some(_permit) = output_guard.acquire() else {
+            return false;
+        };
         if self.globally_locked_body_hash.is_some() {
             return false;
         }
@@ -665,6 +728,27 @@ impl V2LaneWorkAdapter {
     /// only when neither a safety lock nor a durable Decision protects an
     /// earlier immutable body.
     pub(crate) fn retain_merge_sidecars_for_global_view(
+        &mut self,
+        view: wire::View,
+        locked_subject: Option<wire::BlockSubject>,
+        decided_subject: Option<wire::BlockSubject>,
+    ) -> Result<(), V2LaneWorkError> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(V2LaneWorkError::RestartRequired)?;
+        let result = self.retain_merge_sidecars_for_global_view_guarded(
+            view,
+            locked_subject,
+            decided_subject,
+        );
+        if result.is_ok() {
+            operation.complete();
+        }
+        result
+    }
+
+    fn retain_merge_sidecars_for_global_view_guarded(
         &mut self,
         view: wire::View,
         locked_subject: Option<wire::BlockSubject>,
@@ -690,25 +774,35 @@ impl V2LaneWorkAdapter {
             .parent_commit_qc
             .as_ref()
             .map(|certificate| certificate.subject.block_hash)
+            .or_else(|| {
+                self.context
+                    .snapshot_bootstrap
+                    .as_ref()
+                    .map(|anchor| anchor.snapshot_block_hash)
+            })
         else {
             self.kura
                 .retain_pending_certified_merge_entry_for_locked_carrier(self.context.height, None)
                 .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
             self.retained_merge_carrier_state = Some(carrier_state);
-            self.refresh_merge_candidates(view);
+            self.refresh_merge_candidates(view)?;
             return Ok(());
         };
         self.kura
             .prune_pending_certified_merge_entries_not_bound_to(self.context.height, parent, view)
             .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         self.retained_merge_carrier_state = Some(carrier_state);
-        self.refresh_merge_candidates(view);
+        self.refresh_merge_candidates(view)?;
         Ok(())
     }
 
     /// Bind lane proposals reconstructed from the exact durable globally
     /// locked body, then release their bounded lane-local consensus sessions.
     pub(crate) fn bind_locked_global_body(&mut self, block: &SignedBlock) -> V2LaneIngressOutcome {
+        let output_guard = Arc::clone(&self.output_guard);
+        let Some(validation_permit) = output_guard.acquire() else {
+            return V2LaneIngressOutcome::Rejected;
+        };
         let block_hash = block.hash();
         if self.globally_locked_body_hash != Some(block_hash)
             || block.header().height().get() != self.context.height
@@ -806,6 +900,10 @@ impl V2LaneWorkAdapter {
         // Do not delete any losing durable sidecar until every in-memory
         // locked-body check and session insertion has succeeded. Once this
         // exact retention succeeds, the remaining operations are infallible.
+        drop(validation_permit);
+        let Some(persistence) = output_guard.begin_fail_stop_operation() else {
+            return V2LaneIngressOutcome::Rejected;
+        };
         if self
             .kura
             .retain_pending_certified_merge_entry_for_locked_carrier(
@@ -830,11 +928,13 @@ impl V2LaneWorkAdapter {
             );
         }
         self.drive_lane_sessions();
-        if inserted {
+        let outcome = if inserted {
             V2LaneIngressOutcome::Inserted
         } else {
             V2LaneIngressOutcome::Duplicate
-        }
+        };
+        persistence.complete();
+        outcome
     }
 
     /// Persist only completed lane sessions anchored by canonical Kura blocks.
@@ -844,6 +944,10 @@ impl V2LaneWorkAdapter {
     /// Returns [`V2LaneWorkError::Persistence`] if an anchored certificate or
     /// its canonical globally-applied receipt cannot be written durably.
     pub(crate) fn persist_anchored_sessions(&mut self) -> Result<usize, V2LaneWorkError> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(V2LaneWorkError::RestartRequired)?;
         self.collect_committed_lane_sessions();
         let mut sessions = self
             .pending_committed_lanes
@@ -905,12 +1009,26 @@ impl V2LaneWorkAdapter {
             persisted = persisted.saturating_add(1);
         }
         self.pending_committed_lanes = retained;
+        operation.complete();
         Ok(persisted)
     }
 
     /// Retire losing certified merge sidecars once another carrier is durably
     /// finalized at this height.
     pub(crate) fn prune_finalized_merge_sidecars(&mut self) -> Result<(), V2LaneWorkError> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(V2LaneWorkError::RestartRequired)?;
+        #[cfg(test)]
+        if let Some(pause) = &self.persistence_pause {
+            let _ = pause.entered.send(());
+            pause.release.wait();
+        }
+        #[cfg(test)]
+        if let Some(reason) = self.persistence_failure.take() {
+            return Err(V2LaneWorkError::Persistence(reason));
+        }
         self.merge_entries.clear();
         self.merge_claims.clear();
         self.purge_queued_merge_broadcasts();
@@ -919,6 +1037,7 @@ impl V2LaneWorkAdapter {
         self.kura
             .prune_finalized_pending_certified_merge_entries(self.context.height)
             .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+        operation.complete();
         Ok(())
     }
 
@@ -940,6 +1059,10 @@ impl V2LaneWorkAdapter {
         inbound: InboundBlockMessage,
         active_view: wire::View,
     ) -> V2LaneIngressOutcome {
+        let output_guard = Arc::clone(&self.output_guard);
+        let Some(_permit) = output_guard.acquire() else {
+            return V2LaneIngressOutcome::Rejected;
+        };
         let (message, sender) = inbound.into_message_and_sender();
         let outcome = match message {
             BlockMessage::LaneBlockProposal(proposal) => {
@@ -982,6 +1105,24 @@ impl V2LaneWorkAdapter {
     }
 
     fn defer_missing_merge_sidecar_with_priority(
+        &mut self,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        reference: CertifiedMergeLedgerReference,
+        decided: bool,
+    ) -> Result<MergeSidecarDeferralDisposition, V2LaneWorkError> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(V2LaneWorkError::RestartRequired)?;
+        let result = self.defer_missing_merge_sidecar_guarded(round, subject, reference, decided);
+        if result.is_ok() {
+            operation.complete();
+        }
+        result
+    }
+
+    fn defer_missing_merge_sidecar_guarded(
         &mut self,
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
@@ -1101,6 +1242,8 @@ impl V2LaneWorkAdapter {
     /// Take one exact entry hash whose durable installation permits validation
     /// of all retained bodies referencing it to retry.
     pub(crate) fn take_completed_merge_sidecar(&mut self) -> Option<HashOf<MergeLedgerEntry>> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let _permit = output_guard.acquire()?;
         let hash = self.completed_merge_sidecars.iter().next().copied()?;
         self.completed_merge_sidecars.remove(&hash);
         Some(hash)
@@ -1109,6 +1252,8 @@ impl V2LaneWorkAdapter {
     /// Take one exact full-entry rejection to apply to every retained body
     /// referencing the same hash.
     pub(crate) fn take_rejected_merge_sidecar(&mut self) -> Option<RejectedMergeSidecar> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let _permit = output_guard.acquire()?;
         let entry_hash = self.rejected_merge_sidecars.keys().next().copied()?;
         let reason = self
             .rejected_merge_sidecars
@@ -1123,10 +1268,15 @@ impl V2LaneWorkAdapter {
         &mut self,
         pending_blocks: &BTreeSet<HashOf<BlockHeader>>,
     ) -> Result<(), V2LaneWorkError> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(V2LaneWorkError::RestartRequired)?;
         let committed_height = u64::try_from(self.state.committed_height())
             .map_err(|_| V2LaneWorkError::StateHeightMismatch)?;
         self.merge_sidecars
             .retain_pending_blocks(pending_blocks, committed_height);
+        operation.complete();
         Ok(())
     }
 
@@ -1136,7 +1286,11 @@ impl V2LaneWorkAdapter {
         message: LaneRelayMessage,
         active_view: wire::View,
     ) -> V2LaneIngressOutcome {
-        match message {
+        let output_guard = Arc::clone(&self.output_guard);
+        let Some(operation) = output_guard.begin_fail_stop_operation() else {
+            return V2LaneIngressOutcome::Rejected;
+        };
+        let result = match message {
             LaneRelayMessage::Envelope(envelope) => self.accept_lane_relay(envelope, active_view),
             LaneRelayMessage::MergeSignature(signature) => {
                 self.accept_merge_signature(signature, active_view)
@@ -1144,15 +1298,33 @@ impl V2LaneWorkAdapter {
             LaneRelayMessage::CertifiedMergeSidecar { sender, message } => {
                 self.accept_certified_merge_sidecar(sender, message)
             }
-            LaneRelayMessage::MergeCandidate { .. } => V2LaneIngressOutcome::Rejected,
+            LaneRelayMessage::MergeCandidate { .. } => Ok(V2LaneIngressOutcome::Rejected),
             LaneRelayMessage::NativeAmx { sender, message } => {
-                self.accept_native_amx(sender, message, active_view)
+                Ok(self.accept_native_amx(sender, message, active_view))
+            }
+        };
+        match result {
+            Ok(outcome) => {
+                operation.complete();
+                outcome
+            }
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    "Sumeragi v2 lane relay hit a fatal local durability failure"
+                );
+                drop(operation);
+                V2LaneIngressOutcome::Rejected
             }
         }
     }
 
     /// Drain at most `limit` explicit transport effects.
     pub(crate) fn drain_effects(&mut self, limit: usize) -> Vec<V2LaneWorkEffect> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let Some(_permit) = output_guard.acquire() else {
+            return Vec::new();
+        };
         let mut drained = Vec::with_capacity(
             limit.min(
                 self.effects
@@ -1191,7 +1363,16 @@ impl V2LaneWorkAdapter {
 
     /// Re-enqueue bounded lane artifacts, Native AMX requests, and merge shares
     /// with rotating class priority for reliable retransmission.
-    pub(crate) fn schedule_retransmission(&mut self) {
+    ///
+    /// # Errors
+    ///
+    /// Returns a restart-required or durable-persistence error before this
+    /// process may publish any later consensus output.
+    pub(crate) fn schedule_retransmission(&mut self) -> Result<(), V2LaneWorkError> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(V2LaneWorkError::RestartRequired)?;
         let sidecar_posts = self.merge_sidecars.tick_bounded(
             &self.local_peer,
             Instant::now(),
@@ -1224,12 +1405,13 @@ impl V2LaneWorkAdapter {
         self.regular_retransmit_class_cursor = (start + 1) % REGULAR_RETRANSMIT_CLASS_COUNT;
 
         let Some(active_merge_view) = active_merge_view else {
-            return;
+            operation.complete();
+            return Ok(());
         };
         // Quorum formation and Kura publication are separate durability
-        // boundaries. Retry already-quorate candidates on the normal bounded
-        // retransmission cadence so a transient disk/capacity failure cannot
-        // strand a certificate when no additional distinct signature arrives.
+        // boundaries. Revisit already-quorate candidates on the bounded
+        // cadence; any publication failure poisons the process-wide output
+        // guard instead of permitting this process to continue signing.
         let merge_keys = self
             .merge_entries
             .keys()
@@ -1237,8 +1419,10 @@ impl V2LaneWorkAdapter {
             .copied()
             .collect::<Vec<_>>();
         for key in merge_keys {
-            self.try_commit_merge(key);
+            self.try_commit_merge(key)?;
         }
+        operation.complete();
+        Ok(())
     }
 
     fn schedule_lane_artifact_retransmissions(&mut self) {
@@ -1359,7 +1543,7 @@ impl V2LaneWorkAdapter {
         &mut self,
         sender: PeerId,
         message: CertifiedMergeSidecarMessage,
-    ) -> V2LaneIngressOutcome {
+    ) -> Result<V2LaneIngressOutcome, V2LaneWorkError> {
         match message {
             CertifiedMergeSidecarMessage::Request(request) => {
                 self.accept_certified_merge_sidecar_request(sender, request)
@@ -1374,27 +1558,19 @@ impl V2LaneWorkAdapter {
         &mut self,
         sender: PeerId,
         request: crate::merge_sidecar::CertifiedMergeSidecarRequestV1,
-    ) -> V2LaneIngressOutcome {
+    ) -> Result<V2LaneIngressOutcome, V2LaneWorkError> {
         let now = Instant::now();
         if let Err(error) =
             self.merge_sidecars
                 .admit_server_request(&sender, &request, &self.local_peer, now)
         {
             iroha_logger::debug!(%sender, ?error, "dropping v2 certified merge-sidecar request");
-            return V2LaneIngressOutcome::Rejected;
+            return Ok(V2LaneIngressOutcome::Rejected);
         }
         let entry = match self.kura.merge_entry_by_hash(request.entry_hash) {
             Ok(Some(entry)) => entry,
-            Ok(None) => return V2LaneIngressOutcome::Rejected,
-            Err(error) => {
-                iroha_logger::warn!(
-                    %sender,
-                    entry_hash = %request.entry_hash,
-                    ?error,
-                    "failed to read a requested v2 certified merge sidecar"
-                );
-                return V2LaneIngressOutcome::Rejected;
-            }
+            Ok(None) => return Ok(V2LaneIngressOutcome::Rejected),
+            Err(error) => return Err(V2LaneWorkError::Persistence(error.to_string())),
         };
         let reference = CertifiedMergeLedgerReference::new(&entry);
         let metadata_matches = request.encoded_len == reference.encoded_len
@@ -1403,14 +1579,14 @@ impl V2LaneWorkAdapter {
         let local_is_holder = certified_merge_sidecar_holders(&reference)
             .is_ok_and(|holders| holders.contains(&self.local_peer));
         if !metadata_matches || !local_is_holder {
-            return V2LaneIngressOutcome::Rejected;
+            return Ok(V2LaneIngressOutcome::Rejected);
         }
         if let Err(error) =
             self.merge_sidecars
                 .enqueue_response(request, entry.canonical_bytes(), now)
         {
             iroha_logger::debug!(%sender, ?error, "v2 merge-sidecar response budget rejected request");
-            return V2LaneIngressOutcome::Rejected;
+            return Ok(V2LaneIngressOutcome::Rejected);
         }
         let posts = self
             .merge_sidecars
@@ -1419,29 +1595,29 @@ impl V2LaneWorkAdapter {
         for post in posts {
             debug_assert!(self.push_merge_sidecar_post(post));
         }
-        if inserted {
+        Ok(if inserted {
             V2LaneIngressOutcome::Inserted
         } else {
             V2LaneIngressOutcome::Duplicate
-        }
+        })
     }
 
     fn accept_certified_merge_sidecar_chunk(
         &mut self,
         sender: PeerId,
         chunk: crate::merge_sidecar::CertifiedMergeSidecarChunkV1,
-    ) -> V2LaneIngressOutcome {
+    ) -> Result<V2LaneIngressOutcome, V2LaneWorkError> {
         let entry_hash = chunk.entry_hash;
         let now = Instant::now();
         let outcome = match self.merge_sidecars.ingest_chunk(&sender, chunk, now) {
             Ok(outcome) => outcome,
             Err(error) => {
                 iroha_logger::debug!(%sender, %entry_hash, ?error, "dropping invalid v2 merge-sidecar chunk");
-                return V2LaneIngressOutcome::Rejected;
+                return Ok(V2LaneIngressOutcome::Rejected);
             }
         };
         let ChunkIngestOutcome::Complete(completed) = outcome else {
-            return V2LaneIngressOutcome::Inserted;
+            return Ok(V2LaneIngressOutcome::Inserted);
         };
         let reference_digest = certified_merge_reference_digest(&completed.reference);
         let entry = match decode_certified_merge_sidecar(&completed.reference, &completed.bytes) {
@@ -1454,7 +1630,7 @@ impl V2LaneWorkAdapter {
                     "reassembled v2 certified merge sidecar is corrupt; rotating holder"
                 );
                 self.retry_completed_merge_sidecar(entry_hash, reference_digest, now);
-                return V2LaneIngressOutcome::Rejected;
+                return Ok(V2LaneIngressOutcome::Rejected);
             }
         };
         if let Err(error) = self
@@ -1467,7 +1643,7 @@ impl V2LaneWorkAdapter {
                     .entry(entry_hash)
                     .or_insert_with(|| error.to_string());
             }
-            return V2LaneIngressOutcome::Rejected;
+            return Ok(V2LaneIngressOutcome::Rejected);
         }
         match self.kura.persist_pending_certified_merge_entry(&entry) {
             Ok(persisted_hash) if persisted_hash == entry_hash => {
@@ -1481,28 +1657,12 @@ impl V2LaneWorkAdapter {
                 if !affected.is_empty() {
                     self.completed_merge_sidecars.insert(entry_hash);
                 }
-                V2LaneIngressOutcome::Inserted
+                Ok(V2LaneIngressOutcome::Inserted)
             }
-            Ok(other_hash) => {
-                let affected = self.merge_sidecars.discard_invalid(entry_hash);
-                if !affected.is_empty() {
-                    self.rejected_merge_sidecars.entry(entry_hash).or_insert_with(|| {
-                        format!(
-                            "Kura persisted conflicting certified merge sidecar hash {other_hash}"
-                        )
-                    });
-                }
-                V2LaneIngressOutcome::Rejected
-            }
-            Err(error) => {
-                iroha_logger::warn!(
-                    %entry_hash,
-                    ?error,
-                    "failed to persist a validated v2 merge sidecar; rotating holder"
-                );
-                self.retry_completed_merge_sidecar(entry_hash, reference_digest, now);
-                V2LaneIngressOutcome::Rejected
-            }
+            Ok(other_hash) => Err(V2LaneWorkError::Persistence(format!(
+                "Kura persisted conflicting certified merge sidecar hash {other_hash}"
+            ))),
+            Err(error) => Err(V2LaneWorkError::Persistence(error.to_string())),
         }
     }
 
@@ -1536,7 +1696,7 @@ impl V2LaneWorkAdapter {
         &mut self,
         envelope: LaneRelayEnvelope,
         active_view: wire::View,
-    ) -> V2LaneIngressOutcome {
+    ) -> Result<V2LaneIngressOutcome, V2LaneWorkError> {
         let key = (
             envelope.lane_id,
             envelope.dataspace_id,
@@ -1544,21 +1704,21 @@ impl V2LaneWorkAdapter {
             Hash::from(envelope.settlement_hash),
         );
         if self.admitted_relays.contains(&key) {
-            return V2LaneIngressOutcome::Duplicate;
+            return Ok(V2LaneIngressOutcome::Duplicate);
         }
         if self.admitted_relays.len() >= self.limits.relay_capacity.get() {
-            return V2LaneIngressOutcome::Rejected;
+            return Ok(V2LaneIngressOutcome::Rejected);
         }
         match self.state.record_lane_relay(&envelope) {
-            Ok(crate::state::LaneRelayInsert::Duplicate) => V2LaneIngressOutcome::Duplicate,
+            Ok(crate::state::LaneRelayInsert::Duplicate) => Ok(V2LaneIngressOutcome::Duplicate),
             Ok(
                 crate::state::LaneRelayInsert::Inserted | crate::state::LaneRelayInsert::Replaced,
             ) => {
                 self.admitted_relays.insert(key);
-                self.refresh_merge_candidates(active_view);
-                V2LaneIngressOutcome::Inserted
+                self.refresh_merge_candidates(active_view)?;
+                Ok(V2LaneIngressOutcome::Inserted)
             }
-            Err(_) => V2LaneIngressOutcome::Rejected,
+            Err(_) => Ok(V2LaneIngressOutcome::Rejected),
         }
     }
 
@@ -2612,6 +2772,12 @@ impl V2LaneWorkAdapter {
             .parent_commit_qc
             .as_ref()
             .map(|qc| qc.subject.block_hash)
+            .or_else(|| {
+                self.context
+                    .snapshot_bootstrap
+                    .as_ref()
+                    .map(|anchor| anchor.snapshot_block_hash)
+            })
         else {
             return false;
         };
@@ -2631,12 +2797,22 @@ impl V2LaneWorkAdapter {
         signer: wire::ValidatorIndex,
         message_digest: Hash,
     ) -> Result<(), MergeSidecarError> {
-        let Some(parent_qc) = self.context.parent_commit_qc.as_ref() else {
+        let Some(expected_parent) = self
+            .context
+            .parent_commit_qc
+            .as_ref()
+            .map(|qc| qc.subject.block_hash)
+            .or_else(|| {
+                self.context
+                    .snapshot_bootstrap
+                    .as_ref()
+                    .map(|anchor| anchor.snapshot_block_hash)
+            })
+        else {
             return Err(MergeSidecarError::SigningGuard(
                 "merge signing requires a committed global parent".to_owned(),
             ));
         };
-        let expected_parent = parent_qc.subject.block_hash;
         if self.pre_apply_unlocked_merge_view() != Some(active_view)
             || candidate.view != active_view
             || candidate.carrier_height != self.context.height
@@ -2718,14 +2894,14 @@ impl V2LaneWorkAdapter {
         Ok(())
     }
 
-    fn refresh_merge_candidates(&mut self, active_view: wire::View) {
+    fn refresh_merge_candidates(&mut self, active_view: wire::View) -> Result<(), V2LaneWorkError> {
         let carrier_protected = self
             .retained_merge_carrier_state
             .is_some_and(|(_, locked, decided)| locked.is_some() || decided.is_some());
         if self.globally_locked_body_hash.is_some() || carrier_protected {
             self.merge_entries.clear();
             self.merge_claims.clear();
-            return;
+            return Ok(());
         }
         self.merge_entries.retain(|key, _| key.view == active_view);
         self.merge_claims
@@ -2733,7 +2909,7 @@ impl V2LaneWorkAdapter {
         if self.pre_apply_unlocked_merge_view() != Some(active_view)
             || !self.merge_parent_frontier_is_exact()
         {
-            return;
+            return Ok(());
         }
         let candidates = self
             .state
@@ -2771,6 +2947,9 @@ impl V2LaneWorkAdapter {
             if let Err(error) =
                 self.authorize_local_merge_claim(&candidate, active_view, local_index, digest)
             {
+                if let MergeSidecarError::SigningGuard(reason) = &error {
+                    return Err(V2LaneWorkError::SigningGuard(reason.clone()));
+                }
                 iroha_logger::warn!(
                     ?error,
                     epoch = candidate.epoch_id,
@@ -2779,10 +2958,8 @@ impl V2LaneWorkAdapter {
                 );
                 continue;
             }
-            let Ok(signature) = Signature::try_new(self.key_pair.private_key(), digest.as_ref())
-            else {
-                continue;
-            };
+            let signature = Signature::try_new(self.key_pair.private_key(), digest.as_ref())
+                .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
             let payload = signature.payload().to_vec();
             self.merge_entries
                 .get_mut(&key)
@@ -2796,29 +2973,30 @@ impl V2LaneWorkAdapter {
                 message_digest: digest,
                 bls_sig: payload,
             }));
-            self.try_commit_merge(key);
+            self.try_commit_merge(key)?;
         }
+        Ok(())
     }
 
     fn accept_merge_signature(
         &mut self,
         signature: MergeCommitteeSignature,
         active_view: wire::View,
-    ) -> V2LaneIngressOutcome {
+    ) -> Result<V2LaneIngressOutcome, V2LaneWorkError> {
         if signature.view != active_view
             || self.pre_apply_unlocked_merge_view() != Some(active_view)
             || !self.merge_parent_frontier_is_exact()
         {
-            return V2LaneIngressOutcome::Rejected;
+            return Ok(V2LaneIngressOutcome::Rejected);
         }
-        self.refresh_merge_candidates(active_view);
+        self.refresh_merge_candidates(active_view)?;
         let key = MergeKey {
             epoch_id: signature.epoch_id,
             view: signature.view,
             digest: signature.message_digest,
         };
         let Some(pending) = self.merge_entries.get(&key) else {
-            return V2LaneIngressOutcome::Rejected;
+            return Ok(V2LaneIngressOutcome::Rejected);
         };
         let expected_digest = match &pending.stage {
             PendingMergeStage::Collecting(candidate) => crate::merge::merge_qc_message_digest(
@@ -2830,7 +3008,7 @@ impl V2LaneWorkAdapter {
             PendingMergeStage::Certified(entry) => entry.merge_qc.message_digest,
         };
         if expected_digest != signature.message_digest {
-            return V2LaneIngressOutcome::Rejected;
+            return Ok(V2LaneIngressOutcome::Rejected);
         }
         let Some(peer) = self
             .context
@@ -2838,33 +3016,32 @@ impl V2LaneWorkAdapter {
             .get(usize::try_from(signature.signer).unwrap_or(usize::MAX))
             .map(|entry| &entry.validator)
         else {
-            return V2LaneIngressOutcome::Rejected;
+            return Ok(V2LaneIngressOutcome::Rejected);
         };
         let Ok(parsed) = Signature::try_from_bytes(&signature.bls_sig) else {
-            return V2LaneIngressOutcome::Rejected;
+            return Ok(V2LaneIngressOutcome::Rejected);
         };
         if parsed
             .verify(peer.public_key(), signature.message_digest.as_ref())
             .is_err()
         {
-            return V2LaneIngressOutcome::Rejected;
+            return Ok(V2LaneIngressOutcome::Rejected);
         }
         let claim_key = (signature.epoch_id, signature.view, signature.signer);
         if let Some(existing) = self.merge_claims.get(&claim_key) {
             if existing != &signature.message_digest {
-                return V2LaneIngressOutcome::Rejected;
+                return Ok(V2LaneIngressOutcome::Rejected);
             }
             if self.merge_entries[&key].signatures.get(&signature.signer)
                 != Some(&signature.bls_sig)
             {
-                return V2LaneIngressOutcome::Rejected;
+                return Ok(V2LaneIngressOutcome::Rejected);
             }
-            // A previous quorum may have failed only because stale durable
-            // sidecars occupied Kura's bounded pending store. Exact duplicate
-            // delivery is a safe opportunity to retry the already-certified
-            // candidate without accepting another signer claim.
-            self.try_commit_merge(key);
-            return V2LaneIngressOutcome::Duplicate;
+            // Re-evaluate the existing exact quorum without accepting another
+            // signer claim. Any durable publication failure propagates to the
+            // enclosing fail-stop relay operation.
+            self.try_commit_merge(key)?;
+            return Ok(V2LaneIngressOutcome::Duplicate);
         }
         self.merge_claims
             .insert(claim_key, signature.message_digest);
@@ -2873,28 +3050,27 @@ impl V2LaneWorkAdapter {
             .expect("pending entry checked above")
             .signatures
             .insert(signature.signer, signature.bls_sig);
-        self.try_commit_merge(key);
-        V2LaneIngressOutcome::Inserted
+        self.try_commit_merge(key)?;
+        Ok(V2LaneIngressOutcome::Inserted)
     }
 
-    fn try_commit_merge(&mut self, key: MergeKey) {
+    fn try_commit_merge(&mut self, key: MergeKey) -> Result<(), V2LaneWorkError> {
         let Some(pending) = self.merge_entries.get(&key) else {
-            return;
+            return Ok(());
         };
         let cached_entry = match &pending.stage {
             PendingMergeStage::Certified(entry) => Some(entry.clone()),
             PendingMergeStage::Collecting(_) => None,
         };
         if let Some(entry) = cached_entry {
-            self.persist_certified_merge_entry(key, &entry);
-            return;
+            return self.persist_certified_merge_entry(key, &entry);
         }
         let Some(PendingMerge {
             stage: PendingMergeStage::Collecting(candidate),
             ..
         }) = self.merge_entries.get(&key)
         else {
-            return;
+            return Ok(());
         };
         let validator_set = self.frozen_validator_set();
         let validator_set_hash = HashOf::new(&validator_set);
@@ -2905,11 +3081,11 @@ impl V2LaneWorkAdapter {
             validator_set_hash,
         ) != key.digest
         {
-            return;
+            return Ok(());
         }
         let signers = pending.signatures.keys().copied().collect::<Vec<_>>();
         if !self.frozen_dual_quorum_met(&signers) {
-            return;
+            return Ok(());
         }
         let signatures = signers
             .iter()
@@ -2920,12 +3096,12 @@ impl V2LaneWorkAdapter {
             .map(|signature| signature.as_slice())
             .collect::<Vec<_>>();
         let Ok(aggregate_signature) = iroha_crypto::bls_normal_aggregate_signatures(&refs) else {
-            return;
+            return Ok(());
         };
         let mut bitmap = vec![0_u8; self.context.roster.len().div_ceil(8)];
         for signer in &signers {
             let Ok(index) = usize::try_from(*signer) else {
-                return;
+                return Ok(());
             };
             bitmap[index / 8] |= 1_u8 << (index % 8);
         }
@@ -2934,15 +3110,15 @@ impl V2LaneWorkAdapter {
             let mut proofs = Vec::with_capacity(signers.len());
             for signer in &signers {
                 let Ok(index) = usize::try_from(*signer) else {
-                    return;
+                    return Ok(());
                 };
                 let Some(peer) = validator_set.get(index) else {
-                    return;
+                    return Ok(());
                 };
                 let Some(proof_of_possession) =
                     crate::state::consensus_key_pop_for_public_key(&world, peer.public_key())
                 else {
-                    return;
+                    return Ok(());
                 };
                 proofs.push(MergeSignerProof {
                     signer: *signer,
@@ -2976,29 +3152,25 @@ impl V2LaneWorkAdapter {
                 view = key.view,
                 "rejecting locally certified merge entry before durable carrier staging"
             );
-            return;
+            return Ok(());
         }
         let Some(pending) = self.merge_entries.get_mut(&key) else {
-            return;
+            return Ok(());
         };
         pending.stage = PendingMergeStage::Certified(entry.clone());
-        self.persist_certified_merge_entry(key, &entry);
+        self.persist_certified_merge_entry(key, &entry)
     }
 
-    fn persist_certified_merge_entry(&mut self, key: MergeKey, entry: &MergeLedgerEntry) {
-        match self.kura.persist_pending_certified_merge_entry(entry) {
-            Ok(_) => {
-                self.merge_entries.remove(&key);
-            }
-            Err(error) => {
-                iroha_logger::warn!(
-                    ?error,
-                    epoch = entry.epoch_id,
-                    view = key.view,
-                    "failed to durably stage certified merge entry for global V2 consensus"
-                );
-            }
-        }
+    fn persist_certified_merge_entry(
+        &mut self,
+        key: MergeKey,
+        entry: &MergeLedgerEntry,
+    ) -> Result<(), V2LaneWorkError> {
+        self.kura
+            .persist_pending_certified_merge_entry(entry)
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+        self.merge_entries.remove(&key);
+        Ok(())
     }
 
     fn frozen_dual_quorum_met(&self, signers: &[wire::ValidatorIndex]) -> bool {
@@ -3046,75 +3218,90 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
         view: wire::View,
         candidates: &[CandidateDescriptor<'_>],
     ) -> Result<PreparedCandidateWork, CandidateWorkUnavailable> {
-        if context != &self.context {
-            return Err(all_unavailable(candidates.len(), "height context drift"));
-        }
-        self.refresh_merge_candidates(view);
-        self.planned_lane_proposals.clear();
-        let routes = candidates
-            .iter()
-            .map(|candidate| candidate.routing_plan().coordinator_route())
-            .collect::<Vec<_>>();
-        let hashes = candidates
-            .iter()
-            .map(|candidate| Hash::from(candidate.entrypoint_hash()))
-            .collect::<Vec<_>>();
-        let lane_plan = prepare_v2_lane_payload_plan(
-            self.state.as_ref(),
-            context,
-            view,
-            &self.local_peer,
-            &routes,
-            &hashes,
-        )
-        .map_err(|error| all_unavailable(candidates.len(), error.to_string()))?;
-        if !lane_plan.unavailable_indices.is_empty() {
-            return Err(CandidateWorkUnavailable::new(
-                lane_plan.unavailable_indices,
-                "lane-local author, committee, or predecessor unavailable",
-            ));
-        }
-        if lane_plan.proposals.len() > self.limits.session_capacity.get() {
+        let output_guard = Arc::clone(&self.output_guard);
+        let Some(operation) = output_guard.begin_fail_stop_operation() else {
             return Err(all_unavailable(
                 candidates.len(),
-                "lane-local proposal count exceeds the bounded session capacity",
+                "Sumeragi v2 consensus requires process restart",
             ));
+        };
+        if context != &self.context {
+            operation.complete();
+            return Err(all_unavailable(candidates.len(), "height context drift"));
         }
+        if let Err(error) = self.refresh_merge_candidates(view) {
+            drop(operation);
+            return Err(all_unavailable(candidates.len(), error.to_string()));
+        }
+        let result = (|| {
+            self.planned_lane_proposals.clear();
+            let routes = candidates
+                .iter()
+                .map(|candidate| candidate.routing_plan().coordinator_route())
+                .collect::<Vec<_>>();
+            let hashes = candidates
+                .iter()
+                .map(|candidate| Hash::from(candidate.entrypoint_hash()))
+                .collect::<Vec<_>>();
+            let lane_plan = prepare_v2_lane_payload_plan(
+                self.state.as_ref(),
+                context,
+                view,
+                &self.local_peer,
+                &routes,
+                &hashes,
+            )
+            .map_err(|error| all_unavailable(candidates.len(), error.to_string()))?;
+            if !lane_plan.unavailable_indices.is_empty() {
+                return Err(CandidateWorkUnavailable::new(
+                    lane_plan.unavailable_indices,
+                    "lane-local author, committee, or predecessor unavailable",
+                ));
+            }
+            if lane_plan.proposals.len() > self.limits.session_capacity.get() {
+                return Err(all_unavailable(
+                    candidates.len(),
+                    "lane-local proposal count exceeds the bounded session capacity",
+                ));
+            }
 
-        let mut receipts = Vec::with_capacity(candidates.len());
-        let mut unavailable = BTreeSet::new();
-        for (index, candidate) in candidates.iter().copied().enumerate() {
-            match candidate.routing_plan() {
-                RoutingPlan::Single(_) => receipts.push(None),
-                RoutingPlan::NativeAmx(_) => {
-                    match self.prepare_native_receipt(view, candidate, &lane_plan.proposals) {
-                        Some(receipt) => receipts.push(Some(receipt)),
-                        None => {
-                            receipts.push(None);
-                            unavailable.insert(index);
+            let mut receipts = Vec::with_capacity(candidates.len());
+            let mut unavailable = BTreeSet::new();
+            for (index, candidate) in candidates.iter().copied().enumerate() {
+                match candidate.routing_plan() {
+                    RoutingPlan::Single(_) => receipts.push(None),
+                    RoutingPlan::NativeAmx(_) => {
+                        match self.prepare_native_receipt(view, candidate, &lane_plan.proposals) {
+                            Some(receipt) => receipts.push(Some(receipt)),
+                            None => {
+                                receipts.push(None);
+                                unavailable.insert(index);
+                            }
                         }
                     }
                 }
             }
-        }
-        if !unavailable.is_empty() {
-            return Err(CandidateWorkUnavailable::new(
-                unavailable,
-                "context-bound Native AMX prepare/commit certificates unavailable",
-            ));
-        }
-        self.planned_lane_proposals.insert(
-            wire::ConsensusRound {
-                context_id: context.id(),
-                height: context.height,
-                view,
-            },
-            lane_plan.proposals,
-        );
-        Ok(PreparedCandidateWork {
-            native_amx_receipts: receipts,
-            lane_payload_ownerships: lane_plan.ownerships,
-        })
+            if !unavailable.is_empty() {
+                return Err(CandidateWorkUnavailable::new(
+                    unavailable,
+                    "context-bound Native AMX prepare/commit certificates unavailable",
+                ));
+            }
+            self.planned_lane_proposals.insert(
+                wire::ConsensusRound {
+                    context_id: context.id(),
+                    height: context.height,
+                    view,
+                },
+                lane_plan.proposals,
+            );
+            Ok(PreparedCandidateWork {
+                native_amx_receipts: receipts,
+                lane_payload_ownerships: lane_plan.ownerships,
+            })
+        })();
+        operation.complete();
+        result
     }
 }
 
@@ -3325,7 +3512,9 @@ mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
         num::{NonZeroU64, NonZeroUsize},
-        sync::Arc,
+        sync::{Arc, Barrier, mpsc},
+        thread,
+        time::{Duration, Instant},
     };
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
@@ -3462,6 +3651,7 @@ mod tests {
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![0xA5; 48],
             }),
+            snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("dual quorum"),
             roster,
             nexus_amx_context_hash: super::super::v2_recovery::committed_nexus_amx_context_hash(
@@ -3653,6 +3843,122 @@ mod tests {
     }
 
     #[test]
+    fn restart_required_lane_persistence_rejects_before_any_mutation() {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let entry = pending_sidecar_entry(&adapter, &keys, 1);
+        let entry_hash = adapter
+            .kura
+            .persist_pending_certified_merge_entry(&entry)
+            .expect("seed a pending sidecar before activating restart recovery");
+        adapter
+            .merge_claims
+            .insert((entry.epoch_id, 1, 0), Hash::new(b"retained merge claim"));
+        let claims_before = adapter.merge_claims.clone();
+
+        adapter.output_guard.activate_restart_required();
+
+        assert!(matches!(
+            adapter.prune_finalized_merge_sidecars(),
+            Err(V2LaneWorkError::RestartRequired)
+        ));
+        assert_eq!(
+            adapter.merge_claims, claims_before,
+            "post-latch lane cleanup must fail before in-memory mutation"
+        );
+        assert_eq!(
+            adapter
+                .kura
+                .merge_entry_by_hash(entry_hash)
+                .expect("read pending sidecar after denied cleanup"),
+            Some(entry),
+            "post-latch lane cleanup must perform no Kura mutation"
+        );
+    }
+
+    #[test]
+    fn lane_persistence_error_latches_restart_required_before_return() {
+        let (mut adapter, _) = fixture(wire::ConsensusMode::Permissioned);
+        adapter
+            .merge_claims
+            .insert((1, 1, 0), Hash::new(b"retained merge claim"));
+        let claims_before = adapter.merge_claims.clone();
+        adapter.persistence_failure = Some("injected lane persistence failure".to_owned());
+        let output_guard = Arc::clone(&adapter.output_guard);
+
+        assert!(matches!(
+            adapter.prune_finalized_merge_sidecars(),
+            Err(V2LaneWorkError::Persistence(reason))
+                if reason == "injected lane persistence failure"
+        ));
+        assert!(output_guard.restart_required());
+        assert!(output_guard.acquire().is_none());
+        assert_eq!(adapter.merge_claims, claims_before);
+    }
+
+    #[test]
+    fn restart_activation_drains_inflight_lane_kura_persistence() {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let entry = pending_sidecar_entry(&adapter, &keys, 1);
+        let entry_hash = adapter
+            .kura
+            .persist_pending_certified_merge_entry(&entry)
+            .expect("seed pending sidecar for persistence race");
+        let output_guard = Arc::clone(&adapter.output_guard);
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let release = Arc::new(Barrier::new(2));
+        adapter.persistence_pause = Some(LanePersistencePause {
+            entered: entered_tx,
+            release: Arc::clone(&release),
+        });
+        let persistence = thread::spawn(move || {
+            let result = adapter.prune_finalized_merge_sidecars();
+            (adapter, result)
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("lane persistence acquired its output permit");
+
+        let activation_guard = Arc::clone(&output_guard);
+        let (activated_tx, activated_rx) = mpsc::sync_channel(1);
+        let activation = thread::spawn(move || {
+            activation_guard.activate_restart_required();
+            activated_tx
+                .send(())
+                .expect("publish completed restart activation");
+        });
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !output_guard.restart_required() && Instant::now() < deadline {
+            thread::yield_now();
+        }
+        assert!(output_guard.restart_required());
+        assert!(
+            activated_rx
+                .recv_timeout(Duration::from_millis(25))
+                .is_err(),
+            "restart activation must drain in-flight lane Kura persistence"
+        );
+
+        release.wait();
+        let (mut adapter, result) = persistence.join().expect("join lane persistence worker");
+        result.expect("already-admitted lane persistence completes before activation");
+        activated_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("activation completes after lane persistence releases its permit");
+        activation.join().expect("join restart activation worker");
+        assert!(
+            adapter
+                .kura
+                .merge_entry_by_hash(entry_hash)
+                .expect("read pruned sidecar after drained persistence")
+                .is_none()
+        );
+        assert!(matches!(
+            adapter.prune_finalized_merge_sidecars(),
+            Err(V2LaneWorkError::RestartRequired)
+        ));
+    }
+
+    #[test]
     fn repeated_carrier_state_retention_scans_kura_only_on_transition() {
         let (mut adapter, _) = fixture(wire::ConsensusMode::Permissioned);
         adapter
@@ -3719,7 +4025,9 @@ mod tests {
                 signatures: BTreeMap::new(),
             },
         );
-        adapter.refresh_merge_candidates(0);
+        adapter
+            .refresh_merge_candidates(0)
+            .expect("Decision-protected refresh is durability-safe");
         assert!(
             adapter.merge_entries.is_empty(),
             "no new merge candidate may survive after a durable Decision"
@@ -4319,10 +4627,6 @@ mod tests {
             adapter.insert_lane_qc(lane_qc_for_phase(&proposal, &keys, CertPhase::Commit), 0,),
             V2LaneIngressOutcome::Inserted
         );
-        assert!(matches!(
-            adapter.persist_anchored_sessions(),
-            Err(V2LaneWorkError::Persistence(_))
-        ));
         assert!(
             !adapter
                 .kura
@@ -5087,17 +5391,23 @@ mod tests {
         );
         adapter.limits.effect_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
 
-        adapter.schedule_retransmission();
+        adapter
+            .schedule_retransmission()
+            .expect("schedule lane retransmission");
         assert!(matches!(
             adapter.drain_effects(usize::MAX).as_slice(),
             [V2LaneWorkEffect::PostLaneBlock { .. }]
         ));
-        adapter.schedule_retransmission();
+        adapter
+            .schedule_retransmission()
+            .expect("schedule Native AMX retransmission");
         assert!(matches!(
             adapter.drain_effects(usize::MAX).as_slice(),
             [V2LaneWorkEffect::PostNativeAmx { .. }]
         ));
-        adapter.schedule_retransmission();
+        adapter
+            .schedule_retransmission()
+            .expect("schedule merge retransmission");
         assert!(matches!(
             adapter.drain_effects(usize::MAX).as_slice(),
             [V2LaneWorkEffect::BroadcastMerge(_)]
@@ -5187,7 +5497,9 @@ mod tests {
             adapter.bind_local_candidate(round_zero, block_zero.hash()),
             V2LaneIngressOutcome::Inserted
         );
-        adapter.schedule_retransmission();
+        adapter
+            .schedule_retransmission()
+            .expect("schedule pre-lock retransmission");
         assert!(
             adapter.drain_effects(usize::MAX).is_empty(),
             "local Prepare intent must not leak lane proposals or votes before PrepareQC"
@@ -5225,7 +5537,9 @@ mod tests {
             V2LaneIngressOutcome::Rejected,
             "a stale body must not satisfy the exact locked subject"
         );
-        adapter.schedule_retransmission();
+        adapter
+            .schedule_retransmission()
+            .expect("schedule locked-body retransmission");
         assert!(
             adapter.drain_effects(usize::MAX).is_empty(),
             "the lock without its exact durable body must not release lane work"
@@ -5826,7 +6140,9 @@ mod tests {
                 .iter()
                 .all(|effect| !matches!(effect, V2LaneWorkEffect::BroadcastMerge(_)))
         );
-        adapter.schedule_retransmission();
+        adapter
+            .schedule_retransmission()
+            .expect("schedule locked-view retransmission");
         assert!(
             adapter
                 .drain_effects(usize::MAX)
@@ -6117,8 +6433,12 @@ mod tests {
             Err(MergeSidecarError::LocalSigningEquivocation),
             "post-apply recovery must never authorize another share"
         );
-        adapter.refresh_merge_candidates(0);
-        adapter.schedule_retransmission();
+        adapter
+            .refresh_merge_candidates(0)
+            .expect("post-apply refresh remains signing-silent");
+        adapter
+            .schedule_retransmission()
+            .expect("schedule post-apply retransmission");
         assert!(
             adapter
                 .drain_effects(usize::MAX)
@@ -6215,16 +6535,18 @@ mod tests {
                 .payload()
                 .to_vec();
             assert_eq!(
-                adapter.accept_merge_signature(
-                    MergeCommitteeSignature {
-                        epoch_id: candidate.epoch_id,
-                        view: candidate.view,
-                        signer,
-                        message_digest: digest,
-                        bls_sig: signature,
-                    },
-                    candidate.view,
-                ),
+                adapter
+                    .accept_merge_signature(
+                        MergeCommitteeSignature {
+                            epoch_id: candidate.epoch_id,
+                            view: candidate.view,
+                            signer,
+                            message_digest: digest,
+                            bls_sig: signature,
+                        },
+                        candidate.view,
+                    )
+                    .expect("persist remote merge signature"),
                 V2LaneIngressOutcome::Inserted
             );
             accepted_remote_signers.push(signer);
@@ -6254,7 +6576,7 @@ mod tests {
     }
 
     #[test]
-    fn quorate_merge_persistence_retries_after_transient_kura_failure() {
+    fn quorate_merge_persistence_failure_latches_restart_required() {
         let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
         let candidate = record_production_merge_candidate_for_persistence_retry(&adapter, &keys, 0);
         adapter
@@ -6299,7 +6621,10 @@ mod tests {
         }
         std::fs::write(&pending_dir, b"temporarily block pending sidecar directory")
             .expect("install transient Kura obstruction");
-        adapter.try_commit_merge(key);
+        assert!(matches!(
+            adapter.schedule_retransmission(),
+            Err(V2LaneWorkError::Persistence(_))
+        ));
         assert!(
             adapter.merge_entries.contains_key(&key),
             "failed Kura publication must retain the complete quorum"
@@ -6317,18 +6642,21 @@ mod tests {
         let certified_hash = crate::merge::merge_ledger_entry_hash(&certified_entry);
         std::fs::remove_file(&pending_dir).expect("remove transient Kura obstruction");
 
-        adapter.schedule_retransmission();
         assert!(
-            !adapter.merge_entries.contains_key(&key),
-            "normal retransmission cadence must retry and persist the retained quorum"
+            adapter.output_guard.restart_required(),
+            "failed durable publication must poison this process before it can sign again"
         );
+        assert!(matches!(
+            adapter.schedule_retransmission(),
+            Err(V2LaneWorkError::RestartRequired)
+        ));
         assert_eq!(
             adapter
                 .kura
                 .merge_entry_by_hash(certified_hash)
-                .expect("read exact retried merge entry"),
-            Some(certified_entry),
-            "retry must publish the exact State-validated certificate cached before failure"
+                .expect("read exact unpublished merge entry"),
+            None,
+            "a poisoned process must not retry durable publication"
         );
     }
 
@@ -6353,7 +6681,9 @@ mod tests {
             bls_sig: vec![0xA5; 96],
         };
         assert_eq!(
-            adapter.accept_merge_signature(stale, 1),
+            adapter
+                .accept_merge_signature(stale, 1)
+                .expect("reject stale remote signature without local durability work"),
             V2LaneIngressOutcome::Rejected
         );
         assert!(adapter.merge_claims.is_empty());

@@ -3040,7 +3040,7 @@ mod tests {
         },
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, UniversalAccountId},
         permission::Permission,
-        prelude::{Domain, InstructionBox, Register},
+        prelude::{Domain, InstructionBox, Quantity, Register},
         transaction::{Executable, IvmBytecode},
         trigger::{
             Trigger,
@@ -4933,8 +4933,8 @@ mod tests {
                 validator: old_account.clone(),
                 peer_id: iroha_data_model::peer::PeerId::from(old_account.signatory().clone()),
                 stake_account: old_account.clone(),
-                total_stake: iroha_primitives::numeric::Numeric::new(1, 0),
-                self_stake: iroha_primitives::numeric::Numeric::new(1, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(1_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
                 metadata: Metadata::default(),
                 status: active.clone(),
                 activation_epoch: Some(1),
@@ -4949,8 +4949,8 @@ mod tests {
                 validator: old_account.clone(),
                 peer_id: iroha_data_model::peer::PeerId::from(old_account.signatory().clone()),
                 stake_account: old_account.clone(),
-                total_stake: iroha_primitives::numeric::Numeric::new(2, 0),
-                self_stake: iroha_primitives::numeric::Numeric::new(2, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(2_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(2_u32),
                 metadata: Metadata::default(),
                 status: active,
                 activation_epoch: Some(1),
@@ -4964,7 +4964,7 @@ mod tests {
                 lane_id: valid_lane,
                 validator: old_account.clone(),
                 staker: old_account.clone(),
-                bonded: iroha_primitives::numeric::Numeric::new(3, 0),
+                bonded: iroha_primitives::numeric::Quantity::from(3_u32),
                 pending_unbonds: BTreeMap::new(),
                 metadata: Metadata::default(),
             },
@@ -4975,7 +4975,7 @@ mod tests {
                 lane_id: malformed_lane,
                 validator: new_account.clone(),
                 staker: old_account.clone(),
-                bonded: iroha_primitives::numeric::Numeric::new(4, 0),
+                bonded: iroha_primitives::numeric::Quantity::from(4_u32),
                 pending_unbonds: BTreeMap::new(),
                 metadata: Metadata::default(),
             },
@@ -4986,11 +4986,11 @@ mod tests {
                 lane_id: valid_lane,
                 epoch: 2,
                 asset: old_reward_asset.clone(),
-                total_reward: iroha_primitives::numeric::Numeric::new(5, 0),
+                total_reward: iroha_primitives::numeric::Quantity::from(5_u32),
                 shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
                     account: old_account.clone(),
                     role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
-                    amount: iroha_primitives::numeric::Numeric::new(5, 0),
+                    amount: iroha_primitives::numeric::Quantity::from(5_u32),
                 }],
                 metadata: Metadata::default(),
             },
@@ -5001,11 +5001,11 @@ mod tests {
                 lane_id: malformed_lane,
                 epoch: 4,
                 asset: old_reward_asset.clone(),
-                total_reward: iroha_primitives::numeric::Numeric::new(6, 0),
+                total_reward: iroha_primitives::numeric::Quantity::from(6_u32),
                 shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
                     account: old_account.clone(),
                     role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
-                    amount: iroha_primitives::numeric::Numeric::new(6, 0),
+                    amount: iroha_primitives::numeric::Quantity::from(6_u32),
                 }],
                 metadata: Metadata::default(),
             },
@@ -5137,11 +5137,9 @@ mod tests {
 
         let old_asset_id =
             iroha_data_model::asset::AssetId::new(asset_def_id.clone(), old_account.clone());
-        let (_, old_asset_value) = iroha_data_model::asset::Asset::new(
-            old_asset_id.clone(),
-            iroha_primitives::numeric::Numeric::new(5, 0),
-        )
-        .into_key_value();
+        let (_, old_asset_value) =
+            iroha_data_model::asset::Asset::new(old_asset_id.clone(), Quantity::from(5_u64))
+                .into_key_value();
         state_transaction
             .world
             .assets

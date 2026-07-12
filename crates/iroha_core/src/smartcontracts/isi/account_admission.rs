@@ -23,7 +23,10 @@ use iroha_data_model::{
     name::Name,
     prelude::*,
 };
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{
+    json::Json,
+    numeric::{Numeric, Quantity},
+};
 
 use crate::{
     role::RoleIdWithOwner,
@@ -144,7 +147,6 @@ fn apply_implicit_creation_fee(
     fee: &ImplicitAccountCreationFee,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
-    let fee_amount = fee.amount.as_numeric();
     let payer = resolve_existing_account_for_subject(state_transaction, authority)?;
     let payer_asset_id =
         state_transaction
@@ -153,16 +155,16 @@ fn apply_implicit_creation_fee(
                 fee.asset_definition_id.clone(),
                 payer,
             ))?;
-    let available = state_transaction.world.asset(&payer_asset_id).map_or_else(
-        |_| Numeric::zero(),
-        |asset| asset.value().as_ref().as_numeric().clone(),
-    );
+    let available = state_transaction
+        .world
+        .asset(&payer_asset_id)
+        .map_or_else(|_| Quantity::zero(), |asset| asset.value().as_ref().clone());
 
-    if &available < fee_amount {
+    if available < fee.amount {
         return Err(
             AccountAdmissionError::FeeUnsatisfied(AccountAdmissionFeeUnsatisfied {
                 asset_definition: fee.asset_definition_id.clone(),
-                required: fee_amount.clone(),
+                required: fee.amount.clone(),
                 available,
             })
             .into(),
@@ -171,7 +173,7 @@ fn apply_implicit_creation_fee(
 
     state_transaction
         .world
-        .withdraw_numeric_asset(&payer_asset_id, fee_amount)?;
+        .withdraw_numeric_asset(&payer_asset_id, fee.amount.as_numeric())?;
 
     match &fee.destination {
         ImplicitAccountFeeDestination::Burn => {
@@ -190,7 +192,7 @@ fn apply_implicit_creation_fee(
                     ))?;
             state_transaction
                 .world
-                .deposit_numeric_asset(&sink_asset_id, fee_amount)?;
+                .deposit_numeric_asset(&sink_asset_id, fee.amount.as_numeric())?;
         }
     }
 
@@ -307,11 +309,16 @@ pub(super) fn ensure_receiving_account(
     if let Some((asset_def_id, amount)) = value_hint {
         if let Some(required) = policy.min_initial_amount_for(asset_def_id) {
             if amount < required.as_numeric() {
+                let provided = Quantity::from_canonical_numeric(amount.clone()).map_err(|_| {
+                    InstructionExecutionError::InvariantViolation(
+                        "implicit-account receipt amount must be a non-negative quantity".into(),
+                    )
+                })?;
                 return Err(AccountAdmissionError::MinInitialAmountUnsatisfied(
                     AccountAdmissionMinInitialAmountUnsatisfied {
                         asset_definition: asset_def_id.clone(),
-                        required: required.clone().into(),
-                        provided: amount.clone(),
+                        required: required.clone(),
+                        provided,
                     },
                 )
                 .into());

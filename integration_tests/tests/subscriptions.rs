@@ -295,10 +295,10 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
             let retry_backoff_ms = 500_u64;
             let (start_time, start_ms) = schedule_start(&network);
 
-            let unit_price = Numeric::new(2_u32, 0);
-            let usage_delta = Numeric::new(3_u32, 0);
-            let amount = Numeric::new(6_u32, 0);
-            let initial_balance = Numeric::new(100_u32, 0);
+            let unit_price = Quantity::from(2_u32);
+            let usage_delta = Quantity::from(3_u32);
+            let amount = Quantity::from(6_u32);
+            let initial_balance = Quantity::from(100_u32);
 
             spawn_blocking({
                 let client = client.clone();
@@ -570,8 +570,8 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
             let period_ms = 3_000_u64;
             let (start_time, start_ms) = schedule_start(&network);
 
-            let amount = Numeric::new(120_u32, 0);
-            let initial_balance = Numeric::new(300_u32, 0);
+            let amount = Quantity::from(120_u32);
+            let initial_balance = Quantity::from(300_u32);
 
             spawn_blocking({
                 let client = client.clone();
@@ -791,8 +791,8 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
             let retry_backoff_ms = 750_u64;
             let (start_time, start_ms) = schedule_start(&network);
 
-            let amount = Numeric::new(120_u32, 0);
-            let initial_balance = Numeric::new(50_u32, 0);
+            let amount = Quantity::from(120_u32);
+            let initial_balance = Quantity::from(50_u32);
 
             spawn_blocking({
                 let client = client.clone();

@@ -40,7 +40,7 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError},
     peer::PeerId,
 };
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::Quantity;
 use iroha_telemetry::metrics;
 use norito::codec::{Decode, Encode};
 
@@ -797,9 +797,9 @@ pub struct NexusStakingLaneSnapshot {
     /// Lane identifier.
     pub lane_id: LaneId,
     /// Total bonded stake recorded.
-    pub bonded: Numeric,
+    pub bonded: Quantity,
     /// Total pending-unbond stake recorded.
-    pub pending_unbond: Numeric,
+    pub pending_unbond: Quantity,
     /// Total slashes applied.
     pub slash_total: u64,
 }
@@ -808,8 +808,8 @@ impl Default for NexusStakingLaneSnapshot {
     fn default() -> Self {
         Self {
             lane_id: LaneId::new(0),
-            bonded: Numeric::zero(),
-            pending_unbond: Numeric::zero(),
+            bonded: Quantity::zero(),
+            pending_unbond: Quantity::zero(),
             slash_total: 0,
         }
     }
@@ -1621,45 +1621,45 @@ where
     update(entry);
 }
 
-fn adjust_numeric_value(current: Numeric, delta: &Numeric, increase: bool) -> Numeric {
+fn adjust_quantity_value(current: Quantity, delta: &Quantity, increase: bool) -> Quantity {
     if delta.is_zero() {
         return current;
     }
     if increase {
         let base = current.clone();
-        current.checked_add(delta.clone()).unwrap_or_else(|| {
+        current.checked_add(delta).unwrap_or_else(|_| {
             iroha_logger::warn!(
                 %base,
                 %delta,
-                "nexus staking accumulator overflowed; clamping to Numeric::zero()"
+                "nexus staking accumulator overflowed; clamping to Quantity::zero()"
             );
-            Numeric::zero()
+            Quantity::zero()
         })
     } else {
         let base = current.clone();
-        current.checked_sub(delta.clone()).unwrap_or_else(|| {
+        current.checked_sub(delta).unwrap_or_else(|_| {
             iroha_logger::warn!(
                 %base,
                 %delta,
-                "nexus staking accumulator underflowed; clamping to Numeric::zero()"
+                "nexus staking accumulator underflowed; clamping to Quantity::zero()"
             );
-            Numeric::zero()
+            Quantity::zero()
         })
     }
 }
 
 /// Record a bonded stake delta for a Nexus lane.
-pub fn record_public_lane_bonded_delta(lane_id: LaneId, amount: &Numeric, increase: bool) {
+pub fn record_public_lane_bonded_delta(lane_id: LaneId, amount: &Quantity, increase: bool) {
     update_staking_lane(lane_id, |snapshot| {
-        snapshot.bonded = adjust_numeric_value(snapshot.bonded.clone(), amount, increase);
+        snapshot.bonded = adjust_quantity_value(snapshot.bonded.clone(), amount, increase);
     });
 }
 
 /// Record a pending-unbond delta for a Nexus lane.
-pub fn record_public_lane_pending_unbond_delta(lane_id: LaneId, amount: &Numeric, increase: bool) {
+pub fn record_public_lane_pending_unbond_delta(lane_id: LaneId, amount: &Quantity, increase: bool) {
     update_staking_lane(lane_id, |snapshot| {
         snapshot.pending_unbond =
-            adjust_numeric_value(snapshot.pending_unbond.clone(), amount, increase);
+            adjust_quantity_value(snapshot.pending_unbond.clone(), amount, increase);
     });
 }
 

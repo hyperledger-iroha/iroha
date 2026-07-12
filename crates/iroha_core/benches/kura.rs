@@ -119,6 +119,7 @@ fn store_signed_complete_wire_finality_for_eviction_bench(
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
             parent_commit_qc: parent.as_ref().map(|artifact| artifact.commit_qc.clone()),
+            snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("eviction-benchmark quorum"),
             roster: roster.clone(),
             nexus_amx_context_hash: Hash::new(b"eviction bench nexus context"),
@@ -288,11 +289,7 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
         "xor".parse().unwrap(),
     );
     let alice_xor_id = AssetId::new(xor_id, alice_id.clone());
-    let transfer = Transfer::asset_quantity(
-        alice_xor_id,
-        10_u32,
-        bob_id,
-    );
+    let transfer = Transfer::asset_quantity(alice_xor_id, 10_u32, bob_id);
     let tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
         .with_instructions([transfer])
         .sign(alice_keypair.private_key());

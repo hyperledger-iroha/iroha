@@ -11,7 +11,7 @@ use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    ChainId, Encode as _,
+    ChainId,
     account::AccountId,
     block::{CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire},
     events::EventBox,
@@ -263,6 +263,7 @@ impl V2ApplyService {
                 body,
                 true,
                 task.validated_receipt().execution_commitment(),
+                &artifact,
             )?;
         } else {
             // WSV is already committed, but Kura may have crashed after the
@@ -276,14 +277,17 @@ impl V2ApplyService {
         // the Kura checkpoint/manifest are separate durable systems. A crash
         // after WSV commit must retry these idempotent associations even
         // though executing the block a second time is forbidden.
-        self.persist_post_apply_metadata(context, task)
+        self.persist_post_apply_metadata(context, task, &artifact)
             .map_err(|error| {
                 V2ApplyError::committed_recovery_required("post-apply metadata", &error)
             })?;
 
-        let receipt = self.kura.store_v2_finality_artifact(&artifact).map_err(|error| {
-            V2ApplyError::committed_recovery_required("v2 finality artifact", &error)
-        })?;
+        let receipt = self
+            .kura
+            .store_v2_finality_artifact(&artifact)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required("v2 finality artifact", &error)
+            })?;
         self.kura
             .promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
             .map_err(|error| {
@@ -358,6 +362,7 @@ impl V2ApplyService {
         body: iroha_data_model::block::SignedBlock,
         store_block: bool,
         expected_execution_commitment: wire::ExecutionCommitment,
+        artifact: &wire::finality::V2FinalityArtifact,
     ) -> Result<(), V2ApplyError> {
         self.validate_lane_payload_plan(context, &body)?;
         let block_hash = body.hash();
@@ -408,7 +413,7 @@ impl V2ApplyService {
             expected_execution_commitment,
         )?;
         let committed_block = valid_block
-            .commit_with_certificate()
+            .commit_with_verified_v2_artifact(artifact, actual_execution_commitment)
             .unpack(|event| pipeline_events.push(event))
             .map_err(|(_, error)| V2ApplyError::Commit(error.to_string()))?;
 
@@ -435,11 +440,9 @@ impl V2ApplyService {
             commit_topology,
             None,
         );
-        state_block
-            .commit()
-            .map_err(|error| {
-                V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
-            })?;
+        state_block.commit().map_err(|error| {
+            V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
+        })?;
 
         self.queue.remove_committed_hashes(
             committed_block
@@ -466,19 +469,15 @@ impl V2ApplyService {
         &self,
         context: &wire::HeightContext,
         task: &ApplyTask,
+        artifact: &wire::finality::V2FinalityArtifact,
     ) -> Result<(), V2ApplyError> {
         let block_hash = task.subject().block_hash;
         let checkpoint = crate::snapshot::canonical_state_snapshot_hash(self.state.as_ref());
         self.kura
             .store_wsv_checkpoint(context.height, block_hash, checkpoint)?;
-        let manifest = CommitManifest::new(
-            context.height,
-            block_hash,
-            None,
-            None,
-            checkpoint,
-            Some(Hash::new(task.certificate().encode())),
-        );
+        let manifest =
+            CommitManifest::new(context.height, block_hash, None, None, checkpoint, None)
+                .with_authenticated_v2_commit_authority(artifact);
         self.kura.store_commit_manifest(manifest)?;
         Ok(())
     }
@@ -654,9 +653,11 @@ mod tests {
             .requires_restart_recovery()
         );
         assert!(
-            V2ApplyError::Kura(crate::kura::Error::CanonicalBlockCommittedRecoveryRequired {
-                detail: "new marker won".to_owned(),
-            })
+            V2ApplyError::Kura(
+                crate::kura::Error::CanonicalBlockCommittedRecoveryRequired {
+                    detail: "new marker won".to_owned(),
+                }
+            )
             .requires_restart_recovery()
         );
         assert!(
@@ -719,6 +720,7 @@ mod tests {
                 next_epoch_snapshot: None,
                 mode: wire::ConsensusMode::Permissioned,
                 parent_commit_qc: None,
+                snapshot_bootstrap: None,
                 quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"apply crash fixture Nexus/AMX"),
@@ -967,6 +969,38 @@ mod tests {
             .expect("reopen body store after crash")
         }
 
+        fn restart_service_from_last_finalized_snapshot(&self) -> (V2ApplyService, Arc<State>) {
+            let authority = self.service.genesis_account.clone();
+            let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+            let state = Arc::new(State::new_with_chain_for_testing(
+                world,
+                Arc::clone(&self.kura),
+                LiveQueryStore::start_test(),
+                self.service.chain_id.clone(),
+            ));
+            let nexus = state.nexus_snapshot();
+            let lane_manifests = Arc::new(
+                LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+            );
+            state.install_lane_manifests(&lane_manifests);
+            let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(32);
+            let queue = Arc::new(Queue::from_config(
+                QueueConfig::default(),
+                events_sender.clone(),
+            ));
+            let service = V2ApplyService::new(
+                Arc::clone(&state),
+                queue,
+                Arc::clone(&self.kura),
+                self.service.chain_id.clone(),
+                self.service.block_cadence,
+                authority,
+                events_sender,
+                self.service.validator_set_pops.clone(),
+            );
+            (service, state)
+        }
+
         fn execute(&self, store: &mut V2BodyStore) -> Result<(), V2ApplyError> {
             self.service
                 .execute(&self.context, store, &self.task)
@@ -1025,12 +1059,11 @@ mod tests {
                     .expect("read checkpoint")
                     .is_some()
             );
-            assert!(
-                self.kura
-                    .commit_manifest(self.context.height)
-                    .expect("read manifest")
-                    .is_some()
-            );
+            let commit_manifest = self
+                .kura
+                .commit_manifest(self.context.height)
+                .expect("read manifest")
+                .expect("commit manifest exists");
             let artifact = self
                 .kura
                 .v2_finality_artifact(self.context.height)
@@ -1039,6 +1072,15 @@ mod tests {
             assert_eq!(artifact.height_context, self.context);
             assert_eq!(artifact.subject, self.manifest.subject);
             assert_eq!(artifact.commit_qc, self.task.certificate().clone());
+            assert!(
+                self.kura
+                    .commit_manifest_has_wsv_binding(&commit_manifest)
+                    .expect("read checkpoint-to-manifest binding")
+            );
+            assert!(
+                commit_manifest.binds_authenticated_v2_commit_authority(&artifact),
+                "manifest must retain the exact QC roots and complete v2 authority seal"
+            );
             assert!(
                 self.state
                     .world_view()
@@ -1598,6 +1640,12 @@ mod tests {
 
     v2_apply_test!(wsv_without_its_canonical_kura_block_fails_closed, {
         let fixture = ApplyFixture::new();
+        let artifact = wire::finality::V2FinalityArtifact::new(
+            fixture.context.clone(),
+            fixture.task.subject(),
+            fixture.task.certificate().clone(),
+            fixture.service.validator_set_pops.clone(),
+        );
         fixture
             .service
             .validate_and_apply(
@@ -1605,6 +1653,7 @@ mod tests {
                 fixture.body.clone(),
                 false,
                 fixture.task.validated_receipt().execution_commitment(),
+                &artifact,
             )
             .expect("model corrupted WSV-ahead crash image");
         assert_eq!(fixture.state.committed_height(), 1);
@@ -1739,6 +1788,69 @@ mod tests {
             fixture
                 .execute(&mut reopened)
                 .expect("complete metadata without reapplying WSV");
+            fixture.assert_complete();
+        }
+    );
+
+    v2_apply_test!(
+        crash_after_wsv_restarts_from_last_finalized_snapshot_and_replays_exact_tip,
+        {
+            let fixture = ApplyFixture::new();
+            let mut first_process_store = fixture.reopen_body_store();
+            fixture.kura.fail_next_wsv_checkpoint_write_for_tests();
+            let first_error = fixture
+                .service
+                .execute(&fixture.context, &mut first_process_store, &fixture.task)
+                .expect_err("inject crash after WSV commit and before checkpoint publication");
+            assert!(first_error.requires_restart_recovery());
+            assert_eq!(fixture.state.committed_height(), 1);
+            assert_eq!(fixture.kura.durable_blocks_count(), 1);
+            fixture.assert_no_post_apply_sidecars();
+            let interrupted_state_hash =
+                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+            drop(first_process_store);
+
+            // Snapshot publication is gated on the complete checkpoint/manifest/finality tuple,
+            // so a process crash reloads the last finalized snapshot (height zero here), not the
+            // transient WSV that crossed only the in-memory commit boundary.
+            let (restarted_service, restarted_state) =
+                fixture.restart_service_from_last_finalized_snapshot();
+            assert_eq!(restarted_state.committed_height(), 0);
+            let mut restarted_store = fixture.reopen_body_store();
+            restarted_service
+                .execute(&fixture.context, &mut restarted_store, &fixture.task)
+                .expect("authenticated WAL/body retry reapplies the sole Kura tip");
+            assert_eq!(restarted_state.committed_height(), 1);
+            let first_artifact = fixture
+                .kura
+                .v2_finality_artifact(1)
+                .expect("read recovered finality")
+                .expect("recovery publishes finality");
+            assert_eq!(first_artifact.block_hash, fixture.body.hash());
+            assert_eq!(
+                crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref()),
+                interrupted_state_hash,
+                "recovery from the finalized snapshot must reproduce the exact interrupted WSV"
+            );
+
+            let durable_state_hash =
+                crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref());
+            restarted_service
+                .execute(&fixture.context, &mut restarted_store, &fixture.task)
+                .expect("an exact post-finality retry is idempotent");
+            assert_eq!(
+                fixture
+                    .kura
+                    .v2_finality_artifact(1)
+                    .expect("read repeated finality")
+                    .as_ref(),
+                Some(&first_artifact)
+            );
+            assert_eq!(
+                crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref()),
+                durable_state_hash,
+                "idempotent retry must not execute the block twice"
+            );
             fixture.assert_complete();
         }
     );

@@ -802,7 +802,7 @@ mod tests {
     use iroha_data_model::{
         block::BlockHeader, consensus::VALIDATOR_SET_HASH_VERSION_V1, peer::PeerId,
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::Quantity;
     use tempfile::tempdir;
 
     use super::*;
@@ -884,7 +884,7 @@ mod tests {
                 .iter()
                 .map(|peer| CommitStakeSnapshotEntry {
                     peer_id: peer.clone(),
-                    stake: Numeric::new(10, 0),
+                    stake: Quantity::from(10_u32),
                 })
                 .collect(),
         }

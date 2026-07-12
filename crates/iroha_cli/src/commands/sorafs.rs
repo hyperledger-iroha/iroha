@@ -110,7 +110,7 @@ use sorafs_orchestrator::{
         AdjustmentKind, AdjustmentRequest, DisputeId, DisputeResolution, DisputeStatus,
         EarningsDashboard, EarningsRow, LedgerAmountConversionError, LedgerAmountSource,
         LedgerReconciliationReport, LedgerTransferMismatch, LedgerTransferRecord, MismatchReason,
-        NumericToNanosError, PayoutInput, RelayPayoutService, ResolutionKind, RewardDispute,
+        PayoutInput, QuantityToNanosError, RelayPayoutService, ResolutionKind, RewardDispute,
         RewardLedgerSnapshot, TransferKind,
     },
 };
@@ -6195,8 +6195,8 @@ pub struct IncentivesOpenDisputeArgs {
     /// Account ID submitting the dispute.
     #[arg(long = "submitted-by", value_name = "ACCOUNT_ID")]
     pub submitted_by: String,
-    /// Requested adjustment amount (Numeric).
-    #[arg(long = "requested-amount", value_name = "NUMERIC")]
+    /// Requested adjustment quantity.
+    #[arg(long = "requested-amount", value_name = "QUANTITY")]
     pub requested_amount: String,
     /// Reason provided by the operator.
     #[arg(long = "reason", value_name = "TEXT")]
@@ -6219,7 +6219,7 @@ impl Run for IncentivesOpenDisputeArgs {
         let instruction = read_reward_instruction(&self.instruction)?;
         let treasury = parse_account_id_str(context, &self.treasury_account, "--treasury-account")?;
         let submitted_by = parse_account_id_str(context, &self.submitted_by, "--submitted-by")?;
-        let requested_amount = parse_numeric_str(&self.requested_amount, "--requested-amount")?;
+        let requested_amount = parse_quantity_str(&self.requested_amount, "--requested-amount")?;
         let submitted_at = self.submitted_at.unwrap_or_else(unix_now);
 
         let ledger = RelayPayoutLedger::new(treasury);
@@ -6544,10 +6544,7 @@ impl Run for IncentivesServiceRecordArgs {
             require_budget_approval_id(state.reward_config.budget_approval_id.as_ref())?;
         ensure_instruction_budget_approval(&instruction, &budget_approval_id)?;
 
-        let transfer_instruction = service
-            .payout_ledger()
-            .to_transfer(&instruction)
-            .map_err(|err| eyre!("invalid relay payout quantity: {err}"))?;
+        let transfer_instruction = service.payout_ledger().to_transfer(&instruction);
         if self.submit_transfer
             && !instruction.is_zero_amount()
             && let Some(transfer) = transfer_instruction.as_ref()
@@ -6617,8 +6614,8 @@ pub struct IncentivesServiceDisputeFileArgs {
     /// Account ID submitting the dispute.
     #[arg(long = "submitted-by", value_name = "ACCOUNT_ID")]
     pub submitted_by: String,
-    /// Requested payout amount (Numeric).
-    #[arg(long = "requested-amount", value_name = "NUMERIC")]
+    /// Requested payout quantity.
+    #[arg(long = "requested-amount", value_name = "QUANTITY")]
     pub requested_amount: String,
     /// Free-form reason describing the dispute.
     #[arg(long = "reason", value_name = "TEXT")]
@@ -6629,14 +6626,14 @@ pub struct IncentivesServiceDisputeFileArgs {
     /// Credit adjustment requested by the operator.
     #[arg(
         long = "adjust-credit",
-        value_name = "NUMERIC",
+        value_name = "QUANTITY",
         conflicts_with = "adjust_debit"
     )]
     pub adjust_credit: Option<String>,
     /// Debit adjustment requested by the operator.
     #[arg(
         long = "adjust-debit",
-        value_name = "NUMERIC",
+        value_name = "QUANTITY",
         conflicts_with = "adjust_credit"
     )]
     pub adjust_debit: Option<String>,
@@ -6655,7 +6652,7 @@ impl Run for IncentivesServiceDisputeFileArgs {
         let (mut state, mut service) = load_state_service(&self.state)?;
         let relay_id = relay_id_from_hex(&self.relay_id)?;
         let submitted_by = parse_account_id_str(context, &self.submitted_by, "--submitted-by")?;
-        let requested_amount = parse_numeric_str(&self.requested_amount, "--requested-amount")?;
+        let requested_amount = parse_quantity_str(&self.requested_amount, "--requested-amount")?;
         let requested_adjustment =
             parse_adjustment_flags(self.adjust_credit.as_ref(), self.adjust_debit.as_ref())?;
         let filed_at = self.filed_at.unwrap_or_else(unix_now);
@@ -6706,7 +6703,7 @@ pub struct IncentivesServiceDisputeResolveArgs {
     #[arg(long = "resolution", value_enum)]
     pub resolution: IncentivesDisputeResolutionKind,
     /// Amount applied when resolving with `credit` or `debit`.
-    #[arg(long = "amount", value_name = "NUMERIC")]
+    #[arg(long = "amount", value_name = "QUANTITY")]
     pub amount: Option<String>,
     /// Resolution notes recorded in the dispute metadata.
     #[arg(long = "notes", value_name = "TEXT")]
@@ -6744,7 +6741,7 @@ impl Run for IncentivesServiceDisputeResolveArgs {
                     .as_ref()
                     .ok_or_else(|| eyre!("--amount is required for credit resolutions"))?;
                 DisputeResolution::Credit {
-                    amount: parse_numeric_str(amount, "--amount")?,
+                    amount: parse_quantity_str(amount, "--amount")?,
                     notes: self.notes.clone(),
                 }
             }
@@ -6754,7 +6751,7 @@ impl Run for IncentivesServiceDisputeResolveArgs {
                     .as_ref()
                     .ok_or_else(|| eyre!("--amount is required for debit resolutions"))?;
                 DisputeResolution::Debit {
-                    amount: parse_numeric_str(amount, "--amount")?,
+                    amount: parse_quantity_str(amount, "--amount")?,
                     notes: self.notes.clone(),
                 }
             }
@@ -7551,7 +7548,7 @@ struct IncentivesDashboardSummary {
 struct DaemonProcessedPayoutSummary {
     relay_id_hex: String,
     epoch: u32,
-    payout_amount: Numeric,
+    payout_amount: Quantity,
     budget_approval_id: Option<String>,
     metrics: PayoutMetricsSnapshot,
     instruction_path: Option<String>,
@@ -8387,7 +8384,7 @@ impl TryFrom<RewardConfigState> for RewardConfig {
 
         let policy = RelayBondPolicyV1::try_from(policy_state)?;
         let base_reward =
-            Numeric::from_str(&base_reward).map_err(|err| eyre!("invalid base_reward: {err}"))?;
+            Quantity::from_str(&base_reward).map_err(|err| eyre!("invalid base_reward: {err}"))?;
         let budget_approval_id = match budget_approval_id {
             Some(hex_value) => {
                 let normalised =
@@ -8430,7 +8427,7 @@ impl TryFrom<RewardPolicyState> for RelayBondPolicyV1 {
     type Error = eyre::Report;
 
     fn try_from(value: RewardPolicyState) -> Result<Self> {
-        let minimum_exit_bond = Numeric::from_str(&value.minimum_exit_bond)
+        let minimum_exit_bond = Quantity::from_str(&value.minimum_exit_bond)
             .map_err(|err| eyre!("invalid minimum_exit_bond: {err}"))?;
         let bond_asset_id = AssetDefinitionId::parse_address_literal(&value.bond_asset_id)
             .map_err(|err| eyre!("invalid bond_asset_id: {err}"))?;
@@ -8540,7 +8537,7 @@ struct StoredDisputeRecord {
     relay_id_hex: String,
     epoch: u32,
     submitted_by: AccountId,
-    requested_amount: Numeric,
+    requested_amount: Quantity,
     filed_at_unix: u64,
     reason: String,
     requested_adjustment: Option<StoredAdjustmentRequest>,
@@ -8558,7 +8555,7 @@ struct StoredDisputeRecord {
 #[norito(decode_from_slice)]
 struct StoredAdjustmentRequest {
     kind: StoredAdjustmentKind,
-    amount: Numeric,
+    amount: Quantity,
 }
 
 impl StoredAdjustmentRequest {
@@ -8663,7 +8660,7 @@ enum StoredDisputeStatus {
     Resolved {
         resolved_at_unix: u64,
         kind: StoredResolutionKind,
-        amount: Option<Numeric>,
+        amount: Option<Quantity>,
         notes: String,
     },
 }
@@ -8771,7 +8768,7 @@ impl StoredDisputeRecord {
 
 fn stored_resolution_to_resolution(
     kind: StoredResolutionKind,
-    amount: Option<Numeric>,
+    amount: Option<Quantity>,
     notes: &str,
 ) -> Result<DisputeResolution> {
     Ok(match kind {
@@ -8908,34 +8905,35 @@ fn ledger_amount_source_label(source: LedgerAmountSource) -> &'static str {
     }
 }
 
-fn numeric_to_nanos_error_label(error: NumericToNanosError) -> &'static str {
+fn quantity_to_nanos_error_label(error: QuantityToNanosError) -> &'static str {
     match error {
-        NumericToNanosError::NegativeOrTooWideMantissa => "negative_or_too_wide_mantissa",
-        NumericToNanosError::ScaleOverflow => "scale_overflow",
-        NumericToNanosError::NanosOverflow => "nanos_overflow",
-        NumericToNanosError::TotalOverflow => "total_overflow",
+        QuantityToNanosError::TooWideMantissa => "too_wide_mantissa",
+        QuantityToNanosError::ScaleOverflow => "scale_overflow",
+        QuantityToNanosError::NanosOverflow => "nanos_overflow",
+        QuantityToNanosError::TotalOverflow => "total_overflow",
     }
 }
 
-fn numeric_to_nanos_checked(amount: &Numeric) -> Result<u128, NumericToNanosError> {
+fn quantity_to_nanos_checked(amount: &Quantity) -> Result<u128, QuantityToNanosError> {
     let scale = amount.scale();
     let mantissa = amount
+        .as_numeric()
         .try_mantissa_u128()
-        .ok_or(NumericToNanosError::NegativeOrTooWideMantissa)?;
+        .ok_or(QuantityToNanosError::TooWideMantissa)?;
     if scale >= 9 {
         let divisor = 10u128
             .checked_pow(scale.saturating_sub(9))
-            .ok_or(NumericToNanosError::ScaleOverflow)?;
+            .ok_or(QuantityToNanosError::ScaleOverflow)?;
         mantissa
             .checked_div(divisor)
-            .ok_or(NumericToNanosError::ScaleOverflow)
+            .ok_or(QuantityToNanosError::ScaleOverflow)
     } else {
         let multiplier = 10u128
             .checked_pow(9 - scale)
-            .ok_or(NumericToNanosError::ScaleOverflow)?;
+            .ok_or(QuantityToNanosError::ScaleOverflow)?;
         mantissa
             .checked_mul(multiplier)
-            .ok_or(NumericToNanosError::NanosOverflow)
+            .ok_or(QuantityToNanosError::NanosOverflow)
     }
 }
 
@@ -9028,14 +9026,14 @@ fn parse_adjustment_flags(
     debit: Option<&String>,
 ) -> Result<Option<AdjustmentRequest>> {
     if let Some(value) = credit {
-        let amount = parse_numeric_str(value, "--adjust-credit")?;
+        let amount = parse_quantity_str(value, "--adjust-credit")?;
         return Ok(Some(AdjustmentRequest {
             kind: AdjustmentKind::Credit,
             amount,
         }));
     }
     if let Some(value) = debit {
-        let amount = parse_numeric_str(value, "--adjust-debit")?;
+        let amount = parse_quantity_str(value, "--adjust-debit")?;
         return Ok(Some(AdjustmentRequest {
             kind: AdjustmentKind::Debit,
             amount,
@@ -9069,7 +9067,7 @@ where
 struct ServicePayoutSummary {
     relay_id_hex: String,
     epoch: u32,
-    payout_amount: Numeric,
+    payout_amount: Quantity,
     reward_score: u64,
     ledger: ServiceLedgerSnapshot,
 }
@@ -9088,9 +9086,9 @@ impl ServicePayoutSummary {
 
 #[derive(Debug, norito::json::JsonSerialize)]
 struct ServiceLedgerSnapshot {
-    total_paid: Numeric,
-    total_rebated: Numeric,
-    total_withheld: Numeric,
+    total_paid: Quantity,
+    total_rebated: Quantity,
+    total_withheld: Quantity,
     net_paid: Numeric,
     epochs_recorded: usize,
     last_epoch: Option<u32>,
@@ -9148,11 +9146,11 @@ struct ReconciliationTransferSummary {
 
 impl ReconciliationTransferSummary {
     fn from_record(record: &LedgerTransferRecord) -> Self {
-        let (amount_nanos, amount_conversion_error) = match numeric_to_nanos_checked(&record.amount)
-        {
-            Ok(nanos) => (Some(nanos), None),
-            Err(error) => (None, Some(numeric_to_nanos_error_label(error).to_string())),
-        };
+        let (amount_nanos, amount_conversion_error) =
+            match quantity_to_nanos_checked(&record.amount) {
+                Ok(nanos) => (Some(nanos), None),
+                Err(error) => (None, Some(quantity_to_nanos_error_label(error).to_string())),
+            };
         Self {
             relay_id: relay_id_to_hex(record.relay_id),
             epoch: record.epoch,
@@ -9201,7 +9199,7 @@ impl ReconciliationAmountConversionSummary {
     fn from_error(error: &LedgerAmountConversionError) -> Self {
         Self {
             source: ledger_amount_source_label(error.source).to_string(),
-            reason: numeric_to_nanos_error_label(error.error).to_string(),
+            reason: quantity_to_nanos_error_label(error.error).to_string(),
             record: ReconciliationTransferSummary::from_record(&error.record),
         }
     }
@@ -9333,7 +9331,7 @@ fn build_shadow_run_summary(summary: &DaemonIterationSummary) -> ShadowRunSummar
 
     for payout in &summary.processed {
         let relay_entry = accumulators.entry(&payout.relay_id_hex).or_default();
-        let payout_nanos = match numeric_to_nanos_checked(&payout.payout_amount) {
+        let payout_nanos = match quantity_to_nanos_checked(&payout.payout_amount) {
             Ok(nanos) => nanos,
             Err(error) => {
                 relay_entry.amount_conversion_errors =
@@ -9342,7 +9340,7 @@ fn build_shadow_run_summary(summary: &DaemonIterationSummary) -> ShadowRunSummar
                     relay_id_hex: payout.relay_id_hex.clone(),
                     epoch: payout.epoch,
                     amount: payout.payout_amount.to_string(),
-                    reason: numeric_to_nanos_error_label(error).to_string(),
+                    reason: quantity_to_nanos_error_label(error).to_string(),
                 });
                 0
             }
@@ -9497,9 +9495,9 @@ impl ServiceDashboardSummary {
 #[derive(Debug, norito::json::JsonSerialize)]
 struct ServiceDashboardRow {
     relay_id_hex: String,
-    total_paid: Numeric,
-    total_rebated: Numeric,
-    total_withheld: Numeric,
+    total_paid: Quantity,
+    total_rebated: Quantity,
+    total_withheld: Quantity,
     net_paid: Numeric,
     epochs_recorded: usize,
     last_epoch: Option<u32>,
@@ -11285,8 +11283,9 @@ fn build_repair_worker_signature(
     Ok((worker_id, signature))
 }
 
-fn parse_numeric_str(value: &str, flag: &str) -> Result<Numeric> {
-    Numeric::from_str(value).map_err(|err| eyre!("{flag} must be a valid Numeric: {err}"))
+fn parse_quantity_str(value: &str, flag: &str) -> Result<Quantity> {
+    Quantity::from_str(value)
+        .map_err(|err| eyre!("{flag} must be a valid non-negative quantity: {err}"))
 }
 
 fn unix_now() -> u64 {
@@ -21384,7 +21383,7 @@ mod tests {
         },
     };
     use iroha_i18n::{Bundle, Language, Localizer};
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::json::{Map, Value};
     use norito::{decode_from_bytes, json::JsonSerialize, to_bytes};
     use rand::{
@@ -22220,7 +22219,7 @@ mod tests {
     fn sample_bond_entry(amount: u32) -> RelayBondLedgerEntryV1 {
         RelayBondLedgerEntryV1 {
             relay_id: [0xAB; 32],
-            bonded_amount: Numeric::from(amount),
+            bonded_amount: Quantity::from(amount),
             bond_asset_id: xor_asset_id(),
             bonded_since_unix: 1,
             exit_capable: true,
@@ -22248,7 +22247,7 @@ mod tests {
             epoch: 9,
             beneficiary: sample_account_id("relay-beneficiary"),
             payout_asset_id: xor_asset_id(),
-            payout_amount: Numeric::from(42_u32),
+            payout_amount: Quantity::from(42_u32),
             reward_score: 750,
             budget_approval_id: Some(sample_budget_id()),
             metadata: Metadata::default(),
@@ -22261,10 +22260,17 @@ mod tests {
             epoch: 3,
             kind,
             dispute_id: None,
-            amount: Numeric::from(amount),
+            amount: Quantity::from(amount),
             source_asset: AssetId::new(xor_asset_id(), sample_account_id("treasury")),
             destination: sample_account_id("relay"),
         }
+    }
+
+    #[test]
+    fn incentive_quantity_parser_rejects_negative_amounts() {
+        let error = parse_quantity_str("-1", "--requested-amount")
+            .expect_err("negative reward quantities must be rejected");
+        assert!(error.to_string().contains("non-negative quantity"));
     }
 
     #[test]
@@ -22304,7 +22310,9 @@ mod tests {
         let mut mismatch_actual = sample_transfer_record(TransferKind::Debit, 35);
         mismatch_actual.destination = sample_account_id("alt-treasury");
         let mut invalid_amount_record = sample_transfer_record(TransferKind::Payout, 5);
-        invalid_amount_record.amount = Numeric::new(-5_i128, 0);
+        invalid_amount_record.amount = "340282366920938463463374607431768211456"
+            .parse::<Quantity>()
+            .expect("2^128 quantity");
 
         let report = LedgerReconciliationReport {
             total_expected_transfers: 3,
@@ -22323,7 +22331,7 @@ mod tests {
             amount_conversion_errors: vec![LedgerAmountConversionError {
                 source: LedgerAmountSource::Exported,
                 record: invalid_amount_record.clone(),
-                error: NumericToNanosError::NegativeOrTooWideMantissa,
+                error: QuantityToNanosError::TooWideMantissa,
             }],
         };
 
@@ -22352,7 +22360,7 @@ mod tests {
         assert_eq!(summary.amount_conversion_errors[0].source, "exported");
         assert_eq!(
             summary.amount_conversion_errors[0].reason,
-            "negative_or_too_wide_mantissa"
+            "too_wide_mantissa"
         );
         assert_eq!(
             summary.amount_conversion_errors[0].record.amount,
@@ -28839,7 +28847,7 @@ mod tests {
         let decoded: RelayRewardInstructionV1 =
             decode_from_bytes(&bytes).expect("decode instruction");
         assert_eq!(decoded.beneficiary, sample_account_id("beneficiary"));
-        assert!(decoded.payout_amount > Numeric::zero());
+        assert!(decoded.payout_amount > Quantity::zero());
     }
 
     #[test]
@@ -28881,14 +28889,14 @@ mod tests {
     #[test]
     fn incentives_dashboard_summarises_rewards() {
         let mut inst1 = sample_reward_instruction();
-        inst1.payout_amount = Numeric::from(40_u32);
+        inst1.payout_amount = Quantity::from(40_u32);
         let mut inst1_file = NamedTempFile::new().expect("inst1");
         let inst1_bytes = to_bytes(&inst1).expect("encode inst1");
         inst1_file.write_all(&inst1_bytes).expect("write inst1");
 
         let mut inst2 = sample_reward_instruction();
         inst2.epoch = inst1.epoch + 1;
-        inst2.payout_amount = Numeric::from(10_u32);
+        inst2.payout_amount = Quantity::from(10_u32);
         let mut inst2_file = NamedTempFile::new().expect("inst2");
         let inst2_bytes = to_bytes(&inst2).expect("encode inst2");
         inst2_file.write_all(&inst2_bytes).expect("write inst2");
@@ -28963,14 +28971,14 @@ mod tests {
         let relay_b = [0x43_u8; 32];
         let relay_primary_bond = RelayBondLedgerEntryV1 {
             relay_id: relay_a,
-            bonded_amount: Numeric::from(5_000_u32),
+            bonded_amount: Quantity::from(5_000_u32),
             bond_asset_id: xor_asset_id(),
             bonded_since_unix: 1,
             exit_capable: true,
         };
         let relay_secondary_bond = RelayBondLedgerEntryV1 {
             relay_id: relay_b,
-            bonded_amount: Numeric::from(7_500_u32),
+            bonded_amount: Quantity::from(7_500_u32),
             bond_asset_id: xor_asset_id(),
             bonded_since_unix: 1,
             exit_capable: true,
@@ -29137,7 +29145,9 @@ mod tests {
             processed: vec![DaemonProcessedPayoutSummary {
                 relay_id_hex: relay_id_hex.clone(),
                 epoch: 7,
-                payout_amount: Numeric::new(-7_i128, 0),
+                payout_amount: "340282366920938463463374607431768211456"
+                    .parse::<Quantity>()
+                    .expect("2^128 quantity"),
                 budget_approval_id: Some(sample_budget_id_hex()),
                 metrics: PayoutMetricsSnapshot {
                     availability_per_mille: 1_000,
@@ -29162,8 +29172,8 @@ mod tests {
         let error = &shadow.payout_amount_conversion_errors[0];
         assert_eq!(error.relay_id_hex, relay_id_hex);
         assert_eq!(error.epoch, 7);
-        assert_eq!(error.amount, "-7");
-        assert_eq!(error.reason, "negative_or_too_wide_mantissa");
+        assert_eq!(error.amount, "340282366920938463463374607431768211456");
+        assert_eq!(error.reason, "too_wide_mantissa");
         assert_eq!(shadow.relays.len(), 1);
         assert_eq!(shadow.relays[0].amount_conversion_errors, 1);
         assert_eq!(shadow.relays[0].payout_nanos, 0);
@@ -29172,7 +29182,7 @@ mod tests {
     #[test]
     fn incentives_state_roundtrip_serializes() {
         let policy = RelayBondPolicyV1 {
-            minimum_exit_bond: Numeric::from(1_000_u32),
+            minimum_exit_bond: Quantity::from(1_000_u32),
             bond_asset_id: xor_asset_id(),
             uptime_floor_per_mille: 900,
             slash_penalty_basis_points: 250,
@@ -29180,7 +29190,7 @@ mod tests {
         };
         let reward_config = RewardConfig {
             policy: policy.clone(),
-            base_reward: Numeric::from(75_u32),
+            base_reward: Quantity::from(75_u32),
             uptime_weight_per_mille: 600,
             bandwidth_weight_per_mille: 400,
             compliance_penalty_basis_points: 0,
@@ -29659,7 +29669,7 @@ mod tests {
         let stored = &state.disputes[0];
         assert_eq!(
             stored.requested_amount,
-            Numeric::from_str("120").expect("numeric literal")
+            Quantity::from_str("120").expect("quantity literal")
         );
         assert_eq!(
             stored
@@ -29667,7 +29677,7 @@ mod tests {
                 .as_ref()
                 .expect("adjustment present")
                 .amount,
-            Numeric::from_str("25").expect("numeric literal")
+            Quantity::from_str("25").expect("quantity literal")
         );
 
         let transfer_file = NamedTempFile::new().expect("transfer file");
@@ -29694,7 +29704,7 @@ mod tests {
                 assert!(matches!(kind, StoredResolutionKind::Credit));
                 assert_eq!(
                     amount.clone(),
-                    Some(Numeric::from_str("25").expect("numeric literal"))
+                    Some(Quantity::from_str("25").expect("quantity literal"))
                 );
             }
             other => panic!("unexpected dispute status: {other:?}"),
@@ -29709,7 +29719,7 @@ mod tests {
         let TransferBox::Asset(transfer) = transfer_box else {
             panic!("expected asset transfer, found {transfer_box:?}");
         };
-        assert_eq!(transfer.object.as_numeric(), &Numeric::from(25_u32));
+        assert_eq!(transfer.object, Quantity::from(25_u32));
         assert_eq!(transfer.destination, sample_account_id("beneficiary"));
         assert_eq!(transfer.source.account, sample_account_id("treasury"));
     }

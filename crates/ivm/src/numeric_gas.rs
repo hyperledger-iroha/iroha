@@ -12,7 +12,7 @@ use iroha_primitives::numeric::NumericWorkStep;
 /// This value is included in the gas-schedule descriptor. Any change to a
 /// logical-work formula, charge-point ordering, or stable staged-phase tag
 /// MUST increment it and regenerate the gas-schedule golden hash.
-pub const NUMERIC_GAS_FORMULA_VERSION_V1: u64 = 4;
+pub const NUMERIC_GAS_FORMULA_VERSION_V1: u64 = 5;
 /// Fixed staged-syscall entry charge.
 ///
 /// The value is calibrated against the complete admitted-call control path,
@@ -178,8 +178,9 @@ pub const fn materialization_work(value_limbs: u64) -> u64 {
     if value_limbs == 0 { 1 } else { value_limbs }
 }
 
-fn alignment_operand_work(value_limbs: u64, exponent: u8) -> Result<u64, VMError> {
-    if exponent == 0 {
+fn alignment_operand_work(value_bits: u64, exponent: u8) -> Result<u64, VMError> {
+    let value_limbs = limbs_for_bits(value_bits);
+    if exponent == 0 || value_bits == 0 {
         Ok(materialization_work(value_limbs))
     } else {
         scale_work(value_limbs, exponent)
@@ -201,15 +202,15 @@ pub fn power_construction_work(exponent: u8) -> Result<u64, VMError> {
 
 /// Aligned add/subtract/compare work, including both decimal scale shifts.
 pub fn aligned_work(
-    lhs_limbs: u64,
+    lhs_bits: u64,
     lhs_scale_delta: u8,
     lhs_aligned_limbs: u64,
-    rhs_limbs: u64,
+    rhs_bits: u64,
     rhs_scale_delta: u8,
     rhs_aligned_limbs: u64,
 ) -> Result<u64, VMError> {
-    let lhs_scale = alignment_operand_work(lhs_limbs, lhs_scale_delta)?;
-    let rhs_scale = alignment_operand_work(rhs_limbs, rhs_scale_delta)?;
+    let lhs_scale = alignment_operand_work(lhs_bits, lhs_scale_delta)?;
+    let rhs_scale = alignment_operand_work(rhs_bits, rhs_scale_delta)?;
     checked_add(
         checked_add(lhs_scale, rhs_scale)?,
         lhs_aligned_limbs.max(rhs_aligned_limbs).max(1),
@@ -383,17 +384,17 @@ pub fn wrapping_multiplication_work(lhs_limbs: u64, rhs_limbs: u64) -> Result<u6
 
 /// Work for one exact or rounded division scale attempt.
 pub fn division_attempt_work(
-    numerator_limbs: u64,
+    numerator_bits: u64,
     numerator_scale_delta: u8,
     scaled_numerator_limbs: u64,
-    denominator_limbs: u64,
+    denominator_bits: u64,
     denominator_scale_delta: u8,
     scaled_denominator_limbs: u64,
 ) -> Result<u64, VMError> {
     checked_add(
         checked_add(
-            alignment_operand_work(numerator_limbs, numerator_scale_delta)?,
-            alignment_operand_work(denominator_limbs, denominator_scale_delta)?,
+            alignment_operand_work(numerator_bits, numerator_scale_delta)?,
+            alignment_operand_work(denominator_bits, denominator_scale_delta)?,
         )?,
         quotient_remainder_work(scaled_numerator_limbs, scaled_denominator_limbs)?,
     )
@@ -557,7 +558,8 @@ mod tests {
     #[test]
     fn multiplication_and_scale_intermediates_exceed_value_width() {
         assert_eq!(multiplication_work(8, 8), Ok(64));
-        assert_eq!(aligned_work(8, 28, 10, 1, 0, 1), Ok(63));
+        assert_eq!(aligned_work(511, 28, 10, 1, 0, 1), Ok(63));
+        assert_eq!(aligned_work(0, 28, 1, 1, 0, 1), Ok(3));
         assert_eq!(MAX_PRODUCT_SCALE, 56);
         assert_eq!(MAX_PRODUCT_LIMBS, 16);
     }
@@ -568,6 +570,8 @@ mod tests {
         assert_eq!(division_work(1, 1), Ok(3));
         assert_eq!(division_work(8, 3), Ok(29));
         assert_eq!(division_work(10, 8), Ok(42));
+        assert_eq!(division_attempt_work(511, 28, 10, 1, 0, 1), Ok(94));
+        assert_eq!(division_attempt_work(0, 28, 1, 1, 0, 1), Ok(7));
     }
 
     #[test]

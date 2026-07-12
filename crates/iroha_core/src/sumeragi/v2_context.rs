@@ -368,6 +368,7 @@ pub(crate) fn build_genesis_height_context(
         next_epoch_snapshot: inputs.next_epoch_snapshot,
         mode: inputs.election.mode,
         parent_commit_qc: None,
+        snapshot_bootstrap: None,
         quorum: inputs.election.quorum()?,
         roster: inputs.election.roster,
         nexus_amx_context_hash: inputs.nexus_amx_context_hash,
@@ -407,6 +408,7 @@ pub(crate) fn build_successor_height_context(
         next_epoch_snapshot,
         mode: election.mode,
         parent_commit_qc: Some(parent.commit_qc.clone()),
+        snapshot_bootstrap: None,
         quorum: election.quorum()?,
         roster: election.roster,
         nexus_amx_context_hash,
@@ -608,7 +610,7 @@ mod tests {
         prelude::{InstructionBox, TransactionBuilder},
     };
     use iroha_genesis::GenesisBlock;
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::Quantity;
 
     use super::*;
     use crate::{
@@ -785,8 +787,8 @@ mod tests {
             validator: validator.clone(),
             peer_id: peer.clone(),
             stake_account: validator,
-            total_stake: Numeric::from(stake),
-            self_stake: Numeric::from(stake),
+            total_stake: Quantity::from(stake),
+            self_stake: Quantity::from(stake),
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
             activation_epoch: None,

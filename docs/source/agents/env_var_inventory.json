@@ -2,8 +2,8 @@
   "command": "python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inventory.json --md docs/source/agents/env_var_inventory.md",
   "generated_at": "2026-07-09T22:34:32Z",
   "root": "iroha",
-  "total_refs": 715,
-  "unique_vars": 196,
+  "total_refs": 714,
+  "unique_vars": 195,
   "variables": {
     "ACTIONS_ID_TOKEN_REQUEST_TOKEN": {
       "counts": {
@@ -3339,19 +3339,6 @@
           "line": 2889,
           "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
           "scope": "test"
-        }
-      ]
-    },
-    "IROHA_REPLAY_SKIP_BLOCK_SIGNATURE_VALIDATION": {
-      "counts": {
-        "prod": 1
-      },
-      "paths": [
-        {
-          "context": "std::env::var(\"IROHA_REPLAY_SKIP_BLOCK_SIGNATURE_VALIDATION\")",
-          "line": 37277,
-          "path": "crates/iroha_core/src/state.rs",
-          "scope": "prod"
         }
       ]
     },

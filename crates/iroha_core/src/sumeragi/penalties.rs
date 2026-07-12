@@ -18,7 +18,7 @@ use iroha_data_model::{
     prelude::{AccountId, PeerId},
     transaction::TransactionSubmissionReceipt,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 
 #[cfg(feature = "telemetry")]
@@ -576,7 +576,7 @@ fn max_slash_amount_for_validator_from_state(
     state: &State,
     locator: &ValidatorLocator,
     max_bps: u16,
-) -> Result<Option<Numeric>> {
+) -> Result<Option<Quantity>> {
     if state.nexus_snapshot().enabled && !state.is_lane_active_for_authority(locator.lane_id) {
         return Ok(None);
     }
@@ -633,7 +633,7 @@ fn jail_in_transaction(
 mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
-    use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         ChainId,
         block::{
@@ -643,8 +643,9 @@ mod tests {
             },
             consensus_v2::{
                 BlockSubject, ConsensusMode as V2ConsensusMode, ConsensusRound,
-                DataAvailabilityLayout, DualQuorum, GlobalPhase, HeightContext, PayloadEncoding,
-                QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
+                DataAvailabilityLayout, DualQuorum, ExecutionCommitment, GlobalPhase,
+                HeightContext, PayloadEncoding, QuorumCertificate, ValidatorPower,
+                finality::V2FinalityArtifact,
             },
         },
         metadata::Metadata,
@@ -655,7 +656,7 @@ mod tests {
             signed::SignedTransaction,
         },
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::Quantity;
     use mv::storage::StorageReadOnly;
 
     use super::*;
@@ -679,12 +680,22 @@ mod tests {
         )
     }
 
-    fn roster() -> Vec<PeerId> {
-        let mut roster = (0..4)
-            .map(|_| PeerId::new(checked_keypair().public_key().clone()))
+    fn roster_keys() -> Vec<KeyPair> {
+        let mut keys = (0_u8..4)
+            .map(|index| {
+                KeyPair::try_from_seed(vec![0xD0 + index; 32], Algorithm::BlsNormal)
+                    .expect("deterministic penalty-roster BLS key")
+            })
             .collect::<Vec<_>>();
-        roster.sort();
-        roster
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        keys
+    }
+
+    fn roster() -> Vec<PeerId> {
+        roster_keys()
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect()
     }
 
     fn test_block_hash(byte: u8) -> HashOf<BlockHeader> {
@@ -748,8 +759,10 @@ mod tests {
             height: 1,
             epoch: 0,
             epoch_end_height: 100,
+            next_epoch_snapshot: None,
             mode: V2ConsensusMode::Permissioned,
             parent_commit_qc: None,
+            snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"penalties v2 test context"),
@@ -774,7 +787,16 @@ mod tests {
         roster: &[PeerId],
         chain_id: ChainId,
     ) -> HeightContext {
-        let signing_key = checked_keypair();
+        let roster_keys = roster_keys();
+        assert_eq!(
+            roster,
+            roster_keys
+                .iter()
+                .map(|key| PeerId::new(key.public_key().clone()))
+                .collect::<Vec<_>>(),
+            "artifact fixture roster must retain its deterministic signing keys"
+        );
+        let signing_key = &roster_keys[0];
         let committed =
             ValidBlock::new_dummy_and_modify_header(signing_key.private_key(), |header| {
                 header.set_height(NonZeroU64::new(1).expect("non-zero height"));
@@ -793,26 +815,59 @@ mod tests {
         let subject = BlockSubject {
             parent_block_hash: None,
             block_hash: block.hash(),
-            payload_hash: Hash::new(b"penalties canonical body"),
+            payload_hash: Hash::new(block.encode_wire().expect("canonical block wire")),
         };
-        let certificate = QuorumCertificate {
-            round: ConsensusRound {
-                context_id: context.id(),
-                height: 1,
-                view: 7,
-            },
+        let execution_commitment = ExecutionCommitment::without_topups(
+            Hash::new(b"penalties fixture parent state"),
+            Hash::new(b"penalties fixture post state"),
+            Hash::new(b"penalties fixture ordinary writes"),
+        );
+        let round = ConsensusRound {
+            context_id: context.id(),
+            height: 1,
+            view: 7,
+        };
+        let unsigned_vote = iroha_data_model::block::consensus_v2::Vote {
+            round,
             phase: GlobalPhase::Commit,
             subject,
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![0x5A; 48],
+            execution_commitment,
+            signer: 0,
+            signature: Vec::new(),
         };
+        let preimage = unsigned_vote.signature_preimage();
+        let shares = roster_keys[..3]
+            .iter()
+            .map(|key| {
+                Signature::new(key.private_key(), &preimage)
+                    .payload()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let certificate = QuorumCertificate {
+            round,
+            phase: GlobalPhase::Commit,
+            subject,
+            execution_commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
+                .expect("aggregate fixture CommitQC"),
+        };
+        let validator_set_pops = roster_keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("fixture validator PoP")
+            })
+            .collect();
         let _receipt = state
             .kura()
             .store_v2_finality_artifact(&V2FinalityArtifact::new(
                 context.clone(),
                 subject,
                 certificate,
-                None,
+                validator_set_pops,
             ))
             .expect("persist canonical v2 finality artifact");
         context
@@ -850,8 +905,8 @@ mod tests {
             validator: validator.clone(),
             peer_id: peer.clone(),
             stake_account: validator.clone(),
-            total_stake: Numeric::new(10_000, 0),
-            self_stake: Numeric::new(10_000, 0),
+            total_stake: Quantity::from(10_000_u64),
+            self_stake: Quantity::from(10_000_u64),
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
             activation_epoch: None,

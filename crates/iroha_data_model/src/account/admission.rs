@@ -219,10 +219,7 @@ mod tests {
             max_implicit_creations_per_tx: None,
             max_implicit_creations_per_block: None,
             implicit_creation_fee: None,
-            min_initial_amounts: BTreeMap::from([(
-                asset_definition_id(),
-                Numeric::new(-1_i32, 0),
-            )]),
+            min_initial_amounts: BTreeMap::from([(asset_definition_id(), Numeric::new(-1_i32, 0))]),
             default_role_on_create: None,
         };
         let encoded = forged_policy.encode();

@@ -341,7 +341,7 @@ fn host_batches_transfer_v1_calls() {
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&from);
     let from_asset = Asset::new(
         AssetId::new(asset_def_id.clone(), from.clone()),
-        Numeric::from(25_u32),
+        Quantity::from(25_u32),
     );
     let world = World::with_assets(
         [domain],
@@ -747,18 +747,8 @@ fn transfer_batch_apply_syscall_enqueues_batch() {
     );
 
     let batch = TransferAssetBatch::new(vec![
-        TransferAssetBatchEntry::new(
-            from.clone(),
-            to_a.clone(),
-            asset_def_id.clone(),
-            7_u32,
-        ),
-        TransferAssetBatchEntry::new(
-            from.clone(),
-            to_b.clone(),
-            asset_def_id.clone(),
-            4_u32,
-        ),
+        TransferAssetBatchEntry::new(from.clone(), to_a.clone(), asset_def_id.clone(), 7_u32),
+        TransferAssetBatchEntry::new(from.clone(), to_b.clone(), asset_def_id.clone(), 4_u32),
     ]);
     let encoded_batch = norito::to_bytes(&batch).expect("encode batch");
     let decoded: TransferAssetBatch =

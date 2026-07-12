@@ -295,7 +295,11 @@ fn domain_owner_asset_permissions() -> Result<()> {
     test_client.submit_blocking(Mint::asset_quantity(10u32, bob_coin_id.clone()))?;
     test_client.submit_blocking(Burn::asset_quantity(5u32, bob_coin_id.clone()))?;
     let err = test_client
-        .submit_blocking(Transfer::asset_quantity(bob_coin_id.clone(), 5u32, alice_id))
+        .submit_blocking(Transfer::asset_quantity(
+            bob_coin_id.clone(),
+            5u32,
+            alice_id,
+        ))
         .expect_err("domain owner must not transfer another account asset without explicit grant");
     assert!(err.chain().any(|cause| {
         cause

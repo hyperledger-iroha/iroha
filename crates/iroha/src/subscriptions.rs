@@ -9,7 +9,7 @@ use iroha_data_model::{
     subscription::{SubscriptionInvoice, SubscriptionPlan, SubscriptionState},
     trigger::TriggerId,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use norito::derive::{JsonDeserialize, JsonSerialize};
 
 /// Request payload for creating a subscription plan.
@@ -197,8 +197,8 @@ pub struct SubscriptionUsageRequest {
     pub private_key: ExposedPrivateKey,
     /// Usage counter key to update.
     pub unit_key: Name,
-    /// Usage increment (must be non-negative).
-    pub delta: Numeric,
+    /// Non-negative usage increment.
+    pub delta: Quantity,
     /// Optional usage trigger id; derived when omitted.
     pub usage_trigger_id: Option<TriggerId>,
 }

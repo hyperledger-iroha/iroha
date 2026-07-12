@@ -106,7 +106,10 @@ impl VerifiedHeightContext {
         proofs_of_possession: Vec<Vec<u8>>,
     ) -> Result<Self, AdapterError> {
         context.validate()?;
-        if context.height != 1 || context.parent_commit_qc.is_some() {
+        if context.height != 1
+            || context.parent_commit_qc.is_some()
+            || context.snapshot_bootstrap.is_some()
+        {
             return Err(AdapterError::InvalidGenesisContext);
         }
         verify_roster_proofs(&context, &proofs_of_possession)?;
@@ -114,6 +117,26 @@ impl VerifiedHeightContext {
         Ok(Self {
             context,
             proofs_of_possession,
+            parent_verification: None,
+        })
+    }
+
+    /// Verify the complete first context authenticated by an audited snapshot payload.
+    pub(crate) fn snapshot_bootstrap(
+        record: &wire::SnapshotV2BootstrapRecord,
+    ) -> Result<Self, AdapterError> {
+        record.validate()?;
+        if record.context.height <= 1
+            || record.context.parent_commit_qc.is_some()
+            || record.context.snapshot_bootstrap.is_none()
+        {
+            return Err(AdapterError::InvalidSnapshotBootstrapContext);
+        }
+        verify_roster_proofs(&record.context, &record.validator_set_pops)?;
+        verify_next_epoch_snapshot_proofs(&record.context)?;
+        Ok(Self {
+            context: record.context.clone(),
+            proofs_of_possession: record.validator_set_pops.clone(),
             parent_verification: None,
         })
     }
@@ -129,6 +152,9 @@ impl VerifiedHeightContext {
         context.validate()?;
         parent_artifact.validate()?;
         verify_next_epoch_snapshot_proofs(&context)?;
+        if context.snapshot_bootstrap.is_some() {
+            return Err(AdapterError::ParentContextMismatch);
+        }
         if parent_artifact.validator_set_pops != parent_proofs_of_possession {
             return Err(AdapterError::ParentContextMismatch);
         }
@@ -441,6 +467,9 @@ pub(crate) enum AdapterError {
     /// Genesis verification was requested for a non-genesis context.
     #[error("Sumeragi v2 genesis context must be height 1 with no parent CommitQC")]
     InvalidGenesisContext,
+    /// Snapshot bootstrap verification was requested for a normal genesis/successor context.
+    #[error("Sumeragi v2 snapshot bootstrap context must be an anchored post-snapshot height")]
+    InvalidSnapshotBootstrapContext,
     /// Successor context is not anchored to the supplied durable parent.
     #[error("Sumeragi v2 height context does not match its durable parent artifact")]
     ParentContextMismatch,
@@ -610,6 +639,17 @@ impl SumeragiV2Adapter {
             .map(|record| registry.decode_wal_entry(record.sequence, &record.payload))
             .collect::<Result<Vec<_>, _>>()?;
         let reducer = reducer::Reducer::recover(context, local_validator, generation, entries)?;
+        if let Some(decision) = reducer.durable_state().decision() {
+            let certificate = registry
+                .certificates
+                .get(&decision.reference())
+                .ok_or(AdapterError::MissingCertificate)?;
+            // WAL framing detects torn or accidentally corrupted bytes, but it is not an
+            // authority proof. Reauthenticate the exact replayed CommitQC before the reducer may
+            // emit its recovery Apply effect. This also rejects a locally rewritten, perfectly
+            // checksummed WAL whose QC was never signed by the frozen quorum.
+            verify_quorum_certificate(&wire_context, certificate, &proofs_of_possession)?;
+        }
         let mut adapter = Self {
             wire_context,
             proofs_of_possession,
@@ -1292,6 +1332,8 @@ impl SumeragiV2Adapter {
             )
         } else if let Some(parent) = &self.wire_context.parent_commit_qc {
             (parent.round.height, Some(parent.subject))
+        } else if let Some(anchor) = &self.wire_context.snapshot_bootstrap {
+            (anchor.snapshot_height, None)
         } else {
             (0, None)
         };
@@ -1814,21 +1856,40 @@ impl WireRegistry {
             wire::ConsensusMode::Npos => reducer::VotingMode::Npos,
         };
         let leader_height_seed = Hash::new((context.leader_seed, context.height).encode());
-        reducer::HeightContext::new(
-            context_id(
-                self.context_id
-                    .expect("registry is constructed with a height context"),
-            ),
-            reducer::ChainId::new(Hash::new(context.chain_id.encode()).into()),
-            context.height,
-            parent_commit,
-            context.epoch,
-            roster,
-            mode,
-            reducer::Digest::new(*context.nexus_amx_context_hash.as_ref()),
-            reducer::Digest::new(Hash::new(context.da_layout.encode()).into()),
-            reducer::Digest::new(leader_height_seed.into()),
-        )
+        let context_id = context_id(
+            self.context_id
+                .expect("registry is constructed with a height context"),
+        );
+        let chain_id = reducer::ChainId::new(Hash::new(context.chain_id.encode()).into());
+        let nexus_hash = reducer::Digest::new(*context.nexus_amx_context_hash.as_ref());
+        let da_hash = reducer::Digest::new(Hash::new(context.da_layout.encode()).into());
+        let leader_seed = reducer::Digest::new(leader_height_seed.into());
+        if context.snapshot_bootstrap.is_some() {
+            reducer::HeightContext::new_snapshot_bootstrap(
+                context_id,
+                chain_id,
+                context.height,
+                context.epoch,
+                roster,
+                mode,
+                nexus_hash,
+                da_hash,
+                leader_seed,
+            )
+        } else {
+            reducer::HeightContext::new(
+                context_id,
+                chain_id,
+                context.height,
+                parent_commit,
+                context.epoch,
+                roster,
+                mode,
+                nexus_hash,
+                da_hash,
+                leader_seed,
+            )
+        }
         .map_err(Into::into)
     }
 
@@ -2653,7 +2714,8 @@ fn verify_authenticated_message(
             match &proposal.justification {
                 wire::ProposalJustification::ParentCommit(parent) => {
                     match (&parent.certificate, parent_verification) {
-                        (None, None) if context.height == 1 => {}
+                        (None, None)
+                            if context.height == 1 || context.snapshot_bootstrap.is_some() => {}
                         (Some(certificate), Some(parent_verification)) => {
                             verify_quorum_certificate(
                                 &parent_verification.context,
@@ -2947,6 +3009,7 @@ mod tests {
             next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Permissioned,
             parent_commit_qc: None,
+            snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
@@ -3037,6 +3100,7 @@ mod tests {
             next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Permissioned,
             parent_commit_qc: None,
+            snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"authenticated nexus amx context"),
@@ -3754,6 +3818,7 @@ mod tests {
         assert_eq!(adapter.reducer.durable_state().last_id().get(), 1);
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn replayed_decision_key_survives_incomplete_tail_and_rejects_key_drift() {
         let directory = TempDir::new().expect("temporary directory");
@@ -3771,14 +3836,43 @@ mod tests {
                 height: adapter.wire_context.height,
                 view: 0,
             };
-            let decision = wire::QuorumCertificate {
+            let commitment = execution_commitment(0xD4);
+            let mut decision = wire::QuorumCertificate {
                 round,
                 phase: wire::GlobalPhase::Commit,
                 subject,
-                execution_commitment: execution_commitment(0xD4),
+                execution_commitment: commitment,
                 signers: vec![0, 1, 2],
-                aggregate_signature: vec![0xD4; 48],
+                aggregate_signature: Vec::new(),
             };
+            let mut keys = (1_u8..=4)
+                .map(|seed| {
+                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                        .expect("deterministic BLS-normal key")
+                })
+                .collect::<Vec<_>>();
+            keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+            let preimage = wire::Vote {
+                round,
+                phase: wire::GlobalPhase::Commit,
+                subject,
+                execution_commitment: commitment,
+                signer: 0,
+                signature: Vec::new(),
+            }
+            .signature_preimage();
+            let shares = keys[..3]
+                .iter()
+                .map(|key| {
+                    Signature::new(key.private_key(), &preimage)
+                        .payload()
+                        .to_vec()
+                })
+                .collect::<Vec<_>>();
+            decision.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+                &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            )
+            .expect("aggregate fixture CommitQC");
             let record = WalEnvelopeV2 {
                 protocol_version: wire::PROTOCOL_VERSION,
                 persistence_id: 1,
@@ -3789,7 +3883,7 @@ mod tests {
                 .wal
                 .append(&record)
                 .expect("append acknowledged Decision record");
-            expected = (round, subject, execution_commitment(0xD4));
+            expected = (round, subject, commitment);
         }
         OpenOptions::new()
             .append(true)
@@ -3828,6 +3922,44 @@ mod tests {
                 field: "consensus key hash",
                 ..
             }))
+        ));
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn replay_rejects_checksummed_wal_decision_without_quorum_authority() {
+        let directory = TempDir::new().expect("temporary directory");
+        {
+            let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+            assert!(startup.is_empty());
+            let round = wire::ConsensusRound {
+                context_id: adapter.wire_context.id(),
+                height: adapter.wire_context.height,
+                view: 0,
+            };
+            let decision = wire::QuorumCertificate {
+                round,
+                phase: wire::GlobalPhase::Commit,
+                subject: subject(0xD5),
+                execution_commitment: execution_commitment(0xD5),
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xD5; 48],
+            };
+            let record = WalEnvelopeV2 {
+                protocol_version: wire::PROTOCOL_VERSION,
+                persistence_id: 1,
+                record: WalRecordV2::Decision(decision),
+            }
+            .encode();
+            adapter
+                .wal
+                .append(&record)
+                .expect("append a fully checksummed but unauthenticated Decision");
+        }
+
+        assert!(matches!(
+            open_test(&directory),
+            Err(AdapterError::Cryptography(_))
         ));
     }
 

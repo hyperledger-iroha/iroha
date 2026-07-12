@@ -4287,7 +4287,11 @@ mod tests_overlay_manifest {
     #[test]
     fn state_free_generic_overlay_rejects_reserved_contract_metadata_before_execution() {
         let (authority, keypair) = gen_account_in("wonderland");
-        for reserved_key in ["contract_entrypoint", "contract_payload", "contract_address"] {
+        for reserved_key in [
+            "contract_entrypoint",
+            "contract_payload",
+            "contract_address",
+        ] {
             let mut metadata = Metadata::default();
             insert_gas_limit(&mut metadata);
             metadata.insert(
@@ -4305,7 +4309,7 @@ mod tests_overlay_manifest {
                 .expect_err("generic execution must reject contract provenance metadata");
             assert!(
                 matches!(
-                    error,
+                    &error,
                     OverlayBuildError::ContractCall(message)
                         if message.contains("generic IVM programs cannot carry")
                             && message.contains(reserved_key)

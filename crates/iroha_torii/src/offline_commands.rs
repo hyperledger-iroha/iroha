@@ -23,7 +23,7 @@ use iroha_data_model::{
         error::TransactionRejectionReason, signed::TransactionResult,
     },
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_torii_shared::offline_api::{
     OfflineOperationKind, OfflineOperationReference, OfflineOperationResult, OfflineOperationState,
     OfflineOperationStatus, OfflineRedeemRequest, OfflineRedeemResult, OfflineTopUpFinalityProof,
@@ -48,7 +48,7 @@ const ADMITTED_OPERATION_ACCOUNTED_BYTES: usize =
 pub(crate) struct OfflineCommandRuntime {
     authority: AccountId,
     key_pair: KeyPair,
-    max_tx_value: Numeric,
+    max_tx_value: Quantity,
     admission: Arc<Mutex<OfflineOperationRegistry>>,
 }
 
@@ -154,7 +154,7 @@ pub(crate) async fn handle_top_up(
         return Ok(response);
     }
     validate_kagemusha_v2_topup_snapshot(&app, &topup_request)?;
-    if topup_request.amount.public_numeric() > issuer.max_tx_value.clone() {
+    if topup_request.amount.public_quantity() > issuer.max_tx_value.clone() {
         return Err(validation(
             "offline_amount_exceeds_limit",
             "Offline top-up amount exceeds issuer policy.",
@@ -243,7 +243,7 @@ pub(crate) async fn handle_redeem(
         return Ok(response);
     }
     validate_kagemusha_v2_redeem_snapshot(&app, &redeem_request)?;
-    if redeem_request.amount.public_numeric() > issuer.max_tx_value.clone() {
+    if redeem_request.amount.public_quantity() > issuer.max_tx_value.clone() {
         return Err(validation(
             "offline_amount_exceeds_limit",
             "Offline redemption amount exceeds issuer policy.",
@@ -1912,7 +1912,7 @@ mod tests {
         Arc::new(OfflineCommandRuntime {
             authority: AccountId::new(key_pair.public_key().clone()),
             key_pair,
-            max_tx_value: Numeric::new(1_000, 0),
+            max_tx_value: Quantity::from(1_000_u32),
             admission: Arc::new(Mutex::new(OfflineOperationRegistry::new(
                 NonZeroUsize::new(max_entries).expect("positive registry count"),
                 NonZeroUsize::new(max_accounted_bytes).expect("positive registry byte budget"),

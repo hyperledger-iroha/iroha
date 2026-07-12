@@ -2542,6 +2542,9 @@ fn native_instruction_ds_effect_disposition(
         // deploy permissionless contracts without creating a policy-era rebind path.
         iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode,
         iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes,
+        iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk,
+        iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload,
+        iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload,
         iroha_data_model::isi::smart_contract_code::ActivateContractInstance,
         SetKeyValueBox,
         RemoveKeyValueBox,
@@ -3005,6 +3008,11 @@ mod tests {
         Numeric::new(value, u32::from(TEST_VALIDATION_FEE_ASSET_SCALE))
     }
 
+    fn quantity_minor_units(value: u64) -> Quantity {
+        Quantity::try_from_numeric(minor_units(value))
+            .expect("validation-fee fixture quantity must be non-negative")
+    }
+
     fn transfer(
         from: &AccountId,
         asset_definition: &AssetDefinitionId,
@@ -3034,9 +3042,9 @@ mod tests {
             None,
             RepoCashLeg {
                 asset_definition_id: cash_asset.clone(),
-                quantity: Numeric::new(1_u64, 0),
+                quantity: Quantity::from(1_u64),
             },
-            RepoCollateralLeg::new(collateral_asset.clone(), Numeric::new(1_u64, 0)),
+            RepoCollateralLeg::new(collateral_asset.clone(), 1_u64),
             0,
             1_000,
             RepoGovernance::with_defaults(0, 0),
@@ -3056,9 +3064,9 @@ mod tests {
             counterparty.clone(),
             RepoCashLeg {
                 asset_definition_id: cash_asset.clone(),
-                quantity: Numeric::new(1_u64, 0),
+                quantity: Quantity::from(1_u64),
             },
-            RepoCollateralLeg::new(collateral_asset.clone(), Numeric::new(1_u64, 0)),
+            RepoCollateralLeg::new(collateral_asset.clone(), 1_u64),
             1_000,
         )
     }
@@ -3068,12 +3076,7 @@ mod tests {
         from: &AccountId,
         to: &AccountId,
     ) -> SettlementLeg {
-        SettlementLeg::new(
-            asset_definition_id.clone(),
-            1_u64,
-            from.clone(),
-            to.clone(),
-        )
+        SettlementLeg::new(asset_definition_id.clone(), 1_u64, from.clone(), to.clone())
     }
 
     fn tx(
@@ -3252,7 +3255,9 @@ mod tests {
     fn active_policy_allows_balance_neutral_permissionless_contract_deployment_steps() {
         use iroha_data_model::{
             isi::smart_contract_code::{
-                ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
+                ActivateContractInstance, CancelSmartContractCodeUpload,
+                FinalizeSmartContractCodeUpload, RegisterSmartContractBytes,
+                RegisterSmartContractCode, UploadSmartContractCodeChunk,
             },
             smart_contract::manifest::ContractManifest,
         };
@@ -3269,6 +3274,21 @@ mod tests {
                 code: Vec::new(),
             }
             .into(),
+            UploadSmartContractCodeChunk {
+                code_hash,
+                total_size: 1,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: vec![0],
+            }
+            .into(),
+            FinalizeSmartContractCodeUpload {
+                code_hash,
+                total_size: 1,
+                chunk_count: 1,
+            }
+            .into(),
+            CancelSmartContractCodeUpload { code_hash }.into(),
             RegisterSmartContractCode {
                 manifest: ContractManifest {
                     seiyaku_name: None,
@@ -3353,11 +3373,8 @@ mod tests {
         let user = account(1);
         let treasury = account(3);
         let policy = policy(&treasury);
-        let mint: InstructionBox = Mint::asset_quantity(
-            1_u64,
-            AssetId::new(policy_fee_asset(&policy), user),
-        )
-        .into();
+        let mint: InstructionBox =
+            Mint::asset_quantity(1_u64, AssetId::new(policy_fee_asset(&policy), user)).into();
         let instruction_wire_id = core::any::type_name::<MintBox>();
 
         assert_eq!(
@@ -4031,17 +4048,12 @@ mod tests {
         ));
 
         let batch = TransferAssetBatch::new(vec![
-            TransferAssetBatchEntry::new(
-                user.clone(),
-                recipient,
-                fee_asset.clone(),
-                1_u64,
-            ),
+            TransferAssetBatchEntry::new(user.clone(), recipient, fee_asset.clone(), 1_u64),
             TransferAssetBatchEntry::new(
                 user.clone(),
                 treasury.clone(),
                 fee_asset.clone(),
-                minor_units(10),
+                quantity_minor_units(10),
             ),
         ]);
         let batch_with_marker =
@@ -5378,7 +5390,12 @@ mod tests {
                         fee_asset.clone(),
                         1_u64,
                     ),
-                    TransferAssetBatchEntry::new(user, treasury, fee_asset, minor_units(20)),
+                    TransferAssetBatchEntry::new(
+                        user,
+                        treasury,
+                        fee_asset,
+                        quantity_minor_units(20),
+                    ),
                 ])
                 .into(),
             ],
@@ -5437,7 +5454,7 @@ mod tests {
                             user.clone(),
                             treasury.clone(),
                             fee_asset.clone(),
-                            minor_units(observed),
+                            quantity_minor_units(observed),
                         ),
                     ])
                     .into(),
@@ -5470,7 +5487,7 @@ mod tests {
                         user,
                         treasury.clone(),
                         fee_asset,
-                        minor_units(10),
+                        quantity_minor_units(10),
                     ),
                 ])
                 .into(),
@@ -5521,7 +5538,7 @@ mod tests {
                         user.clone(),
                         wrong_treasury.clone(),
                         fee_asset.clone(),
-                        minor_units(20),
+                        quantity_minor_units(20),
                     ),
                 ])
                 .into(),
@@ -5558,7 +5575,7 @@ mod tests {
                         user.clone(),
                         treasury.clone(),
                         xor,
-                        minor_units(20),
+                        quantity_minor_units(20),
                     ),
                 ])
                 .into(),
@@ -5583,17 +5600,12 @@ mod tests {
                         fee_asset.clone(),
                         1_u64,
                     ),
-                    TransferAssetBatchEntry::new(
-                        user,
-                        recipient_b,
-                        fee_asset.clone(),
-                        1_u64,
-                    ),
+                    TransferAssetBatchEntry::new(user, recipient_b, fee_asset.clone(), 1_u64),
                     TransferAssetBatchEntry::new(
                         sponsor,
                         treasury.clone(),
                         fee_asset,
-                        minor_units(20),
+                        quantity_minor_units(20),
                     ),
                 ])
                 .into(),
@@ -6053,7 +6065,7 @@ mod tests {
                             multisig,
                             treasury,
                             fee_asset,
-                            minor_units(20),
+                            quantity_minor_units(20),
                         ),
                     ])
                     .into(),
@@ -6115,7 +6127,7 @@ mod tests {
                                 multisig.clone(),
                                 treasury.clone(),
                                 fee_asset.clone(),
-                                minor_units(observed),
+                                quantity_minor_units(observed),
                             ),
                         ])
                         .into(),

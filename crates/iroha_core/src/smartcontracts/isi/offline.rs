@@ -4685,11 +4685,8 @@ pub mod isi {
         requested_height: u64,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<VerifyingKeyRecord, Error> {
-        let record = resolve_kagemusha_v2_recursive_verifier(
-            bundle,
-            requested_height,
-            state_transaction,
-        )?;
+        let record =
+            resolve_kagemusha_v2_recursive_verifier(bundle, requested_height, state_transaction)?;
         verify_kagemusha_v2_recursive_bundle_with_record(bundle, &record, state_transaction)?;
         Ok(record)
     }
@@ -4862,7 +4859,7 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<KagemushaV2RedemptionCommitPlan, Error> {
         let statement = &request.bundle.statement;
-        let amount = request.amount.public_numeric();
+        let amount = request.amount.public_quantity();
         let current_nullifier = statement.current_note.spend_nullifier;
         let (redemption_binding, change_children) =
             if let Some(change) = request.offline_change.as_ref() {
@@ -4886,7 +4883,7 @@ pub mod isi {
                 definition_id: &statement.asset,
                 source_asset,
                 recipient: &request.recipient,
-                amount,
+                amount: amount.into_numeric(),
                 current_nullifier,
                 consumed_claims: &request.redemption.parent_branch_claims,
                 redemption_binding,
@@ -5037,7 +5034,7 @@ pub mod isi {
                 )
                 .into());
             }
-            let amount = request.amount.public_numeric();
+            let amount = request.amount.public_quantity();
             if amount.scale() != live_scale {
                 return Err(labeled_invariant(
                     "amount_scale_mismatch",
@@ -5045,7 +5042,7 @@ pub mod isi {
                 )
                 .into());
             }
-            assert_numeric_spec_with(&amount, spec)?;
+            assert_numeric_spec_with(amount.as_numeric(), spec)?;
             let policy_mode = crate::smartcontracts::isi::world::isi::apply_policy_if_due(
                 state_transaction,
                 request.asset.definition(),
@@ -5163,7 +5160,7 @@ pub mod isi {
                 .into());
             }
 
-            reserve_kagemusha_escrow(state_transaction, &request.asset, &amount)?;
+            reserve_kagemusha_escrow(state_transaction, &request.asset, amount.as_numeric())?;
             let finalized_root =
                 crate::smartcontracts::isi::world::isi::push_confidential_commitment_with_v2_root(
                     &mut zk_state,
@@ -5269,7 +5266,7 @@ pub mod isi {
                 statement.asset_scale,
                 live_scale,
             )?;
-            let amount = request.amount.public_numeric();
+            let amount = request.amount.public_quantity();
             if amount.scale() != live_scale {
                 return Err(labeled_invariant(
                     "amount_scale_mismatch",
@@ -5277,7 +5274,7 @@ pub mod isi {
                 )
                 .into());
             }
-            assert_numeric_spec_with(&amount, spec)?;
+            assert_numeric_spec_with(amount.as_numeric(), spec)?;
 
             let zk_state = state_transaction
                 .world

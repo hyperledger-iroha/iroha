@@ -3021,7 +3021,7 @@ impl WsvHost {
                 from,
                 to,
                 entry.asset_definition().clone(),
-                    entry.amount().clone().into_numeric(),
+                entry.amount().clone().into_numeric(),
                 self.allow_contract_runtime_asset_transfer_bypass,
             ) {
                 return Err(VMError::PermissionDenied);
@@ -8232,10 +8232,7 @@ mod tests_null_decode {
                 10_u64,
             ),
             iroha_data_model::isi::transfer::TransferAssetBatchEntry::new(
-                alice,
-                carol,
-                asset,
-                5_u64,
+                alice, carol, asset, 5_u64,
             ),
         ]);
         let batch_payload = norito::to_bytes(&batch).expect("encode transfer batch");

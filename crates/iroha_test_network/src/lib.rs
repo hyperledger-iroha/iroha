@@ -5150,7 +5150,7 @@ impl NetworkBuilder {
                         validator: validator_id.clone(),
                         peer_id: peer.id(),
                         stake_account: validator_id.clone(),
-                        initial_stake: Numeric::from(stake_amount),
+                        initial_stake: iroha_primitives::numeric::Quantity::from(stake_amount),
                         metadata: Metadata::default(),
                     }
                     .into(),

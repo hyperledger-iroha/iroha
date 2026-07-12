@@ -2601,17 +2601,11 @@ mod tests {
                 reserved_key.parse().expect("reserved metadata key"),
                 iroha_primitives::json::Json::new("forged"),
             );
-            let error = derive_from_ivm_dynamic(
-                &halt,
-                &alice,
-                &metadata,
-                &state.view(),
-                TEST_GAS_LIMIT,
-            )
-            .expect_err("generic prepass must reject contract provenance metadata");
+            let error =
+                derive_from_ivm_dynamic(&halt, &alice, &metadata, &state.view(), TEST_GAS_LIMIT)
+                    .expect_err("generic prepass must reject contract provenance metadata");
             assert!(
-                error.contains("generic IVM programs cannot carry")
-                    && error.contains(reserved_key),
+                error.contains("generic IVM programs cannot carry") && error.contains(reserved_key),
                 "unexpected rejection for `{reserved_key}`: {error}"
             );
         }

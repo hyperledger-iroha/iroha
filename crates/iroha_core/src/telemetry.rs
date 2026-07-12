@@ -64,6 +64,8 @@ use iroha_data_model::{
 use iroha_data_model::{events::data::sorafs::SorafsProofHealthAlert, oracle::OraclePenaltyKind};
 use iroha_futures::supervisor::{Child, OnShutdown};
 use iroha_p2p::OnlinePeers;
+#[cfg(feature = "telemetry")]
+use iroha_primitives::numeric::Quantity;
 use iroha_primitives::{json::Json, numeric::Numeric, time::TimeSource};
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::GaugeVec;
@@ -1308,7 +1310,7 @@ impl StateTelemetry {
 
     /// Increase the bonded stake gauge for the provided lane.
     #[cfg(feature = "telemetry")]
-    pub fn increase_public_lane_bonded(&self, lane_id: LaneId, amount: &Numeric) {
+    pub fn increase_public_lane_bonded(&self, lane_id: LaneId, amount: &Quantity) {
         self.adjust_public_lane_amount(
             &self.metrics.nexus_public_lane_stake_bonded,
             lane_id,
@@ -1319,7 +1321,7 @@ impl StateTelemetry {
 
     /// Decrease the bonded stake gauge for the provided lane.
     #[cfg(feature = "telemetry")]
-    pub fn decrease_public_lane_bonded(&self, lane_id: LaneId, amount: &Numeric) {
+    pub fn decrease_public_lane_bonded(&self, lane_id: LaneId, amount: &Quantity) {
         self.adjust_public_lane_amount(
             &self.metrics.nexus_public_lane_stake_bonded,
             lane_id,
@@ -1330,7 +1332,7 @@ impl StateTelemetry {
 
     /// Increase the pending-unbond gauge for the provided lane.
     #[cfg(feature = "telemetry")]
-    pub fn increase_public_lane_pending_unbond(&self, lane_id: LaneId, amount: &Numeric) {
+    pub fn increase_public_lane_pending_unbond(&self, lane_id: LaneId, amount: &Quantity) {
         self.adjust_public_lane_amount(
             &self.metrics.nexus_public_lane_unbond_pending,
             lane_id,
@@ -1341,7 +1343,7 @@ impl StateTelemetry {
 
     /// Decrease the pending-unbond gauge for the provided lane.
     #[cfg(feature = "telemetry")]
-    pub fn decrease_public_lane_pending_unbond(&self, lane_id: LaneId, amount: &Numeric) {
+    pub fn decrease_public_lane_pending_unbond(&self, lane_id: LaneId, amount: &Quantity) {
         self.adjust_public_lane_amount(
             &self.metrics.nexus_public_lane_unbond_pending,
             lane_id,
@@ -1352,7 +1354,7 @@ impl StateTelemetry {
 
     /// Record a reward distribution for a public lane.
     #[cfg(feature = "telemetry")]
-    pub fn record_public_lane_reward(&self, lane_id: LaneId, amount: &Numeric) {
+    pub fn record_public_lane_reward(&self, lane_id: LaneId, amount: &Quantity) {
         self.adjust_public_lane_amount(
             &self.metrics.nexus_public_lane_reward_total,
             lane_id,
@@ -1399,7 +1401,7 @@ impl StateTelemetry {
         &self,
         gauge: &GaugeVec,
         lane_id: LaneId,
-        amount: &Numeric,
+        amount: &Quantity,
         increase: bool,
     ) {
         if !self.nexus_lane_metrics_enabled() {
@@ -1407,7 +1409,7 @@ impl StateTelemetry {
         }
         let lane_label = Self::lane_label(lane_id);
         let metric = gauge.with_label_values(&[lane_label.as_str()]);
-        let delta = amount.clone().to_f64();
+        let delta = amount.as_numeric().to_f64();
         let base = metric.get();
         let updated = if increase {
             base + delta
@@ -2152,7 +2154,7 @@ impl StateTelemetry {
             SocialEvent::RewardPaid(payload) => {
                 self.metrics
                     .social_budget_spent
-                    .set(payload.budget.spent.clone().to_f64());
+                    .set(payload.budget.spent.as_numeric().to_f64());
                 self.metrics
                     .social_campaign_active
                     .set(if payload.promo_active { 1.0 } else { 0.0 });
@@ -2164,22 +2166,24 @@ impl StateTelemetry {
                     let cap = payload.campaign_cap.clone();
                     self.metrics
                         .social_campaign_spent
-                        .set(spent.clone().to_f64());
-                    self.metrics.social_campaign_cap.set(cap.clone().to_f64());
-                    let remaining = cap.checked_sub(spent).unwrap_or_else(Numeric::zero);
+                        .set(spent.as_numeric().to_f64());
+                    self.metrics
+                        .social_campaign_cap
+                        .set(cap.as_numeric().to_f64());
+                    let remaining = cap.checked_sub(&spent).unwrap_or_else(|_| Quantity::zero());
                     self.metrics
                         .social_campaign_remaining
-                        .set(remaining.to_f64());
+                        .set(remaining.as_numeric().to_f64());
                 } else {
                     self.metrics
                         .social_campaign_spent
-                        .set(Numeric::zero().to_f64());
+                        .set(Quantity::zero().as_numeric().to_f64());
                     self.metrics
                         .social_campaign_cap
-                        .set(payload.campaign_cap.clone().to_f64());
+                        .set(payload.campaign_cap.as_numeric().to_f64());
                     self.metrics
                         .social_campaign_remaining
-                        .set(payload.campaign_cap.clone().to_f64());
+                        .set(payload.campaign_cap.as_numeric().to_f64());
                 }
             }
             SocialEvent::EscrowCreated(_) => {
@@ -11829,7 +11833,7 @@ mod tests {
         let escrow = ViralEscrowRecord {
             binding_hash: binding.clone(),
             sender,
-            amount: Numeric::new(5, 0),
+            amount: Quantity::from(5_u32),
             created_at_ms: 10,
         };
 
@@ -14902,8 +14906,8 @@ mod tests {
             1
         );
 
-        telemetry.increase_public_lane_bonded(lane, &Numeric::new(1_000, 0));
-        telemetry.decrease_public_lane_bonded(lane, &Numeric::new(250, 0));
+        telemetry.increase_public_lane_bonded(lane, &Quantity::from(1_000_u32));
+        telemetry.decrease_public_lane_bonded(lane, &Quantity::from(250_u32));
         let bonded = metrics
             .nexus_public_lane_stake_bonded
             .with_label_values(&["5"])
@@ -14913,8 +14917,8 @@ mod tests {
             "bonded stake gauge should track deltas"
         );
 
-        telemetry.increase_public_lane_pending_unbond(lane, &Numeric::new(400, 0));
-        telemetry.decrease_public_lane_pending_unbond(lane, &Numeric::new(150, 0));
+        telemetry.increase_public_lane_pending_unbond(lane, &Quantity::from(400_u32));
+        telemetry.decrease_public_lane_pending_unbond(lane, &Quantity::from(150_u32));
         let pending = metrics
             .nexus_public_lane_unbond_pending
             .with_label_values(&["5"])
@@ -14924,8 +14928,8 @@ mod tests {
             "pending unbond gauge should track deltas"
         );
 
-        telemetry.record_public_lane_reward(lane, &Numeric::new(100, 0));
-        telemetry.record_public_lane_reward(lane, &Numeric::new(50, 0));
+        telemetry.record_public_lane_reward(lane, &Quantity::from(100_u32));
+        telemetry.record_public_lane_reward(lane, &Quantity::from(50_u32));
         let rewards = metrics
             .nexus_public_lane_reward_total
             .with_label_values(&["5"])

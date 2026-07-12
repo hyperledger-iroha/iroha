@@ -2,7 +2,7 @@
 
 _Last refreshed via `python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inventory.json --md docs/source/agents/env_var_inventory.md`_
 
-Total references: **715** · Unique variables: **196**
+Total references: **714** · Unique variables: **195**
 
 ## ACTIONS_ID_TOKEN_REQUEST_TOKEN (prod: 1)
 
@@ -696,10 +696,6 @@ Total references: **715** · Unique variables: **196**
 ## IROHA_REALISTIC_30TPS_LOG_LEVEL (test: 1)
 
 - test: integration_tests/tests/sumeragi_localnet_smoke.rs:2889 — `std::env::var("IROHA_REALISTIC_30TPS_LOG_LEVEL").unwrap_or_else(|_| "WARN".into());`
-
-## IROHA_REPLAY_SKIP_BLOCK_SIGNATURE_VALIDATION (prod: 1)
-
-- prod: crates/iroha_core/src/state.rs:37277 — `std::env::var("IROHA_REPLAY_SKIP_BLOCK_SIGNATURE_VALIDATION")`
 
 ## IROHA_RUN_IGNORED (test: 51)
 

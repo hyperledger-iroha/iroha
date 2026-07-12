@@ -786,9 +786,10 @@ pub mod genesis_instructions_json {
             .remove("object")
             .ok_or_else(|| json::Error::missing_field("object"))?;
         ensure_no_extra_fields(&fields)?;
-        let quantity = Quantity::try_from_numeric(parse_numeric(object_value)?).map_err(|error| {
-            json::Error::Message(format!("invalid asset mint quantity: {error}"))
-        })?;
+        let quantity =
+            Quantity::try_from_numeric(parse_numeric(object_value)?).map_err(|error| {
+                json::Error::Message(format!("invalid asset mint quantity: {error}"))
+            })?;
         let instruction = InstructionBox::from(Mint::asset_quantity(quantity, asset_id));
         Ok(Some(instruction))
     }
@@ -1067,7 +1068,10 @@ pub mod genesis_instructions_json {
         let stake_value = fields
             .remove("initial_stake")
             .ok_or_else(|| json::Error::missing_field("initial_stake"))?;
-        let initial_stake = parse_numeric(stake_value)?;
+        let initial_stake =
+            Quantity::try_from_numeric(parse_numeric(stake_value)?).map_err(|error| {
+                json::Error::Message(format!("invalid initial stake quantity: {error}"))
+            })?;
         let metadata_value = fields.remove("metadata");
         let metadata = match metadata_value {
             Some(Value::Null) | None => Metadata::default(),
@@ -1855,7 +1859,7 @@ pub mod genesis_instructions_json {
                 validator_id.clone(),
                 validator_peer_id.clone(),
                 validator_id.clone(),
-                Numeric::from(10_u64),
+                Quantity::from(10_u64),
                 Metadata::default(),
             );
             let activate = ActivatePublicLaneValidator::new(LaneId::SINGLE, validator_id.clone());
@@ -1880,7 +1884,7 @@ pub mod genesis_instructions_json {
                     assert_eq!(register.validator(), &validator_id);
                     assert_eq!(register.peer_id(), &validator_peer_id);
                     assert_eq!(register.stake_account(), &validator_id);
-                    assert_eq!(register.initial_stake(), &Numeric::from(10_u64));
+                    assert_eq!(register.initial_stake(), &Quantity::from(10_u64));
                     assert!(register.metadata().is_empty());
                 }
                 other => panic!("unexpected register validator instruction: {other:?}"),
@@ -1895,6 +1899,31 @@ pub mod genesis_instructions_json {
                 }
                 other => panic!("unexpected activate validator instruction: {other:?}"),
             }
+        }
+
+        #[test]
+        fn deserialize_npos_bootstrap_rejects_negative_initial_stake() {
+            let validator_id = ALICE_ID.clone();
+            let register = RegisterPublicLaneValidator::new(
+                LaneId::SINGLE,
+                validator_id.clone(),
+                PeerId::from(validator_id.signatory().clone()),
+                validator_id,
+                Quantity::from(10_u64),
+                Metadata::default(),
+            );
+            let mut json_text = String::new();
+            serialize(&[InstructionBox::from(register)], &mut json_text);
+            let negative = json_text.replace(r#""initial_stake":"10""#, r#""initial_stake":"-1""#);
+            assert_ne!(negative, json_text, "fixture must replace the stake field");
+
+            let parsed = norito::json::from_str::<Value>(&negative)
+                .expect("negative quantity remains syntactically valid JSON");
+            let error = from_value(&parsed).expect_err("negative initial stake must be rejected");
+            assert!(
+                error.to_string().contains("invalid initial stake quantity"),
+                "unexpected error: {error}"
+            );
         }
 
         #[test]

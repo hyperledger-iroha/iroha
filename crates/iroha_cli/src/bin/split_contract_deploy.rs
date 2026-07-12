@@ -15,7 +15,8 @@ use iroha::{
     config::{Config, LoadPath},
     data_model::{
         isi::smart_contract_code::{
-            ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
+            ActivateContractInstance, FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
+            SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk,
         },
         metadata::Metadata,
         name::Name,
@@ -24,8 +25,11 @@ use iroha::{
         transaction::TransactionBuilder,
     },
 };
-use iroha_crypto::{KeyPair, PrivateKey};
+use iroha_crypto::{Hash, KeyPair, PrivateKey};
 use iroha_version::codec::EncodeVersioned;
+
+#[cfg(test)]
+use iroha::data_model::transaction::Executable;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -88,6 +92,126 @@ fn transaction_metadata(gas_asset_id: Option<&str>) -> Metadata {
     metadata
 }
 
+struct NativeUploadPlan {
+    chunk_count: u32,
+    pre_stage: Vec<(String, String, SignedTransaction)>,
+    finalize: (String, String, SignedTransaction),
+}
+
+fn native_upload_report(plan: &NativeUploadPlan) -> norito::json::Value {
+    let register_bytes_stage_tx_hashes = plan
+        .pre_stage
+        .iter()
+        .map(|(_, _, transaction)| transaction.hash().to_string())
+        .collect::<Vec<_>>();
+
+    norito::json!({
+        "register_bytes_tx_strategy": ("native_chunks"),
+        "register_bytes_chunk_size": (u64::try_from(SMART_CONTRACT_CODE_CHUNK_BYTES)
+            .expect("public contract chunk size fits u64")),
+        "register_bytes_chunk_count": (plan.chunk_count),
+        "register_bytes_stage_tx_hashes": (register_bytes_stage_tx_hashes),
+        "register_bytes_tx_hash": (plan.finalize.2.hash().to_string()),
+    })
+}
+
+fn deployment_transaction_sequence(
+    upload_plan: NativeUploadPlan,
+    register_manifest_tx: SignedTransaction,
+    activate_tx: SignedTransaction,
+) -> Vec<(String, String, SignedTransaction)> {
+    let NativeUploadPlan {
+        mut pre_stage,
+        finalize,
+        ..
+    } = upload_plan;
+    pre_stage.push(finalize);
+    pre_stage.push((
+        "register_manifest".to_owned(),
+        "register-manifest".to_owned(),
+        register_manifest_tx,
+    ));
+    pre_stage.push(("activate".to_owned(), "activate".to_owned(), activate_tx));
+    pre_stage
+}
+
+fn build_native_upload_plan(
+    chain: &ChainId,
+    authority: &AccountId,
+    private_key: &PrivateKey,
+    metadata: &Metadata,
+    route_anchor_instruction: Option<InstructionBox>,
+    code_hash: Hash,
+    code: &[u8],
+) -> Result<NativeUploadPlan> {
+    if code.is_empty() {
+        return Err(eyre!("contract artifact must not be empty"));
+    }
+    let canonical_code_hash = ivm::contract_code_hash(code);
+    if code_hash != canonical_code_hash {
+        return Err(eyre!(
+            "contract code hash does not match the canonical artifact hash"
+        ));
+    }
+    let total_size = u64::try_from(code.len())
+        .wrap_err("contract artifact length does not fit the upload descriptor")?;
+    let chunk_count_usize = code.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES);
+    let chunk_count = u32::try_from(chunk_count_usize)
+        .wrap_err("contract upload chunk count does not fit u32")?;
+    let mut pre_stage = Vec::with_capacity(chunk_count_usize.saturating_sub(1));
+
+    for (index, chunk) in code.chunks(SMART_CONTRACT_CODE_CHUNK_BYTES).enumerate() {
+        let chunk_index =
+            u32::try_from(index).wrap_err("contract upload index does not fit u32")?;
+        let mut instructions = Vec::with_capacity(3);
+        if index == 0
+            && let Some(anchor) = route_anchor_instruction.clone()
+        {
+            instructions.push(anchor);
+        }
+        instructions.push(InstructionBox::from(UploadSmartContractCodeChunk {
+            code_hash,
+            total_size,
+            chunk_index,
+            chunk_count,
+            chunk: chunk.to_vec(),
+        }));
+        let is_final = index + 1 == chunk_count_usize;
+        if is_final {
+            instructions.push(InstructionBox::from(FinalizeSmartContractCodeUpload {
+                code_hash,
+                total_size,
+                chunk_count,
+            }));
+        }
+        let transaction = sign_transaction(
+            chain,
+            authority,
+            private_key,
+            metadata.clone(),
+            instructions,
+        )?;
+        if is_final {
+            return Ok(NativeUploadPlan {
+                chunk_count,
+                pre_stage,
+                finalize: (
+                    "register_bytes_finalize".to_owned(),
+                    "register-bytes-finalize".to_owned(),
+                    transaction,
+                ),
+            });
+        }
+        let ordinal = index + 1;
+        pre_stage.push((
+            format!("register_bytes_chunk_{ordinal:04}_of_{chunk_count_usize:04}"),
+            format!("register-bytes-chunk-{ordinal:04}-of-{chunk_count_usize:04}"),
+            transaction,
+        ));
+    }
+    Err(eyre!("contract upload plan did not contain a final chunk"))
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     let config = Config::load(LoadPath::Explicit(&args.config))
@@ -134,28 +258,22 @@ fn main() -> Result<()> {
         ))
     });
 
-    let register_bytes_tx = sign_transaction(
+    let upload_plan = build_native_upload_plan(
         &client.chain,
         &authority,
         &private_key,
-        tx_metadata.clone(),
-        route_anchor_instruction
-            .clone()
-            .into_iter()
-            .chain([InstructionBox::from(RegisterSmartContractBytes {
-                code_hash,
-                code: code.clone(),
-            })]),
+        &tx_metadata,
+        route_anchor_instruction,
+        code_hash,
+        &code,
     )?;
+    let upload_report = native_upload_report(&upload_plan);
     let register_manifest_tx = sign_transaction(
         &client.chain,
         &authority,
         &private_key,
         tx_metadata.clone(),
-        route_anchor_instruction
-            .clone()
-            .into_iter()
-            .chain([InstructionBox::from(RegisterSmartContractCode { manifest })]),
+        [InstructionBox::from(RegisterSmartContractCode { manifest })],
     )?;
     let activate_tx = sign_transaction(
         &client.chain,
@@ -175,30 +293,26 @@ fn main() -> Result<()> {
         ],
     )?;
 
-    let register_bytes_hash = register_bytes_tx.hash();
     let register_manifest_hash = register_manifest_tx.hash();
     let activate_hash = activate_tx.hash();
+    let planned_transactions =
+        deployment_transaction_sequence(upload_plan, register_manifest_tx, activate_tx);
 
     let written = if let Some(out_dir) = args.out_dir.as_deref() {
-        Some(vec![
-            (
-                "register_bytes",
-                write_tx(out_dir, "01-register-bytes", &register_bytes_tx)?,
-            ),
-            (
-                "register_manifest",
-                write_tx(out_dir, "02-register-manifest", &register_manifest_tx)?,
-            ),
-            ("activate", write_tx(out_dir, "03-activate", &activate_tx)?),
-        ])
+        Some(
+            planned_transactions
+                .iter()
+                .map(|(name, slug, tx)| Ok((name.clone(), write_tx(out_dir, slug, tx)?)))
+                .collect::<Result<Vec<_>>>()?,
+        )
     } else {
         None
     };
 
     if !args.emit_only {
-        client.submit_transaction_blocking(&register_bytes_tx)?;
-        client.submit_transaction_blocking(&register_manifest_tx)?;
-        client.submit_transaction_blocking(&activate_tx)?;
+        for (_, _, transaction) in &planned_transactions {
+            client.submit_transaction_blocking(transaction)?;
+        }
     }
 
     let mut fields = std::collections::BTreeMap::from([
@@ -219,10 +333,6 @@ fn main() -> Result<()> {
             hex::encode(<[u8; 32]>::from(code_hash)).into(),
         ),
         (
-            "register_bytes_tx_hash".to_owned(),
-            register_bytes_hash.to_string().into(),
-        ),
-        (
             "register_manifest_tx_hash".to_owned(),
             register_manifest_hash.to_string().into(),
         ),
@@ -231,6 +341,10 @@ fn main() -> Result<()> {
             activate_hash.to_string().into(),
         ),
     ]);
+    let norito::json::Value::Object(upload_report) = upload_report else {
+        unreachable!("native upload report is always an object");
+    };
+    fields.extend(upload_report);
     if let Some(written) = written {
         let files = written
             .into_iter()
@@ -289,6 +403,330 @@ mod tests {
         tx.verify_signature()
             .wrap_err("verify split contract deploy helper signature")?;
         assert_eq!(tx.authority(), &authority);
+        Ok(())
+    }
+
+    #[test]
+    fn native_upload_plan_rejects_empty_artifact() {
+        let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let result = build_native_upload_plan(
+            &ChainId::from("split-contract-deploy-empty-upload-test"),
+            &authority,
+            key_pair.private_key(),
+            &Metadata::default(),
+            None,
+            Hash::new(b""),
+            &[],
+        );
+        let error = match result {
+            Ok(_) => panic!("an empty artifact cannot form a native upload"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("must not be empty"));
+    }
+
+    #[test]
+    fn native_upload_plan_rejects_noncanonical_code_hash() {
+        let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let code = [0x01, 0x02, 0x03];
+        let result = build_native_upload_plan(
+            &ChainId::from("split-contract-deploy-wrong-hash-test"),
+            &authority,
+            key_pair.private_key(),
+            &Metadata::default(),
+            None,
+            Hash::new(b"not-the-canonical-artifact-hash"),
+            &code,
+        );
+        let error = match result {
+            Ok(_) => panic!("a mismatched code hash cannot form a native upload"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("canonical artifact hash"));
+    }
+
+    #[test]
+    fn one_chunk_upload_bootstraps_then_uploads_and_finalizes() -> Result<()> {
+        let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let code = vec![0x5a; SMART_CONTRACT_CODE_CHUNK_BYTES];
+        let anchor = InstructionBox::from(SetKeyValue::account(
+            authority.clone(),
+            Name::from_str(CONTRACT_DEPLOY_NONCE_METADATA_KEY)?,
+            Json::new(0_u64),
+        ));
+        let plan = build_native_upload_plan(
+            &ChainId::from("split-contract-deploy-native-upload-test"),
+            &authority,
+            key_pair.private_key(),
+            &Metadata::default(),
+            Some(anchor),
+            ivm::contract_code_hash(&code),
+            &code,
+        )?;
+
+        assert_eq!(plan.chunk_count, 1);
+        assert!(plan.pre_stage.is_empty());
+        let Executable::Instructions(instructions) = plan.finalize.2.instructions() else {
+            panic!("native upload must use instruction transactions");
+        };
+        assert_eq!(instructions.len(), 3);
+        assert!(
+            instructions[0]
+                .as_any()
+                .downcast_ref::<iroha::data_model::isi::SetKeyValueBox>()
+                .is_some()
+        );
+        let upload = instructions[1]
+            .as_any()
+            .downcast_ref::<UploadSmartContractCodeChunk>()
+            .expect("one-chunk transaction uploads code after bootstrap");
+        assert_eq!(upload.code_hash, ivm::contract_code_hash(&code));
+        assert_eq!(upload.total_size, u64::try_from(code.len())?);
+        assert_eq!(upload.chunk_index, 0);
+        assert_eq!(upload.chunk_count, 1);
+        assert_eq!(upload.chunk, code);
+        let finalize = instructions[2]
+            .as_any()
+            .downcast_ref::<FinalizeSmartContractCodeUpload>()
+            .expect("one-chunk transaction finalizes after upload");
+        assert_eq!(finalize.code_hash, upload.code_hash);
+        assert_eq!(finalize.total_size, upload.total_size);
+        assert_eq!(finalize.chunk_count, upload.chunk_count);
+
+        let report = native_upload_report(&plan);
+        let fields = report.as_object().expect("upload report is an object");
+        assert_eq!(fields.len(), 5);
+        assert!(!fields.contains_key("direct_register_bytes_tx_size"));
+        assert_eq!(
+            fields["register_bytes_tx_strategy"].as_str(),
+            Some("native_chunks")
+        );
+        assert_eq!(fields["register_bytes_chunk_count"].as_u64(), Some(1));
+        assert!(
+            fields["register_bytes_stage_tx_hashes"]
+                .as_array()
+                .expect("stage hashes are an array")
+                .is_empty()
+        );
+        let finalize_hash = plan.finalize.2.hash().to_string();
+        assert_eq!(
+            fields["register_bytes_tx_hash"].as_str(),
+            Some(finalize_hash.as_str())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn multi_mib_upload_is_bounded_ordered_and_carries_stable_metadata() -> Result<()> {
+        let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let code = (0..(3 * 1024 * 1024 + 17))
+            .map(|index| u8::try_from(index % 251).expect("remainder fits u8"))
+            .collect::<Vec<_>>();
+        let metadata = transaction_metadata(Some("fee#split-native"));
+        let anchor = InstructionBox::from(SetKeyValue::account(
+            authority.clone(),
+            Name::from_str(CONTRACT_DEPLOY_NONCE_METADATA_KEY)?,
+            Json::new(0_u64),
+        ));
+        let code_hash = ivm::contract_code_hash(&code);
+        let plan = build_native_upload_plan(
+            &ChainId::from("split-contract-deploy-large-native-upload-test"),
+            &authority,
+            key_pair.private_key(),
+            &metadata,
+            Some(anchor),
+            code_hash,
+            &code,
+        )?;
+
+        let expected_count = code.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES);
+        assert_eq!(usize::try_from(plan.chunk_count)?, expected_count);
+        assert_eq!(plan.pre_stage.len(), expected_count - 1);
+        assert_eq!(
+            plan.pre_stage.first().map(|(_, slug, _)| slug.as_str()),
+            Some("register-bytes-chunk-0001-of-0049")
+        );
+        assert_eq!(
+            plan.pre_stage.last().map(|(_, slug, _)| slug.as_str()),
+            Some("register-bytes-chunk-0048-of-0049")
+        );
+        assert_eq!(plan.finalize.1, "register-bytes-finalize");
+
+        let transactions = plan
+            .pre_stage
+            .iter()
+            .map(|(_, _, transaction)| transaction)
+            .chain(std::iter::once(&plan.finalize.2))
+            .collect::<Vec<_>>();
+        let mut rebuilt = Vec::with_capacity(code.len());
+        for (index, transaction) in transactions.iter().enumerate() {
+            assert_eq!(transaction.metadata(), &metadata);
+            assert!(
+                transaction.encode_versioned().len()
+                    < iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_TX_GOSSIP.get(),
+                "chunk transaction {index} exceeded the default gossip frame"
+            );
+            let Executable::Instructions(instructions) = transaction.instructions() else {
+                panic!("native upload must use instruction transactions");
+            };
+            let uploads = instructions
+                .iter()
+                .filter_map(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<UploadSmartContractCodeChunk>()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(uploads.len(), 1);
+            let upload = uploads[0];
+            assert_eq!(usize::try_from(upload.chunk_index)?, index);
+            assert_eq!(upload.chunk_count, plan.chunk_count);
+            assert_eq!(upload.total_size, u64::try_from(code.len())?);
+            assert_eq!(upload.code_hash, code_hash);
+            let expected_chunk_len = code
+                .len()
+                .saturating_sub(index * SMART_CONTRACT_CODE_CHUNK_BYTES)
+                .min(SMART_CONTRACT_CODE_CHUNK_BYTES);
+            assert_eq!(upload.chunk.len(), expected_chunk_len);
+            assert!(upload.chunk.len() < code.len());
+            rebuilt.extend_from_slice(&upload.chunk);
+            let bootstrap_count = instructions
+                .iter()
+                .filter(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<iroha::data_model::isi::SetKeyValueBox>()
+                        .is_some()
+                })
+                .count();
+            assert_eq!(bootstrap_count, usize::from(index == 0));
+            let finalize_count = instructions
+                .iter()
+                .filter(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<FinalizeSmartContractCodeUpload>()
+                        .is_some()
+                })
+                .count();
+            assert_eq!(finalize_count, usize::from(index + 1 == expected_count));
+            if index + 1 == expected_count {
+                let finalize = instructions
+                    .iter()
+                    .find_map(|instruction| {
+                        instruction
+                            .as_any()
+                            .downcast_ref::<FinalizeSmartContractCodeUpload>()
+                    })
+                    .expect("last upload transaction must finalize");
+                assert_eq!(finalize.code_hash, upload.code_hash);
+                assert_eq!(finalize.total_size, upload.total_size);
+                assert_eq!(finalize.chunk_count, upload.chunk_count);
+            }
+            assert_eq!(
+                instructions.len(),
+                1 + usize::from(index == 0) + usize::from(index + 1 == expected_count)
+            );
+        }
+        assert_eq!(rebuilt, code);
+
+        let report = native_upload_report(&plan);
+        let fields = report.as_object().expect("upload report is an object");
+        assert_eq!(
+            fields["register_bytes_chunk_size"].as_u64(),
+            Some(u64::try_from(SMART_CONTRACT_CODE_CHUNK_BYTES)?)
+        );
+        assert_eq!(
+            fields["register_bytes_chunk_count"].as_u64(),
+            Some(u64::try_from(expected_count)?)
+        );
+        let stage_hashes = fields["register_bytes_stage_tx_hashes"]
+            .as_array()
+            .expect("stage hashes are an array");
+        assert_eq!(stage_hashes.len(), expected_count - 1);
+        for (reported, (_, _, transaction)) in stage_hashes.iter().zip(&plan.pre_stage) {
+            let expected = transaction.hash().to_string();
+            assert_eq!(reported.as_str(), Some(expected.as_str()));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn emit_sequence_writes_exact_ordered_native_filenames() -> Result<()> {
+        let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let chain = ChainId::from("split-contract-deploy-emit-sequence-test");
+        let metadata = transaction_metadata(Some("fee#emit"));
+        let code = vec![0x83; 2 * SMART_CONTRACT_CODE_CHUNK_BYTES + 1];
+        let upload_plan = build_native_upload_plan(
+            &chain,
+            &authority,
+            key_pair.private_key(),
+            &metadata,
+            None,
+            ivm::contract_code_hash(&code),
+            &code,
+        )?;
+        let trailing_transaction = || {
+            sign_transaction(
+                &chain,
+                &authority,
+                key_pair.private_key(),
+                metadata.clone(),
+                Vec::<InstructionBox>::new(),
+            )
+        };
+        let sequence = deployment_transaction_sequence(
+            upload_plan,
+            trailing_transaction()?,
+            trailing_transaction()?,
+        );
+        let expected_slugs = [
+            "register-bytes-chunk-0001-of-0003",
+            "register-bytes-chunk-0002-of-0003",
+            "register-bytes-finalize",
+            "register-manifest",
+            "activate",
+        ];
+        assert_eq!(
+            sequence
+                .iter()
+                .map(|(_, slug, _)| slug.as_str())
+                .collect::<Vec<_>>(),
+            expected_slugs.to_vec()
+        );
+        assert!(
+            sequence
+                .iter()
+                .all(|(_, _, transaction)| transaction.metadata() == &metadata)
+        );
+
+        let output = tempfile::tempdir()?;
+        let written = sequence
+            .iter()
+            .map(|(_, slug, transaction)| write_tx(output.path(), slug, transaction))
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(
+            written
+                .iter()
+                .map(|(path, _)| path.file_name().and_then(std::ffi::OsStr::to_str).unwrap())
+                .collect::<Vec<_>>(),
+            expected_slugs
+                .iter()
+                .map(|slug| format!("{slug}.norito"))
+                .collect::<Vec<_>>()
+        );
+        for ((_, _, transaction), (path, byte_len)) in sequence.iter().zip(&written) {
+            let encoded = transaction.encode_versioned();
+            assert_eq!(*byte_len, encoded.len());
+            assert_eq!(fs::read(path)?, encoded);
+        }
         Ok(())
     }
 }

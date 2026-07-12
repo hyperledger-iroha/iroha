@@ -31,7 +31,7 @@ pub const PROTOCOL_VERSION: u16 = 2;
 pub const MAX_VALIDATORS_PER_HEIGHT: usize = 4_096;
 /// Tight allocation bound for one consensus signature or aggregate.
 pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 256;
-const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 1;
+const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 2;
 /// Permissioned Sumeragi v2 handshake and domain-separation tag.
 pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v2";
 /// NPoS Sumeragi v2 handshake and domain-separation tag.
@@ -299,6 +299,80 @@ impl SumeragiV2GenesisContextParameters {
 /// Canonical staged active-lane record committed by v2 genesis metadata.
 pub type GenesisActiveNexusLaneRecord = ((LaneId, AccountId), PublicLaneValidatorRecord);
 
+/// Audited snapshot boundary which explicitly replaces an unavailable parent CommitQC.
+///
+/// The complete [`SnapshotV2BootstrapRecord`] is carried inside the signed or digest-pinned
+/// snapshot payload. These fields bind its frozen context to the exact restored ledger
+/// geometry and WSV, so an appended self-signed artifact cannot introduce a different trust root.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SnapshotBootstrapAnchor {
+    /// Last audited hash-only ledger height represented by the snapshot.
+    pub snapshot_height: Height,
+    /// Exact canonical block hash at `snapshot_height`.
+    pub snapshot_block_hash: HashOf<BlockHeader>,
+    /// Exact canonical ledger timestamp of the unavailable block at `snapshot_height`.
+    ///
+    /// The first executable successor derives its timestamp from this value and the committed
+    /// block cadence; it must never fall back to a leader's local clock.
+    pub snapshot_block_creation_time_ms: u64,
+    /// Canonical WSV hash reconstructed from the authenticated snapshot payload.
+    pub snapshot_state_hash: Hash,
+}
+
+/// Complete frozen Sumeragi-v2 trust root authenticated by an audited snapshot payload.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SnapshotV2BootstrapRecord {
+    /// Record layout version; currently [`Self::VERSION`].
+    pub version: u16,
+    /// Exact first post-snapshot height context, including mode, seed, DA layout, and anchor.
+    pub context: HeightContext,
+    /// Roster-aligned BLS proofs of possession authenticated by the snapshot payload.
+    pub validator_set_pops: Vec<Vec<u8>>,
+}
+
+impl SnapshotV2BootstrapRecord {
+    /// Current record layout version.
+    pub const VERSION: u16 = 1;
+
+    /// Validate the record's structural context and snapshot-anchor relationship.
+    ///
+    /// Cryptographic PoP validation and comparison with restored live consensus keys are performed
+    /// by the snapshot reader, which owns the authenticated WSV needed for those checks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported version, a malformed context, a missing anchor, or a
+    /// context height that is not the exact successor of the audited snapshot height.
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.version != Self::VERSION {
+            return Err(ValidationError::InvalidSnapshotBootstrap);
+        }
+        self.context.validate()?;
+        let anchor = self
+            .context
+            .snapshot_bootstrap
+            .as_ref()
+            .ok_or(ValidationError::InvalidSnapshotBootstrap)?;
+        if anchor.snapshot_height == 0
+            || anchor.snapshot_height.checked_add(1) != Some(self.context.height)
+            || self.validator_set_pops.len() != self.context.roster.len()
+        {
+            return Err(ValidationError::InvalidSnapshotBootstrap);
+        }
+        Ok(())
+    }
+}
+
 /// Immutable inputs to consensus at one block height.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -325,10 +399,16 @@ pub struct HeightContext {
     pub next_epoch_snapshot: Option<finality::FinalizedNextEpochSnapshot>,
     /// Consensus mode that produced the voting-power snapshot.
     pub mode: ConsensusMode,
-    /// Commit certificate for the parent block, absent only at genesis.
+    /// Commit certificate for the parent block, absent only at genesis or an audited snapshot
+    /// bootstrap boundary.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub parent_commit_qc: Option<QuorumCertificate>,
+    /// Explicit authenticated snapshot boundary used when the parent block body and v2 CommitQC
+    /// predate the first-release v2 ledger. Mutually exclusive with `parent_commit_qc`.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub snapshot_bootstrap: Option<SnapshotBootstrapAnchor>,
     /// Deterministically ordered voting roster; observers are excluded.
     pub roster: Vec<ValidatorPower>,
     /// Canonical dual quorum derived from `roster`.
@@ -371,6 +451,7 @@ impl HeightContext {
                     subject: certificate.subject,
                     execution_commitment: certificate.execution_commitment,
                 }),
+            snapshot_bootstrap: self.snapshot_bootstrap,
             roster: self.roster.clone(),
             quorum: self.quorum,
             nexus_amx_context_hash: self.nexus_amx_context_hash,
@@ -413,18 +494,26 @@ impl HeightContext {
         {
             return Err(ValidationError::PermissionedPowerNotOne);
         }
-        match (self.height, self.parent_commit_qc.as_ref()) {
-            (1, None) => {}
-            (1, Some(_)) | (0, _) | (_, None) => {
+        match (
+            self.height,
+            self.parent_commit_qc.as_ref(),
+            self.snapshot_bootstrap.as_ref(),
+        ) {
+            (1, None, None) => {}
+            (height, None, Some(anchor))
+                if height > 1
+                    && anchor.snapshot_height > 0
+                    && anchor.snapshot_height.checked_add(1) == Some(height) => {}
+            (0, _, _) | (1, _, _) | (_, Some(_), Some(_)) | (_, None, None) => {
                 return Err(ValidationError::InvalidParentCommit);
             }
-            (_, Some(parent))
+            (_, Some(parent), None)
                 if parent.phase != GlobalPhase::Commit
                     || parent.round.height.checked_add(1) != Some(self.height) =>
             {
                 return Err(ValidationError::InvalidParentCommit);
             }
-            (_, Some(_)) => {}
+            (_, Some(_), None) | (_, None, Some(_)) => {}
         }
         if let Some(parent) = &self.parent_commit_qc {
             parent.execution_commitment.validate()?;
@@ -504,6 +593,7 @@ struct HeightContextIdentity {
     next_epoch_snapshot: Option<finality::FinalizedNextEpochSnapshot>,
     mode: ConsensusMode,
     parent_commit: Option<ParentCommitIdentity>,
+    snapshot_bootstrap: Option<SnapshotBootstrapAnchor>,
     roster: Vec<ValidatorPower>,
     quorum: DualQuorum,
     nexus_amx_context_hash: Hash,
@@ -2042,6 +2132,8 @@ pub enum ValidationError {
     NextEpochPermissionedPowerNotOne,
     /// The parent certificate is not a CommitQC for the previous height.
     InvalidParentCommit,
+    /// The audited snapshot bootstrap record or its height/anchor relationship is malformed.
+    InvalidSnapshotBootstrap,
     /// The mandatory data-availability layout is internally inconsistent.
     InvalidDataAvailabilityLayout,
     /// A certificate or message is bound to another height context.
@@ -2183,6 +2275,9 @@ impl fmt::Display for ValidationError {
             }
             Self::InvalidParentCommit => {
                 f.write_str("height context parent is not the previous height CommitQC")
+            }
+            Self::InvalidSnapshotBootstrap => {
+                f.write_str("height context has an invalid audited snapshot bootstrap")
             }
             Self::InvalidDataAvailabilityLayout => {
                 f.write_str("height context has an invalid data-availability layout")
@@ -2520,6 +2615,7 @@ mod tests {
             next_epoch_snapshot: None,
             mode: ConsensusMode::Npos,
             parent_commit_qc: None,
+            snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
@@ -2656,6 +2752,53 @@ mod tests {
         assert_eq!(
             invalid_parent_execution.validate(),
             Err(ValidationError::InvalidExecutionCommitment)
+        );
+    }
+
+    #[test]
+    fn snapshot_bootstrap_is_an_explicit_mutually_exclusive_parent_authority() {
+        let mut anchored = context(&[1, 1, 1, 1]);
+        anchored.height = 11;
+        anchored.snapshot_bootstrap = Some(SnapshotBootstrapAnchor {
+            snapshot_height: 10,
+            snapshot_block_hash: HashOf::from_untyped_unchecked(Hash::new(b"audited snapshot tip")),
+            snapshot_block_creation_time_ms: 1_000,
+            snapshot_state_hash: Hash::new(b"audited snapshot WSV"),
+        });
+        anchored
+            .validate()
+            .expect("exact post-snapshot context is structurally valid");
+        let record = SnapshotV2BootstrapRecord {
+            version: SnapshotV2BootstrapRecord::VERSION,
+            context: anchored.clone(),
+            validator_set_pops: vec![vec![0xA5]; anchored.roster.len()],
+        };
+        record.validate().expect("complete bootstrap record");
+
+        let mut wrong_height = record.clone();
+        wrong_height.context.height = 12;
+        assert_eq!(
+            wrong_height.validate(),
+            Err(ValidationError::InvalidParentCommit)
+        );
+
+        let mut ambiguous = anchored;
+        ambiguous.parent_commit_qc = Some(qc(
+            &context(&[1, 1, 1, 1]),
+            0,
+            GlobalPhase::Commit,
+            vec![0, 1, 2],
+        ));
+        assert_eq!(
+            ambiguous.validate(),
+            Err(ValidationError::InvalidParentCommit)
+        );
+
+        let mut unsupported = record;
+        unsupported.version = SnapshotV2BootstrapRecord::VERSION + 1;
+        assert_eq!(
+            unsupported.validate(),
+            Err(ValidationError::InvalidSnapshotBootstrap)
         );
     }
 

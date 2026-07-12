@@ -49,8 +49,9 @@ use iroha_data_model::{
     isi::{
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
         smart_contract_code::{
-            ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
-            RegisterSmartContractCode, RemoveSmartContractBytes,
+            ActivateContractInstance, DeactivateContractInstance, FinalizeSmartContractCodeUpload,
+            RegisterSmartContractBytes, RegisterSmartContractCode, RemoveSmartContractBytes,
+            UploadSmartContractCodeChunk,
         },
     },
     name::Name,
@@ -2790,6 +2791,8 @@ impl Queue {
                         let any = instruction.as_any();
                         if any.is::<RegisterSmartContractCode>()
                             || any.is::<RegisterSmartContractBytes>()
+                            || any.is::<UploadSmartContractCodeChunk>()
+                            || any.is::<FinalizeSmartContractCodeUpload>()
                             || any.is::<RemoveSmartContractBytes>()
                         {
                             register_code_seen = true;
@@ -2981,6 +2984,8 @@ impl Queue {
                             let any = instruction.as_any();
                             any.is::<RegisterSmartContractCode>()
                                 || any.is::<RegisterSmartContractBytes>()
+                                || any.is::<UploadSmartContractCodeChunk>()
+                                || any.is::<FinalizeSmartContractCodeUpload>()
                                 || any.is::<RemoveSmartContractBytes>()
                         };
                         if modifies_contract_code {
@@ -7849,7 +7854,7 @@ pub mod tests {
         },
         parameter::TransactionParameters,
         prelude::*,
-        proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
+        proof::{ProofAttachment, ProofAttachmentList, ProofBox},
         runtime::RuntimeUpgradeManifest,
         transaction::signed::{
             SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
@@ -8203,7 +8208,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let lane_catalog =
             LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog");
         let mut nexus = state.nexus_snapshot();
@@ -8280,7 +8285,7 @@ pub mod tests {
     #[test]
     fn apply_lane_lifecycle_error_preserves_router_and_limits() {
         let NexusFeeFixture { mut state, .. } =
-            nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+            nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let lane_catalog =
             LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog");
         let mut nexus = state.nexus_snapshot();
@@ -8466,7 +8471,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let retired_lane = LaneId::new(1);
         let lane_catalog = LaneCatalog::new(
             nonzero!(2_u32),
@@ -8608,7 +8613,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let lane_id = LaneId::new(3);
         let dataspace_id = DataSpaceId::new(10);
         let (lane_catalog, dataspace_catalog) =
@@ -8679,7 +8684,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let mut nexus = state.nexus_snapshot();
         nexus.enabled = true;
         nexus.fees.base_fee = Quantity::zero();
@@ -8795,7 +8800,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let mut nexus = state.nexus_snapshot();
         nexus.enabled = true;
         nexus.fees.base_fee = Quantity::zero();
@@ -8903,7 +8908,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let mut initial_lane_1 = LaneConfig {
             id: LaneId::new(1),
             alias: "elastic-lane-1".to_string(),
@@ -10313,38 +10318,81 @@ pub mod tests {
 
         // Contract artifact instructions must also carry governance metadata.
         let (code_hash, code) = minimal_contract_bytes();
-        let register_bytes = InstructionBox::from(RegisterSmartContractBytes {
-            code_hash,
-            code: code.clone(),
-        });
+        let total_size = u64::try_from(code.len()).expect("contract fixture size fits u64");
+        let artifact_operations = [
+            (
+                "register bytes",
+                InstructionBox::from(RegisterSmartContractBytes {
+                    code_hash,
+                    code: code.clone(),
+                }),
+            ),
+            (
+                "upload chunk",
+                InstructionBox::from(UploadSmartContractCodeChunk {
+                    code_hash,
+                    total_size,
+                    chunk_index: 0,
+                    chunk_count: 1,
+                    chunk: code,
+                }),
+            ),
+            (
+                "finalize upload",
+                InstructionBox::from(FinalizeSmartContractCodeUpload {
+                    code_hash,
+                    total_size,
+                    chunk_count: 1,
+                }),
+            ),
+        ];
 
+        for (label, operation) in artifact_operations {
+            let tx = accepted_tx_with(
+                validator.clone(),
+                &keypair,
+                &time_source,
+                vec![operation.clone()],
+                Metadata::default(),
+            );
+            let err = queue
+                .push(tx, state.view())
+                .expect_err("contract artifact operation requires governance metadata");
+            assert!(
+                matches!(err.err, Error::GovernanceNotPermitted { .. }),
+                "unexpected {label} admission result: {err:?}"
+            );
+
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+                Json::new(contract_address.to_string()),
+            );
+            let tx = accepted_tx_with(
+                validator.clone(),
+                &keypair,
+                &time_source,
+                vec![operation],
+                metadata,
+            );
+            queue
+                .push(tx, state.view())
+                .unwrap_or_else(|error| panic!("{label} metadata should be satisfied: {error:?}"));
+        }
+
+        let cancel = InstructionBox::from(
+            iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload { code_hash },
+        );
         let tx = accepted_tx_with(
-            validator.clone(),
+            validator,
             &keypair,
             &time_source,
-            vec![register_bytes.clone()],
+            vec![cancel],
             Metadata::default(),
-        );
-        let err = queue
-            .push(tx, state.view())
-            .expect_err("contract artifact registration requires governance metadata");
-        assert!(matches!(err.err, Error::GovernanceNotPermitted { .. }));
-
-        let mut metadata_bytes = Metadata::default();
-        metadata_bytes.insert(
-            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
-            Json::new(contract_address.to_string()),
-        );
-        let tx = accepted_tx_with(
-            validator.clone(),
-            &keypair,
-            &time_source,
-            vec![register_bytes],
-            metadata_bytes,
         );
         queue
             .push(tx, state.view())
-            .expect("contract artifact registration metadata satisfied");
+            .expect("owner cleanup must not require deployment governance metadata");
     }
 
     #[tokio::test]
@@ -10893,7 +10941,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let old_route = RoutingDecision::new(LaneId::new(3), DataSpaceId::UNIVERSAL);
@@ -13034,7 +13082,7 @@ pub mod tests {
 
     #[test]
     fn push_with_lane_with_state_rejects_insufficient_nexus_fee_balance_before_enqueue() {
-        let fixture = nexus_fee_fixture(Some(Numeric::zero()), None);
+        let fixture = nexus_fee_fixture(Some(Quantity::zero()), None);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by(
@@ -13059,7 +13107,7 @@ pub mod tests {
 
     #[test]
     fn push_with_lane_with_state_accepts_funded_nexus_fee_payer() {
-        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let fixture = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by(
@@ -13077,7 +13125,7 @@ pub mod tests {
 
     #[test]
     fn push_with_lane_with_state_rejects_unauthorized_fee_sponsor() {
-        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), Some(Numeric::from(10_u32)));
+        let fixture = nexus_fee_fixture(Some(Quantity::from(10_u32)), Some(Quantity::from(10_u32)));
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
         let mut metadata = Metadata::default();
@@ -13109,7 +13157,7 @@ pub mod tests {
 
     #[test]
     fn push_with_lane_with_state_accepts_authorized_fee_sponsor_after_committed_grant() {
-        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), Some(Numeric::from(10_u32)));
+        let fixture = nexus_fee_fixture(Some(Quantity::from(10_u32)), Some(Quantity::from(10_u32)));
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = fixture.state.block(header);
         let mut stx = block.transaction();
@@ -13144,7 +13192,7 @@ pub mod tests {
     #[test]
     fn push_with_lane_with_state_accepts_dataspace_default_fee_sponsor() {
         let mut fixture =
-            nexus_fee_fixture(Some(Numeric::from(10_u32)), Some(Numeric::from(10_u32)));
+            nexus_fee_fixture(Some(Quantity::from(10_u32)), Some(Quantity::from(10_u32)));
         fixture
             .state
             .nexus
@@ -13179,7 +13227,7 @@ pub mod tests {
     #[test]
     fn push_with_lane_with_state_accepts_explicit_dataspace_default_fee_sponsor() {
         let mut fixture =
-            nexus_fee_fixture(Some(Numeric::from(10_u32)), Some(Numeric::from(10_u32)));
+            nexus_fee_fixture(Some(Quantity::from(10_u32)), Some(Quantity::from(10_u32)));
         fixture
             .state
             .nexus
@@ -13253,7 +13301,7 @@ pub mod tests {
 
     #[test]
     fn read_only_fee_sponsor_check_accepts_granted_permission() {
-        let fixture = nexus_fee_fixture(None, Some(Numeric::from(10_u32)));
+        let fixture = nexus_fee_fixture(None, Some(Quantity::from(10_u32)));
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = fixture.state.block(header);
         let mut stx = block.transaction();
@@ -13281,7 +13329,7 @@ pub mod tests {
 
     #[test]
     fn push_with_lane_with_state_rejects_raw_ivm_when_gas_limit_exceeds_fee_balance() {
-        let mut fixture = nexus_fee_fixture(Some(Numeric::from(50_u32)), None);
+        let mut fixture = nexus_fee_fixture(Some(Quantity::from(50_u32)), None);
         {
             let nexus = fixture.state.nexus.get_mut();
             nexus.fees.base_fee = Quantity::zero();
@@ -13312,7 +13360,7 @@ pub mod tests {
 
     #[test]
     fn push_with_lane_with_state_rejects_fee_alias_that_expires_before_tx_deadline() {
-        let mut fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let mut fixture = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let fee_asset_alias: iroha_data_model::asset::AssetDefinitionAlias =
             "xor#universal".parse().expect("asset alias");
         {
@@ -13394,7 +13442,7 @@ pub mod tests {
 
     #[test]
     fn get_transactions_for_block_with_state_drops_transaction_that_loses_fee_balance() {
-        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let fixture = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let mut queue = Queue::test(config_factory(), &time_source);
         let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
@@ -14180,8 +14228,8 @@ pub mod tests {
     }
 
     fn nexus_fee_fixture(
-        authority_balance: Option<Numeric>,
-        sponsor_balance: Option<Numeric>,
+        authority_balance: Option<Quantity>,
+        sponsor_balance: Option<Quantity>,
     ) -> NexusFeeFixture {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
         let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
@@ -15573,7 +15621,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let mut future_elastic = LaneConfig {
             id: LaneId::new(1),
             alias: "elastic-lane-1".to_owned(),

@@ -12,9 +12,27 @@ This document describes the app-facing HTTP endpoints for deploying self-describ
 - POST `/v1/contracts/deploy`
   - Accepts base64 `.to` bytecode with authority, private key, and a stable `contract_alias`; verifies the embedded `CNTR` contract interface, computes the domain-separated `code_hash` over the complete artifact including the fixed IVM execution header, computes `abi_hash` from the enforced ABI policy declared by the verified header, derives a fresh immutable `contract_address`, and binds the alias in the requested dataspace (`universal` by default).
   - Request body: `DeployContractDto`; response body: `DeployContractBundleReceiptDto` with exactly one `contracts[]` receipt entry.
-  - Submits a single transaction that registers the manifest, stores the bytecode, activates the fresh address-backed instance, and binds the alias.
+  - Uses consensus-native 65,536-byte uploads. Transactions 1 through N-1 each
+    upload one pre-stage chunk. After those chunks are observed as committed,
+    the final transaction uploads chunk N, finalizes byte registration,
+    registers the manifest, activates the fresh address-backed instance, and
+    binds the alias.
+  - If the signing authority is absent at transaction start, the first
+    deployment transaction uses the exact prefix
+    `Register<Account>(self)`, `Grant<CanRegisterSmartContractCode>(self)`,
+    followed by the first `UploadSmartContractCodeChunk`. For a one-chunk
+    artifact that is the final deployment transaction. This is a narrow atomic
+    bootstrap exception in the default executor, not a general self-grant
+    capability; existing accounts must already hold deployment permission.
+  - Matching code already registered under `code_hash` skips upload entirely.
+    The final transaction still registers the derived manifest and activates
+    and binds the new instance. A missing authority uses the same exact
+    register-and-grant prefix followed directly by `RegisterSmartContractCode`
+    in this matching-code path.
   - Reusing an existing `contract_alias` performs an in-place `kaizen`/`改善`: `contracts[0]` reports the new `contract_address`, the previous address, and `kaizen = true`.
-  - Body size is limited by the `max_contract_code_bytes` custom parameter (default 16 MiB); raise the cap before uploading larger programs.
+  - Body size is limited by the `max_contract_code_bytes` custom parameter
+    (default 16 MiB) and the portable 2,147,483,647-byte consensus ceiling;
+    raise the configured cap before uploading larger programs.
   - Telemetry: increments `torii_contract_errors_total{endpoint="deploy"}` on handler errors and `torii_contract_throttled_total{endpoint="deploy"}` when the limiter fires.
 
 - GET `/v1/contracts/code-bytes/{code_hash}`
@@ -43,6 +61,15 @@ Notes:
 - `lease_expiry_ms` is optional. When omitted or `null`, the alias binding is permanent.
 - The handler recomputes the manifest internally; callers do not provide one on this shortcut.
 - The decoded bytecode length must not exceed `max_contract_code_bytes`; exceeding the limit triggers an `InvariantViolation` (`code bytes exceed cap`) during transaction admission.
+- Uploads are resumable under `(authority, code_hash)`. Torii treats identical
+  chunk retries as success, fails immediately on a terminal transaction
+  rejection, and reports expected versus observed committed progress on
+  timeout without cancelling the pending upload.
+- Consensus accepts out-of-order chunks, but Torii submits its plan in index
+  order. At most four descriptors may be pending for one authority, and their
+  aggregate declared bytes cannot exceed that authority's current contract-code
+  cap. Callers that abandon an upload can issue the owner-scoped,
+  idempotent `CancelSmartContractCodeUpload` instruction.
 
 ### DeployContractBundleReceiptDto
 
@@ -64,6 +91,7 @@ Notes:
       "kaizen": false,
       "dataspace": "universal",
       "deploy_nonce": 0,
+      "upload_stage_tx_hashes": ["0123…cdef"],
       "tx_hash_hex": "0123…cdef",
       "code_hash_hex": "0123…cdef",
       "abi_hash_hex": "89ab…7654",
@@ -74,6 +102,12 @@ Notes:
   "assertions": []
 }
 ```
+
+`upload_stage_tx_hashes` is required, including when it is empty for a
+one-chunk artifact or already-registered matching code. It contains only the
+transactions submitted before the final deployment transaction. This is the
+first persisted receipt shape; Torii does not parse or migrate receipts that
+lack the field.
 
 ### Type encodings (JSON)
 
@@ -184,9 +218,13 @@ The command prints a 32‑byte hex digest. Embed this value in `manifest.abi_has
 
 - Manifest registration, bytecode registration, activation, deactivation, and
   bytecode removal require the signing authority to hold
-  `CanRegisterSmartContractCode`. Torii prepends a domainless self-registration
-  so a permitted signer can materialize its authority account in the same
-  transaction when the network allows it; this does not grant lifecycle authority.
+  `CanRegisterSmartContractCode`. The sole first-release bootstrap exception is
+  an absent transaction authority whose transaction begins with the exact
+  ordered `Register<Account>(self)`,
+  `Grant<CanRegisterSmartContractCode>(self)`, then native upload (or manifest
+  registration when matching code is already stored) prefix described above.
+  The default executor rejects that self-grant for a pre-existing account and
+  rejects changed destinations, permission payloads, or instruction order.
 - Alias-backed public deployment is the only supported app-facing activation
   flow. `ContractAddress` remains immutable per deployment, while
   `ContractAlias` is the stable public handle. Governance-controlled namespace

@@ -22,7 +22,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::{
     CanManageParliament, CanRecordCitizenService,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -40,15 +40,15 @@ fn build_world(def_id: &AssetDefinitionId) -> World {
     let asset_def = AssetDefinition::numeric(def_id.clone()).build(&alice_id);
     let alice_asset = Asset::new(
         AssetId::new(def_id.clone(), ALICE_ID.clone()),
-        Numeric::new(1_000, 0),
+        Quantity::from(1_000_u64),
     );
     let carpenter_asset = Asset::new(
         AssetId::new(def_id.clone(), CARPENTER_ID.clone()),
-        Numeric::new(1_000, 0),
+        Quantity::from(1_000_u64),
     );
     let escrow_asset = Asset::new(
         AssetId::new(def_id.clone(), BOB_ID.clone()),
-        Numeric::new(0, 0),
+        Quantity::from(0_u64),
     );
 
     World::with_assets(

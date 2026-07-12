@@ -36,11 +36,12 @@ Remaining IVM/Kotodama/Torii release work is validation only: run the
 non-skipped four-peer typed-query pagination exercise, controlled 5%
 performance gates, strict Clippy, and the full workspace suite against the
 canonical type-first authorized Kotodama grammar, 49-byte ABI-hash header,
-separate suite/runtime artifact identities, and multisig query/lookup routes.
+separate suite/runtime artifact identities, native 64 KiB contract-code upload
+transactions and receipts, and multisig query/lookup routes.
 Future ABI descriptor changes must regenerate the header documentation, every
 mapped `.to` golden, and the compiler manifests together. No retired grammar,
-17-byte deployable header, CRUD route, carrier, or compatibility migration is
-planned.
+17-byte deployable header, CRUD route, carrier, IVM state-staging deploy path,
+old upload-state migration, or compatibility migration is planned.
 
 ## SORA Economic Constitution
 
@@ -807,8 +808,12 @@ serialized v2 height runner; the legacy actor is never selected under a v2
 handshake. The runner replays its context and safety WAL before opening
 ingress, owns every body/fetch/validation/apply effect, and rolls over only from
 a Kura-authenticated finality receipt. Post-finality WAL/body/chunk cleanup is
-reported as an ordered typed partial-success outcome: cleanup diagnostics stay
-visible, but cannot undo or stop progress after a durable decision.
+reported as an ordered typed partial-success outcome only for explicitly
+classified non-authoritative maintenance diagnostics; those diagnostics stay
+visible but cannot undo a durable decision. Any ambiguous or fatal
+post-publication durability outcome closes the process-wide consensus output
+guard and requires restart recovery before admission, persistence, or network
+output can resume.
 
 Consensus owns one bounded `SccpRegistryV1`. Typed
 `ApplySccpRouteGovernance` actions register an exact route, change its
@@ -882,9 +887,11 @@ Kura disk accounting is publication ordered across canonical rewrites, retired
 trees, lane-geometry mutations, state journals, projections, query indexes, and
 roster persistence. Cached readers wait for an in-flight filesystem mutation;
 partial cleanup or scan failure invalidates the affected total instead of
-publishing a stale value. Once a canonical rewrite is durably committed, a
-cleanup failure is reported as deferred cleanup and cannot make callers retry a
-successful logical commit.
+publishing a stale value. Once a canonical rewrite is durably committed, Kura
+first attempts exact in-process stage recovery. If cleanup remains unresolved,
+or publication state is ambiguous, Kura poisons further canonical mutation and
+the process-wide consensus output guard requires restart recovery. Only
+explicitly classified non-authoritative cleanup diagnostics remain non-fatal.
 
 The remaining SCCP release work is external, independently verifiable evidence:
 

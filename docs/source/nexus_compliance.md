@@ -74,6 +74,8 @@ LaneCompliancePolicy {
   - `max_notional_xor` and `max_daily_notional_xor`.
   - `asset_limits[{asset_id, per_tx, per_day}]`.
   - `relationship_limits` (e.g. CBDC retail vs wholesale).
+  - All monetary ceilings use the nominal non-negative `Quantity` type; a
+    negative cap is rejected during Norito or JSON decoding.
 - `AuditControls` configures:
   - Whether Torii must persist every denial in the audit log.
   - Whether successful decisions should be sampled into Norito digests.

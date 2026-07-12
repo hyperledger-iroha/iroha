@@ -318,19 +318,20 @@ pub mod isi {
                 return Ok(());
             }
 
-            let new_quantity = source_lot
-                .quantity
-                .clone()
-                .checked_sub(&quantity)
-                .map_err(|_| {
-                    Error::InvariantViolation(
-                        format!(
-                            "transfer quantity exceeds source quantity for RWA {}",
-                            source_lot.id()
+            let new_quantity =
+                source_lot
+                    .quantity
+                    .clone()
+                    .checked_sub(&quantity)
+                    .map_err(|_| {
+                        Error::InvariantViolation(
+                            format!(
+                                "transfer quantity exceeds source quantity for RWA {}",
+                                source_lot.id()
+                            )
+                            .into(),
                         )
-                        .into(),
-                    )
-                })?;
+                    })?;
             let child_id = state_transaction
                 .next_generated_rwa_id(source_lot.id().domain(), TransferRwa::WIRE_ID)?;
             if state_transaction.world.rwa(&child_id).is_ok() {
@@ -669,15 +670,11 @@ pub mod isi {
                 .clone()
                 .checked_add(&self.quantity)
                 .map_err(|_| Error::InvariantViolation("hold quantity overflow".into()))?;
-            let available_after = rwa
-                .quantity
-                .clone()
-                .checked_sub(&new_held)
-                .map_err(|_| {
-                    Error::InvariantViolation(
-                        format!("hold quantity exceeds total quantity for RWA {}", rwa.id()).into(),
-                    )
-                })?;
+            let available_after = rwa.quantity.clone().checked_sub(&new_held).map_err(|_| {
+                Error::InvariantViolation(
+                    format!("hold quantity exceeds total quantity for RWA {}", rwa.id()).into(),
+                )
+            })?;
             let _ = available_after;
             let rwa_mut = state_transaction.world.rwa_mut(&self.rwa)?;
             rwa_mut.held_quantity = new_held;
@@ -1063,7 +1060,7 @@ pub mod isi {
             let err = RegisterRwa {
                 rwa: NewRwa::new(
                     missing_domain.clone(),
-                    "5".parse().unwrap(),
+                    "5".parse::<Quantity>().unwrap(),
                     NumericSpec::integer(),
                     "https://example.test/rwa/1".to_owned(),
                     None,
@@ -1093,7 +1090,7 @@ pub mod isi {
             RegisterRwa {
                 rwa: NewRwa::new(
                     domain_id.clone(),
-                    "10".parse().unwrap(),
+                    "10".parse::<Quantity>().unwrap(),
                     NumericSpec::integer(),
                     "https://example.test/rwa/lot-1".to_owned(),
                     Some("vaulted".parse().unwrap()),
@@ -1185,7 +1182,7 @@ pub mod isi {
             RegisterRwa {
                 rwa: NewRwa::new(
                     domain_id.clone(),
-                    "3".parse().unwrap(),
+                    "3".parse::<Quantity>().unwrap(),
                     NumericSpec::integer(),
                     "https://example.test/rwa/lot-2".to_owned(),
                     None,
@@ -1250,7 +1247,7 @@ pub mod isi {
                 RegisterRwa {
                     rwa: NewRwa::new(
                         domain_id.clone(),
-                        lot.parse().unwrap(),
+                        lot.parse::<Quantity>().unwrap(),
                         NumericSpec::integer(),
                         format!("https://example.test/rwa/{lot}"),
                         None,
@@ -1266,8 +1263,8 @@ pub mod isi {
             let parent_ids: Vec<_> = stx.world.rwas.iter().map(|(id, _)| id.clone()).collect();
             MergeRwas {
                 parents: vec![
-                    RwaParentRef::new(parent_ids[0].clone(), "2".parse().unwrap()),
-                    RwaParentRef::new(parent_ids[1].clone(), "3".parse().unwrap()),
+                    RwaParentRef::new(parent_ids[0].clone(), "2".parse::<Quantity>().unwrap()),
+                    RwaParentRef::new(parent_ids[1].clone(), "3".parse::<Quantity>().unwrap()),
                 ],
                 primary_reference: "https://example.test/rwa/merged".to_owned(),
                 status: Some("refined".parse().unwrap()),
@@ -1350,7 +1347,7 @@ pub mod isi {
 
             let new_rwa = NewRwa::new(
                 domain_id,
-                "5".parse().unwrap(),
+                "5".parse::<Quantity>().unwrap(),
                 NumericSpec::integer(),
                 "https://example.test/rwa/repeated".to_owned(),
                 None,
@@ -1388,7 +1385,7 @@ pub mod isi {
             RegisterRwa {
                 rwa: NewRwa::new(
                     domain_id,
-                    "10".parse().unwrap(),
+                    "10".parse::<Quantity>().unwrap(),
                     NumericSpec::integer(),
                     "https://example.test/rwa/transfer-seq".to_owned(),
                     None,
@@ -1449,7 +1446,7 @@ pub mod isi {
             RegisterRwa {
                 rwa: NewRwa::new(
                     domain_id,
-                    "8".parse().unwrap(),
+                    "8".parse::<Quantity>().unwrap(),
                     NumericSpec::integer(),
                     "https://example.test/rwa/controlled".to_owned(),
                     None,
@@ -2045,7 +2042,7 @@ pub mod query {
             RegisterRwa {
                 rwa: NewRwa::new(
                     domain_id,
-                    "2".parse().unwrap(),
+                    "2".parse::<Quantity>().unwrap(),
                     NumericSpec::integer(),
                     "https://example.test/rwa/filter".to_owned(),
                     None,
@@ -2104,7 +2101,7 @@ pub mod query {
             RegisterRwa {
                 rwa: NewRwa::new(
                     domain_id.clone(),
-                    "2".parse().unwrap(),
+                    "2".parse::<Quantity>().unwrap(),
                     NumericSpec::integer(),
                     "https://example.test/rwa/owner-filter-a".to_owned(),
                     None,
@@ -2129,7 +2126,7 @@ pub mod query {
             RegisterRwa {
                 rwa: NewRwa::new(
                     domain_id,
-                    "3".parse().unwrap(),
+                    "3".parse::<Quantity>().unwrap(),
                     NumericSpec::integer(),
                     "https://example.test/rwa/owner-filter-b".to_owned(),
                     None,
@@ -2211,7 +2208,7 @@ pub mod query {
                 RegisterRwa {
                     rwa: NewRwa::new(
                         domain_id.clone(),
-                        "2".parse().unwrap(),
+                        "2".parse::<Quantity>().unwrap(),
                         NumericSpec::integer(),
                         reference.to_owned(),
                         Some(status),

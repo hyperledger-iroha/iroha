@@ -5,7 +5,7 @@
 
 use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
 use iroha_data_model_derive::model;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
@@ -21,7 +21,7 @@ use crate::{
     block::consensus_v2::{
         ConsensusMode, DataAvailabilityLayout, DualQuorum, GlobalPhase, HeightContext,
         HeightContextId, MAX_VALIDATORS_PER_HEIGHT, PROTOCOL_VERSION, QuorumCertificate,
-        ValidatorPower, finality::FinalizedNextEpochSnapshot,
+        SnapshotBootstrapAnchor, ValidatorPower, finality::FinalizedNextEpochSnapshot,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyId},
 };
@@ -379,7 +379,7 @@ mod model {
     /// Exact amount contract for fractional recursive Kagemusha cash.
     ///
     /// `atomic_units` is the positive proof amount. `scale` is copied from the
-    /// authoritative asset definition and determines the public `Numeric`
+    /// authoritative asset definition and determines the public quantity
     /// spelling used when charging or crediting the online balance.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -833,8 +833,10 @@ mod model {
         pub next_epoch_snapshot: Option<FinalizedNextEpochSnapshot>,
         /// Consensus mode governing the frozen roster.
         pub mode: ConsensusMode,
-        /// Parent Commit certificate, absent only at genesis.
+        /// Parent Commit certificate, absent at genesis or an audited snapshot boundary.
         pub parent_commit_qc: Option<QuorumCertificate>,
+        /// Audited snapshot anchor when no parent CommitQC exists.
+        pub snapshot_bootstrap: Option<SnapshotBootstrapAnchor>,
         /// Frozen Nexus/AMX context commitment.
         pub nexus_amx_context_hash: Hash,
         /// Frozen data-availability layout.
@@ -2966,15 +2968,15 @@ impl KagemushaScaledAmountV2 {
         Ok(amount)
     }
 
-    /// Convert an Iroha public amount to the asset's atomic units without rounding.
+    /// Convert an Iroha public quantity to the asset's atomic units without rounding.
     ///
     /// # Errors
     ///
     /// Returns [`KagemushaValidationError`] when the amount is non-positive, wider
     /// than `u128`, has more precision than the asset, or overflows while being
     /// normalized to the asset scale.
-    pub fn from_public_numeric(
-        amount: &Numeric,
+    pub fn from_public_quantity(
+        amount: &Quantity,
         asset_scale: u32,
     ) -> Result<Self, KagemushaValidationError> {
         if asset_scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2 || amount.scale() > asset_scale {
@@ -2982,7 +2984,11 @@ impl KagemushaScaledAmountV2 {
                 field: "amount.scale",
             });
         }
-        let Some(mantissa) = amount.try_mantissa_u128().filter(|value| *value > 0) else {
+        let Some(mantissa) = amount
+            .as_numeric()
+            .try_mantissa_u128()
+            .filter(|value| *value > 0)
+        else {
             return Err(KagemushaValidationError::InvalidRecursiveSpendNote {
                 field: "amount.atomic_units",
             });
@@ -3001,10 +3007,11 @@ impl KagemushaScaledAmountV2 {
         Self::new(atomic_units, asset_scale)
     }
 
-    /// Return the public `Numeric` at the authoritative asset scale.
+    /// Return the public quantity at the authoritative asset scale.
     #[must_use]
-    pub fn public_numeric(self) -> Numeric {
-        Numeric::new(self.atomic_units, self.scale)
+    pub fn public_quantity(self) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(self.atomic_units, self.scale))
+            .expect("a u128 scaled amount is always a non-negative quantity")
     }
 
     /// Validate the exact amount contract.
@@ -3767,6 +3774,7 @@ impl KagemushaTopUpFinalityHeightContextV2 {
             next_epoch_snapshot: self.next_epoch_snapshot.clone(),
             mode: self.mode,
             parent_commit_qc: self.parent_commit_qc.clone(),
+            snapshot_bootstrap: self.snapshot_bootstrap,
             roster: window.validator_set.clone(),
             quorum: DualQuorum::from_roster(&window.validator_set).map_err(|_| {
                 KagemushaValidationError::InvalidRecursiveSpendProof {

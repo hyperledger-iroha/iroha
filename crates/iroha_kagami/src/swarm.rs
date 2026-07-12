@@ -143,12 +143,7 @@ impl<T: Write> RunArgs<T> for Args {
                 "genesis manifest missing consensus_mode; regenerate with `kagami genesis generate --consensus-mode <mode>`"
             )
         })?;
-        validate_consensus_mode_for_line(
-            build_line,
-            manifest_mode,
-            None,
-            ConsensusPolicy::Any,
-        )?;
+        validate_consensus_mode_for_line(build_line, manifest_mode, None, ConsensusPolicy::Any)?;
         if matches!(manifest_mode, SumeragiConsensusMode::Npos) {
             ensure_npos_parameters(&manifest)?;
         }

@@ -39,7 +39,9 @@ use iroha_data_model::{
         Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetDefinitionId,
         AssetEntry, AssetValue, Mintable, id::AssetId,
     },
-    block::consensus_v2::ConsensusMode,
+    block::consensus_v2::{
+        ConsensusMode, SnapshotV2BootstrapRecord, finality::verify_validator_power_roster_pops,
+    },
     block::{
         BlockHeader, SignedBlock,
         consensus::{
@@ -103,8 +105,8 @@ use iroha_data_model::{
         FeeSponsorRule, FeeSponsorRuleEffect, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneId,
         LaneLifecycleParameterV1, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope,
         LaneRelayError, LaneRelayQuorumContext, PublicLaneRewardRecord, PublicLaneStakeShare,
-        PublicLaneUnbonding, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
-        UniversalAccountId, VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedLaneRelayRecord,
+        PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
+        VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedLaneRelayRecord,
         lane_relay_fastpq_claim_digest,
     },
     nft::{NftEntry, NftValue},
@@ -177,7 +179,7 @@ use mv::{
 use nonzero_ext::nonzero;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
-    codec::{Decode, Encode},
+    codec::{Decode, DecodeAll, Encode},
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
@@ -282,9 +284,6 @@ use ivm::IVM;
 pub(crate) use tiered::TieredStateBackend;
 use tiered::{TieredKeyHandle, TieredSnapshotDiff, TieredSnapshotPayload};
 
-const HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP";
-const HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV: &str = "IROHA_HARD_FORK_PUBLIC_LANE_STATE_MANIFEST";
-
 #[cfg(any(test, feature = "bench"))]
 fn checked_keypair() -> KeyPair {
     KeyPair::try_random().expect("state fixture key generation should succeed")
@@ -316,10 +315,6 @@ mod checked_keypair_tests {
     }
 }
 
-fn hard_fork_snapshot_bootstrap_enabled() -> bool {
-    std::env::var_os(HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV).is_some()
-}
-
 #[cfg(feature = "telemetry")]
 use crate::telemetry::ConfidentialTreeStats;
 #[allow(unused_imports)]
@@ -330,7 +325,7 @@ use crate::{
     Peers,
     block::{CommittedBlock, ValidBlock},
     compliance::LaneComplianceEngine,
-    executor::{Executor, initial_executor_data_model_fallback},
+    executor::Executor,
     governance::manifest::{
         LaneManifestRegistry, LaneManifestRegistryHandle, ManifestValidatorBinding,
     },
@@ -605,6 +600,8 @@ macro_rules! build_world_block {
             consensus_evidence: $state.consensus_evidence.$method(),
             contract_manifests: $state.contract_manifests.$method(),
             contract_code: $state.contract_code.$method(),
+            contract_code_uploads: $state.contract_code_uploads.$method(),
+            contract_code_upload_chunks: $state.contract_code_upload_chunks.$method(),
             contract_instances: $state.contract_instances.$method(),
             contract_subject_bindings: $state.contract_subject_bindings.$method(),
             contract_subject_addresses: $state.contract_subject_addresses.$method(),
@@ -830,6 +827,8 @@ macro_rules! build_world_transaction {
             consensus_evidence: $state.consensus_evidence.transaction(),
             contract_manifests: $state.contract_manifests.transaction(),
             contract_code: $state.contract_code.transaction(),
+            contract_code_uploads: $state.contract_code_uploads.transaction(),
+            contract_code_upload_chunks: $state.contract_code_upload_chunks.transaction(),
             contract_instances: $state.contract_instances.transaction(),
             contract_subject_bindings: $state.contract_subject_bindings.transaction(),
             contract_subject_addresses: $state.contract_subject_addresses.transaction(),
@@ -2220,9 +2219,9 @@ pub enum MergeLedgerCommitError {
         /// Payer account.
         payer: AccountId,
         /// Required aggregate burn amount.
-        required: Numeric,
+        required: Quantity,
         /// Available balance.
-        available: Numeric,
+        available: Quantity,
     },
     /// Merge settlement failed while mutating public XOR balances.
     #[error("nexus fee settlement mutation failed: {0}")]
@@ -3159,6 +3158,183 @@ impl DirectLaneBlockApplicationMarker {
     }
 }
 
+/// Consensus key identifying one authority-owned pending contract-code upload.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+pub struct SmartContractCodeUploadKey {
+    /// Account that owns and may finalize or cancel the upload.
+    pub authority: AccountId,
+    /// Declared hash of the complete contract artifact.
+    pub code_hash: Hash,
+}
+
+impl SmartContractCodeUploadKey {
+    /// Construct an upload key from its owner and artifact hash.
+    #[must_use]
+    pub fn new(authority: AccountId, code_hash: Hash) -> Self {
+        Self {
+            authority,
+            code_hash,
+        }
+    }
+
+    pub(crate) fn authority_range(authority: &AccountId) -> std::ops::RangeInclusive<Self> {
+        Self::new(authority.clone(), Hash::prehashed([0; Hash::LENGTH]))
+            ..=Self::new(authority.clone(), Hash::prehashed([u8::MAX; Hash::LENGTH]))
+    }
+}
+
+impl mv::json::JsonKeyCodec for SmartContractCodeUploadKey {
+    fn encode_json_key(&self, out: &mut String) {
+        let key = format!(
+            "{}|{}",
+            self.authority,
+            hex::encode(self.code_hash.as_ref())
+        );
+        json::write_json_string(&key, out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        let mut parts = encoded.split('|');
+        let authority = parts
+            .next()
+            .ok_or_else(|| json::Error::Message("expected contract upload key authority".into()))?;
+        let code_hash = parts
+            .next()
+            .ok_or_else(|| json::Error::Message("expected contract upload key code hash".into()))?;
+        if parts.next().is_some() {
+            return Err(json::Error::Message(
+                "contract upload key has trailing components".into(),
+            ));
+        }
+        let authority = AccountId::parse_encoded(authority)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .map_err(|error| {
+                json::Error::Message(format!("invalid contract upload key authority: {error}"))
+            })?;
+        let code_hash = decode_contract_upload_key_hash(code_hash)?;
+        Ok(Self {
+            authority,
+            code_hash,
+        })
+    }
+}
+
+fn decode_contract_upload_key_hash(encoded: &str) -> Result<Hash, json::Error> {
+    let bytes = hex::decode(encoded).map_err(|error| {
+        json::Error::Message(format!("invalid contract upload key hash: {error}"))
+    })?;
+    let bytes: [u8; Hash::LENGTH] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        json::Error::Message(format!(
+            "invalid contract upload key hash length: expected {}, got {}",
+            Hash::LENGTH,
+            bytes.len()
+        ))
+    })?;
+    Ok(Hash::prehashed(bytes))
+}
+
+/// Consensus key identifying one chunk within an authority-owned pending upload.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+pub struct SmartContractCodeUploadChunkKey {
+    /// Pending upload that owns the chunk.
+    pub upload: SmartContractCodeUploadKey,
+    /// Zero-based chunk position.
+    pub chunk_index: u32,
+}
+
+impl SmartContractCodeUploadChunkKey {
+    /// Construct a pending-upload chunk key.
+    #[must_use]
+    pub fn new(upload: SmartContractCodeUploadKey, chunk_index: u32) -> Self {
+        Self {
+            upload,
+            chunk_index,
+        }
+    }
+
+    pub(crate) fn upload_range(
+        upload: &SmartContractCodeUploadKey,
+    ) -> std::ops::RangeInclusive<Self> {
+        Self::new(upload.clone(), 0)..=Self::new(upload.clone(), u32::MAX)
+    }
+}
+
+impl mv::json::JsonKeyCodec for SmartContractCodeUploadChunkKey {
+    fn encode_json_key(&self, out: &mut String) {
+        let key = format!(
+            "{}|{}|{}",
+            self.upload.authority,
+            hex::encode(self.upload.code_hash.as_ref()),
+            self.chunk_index
+        );
+        json::write_json_string(&key, out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        let mut parts = encoded.split('|');
+        let authority = parts.next().ok_or_else(|| {
+            json::Error::Message("expected contract upload chunk key authority".into())
+        })?;
+        let code_hash = parts.next().ok_or_else(|| {
+            json::Error::Message("expected contract upload chunk key code hash".into())
+        })?;
+        let chunk_index = parts.next().ok_or_else(|| {
+            json::Error::Message("expected contract upload chunk key index".into())
+        })?;
+        if parts.next().is_some() {
+            return Err(json::Error::Message(
+                "contract upload chunk key has trailing components".into(),
+            ));
+        }
+        let authority = AccountId::parse_encoded(authority)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .map_err(|error| {
+                json::Error::Message(format!(
+                    "invalid contract upload chunk key authority: {error}"
+                ))
+            })?;
+        let code_hash = decode_contract_upload_key_hash(code_hash)?;
+        let chunk_index = chunk_index.parse::<u32>().map_err(|error| {
+            json::Error::Message(format!("invalid contract upload chunk key index: {error}"))
+        })?;
+        Ok(Self {
+            upload: SmartContractCodeUploadKey {
+                authority,
+                code_hash,
+            },
+            chunk_index,
+        })
+    }
+}
+
+/// Immutable shape descriptor for a pending contract-code upload.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+)]
+pub struct SmartContractCodeUploadDescriptor {
+    /// Declared byte length of the complete artifact.
+    pub total_size: u64,
+    /// Exact number of 64 KiB chunks required for the artifact.
+    pub chunk_count: u32,
+}
+
+/// Read-only progress for one authority-owned pending contract-code upload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SmartContractCodeUploadProgress {
+    /// Immutable shape descriptor supplied by the first accepted chunk.
+    pub descriptor: SmartContractCodeUploadDescriptor,
+    /// Number of distinct chunks currently stored.
+    pub received_chunks: u32,
+}
+
 /// The global entity consisting of `domains`, `triggers` and etc.
 /// For example registration of domain, will have this as an ISI target.
 #[derive(Default, JsonSerialize)]
@@ -3433,6 +3609,11 @@ pub struct World {
         Storage<iroha_crypto::Hash, iroha_data_model::smart_contract::manifest::ContractManifest>,
     /// On-chain storage of compiled contract code bytes keyed by code hash.
     pub(crate) contract_code: Storage<iroha_crypto::Hash, Vec<u8>>,
+    /// Pending contract upload descriptors keyed by owner and complete artifact hash.
+    pub(crate) contract_code_uploads:
+        Storage<SmartContractCodeUploadKey, SmartContractCodeUploadDescriptor>,
+    /// Pending contract upload chunks stored separately from their descriptors.
+    pub(crate) contract_code_upload_chunks: Storage<SmartContractCodeUploadChunkKey, Vec<u8>>,
     /// Active contract instances bound to canonical contract addresses.
     pub(crate) contract_instances:
         Storage<iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>,
@@ -3661,8 +3842,10 @@ pub struct World {
 }
 
 /// Struct for block's aggregated changes
+#[derive(JsonSerialize)]
 pub struct WorldBlock<'world> {
     /// Dataspace alias catalog used to qualify domain-backed aliases.
+    #[norito(skip)]
     pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
     /// Iroha on-chain parameters.
     pub parameters: CellBlock<'world, Parameters>,
@@ -3680,28 +3863,36 @@ pub struct WorldBlock<'world> {
     pub(crate) domain_endorsements:
         StorageBlock<'world, HashOf<DomainEndorsement>, DomainEndorsementRecord>,
     /// Index of endorsement ids by domain.
+    #[norito(skip)]
     pub(crate) domain_endorsements_by_domain:
         StorageBlock<'world, DomainId, Vec<HashOf<DomainEndorsement>>>,
     /// Registered domains.
     pub(crate) domains: StorageBlock<'world, DomainId, Domain>,
     /// Read-side index from domain owner account to owned domain ids.
+    #[norito(skip)]
     pub(crate) domains_by_owner: StorageBlock<'world, AccountId, BTreeSet<DomainId>>,
     /// Index from account address selector to domain (for address resolution).
+    #[norito(skip)]
     pub(crate) domain_selectors: StorageBlock<'world, AccountDomainSelector, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: StorageBlock<'world, AccountId, AccountValue>,
     /// Index from UAID to bound account (1:1).
+    #[norito(skip)]
     pub(crate) uaid_accounts: StorageBlock<'world, UniversalAccountId, AccountId>,
     /// Index from account alias to canonical I105 account id.
     pub(crate) account_aliases: StorageBlock<'world, AccountAlias, AccountId>,
     /// Reverse index from canonical I105 account id to bound aliases.
+    #[norito(skip)]
     pub(crate) account_aliases_by_account: StorageBlock<'world, AccountId, BTreeSet<AccountAlias>>,
     /// Read-side account scope directory keyed by canonical I105 account id.
+    #[norito(skip)]
     pub(crate) account_scope_directory: StorageBlock<'world, AccountId, AccountScopeDirectoryEntry>,
     /// Reverse read-side account scope index keyed by `(dataspace, alias-domain)`.
+    #[norito(skip)]
     pub(crate) account_scope_accounts:
         StorageBlock<'world, (DataSpaceId, AccountAliasDomain), BTreeSet<AccountId>>,
     /// Index from opaque identifiers to UAIDs.
+    #[norito(skip)]
     pub(crate) opaque_uaids: StorageBlock<'world, OpaqueAccountId, UniversalAccountId>,
     /// Global RAM-LFE program policy registry.
     pub(crate) ram_lfe_program_policies: StorageBlock<'world, RamLfeProgramId, RamLfeProgramPolicy>,
@@ -3721,28 +3912,35 @@ pub struct WorldBlock<'world> {
     /// Registered asset definitions.
     pub(crate) asset_definitions: StorageBlock<'world, AssetDefinitionId, AssetDefinition>,
     /// Index mapping asset alias literals to canonical asset definition ids.
+    #[norito(skip)]
     pub(crate) asset_definition_aliases:
         StorageBlock<'world, AssetDefinitionAlias, AssetDefinitionId>,
     /// Alias lease metadata keyed by canonical asset definition id.
     pub(crate) asset_definition_alias_bindings:
         StorageBlock<'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
     /// Index mapping contract alias literals to canonical contract addresses.
+    #[norito(skip)]
     pub(crate) contract_aliases: StorageBlock<'world, ContractAlias, ContractAddress>,
     /// Alias lease metadata keyed by canonical contract address.
     pub(crate) contract_alias_bindings:
         StorageBlock<'world, ContractAddress, ContractAliasBindingRecord>,
     /// Asset-definition index keyed by definition domain.
+    #[norito(skip)]
     pub(crate) domain_asset_definitions:
         StorageBlock<'world, DomainId, BTreeSet<AssetDefinitionId>>,
     /// Asset-definition index keyed by owner account.
+    #[norito(skip)]
     pub(crate) asset_definitions_by_owner:
         StorageBlock<'world, AccountId, BTreeSet<AssetDefinitionId>>,
     /// Holder index keyed by asset definition id.
+    #[norito(skip)]
     pub(crate) asset_definition_holders:
         StorageBlock<'world, AssetDefinitionId, BTreeSet<AccountId>>,
     /// Asset-id index keyed by asset definition id.
+    #[norito(skip)]
     pub(crate) asset_definition_assets: StorageBlock<'world, AssetDefinitionId, BTreeSet<AssetId>>,
     /// Non-zero holder index keyed by asset definition id.
+    #[norito(skip)]
     pub(crate) asset_definition_nonzero_holders:
         StorageBlock<'world, AssetDefinitionId, BTreeSet<AccountId>>,
     /// Registered assets.
@@ -3752,14 +3950,18 @@ pub struct WorldBlock<'world> {
     /// Registered NFTs.
     pub(crate) nfts: StorageBlock<'world, NftId, NftValue>,
     /// Read-side index from NFT owner account to owned NFT ids.
+    #[norito(skip)]
     pub(crate) nfts_by_owner: StorageBlock<'world, AccountId, BTreeSet<NftId>>,
     /// Registered RWA lots.
     pub(crate) rwas: StorageBlock<'world, RwaId, RwaValue>,
     /// Read-side index from RWA owner account to owned RWA lot ids.
+    #[norito(skip)]
     pub(crate) rwas_by_owner: StorageBlock<'world, AccountId, BTreeSet<RwaId>>,
     /// Read-side index from RWA status to RWA lot ids.
+    #[norito(skip)]
     pub(crate) rwas_by_status: StorageBlock<'world, Option<Name>, BTreeSet<RwaId>>,
     /// Read-side index from RWA frozen state to RWA lot ids.
+    #[norito(skip)]
     pub(crate) rwas_by_frozen: StorageBlock<'world, bool, BTreeSet<RwaId>>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageBlock<'world, RoleId, Role>,
@@ -3815,32 +4017,42 @@ pub struct WorldBlock<'world> {
     /// Native asset escrows keyed by escrow identifier.
     pub(crate) asset_escrows: StorageBlock<'world, EscrowId, AssetEscrowRecord>,
     /// Native asset escrows grouped by seller account.
+    #[norito(skip)]
     pub(crate) asset_escrows_by_seller: StorageBlock<'world, AccountId, BTreeSet<EscrowId>>,
     /// Native asset escrows grouped by buyer account.
+    #[norito(skip)]
     pub(crate) asset_escrows_by_buyer: StorageBlock<'world, AccountId, BTreeSet<EscrowId>>,
     /// Native asset escrows grouped by lifecycle status.
+    #[norito(skip)]
     pub(crate) asset_escrows_by_status: StorageBlock<'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
     /// Native anonymous asset escrows keyed by escrow identifier.
     pub(crate) anonymous_asset_escrows: StorageBlock<'world, EscrowId, AnonymousAssetEscrowRecord>,
     /// Native anonymous asset escrows grouped by seller account.
+    #[norito(skip)]
     pub(crate) anonymous_asset_escrows_by_seller:
         StorageBlock<'world, AccountId, BTreeSet<EscrowId>>,
     /// Native anonymous asset escrows grouped by buyer account.
+    #[norito(skip)]
     pub(crate) anonymous_asset_escrows_by_buyer:
         StorageBlock<'world, AccountId, BTreeSet<EscrowId>>,
     /// Native anonymous asset escrows grouped by lifecycle status.
+    #[norito(skip)]
     pub(crate) anonymous_asset_escrows_by_status:
         StorageBlock<'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
     /// Native SoraNet VPN lease escrows keyed by lease identifier.
     pub(crate) vpn_leases: StorageBlock<'world, [u8; 32], VpnLeaseRecordV1>,
     /// UAID dataspace bindings for this block scope.
+    #[norito(skip)]
     pub(crate) uaid_dataspaces: StorageBlock<'world, UniversalAccountId, UaidDataspaceBindings>,
     /// UAID manifest records maintained by the Space Directory.
+    #[norito(skip)]
     pub(crate) space_directory_manifests:
         StorageBlock<'world, UniversalAccountId, SpaceDirectoryManifestSet>,
     /// Per-dataspace AXT policy entries derived from Space Directory manifests.
+    #[norito(skip)]
     pub(crate) axt_policies: StorageBlock<'world, DataSpaceId, AxtPolicyEntry>,
     /// Bounded replay ledger for AXT handles.
+    #[norito(skip)]
     pub(crate) axt_replay_ledger: StorageBlock<'world, AxtHandleReplayKey, AxtReplayRecord>,
     /// First-class typed SCCP governance registry for this block scope.
     pub(crate) sccp_registry: CellBlock<'world, iroha_data_model::bridge::SccpRegistryV1>,
@@ -3905,6 +4117,7 @@ pub struct WorldBlock<'world> {
         iroha_data_model::proof::ProofRecord,
     >,
     /// Inverted index from proof status to proof ids.
+    #[norito(skip)]
     pub(crate) proofs_by_status: StorageBlock<
         'world,
         iroha_data_model::proof::ProofStatus,
@@ -3917,6 +4130,7 @@ pub struct WorldBlock<'world> {
     /// Commit QCs keyed by subject block hash.
     pub(crate) commit_qcs: StorageBlock<'world, HashOf<BlockHeader>, Qc>,
     /// Persisted consensus evidence records keyed by deterministic digest.
+    #[norito(skip)]
     pub(crate) consensus_evidence: StorageBlock<'world, Vec<u8>, EvidenceRecord>,
     /// Contract manifests
     pub(crate) contract_manifests: StorageBlock<
@@ -3926,6 +4140,12 @@ pub struct WorldBlock<'world> {
     >,
     /// Contract code bytes keyed by hash
     pub(crate) contract_code: StorageBlock<'world, iroha_crypto::Hash, Vec<u8>>,
+    /// Pending contract upload descriptors.
+    pub(crate) contract_code_uploads:
+        StorageBlock<'world, SmartContractCodeUploadKey, SmartContractCodeUploadDescriptor>,
+    /// Pending contract upload chunks.
+    pub(crate) contract_code_upload_chunks:
+        StorageBlock<'world, SmartContractCodeUploadChunkKey, Vec<u8>>,
     /// Active contract instances.
     pub(crate) contract_instances:
         StorageBlock<'world, iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>,
@@ -3936,6 +4156,7 @@ pub struct WorldBlock<'world> {
         crate::smartcontracts::code::ContractSubjectBinding,
     >,
     /// Reverse index from historical contract subject to address.
+    #[norito(skip)]
     pub(crate) contract_subject_addresses:
         StorageBlock<'world, AccountId, iroha_data_model::smart_contract::ContractAddress>,
     /// Durable smart-contract state keyed by logical path.
@@ -4025,69 +4246,95 @@ pub struct WorldBlock<'world> {
     pub(crate) soracloud_private_uploaded_model_execution_receipts:
         StorageBlock<'world, Hash, SoraPrivateUploadedModelExecutionReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
+    #[norito(skip)]
     pub(crate) capacity_declarations: StorageBlock<'world, ProviderId, CapacityDeclarationRecord>,
     /// Capacity fee ledger entries per provider.
+    #[norito(skip)]
     pub(crate) capacity_fee_ledger: StorageBlock<'world, ProviderId, CapacityFeeLedgerEntry>,
     /// Capacity disputes keyed by dispute identifier.
+    #[norito(skip)]
     pub(crate) capacity_disputes: StorageBlock<'world, CapacityDisputeId, CapacityDisputeRecord>,
     /// Governance-controlled `SoraFS` pricing schedule.
+    #[norito(skip)]
     pub sorafs_pricing: CellBlock<'world, PricingScheduleRecord>,
     /// Provider credit ledger entries per provider.
+    #[norito(skip)]
     pub(crate) provider_credit_ledger: StorageBlock<'world, ProviderId, ProviderCreditRecord>,
     /// Owner bindings for `SoraFS` providers.
+    #[norito(skip)]
     pub(crate) provider_owners: StorageBlock<'world, ProviderId, AccountId>,
     /// DA pin intents keyed by storage ticket (on-chain registry).
+    #[norito(skip)]
     pub(crate) da_pin_intents_by_ticket:
         StorageBlock<'world, StorageTicketId, DaPinIntentWithLocation>,
     /// Alias index for DA pin intents (`alias` -> `ticket`).
+    #[norito(skip)]
     pub(crate) da_pin_intents_by_alias: StorageBlock<'world, String, StorageTicketId>,
     /// Manifest index for DA pin intents (`manifest digest` -> `ticket`).
+    #[norito(skip)]
     pub(crate) da_pin_intents_by_manifest: StorageBlock<'world, ManifestDigest, StorageTicketId>,
     /// Lane/epoch/sequence index for DA pin intents.
+    #[norito(skip)]
     pub(crate) da_pin_intents_by_lane_epoch:
         StorageBlock<'world, (LaneId, u64, u64), StorageTicketId>,
     /// `SoraFS` pin manifest registry keyed by manifest digest.
+    #[norito(skip)]
     pub(crate) pin_manifests: StorageBlock<'world, ManifestDigest, PinManifestRecord>,
     /// Active alias bindings keyed by alias identifier.
+    #[norito(skip)]
     pub(crate) manifest_aliases: StorageBlock<'world, ManifestAliasId, ManifestAliasRecord>,
     /// Outstanding replication orders keyed by order identifier.
+    #[norito(skip)]
     pub(crate) replication_orders: StorageBlock<'world, ReplicationOrderId, ReplicationOrderRecord>,
     /// Content bundles keyed by bundle identifier.
     pub(crate) content_bundles: StorageBlock<'world, ContentBundleId, ContentBundleRecord>,
     /// Chunk storage backing content bundles (deduplicated).
     pub(crate) content_chunks: StorageBlock<'world, [u8; 32], ContentChunk>,
     /// Resolver directory records keyed by directory identifier.
+    #[norito(skip)]
     pub(crate) soradns_directory_records:
         StorageBlock<'world, DirectoryId, ResolverDirectoryRecordV1>,
     /// Pending resolver directory drafts awaiting publication.
+    #[norito(skip)]
     pub(crate) soradns_directory_pending:
         StorageBlock<'world, DirectoryId, PendingDirectoryDraftV1>,
     /// Latest published resolver directory identifier.
+    #[norito(skip)]
     pub(crate) soradns_directory_latest: CellBlock<'world, Option<DirectoryId>>,
     /// Historical directory identifiers keyed by rotation index.
+    #[norito(skip)]
     pub(crate) soradns_directory_history: StorageBlock<'world, u64, DirectoryId>,
     /// Reverse pointer from directory identifier to its predecessor.
+    #[norito(skip)]
     pub(crate) soradns_directory_prev_of: StorageBlock<'world, DirectoryId, DirectoryId>,
     /// Resolver revocation records applied as hotfixes.
+    #[norito(skip)]
     pub(crate) soradns_directory_revocations:
         StorageBlock<'world, ResolverId, ResolverRevocationRecordV1>,
     /// Release-signing keys authorized to submit drafts.
+    #[norito(skip)]
     pub(crate) soradns_release_signers: StorageBlock<'world, PublicKey, ()>,
     /// Directory rotation policy enforced by governance.
+    #[norito(skip)]
     pub(crate) soradns_rotation_policy: CellBlock<'world, DirectoryRotationPolicyV1>,
     /// Timestamp (ms) when the last directory publish was recorded.
+    #[norito(skip)]
     pub(crate) soradns_last_publish_ms: CellBlock<'world, Option<u64>>,
     /// Next rotation history index.
+    #[norito(skip)]
     pub(crate) soradns_history_len: CellBlock<'world, u64>,
     /// Active repo agreements keyed by agreement id.
     pub(crate) repo_agreements: StorageBlock<'world, RepoAgreementId, RepoAgreement>,
     /// Repo agreement ids keyed by initiating account.
+    #[norito(skip)]
     pub(crate) repo_agreements_by_initiator:
         StorageBlock<'world, AccountId, BTreeSet<RepoAgreementId>>,
     /// Repo agreement ids keyed by counterparty account.
+    #[norito(skip)]
     pub(crate) repo_agreements_by_counterparty:
         StorageBlock<'world, AccountId, BTreeSet<RepoAgreementId>>,
     /// Repo agreement ids keyed by custodian account.
+    #[norito(skip)]
     pub(crate) repo_agreements_by_custodian:
         StorageBlock<'world, AccountId, BTreeSet<RepoAgreementId>>,
     /// Settlement audit trails keyed by settlement identifier.
@@ -4098,14 +4345,18 @@ pub struct WorldBlock<'world> {
     pub(crate) direct_lane_block_application_markers:
         StorageBlock<'world, DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker>,
     /// Public lane validator registry.
+    #[norito(skip)]
     pub(crate) public_lane_validators:
         StorageBlock<'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
     /// Public lane stake share registry.
+    #[norito(skip)]
     pub(crate) public_lane_stake_shares:
         StorageBlock<'world, (LaneId, AccountId, AccountId), PublicLaneStakeShare>,
     /// Public lane reward journal.
+    #[norito(skip)]
     pub(crate) public_lane_rewards: StorageBlock<'world, (LaneId, u64), PublicLaneRewardRecord>,
     /// Last claimed reward epoch per `(lane_id, account, asset_id)` tuple.
+    #[norito(skip)]
     pub(crate) public_lane_reward_claims: StorageBlock<'world, (LaneId, AccountId, AssetId), u64>,
     /// Emergency validator overrides for lane relay quorum recovery (per lane).
     pub(crate) lane_relay_emergency_validators:
@@ -4143,6 +4394,7 @@ pub struct WorldBlock<'world> {
     /// Latest reduced global state root observed via the merge ledger during this block.
     pub(crate) merge_global_state_root: CellBlock<'world, Option<Hash>>,
     /// Block-local buffer of events pending publication to external subscribers.
+    #[norito(skip)]
     external_event_buf: Vec<EventBox>,
 }
 
@@ -4234,6 +4486,8 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.commit_qcs, CommitQc);
         collect_reverts!(self.contract_manifests, ContractManifest);
         collect_reverts!(self.contract_code, ContractCode);
+        collect_reverts!(self.contract_code_uploads, ContractCodeUpload);
+        collect_reverts!(self.contract_code_upload_chunks, ContractCodeUploadChunk);
         collect_reverts!(self.contract_instances, ContractInstance);
         collect_reverts!(self.contract_subject_bindings, ContractSubjectBinding);
         collect_reverts!(self.smart_contract_state, SmartContractState);
@@ -4301,6 +4555,8 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.commit_qcs, CommitQc);
         collect_payload!(self.contract_manifests, ContractManifest);
         collect_payload!(self.contract_code, ContractCode);
+        collect_payload!(self.contract_code_uploads, ContractCodeUpload);
+        collect_payload!(self.contract_code_upload_chunks, ContractCodeUploadChunk);
         collect_payload!(self.contract_instances, ContractInstance);
         collect_payload!(self.contract_subject_bindings, ContractSubjectBinding);
         collect_payload!(self.smart_contract_state, SmartContractState);
@@ -4445,6 +4701,8 @@ impl<'world> WorldBlock<'world> {
             consensus_evidence,
             contract_manifests,
             contract_code,
+            contract_code_uploads,
+            contract_code_upload_chunks,
             contract_instances,
             smart_contract_state,
             soracloud_service_revisions,
@@ -4843,6 +5101,14 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_data_model::smart_contract::manifest::ContractManifest,
     >,
     pub(crate) contract_code: StorageTransaction<'block, 'world, iroha_crypto::Hash, Vec<u8>>,
+    pub(crate) contract_code_uploads: StorageTransaction<
+        'block,
+        'world,
+        SmartContractCodeUploadKey,
+        SmartContractCodeUploadDescriptor,
+    >,
+    pub(crate) contract_code_upload_chunks:
+        StorageTransaction<'block, 'world, SmartContractCodeUploadChunkKey, Vec<u8>>,
     pub(crate) contract_instances: StorageTransaction<
         'block,
         'world,
@@ -6337,6 +6603,10 @@ pub struct WorldView<'world> {
         iroha_data_model::smart_contract::manifest::ContractManifest,
     >,
     pub(crate) contract_code: StorageView<'world, iroha_crypto::Hash, Vec<u8>>,
+    pub(crate) contract_code_uploads:
+        StorageView<'world, SmartContractCodeUploadKey, SmartContractCodeUploadDescriptor>,
+    pub(crate) contract_code_upload_chunks:
+        StorageView<'world, SmartContractCodeUploadChunkKey, Vec<u8>>,
     pub(crate) contract_instances:
         StorageView<'world, iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>,
     pub(crate) contract_subject_bindings: StorageView<
@@ -9349,6 +9619,10 @@ pub struct State {
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier from configuration (used in VRF prehash binding).
     pub chain_id: iroha_data_model::ChainId,
+    /// Typed v2 trust root parsed from a snapshot but not yet authorized by snapshot policy.
+    snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord>,
+    /// Snapshot-policy-authorized and WSV-validated v2 trust root.
+    authenticated_snapshot_v2_bootstrap: Option<SnapshotV2BootstrapRecord>,
 
     /// State telemetry sink mirrored from data events.
     #[cfg(feature = "telemetry")]
@@ -9634,6 +9908,45 @@ impl<'state> StateBlock<'state> {
     #[inline]
     pub fn world(&self) -> &WorldBlock<'state> {
         &self.world
+    }
+
+    /// Return the staged lane-incarnation lineage used by canonical snapshot hashing.
+    pub(crate) fn lane_incarnation_lineage_for_snapshot(
+        &self,
+    ) -> &BTreeMap<LaneId, LaneIncarnationLineage> {
+        &self.lane_incarnation_lineage
+    }
+
+    /// Serialize transaction membership exactly as this block commit would publish it.
+    pub(crate) fn json_serialize_transactions_after_commit(&self, out: &mut String) {
+        let height = NonZeroUsize::new(
+            usize::try_from(self._curr_block.height().get()).unwrap_or(usize::MAX),
+        )
+        .expect("block height is non-zero");
+        self.transactions.json_serialize_after_commit(
+            &self.direct_committed_transactions,
+            height,
+            out,
+        );
+    }
+
+    /// Serialize the committed event-buffer cell, which block commit deliberately leaves intact.
+    pub(crate) fn json_serialize_committed_external_event_buffer(&self, out: &mut String) {
+        norito::json::JsonSerialize::json_serialize(&self.state_ref.world.external_event_buf, out);
+    }
+
+    fn prepare_replay_checkpoint_preview(&mut self) {
+        let Some(pending) = self.pending_autoscale_lifecycle.as_ref() else {
+            return;
+        };
+        State::prune_lane_lifecycle_world_block_state_for_lanes(
+            &mut self.world,
+            &pending.catalog_update.lanes_to_reset,
+        );
+        State::retain_verified_lane_relay_records_outside_lanes(
+            &mut self.verified_lane_relay_records,
+            &pending.catalog_update.lanes_to_reset,
+        );
     }
 
     #[inline]
@@ -11432,7 +11745,7 @@ where
             return Some(ids);
         }
     }
-    let mut candidates: Vec<(PeerId, Numeric, AccountId)> = world
+    let mut candidates: Vec<(PeerId, Quantity, AccountId)> = world
         .public_lane_validators()
         .iter()
         .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
@@ -11476,7 +11789,7 @@ where
     // rows before ranking so the peer occupies one roster slot and receives
     // its maximum eligible stake. Equal-stake rows use the smallest account
     // identity as a deterministic secondary ranking key.
-    let mut candidates_by_peer: BTreeMap<PeerId, (Numeric, AccountId)> = BTreeMap::new();
+    let mut candidates_by_peer: BTreeMap<PeerId, (Quantity, AccountId)> = BTreeMap::new();
     for (peer, stake, account) in candidates {
         let should_replace =
             candidates_by_peer
@@ -11501,7 +11814,7 @@ where
         return if peers.is_empty() { None } else { Some(peers) };
     }
 
-    let mut candidates: Vec<(PeerId, Numeric, AccountId)> = candidates_by_peer
+    let mut candidates: Vec<(PeerId, Quantity, AccountId)> = candidates_by_peer
         .into_iter()
         .map(|(peer, (stake, account))| (peer, stake, account))
         .collect();
@@ -11652,7 +11965,7 @@ mod stake_snapshot_tests {
             lane_id: key.0,
             validator: validator.clone(),
             staker: staker.clone(),
-            bonded: Numeric::new(100, 0),
+            bonded: iroha_primitives::numeric::Quantity::from(100_u32),
             pending_unbonds: BTreeMap::new(),
             metadata: Metadata::default(),
         };
@@ -11676,7 +11989,7 @@ mod stake_snapshot_tests {
             lane_id: reward_key.0,
             epoch: reward_key.1,
             asset: AssetId::new(reward_asset_definition, validator),
-            total_reward: Numeric::new(10, 0),
+            total_reward: iroha_primitives::numeric::Quantity::from(10_u32),
             shares: Vec::new(),
             metadata: Metadata::default(),
         };
@@ -12000,8 +12313,8 @@ mod stake_snapshot_tests {
                     validator: active_validator.clone(),
                     peer_id: active_peer.clone(),
                     stake_account: active_validator,
-                    total_stake: Numeric::new(10, 0),
-                    self_stake: Numeric::new(10, 0),
+                    total_stake: iroha_primitives::numeric::Quantity::from(10_u32),
+                    self_stake: iroha_primitives::numeric::Quantity::from(10_u32),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_epoch: None,
@@ -12016,8 +12329,8 @@ mod stake_snapshot_tests {
                     validator: jailed_validator.clone(),
                     peer_id: jailed_peer.clone(),
                     stake_account: jailed_validator,
-                    total_stake: Numeric::new(20, 0),
-                    self_stake: Numeric::new(20, 0),
+                    total_stake: iroha_primitives::numeric::Quantity::from(20_u32),
+                    self_stake: iroha_primitives::numeric::Quantity::from(20_u32),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Jailed("downtime".to_string()),
                     activation_epoch: None,
@@ -12032,8 +12345,8 @@ mod stake_snapshot_tests {
                     validator: exiting_validator.clone(),
                     peer_id: exiting_peer.clone(),
                     stake_account: exiting_validator,
-                    total_stake: Numeric::new(30, 0),
-                    self_stake: Numeric::new(30, 0),
+                    total_stake: iroha_primitives::numeric::Quantity::from(30_u32),
+                    self_stake: iroha_primitives::numeric::Quantity::from(30_u32),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Exiting(7),
                     activation_epoch: None,
@@ -12048,8 +12361,8 @@ mod stake_snapshot_tests {
                     validator: mismatched_validator.clone(),
                     peer_id: mismatched_peer.clone(),
                     stake_account: mismatched_validator,
-                    total_stake: Numeric::new(40, 0),
-                    self_stake: Numeric::new(40, 0),
+                    total_stake: iroha_primitives::numeric::Quantity::from(40_u32),
+                    self_stake: iroha_primitives::numeric::Quantity::from(40_u32),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_epoch: None,
@@ -12099,8 +12412,8 @@ mod stake_snapshot_tests {
                     validator: valid_validator.clone(),
                     peer_id: PeerId::from(valid_kp.public_key().clone()),
                     stake_account: valid_validator.clone(),
-                    total_stake: Numeric::new(10, 0),
-                    self_stake: Numeric::new(10, 0),
+                    total_stake: iroha_primitives::numeric::Quantity::from(10_u32),
+                    self_stake: iroha_primitives::numeric::Quantity::from(10_u32),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::PendingActivation(3),
                     activation_epoch: None,
@@ -12115,8 +12428,8 @@ mod stake_snapshot_tests {
                     validator: mismatched_validator.clone(),
                     peer_id: PeerId::from(mismatched_kp.public_key().clone()),
                     stake_account: mismatched_validator.clone(),
-                    total_stake: Numeric::new(20, 0),
-                    self_stake: Numeric::new(20, 0),
+                    total_stake: iroha_primitives::numeric::Quantity::from(20_u32),
+                    self_stake: iroha_primitives::numeric::Quantity::from(20_u32),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::PendingActivation(3),
                     activation_epoch: None,
@@ -12185,8 +12498,8 @@ mod stake_snapshot_tests {
                 validator: validator.clone(),
                 peer_id: PeerId::from(peer_key),
                 stake_account: validator,
-                total_stake: Numeric::new(10, 0),
-                self_stake: Numeric::new(10, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(10_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(10_u32),
                 metadata: Metadata::default(),
                 status,
                 activation_epoch: Some(1),
@@ -12341,8 +12654,8 @@ mod stake_snapshot_tests {
                 validator: live_validator.clone(),
                 peer_id: live_peer.clone(),
                 stake_account: live_validator,
-                total_stake: Numeric::new(10, 0),
-                self_stake: Numeric::new(10, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(10_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(10_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -12357,8 +12670,8 @@ mod stake_snapshot_tests {
                 validator: stale_validator.clone(),
                 peer_id: stale_peer.clone(),
                 stake_account: stale_validator,
-                total_stake: Numeric::new(10_000, 0),
-                self_stake: Numeric::new(10_000, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(10_000_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(10_000_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -12414,8 +12727,8 @@ mod stake_snapshot_tests {
                 validator: validator.clone(),
                 peer_id,
                 stake_account: validator,
-                total_stake: Numeric::new(10, 0),
-                self_stake: Numeric::new(10, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(10_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(10_u32),
                 metadata: Metadata::default(),
                 status,
                 activation_epoch: None,
@@ -12625,8 +12938,8 @@ mod stake_snapshot_tests {
                     validator: account.clone(),
                     peer_id: peer,
                     stake_account: account,
-                    total_stake: Numeric::new(10, 0),
-                    self_stake: Numeric::new(10, 0),
+                    total_stake: iroha_primitives::numeric::Quantity::from(10_u32),
+                    self_stake: iroha_primitives::numeric::Quantity::from(10_u32),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_epoch: None,
@@ -12694,8 +13007,8 @@ mod stake_snapshot_tests {
                 validator: active_validator.clone(),
                 peer_id: PeerId::from(active_validator.signatory().clone()),
                 stake_account: active_validator.clone(),
-                total_stake: Numeric::new(1_000, 0),
-                self_stake: Numeric::new(1_000, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -12710,8 +13023,8 @@ mod stake_snapshot_tests {
                 validator: jailed_validator.clone(),
                 peer_id: PeerId::from(jailed_validator.signatory().clone()),
                 stake_account: jailed_validator.clone(),
-                total_stake: Numeric::new(10_000, 0),
-                self_stake: Numeric::new(10_000, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(10_000_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(10_000_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Jailed("downtime".to_string()),
                 activation_epoch: None,
@@ -12760,8 +13073,8 @@ mod stake_snapshot_tests {
                 validator: active_validator.clone(),
                 peer_id: active_peer.clone(),
                 stake_account: active_validator,
-                total_stake: Numeric::new(1_000, 0),
-                self_stake: Numeric::new(1_000, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -12776,8 +13089,8 @@ mod stake_snapshot_tests {
                 validator: stale_validator.clone(),
                 peer_id: stale_peer.clone(),
                 stake_account: stale_validator,
-                total_stake: Numeric::new(10_000, 0),
-                self_stake: Numeric::new(10_000, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(10_000_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(10_000_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -12828,8 +13141,8 @@ mod stake_snapshot_tests {
                 validator: present_validator.clone(),
                 peer_id: PeerId::from(present_validator.signatory().clone()),
                 stake_account: present_validator.clone(),
-                total_stake: Numeric::new(1_000, 0),
-                self_stake: Numeric::new(1_000, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -12844,8 +13157,8 @@ mod stake_snapshot_tests {
                 validator: missing_validator.clone(),
                 peer_id: PeerId::from(missing_validator.signatory().clone()),
                 stake_account: missing_validator,
-                total_stake: Numeric::new(2_000, 0),
-                self_stake: Numeric::new(2_000, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -12894,8 +13207,8 @@ mod stake_snapshot_tests {
                     validator: validator.clone(),
                     peer_id: PeerId::from(kp.public_key().clone()),
                     stake_account: validator.clone(),
-                    total_stake: Numeric::new(1_000, 0),
-                    self_stake: Numeric::new(1_000, 0),
+                    total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
+                    self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_epoch: None,
@@ -12977,8 +13290,8 @@ mod stake_snapshot_tests {
                     validator: validator.clone(),
                     peer_id: PeerId::from(kp.public_key().clone()),
                     stake_account: validator,
-                    total_stake: Numeric::new(1_000, 0),
-                    self_stake: Numeric::new(1_000, 0),
+                    total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
+                    self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_epoch: None,
@@ -12996,8 +13309,8 @@ mod stake_snapshot_tests {
                     validator: validator.clone(),
                     peer_id: PeerId::from(kp.public_key().clone()),
                     stake_account: validator,
-                    total_stake: Numeric::new(2_000, 0),
-                    self_stake: Numeric::new(2_000, 0),
+                    total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
+                    self_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_epoch: None,
@@ -13087,8 +13400,8 @@ mod stake_snapshot_tests {
                 validator: account_a_high.clone(),
                 peer_id: peer_a.clone(),
                 stake_account: account_a_high,
-                total_stake: Numeric::new(10, 0),
-                self_stake: Numeric::new(10, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(10_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(10_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -13103,8 +13416,8 @@ mod stake_snapshot_tests {
                 validator: account_a_low.clone(),
                 peer_id: peer_a.clone(),
                 stake_account: account_a_low,
-                total_stake: Numeric::new(1, 0),
-                self_stake: Numeric::new(1, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(1_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -13119,8 +13432,8 @@ mod stake_snapshot_tests {
                 validator: account_b.clone(),
                 peer_id: peer_b.clone(),
                 stake_account: account_b,
-                total_stake: Numeric::new(5, 0),
-                self_stake: Numeric::new(5, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(5_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(5_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -13212,8 +13525,8 @@ mod stake_snapshot_tests {
                 validator: live_validator.clone(),
                 peer_id: live_peer.clone(),
                 stake_account: live_validator.clone(),
-                total_stake: Numeric::new(1_000, 0),
-                self_stake: Numeric::new(1_000, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -13228,8 +13541,8 @@ mod stake_snapshot_tests {
                 validator: expired_validator.clone(),
                 peer_id: expired_peer.clone(),
                 stake_account: expired_validator,
-                total_stake: Numeric::new(2_000, 0),
-                self_stake: Numeric::new(2_000, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -13273,8 +13586,8 @@ mod stake_snapshot_tests {
                 validator,
                 peer_id: peer.clone(),
                 stake_account: DMAccountId::of(kp.public_key().clone()),
-                total_stake: Numeric::new(1_000, 0),
-                self_stake: Numeric::new(1_000, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -13345,8 +13658,8 @@ mod stake_snapshot_tests {
                 validator: stake_validator,
                 peer_id: stake_peer.clone(),
                 stake_account: DMAccountId::of(stake_kp.public_key().clone()),
-                total_stake: Numeric::new(1_000, 0),
-                self_stake: Numeric::new(1_000, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -13361,8 +13674,8 @@ mod stake_snapshot_tests {
                 validator: admin_validator,
                 peer_id: admin_peer.clone(),
                 stake_account: DMAccountId::of(admin_kp.public_key().clone()),
-                total_stake: Numeric::new(2_000, 0),
-                self_stake: Numeric::new(2_000, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -13422,8 +13735,8 @@ mod stake_snapshot_tests {
                 validator: validator_id.clone(),
                 peer_id: peer_a.clone(),
                 stake_account: validator_id,
-                total_stake: Numeric::new(500, 0),
-                self_stake: Numeric::new(500, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(500_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(500_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -13530,7 +13843,7 @@ mod sumeragi_timing_tests {
     fn v2_block_cadence_ignores_retired_adaptive_pacing() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
         let mut parameters = state.world.parameters.block();
         parameters.sumeragi.block_time_ms = 1_000;
         parameters.sumeragi.pacing_factor_bps = 20_000;
@@ -16448,9 +16761,12 @@ impl World {
     fn validate_non_negative_ledger_invariants(&self) -> Result<(), String> {
         for (rwa_id, value) in self.rwas.view().iter() {
             let rwa = value.as_ref();
-            ensure_persisted_non_negative(&rwa.quantity, &format!("RWA {rwa_id} quantity"))?;
             ensure_persisted_non_negative(
-                &rwa.held_quantity,
+                rwa.quantity.as_numeric(),
+                &format!("RWA {rwa_id} quantity"),
+            )?;
+            ensure_persisted_non_negative(
+                rwa.held_quantity.as_numeric(),
                 &format!("RWA {rwa_id} held quantity"),
             )?;
             if rwa.held_quantity > rwa.quantity {
@@ -16461,7 +16777,7 @@ impl World {
             }
             for parent in &rwa.parents {
                 ensure_persisted_non_negative(
-                    parent.quantity(),
+                    parent.quantity().as_numeric(),
                     &format!("RWA {rwa_id} parent quantity"),
                 )?;
             }
@@ -16469,7 +16785,7 @@ impl World {
                 ("quantity", &rwa.quantity),
                 ("held quantity", &rwa.held_quantity),
             ] {
-                if rwa.spec.check(quantity).is_err() {
+                if rwa.spec.check(quantity.as_numeric()).is_err() {
                     return Err(format!(
                         "RWA {rwa_id} {label} {quantity} violates numeric spec {}",
                         rwa.spec
@@ -16480,11 +16796,11 @@ impl World {
 
         for (escrow_id, escrow) in self.asset_escrows.view().iter() {
             ensure_persisted_non_negative(
-                &escrow.amount,
+                escrow.amount.as_numeric(),
                 &format!("asset escrow {:?} amount", escrow_id.as_hash()),
             )?;
             ensure_persisted_non_negative(
-                &escrow.remaining_amount,
+                escrow.remaining_amount.as_numeric(),
                 &format!("asset escrow {:?} remaining amount", escrow_id.as_hash()),
             )?;
             if escrow.remaining_amount > escrow.amount {
@@ -16497,11 +16813,11 @@ impl World {
             }
             if let Some(resolution) = &escrow.resolution {
                 ensure_persisted_non_negative(
-                    &resolution.buyer_amount,
+                    resolution.buyer_amount.as_numeric(),
                     &format!("asset escrow {:?} buyer resolution", escrow_id.as_hash()),
                 )?;
                 ensure_persisted_non_negative(
-                    &resolution.seller_amount,
+                    resolution.seller_amount.as_numeric(),
                     &format!("asset escrow {:?} seller resolution", escrow_id.as_hash()),
                 )?;
             }
@@ -16513,7 +16829,7 @@ impl World {
                 ("collateral", agreement.collateral_leg().quantity()),
             ] {
                 ensure_persisted_non_negative(
-                    quantity,
+                    quantity.as_numeric(),
                     &format!("repo agreement {agreement_id} {label} quantity"),
                 )?;
                 if quantity.is_zero() {
@@ -16526,11 +16842,11 @@ impl World {
 
         for ((lane_id, validator_id), validator) in self.public_lane_validators.view().iter() {
             ensure_persisted_non_negative(
-                &validator.total_stake,
+                validator.total_stake.as_numeric(),
                 &format!("lane {lane_id} validator {validator_id} total stake"),
             )?;
             ensure_persisted_non_negative(
-                &validator.self_stake,
+                validator.self_stake.as_numeric(),
                 &format!("lane {lane_id} validator {validator_id} self stake"),
             )?;
             if validator.self_stake > validator.total_stake {
@@ -16544,12 +16860,12 @@ impl World {
             self.public_lane_stake_shares.view().iter()
         {
             ensure_persisted_non_negative(
-                &share.bonded,
+                share.bonded.as_numeric(),
                 &format!("lane {lane_id} validator {validator_id} staker {staker_id} bonded stake"),
             )?;
             for unbond in share.pending_unbonds.values() {
                 ensure_persisted_non_negative(
-                    &unbond.amount,
+                    unbond.amount.as_numeric(),
                     &format!(
                         "lane {lane_id} validator {validator_id} staker {staker_id} pending unbond"
                     ),
@@ -16559,16 +16875,16 @@ impl World {
 
         for ((lane_id, epoch), reward) in self.public_lane_rewards.view().iter() {
             ensure_persisted_non_negative(
-                &reward.total_reward,
+                reward.total_reward.as_numeric(),
                 &format!("lane {lane_id} epoch {epoch} total reward"),
             )?;
-            let mut total = Numeric::zero();
+            let mut total = Quantity::zero();
             for share in &reward.shares {
                 ensure_persisted_non_negative(
-                    &share.amount,
+                    share.amount.as_numeric(),
                     &format!("lane {lane_id} epoch {epoch} reward share"),
                 )?;
-                total = total.checked_add(share.amount.clone()).ok_or_else(|| {
+                total = total.checked_add(&share.amount).map_err(|_| {
                     format!("lane {lane_id} epoch {epoch} reward share total overflowed")
                 })?;
             }
@@ -16584,7 +16900,7 @@ impl World {
             for entry in ledger.entries() {
                 for leg in &entry.legs {
                     ensure_persisted_non_negative(
-                        leg.leg.quantity(),
+                        leg.leg.quantity().as_numeric(),
                         &format!("settlement {settlement_id} leg quantity"),
                     )?;
                 }
@@ -17002,6 +17318,8 @@ impl World {
             proofs_by_status: Storage::default(),
             contract_manifests: Storage::default(),
             contract_code: Storage::default(),
+            contract_code_uploads: Storage::default(),
+            contract_code_upload_chunks: Storage::default(),
             contract_instances: Storage::default(),
             contract_subject_bindings: Storage::default(),
             contract_subject_addresses: Storage::default(),
@@ -17759,6 +18077,8 @@ impl World {
             consensus_evidence: self.consensus_evidence.view(),
             contract_manifests: self.contract_manifests.view(),
             contract_code: self.contract_code.view(),
+            contract_code_uploads: self.contract_code_uploads.view(),
+            contract_code_upload_chunks: self.contract_code_upload_chunks.view(),
             contract_instances: self.contract_instances.view(),
             contract_subject_bindings: self.contract_subject_bindings.view(),
             contract_subject_addresses: self.contract_subject_addresses.view(),
@@ -18376,6 +18696,32 @@ pub trait WorldReadOnly {
     >;
     /// Get stored contract code bytes by hash (read-only)
     fn contract_code(&self) -> &impl StorageReadOnly<iroha_crypto::Hash, Vec<u8>>;
+    /// Pending contract-code upload descriptors (read-only).
+    fn contract_code_uploads(
+        &self,
+    ) -> &impl StorageReadOnly<SmartContractCodeUploadKey, SmartContractCodeUploadDescriptor>;
+    /// Pending contract-code upload chunks (read-only).
+    fn contract_code_upload_chunks(
+        &self,
+    ) -> &impl StorageReadOnly<SmartContractCodeUploadChunkKey, Vec<u8>>;
+    /// Return committed progress for one authority-owned pending upload.
+    fn contract_code_upload_progress(
+        &self,
+        authority: &AccountId,
+        code_hash: &Hash,
+    ) -> Option<SmartContractCodeUploadProgress> {
+        let upload = SmartContractCodeUploadKey::new(authority.clone(), *code_hash);
+        let descriptor = *self.contract_code_uploads().get(&upload)?;
+        let received_chunks = self
+            .contract_code_upload_chunks()
+            .range(SmartContractCodeUploadChunkKey::upload_range(&upload))
+            .count();
+        let received_chunks = u32::try_from(received_chunks).ok()?;
+        Some(SmartContractCodeUploadProgress {
+            descriptor,
+            received_chunks,
+        })
+    }
     /// Contract instances mapping `contract_address -> code_hash` (read-only)
     fn contract_instances(
         &self,
@@ -19770,6 +20116,19 @@ macro_rules! impl_world_ro {
             fn contract_code(&self) -> &impl StorageReadOnly<iroha_crypto::Hash, Vec<u8>> {
                 &self.contract_code
             }
+            fn contract_code_uploads(
+                &self,
+            ) -> &impl StorageReadOnly<
+                SmartContractCodeUploadKey,
+                SmartContractCodeUploadDescriptor,
+            > {
+                &self.contract_code_uploads
+            }
+            fn contract_code_upload_chunks(
+                &self,
+            ) -> &impl StorageReadOnly<SmartContractCodeUploadChunkKey, Vec<u8>> {
+                &self.contract_code_upload_chunks
+            }
             fn contract_instances(
                 &self,
             ) -> &impl StorageReadOnly<
@@ -20407,6 +20766,8 @@ impl<'world> WorldBlock<'world> {
             consensus_evidence,
             contract_manifests,
             contract_code,
+            contract_code_uploads,
+            contract_code_upload_chunks,
             contract_instances,
             contract_subject_bindings,
             contract_subject_addresses,
@@ -20516,6 +20877,8 @@ impl<'world> WorldBlock<'world> {
         consensus_evidence.commit();
         contract_manifests.commit();
         contract_code.commit();
+        contract_code_uploads.commit();
+        contract_code_upload_chunks.commit();
         contract_instances.commit();
         contract_subject_bindings.commit();
         contract_subject_addresses.commit();
@@ -21763,6 +22126,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             commit_qcs,
             contract_manifests,
             contract_code,
+            contract_code_uploads,
+            contract_code_upload_chunks,
             contract_instances,
             contract_subject_bindings,
             contract_subject_addresses,
@@ -21861,6 +22226,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         merge_hint_roots.apply();
         contract_manifests.apply();
         contract_code.apply();
+        contract_code_uploads.apply();
+        contract_code_upload_chunks.apply();
         contract_instances.apply();
         contract_subject_bindings.apply();
         contract_subject_addresses.apply();
@@ -22276,7 +22643,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ///
     /// # Errors
     /// - Asset definition not found
-    /// - Negative increment or stored total, or a numeric-spec mismatch
+    /// - Numeric-spec mismatch for the increment or stored total
     /// - Overflow on addition
     pub fn increase_asset_total_amount(
         &mut self,
@@ -22329,7 +22696,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ///
     /// # Errors
     /// - Asset definition not found
-    /// - Negative decrement or stored total, or a numeric-spec mismatch
+    /// - Numeric-spec mismatch for the decrement or stored total
     /// - Underflow (attempt to burn more than exists)
     pub fn decrease_asset_total_amount(
         &mut self,
@@ -22626,6 +22993,126 @@ impl LaneConsensusLifecycleSnapshot {
 }
 
 impl State {
+    /// Return the authenticated Sumeragi-v2 snapshot bootstrap trust root, if this state was
+    /// restored from an explicitly authorized audited snapshot boundary.
+    #[must_use]
+    pub fn authenticated_snapshot_v2_bootstrap(&self) -> Option<&SnapshotV2BootstrapRecord> {
+        self.authenticated_snapshot_v2_bootstrap.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_authenticated_snapshot_v2_bootstrap_for_testing(
+        &mut self,
+        record: SnapshotV2BootstrapRecord,
+    ) {
+        self.snapshot_v2_bootstrap_candidate = None;
+        self.authenticated_snapshot_v2_bootstrap = Some(record);
+    }
+
+    pub(crate) fn has_snapshot_v2_bootstrap_candidate(&self) -> bool {
+        self.snapshot_v2_bootstrap_candidate.is_some()
+    }
+
+    pub(crate) fn authenticate_snapshot_v2_bootstrap_candidate(
+        &mut self,
+    ) -> core::result::Result<(), String> {
+        let Some(record) = self.snapshot_v2_bootstrap_candidate.as_ref() else {
+            return Ok(());
+        };
+        record
+            .validate()
+            .map_err(|error| format!("invalid snapshot bootstrap structure: {error}"))?;
+        let anchor = record
+            .context
+            .snapshot_bootstrap
+            .as_ref()
+            .expect("validated snapshot bootstrap record must contain an anchor");
+        if record.context.chain_id != self.chain_id {
+            return Err(format!(
+                "bootstrap context chain id {} differs from snapshot chain id {}",
+                record.context.chain_id, self.chain_id
+            ));
+        }
+        let snapshot_height = u64::try_from(self.committed_height())
+            .map_err(|_| "snapshot height exceeds the canonical u64 height domain".to_owned())?;
+        if anchor.snapshot_height != snapshot_height {
+            return Err(format!(
+                "bootstrap anchor height {} differs from snapshot height {snapshot_height}",
+                anchor.snapshot_height
+            ));
+        }
+        let snapshot_tip = self.latest_block_hash_fast().ok_or_else(|| {
+            "non-zero bootstrap snapshot has no canonical terminal block hash".to_owned()
+        })?;
+        if anchor.snapshot_block_hash != snapshot_tip {
+            return Err(format!(
+                "bootstrap anchor block hash {} differs from snapshot tip {snapshot_tip}",
+                anchor.snapshot_block_hash
+            ));
+        }
+        let snapshot_state_hash = crate::snapshot::canonical_state_snapshot_hash(self);
+        if anchor.snapshot_state_hash != snapshot_state_hash {
+            return Err(format!(
+                "bootstrap anchor state hash {:?} differs from canonical snapshot WSV {:?}",
+                anchor.snapshot_state_hash, snapshot_state_hash
+            ));
+        }
+
+        let commit_topology = self.commit_topology.view();
+        let roster_matches_topology = record.context.roster.len() == commit_topology.len()
+            && record
+                .context
+                .roster
+                .iter()
+                .zip(commit_topology.iter())
+                .all(|(entry, peer)| entry.validator == *peer);
+        if !roster_matches_topology {
+            return Err(
+                "bootstrap roster does not exactly match the snapshot commit topology".to_owned(),
+            );
+        }
+        verify_validator_power_roster_pops(&record.context.roster, &record.validator_set_pops)
+            .map_err(|error| format!("invalid bootstrap validator proof of possession: {error}"))?;
+        let world = self.world.view();
+        for (index, (entry, expected_pop)) in record
+            .context
+            .roster
+            .iter()
+            .zip(&record.validator_set_pops)
+            .enumerate()
+        {
+            let live_pop = live_consensus_key_pop_for_peer(
+                &world,
+                &entry.validator,
+                record.context.height,
+            )
+            .ok_or_else(|| {
+                format!(
+                    "bootstrap validator {index} has no live consensus key proof at height {}",
+                    record.context.height
+                )
+            })?;
+            if live_pop != *expected_pop {
+                return Err(format!(
+                    "bootstrap validator {index} proof does not match the live consensus key"
+                ));
+            }
+        }
+        drop(world);
+        drop(commit_topology);
+        if record.context.nexus_amx_context_hash
+            != crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(self)
+        {
+            return Err(
+                "bootstrap Nexus/AMX context does not match the complete restored validator and lane state"
+                    .to_owned(),
+            );
+        }
+
+        self.authenticated_snapshot_v2_bootstrap = self.snapshot_v2_bootstrap_candidate.take();
+        Ok(())
+    }
+
     fn disable_nexus_fees_for_testing(&mut self) {
         let nexus = self.nexus.get_mut();
         nexus.fees.base_fee = Quantity::zero();
@@ -25141,6 +25628,8 @@ impl State {
             lane_compliance: parking_lot::RwLock::new(None),
             da_indexes_hydrated: parking_lot::RwLock::new(None),
             chain_id,
+            snapshot_v2_bootstrap_candidate: None,
+            authenticated_snapshot_v2_bootstrap: None,
             pipeline,
             pipeline_parallelism,
             soracloud_runtime: parking_lot::RwLock::new(None),
@@ -28647,7 +29136,7 @@ impl State {
             return Vec::new();
         }
 
-        let mut candidates: Vec<(AccountId, Numeric)> = world
+        let mut candidates: Vec<(AccountId, Quantity)> = world
             .public_lane_validators()
             .iter()
             .filter(|(key, record)| {
@@ -28785,7 +29274,7 @@ impl State {
             return Vec::new();
         }
 
-        let mut candidates: Vec<(AccountId, PeerId, Numeric)> = world
+        let mut candidates: Vec<(AccountId, PeerId, Quantity)> = world
             .public_lane_validators()
             .iter()
             .filter(|(key, record)| {
@@ -31828,11 +32317,17 @@ impl State {
                 let available = world
                     .assets()
                     .get(asset_id)
-                    .map_or_else(Numeric::zero, |value| value.as_ref().as_numeric().clone());
-                if available < *required {
+                    .map_or_else(Quantity::zero, |value| value.as_ref().clone());
+                if available.as_numeric() < required {
+                    let required =
+                        Quantity::from_canonical_numeric(required.clone()).map_err(|err| {
+                            MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                                "aggregate fee is not a non-negative quantity: {err}"
+                            ))
+                        })?;
                     return Err(MergeLedgerCommitError::InsufficientNexusFeeBalance {
                         payer: asset_id.account().clone(),
-                        required: required.clone(),
+                        required,
                         available,
                     });
                 }
@@ -40973,11 +41468,17 @@ impl<'state> StateBlock<'state> {
                 .world
                 .assets
                 .get(asset_id)
-                .map_or_else(Numeric::zero, |value| value.as_ref().as_numeric().clone());
-            if available < *required {
+                .map_or_else(Quantity::zero, |value| value.as_ref().clone());
+            if available.as_numeric() < required {
+                let required =
+                    Quantity::from_canonical_numeric(required.clone()).map_err(|err| {
+                        MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                            "aggregate fee is not a non-negative quantity: {err}"
+                        ))
+                    })?;
                 return Err(MergeLedgerCommitError::InsufficientNexusFeeBalance {
                     payer: asset_id.account().clone(),
-                    required: required.clone(),
+                    required,
                     available,
                 });
             }
@@ -44572,11 +45073,135 @@ mod tiered_snapshot_diff_tests {
     }
 
     #[test]
+    fn contract_upload_json_keys_are_stable_text_and_reject_trailing_components() {
+        use mv::json::JsonKeyCodec;
+
+        let authority = AccountId::new(checked_keypair().public_key().clone());
+        let code_hash = iroha_crypto::Hash::new(b"stable contract upload json key");
+        let upload_key = SmartContractCodeUploadKey::new(authority.clone(), code_hash);
+        let expected_upload = format!("{}|{}", authority, hex::encode(code_hash.as_ref()));
+        let mut encoded_upload = String::new();
+        upload_key.encode_json_key(&mut encoded_upload);
+        let mut parser = norito::json::Parser::new(&encoded_upload);
+        let raw_upload = parser.parse_string().expect("parse upload JSON key");
+        assert_eq!(raw_upload, expected_upload);
+        assert_eq!(
+            SmartContractCodeUploadKey::decode_json_key(&raw_upload)
+                .expect("decode stable upload JSON key"),
+            upload_key
+        );
+        assert!(
+            SmartContractCodeUploadKey::decode_json_key(&format!("{raw_upload}|trailing")).is_err()
+        );
+
+        let chunk_key = SmartContractCodeUploadChunkKey::new(upload_key, 7);
+        let expected_chunk = format!("{expected_upload}|7");
+        let mut encoded_chunk = String::new();
+        chunk_key.encode_json_key(&mut encoded_chunk);
+        let mut parser = norito::json::Parser::new(&encoded_chunk);
+        let raw_chunk = parser.parse_string().expect("parse upload chunk JSON key");
+        assert_eq!(raw_chunk, expected_chunk);
+        assert_eq!(
+            SmartContractCodeUploadChunkKey::decode_json_key(&raw_chunk)
+                .expect("decode stable upload chunk JSON key"),
+            chunk_key
+        );
+        assert!(
+            SmartContractCodeUploadChunkKey::decode_json_key(&format!("{raw_chunk}|trailing"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn contract_upload_ranges_isolate_authorities_and_uploads() {
+        let first_authority = AccountId::new(checked_keypair().public_key().clone());
+        let second_authority = AccountId::new(checked_keypair().public_key().clone());
+        assert_ne!(first_authority, second_authority);
+
+        let first_upload = SmartContractCodeUploadKey::new(
+            first_authority.clone(),
+            Hash::prehashed([0; Hash::LENGTH]),
+        );
+        let last_upload = SmartContractCodeUploadKey::new(
+            first_authority.clone(),
+            Hash::prehashed([u8::MAX; Hash::LENGTH]),
+        );
+        let other_upload = SmartContractCodeUploadKey::new(
+            second_authority.clone(),
+            Hash::new(b"other authority upload"),
+        );
+        let descriptor = SmartContractCodeUploadDescriptor {
+            total_size: 2,
+            chunk_count: 2,
+        };
+        let mut world = World::default();
+        for upload in [&first_upload, &last_upload, &other_upload] {
+            world
+                .contract_code_uploads
+                .insert(upload.clone(), descriptor);
+        }
+        for (upload, marker) in [(&first_upload, 1_u8), (&other_upload, 2_u8)] {
+            for chunk_index in 0..2 {
+                world.contract_code_upload_chunks.insert(
+                    SmartContractCodeUploadChunkKey::new(upload.clone(), chunk_index),
+                    vec![marker],
+                );
+            }
+        }
+
+        let view = world.view();
+        assert_eq!(
+            view.contract_code_uploads
+                .range(SmartContractCodeUploadKey::authority_range(
+                    &first_authority,
+                ))
+                .count(),
+            2
+        );
+        assert_eq!(
+            view.contract_code_uploads
+                .range(SmartContractCodeUploadKey::authority_range(
+                    &second_authority,
+                ))
+                .count(),
+            1
+        );
+        assert_eq!(
+            view.contract_code_upload_chunks
+                .range(SmartContractCodeUploadChunkKey::upload_range(&first_upload,))
+                .count(),
+            2
+        );
+        assert_eq!(
+            view.contract_code_upload_progress(&first_authority, &first_upload.code_hash),
+            Some(SmartContractCodeUploadProgress {
+                descriptor,
+                received_chunks: 2,
+            })
+        );
+    }
+
+    #[test]
     fn world_block_tiered_snapshot_diff_collects_changed_keys() {
         let world = World::default();
         let mut block = world.block();
         let hash = iroha_crypto::Hash::new([7_u8; 32]);
         block.contract_code.insert(hash, vec![1, 2, 3]);
+        let upload_key = SmartContractCodeUploadKey::new(
+            AccountId::new(checked_keypair().public_key().clone()),
+            iroha_crypto::Hash::new(b"tiered upload diff"),
+        );
+        let upload_chunk_key = SmartContractCodeUploadChunkKey::new(upload_key.clone(), 0);
+        block.contract_code_uploads.insert(
+            upload_key.clone(),
+            SmartContractCodeUploadDescriptor {
+                total_size: 3,
+                chunk_count: 1,
+            },
+        );
+        block
+            .contract_code_upload_chunks
+            .insert(upload_chunk_key.clone(), vec![1, 2, 3]);
         let (marker_key, marker) = sample_direct_lane_marker();
         block
             .direct_lane_block_application_markers
@@ -44603,6 +45228,12 @@ mod tiered_snapshot_diff_tests {
             })
         );
         assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::ContractCodeUpload(key) if *key == upload_key)
+        }));
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::ContractCodeUploadChunk(key) if *key == upload_chunk_key)
+        }));
+        assert!(diff.entries().iter().any(|entry| {
             matches!(entry, TieredKeyHandle::DirectLaneBlockApplicationMarker(key) if *key == marker_key)
         }));
         assert!(diff.entries().iter().any(|entry| {
@@ -44622,6 +45253,21 @@ mod tiered_snapshot_diff_tests {
         let mut block = world.block();
         let hash = iroha_crypto::Hash::new([9_u8; 32]);
         block.contract_code.insert(hash, vec![4, 5, 6]);
+        let upload_key = SmartContractCodeUploadKey::new(
+            AccountId::new(checked_keypair().public_key().clone()),
+            iroha_crypto::Hash::new(b"tiered upload payload"),
+        );
+        let upload_chunk_key = SmartContractCodeUploadChunkKey::new(upload_key.clone(), 0);
+        block.contract_code_uploads.insert(
+            upload_key.clone(),
+            SmartContractCodeUploadDescriptor {
+                total_size: 3,
+                chunk_count: 1,
+            },
+        );
+        block
+            .contract_code_upload_chunks
+            .insert(upload_chunk_key.clone(), vec![4, 5, 6]);
         let (marker_key, marker) = sample_direct_lane_marker();
         block
             .direct_lane_block_application_markers
@@ -44649,6 +45295,12 @@ mod tiered_snapshot_diff_tests {
             })
         );
         assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::ContractCodeUpload(key) if *key == upload_key)
+        }));
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::ContractCodeUploadChunk(key) if *key == upload_chunk_key)
+        }));
+        assert!(diff.entries().iter().any(|entry| {
             matches!(entry, TieredKeyHandle::DirectLaneBlockApplicationMarker(key) if *key == marker_key)
         }));
         assert!(diff.entries().iter().any(|entry| {
@@ -44660,6 +45312,48 @@ mod tiered_snapshot_diff_tests {
         assert!(diff.entries().iter().any(|entry| {
             matches!(entry, TieredKeyHandle::SccpOutboundProof(key) if *key == proof_key)
         }));
+    }
+
+    #[test]
+    fn pending_contract_upload_roundtrips_in_state_snapshot_without_legacy_defaults() {
+        let authority = AccountId::new(checked_keypair().public_key().clone());
+        let code_hash = iroha_crypto::Hash::new(b"partial contract upload snapshot");
+        let upload_key = SmartContractCodeUploadKey::new(authority, code_hash);
+        let chunk_key = SmartContractCodeUploadChunkKey::new(upload_key.clone(), 1);
+        let descriptor = SmartContractCodeUploadDescriptor {
+            total_size: 65_539,
+            chunk_count: 2,
+        };
+        let mut world = World::default();
+        world
+            .contract_code_uploads
+            .insert(upload_key.clone(), descriptor);
+        world
+            .contract_code_upload_chunks
+            .insert(chunk_key.clone(), vec![7, 8, 9]);
+
+        let decoded = decode_sccp_world_snapshot(world).expect("decode pending upload snapshot");
+        let view = decoded.view();
+        assert_eq!(
+            view.world.contract_code_uploads.get(&upload_key),
+            Some(&descriptor)
+        );
+        assert_eq!(
+            view.world.contract_code_upload_chunks.get(&chunk_key),
+            Some(&vec![7, 8, 9])
+        );
+
+        for field in ["contract_code_uploads", "contract_code_upload_chunks"] {
+            let mut snapshot = sccp_state_snapshot_value(World::default(), SCCP_SNAPSHOT_CHAIN_ID);
+            state_snapshot_world_mut(&mut snapshot).remove(field);
+            let error = decode_state_snapshot_value(snapshot)
+                .err()
+                .unwrap_or_else(|| panic!("snapshot missing {field} must fail"));
+            assert!(
+                error.to_string().contains(field),
+                "missing required {field} produced unexpected error: {error}"
+            );
+        }
     }
 
     #[test]
@@ -46626,11 +47320,11 @@ mod transfer_transcript_tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
-            amount: Numeric::from(amount),
-            from_balance_before: Numeric::from(100_u32),
-            from_balance_after: Numeric::from(100_u32.saturating_sub(amount)),
-            to_balance_before: Numeric::zero(),
-            to_balance_after: Numeric::from(amount),
+            amount: Quantity::from(amount),
+            from_balance_before: Quantity::from(100_u32),
+            from_balance_after: Quantity::from(100_u32.saturating_sub(amount)),
+            to_balance_before: Quantity::zero(),
+            to_balance_after: Quantity::from(amount),
             from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         }
@@ -46655,11 +47349,11 @@ mod transfer_transcript_tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition,
-            amount: Numeric::zero(),
-            from_balance_before: Numeric::zero(),
-            from_balance_after: Numeric::zero(),
-            to_balance_before: Numeric::zero(),
-            to_balance_after: Numeric::zero(),
+            amount: Quantity::zero(),
+            from_balance_before: Quantity::zero(),
+            from_balance_after: Quantity::zero(),
+            to_balance_before: Quantity::zero(),
+            to_balance_after: Quantity::zero(),
             from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
@@ -46702,11 +47396,11 @@ mod transfer_transcript_tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition,
-            amount: Numeric::zero(),
-            from_balance_before: Numeric::zero(),
-            from_balance_after: Numeric::zero(),
-            to_balance_before: Numeric::zero(),
-            to_balance_after: Numeric::zero(),
+            amount: Quantity::zero(),
+            from_balance_before: Quantity::zero(),
+            from_balance_after: Quantity::zero(),
+            to_balance_before: Quantity::zero(),
+            to_balance_after: Quantity::zero(),
             from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
@@ -46822,11 +47516,11 @@ mod transfer_transcript_tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: asset_definition.clone(),
-            amount: Numeric::from(10_u32),
-            from_balance_before: Numeric::from(100_u32),
-            from_balance_after: Numeric::from(90_u32),
-            to_balance_before: Numeric::from(0_u32),
-            to_balance_after: Numeric::from(10_u32),
+            amount: Quantity::from(10_u32),
+            from_balance_before: Quantity::from(100_u32),
+            from_balance_after: Quantity::from(90_u32),
+            to_balance_before: Quantity::from(0_u32),
+            to_balance_after: Quantity::from(10_u32),
             from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
@@ -46834,11 +47528,11 @@ mod transfer_transcript_tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition,
-            amount: Numeric::from(5_u32),
-            from_balance_before: Numeric::from(90_u32),
-            from_balance_after: Numeric::from(85_u32),
-            to_balance_before: Numeric::from(10_u32),
-            to_balance_after: Numeric::from(15_u32),
+            amount: Quantity::from(5_u32),
+            from_balance_before: Quantity::from(90_u32),
+            from_balance_after: Quantity::from(85_u32),
+            to_balance_before: Quantity::from(10_u32),
+            to_balance_after: Quantity::from(15_u32),
             from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
@@ -46877,11 +47571,11 @@ mod transfer_transcript_tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: asset_definition.clone(),
-            amount: Numeric::from(10_u32),
-            from_balance_before: Numeric::from(100_u32),
-            from_balance_after: Numeric::from(90_u32),
-            to_balance_before: Numeric::from(0_u32),
-            to_balance_after: Numeric::from(10_u32),
+            amount: Quantity::from(10_u32),
+            from_balance_before: Quantity::from(100_u32),
+            from_balance_after: Quantity::from(90_u32),
+            to_balance_before: Quantity::from(0_u32),
+            to_balance_after: Quantity::from(10_u32),
             from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
@@ -46889,11 +47583,11 @@ mod transfer_transcript_tests {
             from_account: (*BOB_ID).clone(),
             to_account: (*ALICE_ID).clone(),
             asset_definition,
-            amount: Numeric::from(5_u32),
-            from_balance_before: Numeric::from(10_u32),
-            from_balance_after: Numeric::from(5_u32),
-            to_balance_before: Numeric::from(90_u32),
-            to_balance_after: Numeric::from(95_u32),
+            amount: Quantity::from(5_u32),
+            from_balance_before: Quantity::from(10_u32),
+            from_balance_after: Quantity::from(5_u32),
+            to_balance_before: Quantity::from(90_u32),
+            to_balance_after: Quantity::from(95_u32),
             from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
@@ -46965,7 +47659,7 @@ mod transfer_transcript_tests {
                 .world()
                 .assets()
                 .get(asset_id)
-                .map(|value| value.clone().into_inner())
+                .map(|value| value.as_ref().as_numeric().clone())
                 .unwrap_or_else(Numeric::zero)
         }
 
@@ -47214,10 +47908,10 @@ mod transfer_transcript_tests {
             .deltas
             .first()
             .expect("single transfer delta recorded");
-        assert_eq!(transfer_delta.from_balance_before, Numeric::from(10_u32));
-        assert_eq!(transfer_delta.from_balance_after, Numeric::from(7_u32));
-        assert_eq!(transfer_delta.to_balance_before, Numeric::zero());
-        assert_eq!(transfer_delta.to_balance_after, Numeric::from(3_u32));
+        assert_eq!(transfer_delta.from_balance_before, Quantity::from(10_u32));
+        assert_eq!(transfer_delta.from_balance_after, Quantity::from(7_u32));
+        assert_eq!(transfer_delta.to_balance_before, Quantity::zero());
+        assert_eq!(transfer_delta.to_balance_after, Quantity::from(3_u32));
         assert!(transcript.poseidon_preimage_digest.is_some());
     }
 }
@@ -47319,11 +48013,11 @@ mod fastpq_tx_set_hash_tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
-            amount: Numeric::from(10u32),
-            from_balance_before: Numeric::from(100u32),
-            from_balance_after: Numeric::from(90u32),
-            to_balance_before: Numeric::from(0u32),
-            to_balance_after: Numeric::from(10u32),
+            amount: Quantity::from(10u32),
+            from_balance_before: Quantity::from(100u32),
+            from_balance_after: Quantity::from(90u32),
+            to_balance_before: Quantity::from(0u32),
+            to_balance_after: Quantity::from(10u32),
             from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
@@ -47366,11 +48060,11 @@ mod fastpq_tx_set_hash_tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
-            amount: Numeric::from(10u32),
-            from_balance_before: Numeric::from(100u32),
-            from_balance_after: Numeric::from(90u32),
-            to_balance_before: Numeric::from(0u32),
-            to_balance_after: Numeric::from(10u32),
+            amount: Quantity::from(10u32),
+            from_balance_before: Quantity::from(100u32),
+            from_balance_after: Quantity::from(90u32),
+            to_balance_before: Quantity::from(0u32),
+            to_balance_after: Quantity::from(10u32),
             from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
@@ -47412,11 +48106,11 @@ mod fastpq_tx_set_hash_tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
-            amount: Numeric::from(10u32),
-            from_balance_before: Numeric::from(100u32),
-            from_balance_after: Numeric::from(90u32),
-            to_balance_before: Numeric::from(0u32),
-            to_balance_after: Numeric::from(10u32),
+            amount: Quantity::from(10u32),
+            from_balance_before: Quantity::from(100u32),
+            from_balance_after: Quantity::from(90u32),
+            to_balance_before: Quantity::from(0u32),
+            to_balance_after: Quantity::from(10u32),
             from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
@@ -47481,11 +48175,11 @@ mod fastpq_tx_set_hash_tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
-            amount: Numeric::from(10u32),
-            from_balance_before: Numeric::from(100u32),
-            from_balance_after: Numeric::from(90u32),
-            to_balance_before: Numeric::from(0u32),
-            to_balance_after: Numeric::from(10u32),
+            amount: Quantity::from(10u32),
+            from_balance_before: Quantity::from(100u32),
+            from_balance_after: Quantity::from(90u32),
+            to_balance_before: Quantity::from(0u32),
+            to_balance_after: Quantity::from(10u32),
             from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
@@ -47587,187 +48281,124 @@ mod block_proof_tests {
     }
 }
 
-/// Resolve the validator roster for a replayed block using persisted roster metadata.
-fn replay_roster_for_block(
+fn verified_v2_replay_artifact(
     state: &State,
     kura: &Kura,
     block: &SignedBlock,
-    fallback: &crate::sumeragi::network_topology::Topology,
-    commit_roster_snapshot: Option<&CommitRosterSnapshot>,
-) -> Vec<PeerId> {
+) -> Result<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact> {
     let height = block.header().height().get();
     let block_hash = block.hash();
-
-    if let Some(snapshot) = commit_roster_snapshot {
-        let roster = if snapshot.commit_qc.validator_set.is_empty() {
-            snapshot.validator_checkpoint.validator_set.clone()
-        } else {
-            snapshot.commit_qc.validator_set.clone()
-        };
-        if !roster.is_empty() {
-            return roster;
+    let manifest = kura
+        .commit_manifest(height)
+        .wrap_err_with(|| format!("failed to read commit manifest for replayed block #{height}"))?
+        .ok_or_else(|| eyre!("missing commit manifest for full block #{height}"))?;
+    let binding = kura
+        .commit_manifest_binding_state(&manifest)
+        .wrap_err_with(|| {
+            format!("failed to verify checkpoint binding for replayed block #{height}")
+        })?;
+    if binding != crate::kura::CommitManifestBindingState::Bound {
+        return Err(eyre!(
+            "replayed block #{height} commit manifest is not checkpoint-bound: {binding:?}"
+        ));
+    }
+    let artifact = kura
+        .v2_finality_artifact(height)
+        .wrap_err_with(|| format!("failed to verify v2 finality for replayed block #{height}"))?
+        .ok_or_else(|| eyre!("missing verified v2 finality artifact for full block #{height}"))?;
+    artifact
+        .validate_for_header(&block.header())
+        .map_err(|error| eyre!(error))
+        .wrap_err_with(|| format!("v2 finality does not bind replayed block #{height}"))?;
+    if artifact.height_context.chain_id != state.chain_id {
+        return Err(eyre!(
+            "replayed block #{height} v2 finality chain id {} differs from configured chain id {}",
+            artifact.height_context.chain_id,
+            state.chain_id
+        ));
+    }
+    let payload_hash = Hash::new(
+        block
+            .encode_wire()
+            .wrap_err_with(|| format!("failed to encode replayed block #{height}"))?,
+    );
+    if artifact.subject.payload_hash != payload_hash {
+        return Err(eyre!(
+            "replayed block #{height} v2 finality payload hash does not bind the canonical block wire"
+        ));
+    }
+    if !manifest.binds_authenticated_v2_commit_authority(&artifact) {
+        return Err(eyre!(
+            "replayed block #{height} commit manifest does not bind its verified v2 authority and execution roots"
+        ));
+    }
+    if artifact.block_hash != block_hash {
+        return Err(eyre!(
+            "replayed block #{height} finality hash differs from its canonical block hash"
+        ));
+    }
+    if let Some(bootstrap) = state.authenticated_snapshot_v2_bootstrap()
+        && bootstrap
+            .context
+            .snapshot_bootstrap
+            .as_ref()
+            .is_some_and(|anchor| {
+                u64::try_from(state.committed_height()) == Ok(anchor.snapshot_height)
+            })
+    {
+        let anchor = bootstrap
+            .context
+            .snapshot_bootstrap
+            .as_ref()
+            .expect("authenticated bootstrap record must contain an anchor");
+        if height != bootstrap.context.height {
+            return Err(eyre!(
+                "first full block after snapshot bootstrap must be height {}, got {height}",
+                bootstrap.context.height
+            ));
+        }
+        if artifact.height_context != bootstrap.context
+            || artifact.validator_set_pops != bootstrap.validator_set_pops
+        {
+            return Err(eyre!(
+                "first full block #{height} finality does not exactly match the authenticated snapshot bootstrap context and validator proofs"
+            ));
+        }
+        if block.header().prev_block_hash() != Some(anchor.snapshot_block_hash) {
+            return Err(eyre!(
+                "first full block #{height} does not extend the authenticated snapshot bootstrap block {}",
+                anchor.snapshot_block_hash
+            ));
+        }
+        if state.latest_block_hash_fast() != Some(anchor.snapshot_block_hash) {
+            return Err(eyre!(
+                "live state tip no longer matches the authenticated snapshot bootstrap block {}",
+                anchor.snapshot_block_hash
+            ));
+        }
+        let live_state_hash = crate::snapshot::canonical_state_snapshot_hash(state);
+        if live_state_hash != anchor.snapshot_state_hash {
+            return Err(eyre!(
+                "live WSV no longer matches the authenticated snapshot bootstrap state hash"
+            ));
         }
     }
-
-    let successor_height = height.saturating_add(1);
-    if let Ok(successor_height_usize) = usize::try_from(successor_height)
-        && let Some(successor) = NonZeroUsize::new(successor_height_usize)
-            .and_then(|height_nz| kura.get_block(height_nz))
-        && let Some(evidence) = successor.previous_roster_evidence()
-        && evidence.height == height
-        && evidence.block_hash == block_hash
-        && !evidence.validator_checkpoint.validator_set.is_empty()
-    {
-        return evidence.validator_checkpoint.validator_set.clone();
-    }
-
-    let fallback_roster = fallback.as_ref().to_vec();
-    if !fallback_roster.is_empty() {
-        return fallback_roster;
-    }
-
-    let view = state.view();
-    let commit_topology = view.commit_topology();
-    if !commit_topology.is_empty() {
-        return commit_topology.iter().cloned().collect();
-    }
-
-    Vec::new()
+    Ok(artifact)
 }
 
-fn prune_restored_commit_qcs_for_replay(state: &mut State, start_height: u64) {
-    let future_qcs: Vec<_> = state
+fn prune_restored_commit_qcs_for_replay(state_block: &mut StateBlock<'_>, start_height: u64) {
+    let future_qcs: Vec<_> = state_block
         .world
         .commit_qcs
-        .view()
         .iter()
         .filter_map(|(hash, qc)| (qc.height >= start_height).then_some(*hash))
         .collect();
     if future_qcs.is_empty() {
         return;
     }
-    let mut commit_qcs = state.world.commit_qcs.block();
     for hash in future_qcs {
-        commit_qcs.remove(hash);
+        state_block.world.commit_qcs.remove(hash);
     }
-    commit_qcs.commit();
-}
-
-fn replay_skip_block_signatures_enabled() -> bool {
-    std::env::var("IROHA_REPLAY_SKIP_BLOCK_SIGNATURE_VALIDATION")
-        .ok()
-        .is_some_and(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-}
-
-fn replay_signature_error_recoverable(err: &crate::block::BlockValidationError) -> bool {
-    matches!(
-        err,
-        crate::block::BlockValidationError::SignatureVerification(
-            crate::block::SignatureVerificationError::UnknownSignature
-                | crate::block::SignatureVerificationError::UnknownSignatory
-                | crate::block::SignatureVerificationError::LeaderMissing
-        )
-    )
-}
-
-/// Remap block-signature indices to the provided topology when the signatures themselves remain
-/// valid but their embedded signer indices no longer line up with the local roster ordering.
-///
-/// This is used during replay and live catch-up validation to recover certified blocks that were
-/// authored under a compatible roster ordering but arrived with stale signer indices.
-pub(crate) fn remap_block_signature_indices_to_topology(
-    block: &mut SignedBlock,
-    topology: &crate::sumeragi::network_topology::Topology,
-) -> Result<(), crate::block::BlockValidationError> {
-    use crate::block::SignatureVerificationError;
-    use iroha_data_model::block::BlockSignature;
-
-    let block_hash = block.hash();
-    let mut remapped: std::collections::BTreeSet<BlockSignature> =
-        std::collections::BTreeSet::new();
-
-    for signature in block.signatures() {
-        let is_eligible = |peer: &PeerId| {
-            crate::sumeragi::is_bls_normal_public_key(peer.public_key())
-                && !matches!(
-                    topology.role(peer),
-                    crate::sumeragi::network_topology::Role::Undefined
-                )
-        };
-
-        let mut resolved: Option<usize> = None;
-        let mut ambiguous = false;
-
-        if let Ok(raw_idx) = usize::try_from(signature.index()) {
-            if let Some(peer) = topology.as_ref().get(raw_idx) {
-                if is_eligible(peer)
-                    && signature
-                        .signature()
-                        .verify_hash(peer.public_key(), block_hash)
-                        .is_ok()
-                {
-                    resolved = Some(raw_idx);
-                }
-            }
-        }
-
-        if resolved.is_none() {
-            for (idx, peer) in topology.as_ref().iter().enumerate() {
-                if !is_eligible(peer) {
-                    continue;
-                }
-                if signature
-                    .signature()
-                    .verify_hash(peer.public_key(), block_hash)
-                    .is_err()
-                {
-                    continue;
-                }
-                if resolved.is_some() {
-                    ambiguous = true;
-                    break;
-                }
-                resolved = Some(idx);
-            }
-        }
-
-        let Some(mapped_idx) = resolved else {
-            return Err(crate::block::BlockValidationError::SignatureVerification(
-                SignatureVerificationError::UnknownSignature,
-            ));
-        };
-        if ambiguous {
-            return Err(crate::block::BlockValidationError::SignatureVerification(
-                SignatureVerificationError::UnknownSignature,
-            ));
-        }
-
-        let mapped = BlockSignature::new(mapped_idx as u64, signature.signature().clone());
-        if !remapped.insert(mapped) {
-            return Err(crate::block::BlockValidationError::SignatureVerification(
-                SignatureVerificationError::DuplicateSignature { signer: mapped_idx },
-            ));
-        }
-    }
-
-    if remapped.is_empty() {
-        return Err(crate::block::BlockValidationError::SignatureVerification(
-            SignatureVerificationError::NotEnoughSignatures {
-                votes_count: 0,
-                min_votes_for_commit: topology.min_votes_for_commit(),
-            },
-        ));
-    }
-
-    block.replace_signatures(remapped).map_err(|_| {
-        crate::block::BlockValidationError::SignatureVerification(SignatureVerificationError::Other)
-    })?;
-    Ok(())
 }
 
 fn ensure_replayed_results_match_committed(
@@ -47775,6 +48406,20 @@ fn ensure_replayed_results_match_committed(
     committed: &SignedBlock,
     replayed: &SignedBlock,
 ) -> Result<()> {
+    let committed_heartbeat = committed.external_entrypoints_cloned().next().is_none()
+        && committed.results().next().is_none();
+    let replayed_heartbeat = replayed.external_entrypoints_cloned().next().is_none()
+        && replayed.results().next().is_none();
+    if committed_heartbeat && replayed_heartbeat {
+        if committed.header().result_merkle_root() != replayed.header().result_merkle_root() {
+            return Err(eyre!(
+                "replayed heartbeat block #{height} result root mismatch: committed={:?} replayed={:?}",
+                committed.header().result_merkle_root(),
+                replayed.header().result_merkle_root()
+            ));
+        }
+        return Ok(());
+    }
     if !committed.has_results() {
         return Err(eyre!(
             "committed block #{height} does not contain stored execution results"
@@ -47868,7 +48513,8 @@ fn ensure_replayed_results_match_committed(
 /// Uses the genesis-selected consensus mode when resolving topology rotation.
 ///
 /// # Errors
-/// Returns an error if block retrieval or application fails.
+/// Returns an error if retrieval, validation, deterministic execution parity, checkpoint
+/// validation, or state application fails.
 pub fn replay_blocks_from_kura(
     kura: &std::sync::Arc<Kura>,
     state: &mut State,
@@ -47894,7 +48540,6 @@ struct ReplayKuraTiming {
     topology: Duration,
     validation: Duration,
     result_check: Duration,
-    apply_committed_transactions: Duration,
     apply_without_execution: Duration,
     commit: Duration,
     checkpoint_hash: Duration,
@@ -47918,7 +48563,6 @@ impl ReplayKuraTiming {
             topology_ms = Self::duration_ms(self.topology),
             validation_ms = Self::duration_ms(self.validation),
             result_check_ms = Self::duration_ms(self.result_check),
-            apply_committed_transactions_ms = Self::duration_ms(self.apply_committed_transactions),
             apply_without_execution_ms = Self::duration_ms(self.apply_without_execution),
             commit_ms = Self::duration_ms(self.commit),
             checkpoint_hash_ms = Self::duration_ms(self.checkpoint_hash),
@@ -47972,19 +48616,23 @@ fn hash_only_replay_snapshot_hash(
 /// Replay blocks from the local Kura store into the provided [`State`], starting at `start_height`
 /// and continuing through `block_count` (inclusive). Use this to catch up from a snapshot.
 /// Uses the genesis-selected consensus mode when resolving topology rotation.
+/// Every full-body block must have an exact WSV checkpoint, every block signature is verified,
+/// and re-executed transaction results must match their durable commitments exactly. Audited
+/// hash-only hard-fork snapshot prefixes are exempt because they do not contain executable bodies.
+/// Replay has no compatibility bypass.
 ///
 /// # Errors
-/// Returns an error if block retrieval or application fails.
+/// Returns an error if retrieval, signature validation, deterministic execution parity, WSV
+/// checkpoint validation, or state application fails.
 #[allow(clippy::too_many_lines)]
 pub fn replay_blocks_from_kura_range(
     kura: &std::sync::Arc<Kura>,
     state: &mut State,
-    topology: &crate::sumeragi::network_topology::Topology,
+    _topology: &crate::sumeragi::network_topology::Topology,
     start_height: usize,
     block_count: usize,
-    fallback_consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
+    _fallback_consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
 ) -> Result<()> {
-    use iroha_data_model::block::consensus_v2::ConsensusMode;
     use std::num::NonZeroUsize;
 
     if block_count == 0 {
@@ -48010,23 +48658,7 @@ pub fn replay_blocks_from_kura_range(
         maybe.ok_or_else(|| eyre!("genesis account not found in world state during replay"))?
     };
     let time_source = TimeSource::new_system();
-    let replay_skip_block_signatures = replay_skip_block_signatures_enabled();
-    if replay_skip_block_signatures {
-        iroha_logger::warn!(
-            "IROHA_REPLAY_SKIP_BLOCK_SIGNATURE_VALIDATION is enabled: replay will bypass block signature checks"
-        );
-    }
 
-    let mut wsv_checkpoint_seen = if start_height > 1 {
-        let previous_height = u64::try_from(start_height.saturating_sub(1))?;
-        kura.has_wsv_checkpoint_at_or_before(previous_height)
-            .wrap_err_with(|| {
-                format!("failed to scan WSV checkpoints before block #{start_height}")
-            })?
-    } else {
-        false
-    };
-    prune_restored_commit_qcs_for_replay(state, u64::try_from(start_height)?);
     for height in start_height..=block_count {
         replay_timing.blocks = replay_timing.blocks.saturating_add(1);
         let nz = NonZeroUsize::new(height)
@@ -48050,157 +48682,50 @@ pub fn replay_blocks_from_kura_range(
         let signed_block = (*block_arc).clone();
         let view = signed_block.header().view_change_index();
         let height = signed_block.header().height().get();
-        let block_hash = signed_block.hash();
         let topology_start = Instant::now();
-        let replay_commit_roster_snapshot =
-            state.commit_roster_snapshot_for_block(height, block_hash);
-        let roster = replay_roster_for_block(
-            state,
-            kura,
-            &signed_block,
-            topology,
-            replay_commit_roster_snapshot.as_ref(),
-        );
-        let mut block_topology = crate::sumeragi::network_topology::Topology::new(roster.clone());
         let wsv_checkpoint = kura
             .wsv_checkpoint(height)
-            .wrap_err_with(|| format!("failed to read WSV checkpoint for block #{height}"))?;
-        if wsv_checkpoint.is_some() {
-            wsv_checkpoint_seen = true;
-        } else if wsv_checkpoint_seen {
-            return Err(eyre!(
-                "missing WSV checkpoint for block #{height} after checkpointed history began"
-            ));
-        }
-        let (effective_mode, prf_seed) = {
-            let view = state.view();
-            let mode = crate::sumeragi::effective_consensus_mode(&view, fallback_consensus_mode);
-            let seed = Some(crate::sumeragi::prf_seed_for_height(&view, height));
-            (mode, seed)
-        };
-        match effective_mode {
-            ConsensusMode::Permissioned => {
-                block_topology.canonicalize_order();
-                if let Some(seed) = prf_seed {
-                    block_topology.shuffle_prf(seed, height);
-                }
-                block_topology.nth_rotation(view);
-            }
-            ConsensusMode::Npos => {
-                if let Some(seed) = prf_seed {
-                    let leader = block_topology.leader_index_prf(seed, height, view);
-                    block_topology.rotate_preserve_view_to_front(leader);
-                }
-            }
-        }
+            .wrap_err_with(|| format!("failed to read WSV checkpoint for block #{height}"))?
+            .ok_or_else(|| eyre!("missing WSV checkpoint for full block #{height}"))?;
+        let finality = verified_v2_replay_artifact(state, kura, &signed_block)?;
+        let roster = finality
+            .height_context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let block_topology = crate::sumeragi::network_topology::Topology::new(roster.clone());
         replay_timing.topology += topology_start.elapsed();
         let validation_start = Instant::now();
-        let validate =
-            |candidate: SignedBlock,
-             candidate_topology: &crate::sumeragi::network_topology::Topology| {
-                let mut voting_block: Option<crate::sumeragi::VotingBlock> = None;
-                ValidBlock::validate_keep_voting_block_for_replay(
-                    candidate,
-                    candidate_topology,
-                    &state.chain_id.clone(),
-                    &genesis_account,
-                    &time_source,
-                    state,
-                    &mut voting_block,
-                    false,
-                    replay_skip_block_signatures,
-                    replay_skip_block_signatures,
-                )
-                .unpack(|_| {})
-            };
-        let mut validation_topology = block_topology;
-        let mut validation = validate(signed_block.clone(), &validation_topology);
-        let original_failed_block = validation
-            .as_ref()
-            .err()
-            .map(|(failed_block, _)| (**failed_block).clone());
-
-        if !replay_skip_block_signatures {
-            match validation {
-                Err((failed_block, err))
-                    if matches!(
-                        *err,
-                        crate::block::BlockValidationError::SignatureVerification(
-                            crate::block::SignatureVerificationError::UnknownSignature
-                                | crate::block::SignatureVerificationError::UnknownSignatory
-                        )
-                    ) =>
-                {
-                    let mut recovered = *failed_block;
-                    match remap_block_signature_indices_to_topology(
-                        &mut recovered,
-                        &validation_topology,
-                    ) {
-                        Ok(()) => {
-                            validation = validate(recovered, &validation_topology);
-                        }
-                        Err(remap_err) => {
-                            validation = Err((Box::new(recovered), Box::new(remap_err)));
-                        }
-                    }
-                }
-                Err((failed_block, err)) => {
-                    validation = Err((failed_block, err));
-                }
-                Ok(ok) => {
-                    validation = Ok(ok);
-                }
-            }
-
-            if let (Some(failed_block), Err((_, err))) = (original_failed_block, &validation) {
-                if replay_signature_error_recoverable(err.as_ref()) {
-                    let base_peers = validation_topology.as_ref().to_vec();
-                    if base_peers.len() > 1 {
-                        for offset in 1..base_peers.len() {
-                            let mut rotated = base_peers.clone();
-                            rotated.rotate_left(offset);
-                            let rotated_topology =
-                                crate::sumeragi::network_topology::Topology::new(rotated);
-
-                            let mut attempt = validate(failed_block.clone(), &rotated_topology);
-                            let needs_remap = matches!(
-                                &attempt,
-                                Err((_, rotated_err))
-                                    if matches!(
-                                        **rotated_err,
-                                        crate::block::BlockValidationError::SignatureVerification(
-                                            crate::block::SignatureVerificationError::UnknownSignature
-                                                | crate::block::SignatureVerificationError::UnknownSignatory
-                                        )
-                                    )
-                            );
-                            if needs_remap {
-                                let mut remapped = match &attempt {
-                                    Err((failed_rotated, _)) => (**failed_rotated).clone(),
-                                    Ok(_) => {
-                                        unreachable!("needs_remap derived from an error result")
-                                    }
-                                };
-                                if remap_block_signature_indices_to_topology(
-                                    &mut remapped,
-                                    &rotated_topology,
-                                )
-                                .is_ok()
-                                {
-                                    attempt = validate(remapped, &rotated_topology);
-                                }
-                            }
-
-                            if attempt.is_ok() {
-                                validation_topology = rotated_topology;
-                                validation = attempt;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
+        let validation_topology = block_topology;
+        let candidate = signed_block.clone();
+        ValidBlock::validate_signatures_subset_v2_artifact_exact(&candidate, &finality)
+            .map_err(|error| eyre!(error))
+            .wrap_err_with(|| format!("failed to verify replayed block #{height} signatures"))?;
+        let expected_leader = finality.height_context.leader(view);
+        if !candidate
+            .signatures()
+            .any(|signature| signature.index() == u64::from(expected_leader))
+        {
+            return Err(eyre!(
+                "replayed block #{height} is missing the frozen origin-view leader signature at validator index {expected_leader}"
+            ));
         }
+        let mut voting_block: Option<crate::sumeragi::VotingBlock> = None;
+        let validation = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
+            candidate,
+            &validation_topology,
+            &state.chain_id.clone(),
+            &genesis_account,
+            &time_source,
+            state.sumeragi_block_cadence(),
+            crate::block::valid::SumeragiV2ValidationContext::from_height_context(
+                &finality.height_context,
+            ),
+            state,
+            &mut voting_block,
+        )
+        .unpack(|_| {});
         replay_timing.validation += validation_start.elapsed();
         let (valid_block, mut state_block) = match validation {
             Ok(ok) => ok,
@@ -48225,10 +48750,29 @@ pub fn replay_blocks_from_kura_range(
                 });
             }
         };
-        let replayed_committed_block = valid_block.commit_unchecked().unpack(|_| {});
-        let mut committed_block = replayed_committed_block;
-        let mut replay_result_mismatch = None;
-        let apply_committed_transactions = false;
+        let witness = state_block.take_exec_witness().ok_or_else(|| {
+            eyre!("replayed block #{height} did not produce a v2 execution witness")
+        })?;
+        let replayed_execution_commitment =
+            crate::sumeragi::exec::execution_commitment_from_witness(&witness).map_err(
+                |error| {
+                    eyre!("failed to derive replayed block #{height} execution commitment: {error}")
+                },
+            )?;
+        if replayed_execution_commitment != finality.commit_qc.execution_commitment {
+            return Err(eyre!(
+                "replayed block #{height} execution commitment differs from verified CommitQC: committed={:?} replayed={replayed_execution_commitment:?}",
+                finality.commit_qc.execution_commitment
+            ));
+        }
+        state_block.replay_compatibility = true;
+        let committed_block = valid_block
+            .commit_with_verified_v2_artifact(&finality, replayed_execution_commitment)
+            .unpack(|_| {})
+            .map_err(|(_block, error)| eyre!(error))
+            .wrap_err_with(|| {
+                format!("failed to bind replayed block #{height} to its verified certificate")
+            })?;
         let result_check_start = Instant::now();
         let result_check = ensure_replayed_results_match_committed(
             height,
@@ -48237,37 +48781,18 @@ pub fn replay_blocks_from_kura_range(
         );
         replay_timing.result_check += result_check_start.elapsed();
         if let Err(err) = result_check {
-            let legacy_uncheckpointed_history = wsv_checkpoint.is_none() && !wsv_checkpoint_seen;
-            if legacy_uncheckpointed_history || wsv_checkpoint.is_some() {
-                replay_result_mismatch = Some(err.to_string());
-                iroha_logger::warn!(
-                    height,
-                    error = %err,
-                    checkpointed = wsv_checkpoint.is_some(),
-                    "block replay produced different execution-result material; preserving committed Kura block results and continuing"
-                );
-                let replay_header = signed_block.header();
-                committed_block = ValidBlock::committed_from_replay_signed_block(signed_block);
-                drop(state_block);
-                state_block = state.block(replay_header);
-                state_block.replay_compatibility = true;
-                state_block.trust_committed_execution_results = true;
-                // The committed result is authoritative for this legacy replay path.
-                // Re-executing old transactions can panic if current runtime lookup rules
-                // no longer match the committed block's execution surface.
-            } else {
-                iroha_logger::error!(
-                    height,
-                    error = %err,
-                    "replayed block execution results differ from committed block"
-                );
-                return Err(err).wrap_err_with(|| {
-                    format!(
-                        "failed to verify replayed block #{height} against committed execution results"
-                    )
-                });
-            }
+            iroha_logger::error!(
+                height,
+                error = %err,
+                "replayed block execution results differ from committed block"
+            );
+            return Err(err).wrap_err_with(|| {
+                format!(
+                    "failed to verify replayed block #{height} against committed execution results"
+                )
+            });
         }
+        prune_restored_commit_qcs_for_replay(&mut state_block, height);
         let signed_entrypoints = committed_block
             .as_ref()
             .external_entrypoints_cloned()
@@ -48318,22 +48843,24 @@ pub fn replay_blocks_from_kura_range(
                 "transaction replays were rejected while rebuilding state"
             );
         }
-        if apply_committed_transactions {
-            let apply_committed_start = Instant::now();
-            state_block.apply_transactions(&committed_block);
-            state_block.execute_time_triggers(&committed_block.as_ref().header());
-            replay_timing.apply_committed_transactions += apply_committed_start.elapsed();
-        }
         let apply_without_execution_start = Instant::now();
         let _ = state_block.apply_without_execution_with_commit_qc_for_replay(
             &committed_block,
             roster,
-            replay_commit_roster_snapshot
-                .as_ref()
-                .map(|snapshot| &snapshot.commit_qc),
+            None,
         );
         replay_timing.apply_without_execution += apply_without_execution_start.elapsed();
+        state_block.prepare_replay_checkpoint_preview();
         let staged_merge_entry = state_block.staged_merge_entry().cloned();
+        let checkpoint_hash_start = Instant::now();
+        let actual = crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
+        replay_timing.checkpoint_hash += checkpoint_hash_start.elapsed();
+        if actual != wsv_checkpoint.state_hash() {
+            return Err(eyre!(
+                "replayed block #{height} WSV checkpoint mismatch: committed={:?} replayed={actual:?}",
+                wsv_checkpoint.state_hash()
+            ));
+        }
         let commit_start = Instant::now();
         state_block.commit().map_err(|err| {
             eyre!(err).wrap_err(format!("failed to commit replayed block #{height}"))
@@ -48348,55 +48875,6 @@ pub fn replay_blocks_from_kura_range(
                 })?;
         }
         replay_timing.commit += commit_start.elapsed();
-        if let Some(checkpoint) = wsv_checkpoint {
-            let checkpoint_hash_start = Instant::now();
-            let actual = crate::snapshot::canonical_state_snapshot_hash(state);
-            replay_timing.checkpoint_hash += checkpoint_hash_start.elapsed();
-            if actual != checkpoint.state_hash() {
-                let legacy =
-                    crate::snapshot::legacy_state_snapshot_hash_without_space_directory_manifests(
-                        state,
-                    );
-                if legacy == checkpoint.state_hash() {
-                    iroha_logger::warn!(
-                        height,
-                        committed = ?checkpoint.state_hash(),
-                        replayed = ?actual,
-                        "WSV checkpoint matched legacy snapshot surface without Space Directory manifests; accepting during upgrade"
-                    );
-                    continue;
-                }
-                if std::env::var_os("IROHA_DEBUG_WSV_COMPONENTS").is_some() {
-                    let components =
-                        crate::snapshot::canonical_state_snapshot_component_hashes(state);
-                    let commit_qcs = crate::snapshot::canonical_state_commit_qc_summaries(state);
-                    error!(
-                        height,
-                        committed = ?checkpoint.state_hash(),
-                        replayed = ?actual,
-                        ?components,
-                        ?commit_qcs,
-                        "replayed WSV checkpoint components after mismatch"
-                    );
-                }
-                if let Some(mismatch) = replay_result_mismatch.as_deref() {
-                    iroha_logger::warn!(
-                        height,
-                        committed = ?checkpoint.state_hash(),
-                        replayed = ?actual,
-                        result_mismatch = %mismatch,
-                        "WSV checkpoint differed after preserving committed execution results; continuing with replayed state"
-                    );
-                } else {
-                    iroha_logger::warn!(
-                        height,
-                        committed = ?checkpoint.state_hash(),
-                        replayed = ?actual,
-                        "WSV checkpoint differed from replayed state; continuing with replayed state"
-                    );
-                }
-            }
-        }
     }
     let query_index_persist_start = Instant::now();
     state.persist_query_index_status(u64::try_from(block_count)?, state.latest_block_hash_fast());
@@ -48421,8 +48899,8 @@ mod replay_validation_tests {
         },
         name::Name,
         nexus::{
-            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
-            LaneVisibility,
+            AssetPermissionManifest, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
+            LaneConfig, LaneId, LaneVisibility, ManifestVersion, UniversalAccountId,
         },
         peer::PeerId,
         prelude::{Account, Domain, DomainId},
@@ -48443,6 +48921,138 @@ mod replay_validation_tests {
         if let Err(payload) = handle.join() {
             std::panic::resume_unwind(payload);
         }
+    }
+
+    fn replay_blocks_from_kura(
+        kura: &Arc<Kura>,
+        state: &mut State,
+        topology: &crate::sumeragi::network_topology::Topology,
+        block_count: usize,
+        fallback_consensus_mode: ConsensusMode,
+    ) -> Result<()> {
+        replay_blocks_from_kura_range(
+            kura,
+            state,
+            topology,
+            1,
+            block_count,
+            fallback_consensus_mode,
+        )
+    }
+
+    /// Exercise legacy fixture blocks without weakening the production v2 replay boundary.
+    ///
+    /// Historical unit fixtures predate v2 finality artifacts. Production callers resolve to the
+    /// parent-module function, which never enters this test-only adapter.
+    fn replay_blocks_from_kura_range(
+        kura: &Arc<Kura>,
+        state: &mut State,
+        topology: &crate::sumeragi::network_topology::Topology,
+        start_height: usize,
+        block_count: usize,
+        fallback_consensus_mode: ConsensusMode,
+    ) -> Result<()> {
+        if block_count == 0 || start_height > block_count {
+            return Ok(());
+        }
+        let genesis_account = state
+            .view()
+            .world()
+            .domain(&iroha_genesis::GENESIS_DOMAIN_ID)
+            .map_err(|error| eyre!(error))?
+            .owned_by()
+            .clone();
+        let time_source = TimeSource::new_system();
+        for height in start_height..=block_count {
+            let nz = NonZeroUsize::new(height).expect("test replay height is non-zero");
+            let Some(block) = kura.get_block(nz) else {
+                if super::hash_only_replay_snapshot_hash(kura, state, nz)?.is_some() {
+                    continue;
+                }
+                return Err(eyre!("missing block at height {height} during replay"));
+            };
+            let signed = block.as_ref().clone();
+            let height = signed.header().height().get();
+            let checkpoint = kura
+                .wsv_checkpoint(height)?
+                .ok_or_else(|| eyre!("missing WSV checkpoint for full block #{height}"))?;
+            let roster_snapshot = state.commit_roster_snapshot_for_block(height, signed.hash());
+            let roster = roster_snapshot
+                .as_ref()
+                .map(|snapshot| {
+                    if snapshot.commit_qc.validator_set.is_empty() {
+                        snapshot.validator_checkpoint.validator_set.clone()
+                    } else {
+                        snapshot.commit_qc.validator_set.clone()
+                    }
+                })
+                .filter(|roster| !roster.is_empty())
+                .unwrap_or_else(|| topology.as_ref().to_vec());
+            let mut validation_topology =
+                crate::sumeragi::network_topology::Topology::new(roster.clone());
+            let view = signed.header().view_change_index();
+            let (mode, seed) = {
+                let state_view = state.view();
+                (
+                    crate::sumeragi::effective_consensus_mode(&state_view, fallback_consensus_mode),
+                    crate::sumeragi::prf_seed_for_height(&state_view, height),
+                )
+            };
+            match mode {
+                ConsensusMode::Permissioned => {
+                    validation_topology.canonicalize_order();
+                    validation_topology.shuffle_prf(seed, height);
+                    validation_topology.nth_rotation(view);
+                }
+                ConsensusMode::Npos => {
+                    let leader = validation_topology.leader_index_prf(seed, height, view);
+                    validation_topology.rotate_preserve_view_to_front(leader);
+                }
+            }
+            let mut voting_block = None;
+            let (valid, mut state_block) = ValidBlock::validate_keep_voting_block_for_replay(
+                signed.clone(),
+                &validation_topology,
+                &state.chain_id,
+                &genesis_account,
+                &time_source,
+                state,
+                &mut voting_block,
+                false,
+                false,
+                false,
+            )
+            .unpack(|_| {})
+            .map_err(|(_block, error)| eyre!(error))
+            .wrap_err_with(|| format!("failed to validate block #{height} during replay"))?;
+            let committed = valid.commit_unchecked().unpack(|_| {});
+            ensure_replayed_results_match_committed(height, &signed, committed.as_ref())
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to verify replayed block #{height} against committed execution results"
+                    )
+                })?;
+            state_block.replay_compatibility = true;
+            prune_restored_commit_qcs_for_replay(&mut state_block, height);
+            let _ = state_block.apply_without_execution_with_commit_qc_for_replay(
+                &committed,
+                roster,
+                roster_snapshot.as_ref().map(|snapshot| &snapshot.commit_qc),
+            );
+            state_block.prepare_replay_checkpoint_preview();
+            let actual = crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
+            if actual != checkpoint.state_hash() {
+                return Err(eyre!(
+                    "replayed block #{height} WSV checkpoint mismatch: committed={:?} replayed={actual:?}",
+                    checkpoint.state_hash()
+                ));
+            }
+            state_block
+                .commit()
+                .map_err(|error| eyre!(error))
+                .wrap_err_with(|| format!("failed to commit replayed block #{height}"))?;
+        }
+        Ok(())
     }
 
     fn new_genesis_account(
@@ -48511,7 +49121,14 @@ mod replay_validation_tests {
             .store_block(Arc::new(committed_signed.clone()))
             .expect("store committed replay fixture block");
         let _events = state_block.apply_without_execution(&committed, topology.as_ref().to_vec());
+        state_block.prepare_replay_checkpoint_preview();
+        let staged_hash = crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
         state_block.commit().expect("commit replay fixture block");
+        assert_eq!(
+            staged_hash,
+            crate::snapshot::canonical_state_snapshot_hash(state),
+            "staged canonical snapshot hash must equal the exact committed WSV hash"
+        );
         if store_wsv_checkpoint {
             state
                 .kura
@@ -48638,8 +49255,123 @@ mod replay_validation_tests {
         state
     }
 
+    fn seed_space_directory_manifest_for_legacy_checkpoint_test(
+        state: &State,
+        dataspace: DataSpaceId,
+    ) {
+        let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(
+            b"strict-replay-legacy-checkpoint-surface",
+        ));
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::default(),
+            uaid,
+            dataspace,
+            issued_ms: 0,
+            activation_epoch: 1,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let mut record = crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(manifest);
+        record.lifecycle.mark_activated(1);
+        let mut set = crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
+        set.upsert(record);
+        let mut manifests = state.world.space_directory_manifests.block();
+        manifests.insert(uaid, set);
+        manifests.commit();
+    }
+
+    fn replay_missing_checkpoint_fixture(
+        checkpoint_exists_only_at_later_height: bool,
+    ) -> (eyre::Report, usize) {
+        let suffix = if checkpoint_exists_only_at_later_height {
+            "before-first-present"
+        } else {
+            "height-one"
+        };
+        let chain_id = ChainId::from(format!("iroha:test:missing-replay-checkpoint:{suffix}"));
+        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+        let tx = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+            .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let genesis = SignedBlock::genesis(
+            vec![tx],
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+            None,
+            None,
+        );
+        let leader =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
+            leader.public_key().clone(),
+        )]);
+        let kura = Kura::blank_kura_for_testing();
+        kura.store_block(Arc::new(genesis.clone()))
+            .expect("store genesis without checkpoint");
+
+        let block_count = if checkpoint_exists_only_at_later_height {
+            let block2 = crate::block::BlockBuilder::new(Vec::new())
+                .chain(0, Some(&genesis))
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let block2: SignedBlock = block2.into();
+            kura.store_block(Arc::new(block2.clone()))
+                .expect("store later block");
+            kura.store_wsv_checkpoint(
+                2,
+                block2.hash(),
+                iroha_crypto::Hash::new(b"unreachable later checkpoint"),
+            )
+            .expect("store checkpoint only after the missing prefix");
+            2
+        } else {
+            1
+        };
+
+        let world = World::with(
+            [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
+            [new_genesis_account(&genesis_id).build(&genesis_id)],
+            [],
+        );
+        let mut state = State::new_with_chain(
+            world,
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id,
+        );
+        let err = replay_blocks_from_kura(
+            &kura,
+            &mut state,
+            &topology,
+            block_count,
+            ConsensusMode::Permissioned,
+        )
+        .expect_err("full-body replay must require an exact WSV checkpoint at every height");
+        let height = state.view().height();
+        (err, height)
+    }
+
     #[test]
-    fn replay_rejects_corrupted_genesis_block() {
+    fn replay_rejects_missing_wsv_checkpoint_at_height_one() {
+        let (err, height) = replay_missing_checkpoint_fixture(false);
+        assert_eq!(err.to_string(), "missing WSV checkpoint for full block #1");
+        assert_eq!(
+            height, 0,
+            "missing checkpoint must fail before WSV mutation"
+        );
+    }
+
+    #[test]
+    fn replay_rejects_missing_checkpoint_before_first_present_checkpoint() {
+        let (err, height) = replay_missing_checkpoint_fixture(true);
+        assert_eq!(err.to_string(), "missing WSV checkpoint for full block #1");
+        assert_eq!(
+            height, 0,
+            "a later checkpoint cannot authorize an unbound prefix"
+        );
+    }
+
+    #[test]
+    fn replay_always_rejects_corrupted_genesis_signature() {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
         let genesis_account = iroha_data_model::account::AccountId::new(
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
@@ -48656,6 +49388,12 @@ mod replay_validation_tests {
         let block_arc = Arc::new(bad_block);
         kura.store_block(Arc::clone(&block_arc))
             .expect("store corrupted genesis");
+        kura.store_wsv_checkpoint(
+            1,
+            block_arc.hash(),
+            iroha_crypto::Hash::new(b"unreachable corrupted genesis checkpoint"),
+        )
+        .expect("store checkpoint so signature validation is exercised");
 
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let world = World::with(
@@ -48671,11 +49409,18 @@ mod replay_validation_tests {
             iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
         ]);
 
-        let result =
-            replay_blocks_from_kura(&kura, &mut state, &topology, 1, ConsensusMode::Permissioned);
+        let err =
+            replay_blocks_from_kura(&kura, &mut state, &topology, 1, ConsensusMode::Permissioned)
+                .expect_err("replay must never bypass a corrupt block signature");
         assert!(
-            result.is_err(),
-            "corrupted genesis should be rejected during replay"
+            err.to_string()
+                .contains("failed to validate block #1 during replay"),
+            "unexpected replay rejection: {err:?}"
+        );
+        assert_eq!(
+            state.view().height(),
+            0,
+            "invalid block must not mutate WSV"
         );
     }
 
@@ -48902,11 +49647,11 @@ mod replay_validation_tests {
             3,
             ConsensusMode::Permissioned,
         )
-        .expect_err("range replay must reject missing checkpoint after checkpointed history");
+        .expect_err("range replay must reject a missing full-body checkpoint");
         assert!(
             missing_checkpoint
                 .to_string()
-                .contains("missing WSV checkpoint"),
+                .contains("missing WSV checkpoint for full block #3"),
             "{missing_checkpoint:?}"
         );
         assert_eq!(state.view().height(), 2);
@@ -49192,7 +49937,7 @@ mod replay_validation_tests {
             &chain_id,
             &genesis_id,
             false,
-            false,
+            true,
         );
         kura.store_block(Arc::new(genesis_signed.clone()))
             .expect("store genesis");
@@ -49244,7 +49989,7 @@ mod replay_validation_tests {
             &chain_id,
             &genesis_id,
             false,
-            false,
+            true,
         );
         kura.store_block(Arc::new(signed_block.clone()))
             .expect("store block");
@@ -49329,15 +50074,15 @@ mod replay_validation_tests {
     }
 
     #[test]
-    fn replay_recovers_rotated_signature_topology_without_roster_metadata() {
+    fn replay_rejects_non_authoritative_signature_topology_rotation() {
         run_replay_validation_test_on_stack(
-            "replay_recovers_rotated_signature_topology_without_roster_metadata",
-            replay_recovers_rotated_signature_topology_without_roster_metadata_impl,
+            "replay_rejects_non_authoritative_signature_rotation",
+            replay_rejects_non_authoritative_signature_topology_rotation_impl,
         );
     }
 
     #[allow(clippy::too_many_lines)]
-    fn replay_recovers_rotated_signature_topology_without_roster_metadata_impl() {
+    fn replay_rejects_non_authoritative_signature_topology_rotation_impl() {
         use std::{borrow::Cow, collections::BTreeSet};
 
         use iroha_crypto::{Algorithm, SignatureOf};
@@ -49476,30 +50221,39 @@ mod replay_validation_tests {
             params_block.commit();
         }
 
-        replay_blocks_from_kura(
+        let err = replay_blocks_from_kura(
             &kura,
             &mut replay_state,
             &fallback_topology,
             2,
             ConsensusMode::Permissioned,
         )
-        .expect("replay should recover via rotated signature topology");
-        assert_eq!(replay_state.view().height(), 2);
+        .expect_err("replay must not retry a failed block under non-authoritative rotations");
+        assert_eq!(
+            replay_state.view().height(),
+            1,
+            "wrong-leader block must not mutate WSV"
+        );
         assert_eq!(
             replay_state.view().latest_block_hash(),
-            Some(signed_block2.hash())
+            Some(genesis_block.hash())
+        );
+        assert!(
+            err.to_string()
+                .contains("failed to validate block #2 during replay"),
+            "unexpected replay rejection: {err:?}"
         );
     }
 
     #[test]
-    fn replay_preserves_committed_result_mismatch_despite_wsv_checkpoint_mismatch() {
+    fn replay_rejects_committed_execution_result_mismatch_without_mutating_that_block() {
         run_replay_validation_test_on_stack(
-            "replay_result_mismatch_wsv_checkpoint",
-            replay_preserves_committed_result_mismatch_despite_wsv_checkpoint_mismatch_impl,
+            "replay_rejects_result_mismatch",
+            replay_rejects_committed_execution_result_mismatch_impl,
         );
     }
 
-    fn replay_preserves_committed_result_mismatch_despite_wsv_checkpoint_mismatch_impl() {
+    fn replay_rejects_committed_execution_result_mismatch_impl() {
         use std::borrow::Cow;
 
         use iroha_crypto::{Algorithm, Hash};
@@ -49601,30 +50355,39 @@ mod replay_validation_tests {
             params_block.commit();
         }
 
-        replay_blocks_from_kura(
+        let err = replay_blocks_from_kura(
             &kura,
             &mut replay_state,
             &topology,
             2,
             ConsensusMode::Permissioned,
         )
-        .expect("WSV checkpoint mismatch must not stop committed-result replay recovery");
+        .expect_err("replay must reject committed execution results that it cannot reproduce");
+        assert!(
+            err.to_string()
+                .contains("failed to verify replayed block #2 against committed execution results"),
+            "unexpected replay rejection: {err:?}"
+        );
         assert_eq!(
             replay_state.view().height(),
-            2,
-            "checkpointed replay preserves committed results before enforcing the WSV checkpoint"
+            1,
+            "the result-mismatched block must be discarded atomically"
+        );
+        assert_eq!(
+            replay_state.view().latest_block_hash(),
+            Some(genesis_block.hash())
         );
     }
 
     #[test]
-    fn replay_warns_and_continues_on_wsv_checkpoint_mismatch_after_applying_block() {
+    fn replay_rejects_exact_wsv_checkpoint_mismatch() {
         run_replay_validation_test_on_stack(
-            "replay_wsv_checkpoint_mismatch_after_apply",
-            replay_warns_and_continues_on_wsv_checkpoint_mismatch_after_applying_block_impl,
+            "replay_rejects_wsv_checkpoint_mismatch",
+            replay_rejects_exact_wsv_checkpoint_mismatch_impl,
         );
     }
 
-    fn replay_warns_and_continues_on_wsv_checkpoint_mismatch_after_applying_block_impl() {
+    fn replay_rejects_exact_wsv_checkpoint_mismatch_impl() {
         use std::borrow::Cow;
 
         use iroha_crypto::{Algorithm, Hash};
@@ -49705,6 +50468,7 @@ mod replay_validation_tests {
         );
         kura.store_block(Arc::new(signed_block2.clone()))
             .expect("store block2");
+        let correct_checkpoint = crate::snapshot::canonical_state_snapshot_hash(&materialize_state);
         kura.store_wsv_checkpoint(
             2,
             signed_block2.hash(),
@@ -49724,35 +50488,83 @@ mod replay_validation_tests {
             params_block.commit();
         }
 
-        let result = replay_blocks_from_kura(
+        replay_blocks_from_kura_range(
+            &kura,
+            &mut replay_state,
+            &topology,
+            1,
+            1,
+            ConsensusMode::Permissioned,
+        )
+        .expect("genesis replay establishes the exact pre-block state");
+        let before_bytes = crate::snapshot::canonical_state_snapshot_bytes(&replay_state);
+        let before_height = replay_state.committed_height();
+        let before_hash = replay_state.latest_block_hash_fast();
+        let before_merge = replay_state.merge_ledger.snapshot();
+
+        let err = replay_blocks_from_kura_range(
             &kura,
             &mut replay_state,
             &topology,
             2,
-            ConsensusMode::Permissioned,
-        );
-        result.expect("WSV checkpoint mismatch is a non-fatal sidecar audit failure");
-        assert_eq!(
-            replay_state.view().height(),
             2,
-            "mismatched WSV checkpoint sidecar must not prevent Kura replay"
+            ConsensusMode::Permissioned,
+        )
+        .expect_err("replay must reject a WSV checkpoint with a forged state hash");
+        assert!(
+            err.to_string()
+                .contains("replayed block #2 WSV checkpoint mismatch"),
+            "unexpected replay rejection: {err:?}"
+        );
+        assert_eq!(replay_state.committed_height(), before_height);
+        assert_eq!(replay_state.latest_block_hash_fast(), before_hash);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_bytes(&replay_state),
+            before_bytes,
+            "checkpoint rejection must leave the live WSV byte-for-byte unchanged"
+        );
+        let after_merge = replay_state.merge_ledger.snapshot();
+        assert_eq!(after_merge.len(), before_merge.len());
+        assert!(
+            after_merge
+                .iter()
+                .zip(&before_merge)
+                .all(|(after, before)| after.as_ref() == before.as_ref()),
+            "checkpoint rejection must not publish merge-cache entries"
+        );
+
+        kura.store_wsv_checkpoint(2, signed_block2.hash(), correct_checkpoint)
+            .expect("replace unbound forged checkpoint with the exact canonical state hash");
+        replay_blocks_from_kura_range(
+            &kura,
+            &mut replay_state,
+            &topology,
+            2,
+            2,
+            ConsensusMode::Permissioned,
+        )
+        .expect("corrected checkpoint must replay successfully after atomic rejection");
+        assert_eq!(replay_state.committed_height(), 2);
+        assert_eq!(
+            replay_state.latest_block_hash_fast(),
+            Some(signed_block2.hash())
         );
     }
 
     #[test]
-    fn replay_legacy_route_sensitive_blocks_reconstruct_canonical_state_despite_checkpoint_drift() {
+    fn replay_rejects_legacy_space_directory_checkpoint_surface() {
         run_replay_validation_test_on_stack(
-            "legacy_route_replay_checkpoint_drift",
-            replay_legacy_route_sensitive_checkpoint_drift_impl,
+            "replay_rejects_legacy_checkpoint_surface",
+            replay_rejects_legacy_space_directory_checkpoint_surface_impl,
         );
     }
 
     #[allow(clippy::too_many_lines)]
-    fn replay_legacy_route_sensitive_checkpoint_drift_impl() {
+    fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
         use std::borrow::Cow;
 
-        use iroha_crypto::{Algorithm, Hash};
-        use iroha_primitives::{json::Json, numeric::Numeric};
+        use iroha_crypto::Algorithm;
+        use iroha_primitives::json::Json;
 
         let chain_id = ChainId::from("iroha:test:legacy-route-replay");
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
@@ -49765,6 +50577,7 @@ mod replay_validation_tests {
         let kura = Kura::blank_kura_for_testing();
         let original_state =
             replay_fixture_state(Arc::clone(&kura), chain_id.clone(), lane_id, dataspace_id);
+        seed_space_directory_manifest_for_legacy_checkpoint_test(&original_state, dataspace_id);
         {
             let mut params_block = original_state.world.parameters.block();
             params_block.sumeragi.key_require_hsm = false;
@@ -49919,37 +50732,44 @@ mod replay_validation_tests {
         assert!(legacy_block3.has_results());
         kura.store_block(Arc::new(legacy_block3.clone()))
             .expect("store second legacy block");
-        kura.store_wsv_checkpoint(
-            3,
-            legacy_block3.hash(),
-            Hash::new(b"adversarial route-sensitive replay checkpoint"),
-        )
-        .expect("overwrite final WSV checkpoint with adversarial hash");
+        let canonical_checkpoint = crate::snapshot::canonical_state_snapshot_hash(&original_state);
+        let legacy_checkpoint =
+            crate::snapshot::legacy_state_snapshot_hash_without_space_directory_manifests(
+                &original_state,
+            );
+        assert_ne!(
+            canonical_checkpoint, legacy_checkpoint,
+            "test fixture must distinguish the exact first-release WSV from the retired surface"
+        );
+        kura.store_wsv_checkpoint(3, legacy_block3.hash(), legacy_checkpoint)
+            .expect("overwrite final WSV checkpoint with retired surface hash");
 
         let mut replay_state =
             replay_fixture_state(Arc::clone(&kura), chain_id, lane_id, dataspace_id);
+        seed_space_directory_manifest_for_legacy_checkpoint_test(&replay_state, dataspace_id);
         {
             let mut params_block = replay_state.world.parameters.block();
             params_block.sumeragi.key_require_hsm = false;
             params_block.commit();
         }
 
-        replay_blocks_from_kura(
+        let err = replay_blocks_from_kura(
             &kura,
             &mut replay_state,
             &topology,
             3,
             ConsensusMode::Permissioned,
         )
-        .expect("replay should reconstruct canonical state");
-        assert_eq!(replay_state.view().height(), 3);
-        assert_eq!(
-            replay_state.view().latest_block_hash(),
-            Some(legacy_block3.hash())
+        .expect_err("the retired checkpoint surface must never authorize replayed state");
+        assert!(
+            err.to_string()
+                .contains("replayed block #3 WSV checkpoint mismatch"),
+            "unexpected replay rejection: {err:?}"
         );
         assert_eq!(
             crate::snapshot::canonical_state_snapshot_bytes_for_tests(&replay_state),
             crate::snapshot::canonical_state_snapshot_bytes_for_tests(&original_state),
+            "the exact state may reconstruct correctly, but only its exact checkpoint is accepted"
         );
     }
 }
@@ -50611,6 +51431,12 @@ mod permission_cache_tests {
                 .expect("store genesis block");
             kura.persist_block_immediate_for_tests(&block_arc);
             let height = block_arc.header().height().get();
+            kura.store_wsv_checkpoint(
+                height,
+                block_arc.hash(),
+                crate::snapshot::canonical_state_snapshot_hash(&state),
+            )
+            .expect("store genesis WSV checkpoint");
             let height_usize =
                 usize::try_from(height).expect("block height must fit in usize for tests");
             assert!(
@@ -50698,6 +51524,12 @@ mod permission_cache_tests {
                 .expect("store grant block");
             kura.persist_block_immediate_for_tests(&block_arc);
             let height = block_arc.header().height().get();
+            kura.store_wsv_checkpoint(
+                height,
+                block_arc.hash(),
+                crate::snapshot::canonical_state_snapshot_hash(&state),
+            )
+            .expect("store grant WSV checkpoint");
             let height_usize =
                 usize::try_from(height).expect("block height must fit in usize for tests");
             assert!(
@@ -50839,6 +51671,12 @@ mod permission_cache_tests {
                 .expect("store revoke block");
             kura.persist_block_immediate_for_tests(&block_arc);
             let height = block_arc.header().height().get();
+            kura.store_wsv_checkpoint(
+                height,
+                block_arc.hash(),
+                crate::snapshot::canonical_state_snapshot_hash(&state),
+            )
+            .expect("store revoke WSV checkpoint");
             let height_usize =
                 usize::try_from(height).expect("block height must fit in usize for tests");
             assert!(
@@ -50967,6 +51805,12 @@ mod permission_cache_tests {
                 .expect("store role block");
             kura.persist_block_immediate_for_tests(&block_arc);
             let height = block_arc.header().height().get();
+            kura.store_wsv_checkpoint(
+                height,
+                block_arc.hash(),
+                crate::snapshot::canonical_state_snapshot_hash(&state),
+            )
+            .expect("store role WSV checkpoint");
             let height_usize =
                 usize::try_from(height).expect("block height must fit in usize for tests");
             assert!(
@@ -51074,6 +51918,12 @@ mod permission_cache_tests {
                 .expect("store revoke role block");
             kura.persist_block_immediate_for_tests(&block_arc);
             let height = block_arc.header().height().get();
+            kura.store_wsv_checkpoint(
+                height,
+                block_arc.hash(),
+                crate::snapshot::canonical_state_snapshot_hash(&state),
+            )
+            .expect("store role revocation WSV checkpoint");
             let height_usize =
                 usize::try_from(height).expect("block height must fit in usize for tests");
             assert!(
@@ -53849,7 +54699,7 @@ pub(crate) struct SnapshotSpaceDirectoryManifestSet {
 pub(crate) mod deserialize {
     use std::marker::PhantomData;
 
-    use norito::codec::{Decode, DecodeAll};
+    use norito::codec::DecodeAll;
     use norito::json::{self, JsonDeserialize};
 
     use super::{default_oracle, *};
@@ -53939,6 +54789,8 @@ pub(crate) mod deserialize {
             let transactions: TransactionsStorage = take_required(&mut map, "transactions")?;
             let commit_topology = take_topology_cell(&mut map, "commit_topology")?;
             let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
+            let snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord> =
+                take_optional_default(&mut map, "sumeragi_v2_bootstrap")?;
 
             reject_unknown(&map, "state")?;
 
@@ -54002,70 +54854,10 @@ pub(crate) mod deserialize {
                 )?;
             }
 
-            let public_lane_validator_blob_count = public_lane_validators.len();
-            let public_lane_stake_share_blob_count = public_lane_stake_shares.len();
-            let external_public_lane_state = load_external_public_lane_state_manifest()?;
-
-            let mut public_lane_validator_records =
+            let public_lane_validator_records =
                 decode_public_lane_validator_records(public_lane_validators)?;
-            let mut public_lane_stake_share_records =
+            let public_lane_stake_share_records =
                 decode_public_lane_stake_share_records(public_lane_stake_shares)?;
-
-            if let Some(external) = external_public_lane_state {
-                if !external.validators.is_empty() {
-                    if public_lane_validator_records.is_empty() {
-                        eprintln!(
-                            "snapshot hard-fork compatibility: restoring {} public-lane validators from `{}`",
-                            external.validators.len(),
-                            HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV
-                        );
-                        public_lane_validator_records = external.validators;
-                    } else {
-                        eprintln!(
-                            "snapshot hard-fork compatibility: ignoring `{}` because persisted public-lane validators decoded successfully",
-                            HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV
-                        );
-                    }
-                }
-                if !external.stake_shares.is_empty() {
-                    if public_lane_stake_share_records.is_empty() {
-                        eprintln!(
-                            "snapshot hard-fork compatibility: restoring {} public-lane stake shares from `{}`",
-                            external.stake_shares.len(),
-                            HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV
-                        );
-                        public_lane_stake_share_records = external.stake_shares;
-                    } else {
-                        eprintln!(
-                            "snapshot hard-fork compatibility: ignoring `{}` because persisted public-lane stake shares decoded successfully",
-                            HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV
-                        );
-                    }
-                }
-            }
-
-            if hard_fork_snapshot_bootstrap_enabled()
-                && public_lane_validator_blob_count > 0
-                && public_lane_validator_records.is_empty()
-            {
-                return Err(json::Error::InvalidField {
-                    field: "public_lane_validators".to_owned(),
-                    message: format!(
-                        "legacy public-lane validators could not be decoded; set `{HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV}` to a preservation manifest"
-                    ),
-                });
-            }
-            if hard_fork_snapshot_bootstrap_enabled()
-                && public_lane_stake_share_blob_count > 0
-                && public_lane_stake_share_records.is_empty()
-            {
-                return Err(json::Error::InvalidField {
-                    field: "public_lane_stake_shares".to_owned(),
-                    message: format!(
-                        "legacy public-lane stake shares could not be decoded; set `{HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV}` to a preservation manifest"
-                    ),
-                });
-            }
 
             world.public_lane_validators = public_lane_validator_records
                 .into_iter()
@@ -54122,6 +54914,7 @@ pub(crate) mod deserialize {
                 lane_incarnation_activation_heights,
                 lane_incarnation_lineage,
                 chain_id,
+                snapshot_v2_bootstrap_candidate,
                 nexus_runtime_restored_from_snapshot,
                 kura: self.kura,
                 query_handle: self.query_handle,
@@ -54347,371 +55140,10 @@ pub(crate) mod deserialize {
             .collect()
     }
 
-    #[derive(Decode)]
-    struct LegacyPublicLaneValidatorRecord {
-        lane_id: LaneId,
-        validator: AccountId,
-        stake_account: AccountId,
-        total_stake: Numeric,
-        self_stake: Numeric,
-        metadata: Metadata,
-        status: PublicLaneValidatorStatus,
-        activation_epoch: Option<u64>,
-        activation_height: Option<u64>,
-        last_reward_epoch: Option<u64>,
-    }
-
-    #[derive(Decode)]
-    struct LegacyPublicLaneStakeShareRecord {
-        lane_id: LaneId,
-        validator: AccountId,
-        staker: AccountId,
-        bonded: Numeric,
-        pending_unbonds: BTreeMap<Hash, PublicLaneUnbonding>,
-        metadata: Metadata,
-    }
-
-    #[derive(Decode)]
-    struct LegacyPublicLaneStakeShareWithoutPendingUnbonds {
-        lane_id: LaneId,
-        validator: AccountId,
-        staker: AccountId,
-        bonded: Numeric,
-        metadata: Metadata,
-    }
-
-    #[derive(Default)]
-    struct ExternalPublicLaneState {
-        validators: Vec<PublicLaneValidatorRecord>,
-        stake_shares: Vec<PublicLaneStakeShare>,
-    }
-
-    fn load_external_public_lane_state_manifest()
-    -> Result<Option<ExternalPublicLaneState>, json::Error> {
-        if !hard_fork_snapshot_bootstrap_enabled() {
-            return Ok(None);
-        }
-        let Some(path) = std::env::var_os(HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV) else {
-            return Ok(None);
-        };
-        let path = PathBuf::from(path);
-        let body = std::fs::read_to_string(&path).map_err(|err| json::Error::InvalidField {
-            field: HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV.to_owned(),
-            message: format!("failed to read `{}`: {err}", path.display()),
-        })?;
-        let value: json::Value =
-            json::from_json(&body).map_err(|err| json::Error::InvalidField {
-                field: HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV.to_owned(),
-                message: format!("failed to parse `{}` as JSON: {err}", path.display()),
-            })?;
-        let state =
-            parse_external_public_lane_state(&value).map_err(|err| json::Error::InvalidField {
-                field: HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV.to_owned(),
-                message: format!("invalid `{}`: {err}", path.display()),
-            })?;
-        Ok(Some(state))
-    }
-
-    fn parse_external_public_lane_state(
-        value: &json::Value,
-    ) -> Result<ExternalPublicLaneState, json::Error> {
-        let object = value.as_object().ok_or_else(|| {
-            json::Error::Message("expected top-level public-lane manifest object".to_owned())
-        })?;
-        let validators = parse_public_lane_validator_manifest(
-            object
-                .get("validators")
-                .ok_or_else(|| json::Error::missing_field("validators"))?,
-        )?;
-        let stake_shares = parse_public_lane_stake_share_manifest(
-            object
-                .get("stake_shares")
-                .ok_or_else(|| json::Error::missing_field("stake_shares"))?,
-        )?;
-        Ok(ExternalPublicLaneState {
-            validators,
-            stake_shares,
-        })
-    }
-
-    fn parse_public_lane_validator_manifest(
-        value: &json::Value,
-    ) -> Result<Vec<PublicLaneValidatorRecord>, json::Error> {
-        let items = value.as_array().ok_or_else(|| {
-            json::Error::Message("expected `validators` to be an array".to_owned())
-        })?;
-        let mut records = Vec::with_capacity(items.len());
-        for (index, item) in items.iter().enumerate() {
-            let field = format!("validators[{index}]");
-            records.push(PublicLaneValidatorRecord {
-                lane_id: parse_public_lane_id(item, &field)?,
-                validator: parse_public_lane_account(item, "validator", &field)?,
-                peer_id: parse_public_lane_peer_id(item, "peer_id", &field)?,
-                stake_account: parse_public_lane_account(item, "stake_account", &field)?,
-                total_stake: parse_public_lane_numeric(item, "total_stake", &field)?,
-                self_stake: parse_public_lane_numeric(item, "self_stake", &field)?,
-                metadata: parse_public_lane_metadata(item, &field)?,
-                status: parse_public_lane_validator_status(
-                    get_public_lane_field(item, "status", &field)?,
-                    &format!("{field}.status"),
-                )?,
-                activation_epoch: parse_public_lane_optional_u64(item, "activation_epoch", &field)?,
-                activation_height: parse_public_lane_optional_u64(
-                    item,
-                    "activation_height",
-                    &field,
-                )?,
-                last_reward_epoch: parse_public_lane_optional_u64(
-                    item,
-                    "last_reward_epoch",
-                    &field,
-                )?,
-            });
-        }
-        Ok(records)
-    }
-
-    fn parse_public_lane_stake_share_manifest(
-        value: &json::Value,
-    ) -> Result<Vec<PublicLaneStakeShare>, json::Error> {
-        let items = value.as_array().ok_or_else(|| {
-            json::Error::Message("expected `stake_shares` to be an array".to_owned())
-        })?;
-        let mut records = Vec::with_capacity(items.len());
-        for (index, item) in items.iter().enumerate() {
-            let field = format!("stake_shares[{index}]");
-            records.push(PublicLaneStakeShare {
-                lane_id: parse_public_lane_id(item, &field)?,
-                validator: parse_public_lane_account(item, "validator", &field)?,
-                staker: parse_public_lane_account(item, "staker", &field)?,
-                bonded: parse_public_lane_numeric(item, "bonded", &field)?,
-                pending_unbonds: parse_public_lane_pending_unbonds(item, &field)?,
-                metadata: parse_public_lane_metadata(item, &field)?,
-            });
-        }
-        Ok(records)
-    }
-
-    fn get_public_lane_field<'a>(
-        value: &'a json::Value,
-        key: &str,
-        field: &str,
-    ) -> Result<&'a json::Value, json::Error> {
-        value
-            .as_object()
-            .and_then(|object| object.get(key))
-            .ok_or_else(|| json::Error::InvalidField {
-                field: format!("{field}.{key}"),
-                message: "missing field".to_owned(),
-            })
-    }
-
-    fn parse_public_lane_id(value: &json::Value, field: &str) -> Result<LaneId, json::Error> {
-        let lane = get_public_lane_field(value, "lane_id", field)?
-            .as_u64()
-            .ok_or_else(|| json::Error::InvalidField {
-                field: format!("{field}.lane_id"),
-                message: "expected unsigned integer".to_owned(),
-            })?;
-        let lane = u32::try_from(lane).map_err(|_| json::Error::InvalidField {
-            field: format!("{field}.lane_id"),
-            message: "lane id overflow".to_owned(),
-        })?;
-        Ok(LaneId::new(lane))
-    }
-
-    fn parse_public_lane_string(
-        value: &json::Value,
-        key: &str,
-        field: &str,
-    ) -> Result<String, json::Error> {
-        Ok(get_public_lane_field(value, key, field)?
-            .as_str()
-            .ok_or_else(|| json::Error::InvalidField {
-                field: format!("{field}.{key}"),
-                message: "expected string".to_owned(),
-            })?
-            .to_owned())
-    }
-
-    fn parse_public_lane_account(
-        value: &json::Value,
-        key: &str,
-        field: &str,
-    ) -> Result<AccountId, json::Error> {
-        let literal = parse_public_lane_string(value, key, field)?;
-        AccountId::parse_encoded(&literal)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .map_err(|err| json::Error::InvalidField {
-                field: format!("{field}.{key}"),
-                message: err.to_string(),
-            })
-    }
-
-    fn parse_public_lane_peer_id(
-        value: &json::Value,
-        key: &str,
-        field: &str,
-    ) -> Result<PeerId, json::Error> {
-        let literal = parse_public_lane_string(value, key, field)?;
-        literal
-            .parse::<PeerId>()
-            .map_err(|err| json::Error::InvalidField {
-                field: format!("{field}.{key}"),
-                message: err.to_string(),
-            })
-    }
-
-    fn parse_public_lane_numeric(
-        value: &json::Value,
-        key: &str,
-        field: &str,
-    ) -> Result<Numeric, json::Error> {
-        let literal = parse_public_lane_string(value, key, field)?;
-        literal
-            .parse::<Numeric>()
-            .map_err(|err| json::Error::InvalidField {
-                field: format!("{field}.{key}"),
-                message: err.to_string(),
-            })
-    }
-
-    fn parse_public_lane_optional_u64(
-        value: &json::Value,
-        key: &str,
-        field: &str,
-    ) -> Result<Option<u64>, json::Error> {
-        let Some(field_value) = value.as_object().and_then(|object| object.get(key)) else {
-            return Ok(None);
-        };
-        if field_value.is_null() {
-            return Ok(None);
-        }
-        field_value
-            .as_u64()
-            .map(Some)
-            .ok_or_else(|| json::Error::InvalidField {
-                field: format!("{field}.{key}"),
-                message: "expected unsigned integer or null".to_owned(),
-            })
-    }
-
-    fn parse_public_lane_metadata(
-        value: &json::Value,
-        field: &str,
-    ) -> Result<Metadata, json::Error> {
-        let Some(metadata) = value.as_object().and_then(|object| object.get("metadata")) else {
-            return Ok(Metadata::default());
-        };
-        Metadata::json_from_value(metadata).map_err(|err| json::Error::InvalidField {
-            field: format!("{field}.metadata"),
-            message: err.to_string(),
-        })
-    }
-
-    fn parse_public_lane_validator_status(
-        value: &json::Value,
-        field: &str,
-    ) -> Result<PublicLaneValidatorStatus, json::Error> {
-        let status_type = value
-            .as_object()
-            .and_then(|object| object.get("type"))
-            .and_then(json::Value::as_str)
-            .ok_or_else(|| json::Error::InvalidField {
-                field: format!("{field}.type"),
-                message: "expected status type string".to_owned(),
-            })?;
-        match status_type {
-            "PendingActivation" => Ok(PublicLaneValidatorStatus::PendingActivation(
-                get_public_lane_field(value, "activates_at_epoch", field)?
-                    .as_u64()
-                    .ok_or_else(|| json::Error::InvalidField {
-                        field: format!("{field}.activates_at_epoch"),
-                        message: "expected unsigned integer".to_owned(),
-                    })?,
-            )),
-            "Active" => Ok(PublicLaneValidatorStatus::Active),
-            "Jailed" => Ok(PublicLaneValidatorStatus::Jailed(parse_public_lane_string(
-                value, "reason", field,
-            )?)),
-            "Exiting" => Ok(PublicLaneValidatorStatus::Exiting(
-                get_public_lane_field(value, "releases_at_ms", field)?
-                    .as_u64()
-                    .ok_or_else(|| json::Error::InvalidField {
-                        field: format!("{field}.releases_at_ms"),
-                        message: "expected unsigned integer".to_owned(),
-                    })?,
-            )),
-            "Exited" => Ok(PublicLaneValidatorStatus::Exited),
-            "Slashed" => {
-                let slash_id = parse_public_lane_string(value, "slash_id", field)?;
-                slash_id
-                    .parse::<Hash>()
-                    .map(PublicLaneValidatorStatus::Slashed)
-                    .map_err(|err| json::Error::InvalidField {
-                        field: format!("{field}.slash_id"),
-                        message: err.to_string(),
-                    })
-            }
-            other => Err(json::Error::InvalidField {
-                field: format!("{field}.type"),
-                message: format!("unsupported validator status `{other}`"),
-            }),
-        }
-    }
-
-    fn parse_public_lane_pending_unbonds(
-        value: &json::Value,
-        field: &str,
-    ) -> Result<BTreeMap<Hash, PublicLaneUnbonding>, json::Error> {
-        let Some(pending_unbonds) = value
-            .as_object()
-            .and_then(|object| object.get("pending_unbonds"))
-        else {
-            return Ok(BTreeMap::new());
-        };
-        let items = pending_unbonds
-            .as_array()
-            .ok_or_else(|| json::Error::InvalidField {
-                field: format!("{field}.pending_unbonds"),
-                message: "expected array".to_owned(),
-            })?;
-        let mut map = BTreeMap::new();
-        for (index, item) in items.iter().enumerate() {
-            let item_field = format!("{field}.pending_unbonds[{index}]");
-            let request_id = parse_public_lane_string(item, "request_id", &item_field)?
-                .parse::<Hash>()
-                .map_err(|err| json::Error::InvalidField {
-                    field: format!("{item_field}.request_id"),
-                    message: err.to_string(),
-                })?;
-            let amount = parse_public_lane_numeric(item, "amount", &item_field)?;
-            let release_at_ms = get_public_lane_field(item, "release_at_ms", &item_field)?
-                .as_u64()
-                .ok_or_else(|| json::Error::InvalidField {
-                    field: format!("{item_field}.release_at_ms"),
-                    message: "expected unsigned integer".to_owned(),
-                })?;
-            let unbonding = PublicLaneUnbonding {
-                request_id,
-                amount,
-                release_at_ms,
-            };
-            if map.insert(request_id, unbonding).is_some() {
-                return Err(json::Error::InvalidField {
-                    field: item_field,
-                    message: "duplicate pending unbond request_id".to_owned(),
-                });
-            }
-        }
-        Ok(map)
-    }
-
     fn decode_public_lane_validator_records(
         records: Vec<SnapshotNoritoBlob>,
     ) -> Result<Vec<PublicLaneValidatorRecord>, json::Error> {
-        let record_count = records.len();
-        let mut decoded = Vec::with_capacity(record_count);
+        let mut decoded = Vec::with_capacity(records.len());
         for (index, record) in records.into_iter().enumerate() {
             let bytes =
                 hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
@@ -54719,51 +55151,14 @@ pub(crate) mod deserialize {
                     message: format!("record {index} hex decode failed: {err}"),
                 })?;
             let mut cursor = bytes.as_slice();
-            match PublicLaneValidatorRecord::decode_all(&mut cursor) {
-                Ok(record) => decoded.push(record),
-                Err(primary) if hard_fork_snapshot_bootstrap_enabled() => {
-                    let mut legacy_cursor = bytes.as_slice();
-                    match LegacyPublicLaneValidatorRecord::decode_all(&mut legacy_cursor) {
-                        Ok(record) => {
-                            let Some(peer_public_key) = record.validator.try_signatory().cloned()
-                            else {
-                                eprintln!(
-                                    "snapshot hard-fork compatibility: discarding {record_count} persisted `public_lane_validators` records because record {index} has a legacy validator account without a single-key signatory"
-                                );
-                                return Ok(Vec::new());
-                            };
-                            eprintln!(
-                                "snapshot hard-fork compatibility: decoded persisted `public_lane_validators` record {index} with legacy struct fallback after primary decode failed: {primary}"
-                            );
-                            decoded.push(PublicLaneValidatorRecord {
-                                lane_id: record.lane_id,
-                                validator: record.validator,
-                                peer_id: PeerId::from(peer_public_key),
-                                stake_account: record.stake_account,
-                                total_stake: record.total_stake,
-                                self_stake: record.self_stake,
-                                metadata: record.metadata,
-                                status: record.status,
-                                activation_epoch: record.activation_epoch,
-                                activation_height: record.activation_height,
-                                last_reward_epoch: record.last_reward_epoch,
-                            });
-                        }
-                        Err(fallback) => {
-                            eprintln!(
-                                "snapshot hard-fork compatibility: discarding {record_count} persisted `public_lane_validators` records because record {index} could not be decoded: primary={primary}; tuple fallback={fallback}"
-                            );
-                            return Ok(Vec::new());
-                        }
-                    }
-                }
-                Err(err) => {
-                    return Err(json::Error::InvalidField {
+            decoded.push(
+                PublicLaneValidatorRecord::decode_all(&mut cursor).map_err(|err| {
+                    json::Error::InvalidField {
                         field: "public_lane_validators".to_owned(),
                         message: format!("record {index} norito decode failed: {err}"),
-                    });
-                }
-            }
+                    }
+                })?,
+            );
         }
         Ok(decoded)
     }
@@ -54771,8 +55166,7 @@ pub(crate) mod deserialize {
     fn decode_public_lane_stake_share_records(
         records: Vec<SnapshotNoritoBlob>,
     ) -> Result<Vec<PublicLaneStakeShare>, json::Error> {
-        let record_count = records.len();
-        let mut decoded = Vec::with_capacity(record_count);
+        let mut decoded = Vec::with_capacity(records.len());
         for (index, record) in records.into_iter().enumerate() {
             let bytes =
                 hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
@@ -54780,59 +55174,14 @@ pub(crate) mod deserialize {
                     message: format!("record {index} hex decode failed: {err}"),
                 })?;
             let mut cursor = bytes.as_slice();
-            match PublicLaneStakeShare::decode_all(&mut cursor) {
-                Ok(record) => decoded.push(record),
-                Err(primary) if hard_fork_snapshot_bootstrap_enabled() => {
-                    let mut legacy_cursor = bytes.as_slice();
-                    match LegacyPublicLaneStakeShareRecord::decode_all(&mut legacy_cursor) {
-                        Ok(record) => {
-                            eprintln!(
-                                "snapshot hard-fork compatibility: decoded persisted `public_lane_stake_shares` record {index} with legacy struct fallback after primary decode failed: {primary}"
-                            );
-                            decoded.push(PublicLaneStakeShare {
-                                lane_id: record.lane_id,
-                                validator: record.validator,
-                                staker: record.staker,
-                                bonded: record.bonded,
-                                pending_unbonds: record.pending_unbonds,
-                                metadata: record.metadata,
-                            });
-                        }
-                        Err(fallback) => {
-                            let mut legacy_without_unbonds_cursor = bytes.as_slice();
-                            match LegacyPublicLaneStakeShareWithoutPendingUnbonds::decode_all(
-                                &mut legacy_without_unbonds_cursor,
-                            ) {
-                                Ok(record) => {
-                                    eprintln!(
-                                        "snapshot hard-fork compatibility: decoded persisted `public_lane_stake_shares` record {index} without pending_unbonds after primary decode failed: {primary}"
-                                    );
-                                    decoded.push(PublicLaneStakeShare {
-                                        lane_id: record.lane_id,
-                                        validator: record.validator,
-                                        staker: record.staker,
-                                        bonded: record.bonded,
-                                        pending_unbonds: BTreeMap::new(),
-                                        metadata: record.metadata,
-                                    });
-                                }
-                                Err(fallback_without_unbonds) => {
-                                    eprintln!(
-                                        "snapshot hard-fork compatibility: discarding {record_count} persisted `public_lane_stake_shares` records because record {index} could not be decoded: primary={primary}; tuple fallback={fallback}; no-unbonds fallback={fallback_without_unbonds}"
-                                    );
-                                    return Ok(Vec::new());
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(err) => {
-                    return Err(json::Error::InvalidField {
+            decoded.push(
+                PublicLaneStakeShare::decode_all(&mut cursor).map_err(|err| {
+                    json::Error::InvalidField {
                         field: "public_lane_stake_shares".to_owned(),
                         message: format!("record {index} norito decode failed: {err}"),
-                    });
-                }
-            }
+                    }
+                })?,
+            );
         }
         Ok(decoded)
     }
@@ -54897,20 +55246,12 @@ pub(crate) mod deserialize {
         policies: &Storage<RamLfeProgramId, RamLfeProgramPolicy>,
     ) -> Result<(), json::Error> {
         for (program_id, policy) in policies.view().iter() {
-            match crate::smartcontracts::isi::ram_lfe::validate_program_policy(policy) {
-                Ok(()) => {}
-                Err(err) if hard_fork_snapshot_bootstrap_enabled() => {
-                    eprintln!(
-                        "snapshot hard-fork compatibility: preserving RAM-LFE program policy `{program_id}` despite legacy validation failure: {err}"
-                    );
-                }
-                Err(err) => {
-                    return Err(json::Error::InvalidField {
-                        field: format!("world.ram_lfe_program_policies.{program_id}"),
-                        message: err.to_string(),
-                    });
-                }
-            }
+            crate::smartcontracts::isi::ram_lfe::validate_program_policy(policy).map_err(
+                |err| json::Error::InvalidField {
+                    field: format!("world.ram_lfe_program_policies.{program_id}"),
+                    message: err.to_string(),
+                },
+            )?;
         }
         Ok(())
     }
@@ -55149,30 +55490,9 @@ pub(crate) mod deserialize {
     fn take_ram_lfe_program_policies(
         map: &mut json::native::Map,
     ) -> Result<Storage<RamLfeProgramId, RamLfeProgramPolicy>, json::Error> {
-        let Some(mut value) = map.remove("ram_lfe_program_policies") else {
+        let Some(value) = map.remove("ram_lfe_program_policies") else {
             return Ok(Storage::default());
         };
-        if hard_fork_snapshot_bootstrap_enabled()
-            && let json::Value::Object(storage) = &mut value
-            && let Some(json::Value::Object(blocks)) = storage.get_mut("blocks")
-        {
-            let mut patched = 0_usize;
-            for policy in blocks.values_mut() {
-                if let json::Value::Object(policy_map) = policy
-                    && !policy_map.contains_key("output_opening_public_key")
-                    && let Some(resolver_public_key) =
-                        policy_map.get("resolver_public_key").cloned()
-                {
-                    policy_map.insert("output_opening_public_key".to_owned(), resolver_public_key);
-                    patched += 1;
-                }
-            }
-            if patched > 0 {
-                eprintln!(
-                    "snapshot hard-fork compatibility: filled `output_opening_public_key` from `resolver_public_key` for {patched} RAM-LFE program policies"
-                );
-            }
-        }
         json::value::from_value(value).map_err(|err| json::Error::InvalidField {
             field: "ram_lfe_program_policies".to_owned(),
             message: err.to_string(),
@@ -55196,51 +55516,6 @@ pub(crate) mod deserialize {
                     );
                     Ok(T::default())
                 }
-            },
-        )
-    }
-
-    fn take_required_hard_fork_default<T>(
-        map: &mut json::native::Map,
-        key: &str,
-        default: T,
-    ) -> Result<T, json::Error>
-    where
-        T: JsonDeserialize,
-    {
-        match take_required(map, key) {
-            Ok(parsed) => Ok(parsed),
-            Err(err) if hard_fork_snapshot_bootstrap_enabled() => {
-                eprintln!(
-                    "snapshot hard-fork compatibility: replacing persisted `{key}` value because it could not be decoded: {err}"
-                );
-                Ok(default)
-            }
-            Err(err) => Err(err),
-        }
-    }
-
-    fn take_optional_default_hard_fork_lossy<T>(
-        map: &mut json::native::Map,
-        key: &str,
-    ) -> Result<T, json::Error>
-    where
-        T: JsonDeserialize + Default,
-    {
-        map.remove(key).map_or_else(
-            || Ok(T::default()),
-            |value| match json::value::from_value(value) {
-                Ok(parsed) => Ok(parsed),
-                Err(err) if hard_fork_snapshot_bootstrap_enabled() => {
-                    eprintln!(
-                        "snapshot hard-fork compatibility: discarding persisted `{key}` value because it could not be decoded: {err}"
-                    );
-                    Ok(T::default())
-                }
-                Err(err) => Err(json::Error::InvalidField {
-                    field: key.to_owned(),
-                    message: err.to_string(),
-                }),
             },
         )
     }
@@ -55402,13 +55677,9 @@ pub(crate) mod deserialize {
             Some(value) => ivm_seed.cast::<TriggerSet>().parse_trigger_set(&value)?,
             None => TriggerSet::default(),
         };
-        let executor: Cell<Executor> =
-            take_required_hard_fork_default(&mut map, "executor", Cell::new(Executor::default()))?;
-        let executor_data_model: Cell<ExecutorDataModel> = take_required_hard_fork_default(
-            &mut map,
-            "executor_data_model",
-            Cell::new(initial_executor_data_model_fallback()),
-        )?;
+        let executor: Cell<Executor> = take_required(&mut map, "executor")?;
+        let executor_data_model: Cell<ExecutorDataModel> =
+            take_required(&mut map, "executor_data_model")?;
         let external_event_buf: Cell<Vec<EventBox>> =
             take_required(&mut map, "external_event_buf")?;
         let verifying_keys = take_optional_default(&mut map, "verifying_keys")?;
@@ -55422,9 +55693,11 @@ pub(crate) mod deserialize {
         let proofs = take_optional_default(&mut map, "proofs")?;
         let proof_tags = take_optional_default(&mut map, "proof_tags")?;
         let proofs_by_tag = take_optional_default(&mut map, "proofs_by_tag")?;
-        let commit_qcs = take_optional_default_hard_fork_lossy(&mut map, "commit_qcs")?;
+        let commit_qcs = take_optional_default(&mut map, "commit_qcs")?;
         let contract_manifests = take_optional_default(&mut map, "contract_manifests")?;
         let contract_code = take_optional_default(&mut map, "contract_code")?;
+        let contract_code_uploads = take_required(&mut map, "contract_code_uploads")?;
+        let contract_code_upload_chunks = take_required(&mut map, "contract_code_upload_chunks")?;
         let contract_instances = take_optional_default(&mut map, "contract_instances")?;
         let contract_subject_bindings =
             take_optional_default(&mut map, "contract_subject_bindings")?;
@@ -55622,6 +55895,8 @@ pub(crate) mod deserialize {
             commit_qcs,
             contract_manifests,
             contract_code,
+            contract_code_uploads,
+            contract_code_upload_chunks,
             contract_instances,
             contract_subject_bindings,
             contract_subject_addresses: Storage::default(),
@@ -55804,6 +56079,7 @@ pub(crate) mod deserialize {
         lane_incarnation_lineage: BTreeMap<LaneId, LaneIncarnationLineage>,
         lane_incarnation_activation_heights: BTreeMap<LaneId, u64>,
         chain_id: iroha_data_model::ChainId,
+        snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord>,
         nexus_runtime_restored_from_snapshot: bool,
         kura: Arc<Kura>,
         query_handle: LiveQueryStoreHandle,
@@ -55824,6 +56100,7 @@ pub(crate) mod deserialize {
             lane_incarnation_lineage,
             lane_incarnation_activation_heights,
             chain_id,
+            snapshot_v2_bootstrap_candidate,
             nexus_runtime_restored_from_snapshot,
             kura,
             query_handle,
@@ -55939,6 +56216,8 @@ pub(crate) mod deserialize {
             settlement: iroha_config::parameters::actual::Settlement::default(),
             settlement_engine: SettlementEngine::new_roadmap_default(),
             chain_id,
+            snapshot_v2_bootstrap_candidate,
+            authenticated_snapshot_v2_bootstrap: None,
             #[cfg(feature = "telemetry")]
             telemetry,
             lane_lifecycle_lock: parking_lot::Mutex::new(()),
@@ -56482,7 +56761,11 @@ mod tests {
         sorafs::pin_registry::ManifestDigest,
         transaction::ExecutionStep,
     };
-    use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Numeric};
+    use iroha_primitives::{
+        const_vec::ConstVec,
+        json::Json,
+        numeric::{Numeric, Quantity},
+    };
     #[cfg(feature = "telemetry")]
     use iroha_telemetry::metrics::Metrics;
     use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in};
@@ -57273,7 +57556,7 @@ mod tests {
             .build(&ALICE_ID);
         let asset = Asset::new(
             AssetId::new(definition_id, ALICE_ID.clone()),
-            "0.1".parse().expect("valid quantity"),
+            "0.1".parse::<Quantity>().expect("valid quantity"),
         );
 
         let _ = World::with_assets([domain], [account], [definition], [asset], []);
@@ -57327,35 +57610,16 @@ mod tests {
                 .get(&asset_id)
                 .expect("asset remains")
                 .as_ref(),
-            &Numeric::new(5_u32, 0)
+            &Quantity::from(5_u32)
         );
     }
 
     #[test]
-    fn state_snapshot_rejects_negative_consensus_stake() {
-        let mut state = State::new(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
+    fn negative_consensus_stake_cannot_enter_state_storage() {
+        assert!(
+            Quantity::try_from_numeric(Numeric::new(-1_i32, 0)).is_err(),
+            "the nominal stake type must reject negatives before state construction"
         );
-        let lane_id = LaneId::new(0);
-        state.world.public_lane_stake_shares.insert(
-            (lane_id, ALICE_ID.clone(), BOB_ID.clone()),
-            PublicLaneStakeShare {
-                lane_id,
-                validator: ALICE_ID.clone(),
-                staker: BOB_ID.clone(),
-                bonded: Numeric::new(-1_i32, 0),
-                pending_unbonds: BTreeMap::new(),
-                metadata: Metadata::default(),
-            },
-        );
-
-        let value = norito::json::to_value(&state).expect("serialize negative stake snapshot");
-        let error = deserialize_state_snapshot_value(value)
-            .err()
-            .expect("negative persisted consensus stake must fail closed");
-        assert!(error.to_string().contains("bonded stake"), "{error}");
     }
 
     fn mutate_snapshot_incarnation_lineage(
@@ -58379,11 +58643,11 @@ mod tests {
             seller: seller.clone(),
             buyer: Some(buyer.clone()),
             asset_definition: asset_definition.clone(),
-            amount: Numeric::new(42_u32, 0),
+            amount: Quantity::from(42_u32),
             custody: seller.clone(),
             status: iroha_data_model::escrow::AssetEscrowStatus::PaymentSent,
             kind: iroha_data_model::escrow::AssetEscrowKind::Marketplace,
-            remaining_amount: Numeric::new(42_u32, 0),
+            remaining_amount: Quantity::from(42_u32),
             release_authority: None,
             expires_at_ms: None,
             evidence_hashes: vec![Hash::new("public-evidence")],
@@ -58503,8 +58767,8 @@ mod tests {
                 validator: validator.clone(),
                 peer_id: PeerId::from(validator.signatory().clone()),
                 stake_account: validator.clone(),
-                total_stake: Numeric::new(2_000, 0),
-                self_stake: Numeric::new(1_000, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: Some(0),
@@ -58519,8 +58783,8 @@ mod tests {
                 validator: mismatched_validator.clone(),
                 peer_id: PeerId::from(mismatched_validator.signatory().clone()),
                 stake_account: mismatched_validator.clone(),
-                total_stake: Numeric::new(2_000, 0),
-                self_stake: Numeric::new(1_000, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: Some(0),
@@ -58534,12 +58798,12 @@ mod tests {
                 lane_id: LaneId::SINGLE,
                 validator: validator.clone(),
                 staker: staker.clone(),
-                bonded: Numeric::new(900, 0),
+                bonded: iroha_primitives::numeric::Quantity::from(900_u32),
                 pending_unbonds: BTreeMap::from([(
                     request_id,
                     PublicLaneUnbonding {
                         request_id,
-                        amount: Numeric::new(100, 0),
+                        amount: iroha_primitives::numeric::Quantity::from(100_u32),
                         release_at_ms: 12_345,
                     },
                 )]),
@@ -58552,7 +58816,7 @@ mod tests {
                 lane_id: mismatched_lane,
                 validator: validator.clone(),
                 staker: mismatched_staker.clone(),
-                bonded: Numeric::new(400, 0),
+                bonded: iroha_primitives::numeric::Quantity::from(400_u32),
                 pending_unbonds: BTreeMap::new(),
                 metadata: Metadata::default(),
             },
@@ -58563,11 +58827,11 @@ mod tests {
                 lane_id: LaneId::SINGLE,
                 epoch: 7,
                 asset: reward_asset.clone(),
-                total_reward: Numeric::new(77, 0),
+                total_reward: iroha_primitives::numeric::Quantity::from(77_u32),
                 shares: vec![PublicLaneRewardShare {
                     account: validator.clone(),
                     role: PublicLaneRewardRole::Validator,
-                    amount: Numeric::new(77, 0),
+                    amount: iroha_primitives::numeric::Quantity::from(77_u32),
                 }],
                 metadata: Metadata::default(),
             },
@@ -58578,11 +58842,11 @@ mod tests {
                 lane_id: mismatched_lane,
                 epoch: 9,
                 asset: reward_asset.clone(),
-                total_reward: Numeric::new(88, 0),
+                total_reward: iroha_primitives::numeric::Quantity::from(88_u32),
                 shares: vec![PublicLaneRewardShare {
                     account: validator.clone(),
                     role: PublicLaneRewardRole::Validator,
-                    amount: Numeric::new(88, 0),
+                    amount: iroha_primitives::numeric::Quantity::from(88_u32),
                 }],
                 metadata: Metadata::default(),
             },
@@ -58613,8 +58877,8 @@ mod tests {
                 validator: validator.clone(),
                 peer_id: PeerId::from(validator.signatory().clone()),
                 stake_account: validator.clone(),
-                total_stake: Numeric::new(2_000, 0),
-                self_stake: Numeric::new(1_000, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: Some(0),
@@ -58627,14 +58891,14 @@ mod tests {
                 .get(&(LaneId::SINGLE, validator.clone(), staker.clone()))
                 .expect("stake share")
                 .bonded,
-            Numeric::new(900, 0)
+            Quantity::from(900_u32)
         );
         assert_eq!(
             view.public_lane_rewards()
                 .get(&(LaneId::SINGLE, 7))
                 .expect("reward")
                 .total_reward,
-            Numeric::new(77, 0)
+            Quantity::from(77_u32)
         );
         assert_eq!(
             view.public_lane_reward_claims()
@@ -59003,7 +59267,7 @@ mod tests {
         let lot = |id: RwaId| {
             Rwa::new(
                 id,
-                Numeric::new(1, 0),
+                1_u32,
                 NumericSpec::integer(),
                 "certificate".to_owned(),
                 None,
@@ -59056,7 +59320,7 @@ mod tests {
         let lot = |id: RwaId, owner: AccountId| {
             Rwa::new(
                 id,
-                Numeric::new(1, 0),
+                1_u32,
                 NumericSpec::integer(),
                 "certificate".to_owned(),
                 None,
@@ -59133,7 +59397,7 @@ mod tests {
         let lot = |id: RwaId, status: Option<Name>, is_frozen: bool| {
             let mut rwa = Rwa::new(
                 id,
-                Numeric::new(1, 0),
+                1_u32,
                 NumericSpec::integer(),
                 "certificate".to_owned(),
                 status,
@@ -65510,7 +65774,7 @@ mod tests {
         );
         let retired_economic_keys =
             seed_public_lane_economic_state_for_lifecycle_test(&state, retired_lane_id, 41);
-        let retired_status_bonded = Numeric::new(841, 0);
+        let retired_status_bonded = Quantity::from(841_u32);
         record_public_lane_staking_status_for_test(retired_lane_id, &retired_status_bonded);
         let retired_replay_key = AxtHandleReplayKey::from_parts([0xD1; 32], 2, 41, retired_lane_id);
         {
@@ -65799,7 +66063,7 @@ mod tests {
 
         let cleanup_fixture =
             seed_lane_scoped_cleanup_fixture_for_lifecycle_test(&state, retired_lane_id, 0x94, 94);
-        let retired_status_bonded = Numeric::new(894, 0);
+        let retired_status_bonded = Quantity::from(894_u32);
         record_public_lane_staking_status_for_test(retired_lane_id, &retired_status_bonded);
 
         let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xE4);
@@ -69519,8 +69783,8 @@ mod tests {
             seed_public_lane_economic_state_for_lifecycle_test(&state, retired_lane_id, 31);
         let retained_economic_keys =
             seed_public_lane_economic_state_for_lifecycle_test(&state, LaneId::SINGLE, 32);
-        let retired_status_bonded = Numeric::new(631, 0);
-        let retained_status_bonded = Numeric::new(632, 0);
+        let retired_status_bonded = Quantity::from(631_u32);
+        let retained_status_bonded = Quantity::from(632_u32);
         record_public_lane_staking_status_for_test(retired_lane_id, &retired_status_bonded);
         record_public_lane_staking_status_for_test(LaneId::SINGLE, &retained_status_bonded);
         let retired_replay_key = AxtHandleReplayKey::from_parts([0xC1; 32], 2, 31, retired_lane_id);
@@ -70052,7 +70316,7 @@ mod tests {
             lane_id,
             validator: validator.clone(),
             staker,
-            bonded: Numeric::new(1_000, 0),
+            bonded: iroha_primitives::numeric::Quantity::from(1_000_u32),
             pending_unbonds: BTreeMap::new(),
             metadata: Metadata::default(),
         };
@@ -70060,11 +70324,11 @@ mod tests {
             lane_id,
             epoch,
             asset: reward_asset.clone(),
-            total_reward: Numeric::new(epoch.saturating_add(1), 0),
+            total_reward: iroha_primitives::numeric::Quantity::from(epoch.saturating_add(1)),
             shares: vec![PublicLaneRewardShare {
                 account: validator.clone(),
                 role: PublicLaneRewardRole::Validator,
-                amount: Numeric::new(epoch.saturating_add(1), 0),
+                amount: iroha_primitives::numeric::Quantity::from(epoch.saturating_add(1)),
             }],
             metadata: Metadata::default(),
         };
@@ -70288,8 +70552,8 @@ mod tests {
                 validator: validator.clone(),
                 peer_id: peer_id.clone(),
                 stake_account: validator.clone(),
-                total_stake: Numeric::new(1_000, 0),
-                self_stake: Numeric::new(1_000, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: Some(1),
@@ -70795,8 +71059,8 @@ mod tests {
                 retired_lane_id,
                 213,
             );
-        let retired_status_bonded = Numeric::new(811, 0);
-        let retained_status_bonded = Numeric::new(812, 0);
+        let retired_status_bonded = Quantity::from(811_u32);
+        let retained_status_bonded = Quantity::from(812_u32);
         record_public_lane_staking_status_for_test(retired_lane_id, &retired_status_bonded);
         record_public_lane_staking_status_for_test(LaneId::SINGLE, &retained_status_bonded);
 
@@ -72522,8 +72786,8 @@ mod tests {
             seed_public_lane_economic_state_for_lifecycle_test(&state, retired_lane_id, 99);
         let retained_keys =
             seed_public_lane_economic_state_for_lifecycle_test(&state, LaneId::SINGLE, 3);
-        let retired_status_bonded = Numeric::new(799, 0);
-        let retained_status_bonded = Numeric::new(703, 0);
+        let retired_status_bonded = Quantity::from(799_u32);
+        let retained_status_bonded = Quantity::from(703_u32);
         record_public_lane_staking_status_for_test(retired_lane_id, &retired_status_bonded);
         record_public_lane_staking_status_for_test(LaneId::SINGLE, &retained_status_bonded);
 
@@ -73985,7 +74249,7 @@ mod tests {
             lane_id,
             validator: validator.clone(),
             staker,
-            bonded: Numeric::new(100, 0),
+            bonded: iroha_primitives::numeric::Quantity::from(100_u32),
             pending_unbonds: BTreeMap::new(),
             metadata: Metadata::default(),
         };
@@ -73993,11 +74257,11 @@ mod tests {
             lane_id,
             epoch,
             asset: reward_asset.clone(),
-            total_reward: Numeric::new(epoch.saturating_add(1), 0),
+            total_reward: iroha_primitives::numeric::Quantity::from(epoch.saturating_add(1)),
             shares: vec![PublicLaneRewardShare {
                 account: validator.clone(),
                 role: PublicLaneRewardRole::Validator,
-                amount: Numeric::new(epoch.saturating_add(1), 0),
+                amount: iroha_primitives::numeric::Quantity::from(epoch.saturating_add(1)),
             }],
             metadata: Metadata::default(),
         };
@@ -74185,8 +74449,8 @@ mod tests {
             validator: validator.clone(),
             peer_id: peer_id.clone(),
             stake_account: validator.clone(),
-            total_stake: Numeric::new(1_000, 0),
-            self_stake: Numeric::new(1_000, 0),
+            total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
+            self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
             metadata: Metadata::default(),
             status,
             activation_epoch: Some(1),
@@ -74234,7 +74498,7 @@ mod tests {
         let stake_key = (key_lane_id, validator.clone(), staker.clone());
         let reward_key = (key_lane_id, epoch);
         let claim_key = (key_lane_id, validator.clone(), reward_asset.clone());
-        let reward_amount = Numeric::new(epoch.saturating_add(1), 0);
+        let reward_amount = Quantity::from(epoch.saturating_add(1));
 
         let mut block = state.world.block();
         block.public_lane_stake_shares.insert(
@@ -74243,7 +74507,7 @@ mod tests {
                 lane_id: record_lane_id,
                 validator: validator.clone(),
                 staker,
-                bonded: Numeric::new(1_000, 0),
+                bonded: iroha_primitives::numeric::Quantity::from(1_000_u32),
                 pending_unbonds: BTreeMap::new(),
                 metadata: Metadata::default(),
             },
@@ -74297,11 +74561,11 @@ mod tests {
         );
     }
 
-    fn record_public_lane_staking_status_for_test(lane_id: LaneId, bonded: &Numeric) {
+    fn record_public_lane_staking_status_for_test(lane_id: LaneId, bonded: &Quantity) {
         crate::sumeragi::status::record_public_lane_bonded_delta(lane_id, bonded, true);
         crate::sumeragi::status::record_public_lane_pending_unbond_delta(
             lane_id,
-            &Numeric::new(1, 0),
+            &Quantity::from(1_u32),
             true,
         );
         crate::sumeragi::status::record_public_lane_slash(lane_id);
@@ -74317,7 +74581,7 @@ mod tests {
 
     fn assert_public_lane_staking_status_bonded(
         lane_id: LaneId,
-        expected_bonded: &Numeric,
+        expected_bonded: &Quantity,
         context: &str,
     ) {
         let status = crate::sumeragi::status::nexus_staking_snapshot();
@@ -74327,7 +74591,7 @@ mod tests {
             .find(|lane| lane.lane_id == lane_id)
             .unwrap_or_else(|| panic!("{context}: missing lane {}", lane_id.as_u32()));
         assert_eq!(&lane.bonded, expected_bonded, "{context}");
-        assert_eq!(lane.pending_unbond, Numeric::new(1, 0), "{context}");
+        assert_eq!(lane.pending_unbond, Quantity::from(1_u32), "{context}");
         assert_eq!(lane.slash_total, 1, "{context}");
     }
 
@@ -74755,10 +75019,10 @@ mod tests {
             seed_public_lane_economic_state_for_lifecycle_test(&state, retained_lane, 3);
         crate::sumeragi::status::record_public_lane_bonded_delta(
             retired_lane,
-            &Numeric::new(500, 0),
+            &Quantity::from(500_u32),
             true,
         );
-        let retained_status_bonded = Numeric::new(700, 0);
+        let retained_status_bonded = Quantity::from(700_u32);
         crate::sumeragi::status::record_public_lane_bonded_delta(
             retained_lane,
             &retained_status_bonded,
@@ -74890,7 +75154,7 @@ mod tests {
             retired_lane,
             PublicLaneValidatorStatus::Active,
         );
-        let retired_status_bonded = Numeric::new(811, 0);
+        let retired_status_bonded = Quantity::from(811_u32);
         record_public_lane_staking_status_for_test(retired_lane, &retired_status_bonded);
 
         let mut nexus = state.nexus_snapshot();
@@ -79677,8 +79941,8 @@ mod tests {
             &recreated_lane_config,
             LaneId::new(1),
         );
-        let stale_status_bonded = Numeric::new(924, 0);
-        let retained_status_bonded = Numeric::new(904, 0);
+        let stale_status_bonded = Quantity::from(924_u32);
+        let retained_status_bonded = Quantity::from(904_u32);
         record_public_lane_staking_status_for_test(LaneId::new(1), &stale_status_bonded);
         record_public_lane_staking_status_for_test(LaneId::SINGLE, &retained_status_bonded);
         restarted
@@ -80229,8 +80493,8 @@ mod tests {
             seed_public_lane_economic_state_for_lifecycle_test(&state, LaneId::SINGLE, 99);
         let retained_lane_keys =
             seed_public_lane_economic_state_for_lifecycle_test(&state, retained_lane, 3);
-        let reset_status_bonded = Numeric::new(899, 0);
-        let retained_status_bonded = Numeric::new(903, 0);
+        let reset_status_bonded = Quantity::from(899_u32);
+        let retained_status_bonded = Quantity::from(903_u32);
         record_public_lane_staking_status_for_test(LaneId::SINGLE, &reset_status_bonded);
         record_public_lane_staking_status_for_test(retained_lane, &retained_status_bonded);
 
@@ -80813,7 +81077,7 @@ mod tests {
             );
             wb.commit();
         }
-        let reset_status_bonded = Numeric::new(909, 0);
+        let reset_status_bonded = Quantity::from(909_u32);
         record_public_lane_staking_status_for_test(LaneId::new(0), &reset_status_bonded);
 
         let updated_nexus = iroha_config::parameters::actual::Nexus {
@@ -81025,7 +81289,7 @@ mod tests {
             );
             wb.commit();
         }
-        let reset_status_bonded = Numeric::new(911, 0);
+        let reset_status_bonded = Quantity::from(911_u32);
         record_public_lane_staking_status_for_test(reset_lane, &reset_status_bonded);
 
         let plan = iroha_data_model::nexus::LaneLifecyclePlan {
@@ -81619,7 +81883,7 @@ mod tests {
         );
         let cleanup_fixture =
             seed_lane_scoped_cleanup_fixture_for_lifecycle_test(&state, lane_id, 0x91, 91);
-        let lane_status_bonded = Numeric::new(991, 0);
+        let lane_status_bonded = Quantity::from(991_u32);
         record_public_lane_staking_status_for_test(lane_id, &lane_status_bonded);
 
         let retired_blocks_root = store_root.join("retired").join("blocks");
@@ -81727,7 +81991,7 @@ mod tests {
         );
         let cleanup_fixture =
             seed_lane_scoped_cleanup_fixture_for_lifecycle_test(&state, lane_id, 0x95, 95);
-        let lane_status_bonded = Numeric::new(995, 0);
+        let lane_status_bonded = Quantity::from(995_u32);
         record_public_lane_staking_status_for_test(lane_id, &lane_status_bonded);
 
         let retired_lane_root = cold_root.join("retired").join("lanes");
@@ -82222,7 +82486,7 @@ mod tests {
         );
         let cleanup_fixture =
             seed_lane_scoped_cleanup_fixture_for_lifecycle_test(&state, lane_id, 0x92, 92);
-        let lane_status_bonded = Numeric::new(992, 0);
+        let lane_status_bonded = Quantity::from(992_u32);
         record_public_lane_staking_status_for_test(lane_id, &lane_status_bonded);
 
         let retired_blocks_root = store_root.join("retired").join("blocks");
@@ -82313,7 +82577,7 @@ mod tests {
         );
         let cleanup_fixture =
             seed_lane_scoped_cleanup_fixture_for_lifecycle_test(&state, lane_id, 0x93, 93);
-        let lane_status_bonded = Numeric::new(993, 0);
+        let lane_status_bonded = Quantity::from(993_u32);
         record_public_lane_staking_status_for_test(lane_id, &lane_status_bonded);
 
         let retired_lane_root = cold_root.join("retired").join("lanes");
@@ -83006,8 +83270,8 @@ mod tests {
             &recreated_lane_config,
             LaneId::new(1),
         );
-        let stale_status_bonded = Numeric::new(925, 0);
-        let retained_status_bonded = Numeric::new(905, 0);
+        let stale_status_bonded = Quantity::from(925_u32);
+        let retained_status_bonded = Quantity::from(905_u32);
         record_public_lane_staking_status_for_test(LaneId::new(1), &stale_status_bonded);
         record_public_lane_staking_status_for_test(LaneId::SINGLE, &retained_status_bonded);
         restarted
@@ -84240,8 +84504,8 @@ mod tests {
             },
         );
 
-        let stale_status_bonded = Numeric::new(912, 0);
-        let retained_status_bonded = Numeric::new(902, 0);
+        let stale_status_bonded = Quantity::from(912_u32);
+        let retained_status_bonded = Quantity::from(902_u32);
         record_public_lane_staking_status_for_test(recreated_lane_id, &stale_status_bonded);
         record_public_lane_staking_status_for_test(LaneId::SINGLE, &retained_status_bonded);
         seed_stale_da_cursors_for_lane_recreation(&state, &two_lane_config, recreated_lane_id);
@@ -84374,8 +84638,8 @@ mod tests {
             },
         );
 
-        let stale_status_bonded = Numeric::new(913, 0);
-        let retained_status_bonded = Numeric::new(903, 0);
+        let stale_status_bonded = Quantity::from(913_u32);
+        let retained_status_bonded = Quantity::from(903_u32);
         record_public_lane_staking_status_for_test(recreated_lane_id, &stale_status_bonded);
         record_public_lane_staking_status_for_test(LaneId::SINGLE, &retained_status_bonded);
         seed_stale_da_cursors_for_lane_recreation(&state, &two_lane_config, recreated_lane_id);
@@ -84461,8 +84725,8 @@ mod tests {
             },
         );
 
-        let stale_status_bonded = Numeric::new(919, 0);
-        let retained_status_bonded = Numeric::new(901, 0);
+        let stale_status_bonded = Quantity::from(919_u32);
+        let retained_status_bonded = Quantity::from(901_u32);
         record_public_lane_staking_status_for_test(rebound_lane_id, &stale_status_bonded);
         record_public_lane_staking_status_for_test(LaneId::SINGLE, &retained_status_bonded);
         seed_stale_da_cursors_for_lane_recreation(&state, &initial_config, rebound_lane_id);
@@ -90071,8 +90335,8 @@ mod tests {
                 validator: validator.clone(),
                 peer_id: PeerId::from(validator.signatory().clone()),
                 stake_account: validator.clone(),
-                total_stake: Numeric::new(1_000_000, 0),
-                self_stake: Numeric::new(1_000_000, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(1_000_000_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(1_000_000_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -90136,8 +90400,8 @@ mod tests {
                         validator: validator.clone(),
                         peer_id: PeerId::new(keypair.public_key().clone()),
                         stake_account: validator.clone(),
-                        total_stake: Numeric::new(total_stake, 0),
-                        self_stake: Numeric::new(total_stake, 0),
+                        total_stake: iroha_primitives::numeric::Quantity::from(total_stake),
+                        self_stake: iroha_primitives::numeric::Quantity::from(total_stake),
                         metadata: Metadata::default(),
                         status: PublicLaneValidatorStatus::Active,
                         activation_epoch: None,
@@ -91599,8 +91863,8 @@ mod tests {
                 validator: validator.clone(),
                 peer_id,
                 stake_account: validator.clone(),
-                total_stake: Numeric::new(1_000_000, 0),
-                self_stake: Numeric::new(1_000_000, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(1_000_000_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(1_000_000_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -101691,7 +101955,7 @@ mod tests {
                 .asset_definition(&asset_def_id)
                 .expect("definition exists")
                 .total_quantity(),
-            &Numeric::zero(),
+            &Quantity::zero(),
             "tracked total should be decremented"
         );
     }
@@ -101924,7 +102188,7 @@ mod tests {
 
         let global_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let (_, global_asset_value) =
-            Asset::new(global_asset_id.clone(), Quantity::from(1)).into_key_value();
+            Asset::new(global_asset_id.clone(), Quantity::from(1_u64)).into_key_value();
         stx.world
             .assets
             .insert(global_asset_id.clone(), global_asset_value);
@@ -101939,7 +102203,7 @@ mod tests {
             ),
         );
         let (_, scoped_asset_value) =
-            Asset::new(scoped_asset_id.clone(), Quantity::from(1)).into_key_value();
+            Asset::new(scoped_asset_id.clone(), Quantity::from(1_u64)).into_key_value();
         stx.world
             .assets
             .insert(scoped_asset_id.clone(), scoped_asset_value);
@@ -102053,7 +102317,8 @@ mod tests {
             scoped_asset_id.clone(),
             other_asset_id,
         ] {
-            let (_, asset_value) = Asset::new(asset_id.clone(), Quantity::from(1)).into_key_value();
+            let (_, asset_value) =
+                Asset::new(asset_id.clone(), Quantity::from(1_u64)).into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
             stx.world.track_asset_holder(&asset_id);
         }
@@ -102221,7 +102486,7 @@ mod tests {
             }
             .build(&ALICE_ID);
             let asset_id = AssetId::of(asset_def_id.clone(), ALICE_ID.clone());
-            let asset = Asset::new(asset_id.clone(), Quantity::from(0));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(0_u64));
 
             let world = World::with_assets([domain], [account], [asset_def], [asset], []);
             (world, domain_id, asset_def_id, asset_id, ALICE_ID.clone())
@@ -104945,17 +105210,17 @@ seiyaku IdentitylessRawCallback {
             .world
             .asset(&gold_target)
             .expect("trigger should credit gold to bob");
-        assert_eq!(&**bob_gold.value(), &Numeric::from(380_u32));
+        assert_eq!(&**bob_gold.value(), &Quantity::from(380_u32));
         let alice_gold = view
             .world
             .asset(&gold_source)
             .expect("trigger should debit gold from the reserve");
-        assert_eq!(&**alice_gold.value(), &Numeric::from(620_u32));
+        assert_eq!(&**alice_gold.value(), &Quantity::from(620_u32));
         let alice_rose = view
             .world
             .asset(&rose_source)
             .expect("trigger should collect rose into the reserve");
-        assert_eq!(&**alice_rose.value(), &Numeric::from(5_u32));
+        assert_eq!(&**alice_rose.value(), &Quantity::from(5_u32));
     }
 
     #[test]
@@ -106803,8 +107068,8 @@ seiyaku IdentitylessRawCallback {
                         validator: validator.clone(),
                         peer_id: PeerId::new(kp.public_key().clone()),
                         stake_account: validator,
-                        total_stake: Numeric::new(1_000, 0),
-                        self_stake: Numeric::new(1_000, 0),
+                        total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
+                        self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                         metadata: Metadata::default(),
                         status: PublicLaneValidatorStatus::Active,
                         activation_epoch: None,
@@ -106822,8 +107087,8 @@ seiyaku IdentitylessRawCallback {
                         validator: validator.clone(),
                         peer_id: PeerId::new(kp.public_key().clone()),
                         stake_account: validator,
-                        total_stake: Numeric::new(1_000, 0),
-                        self_stake: Numeric::new(1_000, 0),
+                        total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
+                        self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                         metadata: Metadata::default(),
                         status: PublicLaneValidatorStatus::Active,
                         activation_epoch: None,
@@ -106978,8 +107243,8 @@ seiyaku IdentitylessRawCallback {
                         validator: validator.clone(),
                         peer_id: PeerId::new(keypair.public_key().clone()),
                         stake_account: validator,
-                        total_stake: Numeric::new(1_000, 0),
-                        self_stake: Numeric::new(1_000, 0),
+                        total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
+                        self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                         metadata: Metadata::default(),
                         status: PublicLaneValidatorStatus::Active,
                         activation_epoch: None,
@@ -107371,6 +107636,7 @@ seiyaku IdentitylessRawCallback {
             .get(&AssetId::of(asset_def_id.clone(), account_id.clone()))
             .expect("account asset exists")
             .0
+            .as_numeric()
             .clone()
     }
 
@@ -109095,7 +109361,7 @@ seiyaku IdentitylessRawCallback {
                         data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(ch)),
                     )) = ev.as_ref()
                 {
-                    return ch.asset == asset_id && ch.amount == numeric!(1);
+                    return ch.asset == asset_id && ch.amount == Quantity::from(1_u32);
                 }
                 false
             })
@@ -110538,7 +110804,7 @@ seiyaku IdentitylessRawCallback {
             .world
             .asset(&alice_asset_id)
             .expect("retry should mint the asset after the definition is registered");
-        assert_eq!(&**alice_asset.value(), &Numeric::from(1_u32));
+        assert_eq!(&**alice_asset.value(), &Quantity::from(1_u32));
         assert!(
             view.world.triggers().ids().get(&trigger_id).is_none(),
             "one-shot trigger should be removed after successful retry"
@@ -110867,7 +111133,7 @@ seiyaku IdentitylessRawCallback {
                 .world
                 .asset(&alice_asset_id)
                 .expect("retry success should mint exactly once");
-            assert_eq!(&**alice_asset.value(), &Numeric::from(1_u32));
+            assert_eq!(&**alice_asset.value(), &Quantity::from(1_u32));
             let action = view
                 .world
                 .triggers()
@@ -110910,7 +111176,7 @@ seiyaku IdentitylessRawCallback {
             .world
             .asset(&alice_asset_id)
             .expect("periodic trigger should mint the next scheduled tick");
-        assert_eq!(&**alice_asset.value(), &Numeric::from(2_u32));
+        assert_eq!(&**alice_asset.value(), &Quantity::from(2_u32));
         let action = view
             .world
             .triggers()
@@ -112494,7 +112760,7 @@ seiyaku IdentitylessRawCallback {
                         data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(ch)),
                     )) = ev.as_ref()
                 {
-                    return ch.asset == asset_id && ch.amount == numeric!(1);
+                    return ch.asset == asset_id && ch.amount == Quantity::from(1_u32);
                 }
                 false
             })
@@ -113147,7 +113413,7 @@ seiyaku IdentitylessRawCallback {
                 .with_name(__asset_definition_id.name().to_string())
         }
         .build(&ALICE_ID);
-        let asset = Asset::new(asset_id.clone(), Quantity::from(1));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(1_u64));
 
         let mut world = World::with_assets([domain], [account], [asset_def], [asset], []);
         let mut metadata = Metadata::default();

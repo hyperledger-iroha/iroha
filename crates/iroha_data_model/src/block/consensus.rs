@@ -106,7 +106,7 @@ pub enum QuorumPolicy {
     /// `NPoS` stake quorum over the active stake snapshot.
     NposStake(
         /// Total stake in the active set.
-        Numeric,
+        Quantity,
     ),
 }
 
@@ -135,28 +135,28 @@ impl QuorumPolicy {
     /// Missing signed stake, zero total stake, arithmetic overflow, and exact
     /// two-thirds stake all fail closed.
     #[must_use]
-    pub fn is_satisfied_by_stake(&self, signed_stake: Option<Numeric>) -> bool {
+    pub fn is_satisfied_by_stake(&self, signed_stake: Option<Quantity>) -> bool {
         let Self::NposStake(total_stake) = self else {
             return false;
         };
-        if total_stake.is_zero() || total_stake.mantissa().is_negative() {
+        if total_stake.is_zero() {
             return false;
         }
         let Some(signed_stake) = signed_stake else {
             return false;
         };
-        if signed_stake.mantissa().is_negative() {
-            return false;
-        }
         if &signed_stake > total_stake {
             return false;
         }
-        let Some(signed_scaled) =
-            signed_stake.checked_mul(Numeric::from(3_u64), NumericSpec::unconstrained())
+        let Some(signed_scaled) = signed_stake
+            .as_numeric()
+            .clone()
+            .checked_mul(Numeric::from(3_u64), NumericSpec::unconstrained())
         else {
             return false;
         };
         let Some(total_scaled) = total_stake
+            .as_numeric()
             .clone()
             .checked_mul(Numeric::from(2_u64), NumericSpec::unconstrained())
         else {
@@ -4452,13 +4452,14 @@ mod tests {
         }
     }
 
-    fn max_positive_numeric() -> Numeric {
+    fn max_positive_quantity() -> Quantity {
         let mut bytes = [0xff; 64];
         bytes[63] = 0x7f;
-        Numeric::new(
+        Quantity::from_canonical_numeric(Numeric::new(
             BigInt::from_twos_bytes(&bytes).expect("512-bit positive mantissa fits"),
             0,
-        )
+        ))
+        .expect("maximum positive numeric is a quantity")
     }
 
     #[derive(Encode)]
@@ -4497,6 +4498,13 @@ mod tests {
         fee_asset_id: String,
         fee_amount: Numeric,
         schedule: NexusFeeScheduleInputs,
+    }
+
+    #[derive(Encode)]
+    #[norito(tag = "kind", content = "policy", rename_all = "snake_case")]
+    enum ForgedQuorumPolicy {
+        PermissionedCount(u32),
+        NposStake(Numeric),
     }
 
     fn sample_nexus_fee_receipt(source_id: [u8; 32]) -> NexusFeeReceipt {
@@ -4558,6 +4566,19 @@ mod tests {
         assert!(
             NexusFeeReceipt::decode(&mut encoded.as_slice()).is_err(),
             "a negative signed payload must not decode as a fee receipt amount"
+        );
+    }
+
+    #[test]
+    fn negative_numeric_payload_cannot_decode_as_npos_stake_quorum() {
+        // Keep both variants so this forged encoder has the same discriminant
+        // layout as `QuorumPolicy`; the signed payload probes the nominal
+        // quantity boundary on the NPoS variant.
+        let _permissioned = ForgedQuorumPolicy::PermissionedCount(1);
+        let encoded = ForgedQuorumPolicy::NposStake(Numeric::new(-1_i32, 0)).encode();
+        assert!(
+            QuorumPolicy::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as NPoS total stake"
         );
     }
 
@@ -5930,7 +5951,7 @@ mod tests {
         assert!(!count.is_satisfied_by_count(3));
         assert!(count.is_satisfied_by_count(4));
         assert!(!count.is_satisfied_by_count(6));
-        assert!(!count.is_satisfied_by_stake(Some(Numeric::from(4_u64))));
+        assert!(!count.is_satisfied_by_stake(Some(Quantity::from(4_u64))));
         for validators in 1..=3 {
             let policy = QuorumPolicy::PermissionedCount(validators);
             assert!(!policy.is_satisfied_by_count(validators - 1));
@@ -5941,34 +5962,29 @@ mod tests {
         assert!(!max_count.is_satisfied_by_count(2_863_311_530));
         assert!(max_count.is_satisfied_by_count(2_863_311_531));
 
-        let stake = QuorumPolicy::NposStake(Numeric::from(3_u64));
+        let stake = QuorumPolicy::NposStake(Quantity::from(3_u64));
         assert!(!stake.is_satisfied_by_count(3));
         assert!(!stake.is_satisfied_by_stake(None));
-        assert!(!stake.is_satisfied_by_stake(Some(Numeric::new(-1_i128, 0))));
-        assert!(!stake.is_satisfied_by_stake(Some(Numeric::from(2_u64))));
-        assert!(!stake.is_satisfied_by_stake(Some(Numeric::from(4_u64))));
-        assert!(stake.is_satisfied_by_stake(Some(Numeric::new(201_u128, 2))));
+        assert!(!stake.is_satisfied_by_stake(Some(Quantity::from(2_u64))));
+        assert!(!stake.is_satisfied_by_stake(Some(Quantity::from(4_u64))));
+        assert!(stake.is_satisfied_by_stake(Some("2.01".parse().expect("quantity"))));
 
-        let fractional_stake = QuorumPolicy::NposStake(Numeric::new(15_u128, 1));
-        assert!(!fractional_stake.is_satisfied_by_stake(Some(Numeric::new(10_u128, 1))));
-        assert!(fractional_stake.is_satisfied_by_stake(Some(Numeric::new(101_u128, 2))));
+        let fractional_stake = QuorumPolicy::NposStake("1.5".parse().expect("quantity"));
+        assert!(!fractional_stake.is_satisfied_by_stake(Some("1.0".parse().expect("quantity"))));
+        assert!(fractional_stake.is_satisfied_by_stake(Some("1.01".parse().expect("quantity"))));
 
-        let tiny_fractional_stake = QuorumPolicy::NposStake(Numeric::new(3_u128, 2));
-        assert!(!tiny_fractional_stake.is_satisfied_by_stake(Some(Numeric::new(2_u128, 2))));
+        let tiny_fractional_stake = QuorumPolicy::NposStake("0.03".parse().expect("quantity"));
         assert!(
-            tiny_fractional_stake.is_satisfied_by_stake(Some(Numeric::new(
-                200_000_000_000_000_000_000_000_001_u128,
-                28,
-            )))
+            !tiny_fractional_stake.is_satisfied_by_stake(Some("0.02".parse().expect("quantity")))
         );
+        assert!(tiny_fractional_stake.is_satisfied_by_stake(Some(
+            "0.0200000000000000000000000001".parse().expect("quantity")
+        )));
 
-        let zero_total = QuorumPolicy::NposStake(Numeric::zero());
-        assert!(!zero_total.is_satisfied_by_stake(Some(Numeric::from(1_u64))));
+        let zero_total = QuorumPolicy::NposStake(Quantity::zero());
+        assert!(!zero_total.is_satisfied_by_stake(Some(Quantity::from(1_u64))));
 
-        let negative_total = QuorumPolicy::NposStake(Numeric::new(-3_i128, 0));
-        assert!(!negative_total.is_satisfied_by_stake(Some(Numeric::from(1_u64))));
-
-        let max_total = max_positive_numeric();
+        let max_total = max_positive_quantity();
         let overflowing_stake = QuorumPolicy::NposStake(max_total.clone());
         assert!(!overflowing_stake.is_satisfied_by_stake(Some(max_total)));
     }

@@ -2646,12 +2646,12 @@ mod tests {
             metadata: Metadata::default(),
             parents: vec![RwaParentRef::new(
                 rwa_alpha_parent.clone(),
-                "4".parse().unwrap(),
+                "4".parse::<iroha_primitives::numeric::Quantity>().unwrap(),
             )],
             controls: RwaControlPolicy::default(),
             owned_by: ALICE_ID.clone(),
             is_frozen: false,
-            held_quantity: Numeric::zero(),
+            held_quantity: iroha_primitives::numeric::Quantity::zero(),
         };
         alpha_data.metadata.insert(
             "series".parse().unwrap(),

@@ -603,10 +603,7 @@ mod tests {
     use iroha_p2p::{ClassifyTopic, network::message::Topic as NetworkTopic};
     use iroha_test_samples::gen_account_in;
     use norito::json;
-    use norito::{
-        codec::{Decode, Encode},
-        core as ncore,
-    };
+    use norito::{codec::Encode, core as ncore};
 
     use crate::{
         NetworkMessage, PeerTrustGossip, SoranetPowConfigBroadcast, SoranetPuzzleConfigBroadcast,

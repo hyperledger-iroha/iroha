@@ -391,7 +391,7 @@ fn stake_genesis_post_topology_transactions(
                 validator: validator_id.clone(),
                 peer_id: PeerId::from(peer.public_key().clone()),
                 stake_account: validator_id.clone(),
-                initial_stake: Numeric::new(stake, 0),
+                initial_stake: iroha_primitives::numeric::Quantity::from(stake),
                 metadata,
             }
             .into(),

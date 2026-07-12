@@ -162,7 +162,9 @@ fn rwa_iterable_query_response_roundtrips_header_and_json() {
             DomainId::try_new("vault", "universal").expect("domain"),
             iroha_crypto::Hash::prehashed([0x11; iroha_crypto::Hash::LENGTH]),
         ),
-        "12.5".parse().expect("quantity"),
+        "12.5"
+            .parse::<iroha_primitives::numeric::Quantity>()
+            .expect("quantity"),
         iroha_primitives::numeric::NumericSpec::fractional(1),
         "https://example.test/rwa/lot-1".to_owned(),
         Some("vaulted".parse().expect("status")),

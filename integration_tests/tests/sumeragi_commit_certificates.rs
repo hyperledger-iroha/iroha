@@ -23,7 +23,7 @@ use iroha::data_model::{
     prelude::*,
 };
 use iroha_core::sumeragi::{consensus::qc_signer_count, network_topology::commit_quorum_from_len};
-use iroha_primitives::numeric::{Numeric, NumericSpec};
+use iroha_primitives::numeric::NumericSpec;
 use iroha_test_network::{
     NetworkBuilder, NetworkPeer, genesis_factory_with_post_topology, init_instruction_registry,
 };
@@ -700,7 +700,7 @@ fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Inst
                 validator: validator_id.clone(),
                 peer_id: PeerId::from(peer.public_key().clone()),
                 stake_account: validator_id.clone(),
-                initial_stake: Numeric::from(stake),
+                initial_stake: iroha_primitives::numeric::Quantity::from(stake),
                 metadata: Metadata::default(),
             }
             .into(),

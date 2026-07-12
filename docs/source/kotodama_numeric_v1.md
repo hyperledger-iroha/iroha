@@ -403,9 +403,10 @@ complete minimal encoding remains at most 64 bytes.
 
 With the fixed 40-byte canonical Norito V1 header, maximum frame sizes are 108 bytes for
 `int` and 109 bytes for `decimal` and `quantity`. The pointer envelope adds a
-seven-byte type/version/length header and a 32-byte `iroha_crypto::Hash::new`
-digest of the complete frame, for maxima of 147, 148, and 148 bytes
-respectively.
+seven-byte header containing a big-endian `u16` pointer type, one-byte version
+`1`, and big-endian `u32` frame length, followed by a 32-byte
+`iroha_crypto::Hash::new` digest of the complete frame. The resulting maxima
+are 147, 148, and 148 bytes respectively.
 
 ### Typed durable-state identity
 
@@ -557,7 +558,7 @@ never refund. Each phase is debited immediately before its bounded work begins;
 an unaffordable phase performs no work and leaves earlier phase charges
 consumed.
 
-The complete formula and stable OOG phase-tag map have gas-formula version 4.
+The complete formula and stable OOG phase-tag map have gas-formula version 5.
 That version is an input to gas-schedule descriptor format 3 under domain
 `iroha.ivm.gas-schedule.v3`. The descriptor also encodes every staged phase
 name and numeric tag directly, in tag order; the phase table is not represented
@@ -648,6 +649,13 @@ output-length probe before exact compact serialization begins.
 
 There is no implicit minimum applied to `logical_limb_work`; operations whose
 normative work is zero still pay the entry and envelope charges.
+
+For a numeric output mantissa `m`, the signed-length probe uses
+`output_limbs = L(bit_length(abs(m)) + 1)`. Zero therefore uses one limb.
+The extra conceptual sign bit covers every positive sign-extension boundary;
+it deliberately charges a conservative extra limb for negative exact powers
+of two at a 64-bit boundary, including nine limbs for `-2^511`. The later byte
+charge still uses the exact minimal two's-complement frame length.
 
 The constants are consensus weights, not host-cycle counts. They are not
 considered release-calibrated until the required benchmark evidence is
@@ -776,16 +784,19 @@ C(d) = sum(P(k), k = 0..d-1)
 S(0, d) = 1
 S(b, 0) = L(b), for b > 0
 S(b, d) = L(b + B(d)), for b > 0 and d > 0
-A(b, 0) = L(b)
-A(b, d) = C(d) + L(b) * P(d), for d > 0
+A(0, d) = 1
+A(b, 0) = L(b), for b > 0
+A(b, d) = C(d) + L(b) * P(d), for b > 0 and d > 0
 ```
 
 `B(d)` is pinned as an integer table for `d` in `0..=56`; gas computation never
 uses floating-point logarithms. `C(d)` charges deterministic construction of
 `10^d` as the sequence `1 * 10`, `10 * 10`, ..., `10^(d-1) * 10`; the
 primitive implementation performs that same bounded sequence instead of an
-unmetered backend exponentiation. `A(b, 0)` charges the owned temporary that
-the implementation materializes even when no decimal scaling is needed.
+unmetered backend exponentiation. A zero operand never constructs `10^d` or
+performs a multiplication: it emits one one-limb `Materialize` event for every
+alignment delta. `A(b, 0)` charges the owned temporary that the implementation
+materializes even when no decimal scaling is needed.
 Comparison charges both alignment
 multiplications using `A` plus the largest conservative aligned width from `S`,
 all before it materializes aligned operands. Addition and subtraction debit
@@ -842,10 +853,13 @@ For avoidance of doubt, the directly precharged integer work formulas are:
 | wrapping negation before reduction | `2*v + 1` |
 | wrapping addition/subtraction before reduction | `2*m + 1` |
 | wrapping multiplication before reduction | `l*r + l + r` |
-| wrapping reduction of a signed temporary with `x` limbs | `x + 3*8 + min(x, 8)` |
+| wrapping reduction of a signed temporary with `x` conservative signed limbs | `x + 3*8 + min(x, 8)` |
 
 Here every operand width is at least one limb and `q` is the quotient-limb
-bound above. A wrapping operation pays both its pre-reduction row and the
+bound above. For a wrapping temporary `t`, `x = L(bit_length(abs(t)) + 1)`;
+zero therefore has one limb, while `-2^511` deliberately has nine conservative
+signed limbs even though its minimal two's-complement input encoding occupies
+eight. A wrapping operation pays both its pre-reduction row and the
 wrapping-reduction row. Simple representation conversions and scalar range
 checks pay one scan of the source value; an output pointer, when present, is
 still charged separately.
@@ -870,8 +884,9 @@ perform an unreported backend pass:
 | `Normalize(m, scale)` | `QR(m, 1)` for the divide-by-ten probe about to run |
 | `Finalize(v)` | `max(v, 1)` |
 
-Scale alignment emits `ScaleByPowerOfTen` or `Materialize` for both operands,
-then the applicable add/subtract/compare event. Exact denominator reduction
+Scale alignment emits `ScaleByPowerOfTen` for each nonzero operand with a
+positive delta and `Materialize` for an unchanged or zero operand, then the
+applicable add/subtract/compare event. Exact denominator reduction
 emits preparation followed by every Euclidean/classification event actually
 begun, and a terminating quotient emits one `ExactDivisionAttempt` at its
 proven minimum scale. Rounded division emits exactly one bounded
@@ -943,10 +958,24 @@ not charged. No numeric failure writes an output envelope. A recoverable fault
 writes only the result/status registers. Trapping and out-of-gas paths leave
 numeric output allocation and durable state unchanged.
 
-## Ledger boundary
+## Ledger and economic boundaries
 
-Ledger balances remain asset-associated quantities, not generic decimals.
-Every boundary uses an explicit checked conversion equivalent to:
+Objectively non-negative ledger values use the nominal `quantity` domain, not
+generic signed decimals. This includes asset balances and totals, mint/burn/
+transfer values, fees and fee caps, stake and bonds, reward and slash amounts,
+budget/campaign/notional caps, payouts, escrowed values, subscription usage and
+charges, and other durable available/required amount records. The rule applies
+to public instructions, events, state, configuration, query/readback models,
+and SDK construction surfaces.
+
+`quantity` deliberately does not mean `money`: an asset can represent money,
+a commodity, a vote, a right, or another counted resource. Applications that
+need a monetary nominal type SHOULD define a policy-bearing newtype over an
+asset-associated `quantity`; the base language does not label every asset as
+money.
+
+Every signed-decimal crossing uses an explicit checked conversion equivalent
+to:
 
 ```text
 quantity::try_from_decimal(value)
@@ -956,7 +985,10 @@ decimal::from_quantity(value)
 The conversion is exact and enforces the ledger's scale/range and any
 asset-definition precision policy. Negative values, excess precision, and
 out-of-range ledger results have stable errors. Generic decimal values are not
-implicitly accepted by mint, burn, transfer, fee, or balance APIs.
+implicitly accepted by amount-bearing APIs. Internal price, rate, ratio,
+profit/loss, exposure, and signed-delta calculations remain `decimal`; if their
+result returns to a non-negative public or durable boundary, the implementation
+MUST perform the named checked conversion before publication or mutation.
 
 ## First-release activation and validation gates
 
@@ -969,7 +1001,7 @@ Merge and release require:
 
 - full workspace format, build, test, and strict clippy gates;
 - compiler-folding versus runtime differential tests;
-- an independent exact-arithmetic reference implementation;
+- an independent exact-arithmetic reference algorithm;
 - cross-SDK canonical frame fixtures;
 - encode/decode and malformed-frame fuzzing;
 - quote-free staged gas/OOG tests at every phase;
@@ -977,7 +1009,10 @@ Merge and release require:
 - exact division, all signed rounding ties, wrapping endpoints, and
   multiplication/alignment intermediates above the input limb maximum;
 - stale artifact/ABI-hash rejection and canonical numeric map-key tests;
-- execution parity across supported architectures and bigint backends.
+- execution parity across supported architectures using V1's sole supported
+  `num-bigint` backend. Introducing another bigint backend makes differential
+  parity against both backends a mandatory gate before that backend is
+  supported.
 
 The dedicated `numeric_v1_fuzz.yml` gate runs the `numeric_v1` libFuzzer
 target for pull requests that touch the numeric corridor, every push to the

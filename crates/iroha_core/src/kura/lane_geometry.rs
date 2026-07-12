@@ -14031,6 +14031,192 @@ mod tests {
         assert_eq!(reopened.durable_blocks_count(), 3);
     }
 
+    #[test]
+    fn two_lane_relabel_files_applied_restart_recovers_exact_chain() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let lane_count = nonzero!(2_u32);
+        let initial_primary = ModelLaneConfig {
+            alias: "primary-alpha".to_owned(),
+            ..ModelLaneConfig::default()
+        };
+        let initial_secondary = ModelLaneConfig {
+            id: LaneId::new(1),
+            alias: "secondary-alpha".to_owned(),
+            ..ModelLaneConfig::default()
+        };
+        let updated_primary = ModelLaneConfig {
+            alias: "primary-beta".to_owned(),
+            ..initial_primary.clone()
+        };
+        let updated_secondary = ModelLaneConfig {
+            alias: "secondary-beta".to_owned(),
+            ..initial_secondary.clone()
+        };
+        let initial_catalog =
+            LaneCatalog::new(lane_count, vec![initial_primary, initial_secondary])
+                .expect("initial two-lane catalog");
+        let updated_catalog =
+            LaneCatalog::new(lane_count, vec![updated_primary, updated_secondary])
+                .expect("relabelled two-lane catalog");
+        let initial = RuntimeLaneConfig::from_catalog(&initial_catalog);
+        let updated = RuntimeLaneConfig::from_catalog(&updated_catalog);
+        let incarnations = BTreeMap::from([
+            (LaneId::SINGLE, Hash::prehashed([0x31; Hash::LENGTH])),
+            (LaneId::new(1), Hash::prehashed([0x32; Hash::LENGTH])),
+        ]);
+        let activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 0)]);
+        let kura = open_kura(&root, &initial);
+        let _ = durable_geometry_snapshot_identity(&kura, 3);
+        let exact_chain = |kura: &Kura| {
+            (1..=kura.durable_blocks_count())
+                .map(|height| {
+                    kura.get_block(NonZeroUsize::new(height).expect("non-zero block height"))
+                        .expect("durable block")
+                        .encode_wire()
+                        .expect("encode canonical block wire")
+                })
+                .collect::<Vec<_>>()
+        };
+        let expected_chain = exact_chain(&kura);
+
+        let initial_primary = initial.primary();
+        let initial_secondary = initial
+            .entry(LaneId::new(1))
+            .expect("initial secondary lane");
+        let updated_primary = updated.primary();
+        let updated_secondary = updated
+            .entry(LaneId::new(1))
+            .expect("updated secondary lane");
+        let old_primary_blocks = initial_primary.blocks_dir(&root);
+        let old_primary_merge = initial_primary.merge_log_path(&root);
+        let old_secondary_blocks = initial_secondary.blocks_dir(&root);
+        let old_secondary_merge = initial_secondary.merge_log_path(&root);
+        let new_primary_blocks = updated_primary.blocks_dir(&root);
+        let new_primary_merge = updated_primary.merge_log_path(&root);
+        let new_secondary_blocks = updated_secondary.blocks_dir(&root);
+        let new_secondary_merge = updated_secondary.merge_log_path(&root);
+        let secondary_sentinel = "secondary-lane-sentinel";
+        fs::write(
+            old_secondary_blocks.join(secondary_sentinel),
+            b"secondary-block-state",
+        )
+        .expect("seed secondary block state");
+        fs::write(&old_secondary_merge, b"secondary-merge-state")
+            .expect("seed secondary merge state");
+
+        kura.apply_lane_geometry_transition(
+            &initial,
+            &updated,
+            &incarnations,
+            &incarnations,
+            &activations,
+            &activations,
+            &BTreeSet::new(),
+        )
+        .expect("durably relabel both lanes before catalog publication");
+        let journal = kura.read_lane_geometry_journal().expect("geometry journal");
+        assert_eq!(journal.records[0].phase, LaneGeometryPhase::FilesApplied);
+        assert_eq!(journal.records[0].operations.len(), 2);
+        assert!(
+            journal.records[0]
+                .operations
+                .iter()
+                .all(|operation| operation.kind == LaneGeometryOperationKind::Relabel),
+            "both lane operations must be relabels"
+        );
+        for path in [
+            &old_primary_blocks,
+            &old_primary_merge,
+            &old_secondary_blocks,
+            &old_secondary_merge,
+        ] {
+            assert!(!path.exists(), "old lane path must be consumed: {path:?}");
+        }
+        for path in [
+            &new_primary_blocks,
+            &new_primary_merge,
+            &new_secondary_blocks,
+            &new_secondary_merge,
+        ] {
+            assert!(path.exists(), "updated lane path must exist: {path:?}");
+        }
+        assert_eq!(exact_chain(&kura), expected_chain);
+        drop(kura);
+
+        let reopened = open_kura(&root, &initial);
+        assert_eq!(*reopened.active_blocks_dir.lock(), new_primary_blocks);
+        assert_eq!(*reopened.active_merge_path.lock(), new_primary_merge);
+        for path in [
+            &old_primary_blocks,
+            &old_primary_merge,
+            &old_secondary_blocks,
+            &old_secondary_merge,
+        ] {
+            assert!(
+                !path.exists(),
+                "startup must not prematurely recreate a journal-owned old path: {path:?}"
+            );
+        }
+        assert_eq!(
+            fs::read(new_secondary_blocks.join(secondary_sentinel))
+                .expect("read relabelled secondary block state"),
+            b"secondary-block-state"
+        );
+        assert_eq!(
+            fs::read(&new_secondary_merge).expect("read relabelled secondary merge state"),
+            b"secondary-merge-state"
+        );
+        assert_eq!(exact_chain(&reopened), expected_chain);
+
+        reopened
+            .recover_lane_geometry_journal(&initial, &incarnations, &activations)
+            .expect("authoritative old catalog rolls both relabels back");
+        reopened
+            .recover_lane_geometry_journal(&initial, &incarnations, &activations)
+            .expect("two-lane rollback recovery is idempotent");
+        assert_eq!(*reopened.active_blocks_dir.lock(), old_primary_blocks);
+        assert_eq!(*reopened.active_merge_path.lock(), old_primary_merge);
+        for path in [
+            &old_primary_blocks,
+            &old_primary_merge,
+            &old_secondary_blocks,
+            &old_secondary_merge,
+        ] {
+            assert!(path.exists(), "rolled-back lane path must exist: {path:?}");
+        }
+        for path in [
+            &new_primary_blocks,
+            &new_primary_merge,
+            &new_secondary_blocks,
+            &new_secondary_merge,
+        ] {
+            assert!(
+                !path.exists(),
+                "updated lane path must be consumed: {path:?}"
+            );
+        }
+        assert_eq!(
+            fs::read(old_secondary_blocks.join(secondary_sentinel))
+                .expect("read recovered secondary block state"),
+            b"secondary-block-state"
+        );
+        assert_eq!(
+            fs::read(&old_secondary_merge).expect("read recovered secondary merge state"),
+            b"secondary-merge-state"
+        );
+        assert_eq!(
+            reopened
+                .read_lane_geometry_journal()
+                .expect("recovered geometry journal")
+                .records[0]
+                .phase,
+            LaneGeometryPhase::RolledBack
+        );
+        assert_eq!(reopened.durable_blocks_count(), expected_chain.len());
+        assert_eq!(exact_chain(&reopened), expected_chain);
+    }
+
     struct PrimaryRelabelResumeGuard<'a>(&'a std::sync::atomic::AtomicBool);
 
     impl Drop for PrimaryRelabelResumeGuard<'_> {

@@ -8,7 +8,7 @@ use iroha::data_model::{
     isi::social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
     oracle::KeyedHash,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use norito::json;
 
 use crate::{Run, RunContext};
@@ -46,7 +46,7 @@ pub struct SendArgs {
     pub binding_hash_json: String,
     /// Amount to escrow or deliver immediately when the binding is already active.
     ///
-    /// Parsed as `Numeric` (mantissa/scale) using the standard string format.
+    /// Parsed as a canonical non-negative `Quantity` using the standard string format.
     #[arg(long, value_name = "AMOUNT")]
     pub amount: String,
 }
@@ -73,10 +73,10 @@ fn load_binding_hash(path: &Path) -> Result<KeyedHash> {
     Ok(value)
 }
 
-fn parse_numeric(value: &str, flag: &str) -> Result<Numeric> {
+fn parse_quantity(value: &str, flag: &str) -> Result<Quantity> {
     value
-        .parse::<Numeric>()
-        .wrap_err_with(|| format!("{flag} must be a valid Numeric"))
+        .parse::<Quantity>()
+        .wrap_err_with(|| format!("{flag} must be a valid non-negative quantity"))
 }
 
 impl Run for Command {
@@ -89,7 +89,7 @@ impl Run for Command {
             }
             Command::SendToTwitter(args) => {
                 let binding_hash = load_binding_hash(Path::new(&args.binding_hash_json))?;
-                let amount = parse_numeric(&args.amount, "--amount")?;
+                let amount = parse_quantity(&args.amount, "--amount")?;
                 if amount.is_zero() {
                     return Err(eyre!("--amount must be non-zero"));
                 }
@@ -134,11 +134,12 @@ mod tests {
     }
 
     #[test]
-    fn parse_numeric_rejects_invalid_values() {
-        let err = parse_numeric("not-a-number", "--amount").unwrap_err();
+    fn parse_quantity_rejects_invalid_and_negative_values() {
+        let err = parse_quantity("not-a-number", "--amount").unwrap_err();
         assert!(
-            format!("{err:?}").contains("must be a valid Numeric"),
-            "error should mention invalid Numeric"
+            format!("{err:?}").contains("valid non-negative quantity"),
+            "error should mention invalid quantity"
         );
+        assert!(parse_quantity("-1", "--amount").is_err());
     }
 }

@@ -569,10 +569,10 @@ fn transaction_requires_fee_postprocessing(
     }
     if nexus_cfg.enabled {
         let fees = &nexus_cfg.fees;
-        if fees.base_fee > Numeric::zero()
-            || fees.per_byte_fee > Numeric::zero()
-            || fees.per_instruction_fee > Numeric::zero()
-            || fees.per_gas_unit_fee > Numeric::zero()
+        if !fees.base_fee.is_zero()
+            || !fees.per_byte_fee.is_zero()
+            || !fees.per_instruction_fee.is_zero()
+            || !fees.per_gas_unit_fee.is_zero()
         {
             return true;
         }
@@ -2854,6 +2854,10 @@ pub enum BlockValidationError {
     },
     /// Sumeragi v2 logical block time exceeded the canonical u64-millisecond range
     V2BlockTimeOverflow,
+    /// Sumeragi v2 snapshot bootstrap parent geometry is invalid: {0}
+    SnapshotBootstrapParentInvalid(String),
+    /// Sumeragi v2 finality authority does not bind this block and execution: {0}
+    V2FinalityAuthorityInvalid(String),
     /// Some transaction in the block is created after the block itself
     TransactionInTheFuture,
     /// Block confidential feature digest mismatch. Expected: {expected:?}, actual: {actual:?}
@@ -4360,6 +4364,7 @@ pub(crate) mod valid {
         context_id: iroha_data_model::block::consensus_v2::HeightContextId,
         height: u64,
         epoch: u64,
+        snapshot_bootstrap: Option<iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor>,
     }
 
     impl SumeragiV2ValidationContext {
@@ -4373,6 +4378,7 @@ pub(crate) mod valid {
                 context_id: context.id(),
                 height: context.height,
                 epoch: context.epoch,
+                snapshot_bootstrap: context.snapshot_bootstrap,
             }
         }
 
@@ -4384,6 +4390,7 @@ pub(crate) mod valid {
                 ),
                 height: block.header().height().get(),
                 epoch: 0,
+                snapshot_bootstrap: None,
             }
         }
     }
@@ -4422,6 +4429,15 @@ pub(crate) mod valid {
         const fn v2_block_cadence(self) -> Option<Duration> {
             match self {
                 Self::SumeragiV2 { block_cadence, .. } => Some(block_cadence),
+                Self::LegacyLive | Self::Replay => None,
+            }
+        }
+
+        const fn snapshot_bootstrap(
+            self,
+        ) -> Option<iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor> {
+            match self {
+                Self::SumeragiV2 { context, .. } => context.snapshot_bootstrap,
                 Self::LegacyLive | Self::Replay => None,
             }
         }
@@ -5565,6 +5581,18 @@ pub(crate) mod valid {
             if block.header().is_genesis() {
                 return Ok(());
             }
+            Self::validate_signatures_subset_world_exact(block, topology, world)
+        }
+
+        /// Verify the exact stored signature indices and payloads, including at genesis.
+        ///
+        /// Certificate-bound replay uses this after authenticating the canonical block wire;
+        /// signer-index recovery would change the certified payload and is therefore forbidden.
+        pub(crate) fn validate_signatures_subset_world_exact(
+            block: &SignedBlock,
+            topology: &Topology,
+            world: &impl WorldReadOnly,
+        ) -> Result<(), SignatureVerificationError> {
             Self::verify_unique_signers(block)?;
             let params = world.parameters();
             let sumeragi = params.sumeragi();
@@ -5581,6 +5609,40 @@ pub(crate) mod valid {
             )?;
             Self::verify_signatures_against_topology_with_pops(block, topology, &pops)?;
             Self::enforce_consensus_key_lifecycle_world(block, topology, world)
+        }
+
+        /// Verify exact stored signature indices against a frozen v2 artifact authority.
+        ///
+        /// Replay must not derive signature authority from mutable WSV key registries. The
+        /// artifact's roster and roster-aligned PoPs are the only authority for this check.
+        pub(crate) fn validate_signatures_subset_v2_artifact_exact(
+            block: &SignedBlock,
+            artifact: &consensus_v2::finality::V2FinalityArtifact,
+        ) -> Result<(), SignatureVerificationError> {
+            Self::verify_unique_signers(block)?;
+            consensus_v2::finality::verify_validator_power_roster_pops(
+                &artifact.height_context.roster,
+                &artifact.validator_set_pops,
+            )
+            .map_err(|_| SignatureVerificationError::MissingPop)?;
+            let hash = block.hash();
+            for signature in block.signatures() {
+                let signer = usize::try_from(signature.index())
+                    .map_err(|_| SignatureVerificationError::UnknownSignatory)?;
+                let validator = artifact
+                    .height_context
+                    .roster
+                    .get(signer)
+                    .ok_or(SignatureVerificationError::UnknownSignatory)?;
+                if !Self::is_bls_normal_public_key(validator.validator.public_key()) {
+                    return Err(SignatureVerificationError::UnknownSignature);
+                }
+                signature
+                    .signature()
+                    .verify_hash(validator.validator.public_key(), hash)
+                    .map_err(|_| SignatureVerificationError::UnknownSignature)?;
+            }
+            Ok(())
         }
 
         #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -6551,9 +6613,19 @@ pub(crate) mod valid {
             prev_block: &SignedBlock,
             block_cadence: Duration,
         ) -> Result<Duration, BlockValidationError> {
-            let mut expected = prev_block
-                .header()
-                .creation_time()
+            Self::canonical_v2_block_time_from_parent_time(
+                block,
+                prev_block.header().creation_time(),
+                block_cadence,
+            )
+        }
+
+        fn canonical_v2_block_time_from_parent_time(
+            block: &SignedBlock,
+            parent_creation_time: Duration,
+            block_cadence: Duration,
+        ) -> Result<Duration, BlockValidationError> {
+            let mut expected = parent_creation_time
                 .checked_add(block_cadence)
                 .ok_or(BlockValidationError::V2BlockTimeOverflow)?;
             for transaction in block.external_transactions() {
@@ -6738,6 +6810,12 @@ pub(crate) mod valid {
                 };
 
                 if let Some(prev_block) = prev_block {
+                    if validation_profile.snapshot_bootstrap().is_some() {
+                        return Err(BlockValidationError::SnapshotBootstrapParentInvalid(
+                            "snapshot bootstrap parent unexpectedly has a locally available full body"
+                                .to_owned(),
+                        ));
+                    }
                     let prev_block_time = prev_block.header().creation_time();
 
                     if let Some(block_cadence) = validation_profile.v2_block_cadence() {
@@ -6757,17 +6835,38 @@ pub(crate) mod valid {
                     if block.header().creation_time() <= prev_block_time {
                         return Err(BlockValidationError::BlockInThePast);
                     }
-                } else if expected_prev_block_hash == actual_prev_block_hash
-                    && actual_prev_block_hash.is_some()
-                    && state_height > 0
-                {
-                    iroha_logger::warn!(
-                        block_height = block.header().height().get(),
-                        block_hash = ?block.hash(),
-                        parent_hash = ?actual_prev_block_hash,
-                        state_height,
-                        "skipping previous block timestamp check because legacy hard-fork state has hash-only parent context"
-                    );
+                } else if let Some(anchor) = validation_profile.snapshot_bootstrap() {
+                    let cadence = validation_profile
+                        .v2_block_cadence()
+                        .expect("snapshot bootstrap exists only in a v2 validation profile");
+                    if anchor.snapshot_height.checked_add(1) != Some(block.header().height().get())
+                        || state_height
+                            != usize::try_from(anchor.snapshot_height).unwrap_or(usize::MAX)
+                        || actual_prev_block_hash != Some(anchor.snapshot_block_hash)
+                    {
+                        return Err(BlockValidationError::SnapshotBootstrapParentInvalid(
+                            "snapshot anchor height, state height, or parent hash differs from the active block"
+                                .to_owned(),
+                        ));
+                    }
+                    let parent_time = Duration::from_millis(anchor.snapshot_block_creation_time_ms);
+                    let expected = Self::canonical_v2_block_time_from_parent_time(
+                        block,
+                        parent_time,
+                        cadence,
+                    )?;
+                    let actual = block.header().creation_time();
+                    if actual != expected {
+                        return Err(BlockValidationError::NonCanonicalV2BlockTime {
+                            expected_ms: u64::try_from(expected.as_millis())
+                                .map_err(|_| BlockValidationError::V2BlockTimeOverflow)?,
+                            actual_ms: u64::try_from(actual.as_millis())
+                                .map_err(|_| BlockValidationError::V2BlockTimeOverflow)?,
+                        });
+                    }
+                    if actual <= parent_time {
+                        return Err(BlockValidationError::BlockInThePast);
+                    }
                 } else {
                     return Err(BlockValidationError::PrevBlockHashMismatch {
                         expected: expected_prev_block_hash,
@@ -13736,12 +13835,42 @@ pub(crate) mod valid {
             )
         }
 
-        /// Commit using a validated commit certificate.
+        /// Commit using the exact cryptographically verified Sumeragi-v2 finality artifact.
         ///
-        /// Callers must ensure the block has already passed validation and the commit
-        /// certificate was verified; this skips block-signature quorum checks.
-        pub fn commit_with_certificate(self) -> WithCommittedBlockEvents {
-            WithEvents::new(Ok(CommittedBlock(self)))
+        /// This is the sole block-signature quorum bypass. It reauthenticates the artifact and
+        /// binds its header, canonical complete-block wire digest, and execution commitment to
+        /// this validated block before changing the lifecycle type.
+        pub fn commit_with_verified_v2_artifact(
+            self,
+            artifact: &consensus_v2::finality::V2FinalityArtifact,
+            execution_commitment: consensus_v2::ExecutionCommitment,
+        ) -> WithCommittedBlockEvents {
+            let validation = (|| -> Result<(), BlockValidationError> {
+                artifact.verify().map_err(|error| {
+                    BlockValidationError::V2FinalityAuthorityInvalid(error.to_string())
+                })?;
+                artifact
+                    .validate_for_header(&self.block.header())
+                    .map_err(|error| {
+                        BlockValidationError::V2FinalityAuthorityInvalid(error.to_string())
+                    })?;
+                let canonical_wire = self.block.encode_wire().map_err(|error| {
+                    BlockValidationError::V2FinalityAuthorityInvalid(error.to_string())
+                })?;
+                if Hash::new(canonical_wire) != artifact.subject.payload_hash
+                    || execution_commitment != artifact.commit_qc.execution_commitment
+                {
+                    return Err(BlockValidationError::V2FinalityAuthorityInvalid(
+                        "artifact differs from canonical block wire or deterministic execution"
+                            .to_owned(),
+                    ));
+                }
+                Ok(())
+            })();
+            WithEvents::new(match validation {
+                Ok(()) => Ok(CommittedBlock(self)),
+                Err(error) => Err((Box::new(self), Box::new(error))),
+            })
         }
 
         /// Commit using a prevalidated signer set (e.g., from a QC).
@@ -15707,30 +15836,124 @@ pub(crate) mod valid {
             assert!(block.commit(&topology).unpack(|_| {}).is_ok());
         }
 
+        #[cfg(feature = "bls")]
         #[test]
-        fn commit_with_certificate_skips_signature_quorum() {
-            let key_pairs = core::iter::repeat_with(|| {
+        fn v2_certificate_commit_requires_exact_cryptographic_artifact() {
+            let mut key_pairs = core::iter::repeat_with(|| {
                 crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
             })
             .take(4)
             .collect::<Vec<_>>();
-            let topology = test_topology_with_keys(&key_pairs);
-            assert_eq!(topology.min_votes_for_commit(), 3);
+            key_pairs.sort_by(|left, right| left.public_key().cmp(right.public_key()));
 
             let block = ValidBlock::new_dummy(key_pairs[0].private_key());
-            let commit_result = block.commit_with_certificate().unpack(|_| {});
+            let signed = block.as_ref();
+            let roster = key_pairs
+                .iter()
+                .map(
+                    |key| iroha_data_model::block::consensus_v2::ValidatorPower {
+                        validator: PeerId::new(key.public_key().clone()),
+                        power: 1,
+                    },
+                )
+                .collect::<Vec<_>>();
+            let context = iroha_data_model::block::consensus_v2::HeightContext {
+                chain_id: "v2-artifact-bound-commit".into(),
+                protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
+                height: signed.header().height().get(),
+                epoch: 0,
+                epoch_end_height: u64::MAX,
+                next_epoch_snapshot: None,
+                mode: iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+                parent_commit_qc: None,
+                snapshot_bootstrap: None,
+                quorum: iroha_data_model::block::consensus_v2::DualQuorum::from_roster(&roster)
+                    .expect("fixture quorum"),
+                roster,
+                nexus_amx_context_hash: Hash::new(b"v2 artifact-bound commit context"),
+                da_layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout {
+                    encoding: iroha_data_model::block::consensus_v2::PayloadEncoding::Plain,
+                    chunk_size_bytes: 1024,
+                    data_shards: 0,
+                    parity_shards: 0,
+                    max_payload_size_bytes: 4096,
+                    max_chunk_count: 4,
+                },
+                leader_seed: [0x41; 32],
+            };
+            let subject = iroha_data_model::block::consensus_v2::BlockSubject {
+                parent_block_hash: signed.header().prev_block_hash(),
+                block_hash: signed.hash(),
+                payload_hash: Hash::new(signed.encode_wire().expect("canonical block wire")),
+            };
+            let round = iroha_data_model::block::consensus_v2::ConsensusRound {
+                context_id: context.id(),
+                height: context.height,
+                view: signed.header().view_change_index(),
+            };
+            let execution =
+                iroha_data_model::block::consensus_v2::ExecutionCommitment::without_topups(
+                    Hash::new(b"artifact-bound parent state"),
+                    Hash::new(b"artifact-bound post state"),
+                    Hash::new(b"artifact-bound ordinary writes"),
+                );
+            let vote = iroha_data_model::block::consensus_v2::Vote {
+                round,
+                phase: iroha_data_model::block::consensus_v2::GlobalPhase::Commit,
+                subject,
+                execution_commitment: execution,
+                signer: 0,
+                signature: Vec::new(),
+            };
+            let preimage = vote.signature_preimage();
+            let shares = key_pairs[..3]
+                .iter()
+                .map(|key| {
+                    iroha_crypto::Signature::new(key.private_key(), &preimage)
+                        .payload()
+                        .to_vec()
+                })
+                .collect::<Vec<_>>();
+            let qc = iroha_data_model::block::consensus_v2::QuorumCertificate {
+                round,
+                phase: iroha_data_model::block::consensus_v2::GlobalPhase::Commit,
+                subject,
+                execution_commitment: execution,
+                signers: vec![0, 1, 2],
+                aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(
+                    &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                )
+                .expect("aggregate fixture CommitQC"),
+            };
+            let pops = key_pairs
+                .iter()
+                .map(|key| {
+                    iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("fixture PoP")
+                })
+                .collect();
+            let artifact = iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact::new(
+                context, subject, qc, pops,
+            );
+            let forged_block = block.clone();
+            let commit_result = block
+                .commit_with_verified_v2_artifact(&artifact, execution)
+                .unpack(|_| {});
 
             assert!(
                 commit_result.is_ok(),
-                "commit_with_certificate should bypass signature quorum checks"
+                "an exact cryptographic artifact authorizes the v2 quorum conversion"
             );
-            let strict_result = ValidBlock::new_dummy(key_pairs[0].private_key())
-                .commit(&topology)
+
+            let mut forged = artifact;
+            forged.commit_qc.aggregate_signature[0] ^= 0x80;
+            let rejected = forged_block
+                .commit_with_verified_v2_artifact(&forged, execution)
                 .unpack(|_| {});
-            assert!(
-                strict_result.is_err(),
-                "strict commit should still enforce signature quorum"
-            );
+            assert!(matches!(
+                rejected,
+                Err((_, error))
+                    if matches!(error.as_ref(), BlockValidationError::V2FinalityAuthorityInvalid(_))
+            ));
         }
 
         #[test]
@@ -20231,6 +20454,18 @@ pub(crate) mod valid {
                 map_block_err_to_reason(&policy_err),
                 Reason::DaProofPolicyMismatch
             );
+            assert_eq!(
+                map_block_err_to_reason(&BlockValidationError::V2FinalityAuthorityInvalid(
+                    "certificate does not bind the canonical execution".to_owned(),
+                )),
+                Reason::ConsensusBlockRejection
+            );
+            assert_eq!(
+                map_block_err_to_reason(&BlockValidationError::SnapshotBootstrapParentInvalid(
+                    "snapshot parent body is unexpectedly available".to_owned(),
+                )),
+                Reason::ConsensusBlockRejection
+            );
         }
 
         #[test]
@@ -20480,6 +20715,123 @@ pub(crate) mod valid {
                             expected_ms: 1_000_000,
                             actual_ms: 1_000_001,
                         }
+                    )
+            ));
+        }
+
+        #[test]
+        fn v2_snapshot_parent_enforces_authenticated_hash_height_and_logical_time() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let state = State::new(World::new(), Arc::clone(&kura), query);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer = PeerId::new(leader.public_key().clone());
+            let topology = Topology::new(vec![peer.clone()]);
+            let first =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+            let second = commit_block_at_height(
+                &state,
+                &kura,
+                &topology,
+                leader.private_key(),
+                2,
+                Some(first),
+                2,
+            );
+            kura.force_hash_only_block_for_testing(nonzero!(2_usize))
+                .expect("remove audited parent body");
+            assert!(state.view().latest_block().is_none());
+
+            let anchor = consensus_v2::SnapshotBootstrapAnchor {
+                snapshot_height: 2,
+                snapshot_block_hash: second,
+                snapshot_block_creation_time_ms: 2,
+                snapshot_state_hash: crate::snapshot::canonical_state_snapshot_hash(&state),
+            };
+            let roster = vec![consensus_v2::ValidatorPower {
+                validator: peer,
+                power: 1,
+            }];
+            let context = consensus_v2::HeightContext {
+                chain_id: state.chain_id_ref().clone(),
+                protocol_version: consensus_v2::PROTOCOL_VERSION,
+                height: 3,
+                epoch: 0,
+                epoch_end_height: u64::MAX,
+                next_epoch_snapshot: None,
+                mode: consensus_v2::ConsensusMode::Permissioned,
+                parent_commit_qc: None,
+                snapshot_bootstrap: Some(anchor),
+                quorum: consensus_v2::DualQuorum::from_roster(&roster).expect("fixture quorum"),
+                roster,
+                nexus_amx_context_hash: Hash::new(b"snapshot validation Nexus/AMX"),
+                da_layout: consensus_v2::DataAvailabilityLayout {
+                    encoding: consensus_v2::PayloadEncoding::Plain,
+                    chunk_size_bytes: 1024,
+                    data_shards: 0,
+                    parity_shards: 0,
+                    max_payload_size_bytes: 4096,
+                    max_chunk_count: 4,
+                },
+                leader_seed: [0x51; 32],
+            };
+            context.validate().expect("valid snapshot context");
+            let candidate_at = |creation_time_ms| {
+                SignedBlock::from(ValidBlock::new_dummy_and_modify_header(
+                    leader.private_key(),
+                    |header| {
+                        header.set_height(nonzero!(3_u64));
+                        header.set_prev_block_hash(Some(second));
+                        header.creation_time_ms = creation_time_ms;
+                        header.merkle_root = None;
+                        header.set_prev_roster_evidence_hash(None);
+                    },
+                ))
+            };
+            let validate = |candidate: SignedBlock, context: &consensus_v2::HeightContext| {
+                let mut voting_block = None;
+                ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
+                    candidate,
+                    &topology,
+                    &state.chain_id.clone(),
+                    &ALICE_ID,
+                    &TimeSource::new_system(),
+                    Duration::from_millis(10),
+                    SumeragiV2ValidationContext::from_height_context(context),
+                    &state,
+                    &mut voting_block,
+                )
+                .unpack(|_| {})
+            };
+
+            let (valid, staged) = validate(candidate_at(12), &context)
+                .expect("exact anchor time plus cadence is accepted");
+            assert!(valid.as_ref().is_empty());
+            drop(staged);
+            assert!(matches!(
+                validate(candidate_at(13), &context),
+                Err(error)
+                    if matches!(
+                        *error.1,
+                        BlockValidationError::NonCanonicalV2BlockTime {
+                            expected_ms: 12,
+                            actual_ms: 13,
+                        }
+                    )
+            ));
+            let mut wrong_hash_context = context;
+            wrong_hash_context
+                .snapshot_bootstrap
+                .as_mut()
+                .expect("fixture anchor")
+                .snapshot_block_hash =
+                HashOf::from_untyped_unchecked(Hash::new(b"wrong snapshot parent"));
+            assert!(matches!(
+                validate(candidate_at(12), &wrong_hash_context),
+                Err(error)
+                    if matches!(
+                        *error.1,
+                        BlockValidationError::SnapshotBootstrapParentInvalid(_)
                     )
             ));
         }
@@ -23833,6 +24185,10 @@ mod event {
             BlockValidationError::BlockInTheFuture => Reason::BlockInTheFuture,
             BlockValidationError::NonCanonicalV2BlockTime { .. }
             | BlockValidationError::V2BlockTimeOverflow => Reason::BlockInTheFuture,
+            BlockValidationError::SnapshotBootstrapParentInvalid(_) => {
+                Reason::ConsensusBlockRejection
+            }
+            BlockValidationError::V2FinalityAuthorityInvalid(_) => Reason::ConsensusBlockRejection,
             BlockValidationError::TransactionInTheFuture => Reason::TransactionInTheFuture,
             BlockValidationError::ConfidentialFeaturesMismatch { .. } => {
                 Reason::ConfidentialFeatureDigestMismatch
@@ -27811,11 +28167,11 @@ seiyaku DynamicTarget {
             .build(&payer_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_definition_id.clone(), payer_id.clone()),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_definition_id.clone(), sink_id.clone()),
-            Numeric::zero(),
+            Quantity::zero(),
         );
         let world = World::with_assets(
             [domain],
@@ -28025,18 +28381,18 @@ seiyaku DynamicTarget {
         let assets = state_block.world.assets();
         assert_eq!(
             assets.get(&payer_transfer_asset).expect("payer rose").0,
-            Numeric::from(4_u32)
+            Quantity::from(4_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose")
                 .0,
-            Numeric::from(1_u32)
+            Quantity::from(1_u32)
         );
         assert_eq!(
             assets.get(&payer_fee_asset).expect("payer xor").0,
-            Numeric::from(9_u32)
+            Quantity::from(9_u32)
         );
     }
 
@@ -28142,7 +28498,7 @@ seiyaku DynamicTarget {
         let assets = state_block.world.assets();
         assert_eq!(
             assets.get(&payer_fee_asset).expect("payer xor").0,
-            Numeric::from(9_u32)
+            Quantity::from(9_u32)
         );
         let marker_value = state_block
             .world
@@ -28262,7 +28618,7 @@ seiyaku DynamicTarget {
         let assets = state_block.world.assets();
         assert_eq!(
             assets.get(&payer_transfer_asset).expect("payer rose").0,
-            Numeric::from(5_u32),
+            Quantity::from(5_u32),
             "business transfer must not leak when fee charging fails"
         );
         assert_eq!(
@@ -28270,12 +28626,12 @@ seiyaku DynamicTarget {
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose")
                 .0,
-            Numeric::zero(),
+            Quantity::zero(),
             "recipient balance must remain unchanged when fee charging fails"
         );
         assert_eq!(
             assets.get(&payer_fee_asset).expect("payer xor").0,
-            Numeric::zero(),
+            Quantity::zero(),
             "failed fee debit must not create a negative or partial fee state"
         );
     }
@@ -28423,18 +28779,18 @@ seiyaku DynamicTarget {
         let assets = state_block.world.assets();
         assert_eq!(
             assets.get(&payer_transfer_asset).expect("payer rose").0,
-            Numeric::from(4_u32)
+            Quantity::from(4_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose")
                 .0,
-            Numeric::from(1_u32)
+            Quantity::from(1_u32)
         );
         assert_eq!(
             assets.get(&payer_fee_asset).expect("payer xor").0,
-            Numeric::from(9_u32)
+            Quantity::from(9_u32)
         );
         let marker_value = state_block
             .world
@@ -28553,7 +28909,7 @@ seiyaku DynamicTarget {
         let assets = state_block.world.assets();
         assert_eq!(
             assets.get(&payer_transfer_asset).expect("payer rose").0,
-            Numeric::from(5_u32),
+            Quantity::from(5_u32),
             "business transfer must not leak when fee asset lookup fails"
         );
         assert_eq!(
@@ -28561,7 +28917,7 @@ seiyaku DynamicTarget {
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose")
                 .0,
-            Numeric::zero(),
+            Quantity::zero(),
             "recipient balance must remain unchanged when fee asset lookup fails"
         );
         assert!(
@@ -28672,12 +29028,12 @@ seiyaku DynamicTarget {
         let assets = state_block.world.assets();
         assert_eq!(
             assets.get(&payer_asset).expect("payer rose").0,
-            Numeric::from(1_u32),
+            Quantity::from(1_u32),
             "transfer must not leak when post-transfer fee debit fails"
         );
         assert_eq!(
             assets.get(&recipient_asset).expect("recipient rose").0,
-            Numeric::zero(),
+            Quantity::zero(),
             "recipient must not receive funds from a transaction rejected during fee charging"
         );
     }
@@ -28822,7 +29178,7 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after block")
                 .0,
-            Numeric::from(4_u32),
+            Quantity::from(4_u32),
             "the accepted transfer must remain committed"
         );
         assert_eq!(
@@ -28830,15 +29186,15 @@ seiyaku DynamicTarget {
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after block")
                 .0,
-            Numeric::from(1_u32),
+            Quantity::from(1_u32),
             "the rejected transfer must not leak after the first fee drains the payer"
         );
         assert_eq!(
             assets
                 .get(&payer_fee_asset)
                 .map(|asset| asset.0.clone())
-                .unwrap_or_else(Numeric::zero),
-            Numeric::zero(),
+                .unwrap_or_else(Quantity::zero),
+            Quantity::zero(),
             "only the accepted transaction may consume the available fee balance"
         );
     }
@@ -28965,7 +29321,7 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after rejected transfer")
                 .0,
-            Numeric::from(5_u32),
+            Quantity::from(5_u32),
             "payer balance must remain unchanged after rejected transfer"
         );
         assert_eq!(
@@ -28973,7 +29329,7 @@ seiyaku DynamicTarget {
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after rejected transfer")
                 .0,
-            Numeric::zero(),
+            Quantity::zero(),
             "recipient must not receive assets from a transaction rejected after the transfer"
         );
         assert_eq!(
@@ -28981,7 +29337,7 @@ seiyaku DynamicTarget {
                 .get(&payer_fee_asset)
                 .expect("payer xor after rejected transfer")
                 .0,
-            Numeric::from(9_u32),
+            Quantity::from(9_u32),
             "rejected business execution must still charge the configured Nexus fee"
         );
     }
@@ -29112,21 +29468,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after sequence rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after sequence rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&payer_fee_asset)
                 .expect("payer xor after sequence rejection")
                 .0,
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
             "stateful admission failures must not charge Nexus fees"
         );
         assert_eq!(
@@ -29260,21 +29616,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after sponsor rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after sponsor rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&sponsor_fee_asset)
                 .expect("sponsor xor after sponsor rejection")
                 .0,
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
             "unauthorized sponsor rejection must not debit the sponsor"
         );
     }
@@ -29403,21 +29759,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after disabled sponsor rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after disabled sponsor rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&sponsor_fee_asset)
                 .expect("sponsor xor after disabled sponsor rejection")
                 .0,
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
             "disabled sponsorship must not debit the requested sponsor"
         );
     }
@@ -29559,21 +29915,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after sponsor cap rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after sponsor cap rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&sponsor_fee_asset)
                 .expect("sponsor xor after sponsor cap rejection")
                 .0,
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
             "sponsor cap rejection must not debit the sponsor"
         );
     }
@@ -29686,14 +30042,14 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after invalid fee asset rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after invalid fee asset rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
     }
 
@@ -29819,21 +30175,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after malformed sponsor rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after malformed sponsor rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&payer_fee_asset)
                 .expect("payer xor after malformed sponsor rejection")
                 .0,
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
             "malformed sponsor metadata must not fall back to payer debit"
         );
     }
@@ -29941,21 +30297,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after missing gas asset rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after missing gas asset rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&payer_gas_asset)
                 .expect("payer gas asset after missing gas metadata rejection")
                 .0,
-            Numeric::from(10_u32)
+            Quantity::from(10_u32)
         );
     }
 
@@ -30069,21 +30425,21 @@ seiyaku DynamicTarget {
                 .get(&payer_transfer_asset)
                 .expect("payer rose after missing gas rate rejection")
                 .0,
-            Numeric::from(5_u32)
+            Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
                 .expect("recipient rose after missing gas rate rejection")
                 .0,
-            Numeric::zero()
+            Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&payer_gas_asset)
                 .expect("payer gas asset after missing gas rate rejection")
                 .0,
-            Numeric::from(10_u32)
+            Quantity::from(10_u32)
         );
     }
 
@@ -30209,6 +30565,7 @@ seiyaku DynamicTarget {
             .get(&sponsor_asset_id)
             .expect("sponsor asset exists after block commit")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(committed_balance_after, 9);
@@ -30365,6 +30722,7 @@ seiyaku DynamicTarget {
             .get(&sponsor_asset_id)
             .expect("sponsor asset exists after block commit")
             .0
+            .as_numeric()
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(committed_balance_after, 9);
@@ -30391,11 +30749,11 @@ seiyaku DynamicTarget {
             .build(&payer_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_definition_id.clone(), payer_id.clone()),
-            Numeric::from(10_u32),
+            Quantity::from(10_u32),
         );
         let sink_asset = Asset::new(
             AssetId::of(asset_definition_id.clone(), sink_id.clone()),
-            Numeric::zero(),
+            Quantity::zero(),
         );
         let world = World::with_assets(
             [domain],

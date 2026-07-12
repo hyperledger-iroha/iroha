@@ -3,6 +3,8 @@
 //! `Consensus` trait is now implemented only by `Sumeragi` for now.
 use std::{
     collections::BTreeSet,
+    future::Future,
+    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -25,7 +27,7 @@ use iroha_data_model::{
     nexus::LaneRelayEnvelope,
     peer::PeerId,
 };
-use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
+use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, try_spawn_os_thread_as_future};
 use iroha_genesis::GenesisBlock;
 use mv::storage::StorageReadOnly;
 
@@ -37,6 +39,11 @@ use crate::{
 const SUMERAGI_STACK_SIZE_ENV: &str = "IROHA_SUMERAGI_STACK_SIZE_BYTES";
 static CONFIGURED_SUMERAGI_STACK_SIZE_BYTES: AtomicUsize = AtomicUsize::new(0);
 const WORKER_WAKE_CHANNEL_CAP: usize = 1;
+
+type SumeragiThreadWork = Box<dyn FnOnce() + Send + 'static>;
+type SumeragiThreadCompletion = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+type SumeragiThreadSpawner =
+    fn(std::thread::Builder, SumeragiThreadWork) -> std::io::Result<SumeragiThreadCompletion>;
 
 fn normalized_sumeragi_stack_size_bytes(bytes: usize) -> Option<usize> {
     (concurrency_defaults::SUMERAGI_STACK_BYTES_MIN
@@ -736,6 +743,10 @@ pub use v2_context::{
 pub(crate) mod v2_effects;
 pub(crate) mod v2_lane_work;
 pub(crate) mod v2_recovery;
+pub use v2_recovery::{
+    V2StartupReplayError, V2StartupReplayPlan, authenticate_v2_snapshot_replay_boundary,
+    plan_v2_startup_replay,
+};
 pub(crate) mod v2_runner;
 pub(crate) mod v2_runtime;
 pub(crate) mod v2_transport;
@@ -770,10 +781,9 @@ pub fn status_snapshot() -> StatusSnapshot {
     status::snapshot()
 }
 
-use self::{
-    message::*,
-    output_guard::{ConsensusOutputGuard, process_consensus_output_guard},
-};
+#[cfg(not(test))]
+use self::output_guard::process_consensus_output_guard;
+use self::{message::*, output_guard::ConsensusOutputGuard};
 use crate::{EventsSender, IrohaNetwork, kura::Kura, queue::Queue};
 
 /// Bundle of genesis block and its publishing key.
@@ -1088,6 +1098,44 @@ pub struct SumeragiStartArgs {
     pub genesis_network: GenesisWithPubKey,
 }
 
+fn spawn_sumeragi_thread(
+    builder: std::thread::Builder,
+    work: SumeragiThreadWork,
+) -> std::io::Result<SumeragiThreadCompletion> {
+    Ok(Box::pin(try_spawn_os_thread_as_future(builder, work)?))
+}
+
+fn launch_sumeragi_thread(
+    output_guard: &ConsensusOutputGuard,
+    work: SumeragiThreadWork,
+    publish_queue_wake: impl FnOnce(),
+    spawn: SumeragiThreadSpawner,
+) -> Result<Child> {
+    let operation = output_guard.begin_fail_stop_operation().ok_or_else(|| {
+        eyre::eyre!("Sumeragi consensus requires restart before another worker can start")
+    })?;
+    let (start_tx, start_rx) = mpsc::sync_channel(0);
+    let gated_work: SumeragiThreadWork = Box::new(move || {
+        if start_rx.recv().is_ok() {
+            work();
+        }
+    });
+    let completion = spawn(sumeragi_thread_builder("sumeragi"), gated_work)
+        .map_err(|error| eyre::eyre!("failed to spawn authoritative Sumeragi worker: {error}"))?;
+    let join_handle = tokio::task::spawn(completion);
+    let child = Child::new(join_handle, OnShutdown::Wait(Duration::from_secs(5)));
+
+    // Queue wake publication uses an irreversible OnceLock. Publish only after
+    // the OS thread and its async monitor both exist; the start gate keeps the
+    // worker from observing a partially published launch.
+    publish_queue_wake();
+    start_tx
+        .send(())
+        .expect("freshly spawned Sumeragi worker must be waiting on its start gate");
+    operation.complete();
+    Ok(child)
+}
+
 impl SumeragiStartArgs {
     /// Launch the serialized v2 reducer worker and its bounded ingress handle.
     ///
@@ -1105,12 +1153,17 @@ impl SumeragiStartArgs {
             network,
             genesis_network,
         } = self;
+        #[cfg(not(test))]
         let output_guard = process_consensus_output_guard();
+        #[cfg(test)]
+        let output_guard = ConsensusOutputGuard::isolated();
         if output_guard.restart_required() {
             return Err(eyre::eyre!(
                 "Sumeragi consensus is restart-required after a fatal live-runner failure"
             ));
         }
+        kura.bind_consensus_output_guard(Arc::clone(&output_guard))
+            .map_err(|error| eyre::eyre!("failed to bind Kura fail-stop admission guard: {error}"))?;
 
         let vote_channel_cap = config.queues.commands.get();
         let block_payload_channel_cap = config.queues.chunks.get();
@@ -1121,7 +1174,8 @@ impl SumeragiStartArgs {
         let (vote_tx, vote_rx) = mpsc::sync_channel(vote_channel_cap);
         let (lane_relay_tx, lane_relay_rx) = mpsc::sync_channel(lane_relay_channel_cap);
         let (wake_tx, wake_rx) = mpsc::sync_channel(WORKER_WAKE_CHANNEL_CAP);
-        queue.set_sumeragi_wake(wake_tx.clone());
+        let queue_wake = Arc::clone(&queue);
+        let queue_wake_tx = wake_tx.clone();
         let ingress_ready = Arc::new(AtomicBool::new(false));
 
         let handle = SumeragiHandle::new(
@@ -1145,7 +1199,7 @@ impl SumeragiStartArgs {
             genesis_network,
             lane_relay_rx,
             ingress_ready,
-            output_guard,
+            output_guard: Arc::clone(&output_guard),
             vote_rx,
             block_payload_rx,
             block_rx,
@@ -1153,15 +1207,50 @@ impl SumeragiStartArgs {
             shutdown_signal,
         };
 
-        let join_handle = tokio::task::spawn(spawn_os_thread_as_future(
-            sumeragi_thread_builder("sumeragi"),
-            move || worker.run(),
-        ));
+        let child = launch_sumeragi_thread(
+            output_guard.as_ref(),
+            Box::new(move || worker.run()),
+            move || queue_wake.set_sumeragi_wake(queue_wake_tx),
+            spawn_sumeragi_thread,
+        )?;
 
-        Ok((
-            handle,
-            Child::new(join_handle, OnShutdown::Wait(Duration::from_secs(5))),
-        ))
+        Ok((handle, child))
+    }
+}
+
+#[cfg(test)]
+mod worker_launch_tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use super::*;
+
+    fn fail_spawn(
+        _builder: std::thread::Builder,
+        _work: SumeragiThreadWork,
+    ) -> std::io::Result<SumeragiThreadCompletion> {
+        Err(std::io::Error::other("injected synchronous spawn failure"))
+    }
+
+    #[test]
+    fn synchronous_spawn_failure_precedes_queue_wake_publication() {
+        let output_guard = ConsensusOutputGuard::isolated();
+        let wake_published = Arc::new(AtomicBool::new(false));
+        let published = Arc::clone(&wake_published);
+
+        let result = launch_sumeragi_thread(
+            output_guard.as_ref(),
+            Box::new(|| panic!("failed spawn must never run worker")),
+            move || published.store(true, Ordering::Release),
+            fail_spawn,
+        );
+
+        assert!(result.is_err());
+        assert!(!wake_published.load(Ordering::Acquire));
+        assert!(output_guard.restart_required());
+        assert!(output_guard.acquire().is_none());
     }
 }
 

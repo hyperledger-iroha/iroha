@@ -19959,7 +19959,7 @@ mod subscription_http_tests {
     };
 
     use http::StatusCode;
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::{Numeric, Quantity};
     use iroha_test_samples::gen_account_in;
     use norito::json::{JsonSerialize, Value as JsonValue};
 
@@ -20041,7 +20041,7 @@ mod subscription_http_tests {
             },
             pricing: crate::data_model::subscription::SubscriptionPricing::Fixed(
                 SubscriptionFixedPricing {
-                    amount: Numeric::new(5_u32, 0),
+                    amount: Quantity::from(5_u32),
                     asset_definition: charge_asset_id.clone(),
                 },
             ),
@@ -20102,7 +20102,7 @@ mod subscription_http_tests {
             authority: subscriber.clone(),
             private_key: crate::data_model::prelude::ExposedPrivateKey(subscriber_private),
             unit_key: unit_key.clone(),
-            delta: Numeric::new(3_u32, 0),
+            delta: Quantity::from(3_u32),
             usage_trigger_id: None,
         };
 

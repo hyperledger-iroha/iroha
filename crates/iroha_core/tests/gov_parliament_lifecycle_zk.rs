@@ -35,7 +35,10 @@ use iroha_executor_data_model::permission::governance::{
     CanEnactGovernance, CanManageParliament, CanProposeContractDeployment,
     CanSubmitGovernanceBallot,
 };
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{
+    json::Json,
+    numeric::{Numeric, Quantity},
+};
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -100,11 +103,11 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
 
     let proposer_asset = Asset::new(
         AssetId::new(asset_def_id.clone(), proposer_id.clone()),
-        Numeric::new(1_000_000, 0),
+        Quantity::from(1_000_000_u64),
     );
     let escrow_asset = Asset::new(
         AssetId::new(asset_def_id.clone(), escrow_id.clone()),
-        Numeric::new(0, 0),
+        Quantity::from(0_u64),
     );
 
     let proposer_account = Account::new(proposer_id.clone()).build(&proposer_id);

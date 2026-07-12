@@ -295,7 +295,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     let sponsor_asset = AssetId::of(asset_def_id.clone(), sponsor_id.clone());
     let init = 100_000u128;
     let sponsor_balance = Asset::new(sponsor_asset.clone(), Quantity::from(init));
-    let payer_balance = Asset::new(payer_asset.clone(), Quantity::from(0));
+    let payer_balance = Asset::new(payer_asset.clone(), Quantity::from(0_u64));
     let world = World::with_assets(
         [dom_w, dom_i],
         [alice, sponsor, tech],
@@ -447,7 +447,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     let tech_asset = AssetId::of(asset_def_id.clone(), gas_id.clone());
     let init = 100_000u128;
     let sponsor_balance = Asset::new(sponsor_asset.clone(), Quantity::from(init));
-    let payer_balance = Asset::new(payer_asset.clone(), Quantity::from(0));
+    let payer_balance = Asset::new(payer_asset.clone(), Quantity::from(0_u64));
     let world = World::with_assets(
         [dom_w, dom_i],
         [alice, sponsor, tech],
@@ -636,7 +636,7 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
     let tech_asset = AssetId::of(asset_def_id.clone(), gas_id.clone());
     let init = 100_000u128;
     let payer_balance = Asset::new(payer_asset.clone(), Quantity::from(init));
-    let tech_balance = Asset::new(tech_asset.clone(), Quantity::from(0));
+    let tech_balance = Asset::new(tech_asset.clone(), Quantity::from(0_u64));
     let world = World::with_assets(
         [dom_w, dom_i],
         [alice, tech],

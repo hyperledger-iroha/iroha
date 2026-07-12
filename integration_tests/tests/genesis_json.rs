@@ -158,7 +158,7 @@ fn genesis_asset_minted_across_peers() -> Result<()> {
                 .into_iter()
                 .find(|a| a.id() == &asset_id)
                 .expect("asset not found");
-            assert_eq!(asset.value(), &numeric!(13));
+            assert_eq!(asset.value(), &Quantity::from(13_u32));
         }
 
         Ok(())

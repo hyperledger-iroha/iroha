@@ -2837,7 +2837,7 @@ fn append_localnet_npos_bootstrap(
                 validator: validator_id.clone(),
                 peer_id: PeerId::from(peer.public_key.clone()),
                 stake_account: validator_id.clone(),
-                initial_stake: Numeric::from(stake_amount),
+                initial_stake: iroha_primitives::numeric::Quantity::from(stake_amount),
                 metadata: Metadata::default(),
             });
             builder = builder.append_instruction(ActivatePublicLaneValidator {
@@ -4921,7 +4921,10 @@ mod tests {
         for register in &validators {
             assert_eq!(register.lane_id, LaneId::SINGLE);
             assert_eq!(register.validator, register.stake_account);
-            assert_eq!(register.initial_stake, Numeric::from(expected_stake_amount));
+            assert_eq!(
+                register.initial_stake,
+                iroha_primitives::numeric::Quantity::from(expected_stake_amount)
+            );
         }
         for activate in &activations {
             assert_eq!(activate.lane_id, LaneId::SINGLE);

@@ -83,6 +83,32 @@ struct V2IoHandle {
     join: Option<thread::JoinHandle<()>>,
 }
 
+struct V2IoWorkerFailureGuard {
+    output_guard: Arc<ConsensusOutputGuard>,
+    armed: bool,
+}
+
+impl V2IoWorkerFailureGuard {
+    fn new(output_guard: Arc<ConsensusOutputGuard>) -> Self {
+        Self {
+            output_guard,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for V2IoWorkerFailureGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.output_guard.activate_restart_required();
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct CleanupWorkerIdentity {
     height: u64,
@@ -177,66 +203,91 @@ impl V2IoHandle {
         let (completion_tx, completion_rx) = mpsc::sync_channel(capacity);
         let join = super::sumeragi_thread_builder("sumeragi-v2-io")
             .spawn(move || {
+                // A local guard drops before the closure environment releases
+                // command/completion channels, closing output first on panic
+                // or an implicit producer disconnect.
+                let mut worker_failure_guard =
+                    V2IoWorkerFailureGuard::new(Arc::clone(&output_guard));
                 while let Ok(command) = command_rx.recv() {
-                    let Some(output_permit) = output_guard.acquire() else {
-                        break;
-                    };
-                    let completion = match command {
-                        V2IoCommand::Sign(task) => sign_consensus_task(&key_pair, task),
-                        V2IoCommand::Store(task) => body_store
-                            .execute_store_task(&task)
-                            .map(V2IoCompletion::Stored)
-                            .map_err(|error| error.to_string()),
-                        V2IoCommand::Validate(task) => body_store
-                            .execute_validation_task(&task, |body| {
-                                apply_service.validate_candidate(&context, body)
-                            })
-                            .map(V2IoCompletion::Validated)
-                            .map_err(|error| error.to_string()),
-                        V2IoCommand::Apply(task) => {
-                            match apply_service.execute(&context, &mut body_store, &task) {
-                                Ok(completion) => Ok(V2IoCompletion::Applied(completion)),
-                                Err(
-                                    super::v2_apply::V2ApplyError::MissingCertifiedMergeSidecar {
-                                        reference,
-                                    },
-                                ) => Ok(V2IoCompletion::ApplyDeferred {
-                                    work_id: task.id(),
-                                    reference,
-                                }),
-                                Err(error) if error.requires_restart_recovery() => Ok(
-                                    V2IoCompletion::RecoveryRequired(error.to_string()),
-                                ),
-                                Err(error) => Err(error.to_string()),
-                            }
-                        }
-                        V2IoCommand::Serve(request) => {
-                            serve_certified_body(&body_store, &key_pair, local_validator, request)
-                        }
-                        V2IoCommand::LoadCandidate { tag, subject } => {
-                            load_candidate_body(&body_store, tag, subject)
-                        }
+                    match command {
                         V2IoCommand::Retire(receipt) => {
-                            let completion = match body_store.retire_height(&receipt) {
-                                Ok(()) => V2IoCompletion::Retired,
-                                Err(error) => V2IoCompletion::RetirementFailed(error.to_string()),
+                            let Some(completion) = execute_retire_io_command(&output_guard, || {
+                                body_store
+                                    .retire_height(&receipt)
+                                    .map_err(|error| error.to_string())
+                            }) else {
+                                break;
                             };
-                            drop(output_permit);
                             let _ = completion_tx.send(completion);
+                            worker_failure_guard.disarm();
                             break;
                         }
                         V2IoCommand::Shutdown => {
-                            drop(output_permit);
+                            worker_failure_guard.disarm();
                             break;
                         }
-                    };
-                    drop(output_permit);
-                    match completion {
-                        Ok(V2IoCompletion::RecoveryRequired(reason)) | Err(reason) => {
-                            publish_recovery_required(&output_guard, &completion_tx, reason);
-                            break;
+                        command => {
+                            let completion = execute_fail_stop_io_command(&output_guard, || {
+                                match command {
+                                    V2IoCommand::Sign(task) => {
+                                        sign_consensus_task(&key_pair, task)
+                                    }
+                                    V2IoCommand::Store(task) => body_store
+                                        .execute_store_task(&task)
+                                        .map(V2IoCompletion::Stored)
+                                        .map_err(|error| error.to_string()),
+                                    V2IoCommand::Validate(task) => body_store
+                                        .execute_validation_task(&task, |body| {
+                                            apply_service.validate_candidate(&context, body)
+                                        })
+                                        .map(V2IoCompletion::Validated)
+                                        .map_err(|error| error.to_string()),
+                                    V2IoCommand::Apply(task) => match apply_service.execute(
+                                        &context,
+                                        &mut body_store,
+                                        &task,
+                                    ) {
+                                        Ok(completion) => Ok(V2IoCompletion::Applied(completion)),
+                                        Err(
+                                            super::v2_apply::V2ApplyError::MissingCertifiedMergeSidecar {
+                                                reference,
+                                            },
+                                        ) => Ok(V2IoCompletion::ApplyDeferred {
+                                            work_id: task.id(),
+                                            reference,
+                                        }),
+                                        Err(error) if error.requires_restart_recovery() => {
+                                            Ok(V2IoCompletion::RecoveryRequired(error.to_string()))
+                                        }
+                                        Err(error) => Err(error.to_string()),
+                                    },
+                                    V2IoCommand::Serve(request) => serve_certified_body(
+                                        &body_store,
+                                        &key_pair,
+                                        local_validator,
+                                        request,
+                                    ),
+                                    V2IoCommand::LoadCandidate { tag, subject } => {
+                                        load_candidate_body(&body_store, tag, subject)
+                                    }
+                                    V2IoCommand::Retire(_) | V2IoCommand::Shutdown => {
+                                        unreachable!(
+                                            "cleanup commands handled before fail-stop I/O"
+                                        )
+                                    }
+                                }
+                            });
+                            match completion {
+                                Err(reason) => {
+                                    let _ = completion_tx
+                                        .try_send(V2IoCompletion::RecoveryRequired(reason));
+                                    break;
+                                }
+                                Ok(completion) => {
+                                    send_completion(&completion_tx, Ok(completion));
+                                }
+                            }
                         }
-                        Ok(completion) => send_completion(&completion_tx, Ok(completion)),
                     }
                 }
             })
@@ -292,13 +343,44 @@ fn send_completion(
     let _ = sender.send(completion);
 }
 
-fn publish_recovery_required(
+fn execute_fail_stop_io_command(
     output_guard: &ConsensusOutputGuard,
-    sender: &mpsc::SyncSender<V2IoCompletion>,
-    reason: String,
-) {
-    output_guard.activate_restart_required();
-    let _ = sender.try_send(V2IoCompletion::RecoveryRequired(reason));
+    execute: impl FnOnce() -> Result<V2IoCompletion, String>,
+) -> Result<V2IoCompletion, String> {
+    let operation = output_guard
+        .begin_fail_stop_operation()
+        .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+    match execute() {
+        Ok(V2IoCompletion::RecoveryRequired(reason)) | Err(reason) => {
+            drop(operation);
+            Err(reason)
+        }
+        Ok(completion) => {
+            operation.complete();
+            Ok(completion)
+        }
+    }
+}
+
+fn execute_retire_io_command(
+    output_guard: &ConsensusOutputGuard,
+    retire: impl FnOnce() -> Result<(), String>,
+) -> Option<V2IoCompletion> {
+    let operation = output_guard.begin_fail_stop_operation()?;
+    match retire() {
+        Ok(()) => {
+            operation.complete();
+            Some(V2IoCompletion::Retired)
+        }
+        Err(reason) => {
+            // Retirement failure is classified post-finality cleanup only.
+            // Complete it normally before publishing the completion; an
+            // unwind in `retire` instead drops the armed operation and poisons
+            // this process.
+            operation.complete();
+            Some(V2IoCompletion::RetirementFailed(reason))
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -587,6 +669,10 @@ impl ProductionV2Services {
         orphan_chunk_capacity: usize,
         output_guard: Arc<ConsensusOutputGuard>,
     ) -> Result<Self, String> {
+        let construction_guard = Arc::clone(&output_guard);
+        let construction = construction_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         if io_queue_capacity == 0 || orphan_chunk_capacity == 0 {
             return Err("Sumeragi v2 service queue capacities must be non-zero".to_owned());
         }
@@ -615,7 +701,7 @@ impl ProductionV2Services {
             io_queue_capacity,
             Arc::clone(&output_guard),
         )?;
-        Ok(Self {
+        let mut service = Self {
             context,
             local_peer,
             local_validator,
@@ -642,8 +728,15 @@ impl ProductionV2Services {
             last_status: None,
             fatal_reason: None,
             output_guard,
-            clean_teardown: false,
-        })
+            // The enclosing construction operation owns abnormal-exit
+            // activation until its permit is released. This avoids a nested
+            // activation deadlock if `service` unwinds before construction is
+            // explicitly completed.
+            clean_teardown: true,
+        };
+        construction.complete();
+        service.clean_teardown = false;
+        Ok(service)
     }
 
     /// Sign and retain all canonical chunks for proposal and retransmission.
@@ -652,7 +745,7 @@ impl ProductionV2Services {
         payload: EncodedV2Payload,
     ) -> Result<wire::PayloadManifest, String> {
         let output_guard = Arc::clone(&self.output_guard);
-        let _permit = output_guard.acquire().ok_or_else(|| {
+        let operation = output_guard.begin_fail_stop_operation().ok_or_else(|| {
             "Sumeragi v2 canonical persistence requires restart recovery".to_owned()
         })?;
         let sender = self
@@ -691,6 +784,7 @@ impl ProductionV2Services {
         } else {
             self.outbound_chunks.insert(manifest_hash, messages);
         }
+        operation.complete();
         Ok(manifest)
     }
 
@@ -717,14 +811,22 @@ impl ProductionV2Services {
         tag: EventTag,
         subject: wire::BlockSubject,
     ) -> Result<(), String> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         if !self.pending_candidate_loads.insert(tag) {
+            operation.complete();
             return Ok(());
         }
-        if let Err(error) = self.enqueue_io(V2IoCommand::LoadCandidate { tag, subject })
+        if let Err(error) = self
+            .io()?
+            .enqueue(V2IoCommand::LoadCandidate { tag, subject })
         {
             self.pending_candidate_loads.remove(&tag);
             return Err(error);
         }
+        operation.complete();
         Ok(())
     }
 
@@ -759,27 +861,30 @@ impl ProductionV2Services {
         deferred: DeferredMergeSidecarWork,
     ) -> Result<(), String> {
         let output_guard = Arc::clone(&self.output_guard);
-        let _permit = output_guard
-            .acquire()
+        let operation = output_guard
+            .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         if let Some(existing) = self
             .merge_sidecar_deferrals
             .iter()
             .find(|existing| existing.work_id == deferred.work_id)
         {
-            return if existing.round == deferred.round
+            if existing.round == deferred.round
                 && existing.subject == deferred.subject
                 && existing.reference == deferred.reference
             {
-                Ok(())
-            } else {
-                Err("Sumeragi v2 work ID claimed conflicting merge-sidecar deferrals".to_owned())
-            };
+                operation.complete();
+                return Ok(());
+            }
+            return Err(
+                "Sumeragi v2 work ID claimed conflicting merge-sidecar deferrals".to_owned(),
+            );
         }
         if self.merge_sidecar_deferrals.len() >= self.max_merge_sidecar_deferrals {
             return Err("Sumeragi v2 merge-sidecar deferral queue is full".to_owned());
         }
         self.merge_sidecar_deferrals.push_back(deferred);
+        operation.complete();
         Ok(())
     }
 
@@ -806,6 +911,10 @@ impl ProductionV2Services {
             return self.deliver_payload_chunk(executor, work_id, sender, chunk);
         }
 
+        let output_guard = Arc::clone(&self.output_guard);
+        let _permit = output_guard
+            .acquire()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         Ok(self.buffer_orphan_payload_chunk(sender, chunk))
     }
 
@@ -906,10 +1015,8 @@ impl ProductionV2Services {
         executor: &mut V2EffectExecutor,
     ) -> Result<usize, EffectExecutorError> {
         if self.output_guard.restart_required() {
-            return Err(executor.external_service_failed(
-                "Sumeragi v2 consensus requires process restart",
-                self,
-            ));
+            return Err(executor
+                .external_service_failed("Sumeragi v2 consensus requires process restart", self));
         }
         let mut completions = Vec::new();
         if let Some(io) = self.io.as_ref() {
@@ -1015,8 +1122,20 @@ impl ProductionV2Services {
             .unwrap_or_else(Instant::now);
         if let Some(mut io) = self.io.take() {
             let mut command = V2IoCommand::Retire(receipt);
+            let retirement_guard = Arc::clone(&self.output_guard);
             let retirement_requested = 'enqueue: loop {
-                match io.command_tx.try_send(command) {
+                let Some(retirement_enqueue_permit) = retirement_guard.acquire() else {
+                    outcome.record(
+                        PostFinalityCleanupTarget::CleanupWorker,
+                        "process restart became required before body retirement enqueue",
+                    );
+                    break false;
+                };
+                let enqueue = io.command_tx.try_send(command);
+                // Waiting for an older completion while holding this permit
+                // would prevent fatal activation from draining output.
+                drop(retirement_enqueue_permit);
+                match enqueue {
                     Ok(()) => break true,
                     Err(mpsc::TrySendError::Full(returned)) => {
                         command = returned;
@@ -1133,6 +1252,14 @@ impl ProductionV2Services {
             );
         }
 
+        let output_guard = Arc::clone(&self.output_guard);
+        let Some(chunk_cleanup_permit) = output_guard.acquire() else {
+            outcome.record(
+                PostFinalityCleanupTarget::PayloadChunks,
+                "process restart became required before chunk cleanup",
+            );
+            return outcome;
+        };
         match std::fs::remove_dir_all(&self.chunk_root) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1144,6 +1271,7 @@ impl ProductionV2Services {
                 ),
             ),
         }
+        drop(chunk_cleanup_permit);
         outcome
     }
 
@@ -1154,9 +1282,9 @@ impl ProductionV2Services {
     }
 
     fn output_permit(&self) -> Result<ConsensusOutputPermit<'_>, String> {
-        self.output_guard.acquire().ok_or_else(|| {
-            "Sumeragi v2 canonical persistence requires restart recovery".to_owned()
-        })
+        self.output_guard
+            .acquire()
+            .ok_or_else(|| "Sumeragi v2 canonical persistence requires restart recovery".to_owned())
     }
 
     fn enqueue_io(&self, command: V2IoCommand) -> Result<(), String> {
@@ -1165,6 +1293,16 @@ impl ProductionV2Services {
             .acquire()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         self.io()?.enqueue(command)
+    }
+
+    fn enqueue_fail_stop_io(&self, command: V2IoCommand) -> Result<(), String> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        self.io()?.enqueue(command)?;
+        operation.complete();
+        Ok(())
     }
 
     /// Mark an operator-requested shutdown as non-fatal before dropping services.
@@ -1194,7 +1332,17 @@ impl ProductionV2Services {
         let Ok(permit) = self.output_permit() else {
             return;
         };
-        self.post_block_message_while_guarded(peer, BlockMessage::V2(message), &permit);
+        let _ = self.post_block_message_while_guarded(peer, BlockMessage::V2(message), &permit);
+    }
+
+    /// Send one v2 envelope under a caller-owned output operation.
+    pub(crate) fn post_to_peer_with_permit(
+        &self,
+        peer: PeerId,
+        message: wire::ConsensusMessageV2,
+        permit: &ConsensusOutputPermit<'_>,
+    ) -> Result<(), String> {
+        self.post_block_message_while_guarded(peer, BlockMessage::V2(message), permit)
     }
 
     /// Send one retained lane-local proposal, vote, or QC to a committee peer.
@@ -1203,6 +1351,10 @@ impl ProductionV2Services {
         peer: PeerId,
         message: BlockMessage,
     ) -> Result<(), String> {
+        let operation = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         if !matches!(
             message,
             BlockMessage::LaneBlockProposal(_)
@@ -1211,8 +1363,8 @@ impl ProductionV2Services {
         ) {
             return Err("v2 lane transport rejected a legacy global block message".to_owned());
         }
-        let permit = self.output_permit()?;
-        self.post_block_message_while_guarded(peer, message, &permit);
+        self.post_block_message_while_guarded(peer, message, operation.permit())?;
+        operation.complete();
         Ok(())
     }
 
@@ -1271,50 +1423,54 @@ impl ProductionV2Services {
         peer: PeerId,
         message: BlockMessage,
         _permit: &ConsensusOutputPermit<'_>,
-    ) {
+    ) -> Result<(), String> {
         let block_message = Arc::new(message);
-        let wire = match BlockMessageWire::try_preencoded(block_message) {
-            Ok(wire) => wire,
-            Err(error) => {
-                iroha_logger::error!(
-                    ?error,
-                    %peer,
-                    "refusing to send a non-canonical Sumeragi v2 block message"
-                );
-                return;
-            }
-        };
+        let wire = BlockMessageWire::try_preencoded(block_message).map_err(|error| {
+            format!("failed to encode guarded Sumeragi v2 message for {peer}: {error}")
+        })?;
         let data = NetworkMessage::SumeragiBlock(Box::new(wire));
         self.network.post(Post {
             data,
             peer_id: peer,
             priority: Priority::High,
         });
+        Ok(())
     }
 
-    /// Retransmit one v2 transport envelope to every other frozen voter.
-    pub(crate) fn broadcast_to_voters(&self, message: wire::ConsensusMessageV2) {
-        let Ok(permit) = self.output_permit() else {
-            return;
-        };
-        self.broadcast_to_voters_while_guarded(message, &permit);
-    }
-
-    fn broadcast_to_voters_while_guarded(
-        &self,
+    fn preencode_v2_network_message(
         message: wire::ConsensusMessageV2,
-        permit: &ConsensusOutputPermit<'_>,
+    ) -> Result<NetworkMessage, String> {
+        let wire = BlockMessageWire::try_preencoded(Arc::new(BlockMessage::V2(message)))
+            .map_err(|error| format!("failed to encode guarded Sumeragi v2 message: {error}"))?;
+        Ok(NetworkMessage::SumeragiBlock(Box::new(wire)))
+    }
+
+    fn broadcast_preencoded_to_voters_while_guarded(
+        &self,
+        data: &NetworkMessage,
+        _permit: &ConsensusOutputPermit<'_>,
     ) {
         for entry in &self.context.roster {
             if entry.validator == self.local_peer {
                 continue;
             }
-            self.post_block_message_while_guarded(
-                entry.validator.clone(),
-                BlockMessage::V2(message.clone()),
-                permit,
-            );
+            self.network.post(Post {
+                data: data.clone(),
+                peer_id: entry.validator.clone(),
+                priority: Priority::High,
+            });
         }
+    }
+
+    /// Broadcast under a caller-owned output permit without reacquiring it.
+    pub(crate) fn broadcast_to_voters_while_guarded(
+        &self,
+        message: wire::ConsensusMessageV2,
+        permit: &ConsensusOutputPermit<'_>,
+    ) -> Result<(), String> {
+        let data = Self::preencode_v2_network_message(message)?;
+        self.broadcast_preencoded_to_voters_while_guarded(&data, permit);
+        Ok(())
     }
 }
 
@@ -1336,6 +1492,10 @@ impl V2EffectServices for ProductionV2Services {
     type Error = String;
 
     fn enqueue_consensus_sign(&mut self, task: ConsensusSignTask) -> Result<(), Self::Error> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         let prepared = match task.request() {
             super::v2::SignRequest::Vote(vote) if vote.phase == wire::GlobalPhase::Prepare => {
                 Some(PreparedCandidateBody {
@@ -1347,12 +1507,13 @@ impl V2EffectServices for ProductionV2Services {
             | super::v2::SignRequest::Vote(_)
             | super::v2::SignRequest::TimeoutVote(_) => None,
         };
-        self.enqueue_io(V2IoCommand::Sign(task))?;
+        self.io()?.enqueue(V2IoCommand::Sign(task))?;
         if let Some(prepared) = prepared
             && self.prepared_candidates.len() < self.max_orphan_chunks
         {
             self.prepared_candidates.push_back(prepared);
         }
+        operation.complete();
         Ok(())
     }
 
@@ -1366,37 +1527,48 @@ impl V2EffectServices for ProductionV2Services {
         &mut self,
         message: wire::ConsensusMessageV2,
     ) -> Result<(), Self::Error> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         message
             .validate_version()
             .map_err(|error| error.to_string())?;
-        let permit = self.output_permit()?;
-        self.broadcast_to_voters_while_guarded(message.clone(), &permit);
+        let mut messages = vec![message.clone()];
         if let wire::ConsensusMessageV2Payload::Proposal(proposal) = &message.payload {
             let manifest_hash = HashOf::new(&proposal.manifest);
             let chunks = self
                 .outbound_chunks
                 .get(&manifest_hash)
                 .ok_or_else(|| "local proposal has no retained Sumeragi v2 chunks".to_owned())?;
-            for chunk in chunks {
-                self.broadcast_to_voters_while_guarded(chunk.clone(), &permit);
-            }
+            messages.extend(chunks.iter().cloned());
         }
+        let encoded = messages
+            .into_iter()
+            .map(Self::preencode_v2_network_message)
+            .collect::<Result<Vec<_>, _>>()?;
+        for data in &encoded {
+            self.broadcast_preencoded_to_voters_while_guarded(data, operation.permit());
+        }
+        operation.complete();
         Ok(())
     }
 
     fn sign_body_request(&mut self, preimage: &[u8]) -> Result<Vec<u8>, Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
-        let _permit = output_guard
-            .acquire()
+        let operation = output_guard
+            .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        Signature::try_new(self.key_pair.private_key(), preimage)
+        let signature = Signature::try_new(self.key_pair.private_key(), preimage)
             .map(|signature| signature.payload().to_vec())
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        operation.complete();
+        Ok(signature)
     }
 
     fn enqueue_body_fetch(&mut self, task: BodyFetchTask) -> Result<(), Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
-        let permit = output_guard.acquire().ok_or_else(|| {
+        let operation = output_guard.begin_fail_stop_operation().ok_or_else(|| {
             "Sumeragi v2 canonical persistence requires restart recovery".to_owned()
         })?;
         if let Some(existing) = self.fetches.get(&task.id()) {
@@ -1412,11 +1584,12 @@ impl V2EffectServices for ProductionV2Services {
                         self.post_block_message_while_guarded(
                             peer.clone(),
                             BlockMessage::V2(message.clone()),
-                            &permit,
-                        );
+                            operation.permit(),
+                        )?;
                     }
                 }
             }
+            operation.complete();
             return Ok(());
         }
         let chunks = task
@@ -1445,26 +1618,28 @@ impl V2EffectServices for ProductionV2Services {
                     self.post_block_message_while_guarded(
                         peer.clone(),
                         BlockMessage::V2(message.clone()),
-                        &permit,
-                    );
+                        operation.permit(),
+                    )?;
                 }
             }
         }
         self.fetches
             .insert(task.id(), FetchSession { task, chunks });
+        operation.complete();
         Ok(())
     }
 
     fn cancel_body_fetch(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
-        let _permit = output_guard
-            .acquire()
+        let operation = output_guard
+            .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         if let Some(fetch) = self.fetches.remove(&work_id)
             && let Some(manifest) = fetch.task.manifest()
         {
             self.fetch_by_manifest.remove(&HashOf::new(manifest));
         }
+        operation.complete();
         Ok(())
     }
 
@@ -1474,8 +1649,8 @@ impl V2EffectServices for ProductionV2Services {
         chunk: AuthenticatedPayloadChunk,
     ) -> Result<(), Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
-        let _permit = output_guard
-            .acquire()
+        let operation = output_guard
+            .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         let fetch = self
             .fetches
@@ -1489,6 +1664,7 @@ impl V2EffectServices for ProductionV2Services {
             .admit(chunk.chunk())
             .map_err(|error| error.to_string())?;
         let Some(body) = session.reconstruct().map_err(|error| error.to_string())? else {
+            operation.complete();
             return Ok(());
         };
         let manifest = session.manifest().clone();
@@ -1500,11 +1676,12 @@ impl V2EffectServices for ProductionV2Services {
                 manifest,
                 body,
             });
+        operation.complete();
         Ok(())
     }
 
     fn enqueue_body_store(&mut self, task: BodyStoreTask) -> Result<(), Self::Error> {
-        self.enqueue_io(V2IoCommand::Store(task))
+        self.enqueue_fail_stop_io(V2IoCommand::Store(task))
     }
 
     fn cancel_body_store(&mut self, _work_id: EffectWorkId) -> Result<(), Self::Error> {
@@ -1512,7 +1689,7 @@ impl V2EffectServices for ProductionV2Services {
     }
 
     fn enqueue_body_validation(&mut self, task: BodyValidationTask) -> Result<(), Self::Error> {
-        self.enqueue_io(V2IoCommand::Validate(task))
+        self.enqueue_fail_stop_io(V2IoCommand::Validate(task))
     }
 
     fn work_deferred_for_merge_sidecar(
@@ -1531,7 +1708,7 @@ impl V2EffectServices for ProductionV2Services {
     }
 
     fn enqueue_apply(&mut self, task: ApplyTask) -> Result<(), Self::Error> {
-        self.enqueue_io(V2IoCommand::Apply(task))
+        self.enqueue_fail_stop_io(V2IoCommand::Apply(task))
     }
 
     fn entered_view(
@@ -1553,6 +1730,7 @@ impl V2EffectServices for ProductionV2Services {
         round: wire::ConsensusRound,
         kind: EquivocationKind,
     ) -> Result<(), Self::Error> {
+        let _permit = self.output_permit()?;
         iroha_logger::warn!(%offender, ?round, ?kind, "authenticated Sumeragi v2 equivocation");
         Ok(())
     }
@@ -1562,6 +1740,7 @@ impl V2EffectServices for ProductionV2Services {
         subject: wire::BlockSubject,
         certificate: wire::QuorumCertificate,
     ) -> Result<(), Self::Error> {
+        let _permit = self.output_permit()?;
         iroha_logger::error!(
             ?subject,
             ?certificate,
@@ -1650,6 +1829,7 @@ mod tests {
             next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Permissioned,
             parent_commit_qc: None,
+            snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("dual quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"v2-worker-test-context"),
@@ -1706,11 +1886,13 @@ mod tests {
         let later_candidate_published = Arc::new(AtomicBool::new(false));
         let worker_candidate_published = Arc::clone(&later_candidate_published);
         let worker = thread::spawn(move || {
-            publish_recovery_required(
-                &worker_gate,
-                &completion_tx,
+            let fatal_operation = worker_gate
+                .begin_fail_stop_operation()
+                .expect("fatal worker output operation");
+            drop(fatal_operation);
+            let _ = completion_tx.try_send(V2IoCompletion::RecoveryRequired(
                 "committed marker requires restart".to_owned(),
-            );
+            ));
             assert!(worker_gate.restart_required());
             if worker_gate.acquire().is_some() {
                 worker_candidate_published.store(true, Ordering::Release);
@@ -1722,6 +1904,18 @@ mod tests {
                 .recv_timeout(Duration::from_millis(25))
                 .is_err(),
             "recovery activation must wait for an already-admitted output"
+        );
+        let activation_deadline = Instant::now() + Duration::from_secs(1);
+        while !gate.restart_required() && Instant::now() < activation_deadline {
+            thread::yield_now();
+        }
+        assert!(
+            gate.restart_required(),
+            "the guard must close before the fatal output permit is released"
+        );
+        assert!(
+            gate.acquire().is_none(),
+            "a second output must not enter while fatal recovery activation drains"
         );
         drop(admitted_output);
         let completion = completion_rx
@@ -1742,8 +1936,124 @@ mod tests {
     }
 
     #[test]
+    fn io_command_panic_latches_restart_required_before_unwinding() {
+        let output_guard = ConsensusOutputGuard::isolated();
+        let unwind = std::panic::catch_unwind({
+            let output_guard = Arc::clone(&output_guard);
+            move || {
+                let _ = execute_fail_stop_io_command(&output_guard, || {
+                    panic!("model I/O command panic");
+                });
+            }
+        });
+
+        assert!(unwind.is_err());
+        assert!(output_guard.restart_required());
+        assert!(output_guard.acquire().is_none());
+    }
+
+    #[test]
+    fn retire_panic_closes_gate_before_inflight_output_drains() {
+        let output_guard = ConsensusOutputGuard::isolated();
+        let admitted_output = output_guard.acquire().expect("admit earlier output");
+        let worker_guard = Arc::clone(&output_guard);
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            let unwind = std::panic::catch_unwind(move || {
+                let _ = execute_retire_io_command(&worker_guard, || {
+                    entered_tx.send(()).expect("publish Retire entry");
+                    panic!("model Retire panic");
+                });
+            });
+            assert!(unwind.is_err());
+        });
+
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("Retire operation entered");
+        let activation_deadline = Instant::now() + Duration::from_secs(1);
+        while !output_guard.restart_required() && Instant::now() < activation_deadline {
+            thread::yield_now();
+        }
+        assert!(
+            output_guard.restart_required(),
+            "Retire panic must close admission while earlier output still drains"
+        );
+        assert!(
+            output_guard.acquire().is_none(),
+            "no later output may cross the gate after the Retire panic"
+        );
+
+        drop(admitted_output);
+        worker.join().expect("join panicking Retire model");
+        assert!(output_guard.acquire().is_none());
+    }
+
+    #[test]
+    fn retire_failure_is_nonfatal_and_leaves_output_guard_open() {
+        let output_guard = ConsensusOutputGuard::isolated();
+        let mut worker_failure_guard = V2IoWorkerFailureGuard::new(Arc::clone(&output_guard));
+        let completion = execute_retire_io_command(&output_guard, || {
+            Err("injected post-finality retirement failure".to_owned())
+        })
+        .expect("open guard admits Retire");
+        assert!(matches!(
+            completion,
+            V2IoCompletion::RetirementFailed(reason)
+                if reason == "injected post-finality retirement failure"
+        ));
+        worker_failure_guard.disarm();
+        drop(worker_failure_guard);
+
+        assert!(!output_guard.restart_required());
+        assert!(output_guard.acquire().is_some());
+    }
+
+    #[test]
+    fn io_worker_lifetime_guard_latches_panic_after_success_before_completion_delivery() {
+        let output_guard = ConsensusOutputGuard::isolated();
+        let unwind = std::panic::catch_unwind({
+            let output_guard = Arc::clone(&output_guard);
+            move || {
+                let _worker_failure_guard = V2IoWorkerFailureGuard::new(Arc::clone(&output_guard));
+                let completion = execute_fail_stop_io_command(&output_guard, || {
+                    Ok(V2IoCompletion::CertifiedRequestIgnored)
+                })
+                .expect("model successful I/O operation");
+                assert!(matches!(
+                    completion,
+                    V2IoCompletion::CertifiedRequestIgnored
+                ));
+                panic!("model panic before completion delivery");
+            }
+        });
+
+        assert!(unwind.is_err());
+        assert!(output_guard.restart_required());
+        assert!(output_guard.acquire().is_none());
+    }
+
+    #[test]
+    fn io_worker_explicit_shutdown_leaves_output_guard_open() {
+        let output_guard = ConsensusOutputGuard::isolated();
+        let mut worker_failure_guard = V2IoWorkerFailureGuard::new(Arc::clone(&output_guard));
+        worker_failure_guard.disarm();
+        drop(worker_failure_guard);
+
+        assert!(!output_guard.restart_required());
+        assert!(output_guard.acquire().is_some());
+    }
+
+    #[test]
     fn recovery_gate_rejects_service_outputs_and_candidate_delivery() {
         let (mut service, _) = fixture();
+        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (completion_tx, completion_rx) = mpsc::sync_channel(1);
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: None,
+        });
         let encoded = encode_payload(
             &service.context,
             wire::ConsensusRound {
@@ -1759,22 +2069,43 @@ mod tests {
             b"blocked body",
         )
         .expect("encode bounded payload");
-        service.prepared_candidates.push_back(PreparedCandidateBody {
-            tag: EventTag::new(1, 0, iroha_sumeragi_core::Generation::new(1)),
-            subject: wire::BlockSubject {
-                parent_block_hash: None,
-                block_hash: HashOf::from_untyped_unchecked(Hash::new(b"blocked candidate")),
-                payload_hash: Hash::new(b"blocked payload"),
-            },
-        });
+        service
+            .prepared_candidates
+            .push_back(PreparedCandidateBody {
+                tag: EventTag::new(1, 0, iroha_sumeragi_core::Generation::new(1)),
+                subject: wire::BlockSubject {
+                    parent_block_hash: None,
+                    block_hash: HashOf::from_untyped_unchecked(Hash::new(b"blocked candidate")),
+                    payload_hash: Hash::new(b"blocked payload"),
+                },
+            });
         service.output_guard.activate_restart_required();
 
         assert!(service.take_prepared_candidate().is_none());
+        let blocked_subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"blocked load block")),
+            payload_hash: Hash::new(b"blocked load payload"),
+        };
+        assert!(
+            service
+                .request_locked_candidate(
+                    EventTag::new(1, 0, iroha_sumeragi_core::Generation::new(1)),
+                    blocked_subject,
+                )
+                .is_err()
+        );
+        assert!(service.pending_candidate_loads.is_empty());
+        assert!(
+            command_rx.try_recv().is_err(),
+            "post-latch service work must not mutate the ordered I/O queue"
+        );
         assert!(
             service.register_outbound_payload(encoded).is_err(),
             "recovery must reject new proposal material before publication"
         );
         assert!(service.output_permit().is_err());
+        drop(completion_tx);
     }
 
     fn manifest_hash(label: &[u8]) -> HashOf<wire::PayloadManifest> {
@@ -1894,6 +2225,38 @@ mod tests {
             PostFinalityCleanupTarget::CleanupWorker
         );
         assert!(outcome.warnings()[0].reason().contains("disconnected"));
+    }
+
+    #[test]
+    fn prelatched_finalized_cleanup_mutates_neither_queue_nor_chunks() {
+        let (mut service, keys) = fixture();
+        let receipt = durable_receipt(&service, &keys);
+        let directory = TempDir::new().expect("cleanup test directory");
+        let chunk_root = directory.path().join("retained-chunks");
+        std::fs::create_dir_all(&chunk_root).expect("seed retained chunk root");
+        std::fs::write(chunk_root.join("chunk"), b"retained").expect("seed retained chunk");
+        service.chunk_root = chunk_root.clone();
+        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: None,
+        });
+        service.output_guard.activate_restart_required();
+
+        let mut supervisor = V2CleanupSupervisor::default();
+        let outcome = service.finish_height(receipt, Duration::from_secs(1), &mut supervisor);
+
+        assert!(command_rx.try_recv().is_err());
+        assert!(chunk_root.join("chunk").is_file());
+        assert_eq!(outcome.warnings().len(), 2);
+        assert!(
+            outcome
+                .warnings()
+                .iter()
+                .all(|warning| warning.reason().contains("restart"))
+        );
     }
 
     #[test]

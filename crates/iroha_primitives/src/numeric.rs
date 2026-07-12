@@ -1704,7 +1704,7 @@ where
 }
 
 fn scale_unbounded(value: &UnboundedBigInt, decimal_places: u32) -> UnboundedBigInt {
-    if decimal_places == 0 {
+    if decimal_places == 0 || value.is_zero() {
         return value.clone();
     }
     value * decimal_power_unbounded(decimal_places)
@@ -2671,7 +2671,7 @@ mod tests {
     }
 
     #[test]
-    fn public_numeric_construction_makes_equality_ordering_and_hash_canonical() {
+    fn public_quantity_construction_makes_equality_ordering_and_hash_canonical() {
         use core::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
 
@@ -2722,6 +2722,29 @@ mod tests {
         assert!(matches!(add_steps[3], NumericWorkStep::Add { .. }));
         assert!(matches!(add_steps[4], NumericWorkStep::Normalize { .. }));
         assert!(matches!(add_steps[5], NumericWorkStep::Finalize { .. }));
+
+        let mut zero_steps = Vec::new();
+        let zero_sum = decimal("0")
+            .try_decimal_add_observed(&decimal("0.1"), &mut |step| {
+                zero_steps.push(step);
+                Ok::<_, ()>(())
+            })
+            .expect("zero alignment add");
+        assert_eq!(zero_sum, decimal("0.1"));
+        assert!(matches!(
+            zero_steps.first(),
+            Some(NumericWorkStep::CanonicalityProbe { .. })
+        ));
+        assert!(matches!(
+            zero_steps.get(1),
+            Some(NumericWorkStep::Materialize { value_limbs: 1 })
+        ));
+        assert!(
+            zero_steps
+                .iter()
+                .all(|step| !matches!(step, NumericWorkStep::ScaleByPowerOfTen { .. })),
+            "zero alignment must not construct or multiply by a decimal power"
+        );
 
         let mut multiply_steps = Vec::new();
         let product = decimal("0.2")

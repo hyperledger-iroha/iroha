@@ -16,10 +16,7 @@ use norito::{
 };
 
 use crate::{
-    Identifiable, Name,
-    asset::prelude::AssetDefinitionId,
-    metadata::Metadata,
-    prelude::AccountId,
+    Identifiable, Name, asset::prelude::AssetDefinitionId, metadata::Metadata, prelude::AccountId,
 };
 use iroha_primitives::numeric::Quantity;
 

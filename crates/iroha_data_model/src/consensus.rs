@@ -2,7 +2,7 @@
 use std::str::FromStr;
 
 use iroha_crypto::{Hash, PublicKey};
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::{Ident, IntoSchema};
 #[cfg(feature = "json")]
 use mv::json::JsonKeyCodec;
@@ -143,7 +143,7 @@ pub struct CommitStakeSnapshotEntry {
     /// Peer identifier for the validator.
     pub peer_id: crate::peer::PeerId,
     /// Total stake attributed to the validator.
-    pub stake: Numeric,
+    pub stake: Quantity,
 }
 
 /// Stake snapshot aligned to the validator set used for commit proof validation.
@@ -267,7 +267,7 @@ pub struct NposConsensusSlashAction {
     /// Slash identifier recorded in validator status.
     pub slash_id: Hash,
     /// Amount to slash.
-    pub amount: Numeric,
+    pub amount: Quantity,
 }
 
 /// Marker that a VRF epoch's penalties were applied.
@@ -669,8 +669,26 @@ pub struct VrfEpochRecord {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_primitives::numeric::Numeric;
 
     use super::*;
+
+    #[derive(Encode)]
+    struct ForgedCommitStakeSnapshotEntry {
+        peer_id: crate::peer::PeerId,
+        stake: Numeric,
+    }
+
+    #[derive(Encode)]
+    struct ForgedNposConsensusSlashAction {
+        evidence_key: Vec<u8>,
+        signer: u32,
+        peer_id: crate::peer::PeerId,
+        lane_id: crate::nexus::LaneId,
+        validator: crate::account::AccountId,
+        slash_id: Hash,
+        amount: Numeric,
+    }
 
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked consensus DTO fixture keypair")
@@ -679,6 +697,36 @@ mod tests {
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("generate checked consensus DTO fixture keypair")
+    }
+
+    #[test]
+    fn negative_numeric_payloads_cannot_decode_as_consensus_stake_quantities() {
+        let key_pair = checked_random_keypair();
+        let peer_id = crate::peer::PeerId::new(key_pair.public_key().clone());
+        let snapshot = ForgedCommitStakeSnapshotEntry {
+            peer_id: peer_id.clone(),
+            stake: Numeric::new(-1_i32, 0),
+        };
+        let encoded = snapshot.encode();
+        assert!(
+            CommitStakeSnapshotEntry::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a commit stake snapshot"
+        );
+
+        let slash = ForgedNposConsensusSlashAction {
+            evidence_key: vec![0xA5],
+            signer: 0,
+            peer_id,
+            lane_id: crate::nexus::LaneId::SINGLE,
+            validator: crate::account::AccountId::new(key_pair.public_key().clone()),
+            slash_id: Hash::new(b"negative-consensus-slash"),
+            amount: Numeric::new(-1_i32, 0),
+        };
+        let encoded = slash.encode();
+        assert!(
+            NposConsensusSlashAction::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a consensus slash amount"
+        );
     }
 
     #[test]

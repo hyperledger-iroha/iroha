@@ -35,8 +35,9 @@ use iroha_data_model::{
     isi::{
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
         smart_contract_code::{
-            ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
-            RegisterSmartContractCode, RemoveSmartContractBytes,
+            ActivateContractInstance, DeactivateContractInstance, FinalizeSmartContractCodeUpload,
+            RegisterSmartContractBytes, RegisterSmartContractCode, RemoveSmartContractBytes,
+            UploadSmartContractCodeChunk,
         },
         zk,
     },
@@ -4769,6 +4770,8 @@ fn tx_touches_manifest_protected_namespace_surface(tx: &SignedTransaction) -> bo
                     let any = instruction.as_any();
                     if any.is::<RegisterSmartContractCode>()
                         || any.is::<RegisterSmartContractBytes>()
+                        || any.is::<UploadSmartContractCodeChunk>()
+                        || any.is::<FinalizeSmartContractCodeUpload>()
                         || any.is::<RemoveSmartContractBytes>()
                     {
                         register_code_seen = true;
@@ -4877,6 +4880,8 @@ fn enforce_manifest_protected_namespaces(
                         let any = instruction.as_any();
                         any.is::<RegisterSmartContractCode>()
                             || any.is::<RegisterSmartContractBytes>()
+                            || any.is::<UploadSmartContractCodeChunk>()
+                            || any.is::<FinalizeSmartContractCodeUpload>()
                             || any.is::<RemoveSmartContractBytes>()
                     };
                     if modifies_contract_code {
@@ -8366,7 +8371,7 @@ pub mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
-            1u32.into(),
+            1u32,
         );
         let governance = iroha_data_model::repo::RepoGovernance::with_defaults(100, 3600);
         let repo = iroha_data_model::isi::repo::RepoIsi::new(
@@ -8438,7 +8443,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "bond".parse().unwrap(),
                 ),
-                1u32.into(),
+                1u32,
                 counterparty.clone(),
                 authority.clone(),
             ),
@@ -8447,7 +8452,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
-                1u32.into(),
+                1u32,
                 authority.clone(),
                 counterparty.clone(),
             ),
@@ -8463,7 +8468,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "eur".parse().unwrap(),
                 ),
-                1u32.into(),
+                1u32,
                 counterparty.clone(),
                 authority.clone(),
             ),
@@ -8472,7 +8477,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
-                1u32.into(),
+                1u32,
                 authority.clone(),
                 counterparty.clone(),
             ),
@@ -11434,24 +11439,24 @@ pub mod tests {
             commits_on_regular_success(sandbox(), "time");
         }
 
-        /// Data trigger chains must roll back when a transfer uses a negative amount.
+        /// Data trigger chains must roll back when a transfer uses a zero amount.
         #[tokio::test]
-        async fn atomically_aborts_on_negative_amount_from_transaction() {
+        async fn atomically_aborts_on_zero_amount_from_transaction() {
             let sandbox = || {
                 let mut res = Sandbox::default();
                 res.request_transfer("alice", 50, "bob");
                 res
             };
 
-            aborts_on_negative_amount(sandbox(), "txn");
+            aborts_on_zero_amount(sandbox(), "txn");
         }
 
-        /// Negative transfer amounts should abort chains initiated by time triggers as well.
+        /// Zero transfer amounts should abort chains initiated by time triggers as well.
         #[tokio::test]
-        async fn atomically_aborts_on_negative_amount_from_time_trigger() {
+        async fn atomically_aborts_on_zero_amount_from_time_trigger() {
             let sandbox = || Sandbox::default().with_time_trigger_transfer("alice", 50, "bob");
 
-            aborts_on_negative_amount(sandbox(), "time");
+            aborts_on_zero_amount(sandbox(), "time");
         }
 
         fn aborts_on_execution_error(sandbox: Sandbox, snapshot_suffix: &str) {
@@ -11491,12 +11496,11 @@ pub mod tests {
             ]);
         }
 
-        fn aborts_on_negative_amount(sandbox: Sandbox, snapshot_suffix: &str) {
-            let negative = Numeric::try_new(-1_i128, 0).expect("negative numeric amount");
+        fn aborts_on_zero_amount(sandbox: Sandbox, snapshot_suffix: &str) {
             let mut sandbox = sandbox
                 .with_data_trigger_transfer("bob", 10, "carol")
                 .with_data_trigger_transfer("bob", 10, "dave")
-                .with_data_trigger_transfer_numeric("dave", negative, "eve");
+                .with_data_trigger_transfer_quantity("dave", Quantity::zero(), "eve");
             let mut block = sandbox.block();
             block.assert_balances([
                 ("alice", 60),
@@ -11516,7 +11520,7 @@ pub mod tests {
             );
             assert_events(
                 &events,
-                format!("data_trigger/aborts_on_negative_amount-{snapshot_suffix}"),
+                format!("data_trigger/aborts_on_zero_amount-{snapshot_suffix}"),
             );
             block.assert_balances([
                 ("alice", 60),
@@ -11813,6 +11817,223 @@ pub mod tests {
             }
             other => panic!("expected NotPermitted rejection, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn state_block_manifest_protects_native_contract_upload_lifecycle() {
+        let chain: ChainId = "lane-native-upload-protected-ns".parse().unwrap();
+        let (mut world, authority, keypair) = world_with_authority("wonderland");
+        let lifecycle_permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                .into();
+        world
+            .account_permissions
+            .insert(authority.clone(), Permissions::from([lifecycle_permission]));
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let mut protected_namespaces = BTreeSet::new();
+        protected_namespaces.insert(Name::from_str("apps").expect("protected namespace"));
+        let rules = GovernanceRules {
+            validators: vec![authority.clone()],
+            protected_namespaces,
+            ..GovernanceRules::default()
+        };
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            TestLaneId::SINGLE,
+            LaneManifestStatus {
+                lane: TestLaneId::SINGLE,
+                alias: "apps".to_owned(),
+                dataspace: TestDataSpaceId::UNIVERSAL,
+                visibility: LaneVisibility::Public,
+                storage: LaneStorageProfile::FullReplica,
+                governance: Some("parliament".to_owned()),
+                manifest_path: Some(PathBuf::from("/tmp/apps.manifest.json")),
+                governance_rules: Some(rules),
+                privacy_commitments: Vec::new(),
+            },
+        );
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let mut governance_metadata = Metadata::default();
+        governance_metadata.insert(
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
+        );
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        macro_rules! validate_instruction {
+            ($instruction:expr, $metadata:expr) => {{
+                let tx = TransactionBuilder::new(chain.clone(), authority.clone())
+                    .with_instructions([$instruction])
+                    .with_metadata($metadata)
+                    .sign(keypair.private_key());
+                let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+                let mut ivm_cache = IvmCache::new();
+                block.validate_transaction(accepted, &mut ivm_cache).1
+            }};
+        }
+
+        let (code, _) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                "seiyaku NativeUploadGovernance { view fn inspect() -> int { return 1; } }",
+            )
+            .expect("compile self-describing contract fixture");
+        assert!(
+            code.len()
+                <= iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES,
+            "governance fixture must fit the declared one-chunk upload"
+        );
+        let code_hash = Hash::new(&code);
+        let total_size = u64::try_from(code.len()).expect("contract fixture size fits u64");
+        let descriptor = crate::state::SmartContractCodeUploadDescriptor {
+            total_size,
+            chunk_count: 1,
+        };
+
+        let missing_upload_metadata = validate_instruction!(
+            UploadSmartContractCodeChunk {
+                code_hash,
+                total_size,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: code.clone(),
+            },
+            Metadata::default()
+        );
+        assert!(matches!(
+            missing_upload_metadata,
+            Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(message)
+            )) if message.contains("gov_contract_address")
+        ));
+        assert_eq!(
+            block
+                .world
+                .contract_code_upload_progress(&authority, &code_hash),
+            None,
+            "rejected upload must not create resumable staging"
+        );
+
+        let accepted_upload = validate_instruction!(
+            UploadSmartContractCodeChunk {
+                code_hash,
+                total_size,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: code.clone(),
+            },
+            governance_metadata.clone()
+        );
+        assert!(
+            accepted_upload.is_ok(),
+            "governance metadata should admit upload: {accepted_upload:?}"
+        );
+        assert_eq!(
+            block
+                .world
+                .contract_code_upload_progress(&authority, &code_hash),
+            Some(crate::state::SmartContractCodeUploadProgress {
+                descriptor,
+                received_chunks: 1,
+            })
+        );
+
+        let missing_finalize_metadata = validate_instruction!(
+            FinalizeSmartContractCodeUpload {
+                code_hash,
+                total_size,
+                chunk_count: 1,
+            },
+            Metadata::default()
+        );
+        assert!(matches!(
+            missing_finalize_metadata,
+            Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(message)
+            )) if message.contains("gov_contract_address")
+        ));
+        assert_eq!(
+            block
+                .world
+                .contract_code_upload_progress(&authority, &code_hash),
+            Some(crate::state::SmartContractCodeUploadProgress {
+                descriptor,
+                received_chunks: 1,
+            }),
+            "rejected finalization must preserve resumable staging"
+        );
+        assert!(block.world.contract_code().get(&code_hash).is_none());
+
+        let accepted_finalize = validate_instruction!(
+            FinalizeSmartContractCodeUpload {
+                code_hash,
+                total_size,
+                chunk_count: 1,
+            },
+            governance_metadata.clone()
+        );
+        assert!(
+            accepted_finalize.is_ok(),
+            "governance metadata should admit finalization: {accepted_finalize:?}"
+        );
+        assert_eq!(
+            block
+                .world
+                .contract_code()
+                .get(&code_hash)
+                .map(Vec::as_slice),
+            Some(code.as_slice())
+        );
+        assert_eq!(
+            block
+                .world
+                .contract_code_upload_progress(&authority, &code_hash),
+            None,
+            "successful finalization must clear staging"
+        );
+
+        let cancelled_hash = Hash::new(b"owner-scoped cleanup");
+        let accepted_cancel_stage = validate_instruction!(
+            UploadSmartContractCodeChunk {
+                code_hash: cancelled_hash,
+                total_size: 1,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: vec![0xCA],
+            },
+            governance_metadata
+        );
+        assert!(
+            accepted_cancel_stage.is_ok(),
+            "cleanup fixture upload should be staged: {accepted_cancel_stage:?}"
+        );
+        let accepted_cancel = validate_instruction!(
+            iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload {
+                code_hash: cancelled_hash,
+            },
+            Metadata::default()
+        );
+        assert!(
+            accepted_cancel.is_ok(),
+            "owner cleanup must remain outside protected deployment governance: {accepted_cancel:?}"
+        );
+        assert_eq!(
+            block
+                .world
+                .contract_code_upload_progress(&authority, &cancelled_hash),
+            None
+        );
     }
 
     #[test]
@@ -13260,9 +13481,9 @@ pub mod tests {
         /// Add a data trigger that reacts to asset-added events and forwards funds.
         #[must_use]
         pub fn with_data_trigger_transfer(self, src: &str, quantity: u32, dest: &str) -> Self {
-            self.with_data_trigger_transfer_numeric_internal(
+            self.with_data_trigger_transfer_quantity_internal(
                 src,
-                Numeric::from(quantity),
+                Quantity::from(quantity),
                 dest,
                 Repeats::Indefinitely,
                 0,
@@ -13272,9 +13493,9 @@ pub mod tests {
         /// Add a single-use data trigger that fires at most once.
         #[must_use]
         pub fn with_data_trigger_transfer_once(self, src: &str, quantity: u32, dest: &str) -> Self {
-            self.with_data_trigger_transfer_numeric_internal(
+            self.with_data_trigger_transfer_quantity_internal(
                 src,
-                Numeric::from(quantity),
+                Quantity::from(quantity),
                 dest,
                 Repeats::Exactly(1),
                 0,
@@ -13290,24 +13511,24 @@ pub mod tests {
             dest: &str,
             label: u32,
         ) -> Self {
-            self.with_data_trigger_transfer_numeric_internal(
+            self.with_data_trigger_transfer_quantity_internal(
                 src,
-                Numeric::from(quantity),
+                Quantity::from(quantity),
                 dest,
                 Repeats::Indefinitely,
                 label,
             )
         }
 
-        /// Add a data trigger with an explicit [`Numeric`] amount.
+        /// Add a data trigger with an explicit [`Quantity`] amount.
         #[must_use]
-        pub fn with_data_trigger_transfer_numeric(
+        pub fn with_data_trigger_transfer_quantity(
             self,
             src: &str,
-            amount: Numeric,
+            amount: Quantity,
             dest: &str,
         ) -> Self {
-            self.with_data_trigger_transfer_numeric_internal(
+            self.with_data_trigger_transfer_quantity_internal(
                 src,
                 amount,
                 dest,
@@ -13316,10 +13537,10 @@ pub mod tests {
             )
         }
 
-        fn with_data_trigger_transfer_numeric_internal(
+        fn with_data_trigger_transfer_quantity_internal(
             self,
             src: &str,
-            amount: Numeric,
+            amount: Quantity,
             dest: &str,
             repeats: Repeats,
             label: u32,
@@ -13473,9 +13694,12 @@ pub mod tests {
                         || panic!("{name}'s asset not found"),
                         |asset| asset.0.clone(),
                     );
-                    let balance = numeric_to_u64(&balance_num).unwrap_or_else(|error| {
-                        panic!("account {name} has non-integer balance {balance_num}: {error:?}");
-                    });
+                    let balance =
+                        numeric_to_u64(balance_num.as_numeric()).unwrap_or_else(|error| {
+                            panic!(
+                                "account {name} has non-integer balance {balance_num}: {error:?}"
+                            );
+                        });
                     (*name, balance)
                 })
                 .collect();
