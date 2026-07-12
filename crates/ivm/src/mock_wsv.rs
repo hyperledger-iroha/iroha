@@ -11,6 +11,7 @@ use iroha_crypto::{Hash as CryptoHash, HashOf, PublicKey};
 pub use iroha_data_model::account::AccountId;
 pub use iroha_data_model::prelude::{AssetDefinitionId, DomainId, Mintable, Name, NftId, Peer};
 use iroha_data_model::{
+    asset::{AssetBalanceScope, AssetId},
     isi::{smart_contract_code as scode, transfer::TransferAssetBatch},
     nexus::{AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId, LaneId},
     proof::{ProofAttachment, VerifyingKeyId},
@@ -235,7 +236,22 @@ pub enum PermissionToken {
     RegisterZkAsset(AssetDefinitionId),
     MintAsset(AssetDefinitionId),
     BurnAsset(AssetDefinitionId),
+    /// Definition-wide transfer permission retained for general executor parity.
     TransferAsset(AssetDefinitionId),
+    /// Permission to transfer one exact owner/dataspace balance bucket.
+    TransferAssetBucket(AssetId),
+    /// Permission to set transfer-freeze state for one asset and exact account alias scope.
+    SetAssetTransferFreeze {
+        asset_definition: AssetDefinitionId,
+        account_domain: Name,
+        account_dataspace: DataSpaceId,
+    },
+    /// Permission to set a daily transfer limit for one asset and exact account alias scope.
+    SetAssetTransferDailyLimit {
+        asset_definition: AssetDefinitionId,
+        account_domain: Name,
+        account_dataspace: DataSpaceId,
+    },
     /// Permission to add a signatory for the given account
     AddSignatory(AccountId),
     /// Permission to remove a signatory for the given account
@@ -331,6 +347,8 @@ pub struct MockWorldStateView {
     permissions: HashMap<AccountId, HashSet<PermissionToken>>,
     asset_definitions: HashMap<AssetDefinitionId, AssetDefinition>,
     balances: HashMap<(AccountId, AssetDefinitionId), Numeric>,
+    asset_transfer_freezes: HashMap<(AccountId, AssetDefinitionId), bool>,
+    asset_transfer_daily_limits: HashMap<(AccountId, AssetDefinitionId), Option<Numeric>>,
     nfts: HashMap<NftId, NftRecord>,
     peers: HashSet<Peer>,
     triggers: HashMap<String, bool>,
@@ -378,6 +396,8 @@ impl MockWorldStateView {
             permissions: HashMap::new(),
             asset_definitions: HashMap::new(),
             balances: HashMap::new(),
+            asset_transfer_freezes: HashMap::new(),
+            asset_transfer_daily_limits: HashMap::new(),
             nfts: HashMap::new(),
             peers: HashSet::new(),
             triggers: HashMap::new(),
@@ -1408,6 +1428,30 @@ impl MockWorldStateView {
         }
     }
 
+    /// Return the last native transfer-freeze value applied in this mock world.
+    #[must_use]
+    pub fn asset_transfer_freeze(
+        &self,
+        account_id: &AccountId,
+        asset_id: &AssetDefinitionId,
+    ) -> Option<bool> {
+        self.asset_transfer_freezes
+            .get(&(Self::account_subject(account_id), asset_id.clone()))
+            .copied()
+    }
+
+    /// Return the last native daily transfer cap applied in this mock world.
+    #[must_use]
+    pub fn asset_transfer_daily_limit(
+        &self,
+        account_id: &AccountId,
+        asset_id: &AssetDefinitionId,
+    ) -> Option<Option<Numeric>> {
+        self.asset_transfer_daily_limits
+            .get(&(Self::account_subject(account_id), asset_id.clone()))
+            .cloned()
+    }
+
     /// Transfer `amount` of `asset_id` from `from` to `to`.
     /// Returns `true` on success or `false` if `from` lacks funds.
     pub fn transfer(
@@ -1935,12 +1979,20 @@ pub enum ZkEvent {
 
 /// Host environment exposing WSV operations via syscalls and enforcing permissions.
 #[derive(Clone)]
+struct MockAccountAliasBinding {
+    account: AccountId,
+    domain: Option<Name>,
+    dataspace_name: Name,
+    dataspace_id: Option<DataSpaceId>,
+}
+
+#[derive(Clone)]
 pub struct WsvHost {
     pub wsv: MockWorldStateView,
     pub caller: AccountId,
     account_map: HashMap<u64, AccountId>,
     asset_map: HashMap<u64, AssetDefinitionId>,
-    account_aliases: BTreeMap<String, AccountId>,
+    account_aliases: BTreeMap<String, MockAccountAliasBinding>,
     public_inputs: BTreeMap<Name, Vec<u8>>,
     // ZK verify gating and configuration
     zk_verified_transfer: bool,
@@ -1970,7 +2022,7 @@ struct WsvHostSnapshot {
     caller: AccountId,
     account_map: HashMap<u64, AccountId>,
     asset_map: HashMap<u64, AssetDefinitionId>,
-    account_aliases: BTreeMap<String, AccountId>,
+    account_aliases: BTreeMap<String, MockAccountAliasBinding>,
     public_inputs: BTreeMap<Name, Vec<u8>>,
     zk_verified_transfer: bool,
     zk_verified_unshield: bool,
@@ -2593,7 +2645,7 @@ impl WsvHost {
             .unwrap_or_else(|| self.caller.clone())
     }
 
-    fn validate_account_alias_literal(alias: &str) -> Result<(), String> {
+    fn parse_account_alias_scope(alias: &str) -> Result<(Option<Name>, Name), String> {
         if alias.is_empty() || alias.trim() != alias {
             return Err("account alias must be a non-empty canonical literal".to_owned());
         }
@@ -2616,14 +2668,20 @@ impl WsvHost {
                 "account alias must be `name@dataspace` or `name@domain.dataspace`".to_owned(),
             );
         }
+        let mut canonical_parts = Vec::with_capacity(scope_parts.len());
         for part in scope_parts {
             let name = Name::from_str(part)
                 .map_err(|_| "account alias scope contains an invalid Name".to_owned())?;
             if name.as_ref() != part {
                 return Err("account alias scope is not canonically encoded".to_owned());
             }
+            canonical_parts.push(name);
         }
-        Ok(())
+        match canonical_parts.as_slice() {
+            [dataspace] => Ok((None, dataspace.clone())),
+            [domain, dataspace] => Ok((Some(domain.clone()), dataspace.clone())),
+            _ => unreachable!("scope arity was validated above"),
+        }
     }
 
     /// Seed one canonical account alias for contract-test query execution.
@@ -2632,20 +2690,61 @@ impl WsvHost {
         alias: String,
         account: AccountId,
     ) -> Result<(), String> {
-        Self::validate_account_alias_literal(&alias)?;
+        self.register_account_alias_with_dataspace(alias, account, None)
+    }
+
+    /// Seed a canonical account alias together with its exact numeric dataspace binding.
+    pub fn register_account_alias_with_dataspace(
+        &mut self,
+        alias: String,
+        account: AccountId,
+        dataspace_id: Option<DataSpaceId>,
+    ) -> Result<(), String> {
+        let (domain, dataspace_name) = Self::parse_account_alias_scope(&alias)?;
         let account = Self::materialize_subject_account(&mut self.wsv, &account);
         if let Some(existing) = self.account_aliases.get(&alias) {
-            let conflict = if existing == &account {
+            let conflict = if existing.account == account && existing.dataspace_id == dataspace_id {
                 "duplicate"
             } else {
                 "conflicting"
             };
             return Err(format!(
-                "{conflict} account alias registration for `{alias}` (existing `{existing}`, requested `{account}`)"
+                "{conflict} account alias registration for `{alias}` (existing `{}`, requested `{account}`)",
+                existing.account,
             ));
         }
-        self.account_aliases.insert(alias, account);
+        self.account_aliases.insert(
+            alias,
+            MockAccountAliasBinding {
+                account,
+                domain,
+                dataspace_name,
+                dataspace_id,
+            },
+        );
         Ok(())
+    }
+
+    fn account_transfer_control_scope(
+        &self,
+        account: &AccountId,
+    ) -> Result<(Name, Name, DataSpaceId), VMError> {
+        let mut matching = self
+            .account_aliases
+            .values()
+            .filter(|binding| binding.account == *account)
+            .filter_map(|binding| {
+                Some((
+                    binding.domain.clone()?,
+                    binding.dataspace_name.clone(),
+                    binding.dataspace_id?,
+                ))
+            });
+        let scope = matching.next().ok_or(VMError::PermissionDenied)?;
+        if matching.any(|candidate| candidate != scope) {
+            return Err(VMError::PermissionDenied);
+        }
+        Ok(scope)
     }
 
     #[must_use]
@@ -3494,6 +3593,20 @@ fn parse_permission_value(value: &njson::Value) -> Result<PermissionToken, VMErr
         "transfer_asset" => {
             let id: AssetDefinitionId = parse_target(map)?;
             Ok(PermissionToken::TransferAsset(id))
+        }
+        "CanTransferAsset" => {
+            if map.len() != 2 || !map.contains_key("type") || !map.contains_key("asset") {
+                return Err(VMError::NoritoInvalid);
+            }
+            let literal = map
+                .get("asset")
+                .and_then(njson::Value::as_str)
+                .ok_or(VMError::NoritoInvalid)?;
+            let asset = AssetId::parse_literal(literal).map_err(|_| VMError::NoritoInvalid)?;
+            if asset.canonical_literal() != literal {
+                return Err(VMError::NoritoInvalid);
+            }
+            Ok(PermissionToken::TransferAssetBucket(asset))
         }
         "manage_roles" => Ok(PermissionToken::ManageRoles),
         "manage_permissions" => Ok(PermissionToken::ManagePermissions),
@@ -5756,6 +5869,79 @@ impl IVMHost for WsvHost {
                     Err(VMError::PermissionDenied)
                 }
             }
+            syscalls::SYSCALL_SET_ASSET_TRANSFER_FREEZE => {
+                let account = self.decode_canonical_account_reg(vm, 10)?;
+                let asset_definition = self.decode_asset_reg(vm, 11)?;
+                let frozen = match vm.register(12) {
+                    0 => false,
+                    1 => true,
+                    _ => return Err(VMError::DecodeError),
+                };
+                let (account_domain, _dataspace_name, account_dataspace) =
+                    self.account_transfer_control_scope(&account)?;
+                let permission = PermissionToken::SetAssetTransferFreeze {
+                    asset_definition: asset_definition.clone(),
+                    account_domain,
+                    account_dataspace,
+                };
+                if !self.wsv.has_permission(&self.caller, &permission)
+                    || !self.wsv.account_is_linked(&account)
+                    || !self.wsv.asset_definitions.contains_key(&asset_definition)
+                {
+                    return Err(VMError::PermissionDenied);
+                }
+                self.wsv.asset_transfer_freezes.insert(
+                    (
+                        MockWorldStateView::account_subject(&account),
+                        asset_definition,
+                    ),
+                    frozen,
+                );
+                Ok(Self::mutation_gas(0))
+            }
+            syscalls::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT => {
+                let account = self.decode_canonical_account_reg(vm, 10)?;
+                let asset_definition = self.decode_asset_reg(vm, 11)?;
+                let layout =
+                    crate::sum::SumLayoutV1::option(1).map_err(|_| VMError::DecodeError)?;
+                let (is_some, words) = crate::sum::read_words(vm, vm.register(12), layout)?;
+                let cap = if is_some {
+                    let pointer = words.first().copied().ok_or(VMError::DecodeError)?;
+                    let tlv = vm.validate_tlv(pointer)?;
+                    if tlv.type_id != PointerType::Quantity {
+                        return Err(VMError::NoritoInvalid);
+                    }
+                    Some(
+                        QuantityValueV1::decode_frame(tlv.payload)
+                            .map(QuantityValueV1::into_quantity)
+                            .map(Quantity::into_numeric)
+                            .map_err(|_| VMError::DecodeError)?,
+                    )
+                } else {
+                    None
+                };
+                let (account_domain, _dataspace_name, account_dataspace) =
+                    self.account_transfer_control_scope(&account)?;
+                let permission = PermissionToken::SetAssetTransferDailyLimit {
+                    asset_definition: asset_definition.clone(),
+                    account_domain,
+                    account_dataspace,
+                };
+                if !self.wsv.has_permission(&self.caller, &permission)
+                    || !self.wsv.account_is_linked(&account)
+                    || !self.wsv.asset_definitions.contains_key(&asset_definition)
+                {
+                    return Err(VMError::PermissionDenied);
+                }
+                self.wsv.asset_transfer_daily_limits.insert(
+                    (
+                        MockWorldStateView::account_subject(&account),
+                        asset_definition,
+                    ),
+                    cap,
+                );
+                Ok(Self::mutation_gas(0))
+            }
             syscalls::SYSCALL_DEBUG_PRINT => {
                 let value = vm.register(10);
                 if cfg!(any(test, debug_assertions)) {
@@ -5773,6 +5959,44 @@ impl IVMHost for WsvHost {
                 // Preserve r10 as the stable contract-provided abort code.
                 vm.request_abort();
                 Ok(DEBUG_GAS)
+            }
+            syscalls::SYSCALL_DEBUG_LOG => {
+                let pointer = vm.register(10);
+                if pointer == 0 {
+                    return Ok(DEBUG_GAS);
+                }
+                let resolved = crate::core_host::CoreHost::resolve_code_tlv_addr(vm, pointer);
+                let tlv = vm.validate_tlv(resolved)?;
+                let policy = vm.syscall_policy();
+                if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: tlv.type_id as u16,
+                    });
+                }
+                if !matches!(
+                    tlv.type_id,
+                    PointerType::Blob | PointerType::NoritoBytes | PointerType::Json
+                ) {
+                    return Err(VMError::NoritoInvalid);
+                }
+                if crate::dev_env::debug_wsv_enabled() {
+                    let message = if tlv.type_id == PointerType::Json {
+                        decode_from_bytes::<Json>(tlv.payload)
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|_| {
+                                core::str::from_utf8(tlv.payload)
+                                    .unwrap_or("<non-utf8>")
+                                    .to_owned()
+                            })
+                    } else {
+                        core::str::from_utf8(tlv.payload)
+                            .unwrap_or("<non-utf8>")
+                            .to_owned()
+                    };
+                    eprintln!("[WsvHost] {message}");
+                }
+                Ok(crate::host::debug_log_gas(tlv.payload.len()))
             }
             syscalls::SYSCALL_GET_AUTHORITY | syscalls::SYSCALL_SYSVAR_AUTHORITY => {
                 // Return the domainless account subject so raw equality checks inside
@@ -5845,11 +6069,11 @@ impl IVMHost for WsvHost {
                 let alias_input_len = alias_tlv.payload.len();
                 let alias = String::from_utf8(alias_tlv.payload.to_vec())
                     .map_err(|_| VMError::DecodeError)?;
-                Self::validate_account_alias_literal(&alias).map_err(|_| VMError::NoritoInvalid)?;
+                Self::parse_account_alias_scope(&alias).map_err(|_| VMError::NoritoInvalid)?;
                 let account = self
                     .account_aliases
                     .get(&alias)
-                    .cloned()
+                    .map(|binding| binding.account.clone())
                     .ok_or(VMError::PermissionDenied)?;
                 let payload = norito::to_bytes(&account).map_err(|_| VMError::NoritoInvalid)?;
                 let pointer = Self::alloc_tlv_payload(vm, PointerType::AccountId, &payload)?;
@@ -6033,23 +6257,34 @@ impl IVMHost for WsvHost {
                 let to_id = self.decode_canonical_account_reg(vm, 11)?;
                 let asset_id = self.decode_asset_reg(vm, 12)?;
                 let amount = self.decode_amount_reg(vm, 13)?;
-                let _dataspace_id = self.decode_dataspace_reg(vm, 14)?;
-                if MockWorldStateView::account_subject(&from_id)
-                    != MockWorldStateView::account_subject(&self.caller)
+                let dataspace_id = self.decode_dataspace_reg(vm, 14)?;
+                let transfers_external_bucket = MockWorldStateView::account_subject(&from_id)
+                    != MockWorldStateView::account_subject(&self.caller);
+                let permission_checked_bypass = if transfers_external_bucket
                     && !self.allow_contract_runtime_asset_transfer_bypass
                 {
-                    let token = PermissionToken::TransferAsset(asset_id.clone());
-                    if !self.wsv.has_permission(&self.caller, &token) {
+                    let exact = PermissionToken::TransferAssetBucket(AssetId::with_scope(
+                        asset_id.clone(),
+                        from_id.clone(),
+                        AssetBalanceScope::Dataspace(dataspace_id),
+                    ));
+                    let definition_wide = PermissionToken::TransferAsset(asset_id.clone());
+                    if !self.wsv.has_permission(&self.caller, &exact)
+                        && !self.wsv.has_permission(&self.caller, &definition_wide)
+                    {
                         return Err(VMError::PermissionDenied);
                     }
-                }
+                    true
+                } else {
+                    self.allow_contract_runtime_asset_transfer_bypass
+                };
                 if self.wsv.transfer_with_permission_bypass(
                     &self.caller,
                     from_id,
                     to_id,
                     asset_id,
                     amount,
-                    self.allow_contract_runtime_asset_transfer_bypass,
+                    permission_checked_bypass,
                 ) {
                     Ok(Self::mutation_gas(0))
                 } else {
@@ -7354,6 +7589,31 @@ mod tests_null_decode {
     }
 
     #[test]
+    fn debug_log_syscall_accepts_current_kotodama_payloads_and_charges_bytes() {
+        let caller: AccountId = test_account_id(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "wonderland",
+        );
+        let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
+        let mut vm = IVM::new(u64::MAX);
+        let payload = b"first-release-contract-event";
+        let pointer = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Blob, payload))
+            .expect("allocate debug log payload");
+        vm.set_register(10, pointer);
+
+        let quote = host
+            .prepare_syscall(syscalls::SYSCALL_DEBUG_LOG, &vm)
+            .expect("quote debug log");
+        let actual = host
+            .syscall(syscalls::SYSCALL_DEBUG_LOG, &mut vm)
+            .expect("execute debug log");
+
+        assert_eq!(actual, crate::host::debug_log_gas(payload.len()));
+        assert_eq!(actual, quote);
+    }
+
+    #[test]
     fn authority_response_quote_covers_actual_and_fits_default_budget() {
         let caller: AccountId = test_account_id(
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -7972,6 +8232,94 @@ mod tests_null_decode {
             apply_host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY, &mut apply_vm),
             Ok(WsvHost::mutation_batch_gas(2))
         );
+    }
+
+    #[test]
+    fn scoped_transfer_requires_the_exact_contract_subject_source_bucket() {
+        fn invoke(
+            grant_to_app: bool,
+            grant_source_matches: bool,
+            grant_dataspace: u64,
+            requested_dataspace: u64,
+        ) -> Result<u64, VMError> {
+            let source = test_account_id(
+                "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+                "source",
+            );
+            let destination = test_account_id(
+                "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
+                "destination",
+            );
+            let contract_subject = test_account_id(
+                "ed012026DB3C0E3D6A4C53E2CD59000B2D5F9ECB41D4EDD5E0C83F9F1B40D0F0A5BF42",
+                "contract",
+            );
+            let app = test_account_id(
+                "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "app",
+            );
+            let asset = AssetDefinitionId::new(
+                DomainId::try_new("currency", "sbp").expect("asset domain"),
+                "pkr".parse().expect("asset name"),
+            );
+            let mut wsv = MockWorldStateView::with_balances(&[
+                ((source.clone(), asset.clone()), Numeric::from(100_u64)),
+                ((destination.clone(), asset.clone()), Numeric::zero()),
+            ]);
+            wsv.add_account_unchecked(contract_subject.clone());
+            wsv.add_account_unchecked(app.clone());
+            let granted_source = if grant_source_matches {
+                source.clone()
+            } else {
+                destination.clone()
+            };
+            let permission = PermissionToken::TransferAssetBucket(AssetId::with_scope(
+                asset.clone(),
+                granted_source,
+                AssetBalanceScope::Dataspace(DataSpaceId::new(grant_dataspace)),
+            ));
+            wsv.grant_permission(
+                if grant_to_app {
+                    &app
+                } else {
+                    &contract_subject
+                },
+                permission,
+            );
+
+            let mut account_map = HashMap::new();
+            account_map.insert(1, source);
+            account_map.insert(2, destination);
+            let mut asset_map = HashMap::new();
+            asset_map.insert(1, asset);
+            let host = WsvHost::new_with_subject_map(wsv, contract_subject, account_map, asset_map);
+            let mut vm = IVM::new(u64::MAX);
+            vm.set_host(host);
+            vm.set_register(10, 1);
+            vm.set_register(11, 2);
+            vm.set_register(12, 1);
+            let quantity = QuantityValueV1::new(
+                Quantity::try_from_numeric(Numeric::from(10_u64)).expect("canonical quantity"),
+            )
+            .encode_frame()
+            .expect("encode quantity");
+            let quantity_ptr = vm
+                .alloc_input_tlv(&make_tlv(PointerType::Quantity, &quantity))
+                .expect("allocate quantity");
+            let dataspace =
+                norito::to_bytes(&DataSpaceId::new(requested_dataspace)).expect("encode dataspace");
+            let dataspace_ptr = vm
+                .alloc_input_tlv(&make_tlv(PointerType::DataSpaceId, &dataspace))
+                .expect("allocate dataspace");
+            vm.set_register(13, quantity_ptr);
+            vm.set_register(14, dataspace_ptr);
+            call_syscall(&mut vm, syscalls::SYSCALL_TRANSFER_ASSET_SCOPED)
+        }
+
+        assert_eq!(invoke(true, true, 10, 10), Err(VMError::PermissionDenied));
+        assert_eq!(invoke(false, false, 10, 10), Err(VMError::PermissionDenied));
+        assert_eq!(invoke(false, true, 11, 10), Err(VMError::PermissionDenied));
+        assert!(invoke(false, true, 10, 10).is_ok());
     }
 
     #[test]

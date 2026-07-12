@@ -442,6 +442,17 @@ function shouldUsePureJsInstructionFallback(error) {
 }
 
 function encodeNormalizedInstruction(normalized) {
+  const deployProposal = normalized?.ProposeDeployContract;
+  if (
+    isPlainObject(deployProposal) &&
+    deployProposal.mode !== undefined &&
+    deployProposal.mode !== null
+  ) {
+    // Rust's JSON bridge has historically accepted case-folded enum text.
+    // Bind the public JS wire contract to the exact canonical spellings before
+    // native dispatch so non-canonical JSON cannot acquire canonical bytes.
+    encodeVotingModeValue(deployProposal.mode, "ProposeDeployContract.mode");
+  }
   let encoded;
   if (forcePureJsInstructionCodec) {
     encoded = encodePureJsInstruction(normalized);
@@ -7339,7 +7350,10 @@ function decodeNoritoFrame(buffer, context, expectedSchemaHash) {
     // helper reports the more specific SCCP-facing short-header error.
     throw new Error(`${context} reader overran payload while reading Norito header`);
   }
-  return validateNoritoFrame(buffer, { context, expectedSchemaHash });
+  return validateNoritoFrame(buffer, {
+    context,
+    ...(expectedSchemaHash == null ? {} : { expectedSchemaHash }),
+  });
 }
 
 function frameNoritoPayload(payload, schemaHash, flags = 0, padding = 0) {

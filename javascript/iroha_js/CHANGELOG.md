@@ -4,6 +4,67 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Hardened Kotodama compiler result normalization against malformed or hostile
+  native/service output. Successful manifests, recursive entrypoint schemas,
+  triggers, localization/provenance metadata, and source-map/budget sidecars
+  now use exact bounded V1 field contracts with cross-sidecar identity checks;
+  accessors, sparse byte arrays, unsafe integers, retired `Amount`/`U128`
+  leaves, and inconsistent parameter/return schemas fail closed. TypeScript
+  declarations now expose the canonical `Int`/`Decimal`/`Quantity` leaf set,
+  and the exact `Norito` runtime namespace includes `validateNoritoFrame`.
+  Remote compilation now has a 30-second total deadline (bounded to two
+  minutes when overridden), supports caller cancellation without trusting
+  instance accessors, and races uncooperative Fetch/body readers while
+  deterministically releasing listeners, timers, and streams. Compiler URLs
+  and Fetch implementations are retained in private immutable state; responses
+  require absent/identity content encoding and exact result/null sentinels.
+  Successful output now checks exact IVM 1.1 deployable mode/code-memory bounds,
+  zero-padded CNTR framing, ABI-1 literal descriptors and pointer TLVs, embedded
+  identity/capability/count bindings, and null provenance before Rust performs
+  final semantic admission. Its complete browser export bundles to exactly
+  51,000 bytes (49.8 KiB, six modules, zero Node-only inputs or global `Buffer`
+  assignments) under a 51 KiB gate with 1,224 bytes (2.40%) of headroom.
+- Rebased only the complete Node Torii bundle ceiling to 840 KiB after the
+  pinned-esbuild security-hardening baseline reached exactly 853,208 bytes.
+  The gate retains 6,952 bytes (0.81%) of headroom, while regression tests keep
+  every browser ceiling unchanged and require all browser bundles to exclude
+  Node-only inputs and global `Buffer` shims. The complete public browser
+  aggregate is 303,924 bytes across 51 modules, leaving 3,276 bytes (1.08%)
+  under its unchanged 300 KiB ceiling.
+- Made native-host publication repeatable on Windows and fail closed across
+  replacement failures. The publisher now locks the destination, verifies and
+  probes a staged addon for the required Norito and Kotodama exports, moves an
+  existing binary/checksum pair aside before replacement, publishes the new
+  checksum manifest last, re-verifies the public pair, and restores the exact
+  prior state while cleaning transaction artifacts on failure. Publication is
+  now also durable across hard process termination: a versioned append-only
+  journal, fsynced files and directory entries, exact old/new component
+  inventories, and lock-held startup recovery resolve every replacement phase
+  without guessing. Ambiguous, duplicated, missing, symlinked, or tampered
+  recovery artifacts are preserved and rejected. Distribution/native locking
+  no longer seeds source checkouts with an orphan checksum manifest, so a clean
+  checkout can bootstrap its first verified native binary without weakening
+  the publisher's fail-closed handling of unjournaled partial pairs. The real
+  required-export probe now uses Node's native loader directly while retaining
+  the legacy private staging name, preserving crash recovery across upgrades.
+  Lock ownership now fingerprints the exact owner file, rechecks ownership
+  before destructive phases, and atomically quarantines stale candidates so a
+  replacement lock is never unlinked through a stale-lock
+  time-of-check/time-of-use race. Lock
+  acquisition pins the exact bytes it fsynced and observes lease mtime changes;
+  staged distribution trees are recursively fsynced and rehashed around
+  publication. Canonical bounded journal phases, alternate valid manifest
+  encodings for an identical addon, and ambiguous crash backups now fail or
+  recover deterministically.
+- Fixed the npm package surface to include the canonical Apache-2.0 license and
+  reject stale README or backup artifacts during pack verification.
+- Fixed the Node Kotodama binding to emit its canonical three-field result
+  envelope with explicit null sentinels for inactive output or diagnostics.
+- Tightened instruction and Torii Numeric admission to bound text before
+  `BigInt`, enforce Rust's exact signed 512-bit mantissa range, preserve source
+  scale for policy validation, and reject legacy noncanonical Numeric archives.
+  Governance modes now fail closed on case-folded aliases, while native-only
+  nested instructions retain their authenticated unknown-schema frames.
 - Replaced lossy Kotodama compiler exceptions with a discriminated asynchronous
   result. Node and browser-service compilation now preserve the canonical Rust
   diagnostic fields and UTF-8 byte spans, validate artifact/manifest/sidecar

@@ -5,6 +5,7 @@ EXPECTED_VERUS_VERSION="0.2026.05.31.5dd6d83"
 EXPECTED_VERUS_TOOLCHAIN_VERSION="1.95.0"
 EXPECTED_VSTD_VERSION="0.0.0-2026-05-31-0205"
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+VERUS_LOG="${REPO_ROOT}/target/formal/sumeragi_v2/verus.log"
 
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -36,16 +37,20 @@ if [[ "${actual_toolchain%%-*}" != "$EXPECTED_VERUS_TOOLCHAIN_VERSION" ]]; then
 fi
 
 platform="$(verus --version | awk '/Platform:/ {print $2; exit}')"
-case "$platform" in
-  macos_aarch64)
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64)
     expected_verus_sha256="f11f8a863103a3c8fcaf27e6189edfdba31081516591365b5e29b0a66f570451"
     expected_cargo_verus_sha256="f918c6229c8d714640c9c9ec3d60b9c1d2e0aafc09bba8ff037332b04f85d078"
+    ;;
+  Linux-x86_64)
+    expected_verus_sha256="c5911ee43c7a92c49a48d2c8646c604d252a38c71c87bda88ad4d33eb9e7e0fc"
+    expected_cargo_verus_sha256="42a79c9afd700f8312a9ac7ab212070723e71beeb07f5ab855453010455bdc6d"
     ;;
   *)
     expected_verus_sha256="${SUMERAGI_VERUS_SHA256:-}"
     expected_cargo_verus_sha256="${SUMERAGI_CARGO_VERUS_SHA256:-}"
     if [[ -z "$expected_verus_sha256" || -z "$expected_cargo_verus_sha256" ]]; then
-      echo "no pinned Verus checksums for platform ${platform:-unknown}; set SUMERAGI_VERUS_SHA256 and SUMERAGI_CARGO_VERUS_SHA256" >&2
+      echo "no pinned Verus checksums for host $(uname -s)-$(uname -m) (${platform:-unknown}); set SUMERAGI_VERUS_SHA256 and SUMERAGI_CARGO_VERUS_SHA256" >&2
       exit 1
     fi
     ;;
@@ -74,6 +79,21 @@ if rg -n '\b(assume|admit)\s*\(|external_body|external_[[:alnum:]_]*specificatio
   exit 1
 fi
 
+# TimeoutIntent is safety-critical for view closure and replay. Keep its WAL
+# guard derived from the carried vote/context/QC primitives; a compressed
+# caller-supplied validity or high-QC-match bit would reopen the projection
+# gap even if the downstream theorem remained satisfiable.
+if rg -U -n '(?s)TimeoutIntent\s*\{[^}]*\b(local_vote_valid|high_reference_matches)\b' \
+  "$REPO_ROOT/crates/iroha_sumeragi_core/src/verus_proofs.rs"; then
+  echo "TimeoutIntent WAL guard contains a caller-supplied predicate" >&2
+  exit 1
+fi
+if ! rg -q 'pub proof fn timeout_intent_guard_is_derived_from_vote_and_frozen_context' \
+  "$REPO_ROOT/crates/iroha_sumeragi_core/src/verus_proofs.rs"; then
+  echo "TimeoutIntent primitive-guard proof is missing" >&2
+  exit 1
+fi
+
 # Keep the explicit Verus-to-TLA action-name table from silently drifting.
 # This is a spelling/existence guard, not a claim that two independently
 # parsed action bodies are already proved equivalent.
@@ -98,6 +118,7 @@ for action in \
 done
 
 cd "$REPO_ROOT"
+mkdir -p "$(dirname -- "$VERUS_LOG")"
 
 # A clean target is intentional.  Pinned vstd uses reviewed trusted
 # specifications, so root-only forwarding is required: `--no-cheating` applies
@@ -114,4 +135,5 @@ cargo verus verify -p iroha_sumeragi_core --features verus \
   --fwd-verus-args-to roots -- \
   --rlimit 60 \
   --expand-errors \
-  --no-cheating
+  --no-cheating \
+  2>&1 | tee "$VERUS_LOG"

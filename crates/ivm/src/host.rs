@@ -289,7 +289,7 @@ pub(crate) fn debug_log_gas(payload_len: usize) -> u64 {
 pub(crate) const TLV_ENVELOPE_OVERHEAD: usize = 7 + iroha_crypto::Hash::LENGTH;
 
 /// Build the injective V1 durable-map path for canonical Norito key bytes.
-pub(crate) fn canonical_state_map_path(base: &Name, key: &[u8]) -> Result<Name, VMError> {
+pub fn canonical_state_map_path(base: &Name, key: &[u8]) -> Result<Name, VMError> {
     if state_path_name_payload_len(base)? > syscalls::STATE_MAP_MAX_BASE_BYTES
         || key.is_empty()
         || key.len() > syscalls::STATE_MAP_MAX_KEY_BYTES

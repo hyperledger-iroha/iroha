@@ -57,7 +57,7 @@ public struct KagemushaRecursiveSpendNativeCapabilities: Equatable, Sendable {
     ) throws {
         guard bridgeABIVersion == KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion,
               artifactManifestSchema == KagemushaRecursiveSpend.artifactManifestSchema,
-              mode == KagemushaRecursiveSpend.mode,
+              mode == KagemushaRecursiveSpend.artifactManifestMode,
               proofBackend == KagemushaRecursiveSpend.pastaCycleBackend,
               transcriptProfile == KagemushaRecursiveSpend.pastaCycleTranscript,
               proofEnvelopeVersion == KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion,
@@ -85,11 +85,20 @@ public struct KagemushaRecursiveSpendNativeCapabilities: Equatable, Sendable {
     }
 }
 
+/// The sole public offline-cash product selector.
+public enum KagemushaOfflineSpendMode: String, Equatable, CaseIterable, Sendable {
+    case recursiveSpend = "recursive_spend_v1"
+}
+
 public enum KagemushaRecursiveSpend {
     public static let requiredNativeBridgeAbiVersion: UInt32 = 18
     public static let artifactManifestSchema =
         "kagemusha.offline.recursive_spend.artifact_manifest.v3"
-    public static let mode = "recursive_spend_v2"
+    /// Public first-release product selector.
+    public static let productMode = "recursive_spend_v1"
+    /// Internal mode authenticated by ABI-18 capabilities and V3 artifacts.
+    public static let artifactManifestMode = "recursive_spend_v2"
+    public static let mode = productMode
     public static let pastaCycleBackend = "halo2/ipa-pasta-cycle-v1"
     public static let pastaCycleTranscript = "kagemusha-pasta-cycle-poseidon-v1"
     public static let pastaCycleProofEnvelopeVersion: UInt16 = 1
@@ -114,13 +123,13 @@ public enum KagemushaRecursiveSpend {
 
     /// Canonical supporting archives consumed by the V2 request records.
     /// These are not alternate spend modes; they are authenticated inputs to
-    /// the sole first-release `recursive_spend_v2` product mode.
+    /// the internal `recursive_spend_v2` artifact contract.
     public static let verifiedFoldRecordBundleWireName =
         "iroha_data_model::offline::model::KagemushaVerifiedFoldRecordBundle"
 
     /// Return whether a raw capability value is the spend-again product mode.
     public static func isSpendAgainMode(_ value: String?) -> Bool {
-        value == mode
+        value == productMode
     }
     public static let proofAttachmentWireName =
         "iroha_data_model::proof::ProofAttachment"
@@ -133,6 +142,8 @@ public enum KagemushaRecursiveSpend {
         wire("KagemushaRecipientOutputDerivationRequestV2")
     public static let recipientOutputDerivationResultWireName =
         wire("KagemushaRecipientOutputDerivationResultV2")
+    public static let noteOpeningWireName =
+        "connect_norito_bridge::KagemushaNoteOpeningV2"
     public static let branchPathWireName = wire("KagemushaRecursiveSpendBranchPathV2")
     public static let branchClaimWireName = wire("KagemushaRecursiveSpendBranchClaimV2")
     public static let recipientRequestPayloadWireName =
@@ -603,6 +614,41 @@ public struct KagemushaSpendableNoteDescriptor: Equatable, Hashable, Sendable {
     }
 }
 
+/// Uniform local opening for every Kagemusha note created by top-up, receive,
+/// sender change, or partial redemption.
+///
+/// This type is secret-bearing. Its Norito archive is accepted only by local
+/// native proof entrypoints and must be encrypted at rest, wiped after bridge
+/// calls, and never included in a peer or Torii payload.
+///
+/// The spend key is wallet-scoped: every note owned by one wallet must resolve
+/// to the same device-bound key so a two-input transfer can be proven. Wallet
+/// state should persist that key's secure reference once and store only the
+/// note-specific rho and diversifier beside each note; this value is the
+/// transient bridge-bound reconstruction.
+public struct KagemushaNoteOpening: Equatable, Sendable {
+    public let spendKey: Data
+    public let rho: Data
+    public let diversifier: Data
+
+    public init(spendKey: Data, rho: Data, diversifier: Data) throws {
+        for (field, value) in [
+            ("spendKey", spendKey),
+            ("rho", rho),
+            ("diversifier", diversifier),
+        ] {
+            try KagemushaRecursiveSpend.requireNonzeroFixed32(value, field: field)
+        }
+        self.spendKey = Data(spendKey)
+        self.rho = Data(rho)
+        self.diversifier = Data(diversifier)
+    }
+
+    func noritoEncoded() throws -> Data {
+        try KagemushaRecursiveSpendCodecs.encodeNoteOpening(self)
+    }
+}
+
 public struct KagemushaRecipientOutputDerivationRequest: Equatable, Sendable {
     public let chainID: String
     public let assetDefinitionID: String
@@ -627,48 +673,52 @@ public struct KagemushaRecipientOutputDerivationRequest: Equatable, Sendable {
     }
 
     public func derive(
-        receiverSpendSecret: Data
+        opening: KagemushaNoteOpening
     ) throws -> KagemushaRecipientOutputDerivationResult {
-        guard receiverSpendSecret.count == 32,
-              receiverSpendSecret.contains(where: { $0 != 0 }) else {
-            throw KagemushaRecursiveSpendError.invalidField("receiverSpendSecret")
-        }
         let requestArchive = try KagemushaRecursiveSpendCodecs
             .encodeRecipientOutputDerivationRequest(self)
+        var openingArchive = try opening.noritoEncoded()
+        defer { openingArchive.resetBytes(in: 0..<openingArchive.count) }
         guard let resultArchive = try NoritoNativeBridge.shared
             .kagemushaRecipientOutputDeriveV2(
                 requestArchive: requestArchive,
-                receiverSpendSecret: receiverSpendSecret
+                noteOpeningArchive: openingArchive
             ) else {
             throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
         }
         return try KagemushaRecursiveSpendCodecs.decodeRecipientOutputDerivationResult(
             resultArchive,
-            request: self
+            request: self,
+            opening: opening
         )
     }
 }
 
 public struct KagemushaRecipientOutputDerivationResult: Equatable, Sendable {
     public let recipientOutput: KagemushaSpendableNoteDescriptor
-    public let recipientOutputProverMaterial: Data
+    /// Opaque sender-prover archive containing only amount, rho, and owner tag.
+    /// Carry this unchanged in the signed peer request; never interpret it in wallet code.
+    public let senderOutputProverMaterial: Data
+    public let opening: KagemushaNoteOpening
 
     init(
         recipientOutput: KagemushaSpendableNoteDescriptor,
-        recipientOutputProverMaterial: Data,
-        request: KagemushaRecipientOutputDerivationRequest
+        senderOutputProverMaterial: Data,
+        request: KagemushaRecipientOutputDerivationRequest,
+        opening: KagemushaNoteOpening
     ) throws {
         guard recipientOutput.chainID == request.chainID,
               recipientOutput.assetDefinitionID == request.assetDefinitionID,
               recipientOutput.amount == request.amount,
-              !recipientOutputProverMaterial.isEmpty,
-              recipientOutputProverMaterial.count <= 4 * 1_024 else {
+              !senderOutputProverMaterial.isEmpty,
+              senderOutputProverMaterial.count <= 4 * 1_024 else {
             throw KagemushaRecursiveSpendError.invalidField(
-                "recipientOutputProverMaterial"
+                "senderOutputProverMaterial"
             )
         }
         self.recipientOutput = recipientOutput
-        self.recipientOutputProverMaterial = Data(recipientOutputProverMaterial)
+        self.senderOutputProverMaterial = Data(senderOutputProverMaterial)
+        self.opening = opening
     }
 }
 
@@ -878,7 +928,9 @@ public struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendabl
     public let issuedAtMilliseconds: UInt64
     public let expiresAtMilliseconds: UInt64
     public let recipientOutput: KagemushaSpendableNoteDescriptor
-    public let recipientOutputProverMaterial: Data
+    /// Signed, peer-carried archive consumed only by the sender proof builder.
+    /// It must never contain the receiver spend key or output diversifier.
+    public let senderOutputProverMaterial: Data
 
     public init(
         chainID: String,
@@ -892,7 +944,7 @@ public struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendabl
         issuedAtMilliseconds: UInt64,
         expiresAtMilliseconds: UInt64,
         recipientOutput: KagemushaSpendableNoteDescriptor,
-        recipientOutputProverMaterial: Data
+        senderOutputProverMaterial: Data
     ) throws {
         try KagemushaRecursiveSpend.requirePortableText(chainID, field: "chainID")
         guard AssetDefinitionAddress.decode(assetDefinitionID) != nil else {
@@ -915,8 +967,8 @@ public struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendabl
               recipientOutput.chainID == chainID,
               recipientOutput.assetDefinitionID == assetDefinitionID,
               recipientOutput.amount == amount,
-              !recipientOutputProverMaterial.isEmpty,
-              recipientOutputProverMaterial.count <= 4 * 1024 else {
+              !senderOutputProverMaterial.isEmpty,
+              senderOutputProverMaterial.count <= 4 * 1024 else {
             throw KagemushaRecursiveSpendError.invalidField("recipientRequest")
         }
         self.chainID = chainID
@@ -930,7 +982,7 @@ public struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendabl
         self.issuedAtMilliseconds = issuedAtMilliseconds
         self.expiresAtMilliseconds = expiresAtMilliseconds
         self.recipientOutput = recipientOutput
-        self.recipientOutputProverMaterial = Data(recipientOutputProverMaterial)
+        self.senderOutputProverMaterial = Data(senderOutputProverMaterial)
     }
 
     public func signingBytes() throws -> Data {
@@ -1131,9 +1183,7 @@ public struct KagemushaTopUpShieldBuildRequest: Equatable, Sendable {
     public let amount: KagemushaScaledAmount
     public let payer: String
     public let operationID: Data
-    public let spendKey: Data
-    public let rho: Data
-    public let diversifier: Data
+    public let opening: KagemushaNoteOpening
     public let leafIndex: UInt32
     public let zeroPath: PrivacyConfidentialMerklePathWitnessV2
     public let shieldVerifierID: String
@@ -1146,9 +1196,7 @@ public struct KagemushaTopUpShieldBuildRequest: Equatable, Sendable {
         amount: KagemushaScaledAmount,
         payer: String,
         operationID: Data,
-        spendKey: Data,
-        rho: Data,
-        diversifier: Data,
+        opening: KagemushaNoteOpening,
         leafIndex: UInt32,
         zeroPath: PrivacyConfidentialMerklePathWitnessV2,
         shieldVerifierID: String,
@@ -1175,9 +1223,6 @@ public struct KagemushaTopUpShieldBuildRequest: Equatable, Sendable {
         )
         for (field, value) in [
             ("operationID", operationID),
-            ("spendKey", spendKey),
-            ("rho", rho),
-            ("diversifier", diversifier),
             ("shieldVerifierCommitment", shieldVerifierCommitment),
         ] {
             try KagemushaRecursiveSpend.requireNonzeroFixed32(value, field: field)
@@ -1187,9 +1232,7 @@ public struct KagemushaTopUpShieldBuildRequest: Equatable, Sendable {
         self.amount = amount
         self.payer = payer
         self.operationID = Data(operationID)
-        self.spendKey = Data(spendKey)
-        self.rho = Data(rho)
-        self.diversifier = Data(diversifier)
+        self.opening = opening
         self.leafIndex = leafIndex
         self.zeroPath = zeroPath
         self.shieldVerifierID = shieldVerifierID
@@ -1203,9 +1246,7 @@ public struct KagemushaTopUpShieldBuildRequest: Equatable, Sendable {
         amount: KagemushaScaledAmount,
         payer: String,
         operationID: Data,
-        spendKey: Data,
-        rho: Data,
-        diversifier: Data,
+        opening: KagemushaNoteOpening,
         zeroPath: ZkAssetMerklePath,
         shieldVerifierID: String,
         shieldVerifierCommitment: Data,
@@ -1220,9 +1261,7 @@ public struct KagemushaTopUpShieldBuildRequest: Equatable, Sendable {
             amount: amount,
             payer: payer,
             operationID: operationID,
-            spendKey: spendKey,
-            rho: rho,
-            diversifier: diversifier,
+            opening: opening,
             leafIndex: UInt32(zeroPath.leafIndex),
             zeroPath: PrivacyConfidentialMerklePathWitnessV2(path: zeroPath),
             shieldVerifierID: shieldVerifierID,
@@ -1232,8 +1271,9 @@ public struct KagemushaTopUpShieldBuildRequest: Equatable, Sendable {
     }
 
     public func buildUnsigned() throws -> KagemushaRecursiveSpendTopUpUnsigned {
-        let archive = try KagemushaRecursiveSpendCodecs
+        var archive = try KagemushaRecursiveSpendCodecs
             .encodeTopUpShieldBuildRequest(self)
+        defer { archive.resetBytes(in: 0..<archive.count) }
         guard let unsignedArchive = try NoritoNativeBridge.shared
             .kagemushaTopUpShieldBuildUnsignedV2(requestArchive: archive) else {
             throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
@@ -1919,6 +1959,53 @@ public struct KagemushaRecursiveSpendBundle: Equatable, Sendable {
     init(archive: Data, summary: KagemushaRecursiveSpendBundleSummary) {
         self.archive = Data(archive)
         self.summary = summary
+    }
+}
+
+/// Exact Torii registry record supplied to a native Reserved-lineage proof
+/// operation.
+///
+/// `recordBytes` is the canonical Norito `VerifyingKeyRecord`; wallet code
+/// keeps it opaque. The registry identifier is retained alongside the archive
+/// so callers can bind cache entries and rotation decisions to the exact
+/// Torii key they fetched, even though the Rust request wire type embeds only
+/// the record itself.
+public struct KagemushaRecursiveSpendVerifierRecordRef: Equatable, Sendable {
+    public let verifierKeyId: String
+    public let recordBytes: Data
+
+    public init(verifierKeyId: String, recordBytes: Data) throws {
+        let parts = verifierKeyId.split(
+            separator: ":",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )
+        guard parts.count == 2 else {
+            throw KagemushaRecursiveSpendError.invalidField("verifierKeyId")
+        }
+        let backend = String(parts[0])
+        let name = String(parts[1])
+        try KagemushaRecursiveSpend.requirePortableText(
+            backend,
+            field: "verifierKeyId.backend"
+        )
+        try KagemushaRecursiveSpend.requirePortableText(
+            name,
+            field: "verifierKeyId.name"
+        )
+        guard backend == "halo2/ipa",
+              !name.contains(":"),
+              recordBytes.count <= KagemushaRecursiveSpend.topUpFinalityRosterMaximumArchiveBytes
+        else {
+            throw KagemushaRecursiveSpendError.invalidField("verifierKeyId")
+        }
+        try KagemushaRecursiveSpend.requireArchive(
+            recordBytes,
+            schema: KagemushaRecursiveSpend.verifyingKeyRecordWireName,
+            field: "verifierRecord"
+        )
+        self.verifierKeyId = verifierKeyId
+        self.recordBytes = Data(recordBytes)
     }
 }
 

@@ -921,6 +921,7 @@ DeliverQC(envelope) ==
 BeginObservePrepare(node, qc) ==
   LET request == ObservePrepareWal(node, qc)
   IN /\ QcAt(node, qc) \in receivedQCs
+     /\ qc.context = context
      /\ qc.phase = "Prepare"
      /\ qc.view <= nodeView[node]
      /\ qc.view > highestRank[node]
@@ -961,6 +962,7 @@ BeginLockCommit(node, qc) ==
       request == LockCommitWal(node, qc, vote)
   IN /\ node \in Honest \cap up \cap CurrentVoters
      /\ QcAt(node, qc) \in receivedQCs
+     /\ qc.context = context
      /\ qc.phase = "Prepare"
      /\ qc.view = nodeView[node]
      /\ ~NodeTimedOut(node, qc.view)
@@ -1039,6 +1041,7 @@ FormCommitQC(node, roundView, subject) ==
 BeginDecision(node, qc) ==
   LET request == DecisionWal(node, qc, FALSE)
   IN /\ QcAt(node, qc) \in receivedQCs
+     /\ qc.context = context
      /\ qc.phase = "Commit"
      /\ NodeIdle(node)
      /\ ~\E decision \in decisions:
@@ -1671,8 +1674,10 @@ LockBelowHighest ==
   \A node \in ValidatorIds: lockRank[node] <= highestRank[node]
 
 DecisionAgreement ==
-  \A left, right \in decisions:
-    left.qc.context = right.qc.context => left.qc.subject = right.qc.subject
+  /\ \A decision \in decisions: decision.qc \in commitQCs
+  /\ \A left, right \in decisions:
+       left.qc.context = right.qc.context
+         => left.qc.subject = right.qc.subject
 
 OldViewCommitQCAccepted ==
   \A request \in pendingDecision:

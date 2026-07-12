@@ -389,10 +389,10 @@ pub struct JsKeyPair {
 
 /// Canonical Kotodama compilation result envelope returned by the Rust compiler.
 ///
-/// Source errors are data, not rejected JavaScript promises. Exactly one of
-/// `output` and `diagnostics_json` is present according to `ok`; rejected
-/// promises are reserved for task or serialization failures in the binding.
-#[napi(object)]
+/// Source errors are data, not rejected JavaScript promises. Both result fields
+/// are always present: the inactive field is an explicit JavaScript `null`;
+/// rejected promises are reserved for task or serialization failures.
+#[napi(object, use_nullable = true)]
 pub struct JsKotodamaCompileResult {
     /// Whether canonical compilation succeeded.
     pub ok: bool,

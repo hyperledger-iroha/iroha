@@ -13743,12 +13743,44 @@ fn collect_contract_state_schemas(
 }
 
 #[cfg(feature = "app_api")]
+fn decode_contract_state_pointer_payload<'a>(
+    bytes: &'a [u8],
+    expected: ivm::pointer_abi::PointerType,
+    label: &str,
+) -> core::result::Result<&'a [u8], String> {
+    let tlv = ivm::pointer_abi::validate_tlv_bytes(bytes)
+        .map_err(|err| format!("invalid durable TLV: {err}"))?;
+    if tlv.type_id != expected {
+        return Err(format!("expected {label} payload for {label} state"));
+    }
+    Ok(tlv.payload)
+}
+
+#[cfg(feature = "app_api")]
+fn encode_contract_state_tlv(
+    pointer_type: ivm::pointer_abi::PointerType,
+    payload: &[u8],
+) -> Option<Vec<u8>> {
+    let payload_len = u32::try_from(payload.len()).ok()?;
+    let mut encoded = Vec::with_capacity(2 + 1 + 4 + payload.len() + Hash::LENGTH);
+    encoded.extend_from_slice(&(pointer_type as u16).to_be_bytes());
+    encoded.push(1);
+    encoded.extend_from_slice(&payload_len.to_be_bytes());
+    encoded.extend_from_slice(payload);
+    encoded.extend_from_slice(Hash::new(payload).as_ref());
+    Some(encoded)
+}
+
+#[cfg(feature = "app_api")]
 fn encode_contract_state_pointer_tlv_bytes(
     ty: &ivm::EmbeddedStateType,
     raw: &str,
 ) -> Option<Vec<u8>> {
     use ivm::pointer_abi::PointerType;
     use norito::to_bytes;
+
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
 
     let (type_id, payload) = match ty {
         ivm::EmbeddedStateType::Int => {
@@ -13808,21 +13840,18 @@ fn encode_contract_state_pointer_tlv_bytes(
             (PointerType::DomainId, to_bytes(&value).ok()?)
         }
         ivm::EmbeddedStateType::DataSpaceId => {
-            let raw_id = raw.parse::<u64>().ok()?;
+            let raw_id = if let Some(hex) = raw.strip_prefix("0x") {
+                u64::from_str_radix(hex, 16).ok()?
+            } else {
+                raw.parse::<u64>().ok()?
+            };
             let value = iroha_data_model::nexus::DataSpaceId::new(raw_id);
             (PointerType::DataSpaceId, to_bytes(&value).ok()?)
         }
         _ => return None,
     };
 
-    let payload_len = u32::try_from(payload.len()).ok()?;
-    let mut encoded = Vec::with_capacity(2 + 1 + 4 + payload.len() + Hash::LENGTH);
-    encoded.extend_from_slice(&(type_id as u16).to_be_bytes());
-    encoded.push(1);
-    encoded.extend_from_slice(&payload_len.to_be_bytes());
-    encoded.extend_from_slice(&payload);
-    encoded.extend_from_slice(Hash::new(&payload).as_ref());
-    Some(encoded)
+    encode_contract_state_tlv(type_id, &payload)
 }
 
 #[cfg(feature = "app_api")]
@@ -13841,13 +13870,15 @@ fn contract_state_stored_map_key_suffix(
         }
         logical_key_suffix
     };
-    let encoded = match key_ty {
+    let canonical_key = match key_ty {
         ivm::EmbeddedStateType::Bool => {
             let value = match logical_key_suffix {
                 "true" | "1" => 1_i64,
                 "false" | "0" => 0_i64,
                 _ => return None,
             };
+            let _canonical_flags =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
             norito::to_bytes(&value).ok()?
         }
         ivm::EmbeddedStateType::Int
@@ -13866,7 +13897,58 @@ fn contract_state_stored_map_key_suffix(
         }
         _ => return None,
     };
-    Some(hex::encode(encoded))
+    Some(hex::encode(canonical_key))
+}
+
+#[cfg(all(feature = "app_api", test))]
+fn contract_state_logical_map_key_suffix(
+    key_ty: &ivm::EmbeddedStateType,
+    stored_key_suffix: &str,
+) -> Option<String> {
+    let canonical_key = hex::decode(stored_key_suffix).ok()?;
+    if hex::encode(&canonical_key) != stored_key_suffix {
+        return None;
+    }
+
+    let logical_key = match key_ty {
+        ivm::EmbeddedStateType::Bool => {
+            let value: i64 =
+                decode_canonical_contract_state_norito(&canonical_key, "bool map key").ok()?;
+            match value {
+                0 => "false".to_owned(),
+                1 => "true".to_owned(),
+                _ => return None,
+            }
+        }
+        ivm::EmbeddedStateType::Bytes => {
+            let payload = decode_contract_state_pointer_payload(
+                &canonical_key,
+                ivm::pointer_abi::PointerType::Blob,
+                "bytes map key",
+            )
+            .ok()?;
+            format!("0x{}", hex::encode(payload))
+        }
+        ivm::EmbeddedStateType::Int
+        | ivm::EmbeddedStateType::Decimal
+        | ivm::EmbeddedStateType::Quantity
+        | ivm::EmbeddedStateType::String
+        | ivm::EmbeddedStateType::Name
+        | ivm::EmbeddedStateType::AccountId
+        | ivm::EmbeddedStateType::AssetDefinitionId
+        | ivm::EmbeddedStateType::AssetId
+        | ivm::EmbeddedStateType::NftId
+        | ivm::EmbeddedStateType::DomainId
+        | ivm::EmbeddedStateType::DataSpaceId => {
+            let decoded = decode_contract_state_pointer_json(&canonical_key, key_ty).ok()?;
+            decoded.as_str()?.to_owned()
+        }
+        _ => return None,
+    };
+
+    (contract_state_stored_map_key_suffix(key_ty, &logical_key).as_deref()
+        == Some(stored_key_suffix))
+    .then_some(logical_key)
 }
 
 #[cfg(feature = "app_api")]
@@ -13875,7 +13957,7 @@ fn contract_state_logical_map_entry_value(
     logical_path: &str,
     get_value: &impl Fn(&str) -> Option<Vec<u8>>,
 ) -> Option<Vec<u8>> {
-    if let Some(Some(_)) = registry.get(logical_path) {
+    if matches!(registry.get(logical_path), Some(Some(_))) {
         return get_value(logical_path);
     }
     let (base, key, key_suffix) = contract_state_logical_map_parts(registry, logical_path)?;
@@ -13901,85 +13983,92 @@ fn contract_state_logical_map_parts<'a>(
 }
 
 #[cfg(feature = "app_api")]
-fn embedded_contract_state_value_kind(
+fn contract_state_value_kind(
     ty: &ivm::EmbeddedStateType,
 ) -> Option<ivm_abi::state_value::StateValueKindV1> {
-    use ivm::EmbeddedStateType as Embedded;
+    use ivm::EmbeddedStateType as Type;
     use ivm_abi::state_value::StateValueKindV1 as Kind;
 
     Some(match ty {
-        Embedded::Int => Kind::Int,
-        Embedded::Decimal => Kind::Decimal,
-        Embedded::Quantity => Kind::Quantity,
-        Embedded::Bool => Kind::Bool,
-        Embedded::String => Kind::String,
-        Embedded::Bytes => Kind::Bytes,
-        Embedded::DataSpaceId => Kind::DataSpaceId,
-        Embedded::AccountId => Kind::AccountId,
-        Embedded::AssetDefinitionId => Kind::AssetDefinitionId,
-        Embedded::AssetId => Kind::AssetId,
-        Embedded::NftId => Kind::NftId,
-        Embedded::DomainId => Kind::DomainId,
-        Embedded::Name => Kind::Name,
-        Embedded::Json => Kind::Json,
-        Embedded::Tuple(_)
-        | Embedded::Struct { .. }
-        | Embedded::StateMap { .. }
-        | Embedded::Option(_)
-        | Embedded::Result { .. }
-        | Embedded::List { .. } => return None,
+        Type::Int => Kind::Int,
+        Type::Decimal => Kind::Decimal,
+        Type::Quantity => Kind::Quantity,
+        Type::Bool => Kind::Bool,
+        Type::String => Kind::String,
+        Type::Bytes => Kind::Bytes,
+        Type::DataSpaceId => Kind::DataSpaceId,
+        Type::AccountId => Kind::AccountId,
+        Type::AssetDefinitionId => Kind::AssetDefinitionId,
+        Type::AssetId => Kind::AssetId,
+        Type::NftId => Kind::NftId,
+        Type::DomainId => Kind::DomainId,
+        Type::Name => Kind::Name,
+        Type::Json => Kind::Json,
+        Type::Tuple(_)
+        | Type::Struct { .. }
+        | Type::StateMap { .. }
+        | Type::Option(_)
+        | Type::Result { .. }
+        | Type::List { .. } => return None,
     })
 }
 
 #[cfg(feature = "app_api")]
-fn append_embedded_contract_state_schema_nodes(
+fn append_contract_state_schema_nodes(
     ty: &ivm::EmbeddedStateType,
     nodes: &mut Vec<ivm_abi::state_value::StateValueNodeV1>,
 ) -> bool {
-    use ivm::EmbeddedStateType as Embedded;
+    use ivm::EmbeddedStateType as Type;
     use ivm_abi::state_value::StateValueNodeV1 as Node;
 
     match ty {
-        Embedded::Struct { name, fields } => {
+        Type::Struct { name, fields } => {
             nodes.push(Node::Struct {
                 name: name.clone(),
                 fields: fields.iter().map(|field| field.name.clone()).collect(),
             });
             fields
                 .iter()
-                .all(|field| append_embedded_contract_state_schema_nodes(&field.ty, nodes))
+                .all(|field| append_contract_state_schema_nodes(&field.ty, nodes))
         }
-        Embedded::Tuple(items) => {
+        Type::Tuple(items) => {
             let Ok(arity) = u16::try_from(items.len()) else {
                 return false;
             };
             nodes.push(Node::Tuple { arity });
             items
                 .iter()
-                .all(|item| append_embedded_contract_state_schema_nodes(item, nodes))
+                .all(|item| append_contract_state_schema_nodes(item, nodes))
         }
-        Embedded::Option(inner) => {
+        Type::Option(inner) => {
             nodes.push(Node::Option);
-            append_embedded_contract_state_schema_nodes(inner, nodes)
+            append_contract_state_schema_nodes(inner, nodes)
         }
-        Embedded::Result { ok, err } => {
+        Type::Result { ok, err } => {
             nodes.push(Node::Result);
-            append_embedded_contract_state_schema_nodes(ok, nodes)
-                && append_embedded_contract_state_schema_nodes(err, nodes)
+            append_contract_state_schema_nodes(ok, nodes)
+                && append_contract_state_schema_nodes(err, nodes)
         }
-        Embedded::List { element, capacity } => {
-            let Some(element) = embedded_contract_state_value_schema(element) else {
+        Type::List { element, capacity } => {
+            let mut element_nodes = Vec::new();
+            if !append_contract_state_schema_nodes(element, &mut element_nodes) {
                 return false;
+            }
+            let element = ivm_abi::state_value::StateValueSchemaV1 {
+                nodes: element_nodes,
             };
+            if !element.validate() {
+                return false;
+            }
             nodes.push(Node::List {
                 element: Box::new(element),
                 capacity: *capacity,
             });
             true
         }
-        Embedded::StateMap { .. } => false,
+        Type::StateMap { .. } => false,
         leaf => {
-            let Some(kind) = embedded_contract_state_value_kind(leaf) else {
+            let Some(kind) = contract_state_value_kind(leaf) else {
                 return false;
             };
             nodes.push(Node::Leaf(kind));
@@ -13989,145 +14078,155 @@ fn append_embedded_contract_state_schema_nodes(
 }
 
 #[cfg(feature = "app_api")]
-fn embedded_contract_state_value_schema(
+fn contract_state_value_schema(
     ty: &ivm::EmbeddedStateType,
-) -> Option<ivm_abi::state_value::StateValueSchemaV1> {
+) -> core::result::Result<ivm_abi::state_value::StateValueSchemaV1, String> {
     let mut nodes = Vec::new();
-    if !append_embedded_contract_state_schema_nodes(ty, &mut nodes) {
-        return None;
+    if !append_contract_state_schema_nodes(ty, &mut nodes) {
+        return Err("state map values require an entry key".into());
     }
     let schema = ivm_abi::state_value::StateValueSchemaV1 { nodes };
-    schema.validate().then_some(schema)
+    schema
+        .validate()
+        .then_some(schema)
+        .ok_or_else(|| "embedded durable-state schema is invalid".into())
 }
 
 #[cfg(feature = "app_api")]
-fn decode_contract_state_canonical_norito<T>(
+fn decode_canonical_contract_state_norito<T>(
     payload: &[u8],
     label: &str,
 ) -> core::result::Result<T, String>
 where
     T: norito::codec::Decode + norito::codec::Encode,
 {
-    let value: T =
-        norito::decode_from_bytes(payload).map_err(|error| format!("decode {label}: {error}"))?;
-    let canonical =
-        norito::to_bytes(&value).map_err(|error| format!("re-encode {label}: {error}"))?;
-    if canonical != payload {
-        return Err(format!("non-canonical {label} state payload"));
+    let value =
+        norito::decode_from_bytes(payload).map_err(|err| format!("decode {label}: {err}"))?;
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    if norito::to_bytes(&value).map_err(|err| format!("encode {label}: {err}"))? != payload {
+        return Err(format!("non-canonical {label} payload"));
     }
     Ok(value)
 }
 
 #[cfg(feature = "app_api")]
-fn decode_contract_state_pointer_atom_json(
+fn decode_contract_state_pointer_json(
     envelope: &[u8],
     ty: &ivm::EmbeddedStateType,
 ) -> core::result::Result<norito::json::Value, String> {
-    use iroha_primitives::numeric_abi::{DecimalValueV1, IntValueV1, QuantityValueV1};
-    use ivm::EmbeddedStateType as Embedded;
+    use ivm::EmbeddedStateType as Type;
     use ivm::pointer_abi::PointerType;
 
-    let tlv = ivm::pointer_abi::validate_tlv_bytes(envelope)
-        .map_err(|error| format!("invalid state atom TLV: {error}"))?;
-    let require = |expected: PointerType, label: &str| {
-        (tlv.type_id == expected)
-            .then_some(tlv.payload)
-            .ok_or_else(|| format!("expected {label} state atom, got {:?}", tlv.type_id))
-    };
-
     match ty {
-        Embedded::Int => {
-            let value = IntValueV1::decode_frame(require(PointerType::Int, "Int")?)
-                .map_err(|error| format!("decode Int state atom: {error}"))?;
-            Ok(norito::json::Value::from(value.into_int().to_string()))
+        Type::Int => {
+            let value = ivm::numeric_tlv::decode_int_bytes(envelope)
+                .map_err(|err| format!("decode int: {err}"))?;
+            Ok(norito::json::Value::from(value.to_string()))
         }
-        Embedded::Decimal => {
-            let value = DecimalValueV1::decode_frame(require(PointerType::Decimal, "Decimal")?)
-                .map_err(|error| format!("decode Decimal state atom: {error}"))?;
-            Ok(norito::json::Value::from(value.into_numeric().to_string()))
+        Type::Decimal => {
+            let value = ivm::numeric_tlv::decode_decimal_bytes(envelope)
+                .map_err(|err| format!("decode decimal: {err}"))?;
+            Ok(norito::json::Value::from(value.to_string()))
         }
-        Embedded::Quantity => {
-            let value = QuantityValueV1::decode_frame(require(PointerType::Quantity, "Quantity")?)
-                .map_err(|error| format!("decode Quantity state atom: {error}"))?;
-            Ok(norito::json::Value::from(value.into_quantity().to_string()))
+        Type::Quantity => {
+            let value = ivm::numeric_tlv::decode_quantity_bytes(envelope)
+                .map_err(|err| format!("decode quantity: {err}"))?;
+            Ok(norito::json::Value::from(value.to_string()))
         }
-        Embedded::String => {
-            let payload = require(PointerType::Blob, "String")?;
+        Type::String => {
+            let payload =
+                decode_contract_state_pointer_payload(envelope, PointerType::Blob, "string")?;
             let value = std::str::from_utf8(payload)
-                .map_err(|error| format!("decode String state atom: {error}"))?;
+                .map_err(|err| format!("decode UTF-8 string: {err}"))?;
             Ok(norito::json::Value::from(value.to_owned()))
         }
-        Embedded::Bytes => Ok(norito::json::Value::from(
-            base64::engine::general_purpose::STANDARD.encode(require(PointerType::Blob, "Bytes")?),
-        )),
-        Embedded::Json => {
-            let value: iroha_primitives::json::Json = decode_contract_state_canonical_norito(
-                require(PointerType::Json, "Json")?,
-                "Json",
-            )?;
+        Type::Bytes => {
+            let payload =
+                decode_contract_state_pointer_payload(envelope, PointerType::Blob, "bytes")?;
+            Ok(norito::json::Value::from(
+                base64::engine::general_purpose::STANDARD.encode(payload),
+            ))
+        }
+        Type::Json => {
+            let payload =
+                decode_contract_state_pointer_payload(envelope, PointerType::Json, "Json")?;
+            let value: iroha_primitives::json::Json =
+                decode_canonical_contract_state_norito(payload, "json")?;
             value
                 .try_into_any_norito::<norito::json::Value>()
-                .map_err(|error| format!("convert Json state atom: {error}"))
+                .map_err(|err| format!("convert json payload: {err}"))
         }
-        Embedded::Name => {
-            let value: iroha_data_model::prelude::Name = decode_contract_state_canonical_norito(
-                require(PointerType::Name, "Name")?,
-                "Name",
-            )?;
+        Type::Name => {
+            let payload =
+                decode_contract_state_pointer_payload(envelope, PointerType::Name, "Name")?;
+            let value: iroha_data_model::prelude::Name =
+                norito::decode_from_bytes(payload).map_err(|err| format!("decode name: {err}"))?;
+            if encode_contract_state_pointer_tlv_bytes(ty, value.as_ref()).as_deref()
+                != Some(envelope)
+            {
+                return Err("non-canonical name envelope".into());
+            }
             Ok(norito::json::Value::from(value.as_ref().to_owned()))
         }
-        Embedded::AccountId => {
+        Type::AccountId => {
+            let payload = decode_contract_state_pointer_payload(
+                envelope,
+                PointerType::AccountId,
+                "AccountId",
+            )?;
             let value: iroha_data_model::account::AccountId =
-                decode_contract_state_canonical_norito(
-                    require(PointerType::AccountId, "AccountId")?,
-                    "AccountId",
-                )?;
+                decode_canonical_contract_state_norito(payload, "account id")?;
             Ok(norito::json::Value::from(value.to_string()))
         }
-        Embedded::AssetDefinitionId => {
+        Type::AssetDefinitionId => {
+            let payload = decode_contract_state_pointer_payload(
+                envelope,
+                PointerType::AssetDefinitionId,
+                "AssetDefinitionId",
+            )?;
             let value: iroha_data_model::asset::AssetDefinitionId =
-                decode_contract_state_canonical_norito(
-                    require(PointerType::AssetDefinitionId, "AssetDefinitionId")?,
-                    "AssetDefinitionId",
-                )?;
+                decode_canonical_contract_state_norito(payload, "asset definition id")?;
             Ok(norito::json::Value::from(value.to_string()))
         }
-        Embedded::AssetId => {
-            let value: iroha_data_model::asset::AssetId = decode_contract_state_canonical_norito(
-                require(PointerType::AssetId, "AssetId")?,
-                "AssetId",
+        Type::AssetId => {
+            let payload =
+                decode_contract_state_pointer_payload(envelope, PointerType::AssetId, "AssetId")?;
+            let value: iroha_data_model::asset::AssetId =
+                decode_canonical_contract_state_norito(payload, "asset id")?;
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        Type::NftId => {
+            let payload =
+                decode_contract_state_pointer_payload(envelope, PointerType::NftId, "NftId")?;
+            let value: iroha_data_model::nft::NftId =
+                decode_canonical_contract_state_norito(payload, "nft id")?;
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        Type::DomainId => {
+            let payload =
+                decode_contract_state_pointer_payload(envelope, PointerType::DomainId, "DomainId")?;
+            let value: iroha_data_model::domain::DomainId =
+                decode_canonical_contract_state_norito(payload, "domain id")?;
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        Type::DataSpaceId => {
+            let payload = decode_contract_state_pointer_payload(
+                envelope,
+                PointerType::DataSpaceId,
+                "DataSpaceId",
             )?;
-            Ok(norito::json::Value::from(value.to_string()))
-        }
-        Embedded::NftId => {
-            let value: iroha_data_model::nft::NftId = decode_contract_state_canonical_norito(
-                require(PointerType::NftId, "NftId")?,
-                "NftId",
-            )?;
-            Ok(norito::json::Value::from(value.to_string()))
-        }
-        Embedded::DomainId => {
-            let value: iroha_data_model::domain::DomainId = decode_contract_state_canonical_norito(
-                require(PointerType::DomainId, "DomainId")?,
-                "DomainId",
-            )?;
-            Ok(norito::json::Value::from(value.to_string()))
-        }
-        Embedded::DataSpaceId => {
             let value: iroha_data_model::nexus::DataSpaceId =
-                decode_contract_state_canonical_norito(
-                    require(PointerType::DataSpaceId, "DataSpaceId")?,
-                    "DataSpaceId",
-                )?;
+                decode_canonical_contract_state_norito(payload, "dataspace id")?;
             Ok(norito::json::Value::from(value.to_string()))
         }
-        Embedded::Bool
-        | Embedded::Tuple(_)
-        | Embedded::Struct { .. }
-        | Embedded::StateMap { .. }
-        | Embedded::Option(_)
-        | Embedded::Result { .. }
-        | Embedded::List { .. } => Err("state atom does not match a pointer leaf".to_owned()),
+        Type::Bool
+        | Type::Tuple(_)
+        | Type::Struct { .. }
+        | Type::StateMap { .. }
+        | Type::Option(_)
+        | Type::Result { .. }
+        | Type::List { .. } => Err("expected a pointer-backed state leaf".into()),
     }
 }
 
@@ -14137,11 +14236,11 @@ fn decode_contract_state_atoms_json(
     atoms: &[ivm_abi::state_value::StateValueAtomV1],
     atom_index: &mut usize,
 ) -> core::result::Result<norito::json::Value, String> {
-    use ivm::EmbeddedStateType as Embedded;
+    use ivm::EmbeddedStateType as Type;
     use ivm_abi::state_value::StateValueAtomV1 as Atom;
 
     match ty {
-        Embedded::Struct { fields, .. } => {
+        Type::Struct { fields, .. } => {
             let mut object = norito::json::Map::new();
             for field in fields {
                 object.insert(
@@ -14151,16 +14250,16 @@ fn decode_contract_state_atoms_json(
             }
             Ok(norito::json::Value::Object(object))
         }
-        Embedded::Tuple(items) => {
+        Type::Tuple(items) => {
             let mut values = Vec::with_capacity(items.len());
             for item in items {
                 values.push(decode_contract_state_atoms_json(item, atoms, atom_index)?);
             }
             Ok(norito::json::Value::Array(values))
         }
-        Embedded::Option(inner) => {
+        Type::Option(inner) => {
             let Some(Atom::Tag(present)) = atoms.get(*atom_index) else {
-                return Err("Option state value is missing its tag atom".to_owned());
+                return Err("option state value is missing its canonical tag".into());
             };
             *atom_index = atom_index.saturating_add(1);
             if *present {
@@ -14169,49 +14268,62 @@ fn decode_contract_state_atoms_json(
                 Ok(norito::json::Value::Null)
             }
         }
-        Embedded::Result { ok, err } => {
-            let Some(Atom::Tag(success)) = atoms.get(*atom_index) else {
-                return Err("Result state value is missing its tag atom".to_owned());
+        Type::Result { ok, err } => {
+            let Some(Atom::Tag(is_ok)) = atoms.get(*atom_index) else {
+                return Err("result state value is missing its canonical tag".into());
             };
             *atom_index = atom_index.saturating_add(1);
-            let (label, value_ty) = if *success { ("ok", ok) } else { ("err", err) };
+            let (label, value) = if *is_ok {
+                (
+                    "ok",
+                    decode_contract_state_atoms_json(ok, atoms, atom_index)?,
+                )
+            } else {
+                (
+                    "err",
+                    decode_contract_state_atoms_json(err, atoms, atom_index)?,
+                )
+            };
             let mut object = norito::json::Map::new();
-            object.insert(
-                label.into(),
-                decode_contract_state_atoms_json(value_ty, atoms, atom_index)?,
-            );
+            object.insert(label.into(), value);
             Ok(norito::json::Value::Object(object))
         }
-        Embedded::List { element, .. } => {
+        Type::List { element, capacity } => {
             let Some(Atom::List(items)) = atoms.get(*atom_index) else {
-                return Err("List state value is missing its sequence atom".to_owned());
+                return Err("list state value is missing its canonical item stream".into());
             };
             *atom_index = atom_index.saturating_add(1);
+            if items.len() > usize::from(*capacity) {
+                return Err("list state value exceeds its embedded capacity".into());
+            }
             let mut values = Vec::with_capacity(items.len());
             for item_atoms in items {
                 let mut item_index = 0;
-                let value = decode_contract_state_atoms_json(element, item_atoms, &mut item_index)?;
+                values.push(decode_contract_state_atoms_json(
+                    element,
+                    item_atoms,
+                    &mut item_index,
+                )?);
                 if item_index != item_atoms.len() {
-                    return Err("List item contains trailing state atoms".to_owned());
+                    return Err("list item contains trailing state atoms".into());
                 }
-                values.push(value);
             }
             Ok(norito::json::Value::Array(values))
         }
-        Embedded::Bool => {
+        Type::Bool => {
             let Some(Atom::Bool(value)) = atoms.get(*atom_index) else {
-                return Err("Bool state value is missing its boolean atom".to_owned());
+                return Err("bool state value is not a canonical bool atom".into());
             };
             *atom_index = atom_index.saturating_add(1);
-            Ok(norito::json::Value::from(*value))
+            Ok(norito::json::Value::Bool(*value))
         }
-        Embedded::StateMap { .. } => Err("nested durable maps are not supported".to_owned()),
+        Type::StateMap { .. } => Err("nested durable maps are not supported".into()),
         leaf => {
             let Some(Atom::Pointer(envelope)) = atoms.get(*atom_index) else {
-                return Err("pointer state value is missing its TLV atom".to_owned());
+                return Err("pointer-backed state value is missing its canonical envelope".into());
             };
             *atom_index = atom_index.saturating_add(1);
-            decode_contract_state_pointer_atom_json(envelope, leaf)
+            decode_contract_state_pointer_json(envelope, leaf)
         }
     }
 }
@@ -14225,35 +14337,29 @@ fn decode_contract_state_scalar_json(
         MAX_STATE_VALUE_RECORD_BYTES, StateValueRecordV1, state_value_schema_hash_v1,
     };
 
-    // SYSCALL_STATE_SET validates a NoritoBytes envelope at the VM boundary, then persists only
-    // its payload. Durable WSV bytes are therefore the canonical StateValueRecordV1 itself; the
-    // host recreates the transport envelope only when loading the value back into a VM.
     if bytes.len() > MAX_STATE_VALUE_RECORD_BYTES {
-        return Err(format!(
-            "state record exceeds the {MAX_STATE_VALUE_RECORD_BYTES}-byte limit"
-        ));
+        return Err("durable state record exceeds the V1 byte limit".into());
     }
     let record: StateValueRecordV1 = norito::decode_from_bytes(bytes)
-        .map_err(|error| format!("decode state record: {error}"))?;
-    let canonical_record =
-        norito::to_bytes(&record).map_err(|error| format!("re-encode state record: {error}"))?;
-    if canonical_record != bytes {
-        return Err("state record is not canonically encoded".to_owned());
+        .map_err(|err| format!("decode durable state record: {err}"))?;
+    if norito::to_bytes(&record).map_err(|err| format!("re-encode durable state record: {err}"))?
+        != bytes
+    {
+        return Err("durable state record is not canonically encoded".into());
     }
-    let schema = embedded_contract_state_value_schema(ty)
-        .ok_or_else(|| "embedded state schema is not a storable V1 value".to_owned())?;
+    let schema = contract_state_value_schema(ty)?;
     let schema_payload = norito::to_bytes(&schema)
-        .map_err(|error| format!("encode embedded state schema: {error}"))?;
+        .map_err(|err| format!("encode embedded durable-state schema: {err}"))?;
     if record.schema_hash != state_value_schema_hash_v1(&schema_payload) {
-        return Err("state record schema hash does not match the deployed artifact".to_owned());
+        return Err("durable state record does not match its embedded schema".into());
     }
     if !schema.validate_atoms(&record.atoms) {
-        return Err("state record atoms do not match the deployed artifact schema".to_owned());
+        return Err("durable state record contains an invalid atom stream".into());
     }
     let mut atom_index = 0;
     let value = decode_contract_state_atoms_json(ty, &record.atoms, &mut atom_index)?;
     if atom_index != record.atoms.len() {
-        return Err("state record contains trailing atoms".to_owned());
+        return Err("durable state record contains trailing atoms".into());
     }
     Ok(value)
 }
@@ -14308,6 +14414,8 @@ fn validate_contract_state_stored_map_key_suffix(
     }
     match key_ty {
         ivm::EmbeddedStateType::Bool => {
+            let _canonical_flags =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
             let false_key = norito::to_bytes(&0_i64)
                 .map_err(|error| format!("encode canonical false map key: {error}"))?;
             let true_key = norito::to_bytes(&1_i64)
@@ -14328,7 +14436,7 @@ fn validate_contract_state_stored_map_key_suffix(
         | ivm::EmbeddedStateType::NftId
         | ivm::EmbeddedStateType::DomainId
         | ivm::EmbeddedStateType::DataSpaceId => {
-            decode_contract_state_pointer_atom_json(&encoded, key_ty)
+            decode_contract_state_pointer_json(&encoded, key_ty)
                 .map_err(|error| format!("invalid typed durable map key: {error}"))?;
         }
         _ => return Err("deployed durable map key schema is not supported by V1".to_owned()),
@@ -14342,11 +14450,14 @@ fn match_contract_state_map_key_suffix(
     key_ty: &ivm::EmbeddedStateType,
     stored_path: &str,
 ) -> core::result::Result<Option<(String, String)>, String> {
-    let Some(suffix) = stored_path.strip_prefix(&format!("{base}/")) else {
+    let Some(stored_key_suffix) = stored_path.strip_prefix(&format!("{base}/")) else {
         return Ok(None);
     };
-    validate_contract_state_stored_map_key_suffix(key_ty, suffix)?;
-    Ok(Some((format!("tlv-{suffix}"), suffix.to_owned())))
+    validate_contract_state_stored_map_key_suffix(key_ty, stored_key_suffix)?;
+    Ok(Some((
+        format!("tlv-{stored_key_suffix}"),
+        stored_key_suffix.to_owned(),
+    )))
 }
 
 #[cfg(feature = "app_api")]
@@ -14547,6 +14658,17 @@ pub async fn handle_get_contract_state(
         };
         storage.get(scoped.as_str()).is_some()
     };
+    let get_schema_aware_value = |path: &str| {
+        let Some(registry) = schema_registry.as_ref() else {
+            return get_value(path);
+        };
+        if registry.contains_key(path) || contract_state_logical_map_parts(registry, path).is_some()
+        {
+            contract_state_logical_map_entry_value(registry, path, &get_value)
+        } else {
+            get_value(path)
+        }
+    };
     let contract_address_response = resolved_contract_address
         .as_ref()
         .map(std::string::ToString::to_string);
@@ -14587,11 +14709,7 @@ pub async fn handle_get_contract_state(
     if let Some(path_raw) = q.path {
         let name = parse_name(&path_raw, "path")?;
         let path = name.as_ref();
-        let stored = get_value(path).or_else(|| {
-            schema_registry.as_ref().and_then(|registry| {
-                contract_state_logical_map_entry_value(registry, path, &get_value)
-            })
-        });
+        let stored = get_schema_aware_value(path);
         let logical_found = schema_registry
             .as_ref()
             .is_some_and(|registry| contract_state_logical_path_exists(registry, path, &has_value));
@@ -14646,11 +14764,7 @@ pub async fn handle_get_contract_state(
         let mut paths = Vec::with_capacity(parsed.len());
         for name in parsed {
             let path = name.as_ref();
-            let stored = get_value(path).or_else(|| {
-                schema_registry.as_ref().and_then(|registry| {
-                    contract_state_logical_map_entry_value(registry, path, &get_value)
-                })
-            });
+            let stored = get_schema_aware_value(path);
             let logical_found = schema_registry.as_ref().is_some_and(|registry| {
                 contract_state_logical_path_exists(registry, path, &has_value)
             });
@@ -14843,7 +14957,9 @@ mod contract_state_tests {
         ty: &ivm::EmbeddedStateType,
         atoms: Vec<ivm_abi::state_value::StateValueAtomV1>,
     ) -> Vec<u8> {
-        let schema = embedded_contract_state_value_schema(ty).expect("valid embedded schema");
+        let _canonical_flags =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let schema = contract_state_value_schema(ty).expect("valid embedded schema");
         assert!(schema.validate_atoms(&atoms), "fixture atoms match schema");
         let schema_payload = norito::to_bytes(&schema).expect("encode state schema");
         let record = ivm_abi::state_value::StateValueRecordV1 {
@@ -15339,18 +15455,36 @@ mod contract_state_tests {
     }
 
     #[test]
-    fn decode_contract_state_scalar_json_rejects_legacy_unbound_payloads() {
+    fn decode_contract_state_scalar_json_rejects_unbound_legacy_json_payloads() {
+        let json_value = iroha_primitives::json::Json::from_str_norito(
+            "{\"tranche_id\":\"benefit-1\",\"beneficiary_account_id\":\"i105-user\"}",
+        )
+        .expect("valid json payload");
+        let json_payload = norito::to_bytes(&json_value).expect("encode json payload");
+        let error = decode_contract_state_scalar_json(&json_payload, &ivm::EmbeddedStateType::Json)
+            .expect_err("unbound legacy JSON must not bypass the V1 state schema");
+        assert!(error.contains("record"), "{error}");
+    }
+
+    #[test]
+    fn decode_contract_state_scalar_json_rejects_policyless_norito_json_wrapper() {
         let json_value = iroha_primitives::json::Json::from_str_norito(
             "{\"tranche_id\":\"benefit-1\",\"beneficiary_account_id\":\"i105-user\"}",
         )
         .expect("valid json payload");
         let json_payload = norito::to_bytes(&json_value).expect("encode json payload");
         let error = decode_contract_state_scalar_json(
-            &make_tlv(PointerType::NoritoBytes, &json_payload),
+            &make_state_record(
+                &ivm::EmbeddedStateType::Json,
+                vec![ivm_abi::state_value::StateValueAtomV1::Pointer(make_tlv(
+                    PointerType::NoritoBytes,
+                    &json_payload,
+                ))],
+            ),
             &ivm::EmbeddedStateType::Json,
         )
         .expect_err("first-release state decoding requires a schema-bound record");
-        assert!(error.contains("decode state record"), "{error}");
+        assert!(error.contains("expected Json payload"), "{error}");
     }
 
     #[test]
@@ -15372,7 +15506,7 @@ mod contract_state_tests {
 
         let error = decode_contract_state_scalar_json(&encoded, &ivm::EmbeddedStateType::Quantity)
             .expect_err("a record cannot be decoded under a different deployed schema");
-        assert!(error.contains("schema hash"), "{error}");
+        assert!(error.contains("schema"), "{error}");
     }
 
     #[test]
@@ -15387,11 +15521,9 @@ mod contract_state_tests {
         let encoded = hex::decode(&canonical).expect("stored suffix is lowercase hex");
         let tlv = ivm::pointer_abi::validate_tlv_bytes(&encoded).expect("stored suffix is a TLV");
         assert_eq!(tlv.type_id, PointerType::Quantity);
-
         assert_eq!(
-            contract_state_stored_map_key_suffix(&ty, &format!("tlv-{canonical}")),
-            Some(canonical.clone()),
-            "the explicit physical form must round-trip exact typed keys"
+            contract_state_logical_map_key_suffix(&ty, &canonical).as_deref(),
+            Some("7"),
         );
         assert_eq!(
             match_contract_state_map_key_suffix("Prices", &ty, "Other/path")
@@ -15405,19 +15537,17 @@ mod contract_state_tests {
         );
 
         let uppercase = canonical.to_ascii_uppercase();
-        assert!(
-            match_contract_state_map_key_suffix("Prices", &ty, &format!("Prices/{uppercase}"))
-                .is_err(),
-            "uppercase physical keys are not canonical"
-        );
-        assert!(
-            match_contract_state_map_key_suffix("Prices", &ty, "Prices/abc").is_err(),
-            "odd-length physical keys must reject"
-        );
-        assert!(
-            match_contract_state_map_key_suffix("Prices", &ty, "Prices/zz").is_err(),
-            "non-hex physical keys must reject"
-        );
+        assert_ne!(uppercase, canonical);
+        for invalid_path in [
+            format!("Prices/{uppercase}"),
+            "Prices/abc".to_owned(),
+            "Prices/zz".to_owned(),
+        ] {
+            assert!(
+                match_contract_state_map_key_suffix("Prices", &ty, &invalid_path).is_err(),
+                "non-canonical physical key {invalid_path:?} must reject",
+            );
+        }
         assert!(
             match_contract_state_map_key_suffix(
                 "Prices",
@@ -15425,8 +15555,9 @@ mod contract_state_tests {
                 &format!("Prices/{canonical}"),
             )
             .is_err(),
-            "a canonical key for the wrong embedded type must reject"
+            "a canonical key for the wrong embedded type must reject",
         );
+
         let mut corrupt = canonical.clone().into_bytes();
         let last = corrupt.last_mut().expect("nonempty canonical suffix");
         *last = if *last == b'0' { b'1' } else { b'0' };
@@ -15434,21 +15565,23 @@ mod contract_state_tests {
         assert!(
             match_contract_state_map_key_suffix("Prices", &ty, &format!("Prices/{corrupt}"))
                 .is_err(),
-            "a key with a corrupt TLV digest must reject"
+            "a key with a corrupt TLV digest must reject",
         );
 
+        let _canonical_flags =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let false_key = hex::encode(norito::to_bytes(&0_i64).expect("encode false key"));
         let true_key = hex::encode(norito::to_bytes(&1_i64).expect("encode true key"));
         let invalid_bool = hex::encode(norito::to_bytes(&2_i64).expect("encode invalid bool key"));
         for key in [false_key, true_key] {
-            assert!(
+            assert_eq!(
                 match_contract_state_map_key_suffix(
                     "Flags",
                     &ivm::EmbeddedStateType::Bool,
                     &format!("Flags/{key}"),
                 )
-                .expect("canonical Bool key")
-                .is_some()
+                .expect("canonical Bool key"),
+                Some((format!("tlv-{key}"), key)),
             );
         }
         assert!(
@@ -15457,7 +15590,7 @@ mod contract_state_tests {
                 &ivm::EmbeddedStateType::Bool,
                 &format!("Flags/{invalid_bool}"),
             )
-            .is_err()
+            .is_err(),
         );
     }
 
@@ -17309,6 +17442,12 @@ fn normalize_contract_payload(
     descriptor: &manifest::EntrypointDescriptor,
     payload: Option<&IrohaJson>,
 ) -> Result<Option<IrohaJson>> {
+    if descriptor.argument_schema.is_none() && !descriptor.params.is_empty() {
+        return Err(conversion_error(format!(
+            "parameterized contract entrypoint `{}` is missing its canonical argument schema",
+            descriptor.name
+        )));
+    }
     match (descriptor.argument_schema.as_ref(), payload) {
         (None, None) => Ok(None),
         (None, Some(_)) => Err(conversion_error(
@@ -21975,6 +22114,20 @@ seiyaku ZkIvmPayloadNormalizeTest {
         let error = normalize_contract_payload(&descriptor, Some(&payload))
             .expect_err("a contract address is not a canonical AccountId");
         assert!(expect_conversion(error).contains("exact argument schema"));
+    }
+
+    #[test]
+    fn normalize_contract_payload_rejects_parameterized_manifest_without_argument_schema() {
+        let mut descriptor = int_descriptor();
+        descriptor.argument_schema = None;
+        let payload = scalar_payload("amount", Value::from("10"));
+
+        let error = normalize_contract_payload(&descriptor, Some(&payload))
+            .expect_err("parameter metadata must not replace the canonical argument schema");
+        assert!(
+            expect_conversion(error).contains("missing its canonical argument schema"),
+            "missing exact schema must fail before any retired textual-type fallback"
+        );
     }
 
     #[test]

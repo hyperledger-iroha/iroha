@@ -15,38 +15,55 @@ public final class PipelineStatusExtractorTests {
   private PipelineStatusExtractorTests() {}
 
   public static void main(final String[] args) {
-    extractStatusKindFromNestedContent();
-    extractStatusKindFromDirectString();
+    extractStatusKindFromCurrentPayload();
+    rejectNestedStatusEnvelope();
+    rejectDirectStatusString();
+    rejectNonCanonicalStatusKinds();
     extractStatusKindMissingStatus();
-    extractRejectionReasonFromEnvelopeDetails();
+    extractRejectionReasonFromCurrentDiagnostics();
     extractRejectCodeFromErrorEnvelopeBody();
     extractRejectCodeFromNoritoErrorEnvelopeBody();
     System.out.println("[IrohaAndroid] Pipeline status extractor tests passed.");
   }
 
-  private static void extractStatusKindFromNestedContent() {
-    final Map<String, Object> nestedStatus = new HashMap<>();
-    nestedStatus.put("kind", "Committed");
-
-    final Map<String, Object> content = new HashMap<>();
-    content.put("status", nestedStatus);
-
+  private static void extractStatusKindFromCurrentPayload() {
+    final Map<String, Object> statusRecord = new HashMap<>();
+    statusRecord.put("kind", "Applied");
     final Map<String, Object> payload = new HashMap<>();
-    payload.put("kind", "Transaction");
-    payload.put("content", content);
+    payload.put("status", statusRecord);
 
     final Optional<String> status = PipelineStatusExtractor.extractStatusKind(payload);
     assert status.isPresent() : "Expected status to be present";
-    assert "Committed".equals(status.get()) : "Expected nested status kind";
+    assert "Applied".equals(status.get()) : "Expected current flat status kind";
   }
 
-  private static void extractStatusKindFromDirectString() {
+  private static void rejectNestedStatusEnvelope() {
+    final Map<String, Object> nestedStatus = new HashMap<>();
+    nestedStatus.put("kind", "Applied");
+    final Map<String, Object> content = new HashMap<>();
+    content.put("status", nestedStatus);
     final Map<String, Object> payload = new HashMap<>();
-    payload.put("status", "Rejected");
+    payload.put("content", content);
+    assert !PipelineStatusExtractor.extractStatusKind(payload).isPresent()
+        : "Retired nested status envelopes must be rejected";
+  }
 
-    final Optional<String> status = PipelineStatusExtractor.extractStatusKind(payload);
-    assert status.isPresent() : "Expected status to be present";
-    assert "Rejected".equals(status.get()) : "Expected direct status string";
+  private static void rejectDirectStatusString() {
+    final Map<String, Object> payload = new HashMap<>();
+    payload.put("status", "Applied");
+    assert !PipelineStatusExtractor.extractStatusKind(payload).isPresent()
+        : "Status must use the current typed object";
+  }
+
+  private static void rejectNonCanonicalStatusKinds() {
+    for (final String kind : Arrays.asList(" Applied", "Applied ", "Applied(extra)", "Unknown")) {
+      final Map<String, Object> statusRecord = new HashMap<>();
+      statusRecord.put("kind", kind);
+      final Map<String, Object> payload = new HashMap<>();
+      payload.put("status", statusRecord);
+      assert !PipelineStatusExtractor.extractStatusKind(payload).isPresent()
+          : "Non-canonical status kind must be rejected: " + kind;
+    }
   }
 
   private static void extractStatusKindMissingStatus() {
@@ -56,17 +73,19 @@ public final class PipelineStatusExtractorTests {
         : "Expected empty optional when payload is null";
   }
 
-  private static void extractRejectionReasonFromEnvelopeDetails() {
-    final Map<String, Object> details = new HashMap<>();
-    details.put("reject_code", "TX_QUEUE_FULL");
-
+  private static void extractRejectionReasonFromCurrentDiagnostics() {
+    final Map<String, Object> diagnostic = new HashMap<>();
+    diagnostic.put("decoded_reason", "missing exact permission");
+    diagnostic.put("message", "fallback message");
+    final Map<String, Object> statusRecord = new HashMap<>();
+    statusRecord.put("kind", "Rejected");
     final Map<String, Object> payload = new HashMap<>();
-    payload.put("status", "Rejected");
-    payload.put("details", details);
+    payload.put("status", statusRecord);
+    payload.put("diagnostics", Collections.singletonList(diagnostic));
 
     final Optional<String> reason = PipelineStatusExtractor.extractRejectionReason(payload);
-    assert reason.isPresent() : "Expected details reject code to be present";
-    assert "TX_QUEUE_FULL".equals(reason.get()) : "Expected details reject code";
+    assert reason.isPresent() : "Expected current diagnostic reason to be present";
+    assert "missing exact permission".equals(reason.get()) : "Expected decoded reason";
   }
 
   private static void extractRejectCodeFromErrorEnvelopeBody() {

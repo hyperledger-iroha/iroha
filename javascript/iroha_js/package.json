@@ -193,6 +193,7 @@
   },
   "files": [
     "README.md",
+    "LICENSE",
     "index.d.ts",
     "canonical-request.d.ts",
     "ivm-artifact.d.ts",

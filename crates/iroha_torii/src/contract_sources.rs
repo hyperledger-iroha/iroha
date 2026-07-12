@@ -1367,10 +1367,17 @@ mod tests {
             triggers: Vec::new(),
         };
 
+        let mut run = descriptor("run", EntryPointKind::Kotoage);
+        run.params.push(
+            iroha_data_model::smart_contract::manifest::EntrypointParamDescriptor {
+                name: "amount".to_owned(),
+                type_name: "quantity".to_owned(),
+            },
+        );
+
         assert_eq!(
-            entrypoint_signature(&descriptor("run", EntryPointKind::Kotoage))
-                .expect("canonical kotoage signature"),
-            "kotoage fn run() authorize(\"Run\")",
+            entrypoint_signature(&run).expect("canonical kotoage signature"),
+            "kotoage fn run(quantity amount) authorize(\"Run\")",
         );
         assert_eq!(
             entrypoint_signature(&descriptor("read", EntryPointKind::View))
@@ -1553,6 +1560,7 @@ mod tests {
         let payload: ContractCodeViewDto =
             norito::json::from_slice(&body).expect("decode contract view");
         assert_eq!(payload.rendered_source_kind, RENDERED_SOURCE_PSEUDO);
+        assert!(payload.rendered_source_text.contains("seiyaku Contract_"));
         assert!(payload.rendered_source_text.contains("view fn main()"));
         assert!(!payload.rendered_source_text.contains("public fn"));
         assert!(!payload.rendered_source_text.contains("main:"));

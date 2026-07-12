@@ -480,7 +480,7 @@ fn public_session_compile_fail_diagnostics_are_stable() {
 #[test]
 fn multi_error_renderers_preserve_identical_semantic_records_and_exact_spans() {
     let source = r#"seiyaku Broken {
-  fn first() { let int amount = true; }
+  fn first() { let quantity amount = true; }
   fn second() { let value = 1; value = 2; }
 }"#;
     let source_name = "multi-error-renderers.ko";

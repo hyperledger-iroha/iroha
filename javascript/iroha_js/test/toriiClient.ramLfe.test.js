@@ -29,6 +29,10 @@ const RECEIPT_HASH = "22".repeat(32);
 const OUTPUT_HASH = "44".repeat(32);
 const ASSOCIATED_DATA_HASH = "55".repeat(32);
 const PROOF_SCHEMA_HASH = "66".repeat(32);
+const INPUT_CIPHERTEXT_HASH = "77".repeat(32);
+const OUTPUT_CIPHERTEXT_HASH = "88".repeat(32);
+const PARAMETER_DIGEST = "99".repeat(32);
+const EVALUATION_KEY_DIGEST = "aa".repeat(32);
 const RECEIPT = {
   payload: {
     program_id: { name: PROGRAM_ID },
@@ -46,6 +50,23 @@ const RECEIPT = {
   signature: "AA".repeat(64),
 };
 
+function ramLfeOutputOpening(overrides = {}) {
+  return {
+    payload: {
+      program_id: PROGRAM_ID,
+      input_ciphertext_hash: INPUT_CIPHERTEXT_HASH,
+      output_ciphertext_hash: OUTPUT_CIPHERTEXT_HASH,
+      parameter_digest: PARAMETER_DIGEST,
+      evaluation_key_digest: EVALUATION_KEY_DIGEST,
+      opened_output_hash: OUTPUT_HASH,
+      opened_at_ms: 42,
+      expires_at_ms: 142,
+      ...(overrides.payload ?? {}),
+    },
+    signature: overrides.signature ?? "ab".repeat(64),
+  };
+}
+
 function ramLfeExecuteResponse(overrides = {}) {
   return {
     program_id: PROGRAM_ID,
@@ -59,6 +80,7 @@ function ramLfeExecuteResponse(overrides = {}) {
     backend: "bfv-programmed-sha3-256-v1",
     verification_mode: "signed",
     receipt: RECEIPT,
+    output_opening: ramLfeOutputOpening({ signature: "AB".repeat(64) }),
     ...overrides,
   };
 }
@@ -82,6 +104,7 @@ function ramLfeProgramPolicy(overrides = {}) {
     owner: ACCOUNT_ID,
     active: true,
     resolver_public_key: "ed25519:resolver-key",
+    output_opening_public_key: "ed25519:output-opening-key",
     backend: "bfv-programmed-sha3-256-v1",
     verification_mode: "signed",
     input_encryption: "bfv-v1",
@@ -131,6 +154,10 @@ test("listRamLfeProgramPolicies parses exact BFV metadata", async () => {
   assert.equal(result.items[0].program_id, PROGRAM_ID);
   assert.equal(result.items[0].owner, ACCOUNT_ID);
   assert.equal(result.items[0].verification_mode, "signed");
+  assert.equal(
+    result.items[0].output_opening_public_key,
+    "ed25519:output-opening-key",
+  );
   assert.equal(result.items[0].input_encryption, "bfv-v1");
   assert.equal(
     result.items[0].input_encryption_public_parameters_decoded.parameters.polynomial_degree,
@@ -145,6 +172,10 @@ test("listRamLfeProgramPolicies rejects non-exact policy metadata", async () => 
     ["program_id", { program_id: ` ${PROGRAM_ID}` }],
     ["owner", { owner: `${ACCOUNT_ID} ` }],
     ["resolver_public_key", { resolver_public_key: " ed25519:resolver-key" }],
+    [
+      "output_opening_public_key",
+      { output_opening_public_key: " ed25519:output-opening-key" },
+    ],
     ["backend", { backend: "BFV-programmed-sha3-256-v1" }],
     ["verification_mode", { verification_mode: " signed" }],
     ["input_encryption", { input_encryption: "bfv-v1 " }],
@@ -191,7 +222,7 @@ test("listRamLfeProgramPolicies rejects non-exact proof-verifier metadata", asyn
   }
 });
 
-test("executeRamLfeProgram posts encrypted input and preserves raw receipt", async () => {
+test("executeRamLfeProgram preserves the receipt and normalizes the output opening", async () => {
   const client = new ToriiClient("https://example.test", {
     fetchImpl: async (input, init) => {
       assert.equal(init.method, "POST");
@@ -215,6 +246,7 @@ test("executeRamLfeProgram posts encrypted input and preserves raw receipt", asy
   assert.equal(result.output_hash, OUTPUT_HASH);
   assert.equal(result.verification_mode, "signed");
   assert.deepEqual(result.receipt, RECEIPT);
+  assert.deepEqual(result.output_opening, ramLfeOutputOpening());
 });
 
 test("executeRamLfeProgram rejects non-exact response fields", async () => {
@@ -230,6 +262,7 @@ test("executeRamLfeProgram rejects non-exact response fields", async () => {
     ],
     ["backend", ramLfeExecuteResponse({ backend: "BFV-programmed-sha3-256-v1" })],
     ["verification_mode", ramLfeExecuteResponse({ verification_mode: " signed" })],
+    ["output_opening", ramLfeExecuteResponse({ output_opening: null })],
   ];
 
   for (const [field, body] of cases) {

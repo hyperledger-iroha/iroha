@@ -1,14 +1,16 @@
 package org.hyperledger.iroha.android.client;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Helpers for parsing Torii pipeline status payloads.
  */
 final class PipelineStatusExtractor {
-  private static final String[] REJECTION_REASON_KEYS =
-      new String[] {"rejection_reason", "rejectionReason", "reason", "reject_code", "rejectCode"};
+  private static final Set<String> STATUS_KINDS =
+      Set.of("Queued", "Approved", "Committed", "Applied", "Rejected", "Expired");
 
   private PipelineStatusExtractor() {}
 
@@ -17,15 +19,7 @@ final class PipelineStatusExtractor {
       return Optional.empty();
     }
     final Map<?, ?> payloadMap = (Map<?, ?>) payload;
-    final Optional<String> direct = coerceStatus(payloadMap.get("status"));
-    if (direct.isPresent()) {
-      return direct;
-    }
-    final Object content = payloadMap.get("content");
-    if (content instanceof Map) {
-      return coerceStatus(((Map<?, ?>) content).get("status"));
-    }
-    return Optional.empty();
+    return coerceStatus(payloadMap.get("status"));
   }
 
   static Optional<String> extractRejectionReason(final Object payload) {
@@ -33,40 +27,86 @@ final class PipelineStatusExtractor {
       return Optional.empty();
     }
     final Map<?, ?> payloadMap = (Map<?, ?>) payload;
-    final Optional<String> direct = coerceReasonFromRecord(payloadMap);
-    if (direct.isPresent()) {
-      return direct;
+    final Object diagnostics = payloadMap.get("diagnostics");
+    if (diagnostics instanceof List<?>) {
+      for (final Object diagnostic : (List<?>) diagnostics) {
+        if (diagnostic instanceof Map<?, ?>) {
+          final Map<?, ?> record = (Map<?, ?>) diagnostic;
+          final Optional<String> decoded = coerceReason(record.get("decoded_reason"));
+          if (decoded.isPresent()) {
+            return decoded;
+          }
+          final Optional<String> message = coerceReason(record.get("message"));
+          if (message.isPresent()) {
+            return message;
+          }
+        }
+      }
     }
-    final Object content = payloadMap.get("content");
-    if (content instanceof Map) {
-      final Map<?, ?> contentMap = (Map<?, ?>) content;
-      final Optional<String> contentReason = coerceReasonFromRecord(contentMap);
-      if (contentReason.isPresent()) {
-        return contentReason;
+
+    final Object status = payloadMap.get("status");
+    if (status instanceof Map<?, ?>) {
+      final Optional<String> rejection =
+          coerceReason(((Map<?, ?>) status).get("rejection_reason"));
+      if (rejection.isPresent()) {
+        return rejection;
       }
-      final Object status = contentMap.get("status");
-      if (status instanceof Map) {
-        final Map<?, ?> statusMap = (Map<?, ?>) status;
-        final Optional<String> statusReason = coerceReasonFromRecord(statusMap);
-        if (statusReason.isPresent()) {
-          return statusReason;
-        }
-        if ("Rejected".equalsIgnoreCase(String.valueOf(statusMap.get("kind")))) {
-          return coerceReason(statusMap.get("content"));
-        }
-      }
+    }
+
+    final Optional<String> summary = coerceReason(payloadMap.get("summary"));
+    if (summary.isPresent() && !summary.equals(extractStatusKind(payload))) {
+      return summary;
     }
     return Optional.empty();
   }
 
-  private static Optional<String> coerceStatus(final Object status) {
-    if (status instanceof Map) {
-      final Object kind = ((Map<?, ?>) status).get("kind");
-      if (kind != null) {
-        return normalizeStatus(kind.toString());
+  static String requireAuthoritativeStatus(
+      final Map<String, Object> payload, final String expectedHash) {
+    if (payload == null) {
+      throw new IllegalStateException("Pipeline status response must not be empty");
+    }
+    if (!expectedHash.equals(payload.get("hash"))) {
+      throw new IllegalStateException(
+          "Pipeline status hash does not match the requested transaction hash");
+    }
+    if (!"global".equals(payload.get("scope"))) {
+      throw new IllegalStateException("Pipeline status must use global scope");
+    }
+    if (!(payload.get("summary") instanceof String)) {
+      throw new IllegalStateException("Pipeline status summary is missing or malformed");
+    }
+
+    final String kind =
+        extractStatusKind(payload)
+            .orElseThrow(
+                () -> new IllegalStateException("Pipeline status kind is missing or unsupported"));
+    final Object resolvedFrom = payload.get("resolved_from");
+    if (!(resolvedFrom instanceof String)) {
+      throw new IllegalStateException("Pipeline status resolution source is missing");
+    }
+
+    if ("Applied".equals(kind)) {
+      if (!"state".equals(resolvedFrom) || !hasPositiveBlockHeight(payload)) {
+        throw new IllegalStateException(
+            "Applied pipeline status must be state-resolved with a positive block height");
       }
-    } else if (status != null) {
-      return normalizeStatus(status.toString());
+    } else if ("Rejected".equals(kind) || "Expired".equals(kind)) {
+      if (!"state".equals(resolvedFrom)) {
+        throw new IllegalStateException(
+            "Terminal pipeline failure must be resolved from state");
+      }
+    } else if (!Set.of("queue", "cache", "state").contains(resolvedFrom)) {
+      throw new IllegalStateException("Pipeline status has an unsupported resolution source");
+    }
+    return kind;
+  }
+
+  private static Optional<String> coerceStatus(final Object status) {
+    if (status instanceof Map<?, ?>) {
+      final Object kind = ((Map<?, ?>) status).get("kind");
+      if (kind instanceof String) {
+        return normalizeStatus((String) kind);
+      }
     }
     return Optional.empty();
   }
@@ -82,72 +122,22 @@ final class PipelineStatusExtractor {
     return Optional.of(text);
   }
 
-  private static Optional<String> coerceReasonFromRecord(final Map<?, ?> record) {
-    for (final String key : REJECTION_REASON_KEYS) {
-      final Optional<String> reason = coerceReason(record.get(key));
-      if (reason.isPresent()) {
-        return reason;
-      }
-    }
-    final Object details = record.get("details");
-    if (details instanceof Map<?, ?>) {
-      final Map<?, ?> detailsMap = (Map<?, ?>) details;
-      for (final String key : REJECTION_REASON_KEYS) {
-        final Optional<String> reason = coerceReason(detailsMap.get(key));
-        if (reason.isPresent()) {
-          return reason;
-        }
-      }
-    }
-    final Optional<String> parsedFromStatus = parseReasonFromStatus(record.get("status"));
-    if (parsedFromStatus.isPresent()) {
-      return parsedFromStatus;
-    }
-    final Optional<String> parsedFromKind = parseReasonFromStatus(record.get("kind"));
-    if (parsedFromKind.isPresent()) {
-      return parsedFromKind;
-    }
-    return Optional.empty();
-  }
-
   static Optional<String> normalizeStatus(final String statusLiteral) {
-    if (statusLiteral == null) {
-      return Optional.empty();
-    }
-    final String trimmed = statusLiteral.trim();
-    if (trimmed.isEmpty()) {
-      return Optional.empty();
-    }
-    if (trimmed.startsWith("Queued")) {
-      return Optional.of("Queued");
-    }
-    if (trimmed.startsWith("Approved")) {
-      return Optional.of("Approved");
-    }
-    if (trimmed.startsWith("Committed")) {
-      return Optional.of("Committed");
-    }
-    if (trimmed.startsWith("Applied")) {
-      return Optional.of("Applied");
-    }
-    if (trimmed.startsWith("Rejected")) {
-      return Optional.of("Rejected");
-    }
-    if (trimmed.startsWith("Expired")) {
-      return Optional.of("Expired");
-    }
-    return Optional.of(trimmed);
+    return statusLiteral != null && STATUS_KINDS.contains(statusLiteral)
+        ? Optional.of(statusLiteral)
+        : Optional.empty();
   }
 
-  private static Optional<String> parseReasonFromStatus(final Object statusValue) {
-    if (!(statusValue instanceof String)) {
-      return Optional.empty();
+  private static boolean hasPositiveBlockHeight(final Map<String, Object> payload) {
+    final Object status = payload.get("status");
+    if (!(status instanceof Map<?, ?>)) {
+      return false;
     }
-    final String trimmed = ((String) statusValue).trim();
-    if (!trimmed.startsWith("Rejected(") || !trimmed.endsWith(")")) {
-      return Optional.empty();
+    final Object blockHeight = ((Map<?, ?>) status).get("block_height");
+    if (!(blockHeight instanceof Number)) {
+      return false;
     }
-    final String reason = trimmed.substring("Rejected(".length(), trimmed.length() - 1).trim();
-    return reason.isEmpty() ? Optional.empty() : Optional.of(reason);
+    final double value = ((Number) blockHeight).doubleValue();
+    return Double.isFinite(value) && value > 0 && value == Math.rint(value);
   }
 }

@@ -16,6 +16,8 @@ use iroha_data_model::{
         entrypoint_return_schema_hash_v1, entrypoint_value_subtree_range_v1,
     },
 };
+#[cfg(test)]
+use iroha_primitives::numeric::Quantity;
 use iroha_primitives::{
     bigint::BigInt,
     json::Json,

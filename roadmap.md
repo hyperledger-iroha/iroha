@@ -8,11 +8,13 @@ The detailed engineering backlog lives in
 and completed history lives in [`status.md`](./status.md).
 
 Kagemusha V2 transport and proof admission are fail-closed for the first release.
-The only public product selector is `recursive_spend_v2`; it requires exact
+The only public product selector is `recursive_spend_v1`; it requires exact
 bridge ABI 18 and the governed
 `kagemusha.offline.recursive_spend.artifact_manifest.v3` manifest with the V3
 atomic artifact lifecycle. ABI-6/ABI-7 fixtures and unsuffixed recursive-spend
-helpers are not first-release compatibility surfaces.
+helpers are not first-release compatibility surfaces. The typed V2 native
+capability and artifact manifest retain the internal `recursive_spend_v2` mode;
+that value is not accepted as a product selector.
 `KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE = false` is the
 authoritative release state: Core top-up execution and every proof-gated
 init/append/redeem-change/verify/redeem path remain unavailable. Record-backed
@@ -23870,10 +23872,10 @@ digest-bound pending-XSD source probe summaries for reviewed
   bridge-loader tests pin packaged artifacts to at least ABI 6, the Node NAPI
   host exports `connectNoritoBridgeAbiVersion`, and the Python PyO3 extension
   exports `kagemusha_recursive_spend_native_bridge_abi_version`. The SDK surfaces also
-  expose a common preferred offline spend-mode selector: `recursive_compact_v1`
-  when ABI-7 compact prover/verifier support is available, `recursive_spend_v1`
-  when only the ABI-6-or-later recursive spend surface is available, and no
-  preferred production mode when neither recursive surface is available;
+  expose one common preferred offline spend-mode selector: `recursive_spend_v1`
+  only when the exact ABI-18 recursive backend is available, and no preferred
+  production mode otherwise. `recursive_compact_v1` remains an
+  admission-neutral projection and never wins product selection;
   Kotlin/JVM and Java
   Android probe the native bridge ABI version plus verify and both lineage
   witness JNI symbols, C# probes the matching P/Invoke symbols, and
@@ -28960,7 +28962,7 @@ signed ancestor-linked solid-block header proof,
   effect, syscall, access, gas, and lowering policy. Every new privileged
   operation must update bytecode-derived admission, ABI-v1 hashes/goldens,
   deterministic host behavior, docs, and adversarial tests in the same change.
-- Finish and validate the bounded-List, exact-Amount, native-JSON, and typed
+- Finish and validate the bounded-List, exact-decimal/quantity, native-JSON, and typed
   core-query-page corridor. The implementation and source migration are under
   final audit; regenerate every mapped golden, manifest, syscall/pointer table,
   and ABI hash only after frontend and ABI hardening are green. Then prove one
@@ -30740,6 +30742,23 @@ validation path.
 ## Consensus, Performance, and Operations
 
 **Status:** active optimization.
+
+The release target is the single serialized Sumeragi v2 reducer. It is a
+fresh-genesis protocol revision: live validators accept only v2 messages,
+permissioned and NPoS contexts use the same Prepare/Commit state machine, view
+changes require durable grouped timeout certificates, DA is mandatory, and
+the old global-RBC, collector, missing-QC, adaptive-pacing, vNext, and runtime
+mode-flip paths are not release architecture. Mixed-version or rolling
+upgrades are intentionally unsupported.
+
+Current release work is to finish the direct TLAPS induction and conditional
+post-GST liveness proof, close the Verus-to-byte-WAL refinement, replay model
+traces against the executable reducer, pass the real four-validator Taira
+stall/partition/restart regressions within the 50-second bound, remove the
+remaining compiled legacy actor/configuration surface, and complete the
+100,000-block chaos plus 24-hour Taira-profile soak. The V1/global-RBC corridor
+notes retained below are historical implementation records only; they must not
+be used to design, configure, test, or roll out the first release.
 
 - Wire the canonical Sumeragi V1 pure engine through the live network,
   validation, payload, telemetry, and storage adapters while preserving

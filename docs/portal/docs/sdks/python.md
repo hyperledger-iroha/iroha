@@ -109,8 +109,18 @@ from iroha_python import ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080")
 readiness = client.get_offline_readiness(asset_definition_id="xor#wonderland")
-print("offline ready", readiness.ready, readiness.blockers)
+print(
+    "offline ready",
+    readiness.ready,
+    readiness.active_transfer_verifier,
+    readiness.active_topup_shield_verifier,
+    readiness.blockers,
+)
 ```
+
+The two verifier fields are required nullable snapshots for distinct roles.
+Each is null exactly with its matching unavailable blocker, and `ready=True`
+requires both to be active at the evaluated block.
 ## 6. Stream events
 
 Torii SSE helpers return live-only generators. They may reconnect within the

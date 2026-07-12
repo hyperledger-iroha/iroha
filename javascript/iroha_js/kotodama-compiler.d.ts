@@ -138,6 +138,9 @@ export interface KotodamaCompiledSourceMapEntry {
   pc_start: number;
   pc_end: number;
   source_path: string | null;
+  source_id: number;
+  byte_start: number;
+  byte_end: number;
   line: number;
   column: number;
 }
@@ -152,6 +155,9 @@ export interface KotodamaCompiledBudgetEntry {
   jump_span_words: number;
   jump_range_risk: boolean;
   source_path: string | null;
+  source_id: number | null;
+  byte_start: number | null;
+  byte_end: number | null;
   line: number | null;
   column: number | null;
 }
@@ -180,22 +186,23 @@ export interface KotodamaCompiledManifestProvenance {
 }
 
 export interface KotodamaCompiledManifestMetadata {
-  seiyaku_name: string | null;
+  seiyaku_name: string;
   code_hash: string;
   abi_hash: string;
-  compiler_fingerprint: string | null;
-  features_bitmap: number | null;
-  entrypoints: KotodamaCompiledEntrypoint[] | null;
+  compiler_fingerprint: string;
+  features_bitmap: number;
+  entrypoints: KotodamaCompiledEntrypoint[];
   access_set_hints: {
     read_keys: string[];
     write_keys: string[];
     dynamic_reads: KotodamaCompiledDynamicAccessHint[];
     dynamic_writes: KotodamaCompiledDynamicAccessHint[];
   } | null;
-  states: KotodamaCompiledStateDescriptor[] | null;
+  states: KotodamaCompiledStateDescriptor[];
   error_codes: KotodamaCompiledErrorCodeDescriptor[] | null;
   kotoba: KotodamaCompiledKotobaEntry[] | null;
-  provenance: KotodamaCompiledManifestProvenance | null;
+  /** Signed provenance is not accepted until its exact V1 message can be verified. */
+  provenance: null;
 }
 
 export interface KotodamaCompilerRequestOptions {
@@ -212,11 +219,24 @@ export interface KotodamaCompilerRequest {
   zk: boolean;
 }
 
-export interface KotodamaCompilerOptions extends KotodamaCompilerRequestOptions {
+export interface KotodamaCompilerTransportOptions {
+  /** Abort one remote compilation; the exact caller reason is preserved. */
+  signal?: AbortSignal;
+  /** Total fetch-and-body deadline in milliseconds (default 30,000; maximum 120,000). */
+  timeoutMs?: number;
+}
+
+export interface KotodamaCompilerCallOptions
+  extends KotodamaCompilerRequestOptions,
+    KotodamaCompilerTransportOptions {}
+
+export interface KotodamaCompilerOptions extends KotodamaCompilerCallOptions {
   /**
    * Canonical Rust compiler-service URL. Required in browsers; optional in
    * Node, which otherwise compiles asynchronously through `iroha_js_host`.
-   * Remote services must use HTTPS; loopback development URLs may use HTTP.
+   * Remote services receive the complete source and must be trusted. They must
+   * use HTTPS; loopback development URLs may use HTTP. Responses must be
+   * uncompressed (`Content-Encoding` absent or `identity`).
    */
   compilerUrl?: string;
   /** Fetch implementation used only with `compilerUrl`. */
@@ -224,6 +244,10 @@ export interface KotodamaCompilerOptions extends KotodamaCompilerRequestOptions 
 }
 
 export interface KotodamaCompilerOutput {
+  /**
+   * Bounded IVM 1.1/ABI-1 artifact with a validated CNTR frame and
+   * word-aligned instruction stream.
+   */
   artifactBytes: Uint8Array;
   codeHashHex: string;
   abiHashHex: string;
@@ -247,6 +271,6 @@ export declare class KotodamaCompilerClient {
   constructor(baseUrl: string, options?: { fetchImpl?: typeof fetch });
   compile(
     source: string,
-    options?: KotodamaCompilerRequestOptions,
+    options?: KotodamaCompilerCallOptions,
   ): Promise<KotodamaCompilerResult>;
 }

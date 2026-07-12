@@ -18,14 +18,16 @@ public final class KagemushaRecursiveSpendProverTest {
   @Test
   public void productionHarnessResolvesKagemushaRecursiveSpendSurface() {
     assertEquals(18, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
-    assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.MODE);
+    assertEquals("recursive_spend_v1", KagemushaRecursiveSpendProver.MODE);
     assertEquals(
         KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND,
         KagemushaRecursiveSpendProver.preferredMode(true));
     assertEquals(null, KagemushaRecursiveSpendProver.preferredMode(false));
-    assertTrue(KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_spend_v2"));
-    assertFalse(KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_spend_v1"));
+    assertTrue(KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_spend_v1"));
+    assertFalse(KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_spend_v2"));
     assertFalse(KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_compact_v1"));
+    assertFalse(KagemushaRecursiveSpendProver.isSpendAgainMode(" recursive_spend_v1"));
+    assertFalse(KagemushaRecursiveSpendProver.isSpendAgainMode("RECURSIVE_SPEND_V1"));
   }
 
   @Test

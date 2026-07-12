@@ -120,10 +120,9 @@ config rather than wrapper-local defaults:
   stale-validator dispatch errors, capacity-state visibility failures,
   `/status` and Sumeragi commit-QC/finality health failures, and bounded HTTP
   timeout controls without mutating public Taira state.
-- `clear_volatile_consensus_state.sh`: operator recovery helper for the
-  one-block-ahead Sumeragi stall class; it quarantines only volatile
-  `queue_plan_journal*` and `rbc_sessions` state, archives peer logs, and can
-  restart a digest-pinned runtime after an explicit `--apply`.
+- `clear_volatile_consensus_state.sh`: archived v1 incident-evidence helper.
+  Do not use it to recover a v2 deployment; v2 preserves its safety WAL and
+  fails the rollout instead of clearing consensus state.
 - `verify_soraswap_rollout.sh`: post-upgrade wrapper that first runs the local
   `iroha_core` SoraSwap deploy-route router regression and three-hop nested
   transfer authority canary, then runs the public MCP canary, the SoraFS capacity canary, the SoraSwap
@@ -671,11 +670,11 @@ not valid for Taira. When `--write-config` is omitted and the automatically
 selected runtime path is missing, the rollout scripts generate a fresh
 keypair, onboard the account on public Taira, and write that runtime-only
 config before the signed ping. An explicit config path is never replaced,
-including when it contains a stale or placeholder authority. With the default
-Taira XOR gas asset
-configured, bootstrap passes the same gas asset to onboarding and skips faucet
-funding by default, so the write canary proves the sponsored-fee path directly
-instead of depending on faucet finality first. Set
+including when it contains a stale or placeholder authority. The Torii
+onboarding authority sponsors the onboarding transaction; onboarding does not
+accept gas fields. With the default Taira XOR gas asset configured, bootstrap
+skips faucet funding by default, so the write canary proves the sponsored-fee
+path directly. Set
 `ROLLOUT_CANARY_SKIP_FAUCET=0` only when intentionally validating an
 unsponsored/faucet-funded network. The signed ping attaches Taira's accepted XOR
 gas asset metadata by default; pass `--gas-asset-id ""` only against a network
@@ -703,7 +702,7 @@ Before long public writes such as Soracloud releases or large SoraFS publishes:
 - confirm that `/status` counters advance and use `/v1/sumeragi/status` for
   detailed finality and queue health:
   - `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq '{build_git_sha: .build.git_commit_sha, blocks, queue_size, peers, teu_dataspace_backlog}'`
-  - `curl -sS "${PUBLIC_TORII_ROOT}/v1/sumeragi/status" | jq '{commit_qc_height: (.commit_qc_height // .commit_qc.height // null), highest_qc_height: (.highest_qc_height // .highest_qc.height // null), locked_qc_height: (.locked_qc_height // .locked_qc.height // null), canonical_height: (.canonical.height // null), canonical_phase: (.canonical.phase // null), membership_height: (.membership.height // null), pending_finality: (.canonical.pending_finality // null), pending_rbc_sessions: (.pending_rbc.sessions // null), view_change_last_cause: (.view_change_causes.last_cause // null), tx_queue_depth: (.tx_queue_depth // .tx_queue.depth // null), tx_queue_capacity: (.tx_queue_capacity // .tx_queue.capacity // null), saturated_by_count: (.tx_queue_saturated_by_count // .tx_queue.saturated_by_count // null), saturated_by_age: (.tx_queue_saturated_by_age // .tx_queue.saturated_by_age // null), oldest_queued_age_ms: (.tx_queue_oldest_queued_age_ms // .tx_queue.oldest_queued_age_ms // null)}'`
+  - `curl -sS "${PUBLIC_TORII_ROOT}/v1/sumeragi/status" | jq '{protocol_version, node_fingerprint, build_fingerprint, config_fingerprint, height_context_id, height, view, phase, leader, locked_prepare_qc, highest_prepare_qc, last_timeout_certificate, body_state, pending_persistence_id, last_committed_height, last_committed_subject}'`
 - verify the signer you intend to use still exists on the current Taira chain
   and still has a positive fee-asset balance
 - for Soracloud mutations specifically, also verify that the signer still
@@ -737,47 +736,33 @@ Interpret the common public failures as follows:
 - `Transaction expired`:
   likely chain-health, consensus-latency, or queue-saturation trouble first.
   Report the current `blocks`, `queue_size`, `teu_dataspace_backlog`,
-  `commit_qc_height`, `highest_qc_height`, `locked_qc_height`,
-  `membership_height`, `tx_queue_depth`, `tx_queue_capacity`,
-  `tx_queue_saturated_by_count`, `tx_queue_saturated_by_age`,
-  `pending_rbc_sessions`, and `view_change_last_cause` samples alongside the
-  failure.
+  `protocol_version`, build/config/context fingerprints, `height`, `view`,
+  `phase`, `leader`, lock/highest-QC/last-TC references, `body_state`,
+  `pending_persistence_id`, and `last_committed_height` samples from every
+  validator alongside the failure.
 - `403 Forbidden` immediately after a reset or redeploy:
   likely signer-permission or signer-state drift first. Re-check that the
   signer still exists on-chain, still holds a fee asset balance, and still has
   the permissions required for the mutation.
-- `GET /v1/transactions/status?hash=...` returning `404 not_found` for a
+- `GET /v1/pipeline/transactions/status?hash=...` returning `404 not_found` for a
   previously submitted hash:
   the queried public node currently has no visibility for that hash. Do not
   infer commit, reject, or network-wide disappearance from that result alone.
 
-If the latest committed block timestamp stops advancing and `/v1/sumeragi/status`
-shows signals such as `membership.height > commit_qc.height`,
-`view_change_causes.last_cause = "missing_qc"`, or `worker_loop.stage = "idle"`,
-report that the queried public Torii finality path appears stalled. Unless you
-also have validator-side access, describe that as a public-node or
+If the latest committed block timestamp stops advancing, sample the compact v2
+status from every labeled validator. Different build/config/context
+fingerprints are a rollout failure. A `pending_persistence_id` that does not
+clear, a body stuck before `validated`/`applied`, or validators diverging across
+heights and views while `last_committed_height` remains fixed is a consensus
+stall. Unless you have validator-side access, describe it as a public-node or
 public-finality-path observation rather than proof that the full validator set
-is down. With validator-shell access, use the checked-in recovery helper from
-the Taira host and pin the runtime digest before restarting, for example:
+is down.
 
-```bash
-bash configs/soranexus/taira/clear_volatile_consensus_state.sh \
-  --dist /Users/administrator/dev/iroha/dist/taira-localnet \
-  --runtime-bin /Users/administrator/dev/iroha-build-taira-latest/target/release/irohad \
-  --expected-runtime-sha <64-hex-sha256> \
-  --torii-ports 29080,29081,29082,29083 \
-  --start \
-  --apply
-```
-
-Run it without `--apply` first to inspect the planned stop/quarantine/archive
-operations. If the dry run warns that matched peer processes cannot be
-signalled, rerun it as the peer process owner or with sudo before applying; the
-apply path refuses to touch pidfiles or storage in that state. The script
-normalizes `--torii-ports` to a unique numeric comma-separated list before any
-mutation and accepts `--torii-ports ""` only as an explicit request to skip the
-post-start local Torii wait. It intentionally leaves durable ledger storage in
-place.
+Do not clear volatile consensus state or use an adaptive recovery path. Preserve
+the WAL, Kura, per-validator status samples, and logs as incident evidence. A
+Sumeragi v2 Taira rollout must use one build, one shared config/context
+fingerprint, and a fresh genesis/chain ID; stop the rollout if those invariants
+or the bounded post-healing progress check fail.
 
 ## Governance mode
 
@@ -1104,7 +1089,7 @@ From `../iroha2-block-explorer-web`:
    - before DNS propagates or before the SAN cert is refreshed, you can still
      validate local SNI routing on the edge host with `curl --resolve` plus
      `-k`, for example:
-     `curl -sk --resolve taira-validator-1.sora.org:443:127.0.0.1 https://taira-validator-1.sora.org/status | jq '.blocks, .sumeragi.commit_qc_height'`
+     `curl -sk --resolve taira-validator-1.sora.org:443:127.0.0.1 https://taira-validator-1.sora.org/status | jq '.blocks'`
    - if a client network intercepts or blocks `sora.net`, HTTP may be replaced
      before nginx and HTTPS may reset during the TLS ClientHello. This is stale
      reputation filtering from `sora.net` prior ownership, not evidence that
@@ -1139,10 +1124,9 @@ From `../iroha2-block-explorer-web`:
    - verify native counters and detailed Sumeragi health before trusting public
      writes:
      `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq '{build_git_sha: .build.git_commit_sha, blocks, queue_size, peers, teu_dataspace_backlog}'`
-     `curl -sS "${PUBLIC_TORII_ROOT}/v1/sumeragi/status" | jq '{commit_qc_height: (.commit_qc_height // .commit_qc.height // null), highest_qc_height: (.highest_qc_height // .highest_qc.height // null), locked_qc_height: (.locked_qc_height // .locked_qc.height // null), commit_qc_validator_set_len: (.commit_qc_validator_set_len // .commit_qc.validator_set_len // null), tx_queue_depth: (.tx_queue_depth // .tx_queue.depth // null), tx_queue_capacity: (.tx_queue_capacity // .tx_queue.capacity // null), saturated_by_count: (.tx_queue_saturated_by_count // .tx_queue.saturated_by_count // null), saturated_by_age: (.tx_queue_saturated_by_age // .tx_queue.saturated_by_age // null), view_change_last_cause: (.view_change_causes.last_cause // null)}'`
+     `curl -sS "${PUBLIC_TORII_ROOT}/v1/sumeragi/status" | jq '{protocol_version, node_fingerprint, build_fingerprint, config_fingerprint, height_context_id, height, view, phase, leader, locked_prepare_qc, highest_prepare_qc, last_timeout_certificate, body_state, pending_persistence_id, last_committed_height, last_committed_subject}'`
    - remember that `/status.peers` is the queried node's current remote-peer
      count, not the validator-set size; use
-     `/v1/sumeragi/status` commit-QC validator fields or
      `/v1/sumeragi/validator-sets` for validator-set visibility.
    - create a Connect session through the proxy and ask explicitly for JSON:
      `curl -sS -X POST "${PUBLIC_TORII_ROOT}/v1/connect/session" -H 'content-type: application/json' -H 'accept: application/json' -d '{"sid":"<32-byte-base64url-sid>"}'`

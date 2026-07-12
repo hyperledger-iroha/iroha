@@ -17,17 +17,21 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "src", "toriiClient.js"),
     platform: "node",
     target: "node18",
-    // This direct entrypoint intentionally exposes the complete Torii surface. Keep a tight
-    // regression ceiling around the first actually enforced esbuild baseline (796.0 KiB).
-    limitKb: 825,
+    // This direct entrypoint intentionally exposes the complete Torii surface. The audited
+    // security-hardening baseline is 853,208 bytes with pinned esbuild; 840 KiB (860,160
+    // bytes) leaves 6,952 bytes, or 0.81%, of regression headroom.
+    limitKb: 840,
   }),
   Object.freeze({
     label: "transactionCodec.js (browser)",
     entryPoint: join(ROOT, "src", "transactionCodec.js"),
     platform: "browser",
     target: "es2020",
-    // Current pinned-esbuild baseline is 121.0 KiB; retain measured headroom without masking bloat.
+    // Pinned-esbuild baseline is 125,424 bytes (122.5 KiB); the 132 KiB cap
+    // retains 9,744 bytes (7.77%) without masking browser-codec growth.
     limitKb: 132,
+    forbidNodeInputs: true,
+    forbidGlobalBuffer: true,
   }),
   Object.freeze({
     label: "nexusApp.js (browser)",
@@ -36,8 +40,11 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "es2020",
     // The browser-safe Nexus facade includes Connect, strict Ed25519 verification,
     // canonical transaction finalization, and bounded Torii submission/polling.
-    // Keep narrow headroom over the first enforced baseline (187.7 KiB).
+    // The current 206,556-byte (201.7 KiB) baseline leaves 3,364 bytes
+    // (1.63%) below the 205 KiB ceiling.
     limitKb: 205,
+    forbidNodeInputs: true,
+    forbidGlobalBuffer: true,
   }),
   Object.freeze({
     label: "canonicalRequest.js (browser)",
@@ -47,6 +54,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     // First packed browser-safe baseline is 67.9 KiB with pinned esbuild.
     limitKb: 75,
     forbidNodeInputs: true,
+    forbidGlobalBuffer: true,
   }),
   Object.freeze({
     label: "ivmArtifact.js (browser)",
@@ -59,14 +67,27 @@ export const BUNDLE_TARGETS = Object.freeze([
     forbidGlobalBuffer: true,
   }),
   Object.freeze({
+    label: "kotodamaCompiler/browser.js (browser)",
+    entryPoint: join(ROOT, "dist", "kotodamaCompiler", "browser.js"),
+    platform: "browser",
+    target: "es2020",
+    // Pinned-esbuild baseline is 51,000 bytes (49.8 KiB); 51 KiB leaves 1,224
+    // bytes (2.40%) while covering artifact/CNTR validation and the complete
+    // remote compiler transport boundary.
+    limitKb: 51,
+    forbidNodeInputs: true,
+    forbidGlobalBuffer: true,
+  }),
+  Object.freeze({
     label: "browser.js (public aggregate)",
     entryPoint: join(ROOT, "dist", "browser.js"),
     platform: "browser",
     target: "es2020",
-    // First browser-clean public-aggregate baseline is 278.1 KiB with pinned esbuild.
-    // Keep narrow headroom while covering the complete namespace export.
+    // The browser-clean public aggregate is 303,924 bytes (296.8 KiB) with
+    // pinned esbuild, leaving 3,276 bytes (1.08%) for the complete namespace.
     limitKb: 300,
     forbidNodeInputs: true,
+    forbidGlobalBuffer: true,
   }),
 ]);
 
@@ -180,6 +201,7 @@ export async function runBundleSizeCheck({
   await checkDistExport(pkg, "./nexus-app", "browser");
   await checkDistExport(pkg, "./canonical-request", "browser");
   await checkDistExport(pkg, "./ivm-artifact", "browser");
+  await checkDistExport(pkg, "./kotodama-compiler", "browser");
   await checkDistExport(pkg, "./browser", "browser");
 }
 

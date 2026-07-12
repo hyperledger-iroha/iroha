@@ -392,7 +392,7 @@ public enum KagemushaOfflineSpendMode
 
 public static class KagemushaOfflineSpendModeExtensions
 {
-    public const string RecursiveSpendWireName = "recursive_spend_v2";
+    public const string RecursiveSpendWireName = "recursive_spend_v1";
 
     public static string WireName(this KagemushaOfflineSpendMode mode)
     {

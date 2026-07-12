@@ -596,8 +596,6 @@ def onboard_account(
     public_key_hex: str,
     *,
     permissions: list[str] | None = None,
-    gas_asset_id: str | None = None,
-    gas_limit: int | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "alias": alias,
@@ -607,31 +605,28 @@ def onboard_account(
     requested_permissions = normalize_permissions(list(permissions or []))
     if requested_permissions:
         payload["permissions"] = requested_permissions
-    if isinstance(gas_asset_id, str) and gas_asset_id.strip():
-        payload["gas_asset_id"] = gas_asset_id.strip()
-    if isinstance(gas_limit, int) and gas_limit > 0:
-        payload["gas_limit"] = gas_limit
-    status, payload = _http_json(
+    status, response = _http_json(
         "POST",
         f"{torii_root.rstrip('/')}/v1/accounts/onboard",
         payload,
     )
-    if status in (200, 202):
+    if status == 202:
+        validate_onboarding_response(response, payload["uaid"], alias)
         return {
             "status": "created",
             "response_status": status,
-            "response": payload,
+            "response": response,
         }
 
-    rendered = payload if isinstance(payload, str) else json.dumps(payload, sort_keys=True)
+    rendered = response if isinstance(response, str) else json.dumps(response, sort_keys=True)
     if status == 400 and "account already exists" in rendered:
         return {
             "status": "existing",
             "response_status": status,
-            "response": payload,
+            "response": response,
         }
 
-    raise RuntimeError(f"account onboarding failed: status={status} body={payload!r}")
+    raise RuntimeError(f"account onboarding failed: status={status} body={response!r}")
 
 
 def derive_canary_uaid(public_key_hex: str) -> str:
@@ -643,6 +638,47 @@ def derive_canary_uaid(public_key_hex: str) -> str:
     )
     digest[-1] |= 1
     return f"uaid:{digest.hex()}"
+
+
+def validate_onboarding_response(
+    payload: Any,
+    expected_uaid: str,
+    expected_alias: str,
+) -> None:
+    if not isinstance(payload, dict):
+        raise RuntimeError("account onboarding response must be an object")
+    for key in ("account_id", "uaid", "tx_hash_hex", "status"):
+        if not isinstance(payload.get(key), str) or not payload[key]:
+            raise RuntimeError(f"account onboarding response is missing {key}")
+    if payload["uaid"] != expected_uaid:
+        raise RuntimeError(
+            f"account onboarding UAID does not match request: "
+            f"expected={expected_uaid} actual={payload['uaid']}"
+        )
+    if payload["status"] != "QUEUED":
+        raise RuntimeError(
+            f"account onboarding status must be QUEUED, got {payload['status']}"
+        )
+    try:
+        tx_hash = bytes.fromhex(payload["tx_hash_hex"])
+    except ValueError as exc:
+        raise RuntimeError("account onboarding tx_hash_hex is not hex") from exc
+    if len(tx_hash) != 32:
+        raise RuntimeError("account onboarding tx_hash_hex must encode 32 bytes")
+    lease = payload.get("lease")
+    if not isinstance(lease, dict):
+        raise RuntimeError("account onboarding response is missing lease")
+    if lease.get("alias") != expected_alias:
+        raise RuntimeError("account onboarding lease alias does not match request")
+    for key in ("dataspace", "lease_status"):
+        if not isinstance(lease.get(key), str) or not lease[key]:
+            raise RuntimeError(f"account onboarding lease is missing {key}")
+    for key in ("expires_at_ms", "grace_expires_at_ms", "redemption_expires_at_ms"):
+        if not isinstance(lease.get(key), int) or isinstance(lease[key], bool):
+            raise RuntimeError(f"account onboarding lease is missing integer {key}")
+    for key in ("is_primary", "auto_renew_enabled"):
+        if not isinstance(lease.get(key), bool):
+            raise RuntimeError(f"account onboarding lease is missing boolean {key}")
 
 
 def resolve_alias_account_id(torii_root: str, alias: str) -> str:
@@ -662,15 +698,10 @@ def transaction_status_kind(payload: Any) -> str | None:
     if not isinstance(payload, dict):
         return None
     status = payload.get("status")
-    if isinstance(status, str) and status:
-        return status
     if isinstance(status, dict):
         kind = status.get("kind")
         if isinstance(kind, str) and kind:
             return kind
-    summary = payload.get("summary")
-    if isinstance(summary, str) and summary:
-        return summary
     return None
 
 
@@ -694,9 +725,14 @@ def wait_for_transaction_status(
         if status == 404:
             time.sleep(poll_interval_ms / 1000.0)
             continue
+        if status != 200:
+            raise RuntimeError(
+                "pipeline transaction status failed: "
+                f"status={status} body={payload!r}"
+            )
         last_payload = payload
         kind = transaction_status_kind(payload)
-        if status in (200, 202) and kind in {"Applied", "Committed"}:
+        if kind in {"Applied", "Committed"}:
             return payload if isinstance(payload, dict) else None
         if kind in {"Rejected", "Expired"}:
             return payload if isinstance(payload, dict) else None
@@ -731,38 +767,41 @@ def attempt_faucet(
         f"{torii_root.rstrip('/')}/v1/accounts/faucet",
         claim_body,
     )
-    if claim_status in (200, 202):
-        status = faucet_claim_status_kind(claim)
-        if status != "Applied":
-            tx_hash_hex = claim.get("tx_hash_hex") if isinstance(claim, dict) else None
-            if isinstance(tx_hash_hex, str) and tx_hash_hex:
-                final_status = wait_for_transaction_status(
-                    torii_root,
-                    tx_hash_hex,
-                    timeout_ms=status_timeout_ms,
-                )
-                final_kind = transaction_status_kind(final_status)
-                if final_kind in {"Applied", "Committed"}:
-                    return {
-                        "status": "claimed",
-                        "response_status": claim_status,
-                        "request": claim_body,
-                        "response": claim,
-                        "final_status": final_status,
-                    }
-                status = final_kind or status
+    if claim_status == 202:
+        try:
+            tx_hash_hex = validate_faucet_response(
+                claim,
+                expected_account_id=account_id,
+                expected_asset_definition_id=gas_asset_id,
+            )
+        except RuntimeError as error:
             return {
                 "status": "failed",
                 "response_status": claim_status,
                 "request": claim_body,
                 "response": claim,
-                "last_status": status or "not_observed",
+                "error": str(error),
+            }
+        final_status = wait_for_transaction_status(
+            torii_root,
+            tx_hash_hex,
+            timeout_ms=status_timeout_ms,
+        )
+        final_kind = transaction_status_kind(final_status)
+        if final_kind in {"Applied", "Committed"}:
+            return {
+                "status": "claimed",
+                "response_status": claim_status,
+                "request": claim_body,
+                "response": claim,
+                "final_status": final_status,
             }
         return {
-            "status": "claimed",
+            "status": "failed",
             "response_status": claim_status,
             "request": claim_body,
             "response": claim,
+            "last_status": final_kind or "not_observed",
         }
 
     return {
@@ -773,26 +812,44 @@ def attempt_faucet(
     }
 
 
-def faucet_claim_status_kind(claim: Any) -> str | None:
-    if not isinstance(claim, dict):
-        return None
-    status = claim.get("status")
-    if isinstance(status, str) and status:
-        return status
-    if isinstance(status, dict):
-        kind = status.get("kind")
-        if isinstance(kind, str) and kind:
-            return kind
-    final_status = claim.get("final_status")
-    if isinstance(final_status, dict):
-        body = final_status.get("body")
-        if isinstance(body, dict):
-            status_obj = body.get("status")
-            if isinstance(status_obj, dict):
-                kind = status_obj.get("kind")
-                if isinstance(kind, str) and kind:
-                    return kind
-    return None
+def validate_faucet_response(
+    payload: Any,
+    *,
+    expected_account_id: str,
+    expected_asset_definition_id: str | None,
+) -> str:
+    if not isinstance(payload, dict):
+        raise RuntimeError("faucet response must be an object")
+    for key in (
+        "account_id",
+        "asset_definition_id",
+        "asset_id",
+        "amount",
+        "tx_hash_hex",
+        "status",
+    ):
+        if not isinstance(payload.get(key), str) or not payload[key]:
+            raise RuntimeError(f"faucet response is missing {key}")
+    if payload["account_id"] != expected_account_id:
+        raise RuntimeError("faucet response account_id does not match the request")
+    if (
+        expected_asset_definition_id
+        and payload["asset_definition_id"] != expected_asset_definition_id
+    ):
+        raise RuntimeError(
+            "faucet response asset_definition_id does not match the canary gas asset"
+        )
+    if payload["status"] != "QUEUED":
+        raise RuntimeError(
+            f"faucet response status must be QUEUED, got {payload['status']}"
+        )
+    try:
+        tx_hash = bytes.fromhex(payload["tx_hash_hex"])
+    except ValueError as exc:
+        raise RuntimeError("faucet tx_hash_hex is not hex") from exc
+    if len(tx_hash) != 32:
+        raise RuntimeError("faucet tx_hash_hex must encode 32 bytes")
+    return payload["tx_hash_hex"]
 
 
 def write_config(
@@ -915,13 +972,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--gas-asset-id",
         default=None,
-        help="Optional gas asset definition id to attach to onboarding transactions",
+        help="Optional gas asset definition id for faucet fallback transactions",
     )
     parser.add_argument(
         "--gas-limit",
         type=int,
         default=None,
-        help="Optional gas limit to attach to onboarding transactions",
+        help="Optional gas limit for faucet fallback transactions",
     )
     return parser.parse_args(argv)
 
@@ -961,14 +1018,26 @@ def main(argv: list[str] | None = None) -> int:
             alias,
             public_key_raw_hex,
             permissions=args.permissions,
-            gas_asset_id=args.gas_asset_id,
-            gas_limit=args.gas_limit,
         )
         response = onboarding.get("response")
         if isinstance(response, dict):
             value = response.get("account_id")
             if isinstance(value, str) and value:
                 account_id = value
+            if onboarding.get("status") == "created":
+                tx_hash_hex = response.get("tx_hash_hex")
+                final_status = wait_for_transaction_status(
+                    args.torii_root,
+                    tx_hash_hex,
+                    timeout_ms=args.status_timeout_ms,
+                )
+                final_kind = transaction_status_kind(final_status)
+                onboarding["final_status"] = final_status
+                if final_kind not in {"Applied", "Committed"}:
+                    raise RuntimeError(
+                        "account onboarding did not reach Applied finality: "
+                        f"last_status={final_kind or 'not_observed'}"
+                    )
     except RuntimeError as onboarding_error:
         raise RuntimeError(
             "account onboarding failed; faucet funding was not attempted"
