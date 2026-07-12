@@ -7248,11 +7248,18 @@ mod offline_client_tests {
     use norito::derive::NoritoSerialize;
 
     use super::{evidence_http_tests::*, *};
-    use crate::http::Response as HttpResponse;
+    use crate::{http::Response as HttpResponse, http_default::RequestSnapshot};
 
     #[derive(NoritoSerialize)]
     struct CommandFixture {
         nonce: u64,
+    }
+
+    fn asset_definition_id(name: &str) -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("asset domain id"),
+            name.parse().expect("asset definition name"),
+        )
     }
 
     fn header<'a>(snapshot: &'a RequestSnapshot, name: &str) -> Option<&'a str> {
@@ -7305,16 +7312,33 @@ mod offline_client_tests {
         }
     }
 
+    fn active_topup_shield_verifier()
+    -> iroha_torii_shared::offline_api::OfflineActiveTopUpShieldVerifier {
+        iroha_torii_shared::offline_api::OfflineActiveTopUpShieldVerifier {
+            id: iroha_torii_shared::offline_api::OfflineVerifierId {
+                backend: "halo2/ipa".to_owned(),
+                name: "kagemusha-topup-shield-v2".to_owned(),
+            },
+            version: 3,
+            circuit_id: "kagemusha-topup-shield-v2".to_owned(),
+            commitment: "33".repeat(32),
+            public_inputs_schema_hash: "44".repeat(32),
+            max_proof_bytes: 196_608,
+            activation_height: 1,
+            withdrawal_height: None,
+        }
+    }
+
     #[test]
     fn readiness_request_is_typed_negotiated_and_asset_bound() {
-        let asset_definition_id: AssetDefinitionId =
-            "xor#wonderland".parse().expect("asset definition id");
+        let asset_definition_id = asset_definition_id("xor");
         let readiness = OfflineReadiness {
             asset_definition_id: asset_definition_id.to_string(),
             asset_scale: Some(9),
             evaluated_block_height: 19,
             evaluated_block_hash: "ab".repeat(32),
             active_transfer_verifier: Some(active_transfer_verifier()),
+            active_topup_shield_verifier: Some(active_topup_shield_verifier()),
             ready: false,
             blockers: vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
                 code: "issuer_key_missing".to_owned(),
@@ -7351,14 +7375,16 @@ mod offline_client_tests {
 
     #[test]
     fn readiness_rejects_cross_asset_and_inconsistent_states() {
-        let requested: AssetDefinitionId = "xor#wonderland".parse().expect("asset definition id");
+        let requested = asset_definition_id("xor");
+        let other_asset = asset_definition_id("rose");
         for readiness in [
             OfflineReadiness {
-                asset_definition_id: "rose#wonderland".to_owned(),
+                asset_definition_id: other_asset.to_string(),
                 asset_scale: Some(9),
                 evaluated_block_height: 1,
                 evaluated_block_hash: "ab".repeat(32),
                 active_transfer_verifier: Some(active_transfer_verifier()),
+                active_topup_shield_verifier: Some(active_topup_shield_verifier()),
                 ready: true,
                 blockers: Vec::new(),
             },
@@ -7368,6 +7394,7 @@ mod offline_client_tests {
                 evaluated_block_height: 1,
                 evaluated_block_hash: "ab".repeat(32),
                 active_transfer_verifier: Some(active_transfer_verifier()),
+                active_topup_shield_verifier: Some(active_topup_shield_verifier()),
                 ready: true,
                 blockers: vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
                     code: "forged".to_owned(),
@@ -7380,6 +7407,7 @@ mod offline_client_tests {
                 evaluated_block_height: 1,
                 evaluated_block_hash: "AB".repeat(32),
                 active_transfer_verifier: Some(active_transfer_verifier()),
+                active_topup_shield_verifier: Some(active_topup_shield_verifier()),
                 ready: true,
                 blockers: Vec::new(),
             },
@@ -7404,7 +7432,7 @@ mod offline_client_tests {
 
     #[test]
     fn readiness_rejects_unbound_scale_and_verifier_snapshots() {
-        let requested: AssetDefinitionId = "xor#wonderland".parse().expect("asset definition id");
+        let requested = asset_definition_id("xor");
         let unrelated_blocker = || iroha_torii_shared::offline_api::OfflineReadinessBlocker {
             code: "proof_backend_unavailable".to_owned(),
             message: "proof backend is unavailable".to_owned(),
@@ -7418,6 +7446,7 @@ mod offline_client_tests {
                 evaluated_block_height: 1,
                 evaluated_block_hash: "ab".repeat(32),
                 active_transfer_verifier: Some(active_transfer_verifier()),
+                active_topup_shield_verifier: Some(active_topup_shield_verifier()),
                 ready: false,
                 blockers: vec![unrelated_blocker()],
             },
@@ -7427,6 +7456,7 @@ mod offline_client_tests {
                 evaluated_block_height: 1,
                 evaluated_block_hash: "ab".repeat(32),
                 active_transfer_verifier: None,
+                active_topup_shield_verifier: Some(active_topup_shield_verifier()),
                 ready: false,
                 blockers: vec![unrelated_blocker()],
             },
@@ -7436,6 +7466,7 @@ mod offline_client_tests {
                 evaluated_block_height: 1,
                 evaluated_block_hash: "ab".repeat(32),
                 active_transfer_verifier: Some(future_verifier),
+                active_topup_shield_verifier: Some(active_topup_shield_verifier()),
                 ready: false,
                 blockers: vec![unrelated_blocker()],
             },
@@ -7596,11 +7627,12 @@ mod offline_client_tests {
     #[test]
     fn negotiated_decoder_rejects_retired_and_missing_media_types() {
         let readiness = OfflineReadiness {
-            asset_definition_id: "xor#wonderland".to_owned(),
+            asset_definition_id: asset_definition_id("xor").to_string(),
             asset_scale: Some(9),
             evaluated_block_height: 1,
             evaluated_block_hash: "ab".repeat(32),
             active_transfer_verifier: Some(active_transfer_verifier()),
+            active_topup_shield_verifier: Some(active_topup_shield_verifier()),
             ready: true,
             blockers: Vec::new(),
         };
@@ -8297,14 +8329,18 @@ mod evidence_http_tests {
         let proposal_id = "a".repeat(64);
         let response = json_response(
             StatusCode::OK,
-            &format!(concat!(
-                "{{\"resolved_multisig_account_id\":\"{account_id}\",\"proposals\":[{{",
-                "\"proposal_id\":\"{proposal_id}\",\"instructions_hash\":\"{proposal_id}\",",
-                "\"operation_type\":\"ONCHAIN_MULTISIG\",\"intent\":null,",
-                "\"proposal\":{{\"instructions\":[],\"proposed_at_ms\":1,\"expires_at_ms\":2,",
-                "\"approvals\":[],\"is_relayed\":null}},\"status\":\"COLLECTING_SIGNATURES\",",
-                "\"terminal_at_ms\":null}}]}}"
-            )),
+            &format!(
+                concat!(
+                    "{{\"resolved_multisig_account_id\":\"{account_id}\",\"proposals\":[{{",
+                    "\"proposal_id\":\"{proposal_id}\",\"instructions_hash\":\"{proposal_id}\",",
+                    "\"operation_type\":\"ONCHAIN_MULTISIG\",\"intent\":null,",
+                    "\"proposal\":{{\"instructions\":[],\"proposed_at_ms\":1,\"expires_at_ms\":2,",
+                    "\"approvals\":[],\"is_relayed\":null}},\"status\":\"COLLECTING_SIGNATURES\",",
+                    "\"terminal_at_ms\":null}}]}}"
+                ),
+                account_id = account_id,
+                proposal_id = proposal_id,
+            ),
         );
 
         with_mock_http(respond_with(&snapshots, response), || {
@@ -8417,17 +8453,22 @@ mod evidence_http_tests {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
-        let proposal_id = "a".repeat(64);
+        let instructions = Vec::<iroha_data_model::isi::InstructionBox>::new();
+        let proposal_id = HashOf::new(&instructions).to_string();
         let response = json_response(
             StatusCode::OK,
-            &format!(concat!(
-                "{{\"resolved_multisig_account_id\":\"{account_id}\",",
-                "\"proposal_id\":\"{proposal_id}\",\"instructions_hash\":\"{proposal_id}\",",
-                "\"operation_type\":\"ONCHAIN_MULTISIG\",\"intent\":null,",
-                "\"proposal\":{{\"instructions\":[],\"proposed_at_ms\":1,\"expires_at_ms\":2,",
-                "\"approvals\":[],\"is_relayed\":null}},\"status\":\"COLLECTING_SIGNATURES\",",
-                "\"terminal_at_ms\":null}}"
-            )),
+            &format!(
+                concat!(
+                    "{{\"resolved_multisig_account_id\":\"{account_id}\",",
+                    "\"proposal_id\":\"{proposal_id}\",\"instructions_hash\":\"{proposal_id}\",",
+                    "\"operation_type\":\"ONCHAIN_MULTISIG\",\"intent\":null,",
+                    "\"proposal\":{{\"instructions\":[],\"proposed_at_ms\":1,\"expires_at_ms\":2,",
+                    "\"approvals\":[],\"is_relayed\":null}},\"status\":\"COLLECTING_SIGNATURES\",",
+                    "\"terminal_at_ms\":null}}"
+                ),
+                account_id = account_id,
+                proposal_id = proposal_id,
+            ),
         );
         let request = MultisigProposalsLookupRequest {
             multisig_account_id: Some(account_id.clone()),
@@ -31781,8 +31822,9 @@ mod tests {
         )
         .expect("decode fixture transaction payload");
         let reject_without_http = |candidate: &SccpDestinationProofSubmitRequest, label: &str| {
+            let panic_message = format!("{label} must reject before HTTP");
             with_mock_http(
-                |_| panic!("{label} must reject before HTTP"),
+                move |_| panic!("{panic_message}"),
                 || client.post_sccp_destination_proof(candidate),
             )
             .expect_err(label);
