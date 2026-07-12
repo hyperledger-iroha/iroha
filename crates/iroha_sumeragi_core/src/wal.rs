@@ -283,6 +283,7 @@ impl DurableState {
                     || vote.round().height() != self.height
                     || vote.round().view() != self.current_view
                     || Some(vote.signer()) != local_validator
+                    || context.validator(&vote.signer()).is_none()
                 {
                     return Err(ReplayError::InvalidLocalVote);
                 }

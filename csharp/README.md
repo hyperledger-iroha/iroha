@@ -431,7 +431,7 @@ There is no nested `/offline/v2`, note-issuer route, whole-payload base64
 wrapper, or caller-supplied operation-id argument. `OfflineTopUpRequest` and
 `OfflineRedeemRequest` accept the direct canonical Norito archive, require the
 stable public request schema, uncompressed compact field framing, an exact
-8/11-field root, no padding or trailing data, and derive `Idempotency-Key` from
+7/11-field root, no padding or trailing data, and derive `Idempotency-Key` from
 the embedded nonzero 32-byte operation id.
 
 ```csharp
@@ -833,9 +833,9 @@ reject empty, malformed, tampered, or wrong-type instruction archives, and keep
 recursive redeem derivation inside the native bridge.
 
 Use `PreferredMode(...)` to select only the first-release spend-again product
-mode `recursive_spend_v2` when the exact ABI-18 native surface is available, and
-otherwise `null`. `IsSpendAgainMode(...)` rejects the retired `recursive_spend_v1`
-and `recursive_compact_v1`. Compact-token projection symbols are not alternate
+mode `recursive_spend_v1` when the exact ABI-18 native surface is available, and
+otherwise `null`. `IsSpendAgainMode(...)` rejects the internal artifact mode
+`recursive_spend_v2` and `recursive_compact_v1`. Compact-token projection symbols are not alternate
 product selectors; the internal projection circuit remains
 `kagemusha-recursive-compact-v1`.
 Use `BuildPallasOpenEnvelopesArchive(...)` for the current-hop record bundle

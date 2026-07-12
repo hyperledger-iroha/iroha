@@ -4,6 +4,7 @@ import {
   normalizeAssetAliasFqn,
   normalizeAssetDefinitionId,
 } from "./normalizers.js";
+import { blake2b256 } from "./blake2b.js";
 
 export const OFFLINE_READINESS_PATH = "/v1/offline/readiness";
 export const OFFLINE_TOP_UP_PATH = "/v1/offline/top-up";
@@ -17,6 +18,11 @@ const MAX_U32 = 0xffff_ffffn;
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_U128 = (1n << 128n) - 1n;
 const MAX_OFFLINE_ASSET_SCALE = 28n;
+const MAX_TOP_UP_ANCHORS_PER_BLOCK = 16n;
+const MAX_TOP_UP_FINALITY_SIBLINGS = 4;
+const MAX_TOP_UP_SHIELD_LEAVES = 65_536n;
+const MAX_TOP_UP_SHIELD_PROOF_BYTES = 192 * 1024;
+const MAX_FINALITY_VALIDATORS = 4_096;
 const MAX_JSON_DEPTH = 128;
 const JSON_INTEGER_TOKEN_PATTERN = /^-?(?:0|[1-9][0-9]*)$/u;
 const PARSED_NUMBER_LEXEMES = new WeakMap();
@@ -69,6 +75,23 @@ function requireOwn(record, field, context) {
   }
   requireIntegerJsonToken(record, field, `${context}.${field}`);
   return record[field];
+}
+
+function requireClosedFields(record, required, optional, context) {
+  const allowed = new Set([...required, ...optional]);
+  for (const key of Reflect.ownKeys(record)) {
+    if (typeof key !== "string") {
+      if (Object.prototype.propertyIsEnumerable.call(record, key)) {
+        throw new TypeError(`${context} must not contain enumerable symbol keys`);
+      }
+      continue;
+    }
+    if (Object.prototype.propertyIsEnumerable.call(record, key) && !allowed.has(key)) {
+      throw new TypeError(`${context}.${key} is not part of the first-release contract`);
+    }
+  }
+  for (const field of required) requireOwn(record, field, context);
+  return record;
 }
 
 function requireExactString(value, context, { nonEmpty = true } = {}) {
@@ -348,13 +371,6 @@ function fixedBytesEqual(left, right) {
   return left.every((byte, index) => byte === right[index]);
 }
 
-function compareFixedBytes(left, right) {
-  for (let index = 0; index < left.length; index += 1) {
-    if (left[index] !== right[index]) return left[index] - right[index];
-  }
-  return 0;
-}
-
 function operationIdFromBytes(value, context) {
   const bytes = requireByteArray(value, context, 32);
   if (bytes.every((byte) => byte === 0)) {
@@ -505,6 +521,124 @@ function validateAuthorizationOperationId(request, context, operationId) {
   }
 }
 
+function isPortableVerifierIdField(value) {
+  if (typeof value !== "string" || value.length === 0) return false;
+  if (new TextEncoder().encode(value).length > 256) return false;
+  if (!/^[a-z0-9][a-z0-9_/:.-]*[a-z0-9]$/u.test(value) && !/^[a-z0-9]$/u.test(value)) {
+    return false;
+  }
+  return !["..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:"]
+    .some((separator) => value.includes(separator));
+}
+
+function markedBlake2b256(bytes) {
+  const digest = [...blake2b256(Uint8Array.from(bytes))];
+  digest[digest.length - 1] |= 1;
+  return digest;
+}
+
+function validateTopUpShieldProofAttachment(value, context) {
+  const attachment = requireClosedFields(
+    requireObject(value, context),
+    ["backend", "proof", "vk_ref"],
+    ["vk_commitment", "envelope_hash", "lane_privacy"],
+    context,
+  );
+  const backend = requireExactString(requireOwn(attachment, "backend", context), `${context}.backend`);
+  if (backend !== "halo2/ipa") {
+    throw new TypeError(`${context}.backend must be halo2/ipa`);
+  }
+
+  const proofContext = `${context}.proof`;
+  const proof = requireClosedFields(
+    requireObject(requireOwn(attachment, "proof", context), proofContext),
+    ["backend", "bytes"],
+    [],
+    proofContext,
+  );
+  if (requireExactString(requireOwn(proof, "backend", proofContext), `${proofContext}.backend`) !== backend) {
+    throw new TypeError(`${proofContext}.backend must match ${context}.backend`);
+  }
+  const proofBytes = requireByteArray(requireOwn(proof, "bytes", proofContext), `${proofContext}.bytes`);
+  if (proofBytes.length === 0 || proofBytes.length > MAX_TOP_UP_SHIELD_PROOF_BYTES) {
+    throw new RangeError(
+      `${proofContext}.bytes must contain between 1 and ${MAX_TOP_UP_SHIELD_PROOF_BYTES} bytes`,
+    );
+  }
+
+  const verifierContext = `${context}.vk_ref`;
+  const verifier = requireClosedFields(
+    requireObject(requireOwn(attachment, "vk_ref", context), verifierContext),
+    ["backend", "name"],
+    [],
+    verifierContext,
+  );
+  const verifierBackend = requireExactString(
+    requireOwn(verifier, "backend", verifierContext),
+    `${verifierContext}.backend`,
+  );
+  const verifierName = requireExactString(
+    requireOwn(verifier, "name", verifierContext),
+    `${verifierContext}.name`,
+  );
+  if (verifierBackend !== backend) {
+    throw new TypeError(`${verifierContext}.backend must match ${context}.backend`);
+  }
+  if (!isPortableVerifierIdField(verifierBackend) || !isPortableVerifierIdField(verifierName)) {
+    throw new TypeError(`${verifierContext} must use portable registry syntax`);
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(attachment, "vk_commitment")
+      || attachment.vk_commitment === null) {
+    throw new TypeError(`${context}.vk_commitment is required for top-up shield evidence`);
+  }
+  normalizeFixedBytes(attachment.vk_commitment, `${context}.vk_commitment`, { nonZero: true });
+
+  if (Object.prototype.hasOwnProperty.call(attachment, "envelope_hash")
+      && attachment.envelope_hash !== null) {
+    const envelopeHash = normalizeFixedBytes(
+      attachment.envelope_hash,
+      `${context}.envelope_hash`,
+      { nonZero: true },
+    );
+    if (!fixedBytesEqual(envelopeHash, markedBlake2b256(proofBytes))) {
+      throw new TypeError(`${context}.envelope_hash must match proof bytes`);
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(attachment, "lane_privacy")
+      && attachment.lane_privacy !== null) {
+    throw new TypeError(`${context}.lane_privacy is not valid for top-up shield evidence`);
+  }
+}
+
+function validateTopUpShieldEvidence(value, context) {
+  const evidence = requireClosedFields(
+    requireObject(value, context),
+    ["initial_root", "finalized_root", "leaf_index", "proof"],
+    [],
+    context,
+  );
+  const initialRoot = normalizeFixedBytes(
+    requireOwn(evidence, "initial_root", context),
+    `${context}.initial_root`,
+    { nonZero: true },
+  );
+  const finalizedRoot = normalizeFixedBytes(
+    requireOwn(evidence, "finalized_root", context),
+    `${context}.finalized_root`,
+    { nonZero: true },
+  );
+  if (fixedBytesEqual(initialRoot, finalizedRoot)) {
+    throw new TypeError(`${context}.finalized_root must differ from initial_root`);
+  }
+  requireUnsignedInteger(
+    requireOwn(evidence, "leaf_index", context),
+    `${context}.leaf_index`,
+    MAX_TOP_UP_SHIELD_LEAVES - 1n,
+  );
+  validateTopUpShieldProofAttachment(requireOwn(evidence, "proof", context), `${context}.proof`);
+}
+
 function snapshotAndValidateCommand(input, context, kind) {
   const request = snapshotJson(input, context);
   requireObject(request, context);
@@ -515,13 +649,33 @@ function snapshotAndValidateCommand(input, context, kind) {
   validateAuthorizationOperationId(request, context, operationId);
 
   if (kind === "top_up") {
+    requireClosedFields(
+      request,
+      [
+        "asset",
+        "amount",
+        "current_note",
+        "shield_evidence",
+        "artifact_generation",
+        "operation_id",
+        "authorization",
+      ],
+      [],
+      context,
+    );
     requireExactString(requireOwn(request, "asset", context), `${context}.asset`);
-    validateScaledAmount(requireOwn(request, "amount", context), `${context}.amount`);
-    requireObject(requireOwn(request, "current_note", context), `${context}.current_note`);
-    requireObject(requireOwn(request, "record_bundle", context), `${context}.record_bundle`);
-    requireByteArray(
-      requireOwn(request, "pallas_open_envelopes_archive", context),
-      `${context}.pallas_open_envelopes_archive`,
+    const amount = normalizeScaledAmount(requireOwn(request, "amount", context), `${context}.amount`);
+    const currentNote = normalizeSpendableNote(
+      requireOwn(request, "current_note", context),
+      `${context}.current_note`,
+    );
+    if (BigInt(currentNote.amount.atomic_units) !== BigInt(amount.atomic_units)
+        || BigInt(currentNote.amount.scale) !== BigInt(amount.scale)) {
+      throw new TypeError(`${context}.current_note.amount must equal amount`);
+    }
+    validateTopUpShieldEvidence(
+      requireOwn(request, "shield_evidence", context),
+      `${context}.shield_evidence`,
     );
     const generation = requireExactString(
       requireOwn(request, "artifact_generation", context),
@@ -1039,23 +1193,11 @@ function normalizeTopUpAnchor(value, context, expected) {
     throw new TypeError(`${context}.finalized_root must differ from initial_root`);
   }
 
-  const rawNullifiers = requireOwn(record, "topup_anchor_nullifiers", context);
-  if (!Array.isArray(rawNullifiers) || rawNullifiers.length < 1 || rawNullifiers.length > 2) {
-    throw new RangeError(`${context}.topup_anchor_nullifiers must contain one or two entries`);
-  }
-  const topupAnchorNullifiers = rawNullifiers.map((raw, index) =>
-    normalizeFixedBytes(
-      raw,
-      `${context}.topup_anchor_nullifiers[${index}]`,
-      { nonZero: true },
-    ));
-  for (let index = 1; index < topupAnchorNullifiers.length; index += 1) {
-    if (compareFixedBytes(topupAnchorNullifiers[index - 1], topupAnchorNullifiers[index]) >= 0) {
-      throw new TypeError(
-        `${context}.topup_anchor_nullifiers must be strictly sorted and unique`,
-      );
-    }
-  }
+  const shieldLeafIndex = requireUnsignedInteger(
+    requireOwn(record, "shield_leaf_index", context),
+    `${context}.shield_leaf_index`,
+    MAX_TOP_UP_SHIELD_LEAVES - 1n,
+  );
 
   const currentNote = normalizeSpendableNote(
     requireOwn(record, "current_note", context),
@@ -1074,12 +1216,6 @@ function normalizeTopUpAnchor(value, context, expected) {
   ) {
     throw new TypeError(`${context}.current_note.amount must equal amount`);
   }
-  if (topupAnchorNullifiers.some((nullifier) =>
-    fixedBytesEqual(nullifier, currentNote.note_commitment)
-    || fixedBytesEqual(nullifier, currentNote.spend_nullifier))) {
-    throw new TypeError(`${context}.topup_anchor_nullifiers must not reuse current note material`);
-  }
-
   const topupOperationId = normalizeFixedBytes(
     requireOwn(record, "topup_operation_id", context),
     `${context}.topup_operation_id`,
@@ -1122,16 +1258,16 @@ function normalizeTopUpAnchor(value, context, expected) {
     amount,
     initial_root: initialRoot,
     finalized_root: finalizedRoot,
-    topup_anchor_nullifiers: topupAnchorNullifiers,
+    shield_leaf_index: shieldLeafIndex,
     current_note: currentNote,
     topup_operation_id: topupOperationId,
-    transfer_verifier_id: normalizeVerifierKeyId(
-      requireOwn(record, "transfer_verifier_id", context),
-      `${context}.transfer_verifier_id`,
+    shield_verifier_id: normalizeVerifierKeyId(
+      requireOwn(record, "shield_verifier_id", context),
+      `${context}.shield_verifier_id`,
     ),
-    transfer_verifier_commitment: normalizeFixedBytes(
-      requireOwn(record, "transfer_verifier_commitment", context),
-      `${context}.transfer_verifier_commitment`,
+    shield_verifier_commitment: normalizeFixedBytes(
+      requireOwn(record, "shield_verifier_commitment", context),
+      `${context}.shield_verifier_commitment`,
       { nonZero: true },
     ),
     artifact_generation: artifactGeneration,
@@ -1145,12 +1281,473 @@ function normalizeTopUpAnchor(value, context, expected) {
   };
 }
 
+function crc16CcittAscii(value) {
+  let crc = 0xffff;
+  for (let index = 0; index < value.length; index += 1) {
+    crc ^= value.charCodeAt(index) << 8;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc & 0x8000) === 0
+        ? (crc << 1) & 0xffff
+        : ((crc << 1) ^ 0x1021) & 0xffff;
+    }
+  }
+  return crc;
+}
+
+function normalizeHashLiteral(value, context) {
+  const literal = requireExactString(value, context);
+  const match = /^hash:([0-9A-F]{64})#([0-9A-F]{4})$/u.exec(literal);
+  if (match === null) {
+    throw new TypeError(`${context} must be a canonical uppercase Norito hash literal`);
+  }
+  const [, body, checksum] = match;
+  if ((Number.parseInt(body.slice(-2), 16) & 1) !== 1) {
+    throw new TypeError(`${context} must carry the Iroha hash marker bit`);
+  }
+  const expectedChecksum = crc16CcittAscii(`hash:${body}`)
+    .toString(16)
+    .toUpperCase()
+    .padStart(4, "0");
+  if (checksum !== expectedChecksum) {
+    throw new TypeError(`${context} has an invalid hash checksum`);
+  }
+  return literal;
+}
+
+function normalizeHeightContextId(value, context) {
+  if (!Array.isArray(value) || value.length !== 1) {
+    throw new TypeError(`${context} must be a single-field tuple`);
+  }
+  return [normalizeHashLiteral(value[0], `${context}[0]`)];
+}
+
+function normalizeFinalityUnitTag(value, context, tag, allowed) {
+  const record = requireClosedFields(
+    requireObject(value, context),
+    [tag, "details"],
+    [],
+    context,
+  );
+  const selected = requireExactString(requireOwn(record, tag, context), `${context}.${tag}`);
+  if (!allowed.includes(selected)) {
+    throw new TypeError(`${context}.${tag} must be one of ${allowed.join(", ")}`);
+  }
+  if (requireOwn(record, "details", context) !== null) {
+    throw new TypeError(`${context}.details must be null`);
+  }
+  return { [tag]: selected, details: null };
+}
+
+function normalizeFinalityDaLayout(value, context) {
+  const record = requireClosedFields(
+    requireObject(value, context),
+    [
+      "encoding",
+      "chunk_size_bytes",
+      "data_shards",
+      "parity_shards",
+      "max_payload_size_bytes",
+      "max_chunk_count",
+    ],
+    [],
+    context,
+  );
+  const encoding = normalizeFinalityUnitTag(
+    requireOwn(record, "encoding", context),
+    `${context}.encoding`,
+    "encoding",
+    ["plain", "reed_solomon16"],
+  );
+  const chunkSizeBytes = requireUnsignedInteger(
+    requireOwn(record, "chunk_size_bytes", context),
+    `${context}.chunk_size_bytes`,
+    MAX_U32,
+    { positive: true },
+  );
+  const dataShards = requireUnsignedInteger(
+    requireOwn(record, "data_shards", context),
+    `${context}.data_shards`,
+    0xffffn,
+  );
+  const parityShards = requireUnsignedInteger(
+    requireOwn(record, "parity_shards", context),
+    `${context}.parity_shards`,
+    0xffffn,
+  );
+  const maxPayloadSizeBytes = requireUnsignedResponseInteger(
+    requireOwn(record, "max_payload_size_bytes", context),
+    `${context}.max_payload_size_bytes`,
+    { positive: true },
+  );
+  const maxChunkCount = requireUnsignedInteger(
+    requireOwn(record, "max_chunk_count", context),
+    `${context}.max_chunk_count`,
+    MAX_U32,
+    { positive: true },
+  );
+  if (encoding.encoding === "plain") {
+    if (BigInt(dataShards) !== 0n || BigInt(parityShards) !== 0n) {
+      throw new TypeError(`${context} plain encoding must use zero data and parity shards`);
+    }
+  } else if (BigInt(dataShards) === 0n || BigInt(parityShards) === 0n) {
+    throw new TypeError(`${context} reed_solomon16 encoding requires data and parity shards`);
+  }
+  return {
+    encoding,
+    chunk_size_bytes: chunkSizeBytes,
+    data_shards: dataShards,
+    parity_shards: parityShards,
+    max_payload_size_bytes: maxPayloadSizeBytes,
+    max_chunk_count: maxChunkCount,
+  };
+}
+
+function normalizeFinalityValidatorPower(value, context) {
+  const record = requireClosedFields(
+    requireObject(value, context),
+    ["validator", "power"],
+    [],
+    context,
+  );
+  const validator = requireExactString(
+    requireOwn(record, "validator", context),
+    `${context}.validator`,
+  );
+  if (!/^ea0130[0-9A-F]{96}$/u.test(validator)) {
+    throw new TypeError(`${context}.validator must be a canonical BLS-normal peer id`);
+  }
+  return {
+    validator,
+    power: requireUnsignedResponseInteger(
+      requireOwn(record, "power", context),
+      `${context}.power`,
+      { positive: true },
+    ),
+  };
+}
+
+function normalizeFinalityQuorum(value, context, roster) {
+  const record = requireClosedFields(
+    requireObject(value, context),
+    ["min_signers", "total_power"],
+    [],
+    context,
+  );
+  const minSigners = requireUnsignedInteger(
+    requireOwn(record, "min_signers", context),
+    `${context}.min_signers`,
+    BigInt(MAX_FINALITY_VALIDATORS),
+    { positive: true },
+  );
+  const totalPower = requireUnsignedResponseInteger(
+    requireOwn(record, "total_power", context),
+    `${context}.total_power`,
+    { positive: true },
+  );
+  const expectedMinSigners = BigInt(Math.floor(roster.length * 2 / 3) + 1);
+  let expectedTotalPower = 0n;
+  for (const entry of roster) expectedTotalPower += BigInt(entry.power);
+  if (BigInt(minSigners) !== expectedMinSigners || BigInt(totalPower) !== expectedTotalPower) {
+    throw new TypeError(`${context} must equal the canonical quorum derived from roster`);
+  }
+  return { min_signers: minSigners, total_power: totalPower };
+}
+
+function normalizeFinalityNextEpochSnapshot(value, context) {
+  const record = requireClosedFields(
+    requireObject(value, context),
+    [
+      "epoch",
+      "epoch_end_height",
+      "mode",
+      "roster",
+      "validator_set_pops",
+      "quorum",
+      "leader_seed",
+    ],
+    [],
+    context,
+  );
+  const rawRoster = requireOwn(record, "roster", context);
+  if (!Array.isArray(rawRoster)
+      || rawRoster.length === 0
+      || rawRoster.length > MAX_FINALITY_VALIDATORS) {
+    throw new RangeError(`${context}.roster must contain 1 to ${MAX_FINALITY_VALIDATORS} validators`);
+  }
+  const roster = rawRoster.map((entry, index) =>
+    normalizeFinalityValidatorPower(entry, `${context}.roster[${index}]`));
+  for (let index = 1; index < roster.length; index += 1) {
+    if (roster[index - 1].validator >= roster[index].validator) {
+      throw new TypeError(`${context}.roster must be strictly ordered and unique`);
+    }
+  }
+  const rawPops = requireOwn(record, "validator_set_pops", context);
+  if (!Array.isArray(rawPops) || rawPops.length !== roster.length) {
+    throw new TypeError(`${context}.validator_set_pops must align one-for-one with roster`);
+  }
+  const validatorSetPops = rawPops.map((proof, index) => [
+    ...requireByteArray(proof, `${context}.validator_set_pops[${index}]`, 96),
+  ]);
+  return {
+    epoch: requireUnsignedResponseInteger(
+      requireOwn(record, "epoch", context),
+      `${context}.epoch`,
+      { positive: true },
+    ),
+    epoch_end_height: requireUnsignedResponseInteger(
+      requireOwn(record, "epoch_end_height", context),
+      `${context}.epoch_end_height`,
+      { positive: true },
+    ),
+    mode: normalizeFinalityUnitTag(
+      requireOwn(record, "mode", context),
+      `${context}.mode`,
+      "mode",
+      ["permissioned", "npos"],
+    ),
+    roster,
+    validator_set_pops: validatorSetPops,
+    quorum: normalizeFinalityQuorum(requireOwn(record, "quorum", context), `${context}.quorum`, roster),
+    leader_seed: [...requireByteArray(
+      requireOwn(record, "leader_seed", context),
+      `${context}.leader_seed`,
+      32,
+    )],
+  };
+}
+
+function normalizeFinalityRound(value, context) {
+  const record = requireClosedFields(
+    requireObject(value, context),
+    ["context_id", "height", "view"],
+    [],
+    context,
+  );
+  return {
+    context_id: normalizeHeightContextId(requireOwn(record, "context_id", context), `${context}.context_id`),
+    height: requireUnsignedResponseInteger(
+      requireOwn(record, "height", context),
+      `${context}.height`,
+      { positive: true },
+    ),
+    view: requireUnsignedResponseInteger(
+      requireOwn(record, "view", context),
+      `${context}.view`,
+    ),
+  };
+}
+
+function normalizeFinalityBlockSubject(value, context) {
+  const record = requireClosedFields(
+    requireObject(value, context),
+    ["block_hash", "payload_hash"],
+    ["parent_block_hash"],
+    context,
+  );
+  const result = {
+    block_hash: normalizeHashLiteral(requireOwn(record, "block_hash", context), `${context}.block_hash`),
+    payload_hash: normalizeHashLiteral(requireOwn(record, "payload_hash", context), `${context}.payload_hash`),
+  };
+  if (Object.prototype.hasOwnProperty.call(record, "parent_block_hash")) {
+    result.parent_block_hash = normalizeHashLiteral(record.parent_block_hash, `${context}.parent_block_hash`);
+  }
+  return result;
+}
+
+function normalizeFinalityExecutionCommitment(value, context) {
+  const record = requireClosedFields(
+    requireObject(value, context),
+    ["parent_state_root", "post_state_root", "ordinary_writes_root", "topup_anchor_count"],
+    ["topup_anchor_root"],
+    context,
+  );
+  const topupAnchorCount = requireUnsignedInteger(
+    requireOwn(record, "topup_anchor_count", context),
+    `${context}.topup_anchor_count`,
+    MAX_TOP_UP_ANCHORS_PER_BLOCK,
+  );
+  const hasTopUpRoot = Object.prototype.hasOwnProperty.call(record, "topup_anchor_root");
+  if ((BigInt(topupAnchorCount) === 0n) === hasTopUpRoot) {
+    throw new TypeError(`${context}.topup_anchor_root must be present exactly when count is non-zero`);
+  }
+  const result = {
+    parent_state_root: normalizeHashLiteral(
+      requireOwn(record, "parent_state_root", context),
+      `${context}.parent_state_root`,
+    ),
+    post_state_root: normalizeHashLiteral(
+      requireOwn(record, "post_state_root", context),
+      `${context}.post_state_root`,
+    ),
+    ordinary_writes_root: normalizeHashLiteral(
+      requireOwn(record, "ordinary_writes_root", context),
+      `${context}.ordinary_writes_root`,
+    ),
+    topup_anchor_count: topupAnchorCount,
+  };
+  if (hasTopUpRoot) {
+    result.topup_anchor_root = normalizeHashLiteral(
+      record.topup_anchor_root,
+      `${context}.topup_anchor_root`,
+    );
+  }
+  return result;
+}
+
+function normalizeFinalityQuorumCertificate(value, context, expected = {}) {
+  const record = requireClosedFields(
+    requireObject(value, context),
+    ["round", "phase", "subject", "execution_commitment", "signers", "aggregate_signature"],
+    [],
+    context,
+  );
+  const round = normalizeFinalityRound(requireOwn(record, "round", context), `${context}.round`);
+  const phase = normalizeFinalityUnitTag(
+    requireOwn(record, "phase", context),
+    `${context}.phase`,
+    "phase",
+    ["commit"],
+  );
+  const executionCommitment = normalizeFinalityExecutionCommitment(
+    requireOwn(record, "execution_commitment", context),
+    `${context}.execution_commitment`,
+  );
+  if (expected.height !== undefined && BigInt(round.height) !== BigInt(expected.height)) {
+    throw new TypeError(`${context}.round.height does not match the height context`);
+  }
+  if (expected.contextId !== undefined && round.context_id[0] !== expected.contextId[0]) {
+    throw new TypeError(`${context}.round.context_id does not match the height context`);
+  }
+  if (expected.requireTopUps === true && BigInt(executionCommitment.topup_anchor_count) === 0n) {
+    throw new TypeError(`${context}.execution_commitment must authenticate at least one top-up`);
+  }
+  const rawSigners = requireOwn(record, "signers", context);
+  if (!Array.isArray(rawSigners)
+      || rawSigners.length === 0
+      || rawSigners.length > MAX_FINALITY_VALIDATORS) {
+    throw new RangeError(`${context}.signers must contain 1 to ${MAX_FINALITY_VALIDATORS} entries`);
+  }
+  const signers = rawSigners.map((signer, index) =>
+    requireUnsignedInteger(signer, `${context}.signers[${index}]`, MAX_U32));
+  for (let index = 1; index < signers.length; index += 1) {
+    if (BigInt(signers[index - 1]) >= BigInt(signers[index])) {
+      throw new TypeError(`${context}.signers must be strictly increasing and unique`);
+    }
+  }
+  return {
+    round,
+    phase,
+    subject: normalizeFinalityBlockSubject(requireOwn(record, "subject", context), `${context}.subject`),
+    execution_commitment: executionCommitment,
+    signers,
+    aggregate_signature: [...requireByteArray(
+      requireOwn(record, "aggregate_signature", context),
+      `${context}.aggregate_signature`,
+      96,
+    )],
+  };
+}
+
+function normalizeTopUpFinalityHeightContext(value, context) {
+  const record = requireClosedFields(
+    requireObject(value, context),
+    [
+      "context_id",
+      "chain_id",
+      "protocol_version",
+      "height",
+      "epoch",
+      "epoch_end_height",
+      "mode",
+      "nexus_amx_context_hash",
+      "da_layout",
+      "leader_seed",
+    ],
+    ["next_epoch_snapshot", "parent_commit_qc"],
+    context,
+  );
+  const contextId = normalizeHeightContextId(
+    requireOwn(record, "context_id", context),
+    `${context}.context_id`,
+  );
+  const chainId = requireHumanMessage(requireOwn(record, "chain_id", context), `${context}.chain_id`);
+  if (new TextEncoder().encode(chainId).length > 128) {
+    throw new RangeError(`${context}.chain_id must contain at most 128 UTF-8 bytes`);
+  }
+  const protocolVersion = requireUnsignedInteger(
+    requireOwn(record, "protocol_version", context),
+    `${context}.protocol_version`,
+    0xffffn,
+  );
+  if (BigInt(protocolVersion) !== 2n) {
+    throw new TypeError(`${context}.protocol_version must be 2`);
+  }
+  const height = requireUnsignedResponseInteger(
+    requireOwn(record, "height", context),
+    `${context}.height`,
+    { positive: true },
+  );
+  const epoch = requireUnsignedResponseInteger(
+    requireOwn(record, "epoch", context),
+    `${context}.epoch`,
+  );
+  const epochEndHeight = requireUnsignedResponseInteger(
+    requireOwn(record, "epoch_end_height", context),
+    `${context}.epoch_end_height`,
+    { positive: true },
+  );
+  if (BigInt(epochEndHeight) < BigInt(height)) {
+    throw new TypeError(`${context}.epoch_end_height must not precede height`);
+  }
+  const result = {
+    context_id: contextId,
+    chain_id: chainId,
+    protocol_version: protocolVersion,
+    height,
+    epoch,
+    epoch_end_height: epochEndHeight,
+    mode: normalizeFinalityUnitTag(
+      requireOwn(record, "mode", context),
+      `${context}.mode`,
+      "mode",
+      ["permissioned", "npos"],
+    ),
+    nexus_amx_context_hash: normalizeHashLiteral(
+      requireOwn(record, "nexus_amx_context_hash", context),
+      `${context}.nexus_amx_context_hash`,
+    ),
+    da_layout: normalizeFinalityDaLayout(
+      requireOwn(record, "da_layout", context),
+      `${context}.da_layout`,
+    ),
+    leader_seed: [...requireByteArray(
+      requireOwn(record, "leader_seed", context),
+      `${context}.leader_seed`,
+      32,
+    )],
+  };
+  if (Object.prototype.hasOwnProperty.call(record, "next_epoch_snapshot")) {
+    result.next_epoch_snapshot = normalizeFinalityNextEpochSnapshot(
+      record.next_epoch_snapshot,
+      `${context}.next_epoch_snapshot`,
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(record, "parent_commit_qc")) {
+    result.parent_commit_qc = normalizeFinalityQuorumCertificate(
+      record.parent_commit_qc,
+      `${context}.parent_commit_qc`,
+    );
+  }
+  return result;
+}
+
 function normalizeTopUpFinalityProof(value, context, expected) {
-  // Preserve the complete direct proof for the native verifier, while only
-  // inspecting the small set of public bindings needed to reject response
-  // substitution before cryptographic verification.
-  const directProof = snapshotJson(value, context);
-  const record = requireObject(directProof, context);
+  const record = requireClosedFields(
+    requireObject(snapshotJson(value, context), context),
+    ["version", "anchor", "commit_qc", "anchor_path"],
+    [],
+    context,
+  );
   const version = requireUnsignedInteger(
     requireOwn(record, "version", context),
     `${context}.version`,
@@ -1161,7 +1758,12 @@ function normalizeTopUpFinalityProof(value, context, expected) {
   }
 
   const anchorContext = `${context}.anchor`;
-  const proofAnchor = requireObject(requireOwn(record, "anchor", context), anchorContext);
+  const proofAnchor = requireClosedFields(
+    requireObject(requireOwn(record, "anchor", context), anchorContext),
+    ["topup_operation_id", "anchor_digest"],
+    [],
+    anchorContext,
+  );
   const topupOperationId = normalizeFixedBytes(
     requireOwn(proofAnchor, "topup_operation_id", anchorContext),
     `${anchorContext}.topup_operation_id`,
@@ -1180,41 +1782,65 @@ function normalizeTopUpFinalityProof(value, context, expected) {
   }
 
   const commitQcContext = `${context}.commit_qc`;
-  const commitQc = requireObject(requireOwn(record, "commit_qc", context), commitQcContext);
-  const heightContextContext = `${commitQcContext}.height_context`;
-  const heightContext = requireObject(
-    requireOwn(commitQc, "height_context", commitQcContext),
-    heightContextContext,
+  const rawCommitQc = requireClosedFields(
+    requireObject(requireOwn(record, "commit_qc", context), commitQcContext),
+    ["height_context", "certificate"],
+    [],
+    commitQcContext,
   );
-  const contextHeight = requireUnsignedResponseInteger(
-    requireOwn(heightContext, "height", heightContextContext),
-    `${heightContextContext}.height`,
+  const heightContext = normalizeTopUpFinalityHeightContext(
+    requireOwn(rawCommitQc, "height_context", commitQcContext),
+    `${commitQcContext}.height_context`,
+  );
+  if (BigInt(heightContext.height) !== BigInt(expected.finalizedBlockHeight)) {
+    throw new TypeError(`${commitQcContext}.height_context.height does not match finalized_block_height`);
+  }
+  const certificate = normalizeFinalityQuorumCertificate(
+    requireOwn(rawCommitQc, "certificate", commitQcContext),
+    `${commitQcContext}.certificate`,
+    { height: heightContext.height, contextId: heightContext.context_id, requireTopUps: true },
+  );
+
+  const anchorPathContext = `${context}.anchor_path`;
+  const rawAnchorPath = requireClosedFields(
+    requireObject(requireOwn(record, "anchor_path", context), anchorPathContext),
+    ["leaf_index", "leaf_count", "siblings"],
+    [],
+    anchorPathContext,
+  );
+  const leafIndex = requireUnsignedInteger(
+    requireOwn(rawAnchorPath, "leaf_index", anchorPathContext),
+    `${anchorPathContext}.leaf_index`,
+    MAX_TOP_UP_ANCHORS_PER_BLOCK - 1n,
+  );
+  const leafCount = requireUnsignedInteger(
+    requireOwn(rawAnchorPath, "leaf_count", anchorPathContext),
+    `${anchorPathContext}.leaf_count`,
+    MAX_TOP_UP_ANCHORS_PER_BLOCK,
     { positive: true },
   );
-  if (BigInt(contextHeight) !== BigInt(expected.finalizedBlockHeight)) {
-    throw new TypeError(
-      `${heightContextContext}.height does not match finalized_block_height`,
-    );
+  if (BigInt(leafIndex) >= BigInt(leafCount)) {
+    throw new TypeError(`${anchorPathContext}.leaf_index must be less than leaf_count`);
   }
-
-  const certificateContext = `${commitQcContext}.certificate`;
-  const certificate = requireObject(
-    requireOwn(commitQc, "certificate", commitQcContext),
-    certificateContext,
-  );
-  const roundContext = `${certificateContext}.round`;
-  const round = requireObject(requireOwn(certificate, "round", certificateContext), roundContext);
-  const certificateHeight = requireUnsignedResponseInteger(
-    requireOwn(round, "height", roundContext),
-    `${roundContext}.height`,
-    { positive: true },
-  );
-  if (BigInt(certificateHeight) !== BigInt(expected.finalizedBlockHeight)) {
-    throw new TypeError(`${roundContext}.height does not match finalized_block_height`);
+  if (BigInt(leafCount) !== BigInt(certificate.execution_commitment.topup_anchor_count)) {
+    throw new TypeError(`${anchorPathContext}.leaf_count must match the certified top-up count`);
   }
+  const rawSiblings = requireOwn(rawAnchorPath, "siblings", anchorPathContext);
+  const expectedSiblingCount = Math.ceil(Math.log2(Number(leafCount)));
+  if (!Array.isArray(rawSiblings)
+      || rawSiblings.length !== expectedSiblingCount
+      || rawSiblings.length > MAX_TOP_UP_FINALITY_SIBLINGS) {
+    throw new TypeError(`${anchorPathContext}.siblings has a non-canonical Merkle depth`);
+  }
+  const siblings = rawSiblings.map((sibling, index) =>
+    normalizeFixedBytes(sibling, `${anchorPathContext}.siblings[${index}]`, { nonZero: true }));
 
-  requireObject(requireOwn(record, "anchor_path", context), `${context}.anchor_path`);
-  return directProof;
+  return {
+    version,
+    anchor: { topup_operation_id: topupOperationId, anchor_digest: anchorDigest },
+    commit_qc: { height_context: heightContext, certificate },
+    anchor_path: { leaf_index: leafIndex, leaf_count: leafCount, siblings },
+  };
 }
 
 function normalizeOperationResult(value, context, operationId) {

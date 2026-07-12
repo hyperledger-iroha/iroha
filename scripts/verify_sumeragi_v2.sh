@@ -74,6 +74,21 @@ if rg -n '\b(assume|admit)\s*\(|external_body|external_[[:alnum:]_]*specificatio
   exit 1
 fi
 
+# TimeoutIntent is safety-critical for view closure and replay. Keep its WAL
+# guard derived from the carried vote/context/QC primitives; a compressed
+# caller-supplied validity or high-QC-match bit would reopen the projection
+# gap even if the downstream theorem remained satisfiable.
+if rg -U -n '(?s)TimeoutIntent\s*\{[^}]*\b(local_vote_valid|high_reference_matches)\b' \
+  "$REPO_ROOT/crates/iroha_sumeragi_core/src/verus_proofs.rs"; then
+  echo "TimeoutIntent WAL guard contains a caller-supplied predicate" >&2
+  exit 1
+fi
+if ! rg -q 'pub proof fn timeout_intent_guard_is_derived_from_vote_and_frozen_context' \
+  "$REPO_ROOT/crates/iroha_sumeragi_core/src/verus_proofs.rs"; then
+  echo "TimeoutIntent primitive-guard proof is missing" >&2
+  exit 1
+fi
+
 # Keep the explicit Verus-to-TLA action-name table from silently drifting.
 # This is a spelling/existence guard, not a claim that two independently
 # parsed action bodies are already proved equivalent.

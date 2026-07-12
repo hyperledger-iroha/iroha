@@ -451,7 +451,7 @@ public enum OfflineOperationCodec {
             throw OfflineOperationError.invalidNoritoArchive
         }
         let compact = true
-        var reader = OfflineNoritoReader(data: frame.payload)
+        var reader = CanonicalNoritoReader(data: frame.payload)
         let operationId = try readField(&reader, compact: compact) {
             try readString(&$0, compact: compact)
         }
@@ -487,13 +487,13 @@ public enum OfflineOperationCodec {
     }
 
     public static func encodeReference(_ reference: OfflineOperationReference) -> Data {
-        var payload = OfflineCompactNoritoWriter()
-        payload.writeField(OfflineCompactNorito.encodeString(reference.operationId))
-        payload.writeField(OfflineCompactNorito.encodeUInt32(reference.kind == .topUp ? 0 : 1))
-        payload.writeField(OfflineCompactNorito.encodeUInt32(0))
-        payload.writeField(OfflineCompactNorito.encodeString(reference.transactionHash))
-        payload.writeField(OfflineCompactNorito.encodeString(reference.statusUri))
-        var submittedAt = OfflineCompactNoritoWriter()
+        var payload = CompactNoritoWriter()
+        payload.writeField(CompactNorito.encodeString(reference.operationId))
+        payload.writeField(CompactNorito.encodeUInt32(reference.kind == .topUp ? 0 : 1))
+        payload.writeField(CompactNorito.encodeUInt32(0))
+        payload.writeField(CompactNorito.encodeString(reference.transactionHash))
+        payload.writeField(CompactNorito.encodeString(reference.statusUri))
+        var submittedAt = CompactNoritoWriter()
         submittedAt.writeUInt64LE(reference.submittedAtMs)
         payload.writeField(submittedAt.data)
         return noritoEncode(
@@ -511,7 +511,7 @@ public enum OfflineOperationCodec {
               frame.paddingLength == 8 else {
             throw OfflineOperationError.invalidNoritoArchive
         }
-        var reader = OfflineNoritoReader(data: frame.payload)
+        var reader = CanonicalNoritoReader(data: frame.payload)
         let variant = try reader.readUInt32LE()
         let status: OfflineOperationStatus
         switch variant {
@@ -565,7 +565,7 @@ public enum OfflineOperationCodec {
     }
 
     private static func decodeResult(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         compact: Bool
     ) throws -> OfflineOperationResult {
         switch try reader.readUInt32LE() {
@@ -583,7 +583,7 @@ public enum OfflineOperationCodec {
     }
 
     private static func decodeTopUpResult(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         compact: Bool
     ) throws -> OfflineTopUpResult {
         let transactionHash = try readExactTextField(
@@ -626,7 +626,7 @@ public enum OfflineOperationCodec {
     }
 
     private static func decodeRedeemResult(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         compact: Bool
     ) throws -> OfflineRedeemResult {
         let transactionHash = try readExactTextField(
@@ -648,7 +648,7 @@ public enum OfflineOperationCodec {
     }
 
     private static func decodeErrorEnvelope(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         compact: Bool
     ) throws -> OfflineOperationErrorEnvelope {
         let code = try readField(&reader, compact: compact) {
@@ -666,7 +666,7 @@ public enum OfflineOperationCodec {
     }
 
     private static func decodeErrorDetails(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         compact: Bool
     ) throws -> OfflineOperationErrorDetails {
         let layer = try readOptionalStringField(&reader, compact: compact)
@@ -718,7 +718,7 @@ public enum OfflineOperationCodec {
     }
 
     private static func decodeQueueSnapshot(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         compact: Bool
     ) throws -> OfflineQueueErrorSnapshot {
         let state = try readField(&reader, compact: compact) {
@@ -742,7 +742,7 @@ public enum OfflineOperationCodec {
     }
 
     private static func decodeAxtDetails(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         compact: Bool
     ) throws -> OfflineAxtErrorDetails {
         let code = try readOptionalStringField(&reader, compact: compact)
@@ -784,7 +784,7 @@ public enum OfflineOperationCodec {
     }
 
     private static func readOperationIdField(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         compact: Bool
     ) throws -> String {
         let value = try readField(&reader, compact: compact) {
@@ -794,7 +794,7 @@ public enum OfflineOperationCodec {
     }
 
     private static func readKindField(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         compact: Bool
     ) throws -> OfflineOperationKind {
         let tag = try readField(&reader, compact: compact) { try $0.readUInt32LE() }
@@ -806,7 +806,7 @@ public enum OfflineOperationCodec {
     }
 
     private static func readExactTextField(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         compact: Bool,
         field: String
     ) throws -> String {
@@ -817,7 +817,7 @@ public enum OfflineOperationCodec {
     }
 
     private static func readOptionalStringField(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         compact: Bool
     ) throws -> String? {
         try readField(&reader, compact: compact) {
@@ -828,9 +828,9 @@ public enum OfflineOperationCodec {
     }
 
     private static func readOptionalScalarField<T>(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         compact: Bool,
-        decode: (inout OfflineNoritoReader) throws -> T
+        decode: (inout CanonicalNoritoReader) throws -> T
     ) throws -> T? {
         try readField(&reader, compact: compact) {
             try decodeOption(&$0, compact: compact, decode: decode)
@@ -838,9 +838,9 @@ public enum OfflineOperationCodec {
     }
 
     private static func decodeOption<T>(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         compact: Bool,
-        decode: (inout OfflineNoritoReader) throws -> T
+        decode: (inout CanonicalNoritoReader) throws -> T
     ) throws -> T? {
         switch try reader.readUInt8() {
         case 0:
@@ -850,7 +850,7 @@ public enum OfflineOperationCodec {
             return nil
         case 1:
             let payload = compact ? try reader.readCompactField() : try reader.readField()
-            var child = OfflineNoritoReader(data: payload)
+            var child = CanonicalNoritoReader(data: payload)
             let value = try decode(&child)
             guard child.remaining() == 0, reader.remaining() == 0 else {
                 throw OfflineOperationError.invalidNoritoArchive
@@ -862,12 +862,12 @@ public enum OfflineOperationCodec {
     }
 
     private static func readField<T>(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         compact: Bool,
-        _ decode: (inout OfflineNoritoReader) throws -> T
+        _ decode: (inout CanonicalNoritoReader) throws -> T
     ) throws -> T {
         let bytes = compact ? try reader.readCompactField() : try reader.readField()
-        var child = OfflineNoritoReader(data: bytes)
+        var child = CanonicalNoritoReader(data: bytes)
         let value = try decode(&child)
         guard child.remaining() == 0 else {
             throw OfflineOperationError.invalidNoritoArchive
@@ -876,7 +876,7 @@ public enum OfflineOperationCodec {
     }
 
     private static func readString(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         compact: Bool
     ) throws -> String {
         let length = compact ? try reader.readVarint() : try reader.readUInt64LE()
@@ -991,7 +991,7 @@ private enum OfflineOperationValidation {
             throw OfflineOperationError.invalidNoritoArchive
         }
 
-        var reader = OfflineNoritoReader(data: frame.payload)
+        var reader = CanonicalNoritoReader(data: frame.payload)
         var fields = [Data]()
         fields.reserveCapacity(fieldCount)
         do {
@@ -1005,7 +1005,7 @@ private enum OfflineOperationValidation {
             throw OfflineOperationError.invalidNoritoArchive
         }
 
-        var canonicalPayload = OfflineCompactNoritoWriter()
+        var canonicalPayload = CompactNoritoWriter()
         for field in fields {
             canonicalPayload.writeField(field)
         }

@@ -12551,8 +12551,21 @@ impl Compiler {
                             let tuple_items = tuple_map.get(tuple).cloned();
                             if let Some(items) = tuple_items {
                                 if let Some(src_t) = items.get(*index) {
-                                    let rs = src_reg(src_t, scratch1, &mut code)?;
-                                    emit_addi(&mut code, rd, rs, 0);
+                                    if let Some(kind) =
+                                        dataref_kind_map.get(&(func_idx, *src_t)).copied()
+                                        && let Some(literal) =
+                                            string_map.get(&(func_idx, *src_t)).cloned()
+                                    {
+                                        emit_literal_load(
+                                            &mut code,
+                                            &fixups,
+                                            rd,
+                                            data_key_for_pointer(kind, &literal),
+                                        );
+                                    } else {
+                                        let rs = src_reg(src_t, scratch1, &mut code)?;
+                                        emit_addi(&mut code, rd, rs, 0);
+                                    }
                                     if let Some(child_items) = tuple_map.get(src_t).cloned() {
                                         tuple_map.insert(*dest, child_items);
                                     } else {

@@ -1374,6 +1374,96 @@ fn prepare_intent_replay_derives_local_vote_guards_transactionally() {
 }
 
 #[test]
+fn timeout_intent_replay_derives_local_vote_and_full_high_qc_guards_transactionally() {
+    let context = context();
+    let round = Round::new(context.height(), 0);
+    let invalid = [
+        (
+            TimeoutVote::new(ContextId::repeat(0x99), round, id(1), None),
+            Some(id(1)),
+            ReplayError::ContextMismatch,
+        ),
+        (
+            TimeoutVote::new(
+                context.id(),
+                Round::new(context.height() + 1, 0),
+                id(1),
+                None,
+            ),
+            Some(id(1)),
+            ReplayError::InvalidLocalVote,
+        ),
+        (
+            TimeoutVote::new(context.id(), Round::new(context.height(), 1), id(1), None),
+            Some(id(1)),
+            ReplayError::InvalidLocalVote,
+        ),
+        (
+            TimeoutVote::new(context.id(), round, id(2), None),
+            Some(id(1)),
+            ReplayError::InvalidLocalVote,
+        ),
+        (
+            TimeoutVote::new(context.id(), round, id(9), None),
+            Some(id(9)),
+            ReplayError::InvalidLocalVote,
+        ),
+        (
+            TimeoutVote::new(context.id(), round, id(1), None),
+            None,
+            ReplayError::InvalidLocalVote,
+        ),
+    ];
+
+    for (vote, local_validator, expected) in invalid {
+        let mut state = DurableState::new(&context);
+        let before = state.clone();
+        let entry = WalEntry::new(PersistenceId::new(1), WalRecord::TimeoutIntent(vote));
+        assert_eq!(
+            state.apply(&context, local_validator, &entry),
+            Err(expected)
+        );
+        assert_eq!(state, before);
+    }
+
+    let subject = Subject::repeat(0x76);
+    let highest = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
+    let observed = WalEntry::new(
+        PersistenceId::new(1),
+        WalRecord::ObservePrepare(highest.clone()),
+    );
+    let mut state = DurableState::new(&context);
+    state
+        .apply(&context, Some(id(1)), &observed)
+        .expect("valid PrepareQC becomes the durable high QC");
+    let before_timeout = state.clone();
+
+    let same_reference_different_evidence =
+        QuorumCertificate::new(highest.reference(), shares(&[1, 2, 4]));
+    for carried in [None, Some(same_reference_different_evidence)] {
+        let entry = WalEntry::new(
+            PersistenceId::new(2),
+            WalRecord::TimeoutIntent(TimeoutVote::new(context.id(), round, id(1), carried)),
+        );
+        assert_eq!(
+            state.apply(&context, Some(id(1)), &entry),
+            Err(ReplayError::TimeoutHighQcMismatch)
+        );
+        assert_eq!(state, before_timeout);
+    }
+
+    let exact_vote = TimeoutVote::new(context.id(), round, id(1), Some(highest));
+    let exact_entry = WalEntry::new(
+        PersistenceId::new(2),
+        WalRecord::TimeoutIntent(exact_vote.clone()),
+    );
+    state
+        .apply(&context, Some(id(1)), &exact_entry)
+        .expect("the exact full durable high QC authorizes the timeout intent");
+    assert_eq!(state.timeout_intent(round), Some(exact_vote));
+}
+
+#[test]
 fn every_wal_boundary_replays_to_a_safe_resumable_state() {
     let context = context();
     let local = context.leader(0);

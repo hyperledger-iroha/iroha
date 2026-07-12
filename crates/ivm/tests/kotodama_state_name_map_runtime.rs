@@ -29,6 +29,14 @@ fn test_subject() -> AccountId {
     )
 }
 
+fn encoded_int_state_path(name: &str, key: i64) -> String {
+    let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(
+        i128::from(key),
+    ))
+    .expect("encode canonical StateMap int key");
+    format!("{name}/{}", hex::encode(key))
+}
+
 fn run_program_with_wsv(src: &str, wsv: MockWorldStateView) -> (IVM, MockWorldStateView) {
     let code = KotodamaCompiler::new()
         .compile_source(src)
@@ -171,6 +179,227 @@ fn durable_name_map_struct_value_roundtrip_through_helper() {
 
     let vm = run_program(src);
     assert_eq!(common::decode_i64_register(&vm, 10), 42);
+}
+
+#[test]
+fn missing_mixed_aggregate_option_uses_complete_helper_fallback() {
+    let src = r#"
+        seiyaku C {
+            struct PolicyState {
+                int version,
+                bytes document,
+                bytes document_hash,
+                AccountId approved_by,
+                int applied_at_ms,
+                Name change_id,
+            }
+            state StateMap<Name, PolicyState> Policies;
+
+            fn empty_policy_state() -> PolicyState {
+                return PolicyState {
+                    version: 0,
+                    document: b"",
+                    document_hash: b"",
+                    approved_by: context::authority(),
+                    applied_at_ms: 0,
+                    change_id: Name::parse("initial"),
+                };
+            }
+
+            view fn main() -> bool {
+                let policy = Policies.get(Name::parse("spend")).unwrap_or(
+                    empty_policy_state(),
+                );
+                return policy.version > -1
+                    && policy.document == b""
+                    && policy.document_hash == b""
+                    && policy.approved_by == context::authority()
+                    && policy.applied_at_ms == 0
+                    && policy.change_id == Name::parse("initial");
+            }
+        }
+    "#;
+
+    let vm = run_program(src);
+    assert_eq!(vm.register(10), 1);
+}
+
+#[test]
+fn present_mixed_aggregate_option_ignores_fallback_value_without_field_corruption() {
+    let src = r#"
+        seiyaku C {
+            struct PolicyState {
+                int version,
+                bytes document,
+                bytes document_hash,
+                AccountId approved_by,
+                int applied_at_ms,
+                Name change_id,
+            }
+            state StateMap<Name, PolicyState> Policies;
+
+            fn empty_policy_state() -> PolicyState {
+                return PolicyState {
+                    version: 0,
+                    document: b"fallback",
+                    document_hash: b"fallback-hash",
+                    approved_by: context::authority(),
+                    applied_at_ms: 0,
+                    change_id: Name::parse("fallback"),
+                };
+            }
+
+            kotoage fn main() -> bool authorize("WriteState") {
+                let key = Name::parse("spend");
+                Policies[key] = PolicyState {
+                    version: 7,
+                    document: b"policy",
+                    document_hash: b"hash",
+                    approved_by: context::authority(),
+                    applied_at_ms: 99,
+                    change_id: Name::parse("change-7"),
+                };
+                let policy = Policies.get(key).unwrap_or(empty_policy_state());
+                return policy.version == 7
+                    && policy.document == b"policy"
+                    && policy.document_hash == b"hash"
+                    && policy.approved_by == context::authority()
+                    && policy.applied_at_ms == 99
+                    && policy.change_id == Name::parse("change-7");
+            }
+        }
+    "#;
+
+    let vm = run_program(src);
+    assert_eq!(vm.register(10), 1);
+}
+
+#[test]
+fn mixed_aggregate_unwrap_or_remains_eager_on_the_present_arm() {
+    let src = r#"
+        seiyaku C {
+            struct PolicyState {
+                int version,
+                bytes document,
+                bytes document_hash,
+                AccountId approved_by,
+                int applied_at_ms,
+                Name change_id,
+            }
+            state StateMap<Name, PolicyState> Policies;
+            state StateMap<int, int> FallbackCalls;
+
+            fn observed_fallback() -> PolicyState {
+                let count = FallbackCalls.get(1).unwrap_or(0);
+                FallbackCalls[1] = count + 1;
+                return PolicyState {
+                    version: 0,
+                    document: b"fallback",
+                    document_hash: b"fallback-hash",
+                    approved_by: context::authority(),
+                    applied_at_ms: 0,
+                    change_id: Name::parse("fallback"),
+                };
+            }
+
+            kotoage fn main() -> int authorize("WriteState") {
+                let key = Name::parse("spend");
+                Policies[key] = PolicyState {
+                    version: 7,
+                    document: b"policy",
+                    document_hash: b"hash",
+                    approved_by: context::authority(),
+                    applied_at_ms: 99,
+                    change_id: Name::parse("change-7"),
+                };
+                let policy = Policies.get(key).unwrap_or(observed_fallback());
+                return policy.version;
+            }
+        }
+    "#;
+
+    let (vm, wsv) = run_program_with_wsv(src, MockWorldStateView::new());
+    assert_eq!(common::decode_i64_register(&vm, 10), 7);
+    let fallback_calls = wsv
+        .sc_get(&encoded_int_state_path("FallbackCalls", 1))
+        .expect("eager fallback must persist its observable state mutation");
+    assert_eq!(common::decode_int_state_value(&fallback_calls), 1);
+}
+
+#[test]
+fn missing_nested_mixed_aggregate_option_preserves_every_fallback_word() {
+    let src = r#"
+        seiyaku C {
+            struct PolicyState {
+                int version,
+                bytes document,
+                bytes document_hash,
+                AccountId approved_by,
+                int applied_at_ms,
+                Name change_id,
+            }
+            struct Envelope { PolicyState policy, bool enabled }
+            state StateMap<Name, Envelope> Policies;
+
+            fn default_envelope() -> Envelope {
+                return Envelope {
+                    policy: PolicyState {
+                        version: 3,
+                        document: b"nested",
+                        document_hash: b"nested-hash",
+                        approved_by: context::authority(),
+                        applied_at_ms: 55,
+                        change_id: Name::parse("nested-change"),
+                    },
+                    enabled: true,
+                };
+            }
+
+            view fn main() -> bool {
+                let envelope = Policies.get(Name::parse("offline")).unwrap_or(
+                    default_envelope(),
+                );
+                return envelope.enabled
+                    && envelope.policy.version == 3
+                    && envelope.policy.document == b"nested"
+                    && envelope.policy.document_hash == b"nested-hash"
+                    && envelope.policy.approved_by == context::authority()
+                    && envelope.policy.applied_at_ms == 55
+                    && envelope.policy.change_id == Name::parse("nested-change");
+            }
+        }
+    "#;
+
+    let vm = run_program(src);
+    assert_eq!(vm.register(10), 1);
+}
+
+#[test]
+fn aggregate_option_rejects_a_different_fallback_shape() {
+    let src = r#"
+        seiyaku C {
+            struct PolicyState { int version, bytes document }
+            struct WrongState { int version }
+            state StateMap<Name, PolicyState> Policies;
+
+            view fn main() -> int {
+                let policy = Policies.get(Name::parse("spend")).unwrap_or(
+                    WrongState { version: 0 },
+                );
+                return policy.version;
+            }
+        }
+    "#;
+
+    let error = KotodamaCompiler::new()
+        .compile_source(src)
+        .expect_err("unwrap_or must reject a fallback with a different aggregate shape");
+    assert!(
+        error.contains("unwrap_or")
+            || error.contains("type mismatch")
+            || error.contains("E_TYPE_ANNOTATION_MISMATCH"),
+        "unexpected diagnostic: {error}"
+    );
 }
 
 #[test]

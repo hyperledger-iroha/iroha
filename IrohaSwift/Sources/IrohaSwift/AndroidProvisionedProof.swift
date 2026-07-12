@@ -226,52 +226,52 @@ public enum AndroidProvisionedProofError: LocalizedError {
 
 extension AndroidProvisionedProof {
     func noritoPayload() throws -> Data {
-        var writer = OfflineNoritoWriter()
-        writer.writeField(OfflineNorito.encodeString(manifestSchema))
-        writer.writeField(try OfflineNorito.encodeOption(manifestVersion, encode: { value in
+        var writer = CanonicalNoritoWriter()
+        writer.writeField(CanonicalNorito.encodeString(manifestSchema))
+        writer.writeField(try CanonicalNorito.encodeOption(manifestVersion, encode: { value in
             guard value >= 0 else {
-                throw OfflineNoritoError.invalidLength("manifest_version")
+                throw CanonicalNoritoError.invalidLength("manifest_version")
             }
-            return OfflineNorito.encodeUInt32(UInt32(value))
+            return CanonicalNorito.encodeUInt32(UInt32(value))
         }))
-        writer.writeField(OfflineNorito.encodeUInt64(manifestIssuedAtMs))
+        writer.writeField(CanonicalNorito.encodeUInt64(manifestIssuedAtMs))
         guard let challenge = challengeHashData else {
-            throw OfflineNoritoError.invalidHash("challenge_hash")
+            throw CanonicalNoritoError.invalidHash("challenge_hash")
         }
-        writer.writeField(try OfflineNorito.encodeHash(challenge))
-        writer.writeField(OfflineNorito.encodeUInt64(counter))
-        writer.writeField(try OfflineNorito.encodeMetadata(deviceManifest))
+        writer.writeField(try CanonicalNorito.encodeHash(challenge))
+        writer.writeField(CanonicalNorito.encodeUInt64(counter))
+        writer.writeField(try CanonicalNorito.encodeMetadata(deviceManifest))
         guard let signature = inspectorSignatureData else {
-            throw OfflineNoritoError.invalidHex("inspector_signature")
+            throw CanonicalNoritoError.invalidHex("inspector_signature")
         }
-        writer.writeField(OfflineNorito.encodeConstVec(signature))
+        writer.writeField(CanonicalNorito.encodeConstVec(signature))
         return writer.data
     }
 
     func noritoEncoded() throws -> Data {
-        OfflineNorito.wrap(typeName: Self.noritoTypeName, payload: try noritoPayload())
+        CanonicalNorito.wrap(typeName: Self.noritoTypeName, payload: try noritoPayload())
     }
 
     func manifestSigningBytes() throws -> Data {
-        OfflineNorito.wrap(typeName: Self.signingPayloadTypeName, payload: try manifestSigningPayload())
+        CanonicalNorito.wrap(typeName: Self.signingPayloadTypeName, payload: try manifestSigningPayload())
     }
 
     private func manifestSigningPayload() throws -> Data {
-        var writer = OfflineNoritoWriter()
-        writer.writeField(OfflineNorito.encodeString(manifestSchema))
-        writer.writeField(try OfflineNorito.encodeOption(manifestVersion, encode: { value in
+        var writer = CanonicalNoritoWriter()
+        writer.writeField(CanonicalNorito.encodeString(manifestSchema))
+        writer.writeField(try CanonicalNorito.encodeOption(manifestVersion, encode: { value in
             guard value >= 0 else {
-                throw OfflineNoritoError.invalidLength("manifest_version")
+                throw CanonicalNoritoError.invalidLength("manifest_version")
             }
-            return OfflineNorito.encodeUInt32(UInt32(value))
+            return CanonicalNorito.encodeUInt32(UInt32(value))
         }))
-        writer.writeField(OfflineNorito.encodeUInt64(manifestIssuedAtMs))
+        writer.writeField(CanonicalNorito.encodeUInt64(manifestIssuedAtMs))
         guard let challenge = challengeHashData else {
-            throw OfflineNoritoError.invalidHash("challenge_hash")
+            throw CanonicalNoritoError.invalidHash("challenge_hash")
         }
-        writer.writeField(try OfflineNorito.encodeHash(challenge))
-        writer.writeField(OfflineNorito.encodeUInt64(counter))
-        writer.writeField(try OfflineNorito.encodeMetadata(deviceManifest))
+        writer.writeField(try CanonicalNorito.encodeHash(challenge))
+        writer.writeField(CanonicalNorito.encodeUInt64(counter))
+        writer.writeField(try CanonicalNorito.encodeMetadata(deviceManifest))
         return writer.data
     }
 

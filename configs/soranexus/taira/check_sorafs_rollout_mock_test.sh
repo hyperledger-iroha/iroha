@@ -80,11 +80,23 @@ PY
   cat >"${root}/scripts/taira_faucet_canary.py" <<'PY'
 #!/usr/bin/env python3
 import os
+import sys
 from pathlib import Path
+
+status_timeout_ms = None
+args = sys.argv[1:]
+for index, value in enumerate(args):
+    if value == "--status-timeout-ms" and index + 1 < len(args):
+        status_timeout_ms = args[index + 1]
 
 state_dir = os.environ.get("MOCK_STATE_DIR")
 if state_dir:
-    Path(state_dir, "faucet_seen").write_text("1\n", encoding="utf-8")
+    state = Path(state_dir)
+    state.joinpath("faucet_seen").write_text("1\n", encoding="utf-8")
+    if status_timeout_ms is not None:
+        state.joinpath("faucet_status_timeout_seen").write_text(
+            status_timeout_ms + "\n", encoding="utf-8"
+        )
 print("faucet bootstrap skipped in mock harness")
 PY
 
@@ -98,6 +110,7 @@ payload=""
 url=""
 connect_timeout=""
 max_time=""
+headers=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -124,6 +137,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --header)
+      headers+=("$2")
       shift 2
       ;;
     --data)
@@ -138,6 +152,15 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
   esac
+done
+
+
+for header in "${headers[@]+"${headers[@]}"}"; do
+  header_name="$(printf '%s' "${header%%:*}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$header_name" == "x-iroha-api-version" ]]; then
+    echo "rollout must not send the retired x-iroha-api-version header" >&2
+    exit 92
+  fi
 done
 
 if [[ -z "$connect_timeout" || -z "$max_time" ]]; then
@@ -180,6 +203,30 @@ case "${method} ${url}" in
       body='{"declarations":[]}'
     fi
     ;;
+  "GET https://taira.sora.org/v1/pipeline/transactions/status")
+    if [[ "$scenario" == "canonical_status_missing" ]]; then
+      status="404"
+      body='{"code":"route_not_found","message":"route not found"}'
+    elif [[ "$scenario" == "canonical_status_wrong_error" ]]; then
+      status="400"
+      body='{"code":"bad_request","message":"generic edge rejection"}'
+    else
+      status="400"
+      body='{"code":"query_validation_failed","message":"missing hash query parameter"}'
+    fi
+    ;;
+  "GET https://taira.sora.org/v1/transactions/status")
+    if [[ "$scenario" == "retired_status_alias_mounted" ]]; then
+      status="200"
+      body='{"status":{"kind":"Applied"}}'
+    elif [[ "$scenario" == "retired_status_wrong_error" ]]; then
+      status="404"
+      body='{"code":"not_found","message":"non-canonical edge rejection"}'
+    else
+      status="404"
+      body='{"code":"route_not_found","message":"route not found"}'
+    fi
+    ;;
   "GET https://taira.sora.org/status")
     if [[ "$scenario" == "status_blocks_zero" ]]; then
       body='{"blocks":0}'
@@ -188,14 +235,16 @@ case "${method} ${url}" in
     fi
     ;;
   "GET https://taira.sora.org/v1/sumeragi/status")
-    if [[ "$scenario" == "sumeragi_3_validators" ]]; then
-      body='{"commit_qc":{"height":707,"validator_set_len":3},"highest_qc":{"height":707},"locked_qc":{"height":707},"canonical":{"height":707}}'
-    elif [[ "$scenario" == "sumeragi_canonical_behind" ]]; then
-      body='{"commit_qc":{"height":707,"validator_set_len":4},"highest_qc":{"height":707},"locked_qc":{"height":707},"canonical":{"height":706}}'
-    elif [[ "$scenario" == "sumeragi_idle_high_view_missing_qc" ]]; then
-      body='{"commit_qc":{"height":707,"validator_set_len":4},"highest_qc":{"height":707},"locked_qc":{"height":707},"canonical":{"height":708,"phase":"prepare","view":42,"pending_finality":null,"rbc_status":"disabled"},"membership":{"height":708,"view":42},"worker_loop":{"stage":"idle"},"view_change_causes":{"last_cause":"missing_qc"},"tx_queue":{"depth":1,"capacity":20000,"saturated_by_age":true,"oldest_queued_age_ms":30000},"pending_rbc":{"sessions":0}}'
+    if [[ "$scenario" == "sumeragi_legacy_status" ]]; then
+      body='{"commit_qc":{"height":707,"validator_set_len":4},"canonical":{"height":707}}'
+    elif [[ "$scenario" == "sumeragi_committed_ahead" ]]; then
+      body='{"protocol_version":2,"node_fingerprint":"node","build_fingerprint":"build","config_fingerprint":"config","height_context_id":["context"],"height":706,"view":0,"phase":{"phase":"AwaitingProposal","details":null},"leader":0,"body_state":{"state":"Applied","details":null},"pending_persistence_id":null,"last_committed_height":707,"last_committed_subject":{"parent_block_hash":"parent","block_hash":"abc","payload_hash":"payload"}}'
+    elif [[ "$scenario" == "sumeragi_pending_zero" ]]; then
+      body='{"protocol_version":2,"node_fingerprint":"node","build_fingerprint":"build","config_fingerprint":"config","height_context_id":["context"],"height":708,"view":0,"phase":{"phase":"AwaitingProposal","details":null},"leader":0,"body_state":{"state":"Applied","details":null},"pending_persistence_id":0,"last_committed_height":707,"last_committed_subject":{"parent_block_hash":"parent","block_hash":"abc","payload_hash":"payload"}}'
+    elif [[ "$scenario" == "sumeragi_missing_fingerprint" ]]; then
+      body='{"protocol_version":2,"node_fingerprint":"node","build_fingerprint":"build","height_context_id":["context"],"height":708,"view":0,"phase":{"phase":"AwaitingProposal","details":null},"leader":0,"body_state":{"state":"Applied","details":null},"pending_persistence_id":null,"last_committed_height":707,"last_committed_subject":{"parent_block_hash":"parent","block_hash":"abc","payload_hash":"payload"}}'
     else
-      body='{"commit_qc":{"height":707,"validator_set_len":4},"highest_qc":{"height":707},"locked_qc":{"height":707},"canonical":{"height":707}}'
+      body='{"protocol_version":2,"node_fingerprint":"node","build_fingerprint":"build","config_fingerprint":"config","height_context_id":["context"],"height":708,"view":0,"phase":{"phase":"AwaitingProposal","details":null},"leader":0,"body_state":{"state":"Applied","details":null},"pending_persistence_id":null,"last_committed_height":707,"last_committed_subject":{"parent_block_hash":"parent","block_hash":"abc","payload_hash":"payload"}}'
     fi
     ;;
   *)
@@ -759,6 +808,7 @@ run_asset_retry_success_case() {
   grep -q 'SoraFS rollout verification passed.' "$output_file"
   test -f "${root}/state/retry_seen"
   test -f "${root}/state/faucet_seen"
+  grep -q '^120000$' "${root}/state/faucet_status_timeout_seen"
   test -f "${root}/state/gas_asset_seen"
   ! grep -q 'ASSETRETRYPRIVATEKEY' "${root}/state/sorafs_manifest_stub_argv"
 }
@@ -794,14 +844,29 @@ run_expected_preflight_failure_case \
   status_blocks_zero \
   'status payload did not include a positive `blocks` value'
 run_expected_preflight_failure_case \
-  sumeragi_3_validators \
-  'sumeragi/status reported only 3 validators in the commit QC set'
+  canonical_status_missing \
+  'pipeline transaction status: expected HTTP 400, got 404'
 run_expected_preflight_failure_case \
-  sumeragi_canonical_behind \
-  'sumeragi/status canonical height 706 is behind commit QC height 707'
+  canonical_status_wrong_error \
+  "pipeline transaction status: response error code was 'bad_request'"
 run_expected_preflight_failure_case \
-  sumeragi_idle_high_view_missing_qc \
-  'sumeragi/status reports a finality fault'
+  retired_status_alias_mounted \
+  'retired transaction status alias: expected HTTP 404, got 200'
+run_expected_preflight_failure_case \
+  retired_status_wrong_error \
+  "retired transaction status alias: response error code was 'not_found'"
+run_expected_preflight_failure_case \
+  sumeragi_legacy_status \
+  'expected the Sumeragi v2 reducer status'
+run_expected_preflight_failure_case \
+  sumeragi_committed_ahead \
+  'sumeragi/status committed height 707 is ahead of reducer height 706'
+run_expected_preflight_failure_case \
+  sumeragi_pending_zero \
+  'sumeragi/status reported invalid pending persistence id: 0'
+run_expected_preflight_failure_case \
+  sumeragi_missing_fingerprint \
+  'sumeragi/status omitted required v2 field(s): config_fingerprint'
 run_expected_numeric_argument_failure_case \
   'DECLARED_CAPACITY_GIB must be a positive integer' \
   --declared-capacity-gib 0

@@ -1,6 +1,6 @@
 import Foundation
 
-public enum OfflineNoritoError: Error, LocalizedError {
+public enum CanonicalNoritoError: Error, LocalizedError {
     case invalidHex(String)
     case invalidLength(String)
     case invalidNumeric(String)
@@ -38,22 +38,22 @@ public enum OfflineNoritoError: Error, LocalizedError {
     }
 }
 
-enum OfflineNumericParseError: Error {
+enum CanonicalNumericParseError: Error {
     case invalid
     case scaleTooLarge
     case overflow
 }
 
-struct OfflineNumericComponents {
+struct CanonicalNumericComponents {
     let isNegative: Bool
     let scale: UInt32
     let mantissaDigits: String
-    private let mantissa: OfflineBigInt
+    private let mantissa: CanonicalBigInt
 
     init(parsing value: String, maxScale: UInt32, maxBigIntBytes: Int) throws {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            throw OfflineNumericParseError.invalid
+            throw CanonicalNumericParseError.invalid
         }
 
         var digits = trimmed[...]
@@ -68,13 +68,13 @@ struct OfflineNumericComponents {
         for scalar in digits.unicodeScalars {
             if scalar == "." {
                 if seenDot {
-                    throw OfflineNumericParseError.invalid
+                    throw CanonicalNumericParseError.invalid
                 }
                 seenDot = true
                 continue
             }
             guard scalar.value >= 48 && scalar.value <= 57 else {
-                throw OfflineNumericParseError.invalid
+                throw CanonicalNumericParseError.invalid
             }
             mantissaDigits.append(Character(scalar))
             if seenDot {
@@ -83,17 +83,17 @@ struct OfflineNumericComponents {
         }
 
         guard !mantissaDigits.isEmpty else {
-            throw OfflineNumericParseError.invalid
+            throw CanonicalNumericParseError.invalid
         }
         guard scale <= maxScale else {
-            throw OfflineNumericParseError.scaleTooLarge
+            throw CanonicalNumericParseError.scaleTooLarge
         }
 
-        var mantissa: OfflineBigInt
+        var mantissa: CanonicalBigInt
         do {
-            mantissa = try OfflineBigInt(decimalDigits: mantissaDigits)
+            mantissa = try CanonicalBigInt(decimalDigits: mantissaDigits)
         } catch {
-            throw OfflineNumericParseError.invalid
+            throw CanonicalNumericParseError.invalid
         }
         if mantissa.isZero {
             mantissa.isNegative = false
@@ -103,10 +103,10 @@ struct OfflineNumericComponents {
 
         do {
             _ = try mantissa.toTwosComplementBytes(maxBytes: maxBigIntBytes)
-        } catch OfflineNoritoError.numericOverflow {
-            throw OfflineNumericParseError.overflow
+        } catch CanonicalNoritoError.numericOverflow {
+            throw CanonicalNumericParseError.overflow
         } catch {
-            throw OfflineNumericParseError.invalid
+            throw CanonicalNumericParseError.invalid
         }
 
         self.isNegative = mantissa.isNegative
@@ -123,8 +123,8 @@ struct OfflineNumericComponents {
         return digits
     }
 
-    var canonicalNumeric: OfflineCanonicalNumeric {
-        OfflineCanonicalNumeric(
+    var canonicalNumeric: CanonicalNumeric {
+        CanonicalNumeric(
             isNegative: isNegative,
             scale: scale,
             digits: normalizedMantissaDigits
@@ -138,15 +138,15 @@ struct OfflineNumericComponents {
     func mantissaBytes(maxBytes: Int) throws -> Data {
         do {
             return try mantissa.toTwosComplementBytes(maxBytes: maxBytes)
-        } catch OfflineNoritoError.numericOverflow {
-            throw OfflineNumericParseError.overflow
+        } catch CanonicalNoritoError.numericOverflow {
+            throw CanonicalNumericParseError.overflow
         } catch {
-            throw OfflineNumericParseError.invalid
+            throw CanonicalNumericParseError.invalid
         }
     }
 }
 
-struct OfflineCanonicalNumeric {
+struct CanonicalNumeric {
     let isNegative: Bool
     let scale: UInt32
     let digits: String
@@ -177,15 +177,15 @@ struct OfflineCanonicalNumeric {
         return isNegative ? "-" + body : body
     }
 
-    func negated() -> OfflineCanonicalNumeric {
-        OfflineCanonicalNumeric(
+    func negated() -> CanonicalNumeric {
+        CanonicalNumeric(
             isNegative: !isNegative && digits != "0",
             scale: scale,
             digits: digits
         )
     }
 
-    func compared(to other: OfflineCanonicalNumeric) -> ComparisonResult {
+    func compared(to other: CanonicalNumeric) -> ComparisonResult {
         let targetScale = max(scale, other.scale)
         if let lhsDigits = alignedDigitsIfWithinBounds(targetScale: targetScale),
            let rhsDigits = other.alignedDigitsIfWithinBounds(targetScale: targetScale) {
@@ -214,9 +214,9 @@ struct OfflineCanonicalNumeric {
     }
 
     func adding(
-        _ other: OfflineCanonicalNumeric,
+        _ other: CanonicalNumeric,
         maxBytes: Int
-    ) throws -> OfflineCanonicalNumeric {
+    ) throws -> CanonicalNumeric {
         let targetScale = max(scale, other.scale)
         let lhsDigits = alignedDigits(targetScale: targetScale)
         let rhsDigits = other.alignedDigits(targetScale: targetScale)
@@ -240,7 +240,7 @@ struct OfflineCanonicalNumeric {
             }
         }
 
-        let result = OfflineCanonicalNumeric(
+        let result = CanonicalNumeric(
             isNegative: resultIsNegative,
             scale: targetScale,
             digits: resultDigits
@@ -250,9 +250,9 @@ struct OfflineCanonicalNumeric {
     }
 
     func subtracting(
-        _ other: OfflineCanonicalNumeric,
+        _ other: CanonicalNumeric,
         maxBytes: Int
-    ) throws -> OfflineCanonicalNumeric {
+    ) throws -> CanonicalNumeric {
         try adding(other.negated(), maxBytes: maxBytes)
     }
 
@@ -263,21 +263,21 @@ struct OfflineCanonicalNumeric {
 
     private func alignedDigitsIfWithinBounds(targetScale: UInt32) -> String? {
         let aligned = alignedDigits(targetScale: targetScale)
-        var mantissa = try? OfflineBigInt(decimalDigits: aligned)
+        var mantissa = try? CanonicalBigInt(decimalDigits: aligned)
         mantissa?.isNegative = isNegative
-        guard let mantissa, (try? mantissa.toTwosComplementBytes(maxBytes: OfflineNorito.maxBigIntBytes)) != nil else {
+        guard let mantissa, (try? mantissa.toTwosComplementBytes(maxBytes: CanonicalNorito.maxBigIntBytes)) != nil else {
             return nil
         }
         return aligned
     }
 
     private func validate(maxBytes: Int) throws {
-        var mantissa = try OfflineBigInt(decimalDigits: digits)
+        var mantissa = try CanonicalBigInt(decimalDigits: digits)
         mantissa.isNegative = isNegative
         _ = try mantissa.toTwosComplementBytes(maxBytes: maxBytes)
     }
 
-    private func comparedMantissa(to other: OfflineCanonicalNumeric) -> ComparisonResult {
+    private func comparedMantissa(to other: CanonicalNumeric) -> ComparisonResult {
         if isNegative != other.isNegative {
             return isNegative ? .orderedAscending : .orderedDescending
         }
@@ -369,7 +369,7 @@ struct OfflineCanonicalNumeric {
     }
 }
 
-struct OfflineNoritoWriter {
+struct CanonicalNoritoWriter {
     private(set) var data = Data()
 
     mutating func writeUInt8(_ value: UInt8) {
@@ -405,7 +405,7 @@ struct OfflineNoritoWriter {
     }
 }
 
-struct OfflineCompactNoritoWriter {
+struct CompactNoritoWriter {
     private(set) var data = Data()
 
     mutating func writeUInt8(_ value: UInt8) {
@@ -446,9 +446,9 @@ struct OfflineCompactNoritoWriter {
     }
 }
 
-enum OfflineCompactNorito {
+enum CompactNorito {
     static func encodeString(_ value: String) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         let bytes = Data(value.utf8)
         writer.writeLength(UInt64(bytes.count))
         writer.writeBytes(bytes)
@@ -460,25 +460,25 @@ enum OfflineCompactNorito {
     }
 
     static func encodeUInt16(_ value: UInt16) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeUInt16LE(value)
         return writer.data
     }
 
     static func encodeUInt32(_ value: UInt32) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeUInt32LE(value)
         return writer.data
     }
 
     static func encodeUInt64(_ value: UInt64) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeUInt64LE(value)
         return writer.data
     }
 
     static func encodeOption<T>(_ value: T?, encode: (T) throws -> Data) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         guard let value else {
             writer.writeUInt8(0)
             return writer.data
@@ -489,7 +489,7 @@ enum OfflineCompactNorito {
     }
 
     static func encodeVec<T>(_ values: [T], encode: (T) throws -> Data) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeLength(UInt64(values.count))
         for value in values {
             writer.writeField(try encode(value))
@@ -498,11 +498,11 @@ enum OfflineCompactNorito {
     }
 
     static func encodeHash(_ bytes: Data) throws -> Data {
-        try OfflineNorito.encodeHash(bytes)
+        try CanonicalNorito.encodeHash(bytes)
     }
 }
 
-public enum OfflineNorito {
+public enum CanonicalNorito {
     static let maxNumericScale: UInt32 = 28
     static let maxBigIntBytes = 64
     private static let maxSafeInteger: Double = 9_007_199_254_740_992 // 2^53
@@ -514,7 +514,7 @@ public enum OfflineNorito {
     }
 
     static func encodeString(_ value: String) -> Data {
-        var writer = OfflineNoritoWriter()
+        var writer = CanonicalNoritoWriter()
         let bytes = Data(value.utf8)
         writer.writeLength(UInt64(bytes.count))
         writer.writeBytes(bytes)
@@ -535,7 +535,7 @@ public enum OfflineNorito {
                 return try address.noritoAccountControllerPayload()
             }
             let canonical = try canonicalizeAccountIdWithoutNativeParse(value)
-            var accountControllerPayload = OfflineNoritoWriter()
+            var accountControllerPayload = CanonicalNoritoWriter()
             accountControllerPayload.writeUInt32LE(0)
             accountControllerPayload.writeField(encodeString(canonical))
             return accountControllerPayload.data
@@ -557,25 +557,25 @@ public enum OfflineNorito {
     }
 
     static func encodeUInt16(_ value: UInt16) -> Data {
-        var writer = OfflineNoritoWriter()
+        var writer = CanonicalNoritoWriter()
         writer.writeUInt16LE(value)
         return writer.data
     }
 
     static func encodeUInt32(_ value: UInt32) -> Data {
-        var writer = OfflineNoritoWriter()
+        var writer = CanonicalNoritoWriter()
         writer.writeUInt32LE(value)
         return writer.data
     }
 
     static func encodeUInt64(_ value: UInt64) -> Data {
-        var writer = OfflineNoritoWriter()
+        var writer = CanonicalNoritoWriter()
         writer.writeUInt64LE(value)
         return writer.data
     }
 
     static func encodeOption<T>(_ value: T?, encode: (T) throws -> Data) throws -> Data {
-        var writer = OfflineNoritoWriter()
+        var writer = CanonicalNoritoWriter()
         guard let value else {
             writer.writeUInt8(0)
             return writer.data
@@ -588,7 +588,7 @@ public enum OfflineNorito {
     }
 
     static func encodeVec<T>(_ values: [T], encode: (T) throws -> Data) throws -> Data {
-        var writer = OfflineNoritoWriter()
+        var writer = CanonicalNoritoWriter()
         writer.writeLength(UInt64(values.count))
         for value in values {
             let payload = try encode(value)
@@ -602,7 +602,7 @@ public enum OfflineNorito {
     /// Rust `Vec<u8>` has a special-case in NoritoSerialize that writes bytes flat.
     /// Used for: `attestation_report`, `allowance.commitment`, `assertion`, etc.
     static func encodeBytesVec(_ bytes: Data) -> Data {
-        var writer = OfflineNoritoWriter()
+        var writer = CanonicalNoritoWriter()
         writer.writeLength(UInt64(bytes.count))
         writer.writeBytes(bytes)
         return writer.data
@@ -612,7 +612,7 @@ public enum OfflineNorito {
     /// Rust `ConstVec<u8>` unpacked layout encodes each u8 with its own u64 length prefix.
     /// Used for: `operator_signature` (Signature wraps ConstVec<u8>).
     static func encodeConstVec(_ bytes: Data) -> Data {
-        var writer = OfflineNoritoWriter()
+        var writer = CanonicalNoritoWriter()
         writer.writeLength(UInt64(bytes.count))
         for byte in bytes {
             writer.writeLength(1)
@@ -623,10 +623,10 @@ public enum OfflineNorito {
 
     static func encodeHash(_ bytes: Data) throws -> Data {
         guard bytes.count == 32 else {
-            throw OfflineNoritoError.invalidLength("hash must be 32 bytes")
+            throw CanonicalNoritoError.invalidLength("hash must be 32 bytes")
         }
         guard let last = bytes.last, (last & 1) == 1 else {
-            throw OfflineNoritoError.invalidHash("least significant bit must be set")
+            throw CanonicalNoritoError.invalidHash("least significant bit must be set")
         }
         return bytes
     }
@@ -634,41 +634,41 @@ public enum OfflineNorito {
     static func encodeNumeric(_ value: String) throws -> Data {
         let numeric = try parseNumeric(value)
         let mantissaBytes = try numeric.mantissaBytes(maxBytes: maxBigIntBytes)
-        var bigintWriter = OfflineNoritoWriter()
+        var bigintWriter = CanonicalNoritoWriter()
         bigintWriter.writeUInt32LE(UInt32(mantissaBytes.count))
         bigintWriter.writeBytes(mantissaBytes)
         let bigintPayload = bigintWriter.data
 
-        var writer = OfflineNoritoWriter()
+        var writer = CanonicalNoritoWriter()
         writer.writeField(bigintPayload)
         writer.writeField(encodeUInt32(numeric.scale))
         return writer.data
     }
 
-    static func parseNumeric(_ value: String) throws -> OfflineNumericComponents {
+    static func parseNumeric(_ value: String) throws -> CanonicalNumericComponents {
         do {
-            return try OfflineNumericComponents(
+            return try CanonicalNumericComponents(
                 parsing: value,
                 maxScale: maxNumericScale,
                 maxBigIntBytes: maxBigIntBytes
             )
-        } catch OfflineNumericParseError.invalid {
-            throw OfflineNoritoError.invalidNumeric(value)
-        } catch OfflineNumericParseError.scaleTooLarge {
-            throw OfflineNoritoError.numericScaleTooLarge
-        } catch OfflineNumericParseError.overflow {
-            throw OfflineNoritoError.numericOverflow
+        } catch CanonicalNumericParseError.invalid {
+            throw CanonicalNoritoError.invalidNumeric(value)
+        } catch CanonicalNumericParseError.scaleTooLarge {
+            throw CanonicalNoritoError.numericScaleTooLarge
+        } catch CanonicalNumericParseError.overflow {
+            throw CanonicalNoritoError.numericOverflow
         } catch {
-            throw OfflineNoritoError.invalidNumeric(value)
+            throw CanonicalNoritoError.invalidNumeric(value)
         }
     }
 
-    static func parseCanonicalNumeric(_ value: String) throws -> OfflineCanonicalNumeric {
+    static func parseCanonicalNumeric(_ value: String) throws -> CanonicalNumeric {
         try parseNumeric(value).canonicalNumeric
     }
 
     static func encodeMetadata(_ metadata: [String: ToriiJSONValue]) throws -> Data {
-        var writer = OfflineNoritoWriter()
+        var writer = CanonicalNoritoWriter()
         let keys = metadata.keys.sorted()
         writer.writeLength(UInt64(keys.count))
         for key in keys {
@@ -681,13 +681,13 @@ public enum OfflineNorito {
     }
 
     static func encodeMetadataEntry(key: String, value: ToriiJSONValue) throws -> Data {
-        var entryWriter = OfflineNoritoWriter()
+        var entryWriter = CanonicalNoritoWriter()
         let namePayload = encodeString(key)
         entryWriter.writeLength(UInt64(namePayload.count))
         entryWriter.writeBytes(namePayload)
         let jsonString = try jsonString(from: value)
         let jsonPayload = encodeString(jsonString)
-        var jsonFieldWriter = OfflineNoritoWriter()
+        var jsonFieldWriter = CanonicalNoritoWriter()
         jsonFieldWriter.writeField(jsonPayload)
         let jsonField = jsonFieldWriter.data
         entryWriter.writeLength(UInt64(jsonField.count))
@@ -697,7 +697,7 @@ public enum OfflineNorito {
 
     static func encodeAssetId(_ assetId: String) throws -> Data {
         let parsed = try parsePublicAssetId(assetId)
-        var writer = OfflineNoritoWriter()
+        var writer = CanonicalNoritoWriter()
         writer.writeField(try encodeAccountId(parsed.accountId))
         writer.writeField(try encodeAssetDefinitionAddress(parsed.assetDefinitionId))
         writer.writeField(encodeAssetBalanceScopePayload(dataspaceId: parsed.dataspaceId))
@@ -705,7 +705,7 @@ public enum OfflineNorito {
     }
 
     static func encodeAssetDefinitionId(name: String, domain: String) throws -> Data {
-        var writer = OfflineNoritoWriter()
+        var writer = CanonicalNoritoWriter()
         let domainPayload = try encodeDomainId(domain)
         writer.writeField(domainPayload)
         let namePayload = encodeString(name)
@@ -714,7 +714,7 @@ public enum OfflineNorito {
     }
 
     static func encodeDomainId(_ value: String) throws -> Data {
-        var writer = OfflineNoritoWriter()
+        var writer = CanonicalNoritoWriter()
         let canonical = try canonicalizeAssetDomain(value)
         let namePayload = encodeString(canonical)
         writer.writeField(namePayload)
@@ -724,16 +724,16 @@ public enum OfflineNorito {
     private static func canonicalizeAccountIdWithoutNativeParse(_ value: String) throws -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            throw OfflineNoritoError.invalidAccountId(value)
+            throw CanonicalNoritoError.invalidAccountId(value)
         }
         if trimmed != value {
-            throw OfflineNoritoError.invalidAccountId(trimmed)
+            throw CanonicalNoritoError.invalidAccountId(trimmed)
         }
         if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
-            throw OfflineNoritoError.invalidAccountId(trimmed)
+            throw CanonicalNoritoError.invalidAccountId(trimmed)
         }
         if trimmed.contains("@") || trimmed.contains("#") || trimmed.contains("$") {
-            throw OfflineNoritoError.invalidAccountId(trimmed)
+            throw CanonicalNoritoError.invalidAccountId(trimmed)
         }
         return trimmed
     }
@@ -741,16 +741,16 @@ public enum OfflineNorito {
     private static func canonicalizeEncodedAccountId(_ value: String) throws -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            throw OfflineNoritoError.invalidAccountId(value)
+            throw CanonicalNoritoError.invalidAccountId(value)
         }
         if trimmed != value {
-            throw OfflineNoritoError.invalidAccountId(trimmed)
+            throw CanonicalNoritoError.invalidAccountId(trimmed)
         }
         if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
-            throw OfflineNoritoError.invalidAccountId(trimmed)
+            throw CanonicalNoritoError.invalidAccountId(trimmed)
         }
         if trimmed.contains("@") || trimmed.contains("#") || trimmed.contains("$") {
-            throw OfflineNoritoError.invalidAccountId(trimmed)
+            throw CanonicalNoritoError.invalidAccountId(trimmed)
         }
         let address: AccountAddress
         do {
@@ -759,7 +759,7 @@ public enum OfflineNorito {
                 expectedPrefix: defaultNetworkPrefix
             )
         } catch {
-            throw OfflineNoritoError.invalidAccountId(trimmed)
+            throw CanonicalNoritoError.invalidAccountId(trimmed)
         }
         return try address.toI105(networkPrefix: defaultNetworkPrefix)
     }
@@ -782,29 +782,29 @@ public enum OfflineNorito {
     private static func parsePublicAssetId(_ raw: String) throws -> ParsedPublicAssetId {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            throw OfflineNoritoError.invalidAssetId(raw)
+            throw CanonicalNoritoError.invalidAssetId(raw)
         }
         if trimmed != raw || trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
-            throw OfflineNoritoError.invalidAssetId(raw)
+            throw CanonicalNoritoError.invalidAssetId(raw)
         }
         let components = trimmed.split(separator: "#", omittingEmptySubsequences: false)
         guard components.count == 2 || components.count == 3,
               !components[0].isEmpty,
               !components[1].isEmpty else {
-            throw OfflineNoritoError.invalidAssetId(raw)
+            throw CanonicalNoritoError.invalidAssetId(raw)
         }
         let assetDefinitionId = String(components[0])
         guard let _ = AssetDefinitionAddress.decode(assetDefinitionId) else {
-            throw OfflineNoritoError.invalidAssetId(raw)
+            throw CanonicalNoritoError.invalidAssetId(raw)
         }
         let accountId: String
         do {
             accountId = try canonicalizeEncodedAccountId(String(components[1]))
         } catch {
-            throw OfflineNoritoError.invalidAssetId(raw)
+            throw CanonicalNoritoError.invalidAssetId(raw)
         }
         guard components.count <= 3 else {
-            throw OfflineNoritoError.invalidAssetId(raw)
+            throw CanonicalNoritoError.invalidAssetId(raw)
         }
         var dataspaceId: UInt64?
         if components.count == 3 {
@@ -816,7 +816,7 @@ public enum OfflineNorito {
             ).dropFirst().first,
             scope.hasPrefix("dataspace:"),
             let parsedDataspaceId = parseCanonicalAssetDataspaceId(rawDataspace) else {
-                throw OfflineNoritoError.invalidAssetId(raw)
+                throw CanonicalNoritoError.invalidAssetId(raw)
             }
             dataspaceId = parsedDataspaceId
         }
@@ -841,9 +841,9 @@ public enum OfflineNorito {
 
     private static func encodeAssetDefinitionAddress(_ literal: String) throws -> Data {
         guard let uuidBytes = AssetDefinitionAddress.decode(literal) else {
-            throw OfflineNoritoError.invalidAssetId(literal)
+            throw CanonicalNoritoError.invalidAssetId(literal)
         }
-        var writer = OfflineNoritoWriter()
+        var writer = CanonicalNoritoWriter()
         for byte in uuidBytes {
             writer.writeLength(1)
             writer.writeUInt8(byte)
@@ -852,13 +852,13 @@ public enum OfflineNorito {
     }
 
     private static func encodeAssetBalanceScopePayload(dataspaceId: UInt64?) -> Data {
-        var writer = OfflineNoritoWriter()
+        var writer = CanonicalNoritoWriter()
         guard let dataspaceId else {
             writer.writeUInt32LE(0)
             return writer.data
         }
         writer.writeUInt32LE(1)
-        var dataspaceWriter = OfflineNoritoWriter()
+        var dataspaceWriter = CanonicalNoritoWriter()
         dataspaceWriter.writeUInt64LE(dataspaceId)
         writer.writeField(dataspaceWriter.data)
         return writer.data
@@ -980,15 +980,15 @@ public enum OfflineNorito {
         do {
             return try AccountAddress.canonicalizeDomainLabel(value)
         } catch {
-            throw OfflineNoritoError.invalidAssetId(value)
+            throw CanonicalNoritoError.invalidAssetId(value)
         }
     }
 
     static func encodePoseidonDigest(_ bytes: Data) throws -> Data {
         guard bytes.count == 32 else {
-            throw OfflineNoritoError.invalidLength("poseidon digest must be 32 bytes")
+            throw CanonicalNoritoError.invalidLength("poseidon digest must be 32 bytes")
         }
-        var writer = OfflineNoritoWriter()
+        var writer = CanonicalNoritoWriter()
         writer.writeLength(UInt64(bytes.count))
         writer.writeBytes(bytes)
         return writer.data
@@ -1008,7 +1008,7 @@ public enum OfflineNorito {
             out.append(flag ? "true" : "false")
         case .number(let number):
             guard number.isFinite else {
-                throw OfflineNoritoError.invalidMetadata("non-finite number")
+                throw CanonicalNoritoError.invalidMetadata("non-finite number")
             }
             if number.rounded(.towardZero) == number && abs(number) <= maxSafeInteger {
                 out.append(String(format: "%.0f", number))
@@ -1078,7 +1078,7 @@ public enum OfflineNorito {
     }
 }
 
-struct OfflineBigInt {
+struct CanonicalBigInt {
     var isNegative: Bool = false
     private var limbs: [UInt32]
 
@@ -1088,12 +1088,12 @@ struct OfflineBigInt {
 
     init(decimalDigits: String) throws {
         guard !decimalDigits.isEmpty else {
-            throw OfflineNoritoError.invalidNumeric(decimalDigits)
+            throw CanonicalNoritoError.invalidNumeric(decimalDigits)
         }
         var values = [UInt32](repeating: 0, count: 1)
         for scalar in decimalDigits.unicodeScalars {
             guard scalar.value >= 48 && scalar.value <= 57 else {
-                throw OfflineNoritoError.invalidNumeric(decimalDigits)
+                throw CanonicalNoritoError.invalidNumeric(decimalDigits)
             }
             let digit = Int(scalar.value - 48)
             var carry = UInt64(digit)
@@ -1140,7 +1140,7 @@ struct OfflineBigInt {
                 bytes.append(0xFF)
             }
             guard bytes.count <= maxBytes else {
-                throw OfflineNoritoError.numericOverflow
+                throw CanonicalNoritoError.numericOverflow
             }
             return Data(bytes)
         }
@@ -1150,7 +1150,7 @@ struct OfflineBigInt {
             bytes.append(0)
         }
         guard bytes.count <= maxBytes else {
-            throw OfflineNoritoError.numericOverflow
+            throw CanonicalNoritoError.numericOverflow
         }
         return Data(bytes)
     }

@@ -2514,6 +2514,7 @@ impl MergeBindingHistory {
         self.latest_entry = Some(entry.clone());
     }
 
+    #[cfg(test)]
     fn from_entries(entries: &[MergeLedgerEntry]) -> Result<Self, MergeLedgerCommitError> {
         let mut history = Self::default();
         for entry in entries {
@@ -26819,6 +26820,7 @@ impl State {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn direct_lane_block_application_marker_matches(
         &self,
         receipt: &crate::kura::LaneBlockApplicationReceiptArtifact,
@@ -26833,6 +26835,7 @@ impl State {
             .is_some_and(|marker| marker == &expected)
     }
 
+    #[cfg(test)]
     pub(crate) fn direct_lane_block_application_markers_snapshot(
         &self,
     ) -> Vec<(
@@ -26847,6 +26850,7 @@ impl State {
             .collect()
     }
 
+    #[cfg(test)]
     pub(crate) fn direct_lane_block_application_marker_targets_active_lane(
         &self,
         marker: &DirectLaneBlockApplicationMarker,
@@ -26854,6 +26858,7 @@ impl State {
         self.lane_id_targets_active_dataspace(marker.lane_id, marker.dataspace_id)
     }
 
+    #[cfg(test)]
     pub(crate) fn direct_lane_block_application_receipt_targets_active_lane(
         &self,
         receipt: &crate::kura::LaneBlockApplicationReceiptArtifact,
@@ -26864,6 +26869,7 @@ impl State {
                 == Some(descriptor.lane_incarnation)
     }
 
+    #[cfg(test)]
     fn lane_id_targets_active_dataspace(&self, lane_id: LaneId, dataspace_id: DataSpaceId) -> bool {
         let nexus = self.nexus.read();
         nexus
@@ -29775,6 +29781,7 @@ impl State {
         Ok(executions)
     }
 
+    #[cfg(test)]
     fn canonical_merge_execution_sources(&self) -> Option<Vec<MergeExecutionSource>> {
         let consensus = self.merge_consensus_snapshot();
         self.canonical_merge_execution_sources_for_consensus(&consensus)
@@ -29967,6 +29974,7 @@ impl State {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn build_merge_execution_batch(
         &self,
         epoch_id: u64,
@@ -29980,6 +29988,7 @@ impl State {
         )
     }
 
+    #[cfg(test)]
     fn build_merge_execution_batch_for_consensus(
         &self,
         epoch_id: u64,
@@ -30579,6 +30588,7 @@ impl State {
     }
 
     /// Synthesise merge-ledger entry candidates from certified lane work or stored relays.
+    #[cfg(test)]
     pub(crate) fn merge_entry_candidates_from_lane_relays(
         &self,
     ) -> Vec<crate::merge::MergeLedgerCandidate> {
@@ -31734,6 +31744,7 @@ impl State {
         Ok(true)
     }
 
+    #[cfg(test)]
     fn apply_nexus_fee_settlement_plan(
         &self,
         plan: NexusFeeSettlementPlan,
@@ -31799,6 +31810,7 @@ impl State {
         Ok(())
     }
 
+    #[cfg(test)]
     fn validate_merge_lane_snapshots(
         &self,
         lane_catalog_hash: Hash,
@@ -39732,6 +39744,7 @@ impl<'state> StateBlock<'state> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn stage_direct_lane_block_application_marker(
         &mut self,
         receipt: &crate::kura::LaneBlockApplicationReceiptArtifact,

@@ -9,7 +9,6 @@ import {
   isKagemushaRecursiveSpendNativeAvailable,
   kagemushaRecursiveSpendInit,
   kagemushaRecursiveSpendTopUp,
-  KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
   normalizeCryptoAlgorithm,
   preferredKagemushaOfflineSpendMode,
   supportedCryptoAlgorithms,
@@ -257,7 +256,7 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
     );
     assert.equal(
       crypto.preferredKagemushaOfflineSpendMode(true),
-      crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2,
+      crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
       `${label} native recursive availability should select recursive spend mode`,
     );
     assert.throws(
@@ -267,8 +266,8 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
     );
     assert.equal(
       crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
-      "recursive_compact_v1",
-      `${label} exposes recursive compact spend mode`,
+      undefined,
+      `${label} does not expose the compact projection as a spend mode`,
     );
     assert.equal(
       crypto.isKagemushaRecursiveCompactUnavailable(
@@ -295,12 +294,15 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
     );
     assert.equal(
       crypto.preferredKagemushaOfflineSpendMode(true),
-      crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2,
+      crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
       `${label} exact V3 backend availability selects spend-again cash`,
     );
-    assert.equal(crypto.isKagemushaSpendAgainMode("recursive_spend_v2"), true);
-    assert.equal(crypto.isKagemushaSpendAgainMode("recursive_spend_v1"), false);
+    assert.equal(crypto.isKagemushaSpendAgainMode("recursive_spend_v1"), true);
+    assert.equal(crypto.isKagemushaSpendAgainMode("recursive_spend_v2"), false);
     assert.equal(crypto.isKagemushaSpendAgainMode("recursive_compact_v1"), false);
+    assert.equal(crypto.isKagemushaSpendAgainMode(" recursive_spend_v1"), false);
+    assert.equal(crypto.isKagemushaSpendAgainMode("RECURSIVE_SPEND_V1"), false);
+    assert.equal(crypto.isKagemushaSpendAgainMode(null), false);
     assert.equal(
       crypto.isKagemushaRecursiveCompactPaymentTokenNativeAvailable(),
       false,

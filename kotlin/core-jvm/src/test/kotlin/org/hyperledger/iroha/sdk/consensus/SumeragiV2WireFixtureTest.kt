@@ -26,6 +26,52 @@ class SumeragiV2WireFixtureTest {
     }
 
     @Test
+    fun `timeout vote carries the complete prepare certificate`() {
+        val rows = fixtureRows()
+        val timeoutVote = (
+            SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                rows.single {
+                    it.kind == "message" && it.name == "timeout_vote"
+                }.hex.hexBytes(),
+            ).payload as SumeragiV2Wire.ConsensusPayload.TimeoutVoteMessage
+            ).value
+        val standalonePrepare = (
+            SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                rows.single {
+                    it.kind == "message" && it.name == "quorum_certificate"
+                }.hex.hexBytes(),
+            ).payload as SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage
+            ).value
+
+        val embeddedPrepare = requireNotNull(timeoutVote.highestPrepareQc)
+        assertEquals(standalonePrepare, embeddedPrepare)
+        assertEquals(listOf(0L, 1L, 2L), embeddedPrepare.signers)
+        assertEquals(48, embeddedPrepare.aggregateSignature().size)
+
+        val changedSignature = embeddedPrepare.aggregateSignature().also {
+            it[0] = (it[0].toInt() xor 1).toByte()
+        }
+        val changedPrepare = SumeragiV2Wire.QuorumCertificate(
+            embeddedPrepare.round,
+            embeddedPrepare.phase,
+            embeddedPrepare.subject,
+            embeddedPrepare.executionCommitment,
+            embeddedPrepare.signers,
+            changedSignature,
+        )
+        val changedVote = SumeragiV2Wire.TimeoutVote(
+            timeoutVote.round,
+            changedPrepare,
+            timeoutVote.signer,
+            timeoutVote.signature(),
+        )
+        assertFalse(
+            timeoutVote.encode().contentEquals(changedVote.encode()),
+            "timeout-vote wire bytes did not bind the embedded PrepareQC evidence",
+        )
+    }
+
+    @Test
     fun `commit certificate signing preimages match rust exactly`() {
         val rows = fixtureRows()
         val requestMessage = rows.single {

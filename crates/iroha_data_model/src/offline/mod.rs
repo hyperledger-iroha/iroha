@@ -179,7 +179,9 @@ pub const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: u
 pub const KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1: u16 = 1;
 /// Kagemusha aggregation mode for compact tokens whose private-hop verifier is proven in-circuit.
 pub const KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1: u16 = 2;
-/// Sole first-release product selector for recursive spend-again-offline cash.
+/// Sole first-release product selector for recursive spend-again offline cash.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1: &str = "recursive_spend_v1";
+/// Internal mode bound into ABI-18 native capability and V3 artifact records.
 pub const KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";
 /// Maximum asset scale accepted by the exact Kagemusha V2 amount contract.
 pub const KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2: u32 = 28;
@@ -311,8 +313,7 @@ pub const KAGEMUSHA_PROVER_ROLE_REDEEM_CHANGE_V2: &str = "redeem_change_prover";
 /// Shared verifier purpose for top-up and offline split evidence.
 pub const KAGEMUSHA_VERIFIER_PURPOSE_TRANSFER_V2: &str = "offline_split";
 /// Verifier purpose for the public-to-confidential top-up transition.
-pub const KAGEMUSHA_VERIFIER_PURPOSE_TOPUP_SHIELD_V2: &str =
-    "online_to_offline_topup_shield";
+pub const KAGEMUSHA_VERIFIER_PURPOSE_TOPUP_SHIELD_V2: &str = "online_to_offline_topup_shield";
 /// Shared verifier purpose for offline-to-online redemption.
 pub const KAGEMUSHA_VERIFIER_PURPOSE_UNSHIELD_V2: &str = "offline_to_online_redemption";
 /// Shared verifier purpose for the first Reserved-lineage proof.
@@ -428,7 +429,7 @@ pub const fn preferred_kagemusha_offline_spend_mode(
     pasta_cycle_v3_backend_available: bool,
 ) -> Option<&'static str> {
     if pasta_cycle_v3_backend_available {
-        Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2)
+        Some(KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1)
     } else {
         None
     }
@@ -2820,9 +2821,9 @@ mod model {
     /// Public inputs used by the native bridge to derive one receiver-owned
     /// confidential output.
     ///
-    /// The receiver's transient 32-byte spend secret is deliberately not part
-    /// of this archive. It is supplied through a separate native-only argument
-    /// and must never cross the stable Norito or Swift model boundary.
+    /// The receiver's local note opening is deliberately not part of this
+    /// archive. It is supplied through a separate native-only archive and must
+    /// never cross a payment, Torii, or peer protocol boundary.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2845,7 +2846,7 @@ mod model {
     ///
     /// `recipient_output_prover_material` may contain only the amount opening,
     /// `rho`, and owner tag required by the sender's proof. It must never
-    /// contain the receiver spend secret or the output diversifier.
+    /// contain the receiver spend key or the output diversifier.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2896,10 +2897,10 @@ mod model {
     /// Receiver-created, nonce-bound and device-signed request for one exact offline payment.
     ///
     /// `recipient_output_prover_material` is opaque to SDK callers. The native
-    /// prover derives it from a receiver-held 32-byte secret and the public
+    /// prover derives it from a receiver-held local note opening and the public
     /// request fields. It contains only the output-opening material the sender
     /// needs to prove the requested commitment; it must never contain the
-    /// receiver's spend key.
+    /// receiver's spend key or diversifier.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -11053,17 +11054,9 @@ impl KagemushaRecursiveSpendInitRequestV2 {
             }
         }
         if self.topup_finality_proof.anchor != self.topup_anchor.compact_ref()?
-            || self
-                .topup_finality_proof
-                .commit_qc
-                .height_context
-                .chain_id
+            || self.topup_finality_proof.commit_qc.height_context.chain_id
                 != self.topup_anchor.chain_id
-            || self
-                .topup_finality_proof
-                .commit_qc
-                .height_context
-                .height
+            || self.topup_finality_proof.commit_qc.height_context.height
                 != self.topup_anchor.finalized_height
         {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
@@ -11077,11 +11070,12 @@ impl KagemushaRecursiveSpendInitRequestV2 {
 impl KagemushaTopUpShieldEvidenceV2 {
     /// Validate the typed proof envelope before authoritative ledger checks.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
-        let commitment = self.proof.vk_commitment.ok_or(
-            KagemushaFoldError::InvalidRecursiveSpendProof {
-                field: "shield_evidence.proof.vk_commitment",
-            },
-        )?;
+        let commitment =
+            self.proof
+                .vk_commitment
+                .ok_or(KagemushaFoldError::InvalidRecursiveSpendProof {
+                    field: "shield_evidence.proof.vk_commitment",
+                })?;
         if self.initial_root == [0; 32]
             || self.finalized_root == [0; 32]
             || self.initial_root == self.finalized_root
@@ -12806,11 +12800,7 @@ impl KagemushaRecursiveSpendLineageTransitionArchiveV2 {
                         .height_context
                         .chain_id
                         != archive.topup_anchor.chain_id
-                    || archive
-                        .topup_finality_proof
-                        .commit_qc
-                        .height_context
-                        .height
+                    || archive.topup_finality_proof.commit_qc.height_context.height
                         != archive.topup_anchor.finalized_height
                     || bundle.statement.transition.is_some()
                     || bundle.statement.proof_step_count != 1
@@ -17086,7 +17076,7 @@ pub fn derive_offline_note_payment_token_id(
 }
 
 #[cfg(test)]
-mod offline_note_tests {
+mod kagemusha_tests {
     #![allow(
         clippy::assertions_on_constants,
         clippy::items_after_statements,
@@ -17878,8 +17868,9 @@ mod offline_note_tests {
                         &KagemushaRecursiveSpendLineageTransitionArchiveV2::Init(
                             KagemushaRecursiveSpendLineageInitArchiveV2 {
                                 topup_anchor: anchor.clone(),
-                                topup_finality_proof:
-                                    kagemusha_topup_finality_proof_for_anchor_v2(anchor),
+                                topup_finality_proof: kagemusha_topup_finality_proof_for_anchor_v2(
+                                    anchor,
+                                ),
                                 result_bundle: bundle.clone(),
                             },
                         ),
@@ -18712,6 +18703,7 @@ mod offline_note_tests {
             capabilities.bridge_abi_version,
             KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
         );
+        assert_eq!(capabilities.mode, KAGEMUSHA_RECURSIVE_SPEND_MODE_V2);
         assert!(!capabilities.proof_backend_available);
         assert_eq!(
             capabilities.missing_gates,
@@ -20574,8 +20566,11 @@ mod offline_note_tests {
         ));
 
         let mut mismatched = request;
-        mismatched.topup_finality_proof.commit_qc.height_context.chain_id =
-            ChainId::from("kagemusha-v2-init-wrong-chain");
+        mismatched
+            .topup_finality_proof
+            .commit_qc
+            .height_context
+            .chain_id = ChainId::from("kagemusha-v2-init-wrong-chain");
         assert!(matches!(
             mismatched.validate_public_binding(),
             Err(KagemushaFoldError::InvalidRecursiveSpendProof {
@@ -21608,7 +21603,7 @@ mod offline_note_tests {
         );
         assert_eq!(
             preferred_kagemusha_offline_spend_mode(true),
-            Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2)
+            Some(KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1)
         );
         assert_eq!(preferred_kagemusha_offline_spend_mode(false), None);
         assert_eq!(

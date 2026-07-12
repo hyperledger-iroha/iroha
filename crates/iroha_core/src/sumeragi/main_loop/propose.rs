@@ -3095,6 +3095,7 @@ impl Actor {
         scheduled
     }
 
+    #[cfg(test)]
     fn requeue_accepted_transaction(
         &self,
         tx: AcceptedTransaction<'static>,

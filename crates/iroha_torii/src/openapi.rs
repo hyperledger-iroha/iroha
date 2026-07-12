@@ -10506,7 +10506,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                 "required": ["version", "anchor", "commit_qc", "anchor_path"],
                 "additionalProperties": false,
                 "properties": {
-                    "version": { "type": "integer", "format": "uint16", "enum": [2] },
+                    "version": { "type": "integer", "format": "uint16", "enum": [1] },
                     "anchor": { "$ref": "#/components/schemas/OfflineTopUpAnchorRef" },
                     "commit_qc": { "$ref": "#/components/schemas/OfflineTopUpFinalityCompactQc" },
                     "anchor_path": { "$ref": "#/components/schemas/OfflineTopUpAnchorMerkleProof" }
@@ -20519,11 +20519,7 @@ mod tests {
             "#/components/schemas/OfflineActiveTransferVerifier"
         );
         assert_eq!(
-            nullable_property_ref(
-                schemas,
-                "OfflineReadiness",
-                "active_topup_shield_verifier"
-            ),
+            nullable_property_ref(schemas, "OfflineReadiness", "active_topup_shield_verifier"),
             "#/components/schemas/OfflineActiveTopUpShieldVerifier"
         );
         let readiness_scale = readiness
@@ -20629,7 +20625,7 @@ mod tests {
         );
         for required in [
             "OfflineSpendableNoteDescriptor",
-            "OfflineVerifiedFoldRecordBundle",
+            "OfflineTopUpShieldEvidence",
             "OfflineRequestAuthorization",
             "OfflineSpendBundle",
             "OfflineProofAttachment",
@@ -20675,8 +20671,7 @@ mod tests {
                 "asset",
                 "amount",
                 "current_note",
-                "record_bundle",
-                "pallas_open_envelopes_archive",
+                "shield_evidence",
                 "artifact_generation",
                 "operation_id",
                 "authorization",
@@ -20687,8 +20682,8 @@ mod tests {
             "#/components/schemas/OfflineSpendableNoteDescriptor"
         );
         assert_eq!(
-            property_ref(schemas, "OfflineTopUpRequest", "record_bundle"),
-            "#/components/schemas/OfflineVerifiedFoldRecordBundle"
+            property_ref(schemas, "OfflineTopUpRequest", "shield_evidence"),
+            "#/components/schemas/OfflineTopUpShieldEvidence"
         );
         assert_eq!(
             property_ref(schemas, "OfflineTopUpRequest", "authorization"),
@@ -20760,6 +20755,18 @@ mod tests {
             property_ref(schemas, "OfflineTopUpFinalityProof", "anchor_path"),
             "#/components/schemas/OfflineTopUpAnchorMerkleProof"
         );
+        assert_eq!(
+            component_properties(schemas, "OfflineTopUpFinalityProof")
+                .get("version")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("enum"))
+                .and_then(Value::as_array)
+                .and_then(|values| values.first())
+                .and_then(Value::as_u64),
+            Some(u64::from(
+                iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2
+            ))
+        );
 
         let top_up_anchor = component_properties(schemas, "OfflineTopUpAnchor");
         assert_eq!(
@@ -20796,17 +20803,21 @@ mod tests {
                 .and_then(Value::as_u64),
             Some(28)
         );
-        let anchor_nullifiers = top_up_anchor
-            .get("topup_anchor_nullifiers")
-            .and_then(Value::as_object)
-            .expect("top-up anchor nullifier list schema");
         assert_eq!(
-            anchor_nullifiers.get("minItems").and_then(Value::as_u64),
-            Some(1)
+            top_up_anchor
+                .get("shield_leaf_index")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("maximum"))
+                .and_then(Value::as_u64),
+            Some(65_535)
         );
         assert_eq!(
-            anchor_nullifiers.get("maxItems").and_then(Value::as_u64),
-            Some(2)
+            property_ref(schemas, "OfflineTopUpAnchor", "shield_verifier_id"),
+            "#/components/schemas/OfflineVerifyingKeyId"
+        );
+        assert_eq!(
+            property_ref(schemas, "OfflineTopUpAnchor", "shield_verifier_commitment"),
+            "#/components/schemas/OfflineFixed32Bytes"
         );
         assert_eq!(
             component_properties(schemas, "OfflineScaledAmount")
@@ -22269,8 +22280,7 @@ mod tests {
         );
         assert!(list_response.contains_key("next_cursor"));
 
-        let nullable_intent_schema =
-            norito::json!({ "$ref": "#/components/schemas/JsonValue" });
+        let nullable_intent_schema = norito::json!({ "$ref": "#/components/schemas/JsonValue" });
         let nullable_terminal_timestamp_schema = norito::json!({
             "oneOf": [
                 { "type": "integer", "format": "uint64" },

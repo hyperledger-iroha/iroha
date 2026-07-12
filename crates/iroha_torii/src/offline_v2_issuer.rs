@@ -3159,7 +3159,9 @@ mod tests {
             "attacker-controlled\nmessage".to_owned(),
         ));
         let message = kagemusha_v2_rejection_detail(Some(&adversarial));
-        assert_eq!(message, "The offline operation was rejected.");
+        assert_eq!(message, "Validation failed");
+        assert!(!message.contains("attacker-controlled"));
+        assert!(!message.contains('\n'));
         assert!(crate::utils::is_valid_error_message(&message));
     }
 

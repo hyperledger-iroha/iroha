@@ -2539,14 +2539,14 @@ impl Reducer {
     ) -> Result<StepOutcome, ReducerError> {
         certificate.validate(&self.context)?;
         match certificate.phase() {
-            Phase::Prepare => self.on_prepare_certificate(certificate, formed_locally),
+            Phase::Prepare => self.on_prepare_certificate(&certificate, formed_locally),
             Phase::Commit => self.on_commit_certificate(certificate, formed_locally),
         }
     }
 
     fn on_prepare_certificate(
         &mut self,
-        certificate: QuorumCertificate,
+        certificate: &QuorumCertificate,
         formed_locally: bool,
     ) -> Result<StepOutcome, ReducerError> {
         if self.durable.decision().is_some() {

@@ -55,7 +55,7 @@ public sealed class OfflineToriiApiTests
     [Fact]
     public void RequestArchivesDeriveOperationIdAndDefensivelyCopyBytes()
     {
-        var topUpArchive = RequestArchive(TopUpSchema, 8, 6, OperationIdBytes);
+        var topUpArchive = RequestArchive(TopUpSchema, 7, 5, OperationIdBytes);
         var redeemArchive = RequestArchive(RedeemSchema, 11, 9, OperationIdBytes);
         var expectedTopUp = (byte[])topUpArchive.Clone();
         var expectedRedeem = (byte[])redeemArchive.Clone();
@@ -87,6 +87,7 @@ public sealed class OfflineToriiApiTests
     [InlineData("extra_field")]
     [InlineData("zero_operation_id")]
     [InlineData("short_operation_id")]
+    [InlineData("wrong_operation_field")]
     [InlineData("overlong_field_length")]
     [InlineData("trailing_byte")]
     [InlineData("declared_length_overflow")]
@@ -94,27 +95,28 @@ public sealed class OfflineToriiApiTests
     {
         var archive = mutation switch
         {
-            "wrong_schema" => RequestArchive(RedeemSchema, 8, 6, OperationIdBytes),
-            "checksum" => MutatePayload(RequestArchive(TopUpSchema, 8, 6, OperationIdBytes)),
-            "non_compact" => RequestArchive(TopUpSchema, 8, 6, OperationIdBytes, flags: 0),
-            "packed_flag" => RequestArchive(TopUpSchema, 8, 6, OperationIdBytes, flags: 0x03),
+            "wrong_schema" => RequestArchive(RedeemSchema, 7, 5, OperationIdBytes),
+            "checksum" => MutatePayload(RequestArchive(TopUpSchema, 7, 5, OperationIdBytes)),
+            "non_compact" => RequestArchive(TopUpSchema, 7, 5, OperationIdBytes, flags: 0),
+            "packed_flag" => RequestArchive(TopUpSchema, 7, 5, OperationIdBytes, flags: 0x03),
             "compression" => MutateClone(
-                RequestArchive(TopUpSchema, 8, 6, OperationIdBytes),
+                RequestArchive(TopUpSchema, 7, 5, OperationIdBytes),
                 clone => clone[22] = 1),
             "header_padding" => AddHeaderPadding(
-                RequestArchive(TopUpSchema, 8, 6, OperationIdBytes),
+                RequestArchive(TopUpSchema, 7, 5, OperationIdBytes),
                 [0]),
             "nonzero_padding" => AddHeaderPadding(
-                RequestArchive(TopUpSchema, 8, 6, OperationIdBytes),
+                RequestArchive(TopUpSchema, 7, 5, OperationIdBytes),
                 [0x7f]),
-            "missing_field" => RequestArchive(TopUpSchema, 7, 6, OperationIdBytes),
-            "extra_field" => RequestArchive(TopUpSchema, 9, 6, OperationIdBytes),
-            "zero_operation_id" => RequestArchive(TopUpSchema, 8, 6, new byte[32]),
-            "short_operation_id" => RequestArchive(TopUpSchema, 8, 6, new byte[31]),
-            "overlong_field_length" => OverlongFirstFieldArchive(TopUpSchema, 8, 6, OperationIdBytes),
-            "trailing_byte" => [.. RequestArchive(TopUpSchema, 8, 6, OperationIdBytes), 0],
+            "missing_field" => RequestArchive(TopUpSchema, 6, 5, OperationIdBytes),
+            "extra_field" => RequestArchive(TopUpSchema, 8, 5, OperationIdBytes),
+            "zero_operation_id" => RequestArchive(TopUpSchema, 7, 5, new byte[32]),
+            "short_operation_id" => RequestArchive(TopUpSchema, 7, 5, new byte[31]),
+            "wrong_operation_field" => RequestArchive(TopUpSchema, 7, 4, OperationIdBytes),
+            "overlong_field_length" => OverlongFirstFieldArchive(TopUpSchema, 7, 5, OperationIdBytes),
+            "trailing_byte" => [.. RequestArchive(TopUpSchema, 7, 5, OperationIdBytes), 0],
             "declared_length_overflow" => MutateClone(
-                RequestArchive(TopUpSchema, 8, 6, OperationIdBytes),
+                RequestArchive(TopUpSchema, 7, 5, OperationIdBytes),
                 clone => BinaryPrimitives.WriteUInt64LittleEndian(clone.AsSpan(23, 8), ulong.MaxValue)),
             _ => throw new InvalidOperationException(),
         };
@@ -600,7 +602,7 @@ public sealed class OfflineToriiApiTests
     [Fact]
     public async Task ToriiClientSubmitsDirectNoritoBodyAndDerivedIdempotencyKey()
     {
-        var requestArchive = RequestArchive(TopUpSchema, 8, 6, OperationIdBytes);
+        var requestArchive = RequestArchive(TopUpSchema, 7, 5, OperationIdBytes);
         var responseArchive = ReferenceArchive(OperationId, OfflineOperationKind.TopUp, TransactionHash);
         using var handler = new CaptureHandler(_ => BinaryResponse(
             responseArchive,
@@ -684,7 +686,7 @@ public sealed class OfflineToriiApiTests
         };
         using var handler = new CaptureHandler(_ => BinaryResponse(responseArchive, status, location, mediaType));
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var request = new OfflineTopUpRequest(RequestArchive(TopUpSchema, 8, 6, OperationIdBytes));
+        var request = new OfflineTopUpRequest(RequestArchive(TopUpSchema, 7, 5, OperationIdBytes));
 
         await Assert.ThrowsAnyAsync<Exception>(() => client.SubmitOfflineTopUpAsync(
             request,

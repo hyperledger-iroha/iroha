@@ -8,11 +8,13 @@ The detailed engineering backlog lives in
 and completed history lives in [`status.md`](./status.md).
 
 Kagemusha V2 transport and proof admission are fail-closed for the first release.
-The only public product selector is `recursive_spend_v2`; it requires exact
+The only public product selector is `recursive_spend_v1`; it requires exact
 bridge ABI 18 and the governed
 `kagemusha.offline.recursive_spend.artifact_manifest.v3` manifest with the V3
 atomic artifact lifecycle. ABI-6/ABI-7 fixtures and unsuffixed recursive-spend
-helpers are not first-release compatibility surfaces.
+helpers are not first-release compatibility surfaces. The typed V2 native
+capability and artifact manifest retain the internal `recursive_spend_v2` mode;
+that value is not accepted as a product selector.
 `KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE = false` is the
 authoritative release state: Core top-up execution and every proof-gated
 init/append/redeem-change/verify/redeem path remain unavailable. Record-backed
@@ -23857,10 +23859,10 @@ digest-bound pending-XSD source probe summaries for reviewed
   bridge-loader tests pin packaged artifacts to at least ABI 6, the Node NAPI
   host exports `connectNoritoBridgeAbiVersion`, and the Python PyO3 extension
   exports `kagemusha_recursive_spend_native_bridge_abi_version`. The SDK surfaces also
-  expose a common preferred offline spend-mode selector: `recursive_compact_v1`
-  when ABI-7 compact prover/verifier support is available, `recursive_spend_v1`
-  when only the ABI-6-or-later recursive spend surface is available, and no
-  preferred production mode when neither recursive surface is available;
+  expose one common preferred offline spend-mode selector: `recursive_spend_v1`
+  only when the exact ABI-18 recursive backend is available, and no preferred
+  production mode otherwise. `recursive_compact_v1` remains an
+  admission-neutral projection and never wins product selection;
   Kotlin/JVM and Java
   Android probe the native bridge ABI version plus verify and both lineage
   witness JNI symbols, C# probes the matching P/Invoke symbols, and

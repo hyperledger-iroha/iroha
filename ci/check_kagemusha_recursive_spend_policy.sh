@@ -30,11 +30,12 @@ DOC_PATHS = (
     "python/iroha_python/README.md",
 )
 
-# The production release has one public spend-again corridor. V2 is the
-# product selector; V3 names the governed artifact manifest/streaming
-# lifecycle, and 18 is the exact native bridge ABI. Historical ABI-6/ABI-7
-# fixtures are deliberately not part of this release policy.
-FIRST_RELEASE_SELECTOR = "recursive_spend_v2"
+# The production release has one public spend-again corridor. V1 is the public
+# product selector; V2 remains the internal typed/native artifact contract; V3
+# names the governed artifact manifest/streaming lifecycle; and 18 is the exact
+# native bridge ABI. Historical ABI-6/ABI-7 fixtures are deliberately excluded.
+FIRST_RELEASE_SELECTOR = "recursive_spend_v1"
+FIRST_RELEASE_ARTIFACT_MODE = "recursive_spend_v2"
 FIRST_RELEASE_BRIDGE_ABI = 18
 FIRST_RELEASE_MANIFEST_SCHEMA = "kagemusha.offline.recursive_spend.artifact_manifest.v3"
 FIRST_RELEASE_JAVA_PROVER = (
@@ -230,7 +231,8 @@ SHARED_FIXTURE_COVERAGE = {
         "change_output",
     ),
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs": (
-        "RecursiveSpendSharedAbi6FixtureMatchesSdkSurface",
+        "RecursiveSpendSharedAbi6FixtureIsExplicitlyRejectedByFirstReleaseSurface",
+        "Assert.NotEqual(KagemushaRecursiveSpendNative.RequiredNativeBridgeAbiVersion, fixtureAbiVersion)",
         "kagemusha_recursive_spend_abi6",
         "archives.json",
         "archive_fixtures",
@@ -2286,6 +2288,7 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineToriiApiTests.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs",
     "IrohaSwift/README.md",
     "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift",
@@ -6106,13 +6109,18 @@ def check_first_release_v3_contract():
     kotlin = read(FIRST_RELEASE_KOTLIN_PROVER)
 
     if re.search(
-        rf"KAGEMUSHA_RECURSIVE_SPEND_MODE_V2\s*:\s*&str\s*=\s*\"{re.escape(FIRST_RELEASE_SELECTOR)}\"\s*;",
+        rf"KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1\s*:\s*&str\s*=\s*\"{re.escape(FIRST_RELEASE_SELECTOR)}\"\s*;",
         model,
     ) is None:
         fail(
-            f"{model_relative} must expose only the {FIRST_RELEASE_SELECTOR} first-release selector"
+            f"{model_relative} must expose only the {FIRST_RELEASE_SELECTOR} public selector"
         )
-    if "Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2)" not in model:
+    if re.search(
+        rf"KAGEMUSHA_RECURSIVE_SPEND_MODE_V2\s*:\s*&str\s*=\s*\"{re.escape(FIRST_RELEASE_ARTIFACT_MODE)}\"\s*;",
+        model,
+    ) is None:
+        fail(f"{model_relative} must preserve the {FIRST_RELEASE_ARTIFACT_MODE} internal artifact mode")
+    if "Some(KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1)" not in model:
         fail(f"{model_relative} first-release selector must fail closed when the backend is unavailable")
     if re.search(
         rf"KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3\s*:\s*&str\s*=\s*\"{re.escape(FIRST_RELEASE_MANIFEST_SCHEMA)}\"\s*;",
@@ -6179,6 +6187,8 @@ def check_first_release_v3_contract():
             fail(f"{relative} must pin {FIRST_RELEASE_MANIFEST_SCHEMA}")
         if FIRST_RELEASE_SELECTOR not in source:
             fail(f"{relative} must expose {FIRST_RELEASE_SELECTOR}")
+        if FIRST_RELEASE_ARTIFACT_MODE not in source:
+            fail(f"{relative} must preserve {FIRST_RELEASE_ARTIFACT_MODE} for the internal V3 artifact contract")
         if re.search(
             rf"REQUIRED_NATIVE_BRIDGE_ABI_VERSION(?:\s*:\s*Int)?\s*=\s*{FIRST_RELEASE_BRIDGE_ABI}\b",
             source,
@@ -6236,7 +6246,8 @@ def check_first_release_v3_contract():
         "isExactBridgeAbi(17)",
         "isExactBridgeAbi(19)",
         "Mode.values().length == 1",
-        '"recursive_spend_v2".equals(KagemushaRecursiveSpendProver.MODE)',
+        '"recursive_spend_v1".equals(KagemushaRecursiveSpendProver.MODE)',
+        '"recursive_spend_v2".equals(KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_MODE)',
         "malformedArtifactInputsFailBeforeNativeDispatch",
         "MAX_MANIFEST_BYTES + 1",
         "new byte[31]",
@@ -6251,7 +6262,8 @@ def check_first_release_v3_contract():
         "isExactBridgeAbi(17)",
         "isExactBridgeAbi(19)",
         "Mode.values()",
-        'assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.MODE)',
+        'assertEquals("recursive_spend_v1", KagemushaRecursiveSpendProver.MODE)',
+        'assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_MODE)',
         "malformedArtifactInputsFailBeforeNativeDispatch",
         "MAX_MANIFEST_BYTES + 1",
         "ByteArray(31)",
@@ -6266,6 +6278,7 @@ def check_first_release_v3_contract():
 
 def check_first_release_v3_docs():
     required = (
+        "`recursive_spend_v1`",
         "`recursive_spend_v2`",
         "ABI 18",
         "`kagemusha.offline.recursive_spend.artifact_manifest.v3`",
@@ -6275,6 +6288,40 @@ def check_first_release_v3_docs():
         for needle in required:
             if needle not in normalized:
                 fail(f"{relative} is missing the first-release ABI-18/V3 contract: {needle}")
+        selector_sentence = (
+            "The sole first-release product selector is `recursive_spend_v1`"
+            if relative == "docs/source/offline_kagemusha.md"
+            else "The only public product selector is `recursive_spend_v1`"
+        )
+        if selector_sentence not in normalized:
+            fail(
+                f"{relative} is missing the first-release ABI-18/V3 contract: "
+                f"{selector_sentence}"
+            )
+
+
+def check_first_release_archive_fields_required():
+    """Reject compatibility defaults in every archive carried by recursive_spend_v2."""
+
+    model_relative = "crates/iroha_data_model/src/offline/mod.rs"
+    model = read(model_relative)
+    for struct_name in (
+        "KagemushaRecursiveAggregationProofPublicInputs",
+        "KagemushaRecursiveSpendAccumulatorV1",
+        "KagemushaRecursiveSpendTransitionProfileV1",
+        "KagemushaRecursiveSpendLineageAppendBoundaryV1",
+    ):
+        match = re.search(
+            rf"pub struct {struct_name} \{{(?P<body>[\s\S]*?)\n    \}}",
+            model,
+        )
+        if match is None:
+            fail(f"{model_relative} is missing {struct_name}")
+        if "#[norito(default)]" in match.group("body"):
+            fail(
+                f"{struct_name} first-release recursive spend archive fields must not use "
+                "#[norito(default)]"
+            )
 
 
 def run_checks():
@@ -6303,6 +6350,7 @@ def run_checks():
     check_core_offline_note_v2_retired_ios_app_attest_profile()
     check_first_release_v3_contract()
     check_first_release_v3_docs()
+    check_first_release_archive_fields_required()
     check_current_roadmap_profile_is_fresh()
     check_current_roadmap_semantic_init_is_fresh()
     check_verify_result_fail_closed_coverage()
@@ -6362,11 +6410,20 @@ if mode == "--negative-control-first-release-v3-contract":
             (
                 "crates/iroha_data_model/src/offline/mod.rs",
                 lambda source: source.replace(
-                    'KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";',
-                    'KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v1";',
+                    'KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1: &str = "recursive_spend_v1";',
+                    'KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1: &str = "unsupported_mode";',
                     1,
                 ),
-                "must expose only the recursive_spend_v2 first-release selector",
+                "must expose only the recursive_spend_v1 public selector",
+            ),
+            (
+                "crates/iroha_data_model/src/offline/mod.rs",
+                lambda source: source.replace(
+                    'KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";',
+                    'KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "unsupported_mode";',
+                    1,
+                ),
+                "must preserve the recursive_spend_v2 internal artifact mode",
             ),
             (
                 "crates/iroha_data_model/src/offline/mod.rs",
@@ -6421,10 +6478,10 @@ if mode == "--negative-control-first-release-v3-jvm-tests":
             (
                 FIRST_RELEASE_JAVA_TEST,
                 lambda source: source.replace(
-                    "exactAbiAndSingleModeAreFailClosed",
-                    "exactAbiAndSingleModeMayDrift",
+                    "exposesStableModesAndCircuitIds",
+                    "exposesDriftedModesAndCircuitIds",
                 ),
-                "exactAbiAndSingleModeAreFailClosed",
+                "exposesStableModesAndCircuitIds",
             ),
             (
                 FIRST_RELEASE_JAVA_TEST,
@@ -6437,18 +6494,18 @@ if mode == "--negative-control-first-release-v3-jvm-tests":
             (
                 FIRST_RELEASE_KOTLIN_TEST,
                 lambda source: source.replace(
-                    "malformed artifact inputs fail before native dispatch",
-                    "malformed artifact inputs may reach native dispatch",
+                    "malformedArtifactInputsFailBeforeNativeDispatch",
+                    "malformedArtifactInputsMayReachNativeDispatch",
                 ),
-                "malformed artifact inputs fail before native dispatch",
+                "malformedArtifactInputsFailBeforeNativeDispatch",
             ),
             (
                 FIRST_RELEASE_KOTLIN_TEST,
                 lambda source: source.replace(
-                    "public surface omits retired recursive APIs",
-                    "public surface may expose retired recursive APIs",
+                    "publicSurfaceOmitsRetiredRecursiveApis",
+                    "publicSurfaceMayExposeRetiredRecursiveApis",
                 ),
-                "public surface omits retired recursive APIs",
+                "publicSurfaceOmitsRetiredRecursiveApis",
             ),
         ),
         "ABI-18/V3 first-release JVM adversarial coverage",
@@ -6468,8 +6525,8 @@ if mode == "--negative-control-first-release-v3-docs":
             ),
             (
                 "roadmap.md",
-                lambda source: source.replace("`recursive_spend_v2`", "`recursive_spend_v1`"),
-                "`recursive_spend_v2`",
+                lambda source: source.replace("`recursive_spend_v1`", "`unsupported_mode`", 1),
+                "`recursive_spend_v1`",
             ),
         ),
         "ABI-18/V3 first-release documentation",

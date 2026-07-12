@@ -35,7 +35,7 @@ private struct StubTransportError: Error {}
 
 private final class PipelineURLProtocol: URLProtocol {
     private static let lock = NSLock()
-    private static var statusBodies: [Data] = []
+    private static var statuses: [(kind: String, rejectionReason: String?)] = []
     private static var submitStatusCode: Int = 202
     private static var submitBody: Data = PipelineURLProtocol.defaultSubmitBody
     private static var submitResponses: [(Int, Data)] = []
@@ -53,7 +53,9 @@ private final class PipelineURLProtocol: URLProtocol {
             let (code, body) = PipelineURLProtocol.nextSubmitResponse()
             sendResponse(code: code, body: body)
         } else if PipelineURLProtocol.isStatusPath(url.path) {
-            let body = PipelineURLProtocol.dequeueStatusBody()
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            let hash = components?.queryItems?.first(where: { $0.name == "hash" })?.value ?? ""
+            let body = PipelineURLProtocol.dequeueStatusBody(hash: hash)
             sendResponse(code: 200, body: body)
         } else if PipelineURLProtocol.isNodeCapabilitiesPath(url.path) {
             sendResponse(code: 200, body: PipelineURLProtocol.nodeCapabilitiesBody)
@@ -79,7 +81,7 @@ private final class PipelineURLProtocol: URLProtocol {
 
     static func configure(statuses: [String], rejectionReason: String? = nil) {
         lock.lock()
-        statusBodies = statuses.map { makeStatusBody(kind: $0, rejectionReason: rejectionReason) }
+        self.statuses = statuses.map { ($0, rejectionReason) }
         lock.unlock()
     }
 
@@ -91,7 +93,7 @@ private final class PipelineURLProtocol: URLProtocol {
 
     static func reset() {
         lock.lock()
-        statusBodies = []
+        statuses = []
         submitStatusCode = 202
         submitBody = defaultSubmitBody
         submitResponses = []
@@ -116,13 +118,18 @@ private final class PipelineURLProtocol: URLProtocol {
         return keys
     }
 
-    private static func dequeueStatusBody() -> Data {
+    private static func dequeueStatusBody(hash: String) -> Data {
         lock.lock()
         defer { lock.unlock() }
-        if statusBodies.isEmpty {
-            return makeStatusBody(kind: "Pending")
+        if statuses.isEmpty {
+            return makeStatusBody(hash: hash, kind: "Queued")
         }
-        return statusBodies.removeFirst()
+        let next = statuses.removeFirst()
+        return makeStatusBody(
+            hash: hash,
+            kind: next.kind,
+            rejectionReason: next.rejectionReason
+        )
     }
 
     private static func nextSubmitResponse() -> (Int, Data) {
@@ -134,20 +141,32 @@ private final class PipelineURLProtocol: URLProtocol {
         return (submitStatusCode, submitBody)
     }
 
-    private static func makeStatusBody(kind: String, rejectionReason: String? = nil) -> Data {
+    private static func makeStatusBody(
+        hash: String,
+        kind: String,
+        rejectionReason: String? = nil
+    ) -> Data {
         var status: [String: Any] = [
-            "kind": kind,
-            "content": NSNull()
+            "kind": kind
         ]
-        if let rejectionReason {
-            status["rejection_reason"] = rejectionReason
+        if kind == "Applied" {
+            status["block_height"] = 7
         }
+        let terminal = ["Applied", "Rejected", "Expired"].contains(kind)
+        let diagnostics: [[String: Any]] = rejectionReason.map {
+            [[
+                "category": "validation",
+                "message": $0,
+                "decoded_reason": $0
+            ]]
+        } ?? []
         let payload: [String: Any] = [
-            "kind": "PipelineTransactionStatus",
-            "content": [
-                "hash": "abc",
-                "status": status
-            ]
+            "hash": hash,
+            "status": status,
+            "summary": rejectionReason.map { "\(kind): \($0)" } ?? kind,
+            "diagnostics": diagnostics,
+            "scope": "global",
+            "resolved_from": terminal ? "state" : "cache"
         ]
         return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
     }
@@ -211,6 +230,7 @@ private func expectedTail(forTTL ttl: UInt64?) -> Data {
 }
 
 final class TxBuilderTests: XCTestCase {
+    private static let pipelineHash = String(repeating: "a", count: 64)
     private static let fixturePrivateKeyHex = "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
     private static let fixtureChainId = "00000000-0000-0000-0000-000000000000"
     private static let fixtureDomain = "wonderland.universal"
@@ -1974,7 +1994,7 @@ final class TxBuilderTests: XCTestCase {
     func testSubmitAndWaitAsyncSucceeds() async throws {
         try requireEd25519Encoder()
         PipelineURLProtocol.reset()
-        PipelineURLProtocol.configure(statuses: ["Queued", "Approved", "Committed"])
+        PipelineURLProtocol.configure(statuses: ["Queued", "Approved", "Committed", "Applied"])
         let sdk = try makePipelineSDK()
         let keypair = try makeFixtureKeypair()
         let request = TransferRequest(chainId: Self.fixtureChainId,
@@ -1985,7 +2005,7 @@ final class TxBuilderTests: XCTestCase {
                                       description: nil,
                                       ttlMs: 60)
         let status = try await sdk.submitAndWait(transfer: request, keypair: keypair)
-        XCTAssertEqual(status.content.status.kind, "Committed")
+        XCTAssertEqual(status.status.kind, "Applied")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -2096,7 +2116,7 @@ final class TxBuilderTests: XCTestCase {
         let task = sdk.submitAndWait(transfer: request, keypair: keypair) { result in
             switch result {
             case .success(let status):
-                XCTAssertEqual(status.content.status.kind, "Applied")
+                XCTAssertEqual(status.status.kind, "Applied")
                 expectation.fulfill()
             case .failure(let error):
                 XCTFail("Unexpected error: \(error)")
@@ -2136,7 +2156,7 @@ final class TxBuilderTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testSubmitAndWaitCustomSuccessStates() async throws {
+    func testSubmitAndWaitDoesNotAllowCustomNonFinalSuccessStates() async throws {
         try requireEd25519Encoder()
         PipelineURLProtocol.reset()
         PipelineURLProtocol.configure(statuses: ["Approved"])
@@ -2149,9 +2169,15 @@ final class TxBuilderTests: XCTestCase {
                                       destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
                                       ttlMs: 60)
-        let options = PipelineStatusPollOptions(successStates: Set([.approved]), failureStates: Set())
-        let status = try await sdk.submitAndWait(transfer: request, keypair: keypair, pollOptions: options)
-        XCTAssertEqual(status.content.status.kind, "Approved")
+        let options = PipelineStatusPollOptions(pollInterval: 0, timeout: 0.1, maxAttempts: 2)
+        do {
+            _ = try await sdk.submitAndWait(transfer: request, keypair: keypair, pollOptions: options)
+            XCTFail("Expected Approved-only status to remain non-final")
+        } catch let error as PipelineStatusError {
+            guard case .timeout = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -2237,10 +2263,10 @@ final class TxBuilderTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testPollPipelineStatusAsync() async throws {
         PipelineURLProtocol.reset()
-        PipelineURLProtocol.configure(statuses: ["Committed"])
+        PipelineURLProtocol.configure(statuses: ["Committed", "Applied"])
         let sdk = try makePipelineSDK()
-        let status = try await sdk.pollPipelineStatus(hashHex: "abc")
-        XCTAssertEqual(status.content.status.kind, "Committed")
+        let status = try await sdk.pollPipelineStatus(hashHex: Self.pipelineHash)
+        XCTAssertEqual(status.status.kind, "Applied")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -2249,7 +2275,7 @@ final class TxBuilderTests: XCTestCase {
         PipelineURLProtocol.configure(statuses: ["Rejected"])
         let sdk = try makePipelineSDK()
         let expectation = expectation(description: "poll completion")
-        let task = sdk.pollPipelineStatus(hashHex: "abc") { result in
+        let task = sdk.pollPipelineStatus(hashHex: Self.pipelineHash) { result in
             switch result {
             case .success:
                 XCTFail("Expected failure status")

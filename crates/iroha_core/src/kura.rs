@@ -5009,6 +5009,7 @@ impl Kura {
     /// # Errors
     /// Returns an error when the pending directory is unreadable, exceeds its
     /// hard entry-count/byte caps, or contains a malformed sidecar.
+    #[cfg(test)]
     pub(crate) fn select_pending_certified_merge_entry(
         &self,
     ) -> Result<Option<(HashOf<MergeLedgerEntry>, MergeLedgerEntry)>> {
@@ -6709,6 +6710,7 @@ impl Kura {
     }
 
     /// Read a bounded, root-authenticated SCCP archive retained independently of the block body.
+    #[cfg(test)]
     pub(crate) fn retained_sccp_archive(
         &self,
         height: u64,
@@ -15076,6 +15078,7 @@ impl Kura {
     /// Returns an error when the execution input is no longer canonical, the
     /// preflight result is internally inconsistent, the lane has no configured
     /// storage segment, or the sidecar write fails.
+    #[cfg(test)]
     pub(crate) fn persist_lane_block_execution_preflight(
         &self,
         input: &LaneBlockExecutionInputArtifact,
@@ -15110,6 +15113,7 @@ impl Kura {
         self.write_lane_block_execution_preflight_artifact(&artifact)
     }
 
+    #[cfg(test)]
     fn write_lane_block_execution_preflight_artifact(
         &self,
         artifact: &LaneBlockExecutionPreflightArtifact,
@@ -16502,6 +16506,7 @@ impl Kura {
     /// Artifacts are sorted by lane-local height first so recovery can rebuild
     /// predecessor-gated lane sessions before later blocks that depend on them.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn lane_block_artifacts_snapshot(&self) -> Vec<LaneBlockArtifact> {
         let lane_ids = self
             .lane_storage_entries
@@ -16525,6 +16530,7 @@ impl Kura {
         artifacts
     }
 
+    #[cfg(test)]
     fn lane_block_artifacts_for_lane(&self, lane_id: LaneId) -> Vec<LaneBlockArtifact> {
         let Some(entry) = self.lane_storage_entry(lane_id).ok() else {
             return Vec::new();

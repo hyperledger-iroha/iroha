@@ -153,66 +153,25 @@ canonical unprefixed Base58 asset-definition IDs on the Swift surface.
 
 `IrohaSDK` trims and validates chain/account/asset identifiers before signing and fails fast on malformed inputs. Override `creationTimeProvider` when you need deterministic timestamps for fixture generation or offline signing flows. `defaultSigningAlgorithm` controls the SDK helpers used by `generateSigningKey()` / `signingKey(fromSeed:)`; `Keypair` convenience APIs are Ed25519-only while native-backed algorithms use `NoritoBridge`.
 
-### Offline cash lifecycle and UI
+### Kagemusha offline cash lifecycle
 
-Use `OfflineCashLifecycleController` around `OfflineNoteWallet` instead of
-calling `load` directly from app screens. The controller syncs pending audit
-receipts before issuing more cash, while local offline send/receive flows stay
-on cached setup data and do not fetch `/v1/capabilities`.
+IrohaSwift exposes one public offline-cash product selector:
+`KagemushaOfflineSpendMode.recursiveSpend` (`recursive_spend_v1`). The
+versioned native artifact contract remains `recursive_spend_v2` and is not a
+second spend mode.
 
-```swift
-import IrohaSwift
-import IrohaSwiftTransferUI
+Use the typed `KagemushaRecursiveSpend` and
+`KagemushaRecursiveSpendCodecs` APIs for top-up, recipient-request creation,
+split/append, receiver verification and acknowledgement, and full or partial
+redemption. Amounts are canonical atomic `u128` values paired with the
+asset-definition scale; callers must reject excess decimal precision instead of
+rounding.
 
-let snapshot = OfflineCashConfigurationSnapshot(
-    chainId: "00000042",
-    assetDefinitionId: "pkr#sbp",
-    offlinePaymentsEnabled: true,
-    issuerPublicKeyBase64: cachedIssuerKeyBase64,
-    nativeBridgeAbiVersion: 7,
-    createdAtMs: cachedAtMs,
-    expiresAtMs: expiresAtMs
-)
-try snapshot.requireUsableForOfflineExchange(
-    nowMs: currentTimeMs,
-    requiredNativeBridgeAbiVersion: 7
-)
-
-let controller = OfflineCashLifecycleController(
-    wallet: offlineNoteWallet,
-    auditReceiptSynchronizer: appAuditSynchronizer
-)
-let issuedNote = try await controller.load(assetDefinitionId: "pkr#sbp", amount: "500")
-```
-
-For SwiftUI screens, use `IrohaOfflineCashFlowView` or
-`IrohaOfflineTransferTransportPicker` and pass platform capabilities. NFC is
-included only when the device and app build support it; apps without HCE or
-non-NFC devices should pass `.unavailable(...)` and the control is omitted.
-
-```swift
-let transports = OfflineNoteTransferCapabilities(
-    qrStreaming: true,
-    nfc: appHasHceEntitlement && deviceSupportsNfc
-        ? .supported
-        : .unavailable("NFC requires device and app HCE support."),
-    nearby: true
-)
-
-IrohaOfflineCashFlowView(
-    state: IrohaOfflineCashFlowState(
-        phase: .ready,
-        totalBalance: "1000",
-        spendableBalance: "900",
-        pendingBalance: "100",
-        pendingReceiptCount: 1
-    ),
-    capabilities: transports,
-    selectedTransport: .qr
-) { action in
-    // Route setup/load/send/receive/redeem/sync actions through app services.
-}
-```
+Wallet applications own encrypted note state and QR/NFC transport. Persist inputs,
+recipient output, optional sender change, lineage witness, and operation status at
+each commit boundary. Fetch and install the complete V3 artifact set before an
+offline exchange; no network or artifact access belongs on the offline send or
+receive path.
 
 ### Push Devices
 
@@ -648,11 +607,6 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-Retired Offline Note issuance, audit, redeem, and defund transaction paths are
-retired. The Swift builders and default submitters fail closed before signing or
-submitting; production offline payments use Kagemusha top-up, transfer, and
-recursive redeem flows.
-
 ### Offline transaction queue
 
 Set `sdk.pendingTransactionQueue` to automatically persist signed envelopes when submissions
@@ -673,299 +627,49 @@ apps can decide how to remediate.
 
 ### Offline APIs
 
-`ToriiClient` exposes the first-release Offline API: readiness for a required
-asset definition, direct-Norito top-up and redeem submissions, and operation
-status. Use `getOfflineReadiness(assetDefinitionId:)`, `submitOfflineTopUp`,
+`ToriiClient` uses only the canonical direct Torii lifecycle:
+`GET /v1/offline/readiness`, `POST /v1/offline/top-up`,
+`POST /v1/offline/redeem`, and `GET /v1/offline/operations/{operation_id}`.
+Use `getOfflineReadiness(assetDefinitionId:)`, `submitOfflineTopUp`,
 `submitOfflineRedeem`, and `getOfflineOperationStatus(operationId:)`.
-Construct `OfflineTopUpRequest(noritoArchive:)` and
-`OfflineRedeemRequest(noritoArchive:)` from their canonical first-release request
-archives. The SDK derives the lowercase idempotency key from the embedded
-nonzero 32-byte operation ID; callers cannot supply or override it. Applied
-top-up results expose `OfflineTopUpAnchor`, which validates and retains the
-canonical anchor archive without publishing an internal versioned wire type.
-Classic note issue, redemption, audit, and defund models are fixture-only;
-production offline payments use Kagemusha transaction builders.
-Swift exposes `OfflineNoteIssue`, `OfflineNoteRedeem`, and `OfflineNoteAuditBundle`
-models plus retired `buildIssueOfflineNote`, `buildRedeemOfflineNote`,
-`buildAuditOfflineNote`, and `buildDefundOfflineNote` methods on `IrohaSDK`.
 
-The retired `buildRedeemOfflineNote`, `buildAuditOfflineNote`,
-`buildIssueOfflineNote`, and `buildDefundOfflineNote` methods now throw before
-signing. Do not use them for new wallet flows.
+`OfflineTopUpRequest` and `OfflineRedeemRequest` accept only the corresponding
+typed Kagemusha Norito archive. They derive the lowercase idempotency key from
+the embedded nonzero operation ID; callers cannot override it. Keep a submitted
+operation and its input note until the operation status reaches final chain
+state. A transport timeout or unknown state is not permission to create a new
+operation ID.
 
-`OfflineNoteWallet` remains available for historical fixture records, but its
-default issuer and transaction submitter surfaces fail
-closed for retired note issue, audit, redeem, and defund paths. Production
-offline payments use Kagemusha flows. When an injected test issuer path is
-used, `load` records issued notes as `.issuePending` until `sync()`
-observes matching `IssueOfflineNote` finality; rejected issue outcomes cancel
-the pending note.
-The first release exposes one Kagemusha production mode: `recursive_spend_v2`.
-Selection requires the exact native bridge ABI 18
-capability archive, a validated `proof_backend_available` value, and the full
-native symbol inventory. `KagemushaRecursiveSpendProver.preferredMode` returns
-`.recursiveSpend` only when that ABI-18 backend is ready; otherwise it returns
-`nil`. Older proof modes and symbol-presence probes are not release fallbacks.
+The sole product mode is `recursive_spend_v1`. Runtime use requires the exact
+ABI 18 capability archive, the complete native V2 symbol inventory, and a
+validated proof-backend readiness result. The V3 manifest and its six streamed
+key artifacts are content-addressed and installed atomically through
+`KagemushaRecursiveSpendArtifactInstallSessionV3`; a partial or corrupt
+generation never becomes active.
 
-`KagemushaRecursiveSpend` consumes the canonical V3 release manifest and its
-content address. The release directory has exactly ten files:
+Top-up uses `KagemushaRecursiveSpendTopUpUnsigned`, an authorization over its
+canonical digest, direct Torii submission, authenticated finality verification,
+and `KagemushaRecursiveSpend.initSpend`. Offline transfer is receiver-initiated:
+verify the nonce-bound `KagemushaRecipientPaymentRequest`, construct an append
+request with recipient and optional change branches, call `appendSpend`, verify
+the result locally, and send only the recipient peer-payment archive.
 
-- `manifest.json`
-- `manifest.norito`
-- `manifest.norito.sha256`
-- `transition-eq.parameters.krv3`
-- `transition-eq.proving-key.krv3`
-- `transition-eq.verifying-key.krv3`
-- `state-ep.parameters.krv3`
-- `state-ep.proving-key.krv3`
-- `state-ep.verifying-key.krv3`
-- `topup-finality-roster.norito`
+The receiver calls `verifySpend`, checks the exact asset, scale, amount,
+recipient commitment, verifier window, hop bound, and lineage requirements,
+then durably stores the bundle before creating a
+`KagemushaReceiverAcknowledgement`. The sender marks its reserved inputs spent
+only after `verifiedForSender` accepts that acknowledgement. Replayed peer
+payments and acknowledgements remain idempotent at the wallet operation layer.
 
-Treat `manifest.norito` as the canonical runtime object and verify its SHA-256
-before ingesting any payload. JSON is an operator view, not a trust anchor. For
-each of the six `KRV3KEY\0` files, begin a manifest-bound streaming ingest with
-`KagemushaRecursiveSpendArtifactInstallSessionV3.beginArtifact`, write bounded
-chunks, finalize only after the complete file has been validated, and cancel
-the handle on every error path.
-The native begin/write/finalize/cancel operations bind the manifest digest,
-artifact digest, framing header, descriptor, payload size, and payload digest.
-Successful ingestion alone does not advertise proof readiness. The six finalized
-streams must be installed atomically through
-`KagemushaRecursiveSpendArtifactInstallSessionV3`; partial generations remain
-unavailable and failed installation retains the prior active generation.
-The SDK also exposes the recursive-spend compact projection verifier for raw
-Norito compact-token and verifier-record archives. Call
-`verifyRecursiveSpendCompactPaymentTokenProjection(compactTokenArchive:verifierRecordArchive:blockHeight:)`
-and require its native boolean receiver result; use
-`isProjectionVerifierNativeAvailable` to probe that verifier surface before
-dispatch.
+Redemption uses `KagemushaRecursiveSpendRedemptionIntentBuildRequest`, the
+unshield-v3 proof APIs, and `KagemushaRecursiveSpendRedeemUnsigned`. Full redeem
+has no change branch; partial redeem binds one offline change branch to the same
+proof and operation ID. `redeemSpend` returns the canonical request submitted by
+`submitOfflineRedeem`.
 
-Top-up admission also requires the manifest-bound finality roster and a final
-committed Torii result. An accepted submission, an unknown operation state, or
-an inconclusive status poll is not finality. Wallets must retain the operation
-identifier, poll the direct Torii status surface, and stop on rejection or an
-ambiguous terminal outcome rather than submitting the same operation again.
-Transaction builders expose the same Kagemusha instruction surface without
-asking wallet code to reframe native archives. Use
-`KagemushaInstructionTransactionRequest` for a typed `KagemushaTransfer` or
-`RedeemKagemushaRecursive` instruction archive, use
-`IrohaSDK.buildKagemushaRecursiveTopUp(...)` to derive the initial
-`TopUpKagemushaRecursive` instruction from a recursive spend top-up request
-archive, and use
-`IrohaSDK.buildKagemushaRecursiveRedeem(...)` to derive the redeem instruction
-from a native recursive redeem request before signing. These builders require
-valid Norito archives, reject empty, malformed, tampered, or wrong-type
-instruction archives, and keep recursive top-up/redeem derivation inside the
-native bridge. Experimental helper symbols are not compatibility inputs to the
-first-release ABI-18/V2 DTOs and cannot be selected as a release mode.
-
-The first-release V2 surface uses the flat,
-`KagemushaRecursiveSpendInitRequestV2` contract instead. Its five fields are the
-finalized top-up anchor, checked one-hop record bundle, Pallas opening archive,
-lineage mode, and optional Reserved-lineage artifact. Amount, current note,
-operation id, artifact generation, and verifier lifecycle height are derived
-from the finalized anchor; no nested V1 request, inline keys, duplicated public
-fields, or optional height is accepted. Swift validates the transfer chain,
-asset, roots, nullifiers, single output commitment, verifier id/commitment, and
-the verifier activation window before encoding or native dispatch. Peer bundles
-carry strictly ordered compact top-up references rather than full anchors, and
-branch claims carry exactly `path.depth` 24-byte transition tags. Swift exposes
-those tags as `[Data]`, while canonical Norito concatenates them into one
-`depth * 24` byte `Vec<u8>` with no nested per-tag vectors. The recipient-only
-peer-payment wire contains only its proof-bearing recipient bundle; operation id
-and recipient-request digest are derived from that bundle's recipient
-`PeerSplit` transition and are never duplicated beside it. A V2 split accepts
-one or two canonical parents; semantic redemption carries the bounded canonical
-lineage DAG needed to verify cross-top-up joins.
-For protocol preflight, the append-boundary helper
-`lineageAppendBoundary(profileArchive:)` derives the compact append-boundary
-Norito archive from a full append transition profile with native opening
-preflight material; wallet code should treat the boundary bytes as opaque
-verifier material.
-The append-boundary digest uses the public
-`recursiveSpendLineageAppendBoundaryDomainV1` domain, plus the
-`recursiveSpendLineageAppendBoundaryChainAssetBindingDomainV1` and
-`recursiveSpendLineageAppendBoundaryFinalNoteBindingDomainV1` subdomains for
-chain/asset and final-root/current-note binding.
-`KagemushaRecursiveSpendProver.recursiveSpendLineageWitnesslessMaxHopsV1`
-is `64`, but it is only the protocol bound. The
-`recursiveSpendLineageTransitionCircuitWiredV1` readiness flag is `false`, so
-witnessless Reserved-lineage redeem and append fail closed for every circuit
-and hop count. Online redemption must carry a record-backed lineage witness.
-Use
-`KagemushaRecursiveSpendProver.canRedeemWitnessless` or
-`requiresLineageWitnessForRedeem` to make that branch from circuit id and hop
-count. `canAppendWitnesslessLineage` returns `false` for every previous hop
-count while transition verification is unavailable.
-`preferredAppendOutputCircuitId(previousHopCount:)` returns the recommended
-append output selector for this release; it always selects semantic recursive
-aggregation while transition verification is unavailable.
-`canProveAppendOutputCircuitId(_:previousHopCount:)` tells wallet code whether
-the selected append output can be proved in this release: semantic recursive
-append is available for previous hop counts `1...63`, while Reserved-lineage
-append is not currently provable.
-The semantic append path is bounded by `compactTokenMaxHops`; the separate
-`recursiveSpendLineageWitnesslessMaxHopsV1` remains a protocol bound and does
-not enable witnessless admission.
-`canSelectAppendOutputCircuitId(previousProofCircuitId:outputCircuitId:previousHopCount:)`
-adds the previous-proof transition check before a wallet serializes the append
-request.
-`isSupportedPreviousProofCircuitId(_:)` and
-`requiresPreviousLineageVerifierRecordForAppend(previousProofCircuitId:)` let
-wallets reject unknown previous recursive proof circuits and include
-`previous_lineage_verifier_record` only for Reserved-lineage previous bundles.
-`requiresPreviousProofOpenEnvelopesForAppend(outputCircuitId:previousHopCount:)`
-tells wallet code whether the selected append output circuit requires the
-request to carry the previous recursive proof opening archive. The
-`outputCircuitId` argument is the append request's `output_proof_circuit_id`;
-wallets must pass either the semantic aggregation circuit id or the
-append-specific Reserved-lineage circuit id explicitly; missing, empty, and
-family-id selectors are rejected before native dispatch. The
-`KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(recordBundleArchive:)`
-and `buildPreviousProofOpenEnvelopesArchive(previousBundleArchive:)` helpers ask
-the native bridge to generate the opaque Pallas opening archives for the current
-hop record bundle and the previous recursive proof. The
-`previous_recursive_proof_open_envelopes_archive` field remains opaque native
-prover material: Swift wallet code must pass it through Norito unchanged and
-must not construct, rewrite, or mutate it. The native bridge validates
-`vk_commitment`, `public_inputs_schema_hash`, and `domain_tag` against the exact
-previous bundle before proving or returning output bytes.
-For confidential-v2 top-up flows, Swift also mirrors the Kotlin helper surface:
-use `KagemushaVerifiedFoldHopEvidence` with
-`buildVerifiedFoldRecordBundle(hops:)` to assemble the verified fold bundle
-from native proof output archives, open-verify envelopes, verifier records, and
-Pallas opening archives. `buildPallasOpenEnvelopesArchive(hops:)` derives the
-per-hop opening archive bundle, and
-`encodeConfidentialTransferV2VerifierRecordArchive(verifierKey:)` emits the
-confidential-transfer-v2 verifier record. Its Norito layout matches the Rust
-derive exactly: direct `[u8; 32]` struct fields are packed as 32 raw bytes,
-while `[u8; 32]` values inside `Vec` and `Option` retain ConstVec's
-length-delimited per-byte framing. Public-input schema and proof-envelope
-hashes use the marked Iroha Blake2b-256 representation, and
-`ConfidentialStatus` is archived as a four-byte `u32` discriminant despite its
-Rust `repr(u8)`. `AssetDefinitionId` is not one of those packed protocol
-fields: its delegated `[u8; 16]` representation keeps per-element framing.
-Canonical `ProofAttachment` encoding also omits an absent trailing default
-`lane_privacy` field instead of writing an explicit `None`. Swift does not
-expose a proof-output-only verified-fold
-builder; Pallas opening evidence is required to validate every hop.
-
-For confidential-unshield redemption, fetch the exact verifier record from
-Torii and keep it bound to the native proof through the complete
-request-to-redeem flow. The first-release API keeps each trust boundary
-explicit: `ToriiClient.getVerifyingKey` rejects a response whose identifier
-does not match the requested key, the exact canonical record archive is carried
-forward unchanged, and the attachment builder verifies the native proof before
-returning an attachment:
-
-```swift
-let unshieldVerifierKeyId = try ToriiVerifyingKeyId(
-    backend: "halo2/ipa",
-    name: "vk_unshield"
-)
-let verifierDetail = try await torii.getVerifyingKey(
-    backend: unshieldVerifierKeyId.backend,
-    name: unshieldVerifierKeyId.name
-)
-let verifierRecord = try verifierDetail
-    .asKagemushaRecursiveSpendVerifierRecordRef()
-let proofRequest = try PrivacyConfidentialWitnessCodecs
-    .buildConfidentialUnshieldProofRequestV2(witness: unshieldWitness)
-let proofOutput = try PrivacyNativeBridge.buildConfidentialUnshieldProofV3(
-    requestArchive: proofRequest
-)
-let redeemProof = try KagemushaRecursiveSpendRequestCodecs
-    .buildRedeemProofAttachment(
-        unshieldProofOutputArchive: proofOutput,
-        unshieldVerifierRecord: verifierRecord,
-        blockHeight: currentBlockHeight
-    )
-let redeemRequest = try KagemushaRecursiveSpendRedeemRequest(
-    bundle: recursiveBundle,
-    recipient: recipient,
-    publicAmount: publicAmount,
-    redeemProof: redeemProof,
-    lineageWitness: lineageWitness,
-    changeOutput: changeCommitment,
-    lineageVerifierRecord: lineageVerifierRecord,
-    lineageVerifierRecords: lineageVerifierRecords,
-    blockHeight: currentBlockHeight
-)
-let redeemRequestArchive = try KagemushaRecursiveSpendRequestCodecs
-    .encodeRedeemRequest(redeemRequest)
-```
-
-Torii's `record_norito_base64` is the authoritative record archive; the SDK
-does not reconstruct it from the JSON projection.
-
-The unshield witness builder rejects transfer outputs, permits zero or one
-private change output, accepts every canonical `u128` public amount, and binds
-the production unshield-v3 verifier reference and nine-column public-input
-schema. The redeem attachment builder accepts only successful native build and
-verify results for `unshield`/`buildConfidentialUnshieldProofV3`. It requires
-the verify result to contain the byte-identical proof and `verified == true`,
-so a missing native bridge, malformed envelope, all-zero or garbage proof, or
-canonical-key substitution fails closed. The matching verifier record must be
-active, use the `offline_kagemusha` namespace and Pallas backend/curve, and have
-consistent inline key, commitment, schema, circuit, and proof-size metadata.
-Windowless active records remain usable without a height. If either activation
-or withdrawal is present, pass `blockHeight`: activation is inclusive and
-withdrawal is exclusive.
-
-The builder emits the canonical logical six-field Norito `ProofAttachment`,
-including
-the complete open-verify envelope and its Iroha `Hash` value (Blake2b-256 with
-the required low-bit marker). Its absent trailing default `lane_privacy` field
-is omitted from the archive, so five fields are serialized. Do not substitute
-the generic Swift
-`ProofAttachment` encoder for a recursive redeem attachment: its general
-variable-tail/default-hash behavior is not the compact recursive-redeem
-contract. Native privacy results, open-verify envelopes, and
-verifier records must also use their canonical zero header padding; the shared
-Norito frame decoder's 64-byte ceiling is only the generic safety bound for
-types with different alignment requirements.
-
-Native append streams the previous recursive proof bytes and per-hop accumulator
-material into native-owned accumulator digests (`recursive_proof_chain_digest`,
-lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base,
-verifier-witness batch, transition-profile, append-opening-preflight,
-append-boundary, scalar-projection, and previous/resulting accumulator digests);
-SDK code must not derive, supply, or patch accumulator state.
-generic proof-state (`proofState`, `ProofState`, `proof_state`),
-recursive/lineage proof-state, aggregation-transcript, fixed-window
-table-schedule/shared-manifest/table-base, verifier-witness batch,
-transition-profile binding, append-opening preflight, recursive verifier
-scalar-projection, and previous/resulting accumulator aliases are native-owned
-material, not Swift request fields.
-Verify request archives must pass the
-same public-binding preflight before the native bridge returns a
-`KagemushaRecursiveSpendVerifyResultV1`: Reserved-lineage bundles require a
-matching active `lineage_verifier_record`, semantic bundles must omit it, and
-unsupported proof attachments are rejected as malformed requests rather than
-soft invalid proof results. Decoded verify results expose only
-`lineageWitnessRequiredForRedeem` for the redeem decision. Init requests may
-omit both packaged lineage key artifacts to select the semantic recursive
-aggregation path. That bundle is valid for offline acceptance and re-spending,
-while online redemption must carry the record-backed lineage witness. Supplying
-exactly one of `lineage_verifier_key` or `lineage_proving_key_archive` is
-rejected. Reserved-lineage append-output requests must still include the append
-lineage key artifacts in the raw Norito request. The
-previous bundle must already be Reserved-lineage before a Reserved-lineage
-append output is valid; semantic previous bundles keep using semantic append
-plus a record-backed lineage witness.
-Swift typed redeem builders accept the single-record `lineageVerifierRecord`
-path plus `lineageVerifierRecords` / raw `lineage_verifier_records` for
-additional Reserved-lineage verifier records. Use the plural field for
-multi-profile record-backed lineage witnesses, or place every Reserved-lineage
-verifier record there for vector-only callers.
-`normalizedAppendOutputCircuitId` and `isSupportedAppendOutputCircuitId`
-helpers expose that explicit-selector rule for wallet-side preflight. The
-`recursivePreviousProofOpenEnvelopesRequiredCountV1` and
-`recursivePreviousProofOpenEnvelopesMaxBytes` expose the exactly-one-envelope
-cardinality rule and native 8 MiB pre-decode cap for that archive.
-Native Kagemusha prover wrappers reject empty native result archives and native
-outputs larger than 64 MiB instead of treating them as successful proof
-material.
+All accumulator, proof, verifier-record, finality-proof, and lineage-witness
+archives are opaque to wallet code. Do not reconstruct or mutate them outside
+the typed codecs.
 
 ### Native privacy bridge
 
@@ -1020,69 +724,6 @@ duplicate JSON keys, noncanonical integer
 fields, non-lowercase fixed32 hex, depth/count drift, root drift,
 direction-bit drift, or non-verifying paths before wallet code receives proof
 material.
-
-`OfflineBearerCashWallet` is the app-facing Offline Bearer Cash surface. It is
-the Offline Note wallet under the cash naming layer, so value is represented by
-note commitments, note secrets, nullifiers, audit lineage, and issuer-signed
-hardware key certificates instead of a separate mutable purse protocol.
-
-`OfflineNoteTransferHandoff` wraps the canonical payment token into app-facing
-transfer modalities. Use `qrStreamingFrameBytes(for:)` for animated/binary QR
-flows, `nfcFrameBytes(for:)` for APDU-sized NFC frame exchange, and
-`nearbyPayload(for:)` or `nearbyFrameBytes(for:)` for MultipeerConnectivity or
-other nearby byte channels. `OfflineNoteTransferStreamReceiver` reconstructs
-stream frames back into a payment token, and `OfflineNoteTransferCapabilities`
-keeps NFC disabled on iOS unless the app explicitly opts in after confirming an
-allowed Core NFC HCE/CardSession use case and entitlement. Apps that want the
-png2-style NFC handoff can use `OfflineNoteNfcApduProtocol` directly: select
-the Iroha AID, read/write the 40-byte metadata header, transfer chunks, then
-commit and poll/read a local `receiptAck` payload. The default write helper
-`nfcPaymentTokenWriteAPDUs(for:)` uses Android-safe 240-byte chunks because many
-Android NFC stacks cannot reliably carry larger APDUs; iOS-to-iOS integrations
-can opt into the extended helpers only after both peers advertise support.
-`IrohaSwiftMobileTransports` adds an optional iOS CoreNFC implementation around
-that same APDU protocol. Configure `IrohaOfflineNfcConfiguration` with the app's
-AID, keep `cardSessionRuntimeEnabled` false unless the build has an allowed HCE
-entitlement/profile, and use `IrohaOfflineNfcReaderService` plus
-`IrohaOfflineNfcCardSessionController` for sender/receiver flows. The module
-logs only state, counts, status words, and sanitized error codes. `IrohaSwiftTransferUI`
-contains reusable SwiftUI QR/NFC/Nearby widgets and the QR fountain frame
-cycler used by wallet apps that want the png2-style transfer surface without
-copying transport logic.
-The app-facing receiver rejects completed streams whose QR envelope kind is not
-a payment token, and direct payload decoding enforces the payment-token content
-type before Norito decode. The QR stream decoder also rejects non-canonical
-frame/envelope lengths, header counter drift, data/parity count or chunk-length
-mismatches, out-of-range wire fields, poisoned parity recovery, payload-hash
-mismatches, and conflicting repeated headers or chunks.
-The NFC APDU parser fails closed on nonzero Le bytes for no-data commands,
-non-canonical zero-length reads, and direct read helpers with invalid requested
-lengths; no-offset APDUs also reject smuggled nonzero P1/P2 bytes. Nearby
-decoding rejects fractional versions, unknown fields inside
-pairing-challenge objects, and challenge/receipt ACK content-type downgrades
-instead of ignoring smuggled JSON.
-`OfflineNoteNearbyEnvelope` provides the matching sorted-key JSON envelope
-with unpadded base64url payloads, the pairing-image challenge used before
-sending a payment token, and the local receipt ACK returned by the receiver.
-None of these local transports require online sync for offline-to-offline value
-transfer.
-`OfflineNoteKeychainStore` writes wallet state through revisioned
-ThisDeviceOnly Keychain records and deletes the previous revision after each
-commit, so app-container rollback cannot revive an earlier note set without the
-deleted revision item. Retired `spendPending`, `SPEND_PENDING`, `changePending`, and `CHANGE_PENDING`
-wallet-note state names are rejected; first-release records must use current
-state names.
-Issuance is accepted only from an offline escrow manager with `CanManageOfflineEscrow`, and the
-one-use key certificate must be signed over its canonical payload. Redemption proofs bind the
-source note commitment, nullifiers, certified key payload, recipient, asset, and amount to a
-previously issued note claim before escrowed value is released. Optional audit bundles bind their
-token id, observed nullifiers, output commitments, and certified key payload to the proof, and the
-certified key must have been issued on-ledger first.
-Recursive proofs must name an active `offline_note` verifier key in WSV, carry an
-`OpenVerifyEnvelope`, match `offline_note_recursive_public_inputs_schema_hash()`, and expose the
-semantic Offline instance columns advertised by `/v1/offline/readiness`. The readiness
-payload includes the canonical `halo2/ipa` verifier key id for `offline-note-recursive`;
-wallets should submit only real prover output for that verifier.
 
 Submission retries can be tuned with `PipelineSubmitOptions` (default: 3 retries, 0.5s
 backoff, retrying 429/5xx responses and transport errors). For example:

@@ -44,6 +44,7 @@ const MAX_LANE_AVAILABILITY_QC_MODE_TAG_BYTES: usize = 256;
 
 /// Bytes reserved below the default consensus frame cap for the authenticated
 /// view/QC envelope and the later globally certified merge transcript.
+#[cfg(test)]
 pub(crate) const LANE_EXECUTABLE_ENVELOPE_HEADROOM_BYTES: usize =
     16 * 1024 * 1024 - MAX_LANE_EXECUTABLE_PAYLOAD_BYTES;
 /// Maximum canonical Norito body bytes retained for one autonomous lane payload.
@@ -2528,6 +2529,7 @@ impl LaneBlockSessionCache {
     ///
     /// The cursor is a stable session key instead of a vector index so concurrent
     /// insertion and pruning cannot repeatedly select the first cached sibling.
+    #[cfg(test)]
     pub(crate) fn periodic_rebroadcast_bundles_after(
         &self,
         signer: &PeerId,

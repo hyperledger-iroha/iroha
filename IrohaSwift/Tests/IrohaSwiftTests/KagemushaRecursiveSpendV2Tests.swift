@@ -3,6 +3,179 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaRecursiveSpendTests: XCTestCase {
+    func testNoteOpeningCodecRoundTripsOnlyCanonicalNonzeroArchives() throws {
+        let opening = try KagemushaNoteOpening(
+            spendKey: fixed32(0x31),
+            rho: fixed32(0x32),
+            diversifier: fixed32(0x33)
+        )
+        let archive = try KagemushaRecursiveSpendCodecs.encodeNoteOpening(opening)
+        XCTAssertEqual(
+            try KagemushaRecursiveSpendCodecs.decodeNoteOpening(archive),
+            opening
+        )
+
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendCodecs.decodeNoteOpening(Data(archive.dropLast()))
+        )
+        var extended = archive
+        extended.append(0)
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendCodecs.decodeNoteOpening(extended)
+        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendCodecs.decodeNoteOpening(
+                Data(repeating: 0, count: archive.count)
+            )
+        )
+    }
+
+    func testTopUpShieldBuildRequestBindsOwnerSnapshotAndEverySecret() throws {
+        let payer = try AccountAddress
+            .fromAccount(publicKey: fixed32(0xC0))
+            .toI105(networkPrefix: 0x02F1)
+        let assetID = "\(assetDefinitionID())#\(payer)"
+        let zeroPath = try PrivacyConfidentialMerklePathWitnessV2(
+            siblings: (0..<16).map { fixed32(UInt8($0 + 1)) },
+            directions: Data(repeating: 0, count: 16),
+            root: fixed32(0x21)
+        )
+        let opening = try KagemushaNoteOpening(
+            spendKey: fixed32(0x23),
+            rho: fixed32(0x24),
+            diversifier: fixed32(0x25)
+        )
+        let request = try KagemushaTopUpShieldBuildRequest(
+            chainID: "swift-kagemusha-topup",
+            assetID: assetID,
+            amount: KagemushaScaledAmount(decimal: "10.75", scale: 9),
+            payer: payer,
+            operationID: fixed32(0x22),
+            opening: opening,
+            leafIndex: 7,
+            zeroPath: zeroPath,
+            shieldVerifierID: "halo2/ipa:kagemusha-topup-shield-v2",
+            shieldVerifierCommitment: fixed32(0x26),
+            artifactGeneration: "release-generation-1"
+        )
+        XCTAssertEqual(request.amount.atomicUnits, "10750000000")
+        XCTAssertEqual(request.amount.scale, 9)
+        XCTAssertEqual(request.payer, payer)
+        XCTAssertEqual(request.opening, opening)
+        XCTAssertEqual(request.zeroPath, zeroPath)
+        XCTAssertNoThrow(
+            try KagemushaRecursiveSpendCodecs.encodeTopUpShieldBuildRequest(request)
+        )
+
+        let otherPayer = try AccountAddress
+            .fromAccount(publicKey: fixed32(0xC1))
+            .toI105(networkPrefix: 0x02F1)
+        XCTAssertThrowsError(try KagemushaTopUpShieldBuildRequest(
+            chainID: request.chainID,
+            assetID: assetID,
+            amount: request.amount,
+            payer: otherPayer,
+            operationID: request.operationID,
+            opening: request.opening,
+            leafIndex: request.leafIndex,
+            zeroPath: zeroPath,
+            shieldVerifierID: request.shieldVerifierID,
+            shieldVerifierCommitment: request.shieldVerifierCommitment,
+            artifactGeneration: request.artifactGeneration
+        ))
+
+        for field in ["operationID", "verifier"] {
+            XCTAssertThrowsError(try KagemushaTopUpShieldBuildRequest(
+                chainID: request.chainID,
+                assetID: assetID,
+                amount: request.amount,
+                payer: payer,
+                operationID: field == "operationID" ? fixed32(0) : request.operationID,
+                opening: request.opening,
+                leafIndex: request.leafIndex,
+                zeroPath: zeroPath,
+                shieldVerifierID: request.shieldVerifierID,
+                shieldVerifierCommitment: field == "verifier"
+                    ? fixed32(0)
+                    : request.shieldVerifierCommitment,
+                artifactGeneration: request.artifactGeneration
+            ), field)
+        }
+        for field in ["spendKey", "rho", "diversifier"] {
+            XCTAssertThrowsError(try KagemushaNoteOpening(
+                spendKey: field == "spendKey" ? fixed32(0) : opening.spendKey,
+                rho: field == "rho" ? fixed32(0) : opening.rho,
+                diversifier: field == "diversifier" ? fixed32(0) : opening.diversifier
+            ), field)
+        }
+
+        XCTAssertThrowsError(try KagemushaTopUpShieldBuildRequest(
+            chainID: request.chainID,
+            assetID: assetID,
+            amount: request.amount,
+            payer: payer,
+            operationID: request.operationID,
+            opening: request.opening,
+            leafIndex: UInt32(ToriiZkMerklePathResponse.confidentialTreeCapacityV2),
+            zeroPath: zeroPath,
+            shieldVerifierID: request.shieldVerifierID,
+            shieldVerifierCommitment: request.shieldVerifierCommitment,
+            artifactGeneration: request.artifactGeneration
+        ))
+    }
+
+    func testTopUpReadinessExpectationRejectsRoleSubstitutionAndExpiredVerifier() throws {
+        func binding(
+            backend: String = "halo2/ipa",
+            circuitID: String = KagemushaRecursiveSpend.topUpShieldCircuitID,
+            commitment: String = String(repeating: "11", count: 32),
+            schema: String = String(repeating: "22", count: 32),
+            maximumProofBytes: UInt32 = 192 * 1024,
+            activationHeight: UInt64 = 40,
+            withdrawalHeight: UInt64? = 80
+        ) throws -> KagemushaTopUpShieldVerifierBinding {
+            try KagemushaTopUpShieldVerifierBinding(
+                backend: backend,
+                name: "kagemusha-topup-shield-v2",
+                version: 3,
+                circuitID: circuitID,
+                commitment: commitment,
+                publicInputsSchemaHash: schema,
+                maximumProofBytes: maximumProofBytes,
+                activationHeight: activationHeight,
+                withdrawalHeight: withdrawalHeight
+            )
+        }
+
+        let verifier = try binding()
+        let expected = try KagemushaTopUpShieldReadinessExpectation(
+            assetDefinitionID: assetDefinitionID(),
+            assetScale: 9,
+            minimumEvaluatedBlockHeight: 42,
+            verifier: verifier
+        )
+        XCTAssertEqual(expected.verifier, verifier)
+
+        XCTAssertThrowsError(try binding(backend: "halo2/kzg"))
+        XCTAssertThrowsError(try binding(circuitID: "confidential-transfer-v2"))
+        XCTAssertThrowsError(try binding(commitment: String(repeating: "00", count: 32)))
+        XCTAssertThrowsError(try binding(schema: "ab"))
+        XCTAssertThrowsError(try binding(maximumProofBytes: 192 * 1024 + 1))
+        XCTAssertThrowsError(try binding(activationHeight: 80, withdrawalHeight: 80))
+        XCTAssertThrowsError(try KagemushaTopUpShieldReadinessExpectation(
+            assetDefinitionID: assetDefinitionID(),
+            assetScale: 9,
+            minimumEvaluatedBlockHeight: 39,
+            verifier: verifier
+        ))
+        XCTAssertThrowsError(try KagemushaTopUpShieldReadinessExpectation(
+            assetDefinitionID: assetDefinitionID(),
+            assetScale: 9,
+            minimumEvaluatedBlockHeight: 80,
+            verifier: verifier
+        ))
+    }
+
     func testSingleInputSplitConservesFractionalAtomicValue() throws {
         let input = try branch(seed: 0x10, amount: "625", path: path(bit: nil))
         let recipient = try note(seed: 0x30, amount: "210")
@@ -175,13 +348,13 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             claim
         )
 
-        var claimReader = OfflineNoritoReader(data: encoded)
+        var claimReader = CanonicalNoritoReader(data: encoded)
         let encodedPath = try claimReader.readCompactField()
         let encodedTags = try claimReader.readCompactField()
         XCTAssertEqual(claimReader.remaining(), 0)
         var flattened = firstTag
         flattened.append(secondTag)
-        var tagsReader = OfflineNoritoReader(data: encodedTags)
+        var tagsReader = CanonicalNoritoReader(data: encodedTags)
         XCTAssertEqual(try tagsReader.readUInt64LE(), UInt64(flattened.count))
         XCTAssertEqual(try tagsReader.readBytes(flattened.count), flattened)
         XCTAssertEqual(tagsReader.remaining(), 0)
@@ -213,7 +386,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
 
         let paymentFrame = try XCTUnwrap(noritoDecodeFrame(payment.archive))
         let bundleFrame = try XCTUnwrap(noritoDecodeFrame(bundle.archive))
-        var paymentReader = OfflineNoritoReader(data: paymentFrame.payload)
+        var paymentReader = CanonicalNoritoReader(data: paymentFrame.payload)
         XCTAssertEqual(try paymentReader.readCompactField(), bundleFrame.payload)
         XCTAssertEqual(paymentReader.remaining(), 0)
 
@@ -586,12 +759,14 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             KagemushaRecursiveSpend.artifactManifestSchema,
             "kagemusha.offline.recursive_spend.artifact_manifest.v3"
         )
-        XCTAssertEqual(KagemushaRecursiveSpend.mode, "recursive_spend_v2")
-        XCTAssertEqual(KagemushaOfflineSpendMode.recursiveSpend.rawValue, "recursive_spend_v2")
-        XCTAssertTrue(KagemushaRecursiveSpend.isSpendAgainMode("recursive_spend_v2"))
-        XCTAssertFalse(KagemushaRecursiveSpend.isSpendAgainMode("recursive_spend_v1"))
+        XCTAssertEqual(KagemushaRecursiveSpend.mode, "recursive_spend_v1")
+        XCTAssertEqual(KagemushaRecursiveSpend.productMode, "recursive_spend_v1")
+        XCTAssertEqual(KagemushaRecursiveSpend.artifactManifestMode, "recursive_spend_v2")
+        XCTAssertEqual(KagemushaOfflineSpendMode.recursiveSpend.rawValue, "recursive_spend_v1")
+        XCTAssertTrue(KagemushaRecursiveSpend.isSpendAgainMode("recursive_spend_v1"))
+        XCTAssertFalse(KagemushaRecursiveSpend.isSpendAgainMode("recursive_spend_v2"))
         XCTAssertFalse(KagemushaRecursiveSpend.isSpendAgainMode("recursive_compact_v1"))
-        XCTAssertNil(KagemushaOfflineSpendMode(rawValue: "recursive_spend_v1"))
+        XCTAssertNil(KagemushaOfflineSpendMode(rawValue: "recursive_spend_v2"))
         XCTAssertNil(KagemushaOfflineSpendMode(rawValue: "recursive_compact_v1"))
         XCTAssertFalse(KagemushaRecursiveSpend.isProductionAvailable)
         XCTAssertNil(KagemushaRecursiveSpend.preferredProductionMode)
@@ -680,7 +855,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         let capabilities = try KagemushaRecursiveSpendNativeCapabilities(
             bridgeABIVersion: 18,
             artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchema,
-            mode: KagemushaRecursiveSpend.mode,
+            mode: KagemushaRecursiveSpend.artifactManifestMode,
             proofBackend: KagemushaRecursiveSpend.pastaCycleBackend,
             transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscript,
             proofEnvelopeVersion: KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion,
@@ -700,7 +875,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilities(
             bridgeABIVersion: 18,
             artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchema,
-            mode: KagemushaRecursiveSpend.mode,
+            mode: KagemushaRecursiveSpend.artifactManifestMode,
             proofBackend: KagemushaRecursiveSpend.pastaCycleBackend,
             transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscript,
             proofEnvelopeVersion: KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion,
@@ -990,12 +1165,12 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         let archive = try KagemushaRecursiveSpendCodecs
             .encodeRecipientRequestPayload(payload)
         let frame = try XCTUnwrap(noritoDecodeFrame(archive))
-        var payloadReader = OfflineNoritoReader(data: frame.payload)
+        var payloadReader = CanonicalNoritoReader(data: frame.payload)
         for _ in 0..<6 {
             _ = try payloadReader.readCompactField()
         }
         let encodedPublicKey = try payloadReader.readCompactField()
-        var publicKeyReader = OfflineNoritoReader(data: encodedPublicKey)
+        var publicKeyReader = CanonicalNoritoReader(data: encodedPublicKey)
         XCTAssertEqual(try publicKeyReader.readUInt64LE(), 33)
         var decoded = Data()
         for _ in 0..<33 {
@@ -1095,13 +1270,13 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
     }
 
     private func fields(_ values: [Data]) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         values.forEach { writer.writeField($0) }
         return writer.data
     }
 
     private func sequence(_ values: [Data]) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeUInt64LE(UInt64(values.count))
         values.forEach { writer.writeField($0) }
         return writer.data
@@ -1116,14 +1291,14 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
     }
 
     private func byteVector(_ value: Data) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeUInt64LE(UInt64(value.count))
         writer.writeBytes(value)
         return writer.data
     }
 
     private func option(_ value: Data?) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         guard let value else {
             writer.writeUInt8(0)
             return writer.data
@@ -1139,19 +1314,19 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
     }
 
     private func uint16(_ value: UInt16) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeUInt16LE(value)
         return writer.data
     }
 
     private func uint32(_ value: UInt32) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeUInt32LE(value)
         return writer.data
     }
 
     private func uint64(_ value: UInt64) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeUInt64LE(value)
         return writer.data
     }
@@ -1196,7 +1371,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             uint32(1),
             uint32(0),
         ])
-        var transition = OfflineCompactNoritoWriter()
+        var transition = CompactNoritoWriter()
         transition.writeUInt32LE(0)
         transition.writeField(peerSplit)
 

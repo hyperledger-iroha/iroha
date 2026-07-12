@@ -1,7 +1,7 @@
 import XCTest
 @testable import IrohaSwift
 
-final class ToriiOfflineCashAPIModelsTests: XCTestCase {
+final class ToriiKagemushaAPIModelsTests: XCTestCase {
     func testPublicRequestSchemaNamesMatchRust() {
         XCTAssertEqual(
             KagemushaRecursiveSpend.topUpRequestWireName,
@@ -313,19 +313,19 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
     }
 
     func testOperationReferenceRejectsInvalidUtf8AndNonCanonicalFraming() throws {
-        var invalidString = OfflineCompactNoritoWriter()
+        var invalidString = CompactNoritoWriter()
         invalidString.writeLength(1)
         invalidString.writeBytes(Data([0xff]))
 
-        var payload = OfflineCompactNoritoWriter()
-        payload.writeField(OfflineCompactNorito.encodeString(Self.operationId))
-        payload.writeField(OfflineCompactNorito.encodeUInt32(0))
-        payload.writeField(OfflineCompactNorito.encodeUInt32(0))
+        var payload = CompactNoritoWriter()
+        payload.writeField(CompactNorito.encodeString(Self.operationId))
+        payload.writeField(CompactNorito.encodeUInt32(0))
+        payload.writeField(CompactNorito.encodeUInt32(0))
         payload.writeField(invalidString.data)
         payload.writeField(
-            OfflineCompactNorito.encodeString("/v1/offline/operations/\(Self.operationId)")
+            CompactNorito.encodeString("/v1/offline/operations/\(Self.operationId)")
         )
-        payload.writeField(OfflineCompactNorito.encodeUInt64(1))
+        payload.writeField(CompactNorito.encodeUInt64(1))
 
         XCTAssertThrowsError(try OfflineOperationCodec.decodeReference(noritoEncode(
             typeName: "iroha_torii_shared::offline_api::OfflineOperationReference",
@@ -362,8 +362,8 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         let expectedOperationId = String(repeating: "ab", count: 32)
         let topUpArchive = requestArchive(
             schema: KagemushaRecursiveSpend.topUpRequestWireName,
-            fieldCount: 8,
-            operationIdFieldIndex: 6,
+            fieldCount: 7,
+            operationIdFieldIndex: 5,
             operationId: operationId
         )
         let redeemArchive = requestArchive(
@@ -386,8 +386,8 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         let operationId = Data(repeating: 0x11, count: 32)
         let topUpArchive = requestArchive(
             schema: KagemushaRecursiveSpend.topUpRequestWireName,
-            fieldCount: 8,
-            operationIdFieldIndex: 6,
+            fieldCount: 7,
+            operationIdFieldIndex: 5,
             operationId: operationId
         )
         let redeemArchive = requestArchive(
@@ -402,8 +402,8 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         XCTAssertThrowsError(
             try OfflineTopUpRequest(noritoArchive: requestArchive(
                 schema: KagemushaRecursiveSpend.topUpRequestWireName,
-                fieldCount: 8,
-                operationIdFieldIndex: 5,
+                fieldCount: 7,
+                operationIdFieldIndex: 4,
                 operationId: operationId
             ))
         )
@@ -425,8 +425,8 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         ] {
             XCTAssertThrowsError(try OfflineTopUpRequest(noritoArchive: requestArchive(
                 schema: KagemushaRecursiveSpend.topUpRequestWireName,
-                fieldCount: 8,
-                operationIdFieldIndex: 6,
+                fieldCount: 7,
+                operationIdFieldIndex: 5,
                 operationId: operationId
             ))) { error in
                 XCTAssertEqual(error as? OfflineOperationError, .invalidField("operation_id"))
@@ -445,8 +445,8 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
     func testRequestsRejectNonCanonicalFramingAndTrailingPayload() throws {
         let operationId = Data(repeating: 0x11, count: 32)
         let canonicalPayload = requestPayload(
-            fieldCount: 8,
-            operationIdFieldIndex: 6,
+            fieldCount: 7,
+            operationIdFieldIndex: 5,
             operationId: operationId
         )
         let schema = KagemushaRecursiveSpend.topUpRequestWireName
@@ -461,8 +461,8 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
 
         XCTAssertThrowsError(try OfflineTopUpRequest(noritoArchive: requestArchive(
             schema: schema,
-            fieldCount: 9,
-            operationIdFieldIndex: 6,
+            fieldCount: 8,
+            operationIdFieldIndex: 5,
             operationId: operationId
         )))
 
@@ -514,7 +514,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         operationIdFieldIndex: Int,
         operationId: Data
     ) -> Data {
-        var payload = OfflineCompactNoritoWriter()
+        var payload = CompactNoritoWriter()
         for index in 0..<fieldCount {
             payload.writeField(
                 index == operationIdFieldIndex ? operationId : Data([UInt8(index + 1)])

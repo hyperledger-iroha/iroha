@@ -12,9 +12,8 @@ Verus or vstd version, verifies the official macOS arm64 binary checksums
 (other platforms must supply the two pinned checksum variables), and rejects
 the wrong bundled Rust toolchain or proof escape hatches in this crate.
 The script enables the crate's `verus` feature explicitly; normal production
-builds do not compile or link `vstd`. Verifier output is streamed to the caller
-and retained at `target/formal/sumeragi_v2/verus.log`; shell `pipefail` keeps a
-failed verification from being masked by log capture.
+builds do not compile or link `vstd`. Verifier output is streamed to the caller;
+CI is responsible for retaining that output as an artifact.
 
 The script uses a clean Cargo target by default. It forwards `--no-cheating`
 only to the selected root crate with Cargo Verus's
@@ -29,21 +28,21 @@ arm64 release:
 ```text
 $ scripts/verify_sumeragi_v2.sh  # official pinned release already in PATH
 verification results:: 1690 verified, 0 errors  # pinned vstd dependency
-verification results:: 60 verified, 0 errors    # iroha_sumeragi_core root obligations
+verification results:: 62 verified, 0 errors    # iroha_sumeragi_core root obligations
 ```
 
 Evidence for the source-link edit itself:
 
 ```text
-CARGO_TARGET_DIR=/tmp/iroha-sumeragi-v2-source-link-target \
+CARGO_TARGET_DIR=/tmp/codex-sumeragi-timeout-proof-target \
   cargo test -p iroha_sumeragi_core -- --nocapture
-  44 unit tests and 6 deterministic network simulations passed
-CARGO_TARGET_DIR=/tmp/iroha-sumeragi-v2-source-link-target \
+  50 unit tests and 6 deterministic network simulations passed
+CARGO_TARGET_DIR=/tmp/codex-sumeragi-timeout-proof-target \
   cargo clippy -p iroha_sumeragi_core --all-targets -- -D warnings
   passed
-PATH=<pinned-verus> CARGO_TARGET_DIR=/tmp/iroha-sumeragi-v2-source-link-verus \
+PATH=<pinned-verus> CARGO_TARGET_DIR=/tmp/codex-sumeragi-timeout-proof-verus \
   scripts/verify_sumeragi_v2.sh
-  1690 dependency obligations and 60 root obligations verified, 0 errors
+  1690 dependency obligations and 62 root obligations verified, 0 errors
 ```
 
 The successful run discharges the abstract reducer/WAL obligations, the
@@ -65,7 +64,7 @@ The WAL projection enumerates all seven production `WalRecord` variants:
 | `PrepareIntent` | valid local Prepare, current/open view, and one immutable Prepare subject |
 | `ObservePrepare` | valid PrepareQC no later than the current view, compatible equal-view subject, and strictly-higher-only highest-QC replacement |
 | `LockAndCommit` | valid matching PrepareQC and local Commit, current/open view, non-regressing lock, immutable Commit subject, and atomic lock-plus-intent installation |
-| `TimeoutIntent` | valid local timeout for the current view, exact durable high-QC reference, and one immutable timeout intent |
+| `TimeoutIntent` | frozen context/height, current view, in-roster local signer, exact durable full high-QC evidence identity, and one immutable timeout intent |
 | `InstallTimeout` | valid TC, non-regressing certified view, no counter overflow, compatible selected PrepareQC, monotone lock, and entry into exactly `tc_view + 1` |
 | `Decision` | valid CommitQC and an absent or identical durable decision |
 
@@ -76,9 +75,22 @@ carries the frozen roster size and local-validator index. Admissibility derives
 the same context/height/Prepare-phase/local-signer/roster checks performed by
 `DurableState::validate_local_vote`. The proof
 `prepare_intent_guard_is_derived_from_vote_and_frozen_context` makes those
-primitive consequences explicit. Proposal, QC, Commit-intent, timeout, TC, and
-decision predicate compression remains part of the projection-extraction gap
-listed below.
+primitive consequences explicit.
+
+`TimeoutIntent` likewise no longer carries either `local_vote_valid` or
+`high_reference_matches` across the abstract WAL boundary. Its projection
+carries context, height, view, signer, and the optional full PrepareQC. The
+guard derives context/height/current-view/local-signer/roster membership and
+compares both the semantic certificate reference and a fixed evidence identity
+for its signer/signature bytes. `timeout_intent_guard_is_derived_from_vote_and_frozen_context`
+makes those consequences explicit. The executable replay path now performs the
+same frozen-roster membership check. Missing high QCs and same-reference QCs
+with different signer evidence are rejected transactionally by the Rust test.
+
+Proposal, observed-QC, Commit-intent, TC, and decision predicate compression
+remains part of the projection-extraction gap listed below. The proof-level
+certificate evidence identity is still extracted by ordinary Rust and is not a
+proof of the cryptographic bytes or their hash function.
 
 The public `DurableState::apply` clone-and-swap behavior is represented by an
 accepted path and a rejected path. The rejected path preserves every projected
@@ -159,6 +171,9 @@ The module contains transition-by-transition proof functions for:
   otherwise inadmissible WAL frames;
 - derivation of every local `PrepareIntent` authenticity check from the vote
   primitives and frozen replay context, without a validity-bit premise;
+- derivation of every local `TimeoutIntent` context, height, current-view,
+  signer/roster, and exact full-high-QC-evidence check from primitives, without
+  validity or high-QC-match bit premises;
 - immutable proposal, Prepare, Commit, and timeout intents;
 - the postcondition of every individual WAL record variant;
 - atomic `LockAndCommit` installation;
@@ -188,7 +203,7 @@ The module contains transition-by-transition proof functions for:
 | Exact one-shot state/effect relation | Encoded in the production gate | `ACTION_RESUME_AFTER_REPLAY` checks false-to-true, unchanged durable state, and the exact Sign/Fetch/empty effect class |
 | Abstract reducer refinement | Encoded | `ReducerPathProjection::ResumeAfterReplay` preserves WAL, application, and effect fences |
 | Named TLA+ action map | Encoded and spelling-gated | Proposal/vote/timeout resumption maps to the existing `ResumeProposal`, `ResumeVote`, and `ResumeTimeout` actions; decided replay maps to `FetchBody` |
-| Pinned Verus discharge of the changed obligations | **Verified** | Official pinned workflow reports 1690 dependency and 60 root obligations verified with zero errors |
+| Pinned Verus discharge of the changed obligations | **Verified** | Official pinned workflow reports 1690 dependency and 62 root obligations verified with zero errors |
 
 ## Exact production commit gate
 
@@ -253,10 +268,12 @@ ordinary Rust collection lookups that produce those concrete primitives are
 not themselves verified, which remains gap 1 below, but no authorization or
 action-exactness boolean crosses the verified kernel boundary.
 
-The pinned verifier discharged all 60 root obligations with zero errors on a
+The pinned verifier discharged all 62 root obligations with zero errors on a
 clean target. The verification script rejects `assume`,
 `admit`, unreviewed trusted bodies, and external function specifications in
-this crate. It also checks that every mapped TLA+ action name still exists in
+this crate. It also rejects reintroduction of compressed `TimeoutIntent`
+validity/high-QC-match predicates and requires the primitive-guard proof. It
+checks that every mapped TLA+ action name still exists in
 both `SumeragiV2Core.tla` and the Verus mapping; this prevents name drift but
 does not prove the independently parsed operator bodies equivalent.
 
@@ -276,9 +293,12 @@ production reducer can be described as deductively verified:
    pinned Verus toolchain cannot verify the current `std` collection-heavy
    reducer body directly. A correlated extraction defect that constructs the
    same wrong requested and granted key is therefore not excluded deductively.
-   The abstract `PrepareIntent` guard now consumes decomposed vote/context
-   primitives instead of an admissibility boolean, but the Rust extraction of
-   validator identities into the frozen-roster index remains in this gap.
+   The abstract `PrepareIntent` and `TimeoutIntent` guards now consume
+   decomposed vote/context primitives instead of admissibility booleans. The
+   timeout guard additionally compares a full-certificate evidence identity,
+   rather than trusting a high-QC-match bit. Rust extraction of validator
+   identities into the frozen-roster index and of the exact QC evidence bytes
+   into that identity remains in this gap.
    Closing this residual source-level gap requires Verus-compatible reducer
    collections or verified projection functions over reviewed external type
    specifications; neither is claimed here.

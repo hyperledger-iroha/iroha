@@ -1912,6 +1912,7 @@ fn prepare_validated_contract_argument_record(
 
 type ResolvedContractEntrypoint = (u64, Option<String>, Option<ivm::EntrypointArgumentSchemaV1>);
 
+#[cfg(test)]
 fn resolve_callable_contract_entrypoint(
     bytecode: &[u8],
     selector: &str,
@@ -1942,6 +1943,7 @@ fn resolve_callable_contract_entrypoint(
     ))
 }
 
+#[cfg(test)]
 fn resolve_nested_contract_entrypoint(
     bytecode: &[u8],
     selector: &str,
@@ -2142,6 +2144,7 @@ impl ContractDispatchSource<'_> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn parse_contract_call_execution_context(
     metadata: &Metadata,
     bytecode: &[u8],
@@ -2463,6 +2466,7 @@ fn parse_contract_call_execution_context_from_source(
     }))
 }
 
+#[cfg(test)]
 pub(crate) fn parse_contract_invocation_execution_context(
     invocation: &ContractInvocation,
     bytecode: &[u8],
@@ -2501,6 +2505,7 @@ pub(crate) fn parse_contract_invocation_execution_context(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn parse_nested_contract_invocation_execution_context(
     invocation: &ContractInvocation,
     bytecode: &[u8],

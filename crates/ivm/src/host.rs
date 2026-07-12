@@ -5019,9 +5019,9 @@ mod tests {
             );
             assert!(encoded.len() <= syscalls::STATE_MAP_MAX_PAGE_BYTES);
         }
-        let oversized: Vec<Name> = (0..=syscalls::STATE_KEYS_MAX_ITEMS)
-            .map(maximum_bounded_state_name)
-            .collect();
+        let max_items = usize::try_from(syscalls::STATE_KEYS_MAX_ITEMS)
+            .expect("state-key page limit fits usize");
+        let oversized: Vec<Name> = (0..=max_items).map(maximum_bounded_state_name).collect();
         assert_eq!(
             state_keys_page_gas_quote(&oversized, 0, 0, syscalls::STATE_KEYS_MAX_ITEMS + 1,),
             Err(VMError::NoritoInvalid)

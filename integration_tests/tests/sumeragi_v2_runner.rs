@@ -12,8 +12,11 @@ use iroha::{
         account::{Account, AccountId},
         block::consensus_v2::PROTOCOL_VERSION,
         isi::Register,
+        parameter::system::SumeragiNposParameters,
         prelude::FindAccountById,
-        query::{account::prelude::FindAccounts, prelude::QueryBuilderExt},
+        query::{
+            account::prelude::FindAccounts, block::prelude::FindBlocks, prelude::QueryBuilderExt,
+        },
     },
 };
 use iroha_test_network::{NetworkBuilder, NetworkPeer, init_instruction_registry};
@@ -25,6 +28,10 @@ const STATUS_TIMEOUT: Duration = Duration::from_secs(90);
 const ACCOUNT_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(90);
 const LEGACY_START_TIMEOUT: Duration = Duration::from_secs(45);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
+const FAST_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const TAIRA_PIPELINE_TIME: Duration = Duration::from_secs(3);
+const TAIRA_ROUND_TIMEOUT_MS: i64 = 10_000;
+const TAIRA_RECOVERY_BOUND: Duration = Duration::from_secs(50);
 
 #[derive(Clone, Debug)]
 struct V2StatusSnapshot {
@@ -35,9 +42,11 @@ struct V2StatusSnapshot {
     config_fingerprint: Value,
     height_context_id: Value,
     height: u64,
+    view: u64,
     leader: u64,
     phase: Value,
     body_state: Value,
+    last_timeout_view: Option<u64>,
     last_committed_height: u64,
 }
 
@@ -282,6 +291,197 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
     result
 }
 
+/// The production NPoS runner must replace an unavailable view leader through
+/// a persisted timeout certificate and finalize within the Taira rollout bound.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()> {
+    init_instruction_registry();
+
+    // `with_pipeline_time` assigns one third to the block cadence, so three
+    // seconds reproduces Taira's one-second cadence. Global v2 uses the single
+    // explicit ten-second round timeout below; legacy phase timeouts are not
+    // involved in this scenario.
+    let builder = NetworkBuilder::new()
+        .with_peers(VALIDATOR_COUNT)
+        .with_auto_populated_trusted_peers()
+        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond())
+        .with_pipeline_time(TAIRA_PIPELINE_TIME)
+        .with_sync_timeout(Duration::from_secs(180))
+        .with_config_layer(|layer| {
+            layer
+                .write(["sumeragi", "consensus_mode"], "npos")
+                .write(["sumeragi", "round_timeout_ms"], TAIRA_ROUND_TIMEOUT_MS);
+        });
+    let context = stringify!(taira_npos_leader_timeout_commits_within_rotation_bound);
+    let network = sandbox::start_network_async_or_skip(builder, context).await?;
+    let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
+        return Ok(());
+    };
+
+    let result = async {
+        ensure!(
+            network.peers().len() == VALIDATOR_COUNT
+                && network.topology_entries().len() == VALIDATOR_COUNT,
+            "Taira regression requires exactly four voting validators"
+        );
+        ensure!(
+            network.peers().iter().all(NetworkPeer::is_running),
+            "all Taira validators must be running after fresh NPoS genesis"
+        );
+
+        let all_peers = network.peers().to_vec();
+        let seed_account = fixture_account(0xB0)?;
+        let outage_account = fixture_account(0xB1)?;
+        assert_accounts_absent(
+            &all_peers,
+            &[seed_account.clone(), outage_account.clone()],
+        )
+        .await?;
+
+        // Commit a seed transaction so the next height has just opened. The
+        // view-zero leader then has the full one-second cadence remaining,
+        // which makes the leader outage deterministic rather than a race with
+        // an already disseminated proposal.
+        let initial = normal_statuses(&all_peers).await?;
+        let seed_target_non_empty = initial
+            .iter()
+            .map(|status| status.blocks_non_empty)
+            .max()
+            .unwrap_or_default()
+            .saturating_add(1);
+        submit_account(network.client(), seed_account.clone()).await?;
+        network
+            .ensure_blocks_with(|height| height.non_empty >= seed_target_non_empty)
+            .await
+            .wrap_err("Taira NPoS seed transaction did not finalize")?;
+
+        let seeded = normal_statuses(&all_peers).await?;
+        let seeded_floor = seeded
+            .iter()
+            .map(|status| status.blocks)
+            .min()
+            .unwrap_or_default();
+        let outage_round = wait_for_common_awaiting_v2_round(
+            &all_peers,
+            seeded_floor,
+            STATUS_TIMEOUT,
+        )
+        .await?;
+        let target_height = outage_round[0].height;
+        let initial_view = outage_round[0].view;
+        let leader = outage_round[0].leader;
+        let leader_peer_index = peer_index_for_validator(&all_peers, leader)?;
+        let leader_peer = all_peers[leader_peer_index].clone();
+        let leader_node_fingerprint = outage_round[leader_peer_index].node_fingerprint.clone();
+        let config_layers = network
+            .config_layers()
+            .map(std::borrow::Cow::into_owned)
+            .collect::<Vec<_>>();
+
+        leader_peer.shutdown().await;
+        ensure!(
+            !leader_peer.is_running(),
+            "the selected view leader must be offline before the proposal"
+        );
+        let remaining_peers = all_peers
+            .iter()
+            .filter(|peer| peer.is_running())
+            .cloned()
+            .collect::<Vec<_>>();
+        ensure!(
+            remaining_peers.len() == VALIDATOR_COUNT - 1,
+            "exactly three NPoS voters must remain after the leader outage"
+        );
+
+        let outage_baseline = normal_statuses(&remaining_peers).await?;
+        let outage_target_non_empty = outage_baseline
+            .iter()
+            .map(|status| status.blocks_non_empty)
+            .max()
+            .unwrap_or_default()
+            .saturating_add(1);
+        submit_account(remaining_peers[0].client(), outage_account.clone()).await?;
+
+        let recovery_started = Instant::now();
+        tokio::time::timeout(
+            TAIRA_RECOVERY_BOUND,
+            network.ensure_blocks_with(|height| {
+                height.total >= target_height && height.non_empty >= outage_target_non_empty
+            }),
+        )
+        .await
+        .wrap_err(
+            "three-voter Taira quorum exceeded one leader rotation plus one successful round",
+        )??;
+        let recovery_elapsed = recovery_started.elapsed();
+        ensure!(
+            recovery_elapsed <= TAIRA_RECOVERY_BOUND,
+            "Taira recovery exceeded {:?}: elapsed={recovery_elapsed:?}",
+            TAIRA_RECOVERY_BOUND
+        );
+
+        wait_for_accounts_visible(
+            &remaining_peers,
+            &[seed_account.clone(), outage_account.clone()],
+            ACCOUNT_VISIBILITY_TIMEOUT,
+        )
+        .await?;
+
+        let mut committed_views = Vec::with_capacity(remaining_peers.len());
+        for peer in &remaining_peers {
+            committed_views.push(committed_view_at_height(peer, target_height).await?);
+        }
+        ensure!(
+            committed_views.iter().all(|view| *view > initial_view),
+            "the outage block must be proposed after a certified view advance: height={target_height}, initial_view={initial_view}, committed_views={committed_views:?}"
+        );
+        ensure!(
+            committed_views
+                .iter()
+                .all(|view| *view <= initial_view.saturating_add(VALIDATOR_COUNT as u64)),
+            "the outage block exceeded one complete leader rotation: initial_view={initial_view}, committed_views={committed_views:?}"
+        );
+        ensure!(
+            committed_views.windows(2).all(|views| views[0] == views[1]),
+            "validators disagreed on the committed block view at height {target_height}: {committed_views:?}"
+        );
+
+        leader_peer
+            .start_checked(config_layers.iter().cloned(), None)
+            .await
+            .wrap_err_with(|| format!("restart Taira leader {}", leader_peer.mnemonic()))?;
+        network
+            .ensure_blocks_with(|height| {
+                height.total >= target_height && height.non_empty >= outage_target_non_empty
+            })
+            .await
+            .wrap_err("restarted Taira leader did not catch up to later-view finality")?;
+        wait_for_accounts_visible(
+            &all_peers,
+            &[seed_account, outage_account],
+            ACCOUNT_VISIBILITY_TIMEOUT,
+        )
+        .await?;
+
+        let recovered = wait_for_v2_statuses(&all_peers, target_height, STATUS_TIMEOUT).await?;
+        validate_v2_status_set(&recovered, VALIDATOR_COUNT)?;
+        ensure!(
+            recovered[leader_peer_index].node_fingerprint == leader_node_fingerprint,
+            "the restarted Taira leader changed its v2 node fingerprint"
+        );
+
+        // TODO: add message-type filtering to the real-network harness so the
+        // production test can retain distinct highest PrepareQCs across several
+        // simultaneous live views. The authenticated embedded-QC adapter path
+        // and exact captured divergence are covered by focused core tests.
+        Ok(())
+    }
+    .await;
+
+    network.shutdown_and_release().await;
+    result
+}
+
 /// The executable must reject the retired v1 protocol before any consensus
 /// process can advertise itself as a live validator.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -360,6 +560,112 @@ async fn normal_statuses(peers: &[NetworkPeer]) -> Result<Vec<iroha::client::Sta
         );
     }
     Ok(statuses)
+}
+
+async fn wait_for_common_awaiting_v2_round(
+    peers: &[NetworkPeer],
+    min_committed_height: u64,
+    timeout: Duration,
+) -> Result<Vec<V2StatusSnapshot>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let mut snapshots = Vec::with_capacity(peers.len());
+        let mut errors = Vec::new();
+        for peer in peers {
+            match fetch_v2_status(peer).await {
+                Ok(snapshot) => snapshots.push(snapshot),
+                Err(error) => errors.push(format!("{}: {error:#}", peer.mnemonic())),
+            }
+        }
+        let observation = format!(
+            "rounds={:?}, errors={errors:?}",
+            snapshots
+                .iter()
+                .map(|snapshot| (
+                    snapshot.peer.clone(),
+                    snapshot.height,
+                    snapshot.view,
+                    snapshot.leader,
+                    snapshot.phase.clone(),
+                    snapshot.last_committed_height,
+                ))
+                .collect::<Vec<_>>()
+        );
+        if snapshots.len() == peers.len() {
+            validate_v2_status_set(&snapshots, VALIDATOR_COUNT)?;
+            let first = &snapshots[0];
+            let common_awaiting_round = snapshots.iter().all(|snapshot| {
+                snapshot.height == first.height
+                    && snapshot.view == first.view
+                    && snapshot.leader == first.leader
+                    && snapshot.height_context_id == first.height_context_id
+                    && snapshot.last_committed_height >= min_committed_height
+                    && snapshot.last_committed_height.checked_add(1) == Some(snapshot.height)
+                    && status_is_awaiting_proposal(&snapshot.phase)
+            });
+            if common_awaiting_round {
+                return Ok(snapshots);
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "validators did not expose a common awaiting-proposal v2 round within {timeout:?}: {observation}"
+            ));
+        }
+        sleep(FAST_STATUS_POLL_INTERVAL).await;
+    }
+}
+
+fn status_is_awaiting_proposal(phase: &Value) -> bool {
+    phase
+        .as_str()
+        .or_else(|| {
+            phase
+                .as_object()
+                .and_then(|object| object.get("phase"))
+                .and_then(Value::as_str)
+        })
+        .is_some_and(|tag| {
+            tag.eq_ignore_ascii_case("AwaitingProposal")
+                || tag.eq_ignore_ascii_case("awaiting_proposal")
+        })
+}
+
+fn peer_index_for_validator(peers: &[NetworkPeer], validator: u64) -> Result<usize> {
+    let mut roster = peers
+        .iter()
+        .enumerate()
+        .map(|(index, peer)| (peer.id(), index))
+        .collect::<Vec<_>>();
+    roster.sort_by(|left, right| left.0.cmp(&right.0));
+    let validator = usize::try_from(validator).wrap_err("validator index does not fit usize")?;
+    roster
+        .get(validator)
+        .map(|(_, network_index)| *network_index)
+        .ok_or_else(|| {
+            eyre!(
+                "validator index {validator} is outside the {}-peer frozen roster",
+                roster.len()
+            )
+        })
+}
+
+async fn committed_view_at_height(peer: &NetworkPeer, height: u64) -> Result<u64> {
+    let client = peer.client();
+    let peer_name = peer.mnemonic().to_owned();
+    task::spawn_blocking(move || {
+        let blocks = client
+            .query(FindBlocks)
+            .execute_all()
+            .wrap_err_with(|| format!("query blocks from {peer_name}"))?;
+        blocks
+            .iter()
+            .find(|block| block.header().height().get() == height)
+            .map(|block| block.header().view_change_index())
+            .ok_or_else(|| eyre!("{peer_name} has no committed block at height {height}"))
+    })
+    .await
+    .wrap_err_with(|| format!("block-view query panicked for {}", peer.mnemonic()))?
 }
 
 async fn assert_accounts_absent(peers: &[NetworkPeer], accounts: &[AccountId]) -> Result<()> {
@@ -494,11 +800,32 @@ fn parse_v2_status(peer: String, value: &Value) -> Result<V2StatusSnapshot> {
         config_fingerprint: required_value("config_fingerprint")?,
         height_context_id: required_value("height_context_id")?,
         height: required_u64("height")?,
+        view: required_u64("view")?,
         leader: required_u64("leader")?,
         phase: required_value("phase")?,
         body_state: required_value("body_state")?,
+        last_timeout_view: optional_timeout_view(object, &peer)?,
         last_committed_height: required_u64("last_committed_height")?,
     })
+}
+
+fn optional_timeout_view(object: &norito::json::Map, peer: &str) -> Result<Option<u64>> {
+    let Some(certificate) = object
+        .get("last_timeout_certificate")
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(None);
+    };
+    let round = certificate
+        .as_object()
+        .and_then(|certificate| certificate.get("round"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| eyre!("v2 status for {peer} has a malformed timeout-certificate round"))?;
+    let view = round
+        .get("view")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| eyre!("v2 status for {peer} has a timeout certificate without a view"))?;
+    Ok(Some(view))
 }
 
 fn validate_v2_status_set(
@@ -529,6 +856,15 @@ fn validate_v2_status_set(
             snapshot.peer,
             snapshot.leader
         );
+        if let Some(timeout_view) = snapshot.last_timeout_view {
+            ensure!(
+                timeout_view.checked_add(1) == Some(snapshot.view),
+                "{} reported current view {} after timeout certificate view {}",
+                snapshot.peer,
+                snapshot.view,
+                timeout_view
+            );
+        }
         ensure!(
             snapshot.build_fingerprint == first.build_fingerprint,
             "{} disagrees on the v2 build fingerprint",
@@ -562,6 +898,16 @@ fn validate_v2_status_set(
                     right.peer,
                     left.height
                 );
+                if left.view == right.view {
+                    ensure!(
+                        left.leader == right.leader,
+                        "{} and {} disagree on the leader for height {} view {}",
+                        left.peer,
+                        right.peer,
+                        left.height,
+                        left.view
+                    );
+                }
             }
         }
     }

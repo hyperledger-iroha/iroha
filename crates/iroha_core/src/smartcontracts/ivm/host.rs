@@ -4273,6 +4273,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok((env, prepared))
     }
 
+    #[cfg(test)]
     fn enforce_zk_envelope(
         &self,
         payload: &[u8],
@@ -5084,11 +5085,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         16_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
     }
 
+    #[cfg(test)]
     fn state_keys_gas(examined_count: usize, payload_len: usize) -> u64 {
         Self::state_query_gas(payload_len)
             .saturating_add(u64::try_from(examined_count).unwrap_or(u64::MAX))
     }
 
+    #[cfg(test)]
     fn state_count_gas(examined_count: usize) -> u64 {
         16_u64.saturating_add(u64::try_from(examined_count).unwrap_or(u64::MAX))
     }

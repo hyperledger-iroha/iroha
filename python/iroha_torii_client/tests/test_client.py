@@ -4441,6 +4441,15 @@ def test_get_offline_readiness_rejects_adversarial_snapshots() -> None:
         _offline_readiness_payload(
             ready=False,
             blockers=[
+                {
+                    "code": "topup_shield_verifier_unavailable",
+                    "message": "top-up shield verifier unavailable",
+                }
+            ],
+        ),
+        _offline_readiness_payload(
+            ready=False,
+            blockers=[
                 {"code": "not_ready", "message": "one"},
                 {"code": "not_ready", "message": "two"},
             ],

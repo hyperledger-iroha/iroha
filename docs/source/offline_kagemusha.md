@@ -6,12 +6,14 @@ sender change use the canonical first-release
 backend is intentionally fail-closed until branch lineage is proven in-circuit;
 retired pre-release wire shapes are not accepted as compatibility inputs.
 
-The sole first-release product selector is `recursive_spend_v2`. It requires
+The sole first-release product selector is `recursive_spend_v1`. It requires
 exact native bridge ABI 18 and the governed
 `kagemusha.offline.recursive_spend.artifact_manifest.v3` manifest. Artifact
 streaming, validation, atomic six-file installation, readiness, and uninstall
 use only the V3 lifecycle; ABI-6/ABI-7 fixtures and unsuffixed bridge helpers
-are not compatibility surfaces.
+are not compatibility surfaces. The manifest and native capability record keep
+their internal typed-contract mode `recursive_spend_v2`; callers must never
+publish or accept that internal value as the product selector.
 
 > **Release blocker:** the current Reserved-lineage prototype does not verify
 > an inner Kagemusha proof. It opens a fixed `1..n` polynomial that is unrelated
@@ -3561,7 +3563,7 @@ lineage-witness assembly helpers, before probing those symbols with malformed
 Norito archives. Swift reports native compact-token, recursive-aggregation, and
 recursive-spend Kagemusha provers as available only when the loaded bridge
 returns the expected Kagemusha rejection without output bytes, and the Swift
-recursive-spend wrapper refuses to select `recursive_spend_v2` unless the exact
+recursive-spend wrapper refuses to select `recursive_spend_v1` unless the exact
 ABI-18 surface and proof-backend capability pass that probe.
 Native bridge ABI 7 exposes fail-closed reserved symbols for
 `connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes`
@@ -3717,15 +3719,15 @@ without the witness helpers needed for later redemption.
 The Swift wrapper also exports the same ABI-6 requirement for wallet-side
 capability checks.
 JavaScript/Node and Python require an exact ABI-18 native version probe
-before reporting recursive spend as available or selecting `recursive_spend_v2`;
+before reporting recursive spend as available or selecting `recursive_spend_v1`;
 the Node NAPI host exports `connectNoritoBridgeAbiVersion`, while the Python
 PyO3 extension exports `kagemusha_recursive_spend_native_bridge_abi_version`.
 Kotlin/JVM and Java Android also call the native bridge ABI-version JNI probe and
 probe the verify plus both lineage-witness JNI symbols before reporting
-recursive spend as available or defaulting to `recursive_spend_v2`. C#
+recursive spend as available or defaulting to `recursive_spend_v1`. C#
 publishes the same exact ABI-18 requirement and probes verify plus both
 lineage-witness P/Invoke symbols before its optional wrapper calls the bridge.
-All SDKs expose the same default spend-mode choice: `recursive_spend_v2` is selected only when the exact ABI-18
+All SDKs expose the same default spend-mode choice: `recursive_spend_v1` is selected only when the exact ABI-18
 recursive-spend surface is available, and no preferred production mode is returned otherwise. Compact and checked pre-fold
 labels remain internal aggregation/fixture material only; first-release selectors must not fall
 back to them or export a checked pre-fold spend mode. Every maintained SDK's

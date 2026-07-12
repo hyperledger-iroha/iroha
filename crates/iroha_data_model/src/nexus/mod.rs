@@ -635,6 +635,14 @@ impl From<DataSpaceId> for u64 {
     }
 }
 
+impl FromStr for DataSpaceId {
+    type Err = std::num::ParseIntError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value.parse::<u64>().map(Self)
+    }
+}
+
 /// Metadata key marking a lane as created and owned by the deterministic autoscaler.
 pub const AUTOSCALE_META_MANAGED: &str = "autoscale.managed";
 /// Metadata key recording the block height where the autoscaler created the lane.
@@ -1728,6 +1736,11 @@ mod tests {
         let decoded = DataSpaceId::decode_all(&mut slice).expect("decode DataSpaceId");
         assert_eq!(decoded, original);
         assert_eq!(DataSpaceId::UNIVERSAL.as_u64(), 0);
+        assert_eq!(
+            "7".parse::<DataSpaceId>().expect("parse DataSpaceId"),
+            original
+        );
+        assert!("-1".parse::<DataSpaceId>().is_err());
     }
 
     #[test]

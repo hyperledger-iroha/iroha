@@ -807,46 +807,34 @@ public struct PipelineSubmitOptions: Sendable {
 }
 
 public struct PipelineStatusPollOptions: Sendable {
-    public static let defaultSuccessStates: Set<PipelineTransactionState> = [.committed, .applied]
-    public static let defaultFailureStates: Set<PipelineTransactionState> = [.rejected, .expired]
     public static let `default` = PipelineStatusPollOptions()
 
     public var pollInterval: TimeInterval
     public var timeout: TimeInterval
     public var maxAttempts: Int?
-    public var successStatuses: Set<String>
-    public var failureStatuses: Set<String>
 
     public init(pollInterval: TimeInterval = 0.5,
                 timeout: TimeInterval = 30,
-                maxAttempts: Int? = nil,
-                successStates: Set<PipelineTransactionState> = PipelineStatusPollOptions.defaultSuccessStates,
-                failureStates: Set<PipelineTransactionState> = PipelineStatusPollOptions.defaultFailureStates) {
+                maxAttempts: Int? = nil) {
         self.pollInterval = pollInterval
         self.timeout = timeout
         self.maxAttempts = maxAttempts
-        self.successStatuses = Set(successStates.map { $0.kind })
-        self.failureStatuses = Set(failureStates.map { $0.kind })
-    }
-
-    public init(pollInterval: TimeInterval,
-                timeout: TimeInterval,
-                maxAttempts: Int? = nil,
-                successStatuses: Set<String>,
-                failureStatuses: Set<String>) {
-        self.pollInterval = pollInterval
-        self.timeout = timeout
-        self.maxAttempts = maxAttempts
-        self.successStatuses = successStatuses
-        self.failureStatuses = failureStatuses
     }
 
     public var successStates: Set<PipelineTransactionState> {
-        Set(successStatuses.map { PipelineTransactionState(kind: $0) })
+        [.applied]
     }
 
     public var failureStates: Set<PipelineTransactionState> {
-        Set(failureStatuses.map { PipelineTransactionState(kind: $0) })
+        [.rejected, .expired]
+    }
+
+    public var successStatuses: Set<String> {
+        [PipelineTransactionState.applied.kind]
+    }
+
+    public var failureStatuses: Set<String> {
+        [PipelineTransactionState.rejected.kind, PipelineTransactionState.expired.kind]
     }
 }
 
@@ -884,17 +872,142 @@ public enum PipelineStatusError: Error, LocalizedError {
                 return message
             }
         }
-        if let explicit = payload.content.status.rejectionReason?.trimmingCharacters(in: .whitespacesAndNewlines),
+        if let explicit = payload.status.rejectionReason?.trimmingCharacters(in: .whitespacesAndNewlines),
            !explicit.isEmpty {
             return explicit
         }
-        if payload.content.status.kind == "Rejected",
-           let contentMessage = payload.content.status.content?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !contentMessage.isEmpty {
-            return contentMessage
+        let summary = payload.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !summary.isEmpty, summary != payload.status.kind {
+            return summary
         }
         return nil
     }
+}
+
+/// Exact cached top-up-shield verifier identity that an online preparation is
+/// allowed to use. A wallet builds this from its authenticated product
+/// capability and must refresh that capability after verifier rotation.
+public struct KagemushaTopUpShieldVerifierBinding: Equatable, Sendable {
+    public let backend: String
+    public let name: String
+    public let version: UInt32
+    public let circuitID: String
+    public let commitment: String
+    public let publicInputsSchemaHash: String
+    public let maximumProofBytes: UInt32
+    public let activationHeight: UInt64
+    public let withdrawalHeight: UInt64?
+
+    public init(
+        backend: String,
+        name: String,
+        version: UInt32,
+        circuitID: String,
+        commitment: String,
+        publicInputsSchemaHash: String,
+        maximumProofBytes: UInt32,
+        activationHeight: UInt64,
+        withdrawalHeight: UInt64?
+    ) throws {
+        guard backend == "halo2/ipa",
+              !name.isEmpty,
+              name.utf8.count <= 256,
+              name.utf8.allSatisfy({ $0 >= 0x21 && $0 <= 0x7E }),
+              circuitID == KagemushaRecursiveSpend.topUpShieldCircuitID,
+              let commitmentBytes = Data(hexString: commitment),
+              commitmentBytes.count == 32,
+              commitmentBytes.contains(where: { $0 != 0 }),
+              let schemaBytes = Data(hexString: publicInputsSchemaHash),
+              schemaBytes.count == 32,
+              schemaBytes.contains(where: { $0 != 0 }),
+              maximumProofBytes > 0,
+              maximumProofBytes <= 192 * 1024,
+              withdrawalHeight.map({ $0 > activationHeight }) != false else {
+            throw KagemushaRecursiveSpendError.invalidField("topUpShieldVerifierBinding")
+        }
+        self.backend = backend
+        self.name = name
+        self.version = version
+        self.circuitID = circuitID
+        self.commitment = commitment
+        self.publicInputsSchemaHash = publicInputsSchemaHash
+        self.maximumProofBytes = maximumProofBytes
+        self.activationHeight = activationHeight
+        self.withdrawalHeight = withdrawalHeight
+    }
+
+    public init(_ verifier: ToriiOfflineActiveTopUpShieldVerifier) throws {
+        try self.init(
+            backend: verifier.id.backend,
+            name: verifier.id.name,
+            version: verifier.version,
+            circuitID: verifier.circuitId,
+            commitment: verifier.commitment,
+            publicInputsSchemaHash: verifier.publicInputsSchemaHash,
+            maximumProofBytes: verifier.maxProofBytes,
+            activationHeight: verifier.activationHeight,
+            withdrawalHeight: verifier.withdrawalHeight
+        )
+    }
+
+    fileprivate func matches(_ verifier: ToriiOfflineActiveTopUpShieldVerifier) -> Bool {
+        backend == verifier.id.backend
+            && name == verifier.id.name
+            && version == verifier.version
+            && circuitID == verifier.circuitId
+            && commitment == verifier.commitment
+            && publicInputsSchemaHash == verifier.publicInputsSchemaHash
+            && maximumProofBytes == verifier.maxProofBytes
+            && activationHeight == verifier.activationHeight
+            && withdrawalHeight == verifier.withdrawalHeight
+    }
+}
+
+/// Product capability snapshot that must still match live Torii readiness
+/// immediately before a top-up proof is built.
+public struct KagemushaTopUpShieldReadinessExpectation: Equatable, Sendable {
+    public let assetDefinitionID: String
+    public let assetScale: UInt32
+    public let minimumEvaluatedBlockHeight: UInt64
+    public let verifier: KagemushaTopUpShieldVerifierBinding
+
+    public init(
+        assetDefinitionID: String,
+        assetScale: UInt32,
+        minimumEvaluatedBlockHeight: UInt64,
+        verifier: KagemushaTopUpShieldVerifierBinding
+    ) throws {
+        guard AssetDefinitionAddress.decode(assetDefinitionID) != nil,
+              assetScale <= KagemushaScaledAmount.maximumScale,
+              verifier.activationHeight <= minimumEvaluatedBlockHeight,
+              verifier.withdrawalHeight.map({ minimumEvaluatedBlockHeight < $0 }) != false else {
+            throw KagemushaRecursiveSpendError.invalidField("topUpReadinessExpectation")
+        }
+        self.assetDefinitionID = assetDefinitionID
+        self.assetScale = assetScale
+        self.minimumEvaluatedBlockHeight = minimumEvaluatedBlockHeight
+        self.verifier = verifier
+    }
+}
+
+/// Reproducible live binding retained with a staged top-up until finality.
+public struct KagemushaTopUpShieldSnapshotBinding: Equatable, Sendable {
+    public let assetDefinitionID: String
+    public let assetScale: UInt32
+    public let evaluatedBlockHeight: UInt64
+    public let evaluatedBlockHash: Data
+    public let verifier: KagemushaTopUpShieldVerifierBinding
+    public let initialRoot: Data
+    public let leafIndex: UInt32
+}
+
+/// Unsigned top-up plus the exact live readiness/tree observation used to
+/// construct it. Wallets persist this atomically with note secrets before
+/// signing or submitting the request.
+public struct KagemushaTopUpShieldPreparation: Equatable, Sendable {
+    public let unsigned: KagemushaRecursiveSpendTopUpUnsigned
+    public let opening: KagemushaNoteOpening
+    public let binding: KagemushaTopUpShieldSnapshotBinding
 }
 
 public final class IrohaSDK: @unchecked Sendable {
@@ -996,20 +1109,21 @@ public final class IrohaSDK: @unchecked Sendable {
     /// Torii readiness snapshot and next-zero confidential Merkle path.
     ///
     /// The secret witness is consumed only by the local native prover. The
-    /// returned archive contains the spendable note descriptor and opaque
-    /// shield proof, never the spend key, rho, or diversifier.
+    /// returned preparation contains the spendable note descriptor, opaque
+    /// shield proof, exact readiness/tree binding, and local note opening to
+    /// persist atomically in encrypted storage before submission. Only the
+    /// unsigned request is sent to Torii; the opening remains local.
     @available(iOS 15.0, macOS 12.0, *)
-    public func buildKagemushaTopUpShieldUnsigned(
+    public func prepareKagemushaTopUpShield(
         chainId: String,
         assetId: String,
         amount: KagemushaScaledAmount,
         payer: String,
         operationId: Data,
-        spendKey: Data,
-        rho: Data,
-        diversifier: Data,
-        artifactGeneration: String
-    ) async throws -> KagemushaRecursiveSpendTopUpUnsigned {
+        opening: KagemushaNoteOpening,
+        artifactGeneration: String,
+        expectedReadiness: KagemushaTopUpShieldReadinessExpectation
+    ) async throws -> KagemushaTopUpShieldPreparation {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
@@ -1025,12 +1139,15 @@ public final class IrohaSDK: @unchecked Sendable {
         let readiness = try await toriiRestClient.getOfflineReadiness(
             assetDefinitionId: assetDefinitionId
         )
-        guard readiness.assetDefinitionId == assetDefinitionId,
+        guard readiness.ready,
+              readiness.blockers.isEmpty,
+              readiness.assetDefinitionId == assetDefinitionId,
+              readiness.assetDefinitionId == expectedReadiness.assetDefinitionID,
               readiness.assetScale == amount.scale,
+              readiness.assetScale == expectedReadiness.assetScale,
+              readiness.evaluatedBlockHeight >= expectedReadiness.minimumEvaluatedBlockHeight,
               let verifier = readiness.activeTopUpShieldVerifier,
-              verifier.id.backend == "halo2/ipa",
-              verifier.circuitId == KagemushaRecursiveSpend.topUpShieldCircuitID,
-              verifier.maxProofBytes <= 192 * 1024,
+              expectedReadiness.verifier.matches(verifier),
               let verifierCommitment = Data(hexString: verifier.commitment),
               verifierCommitment.count == 32 else {
             throw KagemushaRecursiveSpendError.invalidField("topUp.readiness")
@@ -1048,20 +1165,43 @@ public final class IrohaSDK: @unchecked Sendable {
               zeroPath.leafIndex == UInt64(snapshot.frontierLen) else {
             throw KagemushaRecursiveSpendError.invalidField("topUp.zeroPath")
         }
-        return try KagemushaTopUpShieldBuildRequest(
+        let unsigned = try KagemushaTopUpShieldBuildRequest(
             chainID: chainId,
             assetID: canonicalAssetId,
             amount: amount,
             payer: payer,
             operationID: operationId,
-            spendKey: spendKey,
-            rho: rho,
-            diversifier: diversifier,
+            opening: opening,
             zeroPath: zeroPath,
             shieldVerifierID: "\(verifier.id.backend):\(verifier.id.name)",
             shieldVerifierCommitment: verifierCommitment,
             artifactGeneration: artifactGeneration
         ).buildUnsigned()
+        let currentReadiness = try await toriiRestClient.getOfflineReadiness(
+            assetDefinitionId: assetDefinitionId
+        )
+        guard currentReadiness.ready,
+              currentReadiness.blockers.isEmpty,
+              currentReadiness.assetDefinitionId == readiness.assetDefinitionId,
+              currentReadiness.assetScale == readiness.assetScale,
+              currentReadiness.evaluatedBlockHeight >= readiness.evaluatedBlockHeight,
+              let currentVerifier = currentReadiness.activeTopUpShieldVerifier,
+              expectedReadiness.verifier.matches(currentVerifier) else {
+            throw KagemushaRecursiveSpendError.invalidField("topUp.readiness.changed")
+        }
+        return KagemushaTopUpShieldPreparation(
+            unsigned: unsigned,
+            opening: opening,
+            binding: KagemushaTopUpShieldSnapshotBinding(
+                assetDefinitionID: assetDefinitionId,
+                assetScale: amount.scale,
+                evaluatedBlockHeight: currentReadiness.evaluatedBlockHeight,
+                evaluatedBlockHash: currentReadiness.evaluatedBlockHashBytes,
+                verifier: expectedReadiness.verifier,
+                initialRoot: zeroPath.rootAtHeight,
+                leafIndex: UInt32(zeroPath.leafIndex)
+            )
+        )
     }
 
     /// Generates a new signing key using `defaultSigningAlgorithm`.
@@ -2593,7 +2733,7 @@ public final class IrohaSDK: @unchecked Sendable {
             attempts += 1
             if let status = try await statusClient.getTransactionStatus(hashHex: hashHex,
                                                                          mode: mode) {
-                let kind = status.content.status.kind
+                let kind = status.status.kind
                 if options.successStatuses.contains(kind) {
                     return status
                 }

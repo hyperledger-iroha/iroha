@@ -52,6 +52,49 @@ public final class SumeragiV2WireFixtureTests {
   }
 
   @Test
+  public void timeoutVoteCarriesTheCompletePrepareCertificate() throws Exception {
+    SumeragiV2Wire.ConsensusPayload.TimeoutVoteMessage timeoutPayload =
+        (SumeragiV2Wire.ConsensusPayload.TimeoutVoteMessage)
+            SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                    hexBytes(fixtureRow("message", "timeout_vote").hex))
+                .payload;
+    SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage preparePayload =
+        (SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage)
+            SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                    hexBytes(fixtureRow("message", "quorum_certificate").hex))
+                .payload;
+
+    SumeragiV2Wire.QuorumCertificate embeddedPrepare = timeoutPayload.value.highestPrepareQc;
+    if (embeddedPrepare == null) {
+      throw new AssertionError("timeout vote omitted its highest PrepareQC");
+    }
+    assertArrayEquals(preparePayload.value.encode(), embeddedPrepare.encode());
+    assertEquals(Arrays.asList(0L, 1L, 2L), embeddedPrepare.signers);
+    assertEquals(48, embeddedPrepare.aggregateSignature().length);
+
+    byte[] changedSignature = embeddedPrepare.aggregateSignature();
+    changedSignature[0] ^= 1;
+    SumeragiV2Wire.QuorumCertificate changedPrepare =
+        new SumeragiV2Wire.QuorumCertificate(
+            embeddedPrepare.round,
+            embeddedPrepare.phase,
+            embeddedPrepare.subject,
+            embeddedPrepare.executionCommitment,
+            embeddedPrepare.signers,
+            changedSignature);
+    SumeragiV2Wire.TimeoutVote changedVote =
+        new SumeragiV2Wire.TimeoutVote(
+            timeoutPayload.value.round,
+            changedPrepare,
+            timeoutPayload.value.signer,
+            timeoutPayload.value.signature());
+    if (Arrays.equals(timeoutPayload.value.encode(), changedVote.encode())) {
+      throw new AssertionError(
+          "timeout-vote wire bytes did not bind the embedded PrepareQC evidence");
+    }
+  }
+
+  @Test
   public void commitCertificateSigningPreimagesMatchRustExactly() throws Exception {
     FixtureRow requestMessage = fixtureRow("message", "commit_certificate_request");
     FixtureRow responseMessage = fixtureRow("message", "commit_certificate_response");

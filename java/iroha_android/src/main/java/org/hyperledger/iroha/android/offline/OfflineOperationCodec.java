@@ -155,7 +155,7 @@ public final class OfflineOperationCodec {
   }
 
   static CanonicalRequest requireTopUpRequest(final byte[] archive) {
-    return requireCanonicalRequest(archive, TOP_UP_REQUEST_SCHEMA, 6, 8);
+    return requireCanonicalRequest(archive, TOP_UP_REQUEST_SCHEMA, 5, 7);
   }
 
   static CanonicalRequest requireRedeemRequest(final byte[] archive) {

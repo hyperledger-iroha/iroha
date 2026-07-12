@@ -16,10 +16,15 @@
 use vstd::prelude::*;
 
 // These expressions are instantiated both as specifications and as executable
-// Verus functions.  The PrepareIntent WAL guard below is derived directly from
-// primitive vote and frozen-context fields.  The remaining projected WAL
-// certificate/proposal predicates are called out explicitly in
-// `VERIFICATION.md` until they are migrated to the same representation.
+// Verus functions.  The PrepareIntent and TimeoutIntent WAL guards below are
+// derived directly from primitive vote and frozen-context fields.  The
+// remaining projected WAL certificate/proposal predicates are called out
+// explicitly in `VERIFICATION.md` until they are migrated to the same
+// representation.
+// Cargo Verus consumes these macros inside `verus!`; the trailing ordinary
+// Rust metadata pass sees the ghost module erased and would otherwise report
+// them as unused.
+#[allow(unused_macros)]
 macro_rules! same_certificate_body {
     ($left:expr, $right:expr) => {{
         $left.present == $right.present
@@ -32,216 +37,11 @@ macro_rules! same_certificate_body {
     }};
 }
 
-macro_rules! certificate_shape_body {
-    ($certificate:expr, $prepare:expr) => {{
-        $certificate.present
-            && $certificate.prepare == $prepare
-            && 0 <= $certificate.height
-            && $certificate.height <= 18_446_744_073_709_551_615int
-            && 0 <= $certificate.view
-            && $certificate.view <= 18_446_744_073_709_551_615int
-            && 0 <= $certificate.signer_count
-            && 0 <= $certificate.signer_power
-    }};
-}
-
-macro_rules! certificate_valid_for_body {
-    ($state:expr, $certificate:expr, $prepare:expr) => {{
-        certificate_shape_body!($certificate, $prepare)
-            && $certificate.context == $state.context
-            && $certificate.height == $state.height
-            && 0 < $state.validator_count
-            && 0 < $state.total_power
-            && $certificate.signer_count <= $state.validator_count
-            && $certificate.signer_power <= $state.total_power
-            && $certificate.signer_count * 3 > $state.validator_count * 2
-            && $certificate.signer_power * 3 > $state.total_power * 2
-    }};
-}
-
-macro_rules! compatible_highest_update_body {
-    ($current:expr, $incoming:expr) => {{
-        certificate_shape_body!($incoming, true)
-            && (!$current.present
-                || $incoming.view != $current.view
-                || $incoming.subject == $current.subject)
-    }};
-}
-
-macro_rules! timeout_certificate_valid_for_body {
-    ($state:expr, $certificate:expr) => {{
-        $certificate.context == $state.context
-            && $certificate.height == $state.height
-            && 0 <= $certificate.view
-            && $certificate.view < 18_446_744_073_709_551_615int
-            && 0 < $state.validator_count
-            && 0 < $state.total_power
-            && 0 <= $certificate.signer_count
-            && $certificate.signer_count <= $state.validator_count
-            && 0 <= $certificate.signer_power
-            && $certificate.signer_power <= $state.total_power
-            && $certificate.signer_count * 3 > $state.validator_count * 2
-            && $certificate.signer_power * 3 > $state.total_power * 2
-            && (!$certificate.selected_prepare.present
-                || (certificate_valid_for_body!($state, $certificate.selected_prepare, true)
-                    && $certificate.selected_prepare.view <= $certificate.view))
-    }};
-}
-
-macro_rules! wal_guard_context_body {
-    ($state:expr) => {{
-        0 <= $state.height
-            && $state.height <= 18_446_744_073_709_551_615int
-            && 0 <= $state.view
-            && $state.view <= 18_446_744_073_709_551_615int
-            && 0 < $state.validator_count
-            && 0 < $state.total_power
-            && 0 <= $state.leader_start
-            && $state.leader_start < $state.validator_count
-            && -1 <= $state.local_validator
-            && $state.local_validator < $state.validator_count
-            && (!$state.parent_commit.present
-                || certificate_shape_body!($state.parent_commit, false))
-    }};
-}
-
-macro_rules! proposal_justification_body {
-    ($state:expr, $view:expr, $subject:expr, $justification:expr) => {{
-        match $justification {
-            ProposalJustificationProjection::ParentCommit { certificate } => {
-                $view == 0 && same_certificate_body!(certificate, $state.parent_commit)
-            }
-            ProposalJustificationProjection::Timeout { certificate } => {
-                $view > 0
-                    && timeout_certificate_valid_for_body!($state, certificate)
-                    && certificate.view + 1 == $view
-                    && (!certificate.selected_prepare.present
-                        || certificate.selected_prepare.subject == $subject)
-            }
-        }
-    }};
-}
-
-macro_rules! proposal_lock_body {
-    ($state:expr, $subject:expr, $justification:expr) => {{
-        if !$state.locked.present || $state.locked.subject == $subject {
-            true
-        } else {
-            match $justification {
-                ProposalJustificationProjection::Timeout { certificate } => {
-                    certificate.selected_prepare.present
-                        && certificate.selected_prepare.prepare
-                        && certificate.selected_prepare.subject == $subject
-                        && certificate.selected_prepare.view > $state.locked.view
-                }
-                ProposalJustificationProjection::ParentCommit { .. } => false,
-            }
-        }
-    }};
-}
-
-macro_rules! wal_record_guard_body {
-    ($state:expr, $record:expr) => {{
-        wal_guard_context_body!($state)
-            && match $record {
-                WalRecordProjection::ProposalIntent {
-                    context,
-                    height,
-                    view,
-                    subject,
-                    proposer,
-                    justification,
-                } => {
-                    context == $state.context
-                        && height == $state.height
-                        && view == $state.view
-                        && proposer == $state.local_validator
-                        && 0 <= proposer
-                        && proposer < $state.validator_count
-                        && proposer == ($state.leader_start + view) % $state.validator_count
-                        && proposal_justification_body!($state, view, subject, justification)
-                        && proposal_lock_body!($state, subject, justification)
-                }
-                WalRecordProjection::PrepareIntent {
-                    context,
-                    height,
-                    view,
-                    signer,
-                    prepare,
-                    ..
-                } => {
-                    context == $state.context
-                        && height == $state.height
-                        && view == $state.view
-                        && prepare
-                        && signer == $state.local_validator
-                        && 0 <= signer
-                        && signer < $state.validator_count
-                }
-                WalRecordProjection::ObservePrepare { certificate } => {
-                    certificate_valid_for_body!($state, certificate, true)
-                        && certificate.view <= $state.view
-                        && compatible_highest_update_body!($state.highest_prepare, certificate)
-                }
-                WalRecordProjection::LockAndCommit {
-                    prepare,
-                    vote_context,
-                    vote_height,
-                    vote_view,
-                    vote_subject,
-                    vote_signer,
-                    vote_prepare,
-                } => {
-                    certificate_valid_for_body!($state, prepare, true)
-                        && vote_context == $state.context
-                        && vote_height == $state.height
-                        && vote_view == $state.view
-                        && !vote_prepare
-                        && vote_signer == $state.local_validator
-                        && 0 <= vote_signer
-                        && vote_signer < $state.validator_count
-                        && vote_view == prepare.view
-                        && vote_subject == prepare.subject
-                        && compatible_highest_update_body!($state.highest_prepare, prepare)
-                        && (!$state.locked.present
-                            || prepare.view > $state.locked.view
-                            || (prepare.view == $state.locked.view
-                                && prepare.subject == $state.locked.subject))
-                }
-                WalRecordProjection::TimeoutIntent {
-                    context,
-                    height,
-                    view,
-                    signer,
-                    highest_prepare,
-                } => {
-                    context == $state.context
-                        && height == $state.height
-                        && view == $state.view
-                        && signer == $state.local_validator
-                        && 0 <= signer
-                        && signer < $state.validator_count
-                        && same_certificate_body!(highest_prepare, $state.highest_prepare)
-                }
-                WalRecordProjection::InstallTimeout { certificate } => {
-                    timeout_certificate_valid_for_body!($state, certificate)
-                        && certificate.view >= $state.view
-                        && (!certificate.selected_prepare.present
-                            || compatible_highest_update_body!(
-                                $state.highest_prepare,
-                                certificate.selected_prepare
-                            ))
-                        && (!certificate.selected_prepare.present
-                            || !$state.locked.present
-                            || certificate.selected_prepare.view != $state.locked.view
-                            || certificate.selected_prepare.subject == $state.locked.subject)
-                }
-                WalRecordProjection::Decision { certificate } => {
-                    certificate_valid_for_body!($state, certificate, false)
-                        && (!$state.decision.present
-                            || same_certificate_body!($state.decision, certificate))
-                }
-            }
+#[allow(unused_macros)]
+macro_rules! same_certificate_evidence_body {
+    ($left:expr, $right:expr) => {{
+        same_certificate_body!($left, $right)
+            && (!$left.present || $left.evidence == $right.evidence)
     }};
 }
 
@@ -275,6 +75,10 @@ pub struct CertificateProjection {
     pub signer_count: int,
     /// Voting power represented by those signers.
     pub signer_power: int,
+    /// Identity of the complete certificate evidence (signer set and
+    /// aggregate/signature bytes), distinct from its stable decision
+    /// reference.
+    pub evidence: int,
 }
 
 /// The absent certificate value.  Its remaining fields are canonicalized.
@@ -288,6 +92,7 @@ pub open spec fn absent_certificate() -> CertificateProjection {
         subject: 0,
         signer_count: 0,
         signer_power: 0,
+        evidence: 0,
     }
 }
 
@@ -299,14 +104,36 @@ pub open spec fn same_certificate(
     same_certificate_body!(left, right)
 }
 
+/// Equality of the complete carried certificate, including its signer and
+/// signature evidence identity.  Production timeout intents compare the full
+/// `QuorumCertificate`, not only its stable semantic reference.
+pub open spec fn same_certificate_evidence(
+    left: CertificateProjection,
+    right: CertificateProjection,
+) -> bool {
+    same_certificate_evidence_body!(left, right)
+}
+
+/// Canonical fixed-width identity stored for one timeout intent's optional
+/// full high QC.  Absence has no hidden evidence bytes.
+pub open spec fn certificate_evidence_identity(certificate: CertificateProjection) -> int {
+    if certificate.present { certificate.evidence } else { 0 }
+}
+
 /// A well-formed projected PrepareQC.
 pub open spec fn valid_prepare(certificate: CertificateProjection) -> bool {
-    certificate_shape_body!(certificate, true)
+    certificate.present
+        && certificate.prepare
+        && 0 <= certificate.height <= machine_u64_max()
+        && 0 <= certificate.view <= machine_u64_max()
 }
 
 /// A well-formed projected CommitQC.
 pub open spec fn valid_commit(certificate: CertificateProjection) -> bool {
-    certificate_shape_body!(certificate, false)
+    certificate.present
+        && !certificate.prepare
+        && 0 <= certificate.height <= machine_u64_max()
+        && 0 <= certificate.view <= machine_u64_max()
 }
 
 /// Equal-view certificates do not conflict and a higher one may replace one.
@@ -314,7 +141,10 @@ pub open spec fn compatible_highest_update(
     current: CertificateProjection,
     incoming: CertificateProjection,
 ) -> bool {
-    compatible_highest_update_body!(current, incoming)
+    valid_prepare(incoming)
+        && (!current.present
+            || incoming.view != current.view
+            || incoming.subject == current.subject)
 }
 
 /// Production `update_highest`: install only a strictly higher PrepareQC.
@@ -340,6 +170,16 @@ pub open spec fn lock_after_timeout(
     } else {
         current
     }
+}
+
+/// Production Decision replay keeps the first full certificate evidence for
+/// a semantic decision and accepts later certificates only as equivalent
+/// witnesses for the same reference.
+pub open spec fn decision_after_update(
+    current: CertificateProjection,
+    incoming: CertificateProjection,
+) -> CertificateProjection {
+    if current.present { current } else { incoming }
 }
 
 /// A later state extends, rather than regresses, an earlier lock.
@@ -421,7 +261,7 @@ pub enum WalRecordProjection {
         /// Frozen-roster index of the vote signer.
         signer: int,
         /// Prepare when true and Commit when false.
-        prepare: bool,
+        is_prepare: bool,
     },
     /// `WalRecord::ObservePrepare`.
     ObservePrepare {
@@ -445,14 +285,17 @@ pub enum WalRecordProjection {
     },
     /// `WalRecord::TimeoutIntent`.
     TimeoutIntent {
+        /// Frozen height-context identity carried by the timeout vote.
+        context: int,
+        /// Timed-out block height.
+        height: int,
         /// Timed-out view.
         view: int,
-        /// Canonical identity of the carried highest PrepareQC reference.
-        high_reference: int,
-        /// Projection of local timeout vote validation.
-        local_vote_valid: bool,
-        /// The carried high reference equals durable `highest_prepare`.
-        high_reference_matches: bool,
+        /// Frozen-roster index of the timeout signer.
+        signer: int,
+        /// Complete highest PrepareQC carried by the timeout vote, including
+        /// its evidence identity, or the canonical absent value.
+        highest_prepare: CertificateProjection,
     },
     /// `WalRecord::InstallTimeout`.
     InstallTimeout {
@@ -502,7 +345,7 @@ pub struct WalStateProjection {
     pub prepare_intents: Map<int, int>,
     /// Unique local Commit subject per view.
     pub commit_intents: Map<int, int>,
-    /// Unique local timeout high-reference per view.
+    /// Unique local timeout high-QC evidence identity per view.
     pub timeout_intents: Map<int, int>,
     /// Highest observed PrepareQC.
     pub highest_prepare: CertificateProjection,
@@ -529,10 +372,10 @@ pub open spec fn wal_states_equivalent(
         && left.prepare_intents =~= right.prepare_intents
         && left.commit_intents =~= right.commit_intents
         && left.timeout_intents =~= right.timeout_intents
-        && same_certificate(left.highest_prepare, right.highest_prepare)
-        && same_certificate(left.locked, right.locked)
+        && same_certificate_evidence(left.highest_prepare, right.highest_prepare)
+        && same_certificate_evidence(left.locked, right.locked)
         && left.last_timeout_view == right.last_timeout_view
-        && same_certificate(left.decision, right.decision)
+        && same_certificate_evidence(left.decision, right.decision)
 }
 
 /// The invariant reconstructed from every accepted complete WAL prefix.
@@ -594,11 +437,11 @@ pub open spec fn wal_frame_admissible(
                 view,
                 subject,
                 signer,
-                prepare,
+                is_prepare,
             } => {
                 context == before.context
                     && height == before.height
-                    && prepare
+                    && is_prepare
                     && signer == before.local_validator
                     && 0 <= signer
                     && signer < before.validator_count
@@ -637,15 +480,24 @@ pub open spec fn wal_frame_admissible(
                             && prepare.subject == before.locked.subject))
             }
             WalRecordProjection::TimeoutIntent {
+                context,
+                height,
                 view,
-                high_reference,
-                local_vote_valid,
-                high_reference_matches,
+                signer,
+                highest_prepare,
             } => {
-                local_vote_valid
-                    && high_reference_matches
+                context == before.context
+                    && height == before.height
                     && view == before.view
-                    && unique_insert_allowed(before.timeout_intents, view, high_reference)
+                    && signer == before.local_validator
+                    && 0 <= signer
+                    && signer < before.validator_count
+                    && same_certificate_evidence(highest_prepare, before.highest_prepare)
+                    && unique_insert_allowed(
+                        before.timeout_intents,
+                        view,
+                        certificate_evidence_identity(highest_prepare),
+                    )
             }
             WalRecordProjection::InstallTimeout {
                 tc_view,
@@ -704,10 +556,13 @@ pub open spec fn wal_apply(
                     && after.prepare_intents =~= before.prepare_intents
                     && after.commit_intents =~= before.commit_intents
                     && after.timeout_intents =~= before.timeout_intents
-                    && same_certificate(after.highest_prepare, before.highest_prepare)
-                    && same_certificate(after.locked, before.locked)
+                    && same_certificate_evidence(
+                        after.highest_prepare,
+                        before.highest_prepare,
+                    )
+                    && same_certificate_evidence(after.locked, before.locked)
                     && after.last_timeout_view == before.last_timeout_view
-                    && same_certificate(after.decision, before.decision)
+                    && same_certificate_evidence(after.decision, before.decision)
             }
             WalRecordProjection::PrepareIntent { view, subject, .. } => {
                 after.view == before.view
@@ -715,10 +570,13 @@ pub open spec fn wal_apply(
                     && after.prepare_intents =~= before.prepare_intents.insert(view, subject)
                     && after.commit_intents =~= before.commit_intents
                     && after.timeout_intents =~= before.timeout_intents
-                    && same_certificate(after.highest_prepare, before.highest_prepare)
-                    && same_certificate(after.locked, before.locked)
+                    && same_certificate_evidence(
+                        after.highest_prepare,
+                        before.highest_prepare,
+                    )
+                    && same_certificate_evidence(after.locked, before.locked)
                     && after.last_timeout_view == before.last_timeout_view
-                    && same_certificate(after.decision, before.decision)
+                    && same_certificate_evidence(after.decision, before.decision)
             }
             WalRecordProjection::ObservePrepare { certificate, .. } => {
                 after.view == before.view
@@ -726,13 +584,13 @@ pub open spec fn wal_apply(
                     && after.prepare_intents =~= before.prepare_intents
                     && after.commit_intents =~= before.commit_intents
                     && after.timeout_intents =~= before.timeout_intents
-                    && same_certificate(
+                    && same_certificate_evidence(
                         after.highest_prepare,
                         highest_after_update(before.highest_prepare, certificate),
                     )
-                    && same_certificate(after.locked, before.locked)
+                    && same_certificate_evidence(after.locked, before.locked)
                     && after.last_timeout_view == before.last_timeout_view
-                    && same_certificate(after.decision, before.decision)
+                    && same_certificate_evidence(after.decision, before.decision)
             }
             WalRecordProjection::LockAndCommit {
                 prepare,
@@ -746,17 +604,17 @@ pub open spec fn wal_apply(
                     && after.commit_intents
                         =~= before.commit_intents.insert(vote_view, vote_subject)
                     && after.timeout_intents =~= before.timeout_intents
-                    && same_certificate(
+                    && same_certificate_evidence(
                         after.highest_prepare,
                         highest_after_update(before.highest_prepare, prepare),
                     )
-                    && same_certificate(after.locked, prepare)
+                    && same_certificate_evidence(after.locked, prepare)
                     && after.last_timeout_view == before.last_timeout_view
-                    && same_certificate(after.decision, before.decision)
+                    && same_certificate_evidence(after.decision, before.decision)
             }
             WalRecordProjection::TimeoutIntent {
                 view,
-                high_reference,
+                highest_prepare,
                 ..
             } => {
                 after.view == before.view
@@ -764,11 +622,17 @@ pub open spec fn wal_apply(
                     && after.prepare_intents =~= before.prepare_intents
                     && after.commit_intents =~= before.commit_intents
                     && after.timeout_intents
-                        =~= before.timeout_intents.insert(view, high_reference)
-                    && same_certificate(after.highest_prepare, before.highest_prepare)
-                    && same_certificate(after.locked, before.locked)
+                        =~= before.timeout_intents.insert(
+                            view,
+                            certificate_evidence_identity(highest_prepare),
+                        )
+                    && same_certificate_evidence(
+                        after.highest_prepare,
+                        before.highest_prepare,
+                    )
+                    && same_certificate_evidence(after.locked, before.locked)
                     && after.last_timeout_view == before.last_timeout_view
-                    && same_certificate(after.decision, before.decision)
+                    && same_certificate_evidence(after.decision, before.decision)
             }
             WalRecordProjection::InstallTimeout {
                 tc_view,
@@ -780,7 +644,7 @@ pub open spec fn wal_apply(
                     && after.prepare_intents =~= before.prepare_intents
                     && after.commit_intents =~= before.commit_intents
                     && after.timeout_intents =~= before.timeout_intents
-                    && same_certificate(
+                    && same_certificate_evidence(
                         after.highest_prepare,
                         if selected_prepare.present {
                             highest_after_update(before.highest_prepare, selected_prepare)
@@ -788,12 +652,12 @@ pub open spec fn wal_apply(
                             before.highest_prepare
                         },
                     )
-                    && same_certificate(
+                    && same_certificate_evidence(
                         after.locked,
                         lock_after_timeout(before.locked, selected_prepare),
                     )
                     && after.last_timeout_view == tc_view
-                    && same_certificate(after.decision, before.decision)
+                    && same_certificate_evidence(after.decision, before.decision)
             }
             WalRecordProjection::Decision { certificate, .. } => {
                 after.view == before.view
@@ -801,10 +665,16 @@ pub open spec fn wal_apply(
                     && after.prepare_intents =~= before.prepare_intents
                     && after.commit_intents =~= before.commit_intents
                     && after.timeout_intents =~= before.timeout_intents
-                    && same_certificate(after.highest_prepare, before.highest_prepare)
-                    && same_certificate(after.locked, before.locked)
+                    && same_certificate_evidence(
+                        after.highest_prepare,
+                        before.highest_prepare,
+                    )
+                    && same_certificate_evidence(after.locked, before.locked)
                     && after.last_timeout_view == before.last_timeout_view
-                    && same_certificate(after.decision, certificate)
+                    && same_certificate_evidence(
+                        after.decision,
+                        decision_after_update(before.decision, certificate),
+                    )
             }
         }
 }
@@ -951,7 +821,7 @@ pub proof fn wal_apply_preserves_all_existing_intents(
         },
         WalRecordProjection::TimeoutIntent {
             view,
-            high_reference,
+            highest_prepare,
             ..
         } => {
             assert forall |old_view: int|
@@ -964,7 +834,7 @@ pub proof fn wal_apply_preserves_all_existing_intents(
                     assert(unique_insert_allowed(
                         before.timeout_intents,
                         view,
-                        high_reference,
+                        certificate_evidence_identity(highest_prepare),
                     ));
                 }
             }
@@ -1080,12 +950,12 @@ pub proof fn prepare_intent_guard_is_derived_from_vote_and_frozen_context(
                 context,
                 height,
                 signer,
-                prepare,
+                is_prepare,
                 ..
             } => {
                 context == before.context
                     && height == before.height
-                    && prepare
+                    && is_prepare
                     && signer == before.local_validator
                     && 0 <= signer
                     && signer < before.validator_count
@@ -1184,8 +1054,43 @@ pub proof fn lock_and_commit_branch_is_atomic(
     }
 }
 
-/// TimeoutIntent durably closes exactly the current view with the expected high
-/// PrepareQC reference.
+/// TimeoutIntent admissibility is derived from timeout-vote primitives and the
+/// frozen replay context; no caller-supplied validity or high-QC-match bit can
+/// authorize the record.
+pub proof fn timeout_intent_guard_is_derived_from_vote_and_frozen_context(
+    before: WalStateProjection,
+    frame: WalFrameProjection,
+)
+    requires
+        wal_frame_admissible(before, frame),
+    ensures
+        match frame.record {
+            WalRecordProjection::TimeoutIntent {
+                context,
+                height,
+                view,
+                signer,
+                highest_prepare,
+            } => {
+                context == before.context
+                    && height == before.height
+                    && view == before.view
+                    && signer == before.local_validator
+                    && 0 <= signer
+                    && signer < before.validator_count
+                    && same_certificate_evidence(highest_prepare, before.highest_prepare)
+            }
+            _ => true,
+        },
+{
+    match frame.record {
+        WalRecordProjection::TimeoutIntent { .. } => {},
+        _ => {},
+    }
+}
+
+/// TimeoutIntent durably closes exactly the current view with the expected
+/// full high PrepareQC evidence identity.
 pub proof fn timeout_intent_branch_postcondition(
     before: WalStateProjection,
     frame: WalFrameProjection,
@@ -1197,12 +1102,17 @@ pub proof fn timeout_intent_branch_postcondition(
         match frame.record {
             WalRecordProjection::TimeoutIntent {
                 view,
-                high_reference,
+                highest_prepare,
                 ..
             } => {
                 view == before.view
                     && after.timeout_intents.dom().contains(view)
-                    && after.timeout_intents[view] == high_reference
+                    && after.timeout_intents[view]
+                        == certificate_evidence_identity(highest_prepare)
+                    && same_certificate_evidence(
+                        highest_prepare,
+                        before.highest_prepare,
+                    )
                     && after.view == before.view
             }
             _ => true,

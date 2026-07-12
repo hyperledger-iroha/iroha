@@ -3264,6 +3264,7 @@ mod tests {
             norito::json!({ "some": "1", "none": true }),
             norito::json!({ "none": false }),
             norito::json!({ "None": true }),
+            njson::Value::String("1".to_owned()),
             njson::Value::Null,
         ];
         for value in invalid {
@@ -3384,6 +3385,10 @@ mod tests {
             (
                 EntrypointValueKindV1::Int,
                 njson::Value::String("01".to_owned()),
+            ),
+            (
+                EntrypointValueKindV1::Quantity,
+                njson::Value::String("-1".to_owned()),
             ),
             (
                 EntrypointValueKindV1::AssetId,

@@ -14401,61 +14401,262 @@ function parseLaneGovernance(payload) {
 
 function parseSumeragiStatusPayload(payload) {
   const record = ensureRecord(payload, "sumeragi status payload");
-  const normalized = { ...record };
-  normalized.mode_tag = requireNonEmptyString(
-    record.mode_tag ?? "",
-    "sumeragi.mode_tag",
+  assertSumeragiV2Fields(
+    record,
+    new Set([
+      "protocol_version",
+      "node_fingerprint",
+      "build_fingerprint",
+      "config_fingerprint",
+      "height_context_id",
+      "height",
+      "view",
+      "phase",
+      "leader",
+      "locked_prepare_qc",
+      "highest_prepare_qc",
+      "last_timeout_certificate",
+      "body_state",
+      "pending_persistence_id",
+      "last_committed_height",
+      "last_committed_subject",
+      "lane_settlement_commitments",
+      "lane_relay_envelopes",
+    ]),
+    "sumeragi",
   );
-  normalized.staged_mode_tag =
-    record.staged_mode_tag == null
+
+  const protocolVersion = requireNonNegativeIntegerLike(
+    record.protocol_version,
+    "sumeragi.protocol_version",
+  );
+  if (protocolVersion !== 2) {
+    throw new TypeError(
+      `sumeragi.protocol_version must be 2; received ${protocolVersion}`,
+    );
+  }
+
+  const height = requireNonNegativeIntegerLike(record.height, "sumeragi.height");
+  const lastCommittedHeight = requireNonNegativeIntegerLike(
+    record.last_committed_height,
+    "sumeragi.last_committed_height",
+  );
+  if (lastCommittedHeight > height) {
+    throw new RangeError(
+      "sumeragi.last_committed_height must not exceed sumeragi.height",
+    );
+  }
+
+  const lastCommittedSubject =
+    record.last_committed_subject == null
       ? null
-      : requireNonEmptyString(
-          record.staged_mode_tag,
-          "sumeragi.staged_mode_tag",
+      : parseSumeragiV2BlockSubject(
+          record.last_committed_subject,
+          "sumeragi.last_committed_subject",
         );
-  normalized.staged_mode_activation_height =
-    record.staged_mode_activation_height == null
+  if (lastCommittedHeight > 0 && lastCommittedSubject === null) {
+    throw new TypeError(
+      "sumeragi.last_committed_subject is required after the first commit",
+    );
+  }
+
+  const pendingPersistenceId =
+    record.pending_persistence_id == null
       ? null
-      : coerceInteger(
-          record.staged_mode_activation_height,
-          "sumeragi.staged_mode_activation_height",
+      : requireNonNegativeIntegerLike(
+          record.pending_persistence_id,
+          "sumeragi.pending_persistence_id",
         );
-  normalized.mode_activation_lag_blocks =
-    record.mode_activation_lag_blocks == null
-      ? null
-      : coerceInteger(
-          record.mode_activation_lag_blocks,
-          "sumeragi.mode_activation_lag_blocks",
-        );
-  normalized.consensus_caps = record.consensus_caps
-    ? parseConsensusCaps(record.consensus_caps)
-    : null;
-  normalized.commit_qc =
-    record.commit_qc == null
-      ? null
-      : parseCommitQc(record.commit_qc, "sumeragi.commit_qc");
-  normalized.commit_quorum =
-    record.commit_quorum == null
-      ? null
-      : parseCommitQuorum(record.commit_quorum, "sumeragi.commit_quorum");
-  normalized.lane_commitments = parseLaneCommitments(record.lane_commitments);
-  normalized.dataspace_commitments = parseDataspaceCommitments(
-    record.dataspace_commitments,
+  if (pendingPersistenceId === 0) {
+    throw new RangeError("sumeragi.pending_persistence_id must be positive when present");
+  }
+
+  return Object.freeze({
+    protocol_version: protocolVersion,
+    node_fingerprint: requireNonEmptyString(
+      record.node_fingerprint,
+      "sumeragi.node_fingerprint",
+    ),
+    build_fingerprint: requireNonEmptyString(
+      record.build_fingerprint,
+      "sumeragi.build_fingerprint",
+    ),
+    config_fingerprint: requireNonEmptyString(
+      record.config_fingerprint,
+      "sumeragi.config_fingerprint",
+    ),
+    height_context_id: parseSumeragiV2HeightContextId(
+      record.height_context_id,
+      "sumeragi.height_context_id",
+    ),
+    height,
+    view: requireNonNegativeIntegerLike(record.view, "sumeragi.view"),
+    phase: parseSumeragiV2TaggedUnit(
+      record.phase,
+      "phase",
+      new Set([
+        "AwaitingProposal",
+        "ReconstructingPayload",
+        "ValidatingPayload",
+        "Prepare",
+        "Commit",
+        "PendingApply",
+      ]),
+      "sumeragi.phase",
+    ),
+    leader: parseSumeragiV2ValidatorIndex(record.leader, "sumeragi.leader"),
+    locked_prepare_qc:
+      record.locked_prepare_qc == null
+        ? null
+        : parseSumeragiV2QuorumCertificateRef(
+            record.locked_prepare_qc,
+            "sumeragi.locked_prepare_qc",
+          ),
+    highest_prepare_qc:
+      record.highest_prepare_qc == null
+        ? null
+        : parseSumeragiV2QuorumCertificateRef(
+            record.highest_prepare_qc,
+            "sumeragi.highest_prepare_qc",
+          ),
+    last_timeout_certificate:
+      record.last_timeout_certificate == null
+        ? null
+        : parseSumeragiV2TimeoutCertificateRef(
+            record.last_timeout_certificate,
+            "sumeragi.last_timeout_certificate",
+          ),
+    body_state: parseSumeragiV2TaggedUnit(
+      record.body_state,
+      "state",
+      new Set([
+        "Missing",
+        "Reconstructing",
+        "Stored",
+        "Validated",
+        "PendingApply",
+        "Applied",
+      ]),
+      "sumeragi.body_state",
+    ),
+    pending_persistence_id: pendingPersistenceId,
+    last_committed_height: lastCommittedHeight,
+    last_committed_subject: lastCommittedSubject,
+    lane_settlement_commitments: parseLaneSettlementCommitments(
+      record.lane_settlement_commitments,
+    ),
+    lane_relay_envelopes: parseLaneRelayEnvelopes(record.lane_relay_envelopes),
+  });
+}
+
+function assertSumeragiV2Fields(record, allowed, context) {
+  const unknown = Object.keys(record).filter((key) => !allowed.has(key));
+  if (unknown.length > 0) {
+    throw new TypeError(
+      `${context} contains unsupported fields: ${unknown.sort().join(", ")}`,
+    );
+  }
+}
+
+function parseSumeragiV2HeightContextId(value, context) {
+  if (!Array.isArray(value) || value.length !== 1) {
+    throw new TypeError(`${context} must be a one-element tuple`);
+  }
+  return Object.freeze([
+    requireNonEmptyString(value[0], `${context}[0]`),
+  ]);
+}
+
+function parseSumeragiV2TaggedUnit(value, tag, admitted, context) {
+  const record = ensureRecord(value, context);
+  assertSumeragiV2Fields(record, new Set([tag, "details"]), context);
+  if (!Object.prototype.hasOwnProperty.call(record, "details") || record.details !== null) {
+    throw new TypeError(`${context}.details must be null`);
+  }
+  const variant = requireNonEmptyString(record[tag], `${context}.${tag}`);
+  if (!admitted.has(variant)) {
+    throw new TypeError(`${context}.${tag} has unknown variant ${variant}`);
+  }
+  return Object.freeze({ [tag]: variant, details: null });
+}
+
+function parseSumeragiV2ValidatorIndex(value, context) {
+  const index = requireNonNegativeIntegerLike(value, context);
+  if (index > 0xffff_ffff) {
+    throw new RangeError(`${context} must fit an unsigned 32-bit validator index`);
+  }
+  return index;
+}
+
+function parseSumeragiV2ConsensusRound(value, context) {
+  const record = ensureRecord(value, context);
+  assertSumeragiV2Fields(record, new Set(["context_id", "height", "view"]), context);
+  return Object.freeze({
+    context_id: parseSumeragiV2HeightContextId(
+      record.context_id,
+      `${context}.context_id`,
+    ),
+    height: requireNonNegativeIntegerLike(record.height, `${context}.height`),
+    view: requireNonNegativeIntegerLike(record.view, `${context}.view`),
+  });
+}
+
+function parseSumeragiV2BlockSubject(value, context) {
+  const record = ensureRecord(value, context);
+  assertSumeragiV2Fields(
+    record,
+    new Set(["parent_block_hash", "block_hash", "payload_hash"]),
+    context,
   );
-  normalized.lane_settlement_commitments = parseLaneSettlementCommitments(
-    record.lane_settlement_commitments,
+  return Object.freeze({
+    parent_block_hash: requireNonEmptyString(
+      record.parent_block_hash,
+      `${context}.parent_block_hash`,
+    ),
+    block_hash: requireNonEmptyString(record.block_hash, `${context}.block_hash`),
+    payload_hash: requireNonEmptyString(
+      record.payload_hash,
+      `${context}.payload_hash`,
+    ),
+  });
+}
+
+function parseSumeragiV2QuorumCertificateRef(value, context) {
+  const record = ensureRecord(value, context);
+  assertSumeragiV2Fields(record, new Set(["round", "phase", "subject"]), context);
+  return Object.freeze({
+    round: parseSumeragiV2ConsensusRound(record.round, `${context}.round`),
+    phase: parseSumeragiV2TaggedUnit(
+      record.phase,
+      "phase",
+      new Set(["Prepare", "Commit"]),
+      `${context}.phase`,
+    ),
+    subject: parseSumeragiV2BlockSubject(record.subject, `${context}.subject`),
+  });
+}
+
+function parseSumeragiV2TimeoutCertificateRef(value, context) {
+  const record = ensureRecord(value, context);
+  assertSumeragiV2Fields(
+    record,
+    new Set(["round", "highest_prepare_qc", "certificate_hash"]),
+    context,
   );
-  normalized.lane_relay_envelopes = parseLaneRelayEnvelopes(record.lane_relay_envelopes);
-  normalized.lane_governance = parseLaneGovernance(record.lane_governance);
-  normalized.lane_governance_sealed_total = coerceStatusInt(
-    record.lane_governance_sealed_total,
-    "sumeragi.lane_governance_sealed_total",
-  );
-  normalized.lane_governance_sealed_aliases = parseStringArray(
-    record.lane_governance_sealed_aliases,
-    "sumeragi.lane_governance_sealed_aliases",
-  );
-  return Object.freeze(normalized);
+  return Object.freeze({
+    round: parseSumeragiV2ConsensusRound(record.round, `${context}.round`),
+    highest_prepare_qc:
+      record.highest_prepare_qc == null
+        ? null
+        : parseSumeragiV2QuorumCertificateRef(
+            record.highest_prepare_qc,
+            `${context}.highest_prepare_qc`,
+          ),
+    certificate_hash: requireNonEmptyString(
+      record.certificate_hash,
+      `${context}.certificate_hash`,
+    ),
+  });
 }
 
 function parseConsensusCaps(value) {

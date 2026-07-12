@@ -157,11 +157,12 @@ fn abi_v1_allowed_syscalls_have_one_exhaustive_host_metering_registry() {
     for &number in syscalls::abi_syscall_list() {
         let spec = host_syscall_metering_spec(ivm::SyscallPolicy::AbiV1, number)
             .expect("allowed syscall has metering metadata");
-        assert_eq!(
-            spec.metering,
-            SyscallMetering::Reserved,
-            "metering mode for {number:#x}"
-        );
+        let expected = if syscalls::is_numeric_v1_syscall(number) {
+            SyscallMetering::Staged
+        } else {
+            SyscallMetering::Reserved
+        };
+        assert_eq!(spec.metering, expected, "metering mode for {number:#x}");
     }
 }
 

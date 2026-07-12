@@ -84,6 +84,7 @@ PendingVoteWritesAuthorized ==
        /\ request.node \in Honest
        /\ request.vote.phase = "Commit"
        /\ request.vote.signer = request.node
+       /\ request.vote.context = context
        /\ request.vote.context = request.qc.context
        /\ request.vote.view = request.qc.view
        /\ request.vote.subject = request.qc.subject
@@ -115,13 +116,16 @@ CertificatePhasesCorrect ==
 PendingCertificateWritesAuthorized ==
   /\ \A request \in pendingObservePrepare:
        /\ request.qc \in prepareQCs
+       /\ request.qc.context = context
        /\ request.qc.view > highestRank[request.node]
   /\ \A request \in pendingInstallTC:
        /\ request.tc \in formedTCs
+       /\ request.tc.context = context
        /\ request.tc.votes # {}
        /\ request.tc.view >= nodeView[request.node]
   /\ \A request \in pendingDecision:
        /\ request.qc \in commitQCs
+       /\ request.qc.context = context
        /\ request.qc.phase = "Commit"
 
 HonestVoteTransportBacked ==

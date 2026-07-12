@@ -233,7 +233,7 @@ public enum KagemushaRecursiveSpendCodecs {
     public static func encodeRecipientRequestPayload(
         _ payload: KagemushaRecipientPaymentRequestSigningPayload
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(chainID(payload.chainID))
         writer.writeField(try assetDefinitionID(payload.assetDefinitionID))
         writer.writeField(try scaledAmount(payload.amount))
@@ -252,10 +252,46 @@ public enum KagemushaRecursiveSpendCodecs {
         )
     }
 
+    public static func encodeNoteOpening(_ opening: KagemushaNoteOpening) throws -> Data {
+        var writer = CompactNoritoWriter()
+        writer.writeField(opening.spendKey)
+        writer.writeField(opening.rho)
+        writer.writeField(opening.diversifier)
+        return frame(KagemushaRecursiveSpend.noteOpeningWireName, payload: writer.data)
+    }
+
+    /// Decodes the encrypted-at-rest, local-only opening for a spendable note.
+    ///
+    /// The decoder accepts exactly the canonical Norito representation emitted
+    /// by `encodeNoteOpening`; truncated, extended, zero-valued, or otherwise
+    /// non-canonical archives fail closed. Callers must never place this archive
+    /// in a peer or Torii payload.
+    public static func decodeNoteOpening(_ archive: Data) throws -> KagemushaNoteOpening {
+        var reader = KagemushaV2Reader(try payload(
+            archive,
+            schema: KagemushaRecursiveSpend.noteOpeningWireName,
+            field: "noteOpening"
+        ))
+        let opening = try KagemushaNoteOpening(
+            spendKey: packedFixed(
+                reader.field(), count: 32, field: "noteOpening.spendKey"
+            ),
+            rho: packedFixed(reader.field(), count: 32, field: "noteOpening.rho"),
+            diversifier: packedFixed(
+                reader.field(), count: 32, field: "noteOpening.diversifier"
+            )
+        )
+        try reader.finish("noteOpening")
+        guard try encodeNoteOpening(opening) == archive else {
+            throw KagemushaRecursiveSpendError.invalidArchive("noteOpening.canonical")
+        }
+        return opening
+    }
+
     public static func encodeRecipientOutputDerivationRequest(
         _ request: KagemushaRecipientOutputDerivationRequest
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(chainID(request.chainID))
         writer.writeField(try assetDefinitionID(request.assetDefinitionID))
         writer.writeField(try scaledAmount(request.amount))
@@ -268,7 +304,8 @@ public enum KagemushaRecursiveSpendCodecs {
 
     public static func decodeRecipientOutputDerivationResult(
         _ archive: Data,
-        request: KagemushaRecipientOutputDerivationRequest
+        request: KagemushaRecipientOutputDerivationRequest,
+        opening: KagemushaNoteOpening
     ) throws -> KagemushaRecipientOutputDerivationResult {
         var reader = KagemushaV2Reader(try payload(
             archive,
@@ -284,7 +321,8 @@ public enum KagemushaRecursiveSpendCodecs {
         return try KagemushaRecipientOutputDerivationResult(
             recipientOutput: output,
             recipientOutputProverMaterial: proverMaterial,
-            request: request
+            request: request,
+            opening: opening
         )
     }
 
@@ -337,7 +375,7 @@ public enum KagemushaRecursiveSpendCodecs {
     public static func encodeInitRequest(
         _ request: KagemushaRecursiveSpendInitRequest
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try nestedPayload(
             request.topUpAnchor.archive,
             schema: KagemushaRecursiveSpend.topUpAnchorWireName,
@@ -390,7 +428,7 @@ public enum KagemushaRecursiveSpendCodecs {
     public static func encodeTopUpUnsigned(
         _ request: KagemushaRecursiveSpendTopUpUnsigned
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try assetID(request.assetID))
         writer.writeField(try scaledAmount(request.amount))
         writer.writeField(try note(request.currentNote))
@@ -439,20 +477,22 @@ public enum KagemushaRecursiveSpendCodecs {
     public static func encodeTopUpShieldBuildRequest(
         _ request: KagemushaTopUpShieldBuildRequest
     ) throws -> Data {
-        var zeroPath = OfflineCompactNoritoWriter()
+        var zeroPath = CompactNoritoWriter()
         zeroPath.writeField(try sequence(request.zeroPath.siblings))
         zeroPath.writeField(bytes(request.zeroPath.directions))
         zeroPath.writeField(request.zeroPath.root)
 
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(chainID(request.chainID))
         writer.writeField(try assetID(request.assetID))
         writer.writeField(try scaledAmount(request.amount))
         writer.writeField(try accountID(request.payer))
         writer.writeField(request.operationID)
-        writer.writeField(request.spendKey)
-        writer.writeField(request.rho)
-        writer.writeField(request.diversifier)
+        writer.writeField(try nestedPayload(
+            request.opening.noritoEncoded(),
+            schema: KagemushaRecursiveSpend.noteOpeningWireName,
+            field: "opening"
+        ))
         writer.writeField(uint32(request.leafIndex))
         writer.writeField(zeroPath.data)
         writer.writeField(try verifierKeyID(request.shieldVerifierID))
@@ -467,7 +507,7 @@ public enum KagemushaRecursiveSpendCodecs {
     public static func encodeTopUpRequest(
         _ request: KagemushaRecursiveSpendTopUpRequest
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try assetID(request.assetID))
         writer.writeField(try scaledAmount(request.amount))
         writer.writeField(try note(request.currentNote))
@@ -485,7 +525,7 @@ public enum KagemushaRecursiveSpendCodecs {
     public static func encodeTopUpAnchor(
         _ anchor: KagemushaRecursiveSpendTopUpAnchor
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(uint16(anchor.version))
         writer.writeField(chainID(anchor.chainID))
         writer.writeField(try accountID(anchor.payer))
@@ -572,7 +612,7 @@ public enum KagemushaRecursiveSpendCodecs {
                 field: "previousBundles"
             )
         }
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try sequence(bundles))
         writer.writeField(string(request.outputArtifactGeneration))
         writer.writeField(try scaledAmount(request.transferAmount))
@@ -599,7 +639,7 @@ public enum KagemushaRecursiveSpendCodecs {
     public static func encodeRedemptionIntentBuildRequest(
         _ request: KagemushaRecursiveSpendRedemptionIntentBuildRequest
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try nestedPayload(
             request.previousBundle.archive,
             schema: KagemushaRecursiveSpend.bundleWireName,
@@ -631,7 +671,7 @@ public enum KagemushaRecursiveSpendCodecs {
     public static func encodeAppendRequest(
         _ request: KagemushaRecursiveSpendAppendRequest
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try sequence(request.previousInputs.map(appendInput)))
         writer.writeField(try nestedPayload(
             request.recordBundle,
@@ -649,7 +689,7 @@ public enum KagemushaRecursiveSpendCodecs {
     public static func encodeVerifyRequest(
         _ request: KagemushaRecursiveSpendVerifyRequest
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try nestedPayload(
             request.bundle.archive,
             schema: KagemushaRecursiveSpend.bundleWireName,
@@ -692,7 +732,7 @@ public enum KagemushaRecursiveSpendCodecs {
     public static func encodeRedeemRequest(
         _ request: KagemushaRecursiveSpendRedeemRequest
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try nestedPayload(
             request.bundle.archive,
             schema: KagemushaRecursiveSpend.bundleWireName,
@@ -726,7 +766,7 @@ public enum KagemushaRecursiveSpendCodecs {
     public static func encodeRedeemUnsigned(
         _ request: KagemushaRecursiveSpendRedeemUnsigned
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try nestedPayload(
             request.bundle.archive,
             schema: KagemushaRecursiveSpend.bundleWireName,
@@ -755,7 +795,7 @@ public enum KagemushaRecursiveSpendCodecs {
     public static func encodeRedeemChangeBuildRequest(
         _ request: KagemushaRecursiveSpendRedeemChangeBuildRequest
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try nestedPayload(
             request.previousBundle.archive,
             schema: KagemushaRecursiveSpend.bundleWireName,
@@ -895,7 +935,7 @@ public enum KagemushaRecursiveSpendCodecs {
         recipientBundle: KagemushaRecursiveSpendBundle
     ) throws -> Data {
         _ = try recipientPeerSplitIdentity(from: recipientBundle.archive)
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try nestedPayload(
             recipientBundle.archive,
             schema: KagemushaRecursiveSpend.bundleWireName,
@@ -1185,7 +1225,7 @@ public enum KagemushaRecursiveSpendCodecs {
         signature: Data
     ) throws -> Data {
         let payloadArchive = try encodeRecipientRequestPayload(payload)
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try nestedPayload(
             payloadArchive,
             schema: KagemushaRecursiveSpend.recipientRequestPayloadWireName,
@@ -1195,7 +1235,7 @@ public enum KagemushaRecursiveSpendCodecs {
         // signing-payload type, so strip the field wrapper just constructed.
         var flattened = KagemushaV2Reader(writer.data)
         let payloadFields = try flattened.field()
-        var result = OfflineCompactNoritoWriter()
+        var result = CompactNoritoWriter()
         result.writeBytes(payloadFields)
         result.writeField(constVec(signature))
         return frame(KagemushaRecursiveSpend.recipientRequestWireName, payload: result.data)
@@ -1205,7 +1245,7 @@ public enum KagemushaRecursiveSpendCodecs {
         _ fields: KagemushaRequestAuthorizationFields,
         signature: Data
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try accountID(fields.authority))
         writer.writeField(string(fields.deviceID))
         writer.writeField(fields.operationID)
@@ -1255,7 +1295,7 @@ public enum KagemushaRecursiveSpendCodecs {
     private static func topUpAnchorRef(
         _ value: KagemushaRecursiveSpendTopUpAnchorRef
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(value.topUpOperationID)
         writer.writeField(value.anchorDigest)
         return writer.data
@@ -1279,7 +1319,7 @@ public enum KagemushaRecursiveSpendCodecs {
     }
 
     private static func split(_ value: KagemushaRecursiveSpendSplitIntent) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(chainID(value.chainID))
         writer.writeField(try assetDefinitionID(value.assetDefinitionID))
         writer.writeField(try sequence(value.inputs.map(inputBranch)))
@@ -1354,7 +1394,7 @@ public enum KagemushaRecursiveSpendCodecs {
     private static func inputBranch(
         _ value: KagemushaRecursiveSpendInputBranch
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(value.bundleDigest)
         writer.writeField(try note(value.inputNote))
         writer.writeField(try branchClaims(value.branchClaims))
@@ -1388,7 +1428,7 @@ public enum KagemushaRecursiveSpendCodecs {
     private static func appendInput(
         _ value: KagemushaRecursiveSpendAppendInput
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try nestedPayload(
             value.previousBundle.archive,
             schema: KagemushaRecursiveSpend.bundleWireName,
@@ -1403,11 +1443,11 @@ public enum KagemushaRecursiveSpendCodecs {
         _ value: KagemushaUnshieldPublicInputsBinding
     ) -> Data {
         func pair(_ values: [Data]) -> Data {
-            var writer = OfflineCompactNoritoWriter()
+            var writer = CompactNoritoWriter()
             for value in values { writer.writeField(constVec(value)) }
             return writer.data
         }
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(pair(value.inputCommitments))
         writer.writeField(pair(value.nullifiers))
         writer.writeField(value.changeOutputCommitment)
@@ -1459,7 +1499,7 @@ public enum KagemushaRecursiveSpendCodecs {
     private static func redemptionIntent(
         _ value: KagemushaRecursiveSpendRedemptionIntent
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(chainID(value.chainID))
         writer.writeField(try assetDefinitionID(value.assetDefinitionID))
         writer.writeField(try note(value.inputNote))
@@ -1540,7 +1580,7 @@ public enum KagemushaRecursiveSpendCodecs {
     private static func redeemChangeBranch(
         _ value: KagemushaRecursiveSpendRedeemChangeBranch
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try note(value.output))
         writer.writeField(try branchClaims(value.branchClaims))
         writer.writeField(try nestedPayload(
@@ -1570,7 +1610,7 @@ public enum KagemushaRecursiveSpendCodecs {
     }
 
     private static func scaledAmount(_ value: KagemushaScaledAmount) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try u128(value.atomicUnits))
         writer.writeField(uint32(value.scale))
         return writer.data
@@ -1585,7 +1625,7 @@ public enum KagemushaRecursiveSpendCodecs {
     }
 
     private static func note(_ value: KagemushaSpendableNoteDescriptor) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(chainID(value.chainID))
         writer.writeField(try assetDefinitionID(value.assetDefinitionID))
         writer.writeField(value.noteCommitment)
@@ -1614,7 +1654,7 @@ public enum KagemushaRecursiveSpendCodecs {
     private static func topUpShieldEvidence(
         _ value: KagemushaTopUpShieldEvidence
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(value.initialRoot)
         writer.writeField(value.finalizedRoot)
         writer.writeField(uint32(value.leafIndex))
@@ -1647,7 +1687,7 @@ public enum KagemushaRecursiveSpendCodecs {
     }
 
     private static func branchPath(_ value: KagemushaRecursiveSpendBranchPath) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(value.lineageRoot)
         writer.writeField(Data([value.depth]))
         writer.writeField(value.pathBits)
@@ -1675,7 +1715,7 @@ public enum KagemushaRecursiveSpendCodecs {
     static func encodeBranchClaim(
         _ value: KagemushaRecursiveSpendBranchClaim
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(branchPath(value.path))
         writer.writeField(bytes(value.transitionTags.reduce(into: Data()) { result, tag in
             result.append(tag)
@@ -1745,7 +1785,7 @@ public enum KagemushaRecursiveSpendCodecs {
     private static func artifactReference(
         _ value: KagemushaRecursiveSpendArtifactReference
     ) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(uint32(value.role.rawValue))
         writer.writeField(string(value.generation))
         writer.writeField(string(value.circuitID))
@@ -1783,12 +1823,12 @@ public enum KagemushaRecursiveSpendCodecs {
     private static func lineageWitness(
         _ value: KagemushaRecursiveSpendLineageWitness
     ) -> Data {
-        var nodes = OfflineCompactNoritoWriter()
+        var nodes = CompactNoritoWriter()
         nodes.writeUInt64LE(UInt64(value.nodes.count))
         for node in value.nodes {
             nodes.writeField(lineageNode(node))
         }
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(nodes.data)
         writer.writeField(value.finalBundleDigest)
         return writer.data
@@ -1797,12 +1837,12 @@ public enum KagemushaRecursiveSpendCodecs {
     private static func lineageNode(
         _ value: KagemushaRecursiveSpendLineageNode
     ) -> Data {
-        var parents = OfflineCompactNoritoWriter()
+        var parents = CompactNoritoWriter()
         parents.writeUInt64LE(UInt64(value.parentBundleDigests.count))
         for parent in value.parentBundleDigests {
             parents.writeField(constVec(parent))
         }
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(value.resultBundleDigest)
         writer.writeField(parents.data)
         writer.writeField(uint32(value.proofStepCount))
@@ -1898,7 +1938,7 @@ public enum KagemushaRecursiveSpendCodecs {
         keyReference: Data,
         key: KagemushaPublicKey
     ) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(operationID)
         writer.writeField(requestDigest)
         writer.writeField(bundleDigest)
@@ -1913,7 +1953,7 @@ public enum KagemushaRecursiveSpendCodecs {
     private static func publicKey(_ value: KagemushaPublicKey) -> Data {
         var compact = Data([value.algorithm])
         compact.append(value.payload)
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeUInt64LE(UInt64(compact.count))
         for byte in compact {
             writer.writeField(Data([byte]))
@@ -1947,7 +1987,7 @@ public enum KagemushaRecursiveSpendCodecs {
     }
 
     private static func chainID(_ value: String) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(string(value))
         return writer.data
     }
@@ -2008,7 +2048,7 @@ public enum KagemushaRecursiveSpendCodecs {
               let definition = AssetDefinitionAddress.decode(String(parts[0])) else {
             throw KagemushaRecursiveSpendError.invalidField("assetID")
         }
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try accountID(String(parts[1])))
         writer.writeField(constVec(definition))
         if parts.count == 2 {
@@ -2020,7 +2060,7 @@ public enum KagemushaRecursiveSpendCodecs {
                   let value = UInt64(scope.dropFirst(prefix.count)) else {
                 throw KagemushaRecursiveSpendError.invalidField("assetID.scope")
             }
-            var tagged = OfflineCompactNoritoWriter()
+            var tagged = CompactNoritoWriter()
             tagged.writeUInt32LE(1)
             tagged.writeField(uint64(value))
             writer.writeField(tagged.data)
@@ -2072,7 +2112,7 @@ public enum KagemushaRecursiveSpendCodecs {
         guard values.count <= Int(UInt32.max) else {
             throw KagemushaRecursiveSpendError.invalidField("sequence")
         }
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeUInt64LE(UInt64(values.count))
         for value in values {
             writer.writeField(value)
@@ -2109,7 +2149,7 @@ public enum KagemushaRecursiveSpendCodecs {
         let name = String(value[value.index(after: separator)...])
         try KagemushaRecursiveSpend.requirePortableText(backend, field: "verifierKeyID.backend")
         try KagemushaRecursiveSpend.requirePortableText(name, field: "verifierKeyID.name")
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(string(backend))
         writer.writeField(string(name))
         return writer.data
@@ -2151,7 +2191,7 @@ public enum KagemushaRecursiveSpendCodecs {
     }
 
     private static func string(_ value: String) -> Data {
-        OfflineCompactNorito.encodeString(value)
+        CompactNorito.encodeString(value)
     }
 
     private static func decodeString(_ data: Data, field: String) throws -> String {
@@ -2188,7 +2228,7 @@ public enum KagemushaRecursiveSpendCodecs {
     }
 
     private static func bytes(_ value: Data) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeUInt64LE(UInt64(value.count))
         writer.writeBytes(value)
         return writer.data
@@ -2206,7 +2246,7 @@ public enum KagemushaRecursiveSpendCodecs {
     }
 
     private static func constVec(_ value: Data) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         for byte in value {
             writer.writeLength(1)
             writer.writeUInt8(byte)
@@ -2228,7 +2268,7 @@ public enum KagemushaRecursiveSpendCodecs {
     }
 
     private static func option(_ value: Data?) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         guard let value else {
             writer.writeUInt8(0)
             return writer.data

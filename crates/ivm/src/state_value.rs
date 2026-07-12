@@ -41,8 +41,15 @@ fn load_tlv<'a>(
     address: u64,
     resolver: AddressResolver,
 ) -> Result<(&'a [u8], Tlv<'a>), VMError> {
+    let original_address = address;
     let address = resolver(vm, address);
-    let tlv = vm.validate_tlv(address)?;
+    let tlv = vm.validate_tlv(address).inspect_err(|error| {
+        if crate::dev_env::decode_trace_enabled() {
+            eprintln!(
+                "[state-value] invalid TLV pointer original=0x{original_address:016x} resolved=0x{address:016x}: {error:?}"
+            );
+        }
+    })?;
     let total = 7usize
         .checked_add(tlv.payload.len())
         .and_then(|len| len.checked_add(Hash::LENGTH))
@@ -62,6 +69,12 @@ fn load_expected_tlv<'a>(
 ) -> Result<(&'a [u8], Tlv<'a>), VMError> {
     let (envelope, tlv) = load_tlv(vm, address, resolver)?;
     if tlv.type_id != expected {
+        if crate::dev_env::decode_trace_enabled() {
+            eprintln!(
+                "[state-value] TLV type mismatch pointer=0x{address:016x} expected={expected:?} actual={:?}",
+                tlv.type_id
+            );
+        }
         return Err(VMError::NoritoInvalid);
     }
     Ok((envelope, tlv))
@@ -1129,6 +1142,53 @@ mod tests {
         vm.alloc_host_tlv(&envelope).expect("install quantity")
     }
 
+    fn mixed_pointer_scalar_schema() -> StateValueSchemaV1 {
+        StateValueSchemaV1 {
+            nodes: vec![
+                StateValueNodeV1::Struct {
+                    name: "Mixed".into(),
+                    fields: vec!["label".into(), "enabled".into(), "count".into()],
+                },
+                StateValueNodeV1::Leaf(StateValueKindV1::Name),
+                StateValueNodeV1::Leaf(StateValueKindV1::Bool),
+                StateValueNodeV1::Leaf(StateValueKindV1::Int),
+            ],
+        }
+    }
+
+    fn assert_mixed_name_pointer_rejected<F>(install_pointer: F, expected: VMError)
+    where
+        F: FnOnce(&mut IVM) -> u64,
+    {
+        let schema = mixed_pointer_scalar_schema();
+        let mut vm = IVM::new(u64::MAX);
+        let schema_pointer = install_schema(&mut vm, &schema);
+        let count_pointer = install_int(&mut vm, 7);
+        let name_pointer = install_pointer(&mut vm);
+        let table = vm.alloc_heap(24).expect("mixed aggregate word table");
+        vm.store_u64(table, name_pointer)
+            .expect("store candidate Name pointer");
+        vm.store_u64(table + 8, 1).expect("store valid bool scalar");
+        vm.store_u64(table + 16, count_pointer)
+            .expect("store valid int pointer");
+        let heap_before = vm.memory.heap_allocated_len();
+        vm.set_register(10, schema_pointer);
+        vm.set_register(11, table);
+        vm.set_register(12, 3);
+
+        assert_eq!(encode_state_value(&mut vm, identity_address), Err(expected));
+        assert_eq!(
+            vm.register(10),
+            schema_pointer,
+            "a rejected input must not publish an output pointer"
+        );
+        assert_eq!(
+            vm.memory.heap_allocated_len(),
+            heap_before,
+            "a rejected input must not allocate a partial output"
+        );
+    }
+
     #[test]
     fn schema_hash_is_domain_separated_and_stable() {
         let schema = StateValueSchemaV1 {
@@ -1344,6 +1404,37 @@ mod tests {
         assert_eq!(
             encode_state_value(&mut vm, identity_address),
             Err(VMError::DecodeError)
+        );
+    }
+
+    #[test]
+    fn mixed_pointer_scalar_record_rejects_missing_stale_and_malformed_dynamic_pointers() {
+        assert_mixed_name_pointer_rejected(|_| 0, VMError::DecodeError);
+        assert_mixed_name_pointer_rejected(|_| 1, VMError::NoritoInvalid);
+        assert_mixed_name_pointer_rejected(|vm| install_int(vm, 7), VMError::NoritoInvalid);
+        assert_mixed_name_pointer_rejected(
+            |vm| {
+                let envelope = encode_tlv(PointerType::Name, b"not canonical Norito")
+                    .expect("hash-valid malformed Name TLV");
+                vm.alloc_host_tlv(&envelope)
+                    .expect("install malformed dynamic Name")
+            },
+            VMError::DecodeError,
+        );
+        assert_mixed_name_pointer_rejected(
+            |vm| {
+                let name: Name = "valid-name".parse().expect("valid Name");
+                let mut envelope = encode_tlv(
+                    PointerType::Name,
+                    &to_bytes(&name).expect("encode canonical Name"),
+                )
+                .expect("valid Name TLV");
+                let last = envelope.last_mut().expect("TLV checksum byte");
+                *last ^= 1;
+                vm.alloc_host_tlv(&envelope)
+                    .expect("install checksum-corrupted Name")
+            },
+            VMError::NoritoInvalid,
         );
     }
 

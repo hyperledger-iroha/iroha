@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 from urllib import error, request
@@ -16,6 +17,8 @@ from urllib import error, request
 
 FAUCET_POW_DOMAIN_SEPARATOR = b"iroha:accounts:faucet:pow:v2"
 OPENSSL_ENV = "TAIRA_FAUCET_OPENSSL"
+DEFAULT_STATUS_TIMEOUT_MS = 120_000
+DEFAULT_POLL_INTERVAL_MS = 1_000
 
 
 def leading_zero_bits(data: bytes) -> int:
@@ -221,8 +224,124 @@ def _http_json(method: str, url: str, payload: dict[str, Any] | None = None) -> 
         return exc.code, parsed
 
 
-def claim_faucet(account_id: str, torii_root: str) -> dict[str, Any]:
-    """Fetch the current puzzle, solve it, and submit the faucet claim."""
+def validate_faucet_receipt(payload: Any, expected_account_id: str) -> str:
+    """Validate the first-release asynchronous faucet receipt and return its hash."""
+
+    if not isinstance(payload, dict):
+        raise RuntimeError("faucet response must be an object")
+    for key in (
+        "account_id",
+        "asset_definition_id",
+        "asset_id",
+        "amount",
+        "tx_hash_hex",
+        "status",
+    ):
+        if not isinstance(payload.get(key), str) or not payload[key]:
+            raise RuntimeError(f"faucet response is missing {key}")
+    if payload["account_id"] != expected_account_id:
+        raise RuntimeError(
+            "faucet response account_id does not match request: "
+            f"expected={expected_account_id} actual={payload['account_id']}"
+        )
+    if payload["status"] != "QUEUED":
+        raise RuntimeError(f"faucet status must be QUEUED, got {payload['status']}")
+    tx_hash_hex = payload["tx_hash_hex"]
+    try:
+        tx_hash = bytes.fromhex(tx_hash_hex)
+    except ValueError as exc:
+        raise RuntimeError("faucet tx_hash_hex is not hex") from exc
+    if len(tx_hash) != 32:
+        raise RuntimeError("faucet tx_hash_hex must encode 32 bytes")
+    if len(tx_hash_hex) != 64 or tx_hash_hex != tx_hash_hex.lower():
+        raise RuntimeError("faucet tx_hash_hex must use canonical lowercase hex")
+    return tx_hash_hex
+
+
+def pipeline_status_kind(payload: Any, expected_tx_hash: str) -> str:
+    """Validate a canonical pipeline-status payload and return its status kind."""
+
+    if not isinstance(payload, dict):
+        raise RuntimeError("pipeline transaction status response must be an object")
+    if payload.get("hash") != expected_tx_hash:
+        raise RuntimeError(
+            "pipeline transaction status hash does not match faucet receipt: "
+            f"expected={expected_tx_hash} actual={payload.get('hash')!r}"
+        )
+    if payload.get("scope") != "global":
+        raise RuntimeError("pipeline transaction status response must report global scope")
+    if not isinstance(payload.get("resolved_from"), str) or not payload["resolved_from"]:
+        raise RuntimeError("pipeline transaction status response is missing resolved_from")
+    status = payload.get("status")
+    if not isinstance(status, dict):
+        raise RuntimeError("pipeline transaction status response is missing status object")
+    kind = status.get("kind")
+    if not isinstance(kind, str) or not kind:
+        raise RuntimeError("pipeline transaction status response is missing status.kind")
+    if kind not in {"Queued", "Approved", "Committed", "Applied", "Rejected", "Expired"}:
+        raise RuntimeError(f"pipeline transaction status response has unknown status.kind {kind!r}")
+    return kind
+
+
+def wait_for_faucet_finality(
+    torii_root: str,
+    tx_hash_hex: str,
+    *,
+    timeout_ms: int = DEFAULT_STATUS_TIMEOUT_MS,
+    poll_interval_ms: int = DEFAULT_POLL_INTERVAL_MS,
+) -> dict[str, Any]:
+    """Poll the canonical status route until the faucet transaction is final."""
+
+    if timeout_ms < 0:
+        raise ValueError("timeout_ms must not be negative")
+    if poll_interval_ms <= 0:
+        raise ValueError("poll_interval_ms must be positive")
+
+    status_url = (
+        f"{torii_root.rstrip('/')}/v1/pipeline/transactions/status"
+        f"?hash={tx_hash_hex}&scope=global"
+    )
+    deadline = time.monotonic() + timeout_ms / 1_000.0
+    last_kind = "not_observed"
+    while True:
+        status_code, payload = _http_json("GET", status_url)
+        if status_code == 404:
+            last_kind = "not_found"
+        elif status_code != 200:
+            raise RuntimeError(
+                "faucet transaction status failed: "
+                f"status={status_code} body={payload!r}"
+            )
+        else:
+            last_kind = pipeline_status_kind(payload, tx_hash_hex)
+            if last_kind in {"Applied", "Committed"}:
+                return payload
+            if last_kind in {"Rejected", "Expired"}:
+                raise RuntimeError(
+                    f"faucet transaction reached terminal status {last_kind}: {payload!r}"
+                )
+
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                "timed out waiting for faucet transaction finality: "
+                f"tx_hash={tx_hash_hex} last_status={last_kind}"
+            )
+        time.sleep(poll_interval_ms / 1_000.0)
+
+
+def claim_faucet(
+    account_id: str,
+    torii_root: str,
+    *,
+    status_timeout_ms: int = DEFAULT_STATUS_TIMEOUT_MS,
+    poll_interval_ms: int = DEFAULT_POLL_INTERVAL_MS,
+) -> dict[str, Any]:
+    """Fetch and solve the puzzle, then wait for the queued claim to finalize."""
+
+    if status_timeout_ms < 0:
+        raise ValueError("status_timeout_ms must not be negative")
+    if poll_interval_ms <= 0:
+        raise ValueError("poll_interval_ms must be positive")
 
     puzzle_status, puzzle = _http_json("GET", f"{torii_root.rstrip('/')}/v1/accounts/faucet/puzzle")
     if puzzle_status != 200 or not isinstance(puzzle, dict):
@@ -233,13 +352,21 @@ def claim_faucet(account_id: str, torii_root: str) -> dict[str, Any]:
         f"{torii_root.rstrip('/')}/v1/accounts/faucet",
         body,
     )
-    if claim_status not in (200, 202):
+    if claim_status != 202:
         raise RuntimeError(f"faucet claim failed: status={claim_status} body={claim!r}")
+    tx_hash_hex = validate_faucet_receipt(claim, account_id)
+    final_status = wait_for_faucet_finality(
+        torii_root,
+        tx_hash_hex,
+        timeout_ms=status_timeout_ms,
+        poll_interval_ms=poll_interval_ms,
+    )
     return {
         "puzzle": puzzle,
         "request": body,
         "response_status": claim_status,
         "response": claim,
+        "final_status": final_status,
         "status": "claimed",
     }
 
@@ -254,9 +381,30 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         help="Torii root URL, for example https://taira.sora.org",
     )
+    parser.add_argument(
+        "--status-timeout-ms",
+        type=int,
+        default=DEFAULT_STATUS_TIMEOUT_MS,
+        help="Maximum time to wait for the queued faucet transaction to finalize",
+    )
+    parser.add_argument(
+        "--poll-interval-ms",
+        type=int,
+        default=DEFAULT_POLL_INTERVAL_MS,
+        help="Delay between canonical pipeline-status polls",
+    )
     args = parser.parse_args(argv)
+    if args.status_timeout_ms < 0:
+        parser.error("--status-timeout-ms must not be negative")
+    if args.poll_interval_ms <= 0:
+        parser.error("--poll-interval-ms must be positive")
 
-    result = claim_faucet(args.account_id, args.torii_root)
+    result = claim_faucet(
+        args.account_id,
+        args.torii_root,
+        status_timeout_ms=args.status_timeout_ms,
+        poll_interval_ms=args.poll_interval_ms,
+    )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 

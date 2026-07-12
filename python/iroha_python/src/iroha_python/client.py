@@ -75,6 +75,7 @@ from iroha_torii_client.client import (
     OfflineProofBackend,
     OfflinePeerSplitTransitionJson,
     OfflinePeerSplitTransitionVariantJson,
+    OfflineActiveTopUpShieldVerifier,
     OfflineActiveTransferVerifier,
     OfflineReadiness,
     OfflineReadinessBlocker,
@@ -8475,201 +8476,388 @@ class SumeragiLaneGovernanceSnapshot:
         )
 
 
+class SumeragiV2StatusPhase(str, Enum):
+    """High-level state of the authoritative Sumeragi v2 reducer."""
+
+    AWAITING_PROPOSAL = "AwaitingProposal"
+    RECONSTRUCTING_PAYLOAD = "ReconstructingPayload"
+    VALIDATING_PAYLOAD = "ValidatingPayload"
+    PREPARE = "Prepare"
+    COMMIT = "Commit"
+    PENDING_APPLY = "PendingApply"
+
+
+class SumeragiV2BodyState(str, Enum):
+    """Local state of the proposal body reported by Sumeragi v2."""
+
+    MISSING = "Missing"
+    RECONSTRUCTING = "Reconstructing"
+    STORED = "Stored"
+    VALIDATED = "Validated"
+    PENDING_APPLY = "PendingApply"
+    APPLIED = "Applied"
+
+
+class SumeragiV2GlobalPhase(str, Enum):
+    """Global two-phase consensus phase."""
+
+    PREPARE = "Prepare"
+    COMMIT = "Commit"
+
+
+def _sumeragi_v2_exact_fields(
+    payload: Mapping[str, Any], allowed: Sequence[str], context: str
+) -> None:
+    unknown = sorted(set(payload) - set(allowed))
+    if unknown:
+        raise TypeError(f"{context} contains unsupported fields: {', '.join(unknown)}")
+
+
+def _sumeragi_v2_uint(value: Any, context: str, maximum: int = (1 << 64) - 1) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{context} must be an unsigned integer")
+    if value < 0 or value > maximum:
+        raise ValueError(f"{context} is outside its unsigned integer range")
+    return value
+
+
+def _sumeragi_v2_string(value: Any, context: str) -> str:
+    if not isinstance(value, str) or not value.strip() or value != value.strip():
+        raise TypeError(f"{context} must be a non-empty string without surrounding whitespace")
+    return value
+
+
+def _sumeragi_v2_tagged_unit(
+    payload: Any, tag: str, admitted: Sequence[str], context: str
+) -> str:
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"{context} must be an object")
+    _sumeragi_v2_exact_fields(payload, (tag, "details"), context)
+    if set(payload) != {tag, "details"} or payload.get("details") is not None:
+        raise TypeError(f"{context} must contain `{tag}` and null `details`")
+    variant = _sumeragi_v2_string(payload.get(tag), f"{context}.{tag}")
+    if variant not in admitted:
+        raise ValueError(f"{context}.{tag} has unknown variant {variant!r}")
+    return variant
+
+
+@dataclass(frozen=True)
+class SumeragiV2HeightContextId:
+    """Hash identifying one immutable height context."""
+
+    hash: str
+
+    @classmethod
+    def from_payload(cls, payload: Any, context: str) -> "SumeragiV2HeightContextId":
+        if (
+            not isinstance(payload, list)
+            or len(payload) != 1
+        ):
+            raise TypeError(f"{context} must be a one-element tuple")
+        return cls(hash=_sumeragi_v2_string(payload[0], f"{context}[0]"))
+
+
+@dataclass(frozen=True)
+class SumeragiV2ConsensusRound:
+    """Context-bound Sumeragi height and view."""
+
+    context_id: SumeragiV2HeightContextId
+    height: int
+    view: int
+
+    @classmethod
+    def from_payload(cls, payload: Any, context: str) -> "SumeragiV2ConsensusRound":
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        _sumeragi_v2_exact_fields(payload, ("context_id", "height", "view"), context)
+        return cls(
+            context_id=SumeragiV2HeightContextId.from_payload(
+                payload.get("context_id"), f"{context}.context_id"
+            ),
+            height=_sumeragi_v2_uint(payload.get("height"), f"{context}.height"),
+            view=_sumeragi_v2_uint(payload.get("view"), f"{context}.view"),
+        )
+
+
+@dataclass(frozen=True)
+class SumeragiV2BlockSubject:
+    """Exact block and payload hashes certified by consensus."""
+
+    parent_block_hash: str
+    block_hash: str
+    payload_hash: str
+
+    @classmethod
+    def from_payload(cls, payload: Any, context: str) -> "SumeragiV2BlockSubject":
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        _sumeragi_v2_exact_fields(
+            payload, ("parent_block_hash", "block_hash", "payload_hash"), context
+        )
+        return cls(
+            parent_block_hash=_sumeragi_v2_string(
+                payload.get("parent_block_hash"), f"{context}.parent_block_hash"
+            ),
+            block_hash=_sumeragi_v2_string(
+                payload.get("block_hash"), f"{context}.block_hash"
+            ),
+            payload_hash=_sumeragi_v2_string(
+                payload.get("payload_hash"), f"{context}.payload_hash"
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class SumeragiV2QuorumCertificateRef:
+    """Stable reference to a PrepareQC or CommitQC."""
+
+    round: SumeragiV2ConsensusRound
+    phase: SumeragiV2GlobalPhase
+    subject: SumeragiV2BlockSubject
+
+    @classmethod
+    def from_payload(cls, payload: Any, context: str) -> "SumeragiV2QuorumCertificateRef":
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        _sumeragi_v2_exact_fields(payload, ("round", "phase", "subject"), context)
+        phase = _sumeragi_v2_tagged_unit(
+            payload.get("phase"),
+            "phase",
+            tuple(item.value for item in SumeragiV2GlobalPhase),
+            f"{context}.phase",
+        )
+        return cls(
+            round=SumeragiV2ConsensusRound.from_payload(
+                payload.get("round"), f"{context}.round"
+            ),
+            phase=SumeragiV2GlobalPhase(phase),
+            subject=SumeragiV2BlockSubject.from_payload(
+                payload.get("subject"), f"{context}.subject"
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class SumeragiV2TimeoutCertificateRef:
+    """Stable reference to the most recently installed timeout certificate."""
+
+    round: SumeragiV2ConsensusRound
+    highest_prepare_qc: Optional[SumeragiV2QuorumCertificateRef]
+    certificate_hash: str
+
+    @classmethod
+    def from_payload(
+        cls, payload: Any, context: str
+    ) -> "SumeragiV2TimeoutCertificateRef":
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        _sumeragi_v2_exact_fields(
+            payload, ("round", "highest_prepare_qc", "certificate_hash"), context
+        )
+        highest_payload = payload.get("highest_prepare_qc")
+        highest = (
+            None
+            if highest_payload is None
+            else SumeragiV2QuorumCertificateRef.from_payload(
+                highest_payload, f"{context}.highest_prepare_qc"
+            )
+        )
+        if highest is not None and highest.phase is not SumeragiV2GlobalPhase.PREPARE:
+            raise ValueError(f"{context}.highest_prepare_qc must reference a PrepareQC")
+        return cls(
+            round=SumeragiV2ConsensusRound.from_payload(
+                payload.get("round"), f"{context}.round"
+            ),
+            highest_prepare_qc=highest,
+            certificate_hash=_sumeragi_v2_string(
+                payload.get("certificate_hash"), f"{context}.certificate_hash"
+            ),
+        )
+
+
 @dataclass(frozen=True)
 class SumeragiStatusSnapshot:
-    """Structured snapshot returned by `/v1/sumeragi/status`."""
+    """Protocol-v2-only snapshot returned by `/v1/sumeragi/status`."""
 
-    leader_index: int
-    view_change_index: int
-    view_change_proof_accepted_total: int
-    view_change_proof_stale_total: int
-    view_change_proof_rejected_total: int
-    view_change_suggest_total: int
-    view_change_install_total: int
-    highest_qc: SumeragiQcSummary
-    locked_qc: SumeragiQcSummary
-    commit_qc: SumeragiCommitQcSummary
-    commit_quorum: SumeragiCommitQuorumSummary
-    tx_queue: SumeragiTxQueueStatus
-    epoch: SumeragiEpochSchedule
-    block_created_dropped_by_lock_total: int
-    block_created_hint_mismatch_total: int
-    block_created_proposal_mismatch_total: int
-    pacemaker_backpressure_deferrals_total: int
-    da_reschedule_total: int
-    rbc_store: SumeragiRbcStoreStatus
-    prf: SumeragiPrfStatus
-    membership: SumeragiMembershipStatus
-    vrf_penalty_epoch: Optional[int]
-    vrf_committed_no_reveal_total: int
-    vrf_no_participation_total: int
-    vrf_late_reveals_total: int
-    collectors_targeted_current: int
-    collectors_targeted_last_per_block: Optional[int]
-    redundant_sends_total: int
-    lane_commitments: List[SumeragiLaneCommitment]
-    dataspace_commitments: List[SumeragiDataspaceCommitment]
+    protocol_version: int
+    node_fingerprint: str
+    build_fingerprint: str
+    config_fingerprint: str
+    height_context_id: SumeragiV2HeightContextId
+    height: int
+    view: int
+    phase: SumeragiV2StatusPhase
+    leader: int
+    locked_prepare_qc: Optional[SumeragiV2QuorumCertificateRef]
+    highest_prepare_qc: Optional[SumeragiV2QuorumCertificateRef]
+    last_timeout_certificate: Optional[SumeragiV2TimeoutCertificateRef]
+    body_state: SumeragiV2BodyState
+    pending_persistence_id: Optional[int]
+    last_committed_height: int
+    last_committed_subject: Optional[SumeragiV2BlockSubject]
     lane_settlement_commitments: List[SumeragiLaneSettlementCommitment]
     lane_relay_envelopes: List[SumeragiLaneRelayEnvelope]
-    lane_governance_sealed_total: int
-    lane_governance_sealed_aliases: List[str]
-    lane_governance: List[SumeragiLaneGovernanceSnapshot]
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiStatusSnapshot":
         if not isinstance(payload, Mapping):
             raise TypeError("sumeragi status payload must be an object")
-        try:
-            leader_index = int(payload.get("leader_index", 0))
-            view_change_index = int(payload.get("view_change_index", 0))
-            view_change_proof_accepted_total = int(
-                payload.get("view_change_proof_accepted_total", 0)
+        _sumeragi_v2_exact_fields(
+            payload,
+            (
+                "protocol_version",
+                "node_fingerprint",
+                "build_fingerprint",
+                "config_fingerprint",
+                "height_context_id",
+                "height",
+                "view",
+                "phase",
+                "leader",
+                "locked_prepare_qc",
+                "highest_prepare_qc",
+                "last_timeout_certificate",
+                "body_state",
+                "pending_persistence_id",
+                "last_committed_height",
+                "last_committed_subject",
+                "lane_settlement_commitments",
+                "lane_relay_envelopes",
+            ),
+            "sumeragi status payload",
+        )
+
+        protocol_version = _sumeragi_v2_uint(
+            payload.get("protocol_version"), "sumeragi.protocol_version", (1 << 16) - 1
+        )
+        if protocol_version != 2:
+            raise ValueError(
+                f"unsupported Sumeragi status protocol version {protocol_version}; expected 2"
             )
-            view_change_proof_stale_total = int(
-                payload.get("view_change_proof_stale_total", 0)
+        height_context_id = SumeragiV2HeightContextId.from_payload(
+            payload.get("height_context_id"), "sumeragi.height_context_id"
+        )
+        height = _sumeragi_v2_uint(payload.get("height"), "sumeragi.height")
+        view = _sumeragi_v2_uint(payload.get("view"), "sumeragi.view")
+        phase = SumeragiV2StatusPhase(
+            _sumeragi_v2_tagged_unit(
+                payload.get("phase"),
+                "phase",
+                tuple(item.value for item in SumeragiV2StatusPhase),
+                "sumeragi.phase",
             )
-            view_change_proof_rejected_total = int(
-                payload.get("view_change_proof_rejected_total", 0)
+        )
+        body_state = SumeragiV2BodyState(
+            _sumeragi_v2_tagged_unit(
+                payload.get("body_state"),
+                "state",
+                tuple(item.value for item in SumeragiV2BodyState),
+                "sumeragi.body_state",
             )
-            view_change_suggest_total = int(payload.get("view_change_suggest_total", 0))
-            view_change_install_total = int(payload.get("view_change_install_total", 0))
-            block_drop_total = int(payload.get("block_created_dropped_by_lock_total", 0))
-            block_hint_total = int(payload.get("block_created_hint_mismatch_total", 0))
-            block_proposal_total = int(payload.get("block_created_proposal_mismatch_total", 0))
-            pacemaker_deferrals = int(payload.get("pacemaker_backpressure_deferrals_total", 0))
-            da_reschedule_total = int(payload.get("da_reschedule_total", 0))
-            vrf_committed_no_reveal_total = int(payload.get("vrf_committed_no_reveal_total", 0))
-            vrf_no_participation_total = int(payload.get("vrf_no_participation_total", 0))
-            vrf_late_reveals_total = int(payload.get("vrf_late_reveals_total", 0))
-            collectors_targeted_current = int(payload.get("collectors_targeted_current", 0))
-            redundant_sends_total = int(payload.get("redundant_sends_total", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("sumeragi status counters must be numeric") from exc
-        highest_qc_payload = payload.get("highest_qc")
-        locked_qc_payload = payload.get("locked_qc")
-        commit_qc_payload = payload.get("commit_qc")
-        commit_quorum_payload = payload.get("commit_quorum")
-        tx_queue_payload = payload.get("tx_queue")
-        epoch_payload = payload.get("epoch")
-        rbc_store_payload = payload.get("rbc_store")
-        prf_payload = payload.get("prf")
-        membership_payload = payload.get("membership")
-        for field_name, field_payload in [
-            ("highest_qc", highest_qc_payload),
-            ("locked_qc", locked_qc_payload),
-            ("commit_qc", commit_qc_payload),
-            ("commit_quorum", commit_quorum_payload),
-            ("tx_queue", tx_queue_payload),
-            ("epoch", epoch_payload),
-            ("rbc_store", rbc_store_payload),
-            ("prf", prf_payload),
-            ("membership", membership_payload),
-        ]:
-            if not isinstance(field_payload, Mapping):
-                raise TypeError(f"sumeragi status missing object `{field_name}` field")
-        assert isinstance(highest_qc_payload, Mapping)
-        assert isinstance(locked_qc_payload, Mapping)
-        assert isinstance(commit_qc_payload, Mapping)
-        assert isinstance(commit_quorum_payload, Mapping)
-        assert isinstance(tx_queue_payload, Mapping)
-        assert isinstance(epoch_payload, Mapping)
-        assert isinstance(rbc_store_payload, Mapping)
-        assert isinstance(prf_payload, Mapping)
-        assert isinstance(membership_payload, Mapping)
-        lane_commitments_payload = payload.get("lane_commitments", [])
-        if not isinstance(lane_commitments_payload, list):
-            raise TypeError("sumeragi status `lane_commitments` must be a list")
-        lane_commitments = [
-            SumeragiLaneCommitment.from_payload(entry) for entry in lane_commitments_payload
-        ]
-        dataspace_commitments_payload = payload.get("dataspace_commitments", [])
-        if not isinstance(dataspace_commitments_payload, list):
-            raise TypeError("sumeragi status `dataspace_commitments` must be a list")
-        dataspace_commitments = [
-            SumeragiDataspaceCommitment.from_payload(entry)
-            for entry in dataspace_commitments_payload
-        ]
-        lane_settlement_payload = payload.get("lane_settlement_commitments", [])
-        if not isinstance(lane_settlement_payload, list):
-            raise TypeError("sumeragi status `lane_settlement_commitments` must be a list")
-        lane_settlement_commitments = [
-            SumeragiLaneSettlementCommitment.from_payload(entry)
-            for entry in lane_settlement_payload
-        ]
-        lane_relay_payload = payload.get("lane_relay_envelopes", [])
-        if not isinstance(lane_relay_payload, list):
-            raise TypeError("sumeragi status `lane_relay_envelopes` must be a list")
-        lane_relay_envelopes = [
-            SumeragiLaneRelayEnvelope.from_payload(entry) for entry in lane_relay_payload
-        ]
-        try:
-            lane_governance_sealed_total = int(payload.get("lane_governance_sealed_total", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("sumeragi status `lane_governance_sealed_total` must be numeric") from exc
-        lane_governance_sealed_aliases_payload = payload.get("lane_governance_sealed_aliases", [])
-        if not isinstance(lane_governance_sealed_aliases_payload, list):
-            raise TypeError("sumeragi status `lane_governance_sealed_aliases` must be a list")
-        lane_governance_sealed_aliases: List[str] = []
-        for alias in lane_governance_sealed_aliases_payload:
-            if not isinstance(alias, str):
-                raise TypeError("lane governance sealed aliases must be strings")
-            lane_governance_sealed_aliases.append(alias)
-        lane_governance_payload = payload.get("lane_governance", [])
-        if not isinstance(lane_governance_payload, list):
-            raise TypeError("sumeragi status `lane_governance` must be a list")
-        lane_governance = [
-            SumeragiLaneGovernanceSnapshot.from_payload(entry) for entry in lane_governance_payload
-        ]
-        vrf_penalty_epoch_val = payload.get("vrf_penalty_epoch")
-        try:
-            vrf_penalty_epoch = None if vrf_penalty_epoch_val is None else int(vrf_penalty_epoch_val)
-        except (TypeError, ValueError) as exc:
-            raise TypeError("sumeragi status `vrf_penalty_epoch` must be numeric when present") from exc
-        collectors_last_val = payload.get("collectors_targeted_last_per_block")
-        try:
-            collectors_targeted_last_per_block = (
-                None if collectors_last_val is None else int(collectors_last_val)
+        )
+
+        def prepare_ref(name: str) -> Optional[SumeragiV2QuorumCertificateRef]:
+            value = payload.get(name)
+            if value is None:
+                return None
+            reference = SumeragiV2QuorumCertificateRef.from_payload(
+                value, f"sumeragi.{name}"
             )
-        except (TypeError, ValueError) as exc:
+            if reference.phase is not SumeragiV2GlobalPhase.PREPARE:
+                raise ValueError(f"sumeragi.{name} must reference a PrepareQC")
+            if reference.round.context_id != height_context_id or reference.round.height != height:
+                raise ValueError(f"sumeragi.{name} is not bound to the reported height context")
+            if reference.round.view > view:
+                raise ValueError(f"sumeragi.{name} comes from a future view")
+            return reference
+
+        locked_prepare_qc = prepare_ref("locked_prepare_qc")
+        highest_prepare_qc = prepare_ref("highest_prepare_qc")
+        timeout_payload = payload.get("last_timeout_certificate")
+        last_timeout_certificate = (
+            None
+            if timeout_payload is None
+            else SumeragiV2TimeoutCertificateRef.from_payload(
+                timeout_payload, "sumeragi.last_timeout_certificate"
+            )
+        )
+        if last_timeout_certificate is not None:
+            timeout_round = last_timeout_certificate.round
+            if timeout_round.context_id != height_context_id or timeout_round.height != height:
+                raise ValueError(
+                    "sumeragi.last_timeout_certificate is not bound to the reported height context"
+                )
+            if timeout_round.view >= view:
+                raise ValueError(
+                    "sumeragi.last_timeout_certificate must certify a preceding view"
+                )
+
+        pending_value = payload.get("pending_persistence_id")
+        pending_persistence_id = (
+            None
+            if pending_value is None
+            else _sumeragi_v2_uint(pending_value, "sumeragi.pending_persistence_id")
+        )
+        if pending_persistence_id == 0:
+            raise ValueError("sumeragi.pending_persistence_id must be positive when present")
+
+        last_committed_height = _sumeragi_v2_uint(
+            payload.get("last_committed_height"), "sumeragi.last_committed_height"
+        )
+        if last_committed_height > height:
+            raise ValueError("sumeragi.last_committed_height exceeds sumeragi.height")
+        subject_payload = payload.get("last_committed_subject")
+        last_committed_subject = (
+            None
+            if subject_payload is None
+            else SumeragiV2BlockSubject.from_payload(
+                subject_payload, "sumeragi.last_committed_subject"
+            )
+        )
+        if last_committed_height > 0 and last_committed_subject is None:
             raise TypeError(
-                "sumeragi status `collectors_targeted_last_per_block` must be numeric when present"
-            ) from exc
+                "sumeragi.last_committed_subject is required after the first commit"
+            )
+
+        settlement_payload = payload.get("lane_settlement_commitments", [])
+        if not isinstance(settlement_payload, list):
+            raise TypeError("sumeragi.lane_settlement_commitments must be a list")
+        relay_payload = payload.get("lane_relay_envelopes", [])
+        if not isinstance(relay_payload, list):
+            raise TypeError("sumeragi.lane_relay_envelopes must be a list")
+
         return cls(
-            leader_index=leader_index,
-            view_change_index=view_change_index,
-            view_change_proof_accepted_total=view_change_proof_accepted_total,
-            view_change_proof_stale_total=view_change_proof_stale_total,
-            view_change_proof_rejected_total=view_change_proof_rejected_total,
-            view_change_suggest_total=view_change_suggest_total,
-            view_change_install_total=view_change_install_total,
-            highest_qc=SumeragiQcSummary.from_payload(highest_qc_payload),
-            locked_qc=SumeragiQcSummary.from_payload(locked_qc_payload),
-            commit_qc=SumeragiCommitQcSummary.from_payload(commit_qc_payload),
-            commit_quorum=SumeragiCommitQuorumSummary.from_payload(commit_quorum_payload),
-            tx_queue=SumeragiTxQueueStatus.from_payload(tx_queue_payload),
-            epoch=SumeragiEpochSchedule.from_payload(epoch_payload),
-            block_created_dropped_by_lock_total=block_drop_total,
-            block_created_hint_mismatch_total=block_hint_total,
-            block_created_proposal_mismatch_total=block_proposal_total,
-            pacemaker_backpressure_deferrals_total=pacemaker_deferrals,
-            da_reschedule_total=da_reschedule_total,
-            rbc_store=SumeragiRbcStoreStatus.from_payload(rbc_store_payload),
-            prf=SumeragiPrfStatus.from_payload(prf_payload),
-            membership=SumeragiMembershipStatus.from_payload(membership_payload),
-            vrf_penalty_epoch=vrf_penalty_epoch,
-            vrf_committed_no_reveal_total=vrf_committed_no_reveal_total,
-            vrf_no_participation_total=vrf_no_participation_total,
-            vrf_late_reveals_total=vrf_late_reveals_total,
-            collectors_targeted_current=collectors_targeted_current,
-            collectors_targeted_last_per_block=collectors_targeted_last_per_block,
-            redundant_sends_total=redundant_sends_total,
-            lane_commitments=lane_commitments,
-            dataspace_commitments=dataspace_commitments,
-            lane_settlement_commitments=lane_settlement_commitments,
-            lane_relay_envelopes=lane_relay_envelopes,
-            lane_governance_sealed_total=lane_governance_sealed_total,
-            lane_governance_sealed_aliases=lane_governance_sealed_aliases,
-            lane_governance=lane_governance,
+            protocol_version=protocol_version,
+            node_fingerprint=_sumeragi_v2_string(
+                payload.get("node_fingerprint"), "sumeragi.node_fingerprint"
+            ),
+            build_fingerprint=_sumeragi_v2_string(
+                payload.get("build_fingerprint"), "sumeragi.build_fingerprint"
+            ),
+            config_fingerprint=_sumeragi_v2_string(
+                payload.get("config_fingerprint"), "sumeragi.config_fingerprint"
+            ),
+            height_context_id=height_context_id,
+            height=height,
+            view=view,
+            phase=phase,
+            leader=_sumeragi_v2_uint(
+                payload.get("leader"), "sumeragi.leader", (1 << 32) - 1
+            ),
+            locked_prepare_qc=locked_prepare_qc,
+            highest_prepare_qc=highest_prepare_qc,
+            last_timeout_certificate=last_timeout_certificate,
+            body_state=body_state,
+            pending_persistence_id=pending_persistence_id,
+            last_committed_height=last_committed_height,
+            last_committed_subject=last_committed_subject,
+            lane_settlement_commitments=[
+                SumeragiLaneSettlementCommitment.from_payload(entry)
+                for entry in settlement_payload
+            ],
+            lane_relay_envelopes=[
+                SumeragiLaneRelayEnvelope.from_payload(entry) for entry in relay_payload
+            ],
         )
 
 
@@ -10937,6 +11125,7 @@ __all__ = [
     "OfflineProofBackend",
     "OfflinePeerSplitTransitionJson",
     "OfflinePeerSplitTransitionVariantJson",
+    "OfflineActiveTopUpShieldVerifier",
     "OfflineActiveTransferVerifier",
     "OfflineReadiness",
     "OfflineReadinessBlocker",
@@ -10994,6 +11183,14 @@ __all__ = [
     "SumeragiRbcStoreStatus",
     "SumeragiPrfStatus",
     "SumeragiStatusSnapshot",
+    "SumeragiV2StatusPhase",
+    "SumeragiV2BodyState",
+    "SumeragiV2GlobalPhase",
+    "SumeragiV2HeightContextId",
+    "SumeragiV2ConsensusRound",
+    "SumeragiV2BlockSubject",
+    "SumeragiV2QuorumCertificateRef",
+    "SumeragiV2TimeoutCertificateRef",
     "SumeragiLaneSettlementReceipt",
     "SumeragiLaneSwapMetadata",
     "SumeragiLaneSettlementCommitment",

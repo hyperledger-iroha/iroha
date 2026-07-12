@@ -1806,12 +1806,16 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(VerifyingKeyBox, VerifyingKeyRecord), Error> {
         ensure_kagemusha_transparent_attachment(proof)?;
-        let zk_state = state_transaction.world.zk_assets.get(asset).ok_or_else(|| {
-            labeled_invariant(
-                "verifier_key_invalid",
-                "Kagemusha top-up requires configured confidential asset state",
-            )
-        })?;
+        let zk_state = state_transaction
+            .world
+            .zk_assets
+            .get(asset)
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "verifier_key_invalid",
+                    "Kagemusha top-up requires configured confidential asset state",
+                )
+            })?;
         let binding = zk_state.vk_shield.as_ref().ok_or_else(|| {
             labeled_invariant(
                 "verifier_key_invalid",
@@ -1863,8 +1867,7 @@ pub mod isi {
         .into();
         if record.namespace != crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE
             || record.backend != BackendTag::Halo2IpaPasta
-            || record.circuit_id
-                != crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID
+            || record.circuit_id != crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID
             || record.curve != "pallas"
             || record.public_inputs_schema_hash != expected_schema_hash
             || record.commitment != binding.commitment
@@ -1896,14 +1899,13 @@ pub mod isi {
         }
         crate::zk::confidential_v2::ensure_kagemusha_topup_shield_v2_canonical_vk_box(&vk_box)
             .map_err(|err| labeled_invariant("verifier_key_invalid", err))?;
-        let envelope: OpenVerifyEnvelope = norito::decode_from_bytes(&proof.proof.bytes).map_err(
-            |_| {
+        let envelope: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.proof.bytes).map_err(|_| {
                 labeled_invariant(
                     "invalid_proof",
                     "Kagemusha top-up shield proof must be an OpenVerifyEnvelope",
                 )
-            },
-        )?;
+            })?;
         if envelope.backend != BackendTag::Halo2IpaPasta
             || envelope.circuit_id
                 != crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID
@@ -6370,9 +6372,7 @@ pub mod isi {
                     request.amount.atomic_units,
                 )
             || public.asset_scale
-                != crate::zk::confidential_v2::encode_kagemusha_topup_u32_v2(
-                    request.amount.scale,
-                )
+                != crate::zk::confidential_v2::encode_kagemusha_topup_u32_v2(request.amount.scale)
             || public.leaf_index
                 != crate::zk::confidential_v2::encode_kagemusha_topup_u32_v2(
                     authoritative_leaf_index,
@@ -6423,16 +6423,13 @@ pub mod isi {
         request: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV2,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<KagemushaRecursiveSpendTopUpAnchorV2, Error> {
-        let shield_verifier_commitment = request
-            .shield_evidence
-            .proof
-            .vk_commitment
-            .ok_or_else(|| {
-            labeled_invariant(
-                "verifier_key_invalid",
-                "Kagemusha V2 top-up shield proof has no verifier commitment",
-            )
-        })?;
+        let shield_verifier_commitment =
+            request.shield_evidence.proof.vk_commitment.ok_or_else(|| {
+                labeled_invariant(
+                    "verifier_key_invalid",
+                    "Kagemusha V2 top-up shield proof has no verifier commitment",
+                )
+            })?;
         let finalized_tx_hash = *state_transaction
             .current_tx_hash
             .as_ref()
@@ -7261,14 +7258,13 @@ pub mod isi {
                 )
                 .into());
             }
-            let authoritative_leaf_index = u32::try_from(zk_state.commitments.len()).map_err(
-                |_| {
+            let authoritative_leaf_index =
+                u32::try_from(zk_state.commitments.len()).map_err(|_| {
                     labeled_invariant(
                         "topup_tree_full",
                         "Kagemusha confidential tree position does not fit the protocol index",
                     )
-                },
-            )?;
+                })?;
             if authoritative_leaf_index
                 >= iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2
             {
@@ -7318,9 +7314,8 @@ pub mod isi {
                 authoritative_leaf_index,
                 state_transaction,
             )?;
-            state_transaction.register_confidential_proof(
-                request.shield_evidence.proof.proof.bytes.len(),
-            )?;
+            state_transaction
+                .register_confidential_proof(request.shield_evidence.proof.proof.bytes.len())?;
             state_transaction.register_commitments(1)?;
             let report = crate::zk::verify_backend_with_timing_checked(
                 request.shield_evidence.proof.backend.as_str(),
@@ -7792,11 +7787,10 @@ pub mod isi {
                 KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendRedeemRequestV2,
                 KagemushaRecursiveSpendRedemptionIntentV2, KagemushaRequestAuthorizationV2,
                 KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
-                KagemushaTopUpShieldEvidenceV2,
-                KagemushaUnshieldPublicInputsBindingV2, KagemushaVerifiedFoldBundle,
-                KagemushaVerifiedFoldRecordBundle, KagemushaVerifiedFoldStep,
-                KagemushaVerifiedFoldVerifierRecord, OfflineNoteAuditBundle,
-                kagemusha_confidential_amount_encoding_v2,
+                KagemushaTopUpShieldEvidenceV2, KagemushaUnshieldPublicInputsBindingV2,
+                KagemushaVerifiedFoldBundle, KagemushaVerifiedFoldRecordBundle,
+                KagemushaVerifiedFoldStep, KagemushaVerifiedFoldVerifierRecord,
+                OfflineNoteAuditBundle, kagemusha_confidential_amount_encoding_v2,
             },
             permission::Permission,
             proof::ProofAttachment,
@@ -11692,10 +11686,7 @@ pub mod isi {
                     proof: {
                         let mut attachment = ProofAttachment::new_ref(
                             crate::zk::ZK_BACKEND_HALO2_IPA.into(),
-                            ProofBox::new(
-                                crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
-                                vec![0x92],
-                            ),
+                            ProofBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), vec![0x92]),
                             VerifyingKeyId::new(
                                 crate::zk::ZK_BACKEND_HALO2_IPA,
                                 "kagemusha-topup-shield-v2",
