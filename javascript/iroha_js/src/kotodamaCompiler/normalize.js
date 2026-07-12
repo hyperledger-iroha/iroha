@@ -15,7 +15,10 @@ const MANIFEST_ENTRYPOINT_KINDS = new Set([
   "Kaizen",
 ]);
 const MAX_DIAGNOSTICS = 64;
+// Keep the allocation boundary independent from ledger admission. The exact
+// deployable image limit is checked after the fixed IVM header is available.
 const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024;
+const MAX_IVM_CODE_REGION_BYTES = 0x0010_0000;
 const MAX_WIRE_JSON_BYTES = 16 * 1024 * 1024;
 const MAX_MANIFEST_ITEMS = 65_536;
 const MAX_ENTRYPOINT_PARAMETERS = 13;
@@ -29,7 +32,10 @@ const UTF8_ENCODER = new TextEncoder();
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 const IVM_HEADER_BYTES = 17;
 const NORITO_FRAME_HEADER_BYTES = 40;
-const NORITO_MAX_PADDING_BYTES = 64;
+// `Archived<EmbeddedContractInterfaceV1>` is at most 8-byte aligned, and the
+// 40-byte NRT0 header is already aligned. The Rust decoder requires this exact
+// schema padding rather than the looser unknown-schema 64-byte fallback.
+const NORITO_EMBEDDED_INTERFACE_PADDING_BYTES = 0;
 const NORITO_COMPACT_LENGTHS_FLAG = 0x02;
 const NORITO_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
 const NORITO_CRC64_POLYNOMIAL = 0xc96c5795d7870f42n;
@@ -393,6 +399,18 @@ function readU32Le(bytes, offset, label) {
   ) >>> 0;
 }
 
+function readU32Be(bytes, offset, label) {
+  if (offset < 0 || offset + 4 > bytes.length) {
+    throw new TypeError(`${label} is truncated`);
+  }
+  return (
+    bytes[offset] * 0x1000000 +
+    (bytes[offset + 1] << 16) +
+    (bytes[offset + 2] << 8) +
+    bytes[offset + 3]
+  ) >>> 0;
+}
+
 function readU64Le(bytes, offset, label) {
   if (offset < 0 || offset + 8 > bytes.length) {
     throw new TypeError(`${label} is truncated`);
@@ -487,8 +505,8 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode) {
   }
   const safePayloadLength = Number(payloadLength);
   const paddingLength = frame.length - NORITO_FRAME_HEADER_BYTES - safePayloadLength;
-  if (paddingLength < 0 || paddingLength > NORITO_MAX_PADDING_BYTES) {
-    throw new TypeError(`${label} has an invalid alignment padding length`);
+  if (paddingLength !== NORITO_EMBEDDED_INTERFACE_PADDING_BYTES) {
+    throw new TypeError(`${label} has a noncanonical alignment padding length`);
   }
   const payloadOffset = NORITO_FRAME_HEADER_BYTES + paddingLength;
   if (frame.subarray(NORITO_FRAME_HEADER_BYTES, payloadOffset).some((byte) => byte !== 0)) {
@@ -579,7 +597,7 @@ function validateLiteralSection(bytes, start) {
   const count = readU32Le(bytes, start + 4, `${label} count`);
   const padding = readU32Le(bytes, start + 8, `${label} padding`);
   const dataLength = readU32Le(bytes, start + 12, `${label} data length`);
-  if (count === 0 || count > 0x1_0000 || padding > 3) {
+  if (count > 0x1_0000 || padding > 3) {
     throw new TypeError(`${label} has invalid bounds`);
   }
   const entriesLength = count * 8;
@@ -596,6 +614,7 @@ function validateLiteralSection(bytes, start) {
   ) {
     throw new TypeError(`${label} uses noncanonical alignment padding`);
   }
+  const descriptors = [];
   for (let index = 0; index < count; index += 1) {
     const descriptor = readU64Le(
       bytes,
@@ -603,19 +622,73 @@ function validateLiteralSection(bytes, start) {
       `${label} descriptor ${index}`,
     );
     const kind = Number(descriptor >> 56n);
-    const relativeOffset = Number(descriptor & 0x00ff_ffff_ffff_ffffn);
+    const relativeOffsetBigInt = descriptor & 0x00ff_ffff_ffff_ffffn;
+    if (relativeOffsetBigInt > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new TypeError(`${label} descriptor ${index} offset is invalid`);
+    }
+    const relativeOffset = Number(relativeOffsetBigInt);
     const absoluteOffset = start + relativeOffset;
     if (
       (kind !== 0 && kind !== 1) ||
       relativeOffset < 16 + entriesLength ||
       absoluteOffset < dataStart ||
-      absoluteOffset >= dataEnd ||
-      (kind === 1 && absoluteOffset + 8 > dataEnd)
+      absoluteOffset >= dataEnd
     ) {
       throw new TypeError(`${label} descriptor ${index} is invalid`);
     }
+    if (
+      descriptors.length !== 0 &&
+      absoluteOffset <= descriptors[descriptors.length - 1].absoluteOffset
+    ) {
+      throw new TypeError(`${label} descriptor targets must be strictly increasing`);
+    }
+    descriptors.push({ kind, absoluteOffset });
+  }
+  if (descriptors.length === 0) {
+    if (dataLength !== 0) {
+      throw new TypeError(`${label} cannot contain unindexed literal data`);
+    }
+  } else if (descriptors[0].absoluteOffset !== dataStart) {
+    throw new TypeError(`${label} first descriptor must target the first data byte`);
+  }
+  for (let index = 0; index < descriptors.length; index += 1) {
+    const { kind, absoluteOffset } = descriptors[index];
+    const end = descriptors[index + 1]?.absoluteOffset ?? dataEnd;
+    const literal = bytes.subarray(absoluteOffset, end);
+    if (kind === 0) {
+      validatePointerLiteralV1(literal, `${label} descriptor ${index}`);
+    } else if (literal.length !== 8) {
+      throw new TypeError(`${label} i64 descriptor ${index} must contain exactly 8 bytes`);
+    }
   }
   return codeOffset;
+}
+
+function validatePointerLiteralV1(bytes, label) {
+  if (bytes.length < 39) {
+    throw new TypeError(`${label} pointer TLV is truncated`);
+  }
+  const typeId = (bytes[0] << 8) | bytes[1];
+  const allowedType =
+    (typeId >= 0x0001 && typeId <= 0x000f) ||
+    (typeId >= 0x0011 && typeId <= 0x0013);
+  if (!allowedType) {
+    throw new TypeError(`${label} pointer TLV type is not allowed by ABI v1`);
+  }
+  if (bytes[2] !== 1) {
+    throw new TypeError(`${label} pointer TLV must use version 1`);
+  }
+  const payloadLength = readU32Be(bytes, 3, `${label} pointer TLV length`);
+  const expectedLength = 7 + payloadLength + 32;
+  if (bytes.length !== expectedLength) {
+    throw new TypeError(`${label} pointer TLV length does not match its envelope`);
+  }
+  const payload = bytes.subarray(7, 7 + payloadLength);
+  const expectedHash = blake2b256(payload);
+  expectedHash[expectedHash.length - 1] |= 1;
+  if (!equalBytes(bytes.subarray(7 + payloadLength), expectedHash)) {
+    throw new TypeError(`${label} pointer TLV payload hash is invalid`);
+  }
 }
 
 function validateCompiledArtifactV1(bytes, manifest) {
@@ -623,10 +696,15 @@ function validateCompiledArtifactV1(bytes, manifest) {
   if (bytes.length < IVM_HEADER_BYTES + 8 + NORITO_FRAME_HEADER_BYTES + 4) {
     throw new TypeError(`${label} is too short to be a deployable IVM contract`);
   }
+  if (bytes.length - IVM_HEADER_BYTES > MAX_IVM_CODE_REGION_BYTES) {
+    throw new RangeError(
+      `${label} post-header image exceeds the ${MAX_IVM_CODE_REGION_BYTES}-byte IVM code-memory limit`,
+    );
+  }
   if (!equalBytes(bytes.subarray(0, 4), Uint8Array.from([0x49, 0x56, 0x4d, 0x00]))) {
     throw new TypeError(`${label} has invalid IVM header magic`);
   }
-  if (bytes[4] !== 1 || bytes[5] !== 1 || (bytes[6] & ~0x07) !== 0 || bytes[7] > 64) {
+  if (bytes[4] !== 1 || bytes[5] !== 1 || (bytes[6] & ~0x03) !== 0 || bytes[7] > 64) {
     throw new TypeError(`${label} has unsupported IVM execution metadata`);
   }
   if (bytes[16] !== 1) {

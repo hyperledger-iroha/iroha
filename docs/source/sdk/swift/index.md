@@ -219,9 +219,16 @@ Offline uses note challenges, payment tokens, and receipt acks carried over Foun
 
 ### Offline APIs
 
-Torii exposes only `/v1/offline/readiness` for offline HTTP discovery. Offline note
-issuance, redemption, and audit payloads are submitted as transaction instructions; legacy
-offline HTTP routes are no longer published.
+Torii exposes `GET /v1/offline/readiness?asset_definition_id=...`,
+`POST /v1/offline/top-up`, `POST /v1/offline/redeem`, and
+`GET /v1/offline/operations/{operation_id}`. Use
+`getOfflineReadiness(assetDefinitionId:)`, `submitOfflineTopUp(_:)`,
+`submitOfflineRedeem(_:)`, and
+`getOfflineOperationStatus(operationId:)`. The POST methods send a direct typed
+JSON or Norito request and return an `OfflineOperationReference`; follow its
+status URI until the tagged `OfflineOperationStatus` is applied or rejected.
+A `200` readiness response may legitimately contain `ready: false`; `503`
+means Torii could not evaluate readiness.
 
 ### Offline audit logging
 
@@ -763,8 +770,11 @@ if #available(iOS 15, macOS 12, *) {
 
 Fine-tune the lifecycle events by flipping the `includeCreated`, `includeDeleted`,
 `includeExtended`, `includeShortened`, `includeMetadataInserted`, and
-`includeMetadataRemoved` switches on the filter. Provide `lastEventId:` when calling
-`streamTriggerEvents` to propagate Torii’s `Last-Event-ID` header and resume seamlessly.
+`includeMetadataRemoved` switches on the filter. The verifying-key, proof, and
+trigger helpers use the canonical live-only `/v1/events/sse` feed: they accept no
+resume cursor, and reconnecting can leave a gap. Terminal `stream_error` events
+are surfaced as typed stream failures instead of being treated as continuation
+points.
 
 ## Fixture Parity
 

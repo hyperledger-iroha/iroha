@@ -554,12 +554,6 @@ fn minimal_config_snapshot() {
                         path: "tests/fixtures/base.toml",
                     },
                 },
-                api_versions: [
-                    "1.0",
-                ],
-                api_version_default: "1.0",
-                api_min_proof_version: "1.0",
-                api_version_sunset_unix: None,
                 max_content_len: Bytes(
                     64000000,
                 ),
@@ -697,7 +691,6 @@ fn minimal_config_snapshot() {
                 attachments_allowed_mime_types: [
                     "application/x-norito",
                     "application/json",
-                    "text/json",
                     "application/x-zk1",
                 ],
                 attachments_max_expanded_bytes: 16777216,

@@ -8,7 +8,6 @@ summary: Reference for the SF-9b validator tooling and reporting surfaces.
 ## CLI Enhancements
 
 - `sorafs_cli por status --manifest <digest>` — display the latest challenges and outcomes with optional filters.
-- `sorafs_cli por trigger --manifest <digest>` — build the legacy manual challenge request using a council-issued authorisation token; Torii returns the route retirement response until governed scheduler admission is available.
 - `sorafs_cli por export --out <path>` — export GovernanceLog PoR verdicts for offline audits.
 - `sorafs_cli por report --week <iso-week>` — render weekly health reports as Markdown or Norito JSON.
 
@@ -104,26 +103,17 @@ Generated: 2025-03-24 09:30:00 UTC
 
 Markdown reports link to the JSON artefact and the corresponding CAR snapshot from the transparency plan.
 
-## Challenge Authentication & Access Control
+## Scheduler Challenge Authority
 
-Manual PoR challenges carry governance risk and must be gated:
+Torii exposes no client-driven challenge ingress. The verified coordinator
+scheduler derives challenges only from authenticated drand and provider-VRF
+inputs under the active governance policy, then records the resulting
+`PorChallengeV1` in the governance DAG. The CLI is read/report oriented: it can
+inspect, export, and report scheduler outcomes but cannot issue challenges.
 
-- **Identity verification.** `sorafs_cli por trigger` requires a council-signed token
-  (`ChallengeAuthTokenV1`) derived from the governance policy engine. The token encodes the operator ID,
-  allowed manifests/providers, expiration timestamp, and justification. Tokens are Norito payloads signed
-  by at least two governance signers.
-- **CLI flow.** Operator supplies the token via `--auth-token token.to`. The CLI verifies the signature
-  locally, checks expiry, and ensures the targeted manifest/provider pair is authorised. If valid, the CLI
-  submits the legacy challenge request shape to Torii, which currently returns a fail-closed retirement
-  response instead of admitting a live manual challenge.
-- **On-chain audit.** Torii records the token hash and operator ID in the governance DAG so the transparency
-  ledger reflects who initiated manual challenges. Unauthorized attempts are rejected with code
-  `POR-CHAL-UNAUTH` and logged in `EvidenceAuditEventV1`.
-
-Automation:
-- Governance rotates tokens daily; out-of-band revocation is supported by publishing a CRL (`challenge_token_revocations.json`)
-  that the CLI fetches before issuing new challenges.
-- CI tests include a simulated token so we can validate the CLI workflow without involving governance keys.
+Automation must fail closed when the external randomness or VRF evidence cannot
+be verified. CI validates deterministic scheduler fixtures without introducing a
+public mutation command.
 
 ## Repair Automation Hooks
 
@@ -148,7 +138,7 @@ PoR reporting feeds directly into the repair pipeline (`docs/source/sorafs_repai
 Completion criteria:
 
 1. JSON/Markdown templates render successfully using staging data and pass schema validation.
-2. Manual challenge CLI requires valid tokens, logs audit entries, and rejects unauthorized attempts.
+2. Scheduler challenge derivation requires authenticated drand and provider-VRF evidence and fails closed when either cannot be verified.
 3. Repair pipeline consumes the generated reports and automatically aligns tickets/status without
    manual intervention.
 4. Reporting/archive rollout evidence is payload-free and bound to the

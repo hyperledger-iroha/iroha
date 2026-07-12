@@ -77,7 +77,7 @@ translator: machine-google-reviewed
 |指針-ABI 嚴格驗證和文檔同步 | ◉ |通過黃金測試和生成的文檔跨主機/IVM 強制實施 TLV 策略。 |狀態.md:227;狀態.md:317;狀態.md:344;狀態.md:366;狀態.md:527 |
 |通過 CoreHost 進行 ZK 系統調用門控 | ◉ |每操作隊列對經過驗證的信封進行門控，並在 ISI 執行之前強制執行哈希匹配。 |板條箱/iroha_core/src/smartcontracts/ivm/host.rs:213;板條箱/iroha_core/src/smartcontracts/ivm/host.rs:279 |
 | Kotodama 指針-ABI 文檔和語法 | ◉ |語法/文檔與實時構造函數和 SCALL 映射同步。 |狀態.md:299-301 |
-| ISO 20022 模式驅動引擎和 Torii 橋 | ◉ |嵌入規範 ISO 20022 模式、確定性 XML 解析和公開 `/v1/iso20022/status/{MsgId}` API。 |狀態.md:65-70 |
+| ISO 20022 模式驅動引擎和 Torii 橋 | ◉ |嵌入規範 ISO 20022 模式、確定性 XML 解析和公開 `/v1/iso20022/messages/{MsgId}` API。 |狀態.md:65-70 |
 
 ## 硬件加速
 

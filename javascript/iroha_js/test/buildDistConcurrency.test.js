@@ -181,6 +181,27 @@ test("post-close lock replacement reports the ownership race without masking or 
   }
 });
 
+test("post-close same-inode mutation cannot become the accepted lock record", async () => {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "iroha-js-build-dist-post-close-rewrite-"));
+  try {
+    const lockPath = join(fixtureRoot, ".build-dist.lock");
+    await assert.rejects(
+      acquireDistLock({
+        root: fixtureRoot,
+        onLockCreated() {
+          const modified = JSON.parse(readFileSync(lockPath, "utf8"));
+          modified.attacker = "same-inode-post-close-rewrite";
+          writeFileSync(lockPath, `${JSON.stringify(modified)}\n`);
+        },
+      }),
+      /lost ownership/u,
+    );
+    assertNoPublicationArtifacts(fixtureRoot);
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
 test("stale malformed locks are quarantined while live stale-looking locks are preserved", async () => {
   const fixtureRoot = mkdtempSync(join(tmpdir(), "iroha-js-build-dist-stale-owner-"));
   try {
@@ -300,6 +321,45 @@ try {
   }
 });
 
+test("stale takeover preserves a same-inode lock whose lease mtime is refreshed", async () => {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "iroha-js-build-dist-stale-refresh-"));
+  try {
+    const lockPath = join(fixtureRoot, ".build-dist.lock");
+    const staleRecord = `${JSON.stringify({
+      pid: 2_147_483_647,
+      token: "dead-owner-refreshed-before-takeover",
+      createdAt: "1970-01-01T00:00:00.000Z",
+    })}\n`;
+    writeFileSync(lockPath, staleRecord, { mode: 0o600 });
+    const old = new Date(Date.now() - 10 * 60_000);
+    utimesSync(lockPath, old, old);
+
+    let refreshed = false;
+    await assert.rejects(
+      acquireDistLock({
+        root: fixtureRoot,
+        staleLockMs: 60_000,
+        timeoutMs: 125,
+        onStaleCandidate() {
+          if (refreshed) return;
+          refreshed = true;
+          const fresh = new Date();
+          utimesSync(lockPath, fresh, fresh);
+        },
+      }),
+      /timed out waiting/u,
+    );
+    assert.equal(refreshed, true);
+    assert.equal(readFileSync(lockPath, "utf8"), staleRecord);
+    assert.deepEqual(
+      readdirSync(fixtureRoot).filter((entry) => entry.startsWith(".build-dist.lock.retired-")),
+      [],
+    );
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
 test("a lock-aware reader holds a complete old snapshot until changed source is published", async () => {
   const fixtureRoot = mkdtempSync(join(tmpdir(), "iroha-js-build-dist-reader-"));
   try {
@@ -395,6 +455,30 @@ test("a stale crashed transaction restores its backup before rebuilding", async 
     assert.equal(directoryDigest(join(fixtureRoot, "dist")), expectedDigest);
     assertPublishedGeneration(fixtureRoot, "recovered");
     assertNoPublicationArtifacts(fixtureRoot);
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("ambiguous valid crash backups are preserved instead of choosing by mtime", async () => {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "iroha-js-build-dist-backup-ambiguity-"));
+  try {
+    cpSync(join(ROOT, "src"), join(fixtureRoot, "src"), { recursive: true });
+    cpSync(join(fixtureRoot, "src"), join(fixtureRoot, ".dist-backup-first"), {
+      recursive: true,
+    });
+    cpSync(join(fixtureRoot, "src"), join(fixtureRoot, ".dist-backup-second"), {
+      recursive: true,
+    });
+
+    await assert.rejects(
+      runBuild(fixtureRoot),
+      /multiple valid crash backups.*cannot prove their generation order/u,
+    );
+    assert.equal(existsSync(join(fixtureRoot, "dist")), false);
+    assert.equal(existsSync(join(fixtureRoot, ".dist-backup-first")), true);
+    assert.equal(existsSync(join(fixtureRoot, ".dist-backup-second")), true);
+    assert.equal(existsSync(join(fixtureRoot, ".build-dist.lock")), false);
   } finally {
     rmSync(fixtureRoot, { recursive: true, force: true });
   }

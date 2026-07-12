@@ -5,6 +5,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.math.BigInteger;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URLDecoder;
@@ -16,8 +17,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.hyperledger.iroha.android.client.ClientObserver;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.transport.UrlConnectionTransportExecutor;
@@ -44,6 +47,11 @@ public final class ToriiEventStreamClientTests {
     observersReceiveLifecycleCallbacks();
     sseRejectsInsecureAuthorizationHeader();
     sseRequestPropagatesTimeout();
+    sseRejectsCaseVariantAndRepeatedLastEventIdBeforeCanonicalDispatch();
+    ssePreservesLastEventIdForReplayCapableCustomStreams();
+    terminalStreamErrorIsStrictlyTyped();
+    listenerProjectionPropagatesUnwrappedTypedTerminalFailure();
+    malformedTerminalStreamErrorsFailClosed();
     sseRejectsUnsupportedProductionBackendFiltersBeforeRequest();
     sseRejectsMalformedVerifyingKeyEventNamesBeforeRequest();
     sseRejectsMalformedProofEventHashesBeforeRequest();
@@ -290,6 +298,185 @@ public final class ToriiEventStreamClientTests {
     final TransportRequest recorded =
         observer.lastRequest.orElseThrow(() -> new AssertionError("missing observed request"));
     assertEquals(timeout, recorded.timeout(), "timeout should propagate to request");
+  }
+
+  private static void sseRejectsCaseVariantAndRepeatedLastEventIdBeforeCanonicalDispatch() {
+    final java.util.concurrent.atomic.AtomicInteger dispatches =
+        new java.util.concurrent.atomic.AtomicInteger();
+    final TransportExecutor executor =
+        request -> {
+          dispatches.incrementAndGet();
+          return okSseResponse();
+        };
+
+    for (final String path :
+        List.of("/v1/events/sse", "/v1/contracts/events/sse?kind=applied")) {
+      final ToriiEventStreamClient client =
+          ToriiEventStreamClient.builder()
+              .setBaseUri(URI.create("http://example.com/base"))
+              .setTransportExecutor(executor)
+              .putDefaultHeader("Last-Event-ID", "first")
+              .build();
+      final ToriiEventStreamOptions options =
+          ToriiEventStreamOptions.builder()
+              .headers(
+                  new java.util.LinkedHashMap<>(
+                      Map.of("lAsT-eVeNt-Id", "second", "last-event-id", "third")))
+              .build();
+
+      try {
+        client.openSseStream(path, options, event -> {});
+      } catch (final IllegalArgumentException expected) {
+        if (!expected.getMessage().contains("no replay log")) {
+          throw new AssertionError("unexpected resume rejection: " + expected.getMessage());
+        }
+        continue;
+      }
+      throw new AssertionError("Expected Last-Event-ID to be rejected for " + path);
+    }
+    assertEquals(0, dispatches.get(), "resume headers must be rejected before HTTP dispatch");
+  }
+
+  private static void ssePreservesLastEventIdForReplayCapableCustomStreams() throws Exception {
+    final TransportRequest[] recorded = new TransportRequest[1];
+    final ToriiEventStreamClient client =
+        ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("http://example.com"))
+            .setTransportExecutor(
+                request -> {
+                  recorded[0] = request;
+                  return okSseResponse();
+                })
+            .build();
+    final ToriiEventStreamOptions options =
+        ToriiEventStreamOptions.builder()
+            .putHeader("Last-Event-ID", "registry-42")
+            .build();
+
+    client
+        .openSseStream(
+            "/v1/sorafs/reputation/events/stream", options, event -> {})
+        .completion()
+        .get(1, TimeUnit.SECONDS);
+
+    if (recorded[0] == null) {
+      throw new AssertionError("expected replay-capable request to be dispatched");
+    }
+    assertEquals(
+        List.of("registry-42"),
+        recorded[0].headers().get("Last-Event-ID"),
+        "custom stream resume header must be preserved");
+  }
+
+  private static void terminalStreamErrorIsStrictlyTyped() {
+    final String payload =
+        "{\"code\":\"stream_lagged\",\"message\":\"receiver lagged\","
+            + "\"dropped_messages\":18446744073709551615,\"replay_available\":false}";
+    final ServerSentEvent event = new ServerSentEvent("stream_error", payload, null);
+    final ToriiStreamException terminal =
+        event
+            .terminalStreamError()
+            .orElseThrow(() -> new AssertionError("missing typed terminal error"));
+
+    assertEquals("stream_lagged", terminal.code(), "terminal error code mismatch");
+    assertEquals("receiver lagged", terminal.serverMessage(), "terminal message mismatch");
+    assertEquals(
+        BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE),
+        terminal.droppedMessages(),
+        "terminal dropped-message count mismatch");
+    assertEquals(false, terminal.replayAvailable(), "terminal replay flag mismatch");
+    assertEquals(payload, terminal.rawData(), "terminal raw payload mismatch");
+    if (new ServerSentEvent("message", "{}", null).terminalStreamError().isPresent()) {
+      throw new AssertionError("ordinary event must not project to a terminal error");
+    }
+  }
+
+  private static void listenerProjectionPropagatesUnwrappedTypedTerminalFailure()
+      throws Exception {
+    final String body =
+        "event: stream_error\n"
+            + "data: {\"code\":\"stream_source_closed\",\"message\":\"source closed\","
+            + "\"dropped_messages\":null,\"replay_available\":false}\n\n";
+    final AtomicReference<Throwable> observedError = new AtomicReference<>();
+    final CountDownLatch errorLatch = new CountDownLatch(1);
+    final ToriiEventStreamClient client =
+        ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("http://example.com"))
+            .setTransportExecutor(
+                request ->
+                    CompletableFuture.completedFuture(
+                        TransportResponse.builder()
+                            .setStatusCode(200)
+                            .setBody(body.getBytes(StandardCharsets.UTF_8))
+                            .build()))
+            .build();
+    final ToriiEventStream stream =
+        client.openSseStream(
+            "/v1/events/sse",
+            ToriiEventStreamOptions.defaultOptions(),
+            new ToriiEventStreamListener() {
+              @Override
+              public void onEvent(final ServerSentEvent event) {
+                event.terminalStreamError().ifPresent(error -> {
+                  throw error;
+                });
+              }
+
+              @Override
+              public void onError(final Throwable error) {
+                observedError.set(error);
+                errorLatch.countDown();
+              }
+            });
+
+    try {
+      stream.completion().get(1, TimeUnit.SECONDS);
+      throw new AssertionError("terminal stream error must fail completion");
+    } catch (final ExecutionException expected) {
+      if (!(expected.getCause() instanceof ToriiStreamException)) {
+        throw new AssertionError("completion must preserve typed terminal failure", expected);
+      }
+    }
+    if (!errorLatch.await(1, TimeUnit.SECONDS)) {
+      throw new AssertionError("listener did not receive terminal failure");
+    }
+    if (!(observedError.get() instanceof ToriiStreamException terminal)) {
+      throw new AssertionError("listener must receive typed terminal failure");
+    }
+    assertEquals(
+        "stream_source_closed", terminal.code(), "listener terminal error code mismatch");
+  }
+
+  private static void malformedTerminalStreamErrorsFailClosed() {
+    final List<String> malformedPayloads =
+        List.of(
+            "not-json",
+            "[]",
+            "{}",
+            "{\"code\":\"stream_lagged\",\"code\":\"other\",\"message\":\"lagged\",\"dropped_messages\":1,\"replay_available\":false}",
+            "{\"code\":\"stream_lagged\",\"message\":\"lagged\",\"dropped_messages\":1,\"replay_available\":false,\"extra\":true}",
+            "{\"code\":\" stream_lagged\",\"message\":\"lagged\",\"dropped_messages\":1,\"replay_available\":false}",
+            "{\"code\":\"stream lagged\",\"message\":\"lagged\",\"dropped_messages\":1,\"replay_available\":false}",
+            "{\"code\":\"stream_lagged\",\"message\":\" lagged\",\"dropped_messages\":1,\"replay_available\":false}",
+            "{\"code\":\"stream_lagged\",\"message\":\"\\uD800\",\"dropped_messages\":1,\"replay_available\":false}",
+            "{\"code\":\"stream_lagged\",\"message\":\"lagged\",\"dropped_messages\":-1,\"replay_available\":false}",
+            "{\"code\":\"stream_lagged\",\"message\":\"lagged\",\"dropped_messages\":1.0,\"replay_available\":false}",
+            "{\"code\":\"stream_lagged\",\"message\":\"lagged\",\"dropped_messages\":18446744073709551616,\"replay_available\":false}",
+            "{\"code\":\"stream_lagged\",\"message\":\"lagged\",\"dropped_messages\":1,\"replay_available\":null}");
+
+    for (final String payload : malformedPayloads) {
+      final ServerSentEvent event = new ServerSentEvent("stream_error", payload, null);
+      try {
+        event.terminalStreamError();
+      } catch (final ToriiStreamProtocolException expected) {
+        assertEquals(payload, expected.rawData(), "malformed raw payload mismatch");
+        if (expected.reason().isEmpty()) {
+          throw new AssertionError("malformed terminal reason must not be empty");
+        }
+        continue;
+      }
+      throw new AssertionError("Expected malformed terminal stream error rejection: " + payload);
+    }
   }
 
   private static void sseRejectsUnsupportedProductionBackendFiltersBeforeRequest() {

@@ -477,7 +477,7 @@ impl std::io::Write for BoundedCountingWriter {
     }
 }
 
-/// A verifying-key record prepared for repeated host-side verification.
+/// A verifying-key record prepared for repeated host-side proof verification.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PreparedVerifyingKey {
     record: Arc<VerifyingKeyRecord>,
@@ -14968,7 +14968,7 @@ mod tests {
     use iroha_data_model::query::account::prelude::FindAccounts;
     use iroha_data_model::{
         parameter::{CustomParameter, Parameter},
-        proof::{VerifyingKeyBox, VerifyingKeyId},
+        proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId},
         query::{QueryRequest, QueryResponse, SingularQueryBox, prelude::FindParameters},
         zk::BackendTag,
     };

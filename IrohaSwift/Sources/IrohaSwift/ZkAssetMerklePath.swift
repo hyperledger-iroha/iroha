@@ -461,7 +461,7 @@ public struct ToriiZkMerklePathResponse: Decodable, Equatable, Sendable {
     }
 }
 
-private enum StrictJSONDuplicateKeyRejector {
+enum StrictJSONDuplicateKeyRejector {
     static func rejectDuplicateObjectKeys(in data: Data) throws {
         guard let text = String(data: data, encoding: .utf8) else {
             throw ZkAssetMerklePathError.invalidField("json")

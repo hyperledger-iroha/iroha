@@ -9415,20 +9415,22 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineReadinessParsesKagemushaRecursiveCompactMetadata() async throws {
+    func testGetOfflineReadinessParsesExactContract() async throws {
         let payload = """
         {
-          "offline_kagemusha_recursive_compact_available": true,
-          "offline_kagemusha_recursive_compact_mode": "recursive_compact_v1",
-          "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 7,
-          "offline_kagemusha_recursive_compact_circuit_id": "kagemusha-recursive-compact-v1",
-          "offline_kagemusha_recursive_compact_artifacts_available": false,
-          "offline_telemetry": true
+          "asset_definition_id": "xor#wonderland",
+          "evaluated_block_height": 18446744073709551615,
+          "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "ready": false,
+          "blockers": [
+            {"code": "offline_disabled", "message": "Offline transfers are disabled"}
+          ]
         }
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/offline/readiness")
+            XCTAssertEqual(request.url?.query, "asset_definition_id=xor%23wonderland")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
@@ -9437,59 +9439,65 @@ final class ToriiClientTests: XCTestCase {
             return (response, payload)
         }
 
-        let readiness = try await makeClient().getOfflineReadiness()
-        XCTAssertTrue(readiness.offlineKagemushaRecursiveCompactAvailable)
-        XCTAssertEqual(readiness.offlineKagemushaRecursiveCompactMode, "recursive_compact_v1")
-        XCTAssertEqual(readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion, 7)
-        XCTAssertEqual(readiness.offlineKagemushaRecursiveCompactCircuitId, "kagemusha-recursive-compact-v1")
-        XCTAssertFalse(readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)
-        XCTAssertTrue(readiness.offlineTelemetry)
-        XCTAssertFalse(readiness.offlineNote)
-        XCTAssertFalse(readiness.hasCanonicalRecursiveVerifierMetadata)
-        XCTAssertTrue(readiness.hasKagemushaRecursiveCompactMetadata)
+        let readiness = try await makeClient().getOfflineReadiness(
+            assetDefinitionId: "xor#wonderland"
+        )
+        XCTAssertEqual(readiness.assetDefinitionId, "xor#wonderland")
+        XCTAssertEqual(readiness.evaluatedBlockHeight, UInt64.max)
+        XCTAssertEqual(readiness.evaluatedBlockHash, String(repeating: "ab", count: 32))
+        XCTAssertEqual(readiness.evaluatedBlockHashBytes, Data(repeating: 0xAB, count: 32))
+        XCTAssertFalse(readiness.ready)
+        XCTAssertEqual(readiness.blockers.count, 1)
+        XCTAssertEqual(readiness.blockers[0].code, "offline_disabled")
+        XCTAssertEqual(readiness.blockers[0].message, "Offline transfers are disabled")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineReadinessRejectsMalformedKagemushaAbiVersions() async throws {
+    func testGetOfflineReadinessRejectsNonCanonicalFields() async throws {
         func payload(extra: String = "",
-                     compactAvailable: String = "true",
-                     compactMode: String = "\"recursive_compact_v1\"",
-                     compact: String = "7",
-                     compactCircuit: String = "\"kagemusha-recursive-compact-v1\"",
-                     compactArtifacts: String = "false") -> Data {
+                     assetDefinitionId: String = "\"xor#wonderland\"",
+                     blockHash: String = "\"abababababababababababababababababababababababababababababababab\"",
+                     ready: String = "true",
+                     blockers: String = "[]") -> Data {
             """
             {
               \(extra)
-              "offline_kagemusha_recursive_compact_available": \(compactAvailable),
-              "offline_kagemusha_recursive_compact_mode": \(compactMode),
-              "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": \(compact),
-              "offline_kagemusha_recursive_compact_circuit_id": \(compactCircuit),
-              "offline_kagemusha_recursive_compact_artifacts_available": \(compactArtifacts),
-              "offline_telemetry": true
+              "asset_definition_id": \(assetDefinitionId),
+              "evaluated_block_height": 7,
+              "evaluated_block_hash": \(blockHash),
+              "ready": \(ready),
+              "blockers": \(blockers)
             }
             """.data(using: .utf8)!
         }
 
         let cases: [(Data, String)] = [
-            (payload(extra: "\"offline_kagemusha_abi7\": true,"), "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*"),
-            (payload(extra: "\"offline_kagemusha_abi7_bridge_abi_version\": 7,"), "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*"),
-            (payload(compact: "0"), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer"),
-            (payload(compact: "\" 7\""), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact positive integer string"),
-            (payload(compact: "\"007\""), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact positive integer string"),
-            (payload(compact: "\"2147483648\""), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range"),
-            (payload(compactAvailable: "1"), "Expected to decode Bool"),
-            (payload(compactCircuit: "\"kagemusha-recursive-compact-v1 \""), "offline_kagemusha_recursive_compact_circuit_id must not contain surrounding whitespace"),
-            (payload(extra: "\"offline_kagemusha_abi7\": true,"), "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*"),
-            (payload(extra: "\"offline_kagemusha_abi7_mode\": \"recursive_compact_v1\","), "offline_kagemusha_abi7_mode is not supported; use offline_kagemusha_recursive_compact_*"),
-            (payload(extra: "\"offline_kagemusha_abi7_bridge_abi_version\": 7,"), "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*"),
-            (payload(extra: "\"offline_kagemusha_abi7_circuit_id\": \"kagemusha-recursive-compact-v1\","), "offline_kagemusha_abi7_circuit_id is not supported; use offline_kagemusha_recursive_compact_*"),
-            (payload(extra: "\"offline_kagemusha_abi7_artifacts\": false,"), "offline_kagemusha_abi7_artifacts is not supported; use offline_kagemusha_recursive_compact_*"),
-            (payload(extra: "\"unexpected_offline_readiness_field\": true,"), "unexpected_offline_readiness_field is not a supported offline readiness field")
+            (
+                payload(assetDefinitionId: "\" xor#wonderland\""),
+                "asset_definition_id must be exact non-empty text without whitespace"
+            ),
+            (
+                payload(blockHash: "\"ABababababababababababababababababababababababababababababababab\""),
+                "evaluated_block_hash must be exact lowercase 32-byte hexadecimal"
+            ),
+            (
+                payload(blockers: "[{\"code\":\"BAD\",\"message\":\"no\"}]"),
+                "code must be a 1-64 character lowercase stable identifier"
+            ),
+            (
+                payload(blockers: "[{\"code\":\"blocked\",\"message\":\"no\"}]"),
+                "ready must be true exactly when blockers is empty"
+            ),
+            (
+                payload(ready: "false"),
+                "ready must be true exactly when blockers is empty"
+            )
         ]
 
         for (body, expectedMessage) in cases {
             StubURLProtocol.handler = { request in
                 XCTAssertEqual(request.url?.path, "/v1/offline/readiness")
+                XCTAssertEqual(request.url?.query, "asset_definition_id=xor%23wonderland")
                 let response = HTTPURLResponse(url: request.url!,
                                                statusCode: 200,
                                                httpVersion: nil,
@@ -9498,12 +9506,390 @@ final class ToriiClientTests: XCTestCase {
             }
 
             do {
-                _ = try await makeClient().getOfflineReadiness()
+                _ = try await makeClient().getOfflineReadiness(
+                    assetDefinitionId: "xor#wonderland"
+                )
                 XCTFail("expected malformed offline readiness response to fail")
             } catch {
                 XCTAssertTrue(
                     String(describing: error).contains(expectedMessage),
                     "expected \(expectedMessage), got \(error)"
+                )
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetOfflineReadinessIgnoresIndependentUnknownMembers() async throws {
+        let payload = """
+        {
+          "asset_definition_id": "xor#wonderland",
+          "evaluated_block_height": 7,
+          "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "ready": false,
+          "blockers": [
+            {
+              "code": "offline_disabled",
+              "message": "Offline transfers are disabled",
+              "future_blocker_metadata": {"opaque": 1}
+            }
+          ],
+          "future_snapshot_metadata": [1, 2, 3]
+        }
+        """.data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json; charset=utf-8"]
+            )!
+            return (response, payload)
+        }
+
+        let readiness = try await makeClient().getOfflineReadiness(
+            assetDefinitionId: "xor#wonderland"
+        )
+        XCTAssertFalse(readiness.ready)
+        XCTAssertEqual(readiness.blockers.map(\.code), ["offline_disabled"])
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetOfflineReadinessRejectsDuplicateKeysAndInvalidUtf8() async throws {
+        let duplicateRoot = """
+        {
+          "asset_definition_id": "xor#wonderland",
+          "evaluated_block_height": 7,
+          "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "ready": true,
+          "ready": false,
+          "blockers": []
+        }
+        """.data(using: .utf8)!
+        let duplicateNested = """
+        {
+          "asset_definition_id": "xor#wonderland",
+          "evaluated_block_height": 7,
+          "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "ready": false,
+          "blockers": [{"code":"blocked","code":"other","message":"no"}]
+        }
+        """.data(using: .utf8)!
+
+        for body in [duplicateRoot, duplicateNested, Data([0xff, 0xfe])] {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (response, body)
+            }
+            do {
+                _ = try await makeClient().getOfflineReadiness(
+                    assetDefinitionId: "xor#wonderland"
+                )
+                XCTFail("expected adversarial readiness JSON to fail")
+            } catch {
+                XCTAssertTrue(
+                    String(describing: error).contains(
+                        "valid UTF-8 JSON without duplicate object keys"
+                    ),
+                    "unexpected error: \(error)"
+                )
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testOfflineOperationsUseCanonicalPathsAndDirectNoritoBodies() async throws {
+        let operationId = String(repeating: "11", count: 32)
+        let operationIdBytes = Data(repeating: 0x11, count: 32)
+        func requestArchive(
+            schema: String,
+            fieldCount: Int,
+            operationIdFieldIndex: Int
+        ) -> Data {
+            var payload = OfflineCompactNoritoWriter()
+            for index in 0..<fieldCount {
+                payload.writeField(
+                    index == operationIdFieldIndex
+                        ? operationIdBytes
+                        : Data([UInt8(index + 1)])
+                )
+            }
+            return noritoEncode(
+                typeName: schema,
+                payload: payload.data,
+                flags: NoritoHeader.compactLen
+            )
+        }
+        func reference(_ kind: OfflineOperationKind) throws -> OfflineOperationReference {
+            try OfflineOperationReference(
+                operationId: operationId,
+                kind: kind,
+                state: .pending,
+                transactionHash: String(repeating: "22", count: 32),
+                statusUri: "/v1/offline/operations/\(operationId)",
+                submittedAtMs: 1_700_000_000_000
+            )
+        }
+        let topUpResponseArchive = OfflineOperationCodec.encodeReference(try reference(.topUp))
+        let redeemResponseArchive = OfflineOperationCodec.encodeReference(try reference(.redeem))
+        let topUpRequestArchive = requestArchive(
+            schema: KagemushaRecursiveSpendV2.topUpRequestWireName,
+            fieldCount: 8,
+            operationIdFieldIndex: 6
+        )
+        let redeemRequestArchive = requestArchive(
+            schema: KagemushaRecursiveSpendV2.redeemRequestWireName,
+            fieldCount: 11,
+            operationIdFieldIndex: 9
+        )
+        let pendingStatusArchive = try XCTUnwrap(Data(hexString:
+            "4e5254300000fb04214104df1bdcd39249bddd4db23a009600000000000000bdfee2508f80055702000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323208ffffffffffffffff"
+        ))
+
+        StubURLProtocol.handler = { request in
+            let path = request.url?.path
+            let responseBody: Data
+            let status: Int
+            switch path {
+            case "/v1/offline/top-up":
+                status = 202
+                responseBody = topUpResponseArchive
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(self.bodyData(from: request), topUpRequestArchive)
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), operationId)
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
+            case "/v1/offline/redeem":
+                status = 202
+                responseBody = redeemResponseArchive
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(self.bodyData(from: request), redeemRequestArchive)
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), operationId)
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
+            case "/v1/offline/operations/\(operationId)":
+                status = 200
+                responseBody = pendingStatusArchive
+                XCTAssertEqual(request.httpMethod, "GET")
+            default:
+                throw ToriiClientError.invalidURL(path ?? "")
+            }
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: status,
+                httpVersion: nil,
+                headerFields: [
+                    "Content-Type": "application/x-norito",
+                    "Location": "/v1/offline/operations/\(operationId)",
+                ]
+            )!
+            return (response, responseBody)
+        }
+
+        let client = makeClient()
+        let acceptedTopUp = try await client.submitOfflineTopUp(
+            OfflineTopUpRequest(noritoArchive: topUpRequestArchive)
+        )
+        XCTAssertEqual(acceptedTopUp, try reference(.topUp))
+        let acceptedRedeem = try await client.submitOfflineRedeem(
+            OfflineRedeemRequest(noritoArchive: redeemRequestArchive)
+        )
+        XCTAssertEqual(acceptedRedeem, try reference(.redeem))
+        let operationStatus = try await client.getOfflineOperationStatus(operationId: operationId)
+        XCTAssertEqual(
+            operationStatus,
+            .pending(try .init(
+                operationId: operationId,
+                kind: .topUp,
+                transactionHash: String(repeating: "22", count: 32),
+                submittedAtMs: UInt64.max
+            ))
+        )
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testOfflineSubmissionRejectsUnboundReferencesMediaTypesAndLocations() async throws {
+        let submittedOperationId = String(repeating: "11", count: 32)
+        let otherOperationId = String(repeating: "33", count: 32)
+        let transactionHash = String(repeating: "22", count: 32)
+        var requestPayload = OfflineCompactNoritoWriter()
+        for index in 0..<8 {
+            requestPayload.writeField(
+                index == 6 ? Data(repeating: 0x11, count: 32) : Data([UInt8(index + 1)])
+            )
+        }
+        let request = try OfflineTopUpRequest(noritoArchive: noritoEncode(
+            typeName: KagemushaRecursiveSpendV2.topUpRequestWireName,
+            payload: requestPayload.data,
+            flags: NoritoHeader.compactLen
+        ))
+
+        func reference(operationId: String, kind: OfflineOperationKind) throws -> Data {
+            OfflineOperationCodec.encodeReference(try OfflineOperationReference(
+                operationId: operationId,
+                kind: kind,
+                state: .pending,
+                transactionHash: transactionHash,
+                statusUri: "/v1/offline/operations/\(operationId)",
+                submittedAtMs: 1
+            ))
+        }
+
+        let cases: [(Data, [String: String], String)] = [
+            (
+                try reference(operationId: otherOperationId, kind: .topUp),
+                [
+                    "Content-Type": "application/x-norito",
+                    "Location": "/v1/offline/operations/\(submittedOperationId)",
+                ],
+                "does not match the submitted command"
+            ),
+            (
+                try reference(operationId: submittedOperationId, kind: .redeem),
+                [
+                    "Content-Type": "application/x-norito",
+                    "Location": "/v1/offline/operations/\(submittedOperationId)",
+                ],
+                "does not match the submitted command"
+            ),
+            (
+                try reference(operationId: submittedOperationId, kind: .topUp),
+                ["Content-Type": "application/x-norito"],
+                "Location must match"
+            ),
+            (
+                try reference(operationId: submittedOperationId, kind: .topUp),
+                [
+                    "Content-Type": "application/x-norito",
+                    "Location": "/v1/offline/operations/\(otherOperationId)",
+                ],
+                "Location must match"
+            ),
+            (
+                try reference(operationId: submittedOperationId, kind: .topUp),
+                [
+                    "Content-Type": "application/json",
+                    "Location": "/v1/offline/operations/\(submittedOperationId)",
+                ],
+                "Content-Type must be application/x-norito"
+            ),
+            (
+                try reference(operationId: submittedOperationId, kind: .topUp),
+                ["Location": "/v1/offline/operations/\(submittedOperationId)"],
+                "Content-Type must be application/x-norito"
+            ),
+        ]
+
+        for (body, headers, expectedMessage) in cases {
+            StubURLProtocol.handler = { urlRequest in
+                let response = HTTPURLResponse(
+                    url: urlRequest.url!,
+                    statusCode: 202,
+                    httpVersion: nil,
+                    headerFields: headers
+                )!
+                return (response, body)
+            }
+            do {
+                _ = try await makeClient().submitOfflineTopUp(request)
+                XCTFail("expected unbound Offline operation response to fail")
+            } catch {
+                XCTAssertTrue(
+                    String(describing: error).contains(expectedMessage),
+                    "expected \(expectedMessage), got \(error)"
+                )
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testOfflineStatusRejectsWrongResourceIdentityAndMediaType() async throws {
+        let operationId = String(repeating: "11", count: 32)
+        let otherOperationId = String(repeating: "33", count: 32)
+        let pendingStatus = try XCTUnwrap(Data(hexString:
+            "4e5254300000fb04214104df1bdcd39249bddd4db23a009600000000000000bdfee2508f80055702000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323208ffffffffffffffff"
+        ))
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/x-norito"]
+            )!
+            return (response, pendingStatus)
+        }
+        do {
+            _ = try await makeClient().getOfflineOperationStatus(operationId: otherOperationId)
+            XCTFail("expected operation identity mismatch to fail")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("operation_id does not match"))
+        }
+
+        for headers in [
+            ["Content-Type": "application/json"],
+            [:],
+        ] {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: headers
+                )!
+                return (response, pendingStatus)
+            }
+            do {
+                _ = try await makeClient().getOfflineOperationStatus(operationId: operationId)
+                XCTFail("expected invalid operation media type to fail")
+            } catch {
+                XCTAssertTrue(
+                    String(describing: error).contains(
+                        "Content-Type must be application/x-norito"
+                    )
+                )
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testOfflineReadinessRequiresJsonResponseMediaType() async throws {
+        let payload = """
+        {
+          "asset_definition_id": "xor#wonderland",
+          "evaluated_block_height": 7,
+          "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "ready": true,
+          "blockers": []
+        }
+        """.data(using: .utf8)!
+
+        for headers in [
+            ["Content-Type": "application/x-norito"],
+            [:],
+        ] {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: headers
+                )!
+                return (response, payload)
+            }
+            do {
+                _ = try await makeClient().getOfflineReadiness(
+                    assetDefinitionId: "xor#wonderland"
+                )
+                XCTFail("expected invalid readiness media type to fail")
+            } catch {
+                XCTAssertTrue(
+                    String(describing: error).contains("Content-Type must be application/json")
                 )
             }
         }
@@ -10007,11 +10393,7 @@ final class ToriiClientHeaderTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetVerifyingKeyAsync() async throws {
-        let recordNorito = noritoEncode(
-            typeName: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName,
-            payload: Data([0x01]),
-            flags: NoritoHeader.compactLen
-        )
+        let recordNorito = try canonicalKagemushaVerifierRecordArchive(seed: 0x63)
         let payload = """
         {
           "id": { "backend": "halo2/ipa", "name": "vk main" },
@@ -10063,11 +10445,7 @@ final class ToriiClientHeaderTests: XCTestCase {
     }
 
     func testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha() throws {
-        let recordNorito = noritoEncode(
-            typeName: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName,
-            payload: Data([0x01]),
-            flags: NoritoHeader.compactLen
-        )
+        let recordNorito = try canonicalKagemushaVerifierRecordArchive(seed: 0x71)
         let payload = """
         {
           "id": { "backend": "halo2/ipa", "name": "unshield-v3" },
@@ -10096,10 +10474,9 @@ final class ToriiClientHeaderTests: XCTestCase {
     }
 
     func testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64() throws {
-        let recordNorito = noritoEncode(
-            typeName: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName,
-            payload: Data([0x01]),
-            flags: NoritoHeader.compactLen
+        let recordNorito = try canonicalKagemushaVerifierRecordArchive(
+            seed: 0x79,
+            verifierKeyLength: 95
         )
         let canonical = recordNorito.base64EncodedString()
         XCTAssertTrue(canonical.hasSuffix("="))
@@ -11194,7 +11571,7 @@ data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testStreamVerifyingKeyEventsIncludesLastEventIdHeader() async throws {
+    func testStreamVerifyingKeyEventsDoesNotEmitLastEventIdHeader() async throws {
         let ssePayload = """
 id: 21
 data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":1,"circuit_id":"halo2/ipa::transfer_v1","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}}}}
@@ -11215,7 +11592,7 @@ data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main
             return (response, ssePayload)
         }
 
-        let stream = makeClient().streamVerifyingKeyEvents(lastEventId: "99")
+        let stream = makeClient().streamVerifyingKeyEvents()
         var iterator = stream.makeAsyncIterator()
         let event = try await iterator.next()
         guard case .registered? = event?.event else {
@@ -11223,7 +11600,7 @@ data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main
         }
         let finished = try await iterator.next()
         XCTAssertNil(finished)
-        XCTAssertEqual(lastEventIdHeader, "99")
+        XCTAssertNil(lastEventIdHeader)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -11643,6 +12020,7 @@ data: {"VerifyingKey":{"Updated":{"id":{"backend":"halo2/ipa","name":"vk_main"},
 
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+            XCTAssertNil(request.value(forHTTPHeaderField: "Last-Event-ID"))
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -11690,6 +12068,49 @@ data: {"VerifyingKey":{"Updated":{"id":{"backend":"halo2/ipa","name":"vk_main"},
         XCTAssertEqual(updatedId.backend, "halo2/ipa")
         XCTAssertEqual(updatedId.name, "vk_main")
         XCTAssertEqual(updatedRecord.version, 3)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testVerifyingKeyEventsPublisherPreservesTypedTerminalStreamError() throws {
+        let ssePayload = """
+event: stream_error
+data: {"code":"stream_lagged","message":"The stream lost buffered events.","dropped_messages":3,"replay_available":false}
+
+""".data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertNil(request.value(forHTTPHeaderField: "Last-Event-ID"))
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "text/event-stream"])!
+            return (response, ssePayload)
+        }
+
+        let completionExpectation = expectation(description: "publisher surfaced terminal error")
+        var cancellables: Set<AnyCancellable> = []
+        makeClient().verifyingKeyEventsPublisher(scheduler: nil)
+            .sink { completion in
+                switch completion {
+                case .finished:
+                    XCTFail("Expected terminal stream error")
+                case .failure(let clientError):
+                    guard case let .stream(error) = clientError else {
+                        XCTFail("Expected ToriiClientError.stream, got \(clientError)")
+                        completionExpectation.fulfill()
+                        return
+                    }
+                    XCTAssertEqual(error.code, "stream_lagged")
+                    XCTAssertEqual(error.droppedMessages, 3)
+                    XCTAssertFalse(error.replayAvailable)
+                }
+                completionExpectation.fulfill()
+            } receiveValue: { _ in
+                XCTFail("Terminal stream error must not yield a verifying-key event")
+            }
+            .store(in: &cancellables)
+
+        waitForExpectations(timeout: 2.0)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -12410,7 +12831,7 @@ data: {"Trigger":{"Created":"nightly-tick","Deleted":"nightly-tick"}}
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testStreamTriggerEventsIncludesLastEventIdHeader() async throws {
+    func testStreamTriggerEventsDoesNotEmitLastEventIdHeader() async throws {
         let ssePayload = """
 id: 205
 data: {"Trigger":{"Deleted":"nightly-tick"}}
@@ -12431,14 +12852,14 @@ data: {"Trigger":{"Deleted":"nightly-tick"}}
             return (response, ssePayload)
         }
 
-        let stream = makeClient().streamTriggerEvents(lastEventId: "resume-me")
+        let stream = makeClient().streamTriggerEvents()
         var iterator = stream.makeAsyncIterator()
         let event = try await iterator.next()
         guard case let .deleted(id)? = event?.event else {
             return XCTFail("Expected deleted trigger event")
         }
         XCTAssertEqual(id, "nightly-tick")
-        XCTAssertEqual(lastEventIdHeader, "resume-me")
+        XCTAssertNil(lastEventIdHeader)
         let finished = try await iterator.next()
         XCTAssertNil(finished)
     }
@@ -12661,7 +13082,7 @@ data: {"Proof":{"Rejected":{"id":{"backend":"halo2:ipa","proof_hash_hex":"aaaaaa
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testStreamProofEventsIncludesLastEventIdHeader() async throws {
+    func testStreamProofEventsDoesNotEmitLastEventIdHeader() async throws {
         let ssePayload = """
 id: 88
         data: {"Proof":{"Rejected":{"id":{"backend":"halo2/ipa","proof_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}}
@@ -12681,13 +13102,140 @@ id: 88
             return (response, ssePayload)
         }
 
-        let stream = makeClient().streamProofEvents(lastEventId: "123")
+        let stream = makeClient().streamProofEvents()
         var iterator = stream.makeAsyncIterator()
         let event = try await iterator.next()
         guard case .rejected? = event?.event else {
             return XCTFail("Expected rejected proof event")
         }
-        XCTAssertEqual(lastEventIdHeader, "123")
+        XCTAssertNil(lastEventIdHeader)
+        let finished = try await iterator.next()
+        XCTAssertNil(finished)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamVerifyingKeyEventsSurfacesTerminalStreamError() async throws {
+        let ssePayload = """
+event: stream_error
+data: {"code":"stream_lagged","message":"The stream lost buffered events.","dropped_messages":7,"replay_available":false}
+
+""".data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, ssePayload)
+        }
+
+        var iterator = makeClient().streamVerifyingKeyEvents().makeAsyncIterator()
+        do {
+            _ = try await iterator.next()
+            XCTFail("Expected terminal stream error")
+        } catch let ToriiClientError.stream(error) {
+            XCTAssertEqual(error.code, "stream_lagged")
+            XCTAssertEqual(error.message, "The stream lost buffered events.")
+            XCTAssertEqual(error.droppedMessages, 7)
+            XCTAssertFalse(error.replayAvailable)
+        } catch {
+            XCTFail("Expected ToriiClientError.stream, got \(error)")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamProofEventsSurfacesTerminalStreamErrorBeforePayloadProjection() async throws {
+        let ssePayload = """
+event: stream_error
+data: {"code":"stream_source_closed","message":"The event source closed.","dropped_messages":null,"replay_available":false}
+
+""".data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, ssePayload)
+        }
+
+        var iterator = makeClient().streamProofEvents().makeAsyncIterator()
+        do {
+            _ = try await iterator.next()
+            XCTFail("Expected terminal stream error")
+        } catch let ToriiClientError.stream(error) {
+            XCTAssertEqual(error.code, "stream_source_closed")
+            XCTAssertEqual(error.message, "The event source closed.")
+            XCTAssertNil(error.droppedMessages)
+            XCTAssertFalse(error.replayAvailable)
+        } catch {
+            XCTFail("Expected ToriiClientError.stream, got \(error)")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testTypedEventStreamsFailClosedOnMalformedTerminalStreamErrors() async throws {
+        let malformedPayloads = [
+            "null",
+            "{\"code\":\"stream_lagged\",\"code\":\"stream_source_closed\",\"message\":\"closed\",\"dropped_messages\":null,\"replay_available\":false}",
+            "{\"code\":\"stream_lagged\",\"message\":\"closed\",\"dropped_messages\":null}",
+            "{\"code\":\"stream_lagged\",\"message\":\"closed\",\"dropped_messages\":-1,\"replay_available\":false}",
+            "{\"code\":\"stream_lagged\",\"message\":\"closed\",\"dropped_messages\":null,\"replay_available\":\"false\"}",
+            "{\"code\":\"stream_lagged\",\"message\":\"closed\",\"dropped_messages\":null,\"replay_available\":false,\"category\":\"Proof\"}",
+        ]
+
+        for payload in malformedPayloads {
+            let ssePayload = "event: stream_error\ndata: \(payload)\n\n".data(using: .utf8)!
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "text/event-stream"]
+                )!
+                return (response, ssePayload)
+            }
+
+            var iterator = makeClient().streamTriggerEvents().makeAsyncIterator()
+            do {
+                _ = try await iterator.next()
+                XCTFail("Expected malformed terminal stream error to fail closed: \(payload)")
+            } catch ToriiClientError.invalidPayload {
+                // Expected.
+            } catch {
+                XCTFail("Expected ToriiClientError.invalidPayload, got \(error)")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testTransactionStatusStreamStillFiltersOrdinaryNonTransactionEvents() async throws {
+        let ssePayload = """
+data: {"event":"Block","hash":"deadbeef","status":"Applied"}
+
+data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height":17}
+
+""".data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertNil(request.value(forHTTPHeaderField: "Last-Event-ID"))
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, ssePayload)
+        }
+
+        var iterator = makeClient().streamTransactionStatusEvents(hashHex: "deadbeef").makeAsyncIterator()
+        let event = try await iterator.next()
+        XCTAssertEqual(event?.event, "Transaction")
+        XCTAssertEqual(event?.blockHeight, 17)
         let finished = try await iterator.next()
         XCTAssertNil(finished)
     }
@@ -12998,7 +13546,7 @@ id: 88
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/sumeragi/commit_qc/\(blockHash)")
+            XCTAssertEqual(request.url?.path, "/v1/sumeragi/commit-qcs/\(blockHash)")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
@@ -15099,7 +15647,7 @@ id: 88
         let proposalId = String(repeating: "d", count: 64)
         let approverId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/list")
+            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/query")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -15132,7 +15680,7 @@ id: 88
         let approverOne = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
         let approverTwo = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/get")
+            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/lookup")
             guard let body = self.bodyData(from: request),
                   let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
                 XCTFail("missing JSON body")
@@ -15672,6 +16220,7 @@ id: 88
                 return (response, body)
             case "/v1/events/sse":
                 sseCallCount += 1
+                XCTAssertNil(request.value(forHTTPHeaderField: "Last-Event-ID"))
                 let response = HTTPURLResponse(
                     url: request.url!,
                     statusCode: 200,

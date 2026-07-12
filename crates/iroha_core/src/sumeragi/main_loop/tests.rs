@@ -214752,13 +214752,39 @@ async fn known_lane_block_tips_ignore_reset_watermark_committed_queue_before_pru
                     prepare_qc: stale_prepare_qc,
                     commit_qc: stale_commit_qc,
                 },
+            ]),
+        1
+    );
+    assert!(
+        !actor
+            .unapplied_lane_block_lanes_for_proposal(
+                actor.state.as_ref(),
+                reset_height.saturating_add(1),
+            )
+            .contains(&lane_id),
+        "a queued session from a retired lane incarnation must not block the recreated lane",
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .committed_lane_blocks
+            .hydrate_from_certified_sessions(vec![
                 crate::lane_consensus::CommittedLaneBlockSession {
                     proposal: fresh_proposal.clone(),
                     prepare_qc: fresh_prepare_qc,
                     commit_qc: fresh_commit_qc,
                 },
             ]),
-        2
+        1
+    );
+    assert!(
+        actor
+            .unapplied_lane_block_lanes_for_proposal(
+                actor.state.as_ref(),
+                reset_height.saturating_add(1),
+            )
+            .contains(&lane_id),
+        "the current lane incarnation must remain blocked while its certified session is unapplied",
     );
     assert_eq!(
         actor.subsystems.committed_lane_blocks.len(),

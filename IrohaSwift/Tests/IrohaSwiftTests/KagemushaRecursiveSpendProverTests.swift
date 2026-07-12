@@ -4,55 +4,33 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaRecursiveSpendProverTests: XCTestCase {
-    func testPreferredModeRetainsProofSurfaceCompatibility() {
+    func testPreferredModeIsExactFirstReleaseSurface() {
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredMode(
-                recursiveCompactAvailable: true,
-                recursiveSpendAvailable: true
+                pastaCycleV3BackendAvailable: true
             ),
-            .recursiveCompactV1
+            .recursiveSpendV2
         )
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredMode(
-                recursiveCompactAvailable: true,
-                recursiveSpendAvailable: false
-            ),
-            .recursiveCompactV1
-        )
-        XCTAssertEqual(
-            KagemushaRecursiveSpendProver.preferredMode(
-                recursiveCompactAvailable: false,
-                recursiveSpendAvailable: true
-            ),
-            .recursiveSpendV1
-        )
-        XCTAssertEqual(
-            KagemushaRecursiveSpendProver.preferredMode(
-                recursiveCompactAvailable: false,
-                recursiveSpendAvailable: false
+                pastaCycleV3BackendAvailable: false
             ),
             nil
         )
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredSpendableCashMode(
-                recursiveCompactAvailable: true,
-                recursiveSpendAvailable: true
+                pastaCycleV3BackendAvailable: true
             ),
-            .recursiveSpendV1
+            .recursiveSpendV2
         )
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredSpendableCashMode(
-                recursiveCompactAvailable: true,
-                recursiveSpendAvailable: false
+                pastaCycleV3BackendAvailable: false
             ),
             nil
         )
-        XCTAssertEqual(KagemushaOfflineSpendMode.recursiveCompactV1.rawValue, "recursive_compact_v1")
-        XCTAssertEqual(KagemushaRecursiveCompactPaymentTokenProver.requiredNativeBridgeAbiVersion, 7)
-        XCTAssertEqual(
-            KagemushaRecursiveCompactPaymentTokenProver.recursiveCompactCircuitIdV1,
-            "kagemusha-recursive-compact-v1"
-        )
+        XCTAssertEqual(KagemushaOfflineSpendMode.allCases.count, 1)
+        XCTAssertEqual(KagemushaOfflineSpendMode.recursiveSpendV2.rawValue, "recursive_spend_v2")
     }
 
     func testLineageKeyArtifactPackagesValidateReleaseProfiles() throws {
@@ -772,20 +750,20 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
 
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(previousHopCount: 1),
-            circuitIds["reserved_lineage_append"] as? String
+            circuitIds["recursive_aggregation"] as? String
         )
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(previousHopCount: 63),
-            circuitIds["reserved_lineage_append"] as? String
+            circuitIds["recursive_aggregation"] as? String
         )
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(previousHopCount: 64),
             circuitIds["recursive_aggregation"] as? String
         )
         XCTAssertFalse(KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(previousHopCount: 0))
-        XCTAssertTrue(KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(previousHopCount: 63))
+        XCTAssertFalse(KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(previousHopCount: 63))
         XCTAssertFalse(KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(previousHopCount: 64))
-        XCTAssertTrue(
+        XCTAssertFalse(
             KagemushaRecursiveSpendProver.canRedeemWitnessless(
                 circuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1,
                 hopCount: 2
@@ -911,7 +889,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         }
     }
 
-    func testRedeemSpendBuildsAbi7FixtureInstructionWhenBridgeAvailable() throws {
+    func testRedeemSpendRejectsSyntheticAbi7FixtureWhenBridgeAvailable() throws {
         let archiveFixture = try Self.sharedRecursiveSpendAbi7Archives()
         XCTAssertEqual(
             archiveFixture["schema"] as? String,
@@ -924,14 +902,20 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         XCTAssertEqual(redeemInstruction["norito_type"] as? String, "RedeemKagemushaRecursive")
 
         let requestArchive = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(redeemRequest["bytes_base64"] as? String)))
-        let expectedInstructionArchive = try XCTUnwrap(
+        let canonicalInstructionArchive = try XCTUnwrap(
             Data(base64Encoded: try XCTUnwrap(redeemInstruction["bytes_base64"] as? String))
         )
+        XCTAssertEqual(
+            try KagemushaInstructionType.validatedArchiveType(for: canonicalInstructionArchive),
+            .redeemRecursive
+        )
         do {
-            let output = try KagemushaRecursiveSpendProver.redeemSpend(requestArchive: requestArchive)
-            XCTAssertEqual(output, expectedInstructionArchive)
+            _ = try KagemushaRecursiveSpendProver.redeemSpend(requestArchive: requestArchive)
+            XCTFail("Native redemption must reject the synthetic ABI-7 fixture proof.")
         } catch KagemushaRecursiveSpendProverError.bridgeUnavailable {
             throw XCTSkip("Kagemusha recursive spend native bridge is unavailable.")
+        } catch {
+            XCTAssertEqual(error as? KagemushaRecursiveSpendProverError, .proofRejected)
         }
     }
 
@@ -955,7 +939,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         )
         XCTAssertEqual(KagemushaRecursiveSpendProver.compactTokenMaxHops, 64)
         XCTAssertEqual(KagemushaRecursiveSpendProver.recursiveSpendLineageWitnesslessMaxHopsV1, 64)
-        XCTAssertTrue(KagemushaRecursiveSpendProver.recursiveSpendLineageTransitionCircuitWiredV1)
+        XCTAssertFalse(KagemushaRecursiveSpendProver.recursiveSpendLineageTransitionCircuitWiredV1)
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.recursivePreviousProofOpenEnvelopesRequiredCountV1,
             1
@@ -1007,13 +991,13 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
                 hopCount: 1
             )
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             KagemushaRecursiveSpendProver.canRedeemWitnessless(
                 circuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageOneHopProofCircuitIdV1,
                 hopCount: 1
             )
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             KagemushaRecursiveSpendProver.canRedeemWitnessless(
                 circuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1,
                 hopCount: 2
@@ -1075,10 +1059,35 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
                 )
             )
         }
-        XCTAssertFalse(KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(previousHopCount: 0))
-        XCTAssertTrue(KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(previousHopCount: 1))
-        XCTAssertTrue(KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(previousHopCount: 63))
-        XCTAssertFalse(KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(previousHopCount: 64))
+        XCTAssertFalse(KagemushaRecursiveSpendProver.recursiveSpendLineageTransitionCircuitWiredV1)
+        let supportedLineageCircuits = [
+            KagemushaRecursiveSpendProver.recursiveSpendLineageOneHopProofCircuitIdV1,
+            KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1,
+        ]
+        for circuitId in supportedLineageCircuits {
+            for hopCount: UInt32 in [1, 2, 63, 64] {
+                XCTAssertFalse(
+                    KagemushaRecursiveSpendProver.canRedeemWitnessless(
+                        circuitId: circuitId,
+                        hopCount: hopCount
+                    )
+                )
+                XCTAssertTrue(
+                    KagemushaRecursiveSpendProver.requiresLineageWitnessForRedeem(
+                        circuitId: circuitId,
+                        hopCount: hopCount
+                    ),
+                    "\(circuitId) hop \(hopCount) must require a record-backed lineage witness"
+                )
+            }
+        }
+        for hopCount: UInt32 in [0, 1, 2, 63, 64, UInt32.max] {
+            XCTAssertFalse(
+                KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(
+                    previousHopCount: hopCount
+                )
+            )
+        }
         XCTAssertFalse(
             KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(previousHopCount: UInt32.max)
         )
@@ -1309,16 +1318,16 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         )
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(previousHopCount: 1),
-            KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1
+            KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1
         )
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(previousHopCount: 63),
-            KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1
+            KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1
         )
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(previousHopCount: 64),
             KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1,
-            "preferred append selector falls back at the witnessless hop cap"
+            "the semantic append circuit remains preferred while lineage transition verification is unavailable"
         )
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(previousHopCount: 0),
@@ -1367,7 +1376,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
                 previousHopCount: 1
             )
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             KagemushaRecursiveSpendProver.canProveAppendOutputCircuitId(
                 KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1,
                 previousHopCount: 1
@@ -1452,7 +1461,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
                 previousHopCount: 1
             )
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
                 previousProofCircuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageOneHopProofCircuitIdV1,
                 outputCircuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1,

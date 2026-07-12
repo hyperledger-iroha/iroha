@@ -17,6 +17,12 @@ npm install
 npm run build:native
 ```
 
+When upgrading a source checkout from a revision that tracked the checksum
+manifest but ignored the generated binary, Git can remove the manifest while
+leaving an old `native/iroha_js_host.node`. The publisher intentionally rejects
+that binary-only state. Remove that unverified leftover and rerun
+`npm run build:native`; never manufacture a replacement checksum by hand.
+
 The registry tarball intentionally contains no platform-specific `.node`
 binary, Cargo workspace, install hook, or implicit downloader. Consequently,
 `npm run build:native` is a source-checkout command, not a supported operation
@@ -187,7 +193,8 @@ requests must still include the append lineage key artifacts in the raw Norito
 request. Use `kagemushaRecursiveSpendLineageKeyArtifactsForInit(...)` and
 `kagemushaRecursiveSpendLineageKeyArtifactsForAppend(...)` to package and
 validate these verifier/proving key artifacts before building a witnessless
-Reserved-lineage request.
+Reserved-lineage request once transition verification is wired. The current
+release does not select or prove that path.
 Verify request archives must pass the same public-binding preflight before the
 native host returns a `KagemushaRecursiveSpendVerifyResultV1`: Reserved-lineage
 bundles require a matching active `lineage_verifier_record`, semantic bundles
@@ -208,14 +215,15 @@ record there for vector-only callers.
 
 `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` is currently `64`,
 and `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1` is
-`true`: witnessless Reserved-lineage online redemption is available for lineage
-bundles inside the 64-hop cap.
+`false`. The hop constant is only the protocol bound: witnessless
+Reserved-lineage redeem and append fail closed for every circuit and hop count,
+and redeem requires a record-backed lineage witness.
 Wallets should use the exported `canRedeem...`, `requires...LineageWitness...`,
 `preferred...AppendOutput...`, and `canSelect...AppendOutput...` helpers and
-select Reserved-lineage append for previous hop counts `1..63`.
-Semantic append is bounded by the separate
-`KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS` constant; witnessless Reserved-lineage
-append and redeem use `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1`.
+select semantic recursive aggregation while transition verification is
+unavailable. Semantic append is bounded by the separate
+`KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS` constant; the witnessless max-hop constant
+does not enable witnessless admission.
 
 ## Native Privacy Bridge
 
@@ -463,10 +471,15 @@ before invoking the native binding or making a network request.
 Validated service URLs and Fetch implementations are kept in immutable private
 client state, so later property mutation cannot redirect source. Responses must
 be HTTP 200 with exact `application/json`, absent/identity content encoding, and
-consistent byte framing. Successful artifacts are bounded to the ledger's 4 MiB
-limit and must carry canonical IVM 1.1/ABI-1 metadata, a checksummed CNTR Norito
-interface whose identity/capabilities and collection counts match the manifest,
-valid literal-section bounds, and a non-empty word-aligned instruction stream.
+consistent byte framing. Successful artifacts are bounded to the ledger's exact
+1 MiB post-header IVM code-memory limit and must carry canonical IVM 1.1/ABI-1
+metadata, a checksummed CNTR Norito interface whose identity/capabilities and
+collection counts match the manifest, fully framed ABI-1 indexed literals, and
+a non-empty word-aligned instruction stream. These JavaScript framing checks do
+not replace Rust instruction decoding or its control-flow, syscall, entrypoint,
+access-claim, and other semantic admission checks. The service must therefore be
+a trusted canonical Rust compiler endpoint; the ledger remains the final
+authority on whether an artifact is deployable.
 The first release accepts only `provenance: null`; signed provenance remains
 disabled until its exact message and public-key algorithm can be verified.
 The native binding and service receive the same canonical JSON-shaped request,
@@ -2035,14 +2048,14 @@ for await (const order of torii.iterateSorafsReplicationOrders({ pageSize: 25 })
 > continues to throw when the digest is absent so automation that expects a
 > manifest still fails fast.
 
-Uptime telemetry and PoR automation helpers surface the raw endpoints so SDK
-callers can publish probe samples, submit Norito-encoded challenges/proofs, and
-retrieve the coordinator exports:
+Uptime telemetry and PoR automation helpers surface the first-release endpoints
+so SDK callers can publish uptime samples, submit authenticated Norito-encoded
+proofs and verdicts, and retrieve coordinator exports. Challenge issuance is
+owned by the coordinator scheduler; there is no client-side challenge or manual
+observation API.
 
 ```js
 await torii.submitSorafsUptimeObservation({ uptimeSecs: 540, observedSecs: 600 });
-await torii.submitSorafsPorObservation({ success: true });
-await torii.recordSorafsPorChallenge({ challenge: porChallengeBytes });
 await torii.recordSorafsPorProof({ proof: porProofBytes });
 await torii.recordSorafsPorVerdict({ verdict: porVerdictBytes });
 
@@ -2276,7 +2289,7 @@ console.log(status.message_id, status.status, status.transaction_hash);
 
 `submitIsoPacs008` and `submitIsoPacs009` accept strings or binary buffers and
 enforce `application/xml` content-type by default. `submitIsoPacs008AndWait` /
-`submitIsoPacs009AndWait` build on those helpers to poll `/v1/iso20022/status`
+`submitIsoPacs009AndWait` build on those helpers to poll `/v1/iso20022/messages`
 until the bridge reports a deterministic terminal state. Provide `wait` options
 to customise the cadence, attach telemetry hooks, or opt into resolving as soon
 as an `Accepted` status arrives (even before the Torii transaction hash is
@@ -3556,14 +3569,39 @@ They are normalised via the same unsigned-integer validators before any request 
 exactly like `25` while still surfacing a `TypeError` when the value is negative,
 fractional, NaN, or otherwise invalid.
 
-The supported first-release offline HTTP surface is Offline readiness. Retired
-Offline Note issuance, redemption, and audit transaction paths are retired; use
-Kagemusha readiness fields and payment flows for offline payments.
+The first-release Offline HTTP surface is a sharp `/v1` contract: asset-scoped
+readiness, asynchronous top-up and redemption commands, and one pollable
+operation resource. Requests use direct structured JSON. The SDK derives the
+`Idempotency-Key` from the command's non-zero 32-byte `operation_id` and rejects
+requests whose authorization carries a different ID.
 
 ```js
-const readiness = await torii.getOfflineReadiness();
-console.log("Kagemusha ready", readiness.offline_kagemusha_recursive_compact_available);
+const readiness = await torii.getOfflineReadiness("xor#sora");
+if (readiness.ready) {
+  const accepted = await torii.submitOfflineTopUp({
+    ...signedTopUp,
+    operation_id: [...operationIdBytes],
+    authorization: {
+      ...signedTopUp.authorization,
+      operation_id: [...operationIdBytes],
+    },
+  });
+  const status = await torii.getOfflineOperationStatus(accepted.operation_id);
+  console.log(status.state); // pending | applied | rejected
+}
 ```
+
+The exact routes are `GET /v1/offline/readiness?asset_definition_id=…`,
+`POST /v1/offline/top-up`, `POST /v1/offline/redeem`, and
+`GET /v1/offline/operations/{operation_id}`. Whole-payload base64/Norito
+wrappers and `/offline/v2` aliases are not supported.
+
+Offline responses use a lossless JSON parser. Integer tokens through
+`Number.MAX_SAFE_INTEGER` are returned as `number`; wider `u64`/`u128` values
+are returned as `bigint`. Duplicate object keys, malformed number spellings,
+non-finite values, excessive nesting, and unpaired Unicode surrogates are
+rejected before DTO normalization, so a JavaScript runtime never silently
+rounds an amount, height, or timestamp.
 
 for await (const assetDef of torii.iterateAssetDefinitions({
   pageSize: 50,
@@ -3977,6 +4015,13 @@ await torii.registerTrigger({
   action: precommitAction,
 });
 ```
+
+The canonical `/v1/events/sse` and `/v1/contracts/events/sse` feeds are
+live-only and have no replay log. Their helpers intentionally expose no
+`lastEventId` option; reconnecting starts a new subscription and can have a
+gap. A terminal `event: stream_error` frame is yielded before the iterator
+ends, so applications must handle it instead of treating closure as a lossless
+continuation point.
 
 `list*`/`query*` helpers and explorer QR snapshots now emit canonical I105 account
 literals only; address-format hints are no longer supported.

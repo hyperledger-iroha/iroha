@@ -448,7 +448,9 @@ test("buildMintAssetInstruction rejects invalid Numeric literals", () => {
       return true;
     },
   );
-  const tooLarge = 1n << 512n;
+  // Numeric is a signed 512-bit domain, so non-negative quantities end at
+  // 2^511 - 1 rather than 2^512 - 1.
+  const tooLarge = 1n << 511n;
   assert.throws(
     () => buildMintAssetInstruction({ assetId: ASSET_ID, quantity: tooLarge }),
     (error) => {
@@ -465,6 +467,24 @@ test("buildMintAssetInstruction rejects invalid Numeric literals", () => {
       return true;
     },
   );
+  assert.throws(
+    () => buildMintAssetInstruction({ assetId: ASSET_ID, quantity: "1".repeat(100_000) }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
+      assert.match(String(error?.message), /bounded Numeric text length/i);
+      return true;
+    },
+  );
+});
+
+test("buildMintAssetInstruction accepts the positive signed-Numeric boundary", () => {
+  const maximumQuantity = (1n << 511n) - 1n;
+  const instruction = buildMintAssetInstruction({
+    assetId: ASSET_ID,
+    quantity: maximumQuantity,
+  });
+  assert.equal(instruction.Mint.Asset.object, maximumQuantity.toString());
+  assert.deepEqual(encodeAndDecode(instruction), canonicalizeClone(instruction));
 });
 
 test("buildBurnAssetInstruction produces canonical Norito payload", () => {

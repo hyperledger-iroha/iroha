@@ -20,18 +20,13 @@ use iroha_core::{
     queue::{ConfigLaneRouter, Queue, QueueLimits},
     state::State,
 };
-use iroha_crypto::KeyPair;
 use iroha_data_model::nexus::{LaneId, LaneLifecycleStatusV1};
 use iroha_torii::Torii;
-use iroha_torii_shared::{ErrorEnvelope, uri::NEXUS_LANE_LIFECYCLE};
+use iroha_torii_shared::uri::NEXUS_LANE_LIFECYCLE;
 use tower::ServiceExt as _;
-
-#[path = "fixtures.rs"]
-mod fixtures;
 
 struct NexusHarness {
     app: Router,
-    key_pair: KeyPair,
     queue: Arc<Queue>,
     state: Arc<State>,
 }
@@ -47,7 +42,6 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
         cfg.torii.require_api_token = true;
         cfg.torii.api_tokens = vec![api_token.to_owned()];
     }
-    let key_pair = cfg.common.key_pair.clone();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let world = iroha_core::prelude::World::with(
@@ -120,7 +114,6 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
 
     NexusHarness {
         app: torii.api_router_for_tests(),
-        key_pair,
         queue,
         state,
     }
@@ -228,67 +221,46 @@ async fn lifecycle_get_honors_api_token_access_policy() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-async fn assert_deprecated_post_never_mutates(signed: bool) {
+#[tokio::test]
+async fn lifecycle_post_and_normalization_variants_are_unregistered_without_mutation() {
     let harness = build_app();
     let lane = LaneId::new(1);
     let before_catalog = harness.state.nexus_snapshot().lane_catalog;
     let before_limits = harness.queue.queue_limits().for_lane(lane);
     let body = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"forbidden-local","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
-    let request = Request::builder()
-        .method("POST")
-        .uri(NEXUS_LANE_LIFECYCLE)
-        .header("content-type", "application/json")
-        .body(Body::from(body))
-        .expect("request");
-    let request = if signed {
-        fixtures::operator_signed_request(&harness.key_pair, request, body.as_bytes())
-    } else {
-        request
-    };
-    let response = harness
-        .app
-        .clone()
-        .oneshot(request)
-        .await
-        .expect("response");
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    let error = norito::decode_from_bytes::<ErrorEnvelope>(&response_bytes(response).await)
-        .expect("decode deprecated endpoint error");
-    assert_eq!(error.code, "local_lane_lifecycle_disabled");
-    assert!(error.message.contains("nexus_lane_lifecycle_v1"));
-    assert_eq!(harness.state.nexus_snapshot().lane_catalog, before_catalog);
-    assert_eq!(harness.queue.queue_limits().for_lane(lane), before_limits);
-}
-
-#[tokio::test]
-async fn lifecycle_post_is_explicitly_deprecated_for_unsigned_requests() {
-    assert_deprecated_post_never_mutates(false).await;
-}
-
-#[tokio::test]
-async fn lifecycle_post_is_explicitly_deprecated_for_operator_signed_requests() {
-    assert_deprecated_post_never_mutates(true).await;
-}
-
-#[tokio::test]
-async fn empty_malformed_and_oversized_deprecated_posts_never_decode_or_mutate() {
-    let harness = build_app();
-    let before = harness.state.nexus_snapshot().lane_catalog;
-    for body in [Vec::new(), b"{".to_vec(), vec![b'x'; 4 * 1024 * 1024]] {
+    for (path, expected_status) in [
+        (NEXUS_LANE_LIFECYCLE, StatusCode::METHOD_NOT_ALLOWED),
+        ("/v1/nexus/lifecycle/", StatusCode::NOT_FOUND),
+        ("/v1/Nexus/lifecycle", StatusCode::NOT_FOUND),
+        ("/v1/nexus/lifecycle/arbitrary", StatusCode::NOT_FOUND),
+        ("/v1/nexus//lifecycle", StatusCode::BAD_REQUEST),
+        ("/v1/nexus/lifecycle%2Farbitrary", StatusCode::BAD_REQUEST),
+    ] {
         let response = harness
             .app
             .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(NEXUS_LANE_LIFECYCLE)
+                    .uri(path)
+                    .header("accept", "application/json")
                     .header("content-type", "application/json")
                     .body(Body::from(body))
                     .expect("request"),
             )
             .await
             .expect("response");
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), expected_status, "POST {path}");
+        if path == NEXUS_LANE_LIFECYCLE {
+            let allow = response
+                .headers()
+                .get("allow")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default();
+            assert!(allow.contains("GET"));
+            assert!(allow.contains("HEAD"));
+        }
+        assert_eq!(harness.state.nexus_snapshot().lane_catalog, before_catalog);
+        assert_eq!(harness.queue.queue_limits().for_lane(lane), before_limits);
     }
-    assert_eq!(harness.state.nexus_snapshot().lane_catalog, before);
 }

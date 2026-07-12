@@ -28,7 +28,7 @@ use iroha_data_model::{
 #[cfg(test)]
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_primitives::{json::Json, numeric_abi::QuantityValueV1};
-use norito::{decode_from_bytes, json as njson, literal, to_bytes};
+use norito::{decode_from_bytes, json as njson, to_bytes};
 use sha2::{Digest as Sha2Digest, Sha256};
 use sha3_hash::{Digest as Sha3Digest, Keccak256, Sha3_256};
 
@@ -91,18 +91,6 @@ struct CachedProofEntry {
     verified_slot: u64,
     manifest_root: Option<[u8; 32]>,
     valid: bool,
-}
-
-fn decode_json_blob_hex_literal(raw: &str) -> Result<Vec<u8>, VMError> {
-    let raw = if raw.starts_with("hash:") {
-        literal::parse("hash", raw).map_err(|_| VMError::DecodeError)?
-    } else {
-        raw.strip_prefix("0x").unwrap_or(raw)
-    };
-    if raw.len() % 2 != 0 {
-        return Err(VMError::DecodeError);
-    }
-    hex::decode(raw).map_err(|_| VMError::DecodeError)
 }
 
 fn decode_json_blob_payload(payload: &[u8]) -> Result<Json, VMError> {

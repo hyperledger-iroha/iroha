@@ -1007,7 +1007,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 
 1. **DA-PROOF-POLICY-LANES — Fix commitment/proof scheme per lane** (Nexus/Core/SDK, Line: Iroha 3, Owner: DA WG + SDK WG, Priority: Medium, Status: 🈴 Completed, target TBD)
  - [x] Added a versioned `DaProofPolicyBundle` with a Norito-derived `policy_hash`, threaded it into block headers via `da_proof_policies_hash`, and sealed it during block assembly so blocks pin the active per-lane proof policy set.【crates/iroha_data_model/src/da/commitment.rs】【crates/iroha_data_model/src/block/header.rs】【crates/iroha_core/src/block.rs】【crates/iroha_core/src/sumeragi/main_loop.rs】
- - [x] Torii now serves the bundle from `/v1/da/proof_policies` (version + hash + policies) and docs call out the new response shape for clients to validate lane schemes before building proofs.【crates/iroha_torii/src/da/commitments.rs】【docs/source/da/ingest_plan.md】
+ - [x] Torii now serves the bundle from `/v1/da/proof-policies` (version + hash + policies) and docs call out the new response shape for clients to validate lane schemes before building proofs.【crates/iroha_torii/src/da/commitments.rs】【docs/source/da/ingest_plan.md】
 
 1. **SUM-BLOCK-FINALITY-REMEDIATION — Track DA availability and safe commit rollback paths** (Consensus/Sumeragi/Core, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈴 Completed, target TBD)
    - [x] DA availability correctness (logic):

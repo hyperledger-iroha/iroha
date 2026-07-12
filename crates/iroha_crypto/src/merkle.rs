@@ -210,7 +210,7 @@ impl<T> JsonDeserialize for MerkleProof<T> {
                     }
                     audit_path = Some(Vec::<Option<HashOf<T>>>::json_deserialize(parser)?);
                 }
-                other => return Err(json::Error::unknown_field(other.to_owned())),
+                _ => parser.skip_value()?,
             }
 
             parser.skip_ws();
@@ -834,7 +834,7 @@ impl<T> JsonDeserialize for CompactMerkleProof<T> {
                     }
                     siblings = Some(Vec::<Option<HashOf<T>>>::json_deserialize(parser)?);
                 }
-                other => return Err(json::Error::unknown_field(other.to_owned())),
+                _ => parser.skip_value()?,
             }
 
             parser.skip_ws();
@@ -1363,6 +1363,58 @@ mod tests {
             .map(|i| Hash::prehashed([i; Hash::LENGTH]))
             .map(HashOf::from_untyped_unchecked)
             .collect()
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn merkle_proof_json_ignores_unknown_members_and_rejects_duplicates() {
+        let proof: MerkleProof<()> = norito::json::from_str(
+            r#"{
+                "future_before": {"nested": [1, true, null]},
+                "leaf_index": 7,
+                "audit_path": [null],
+                "future_after": "ignored"
+            }"#,
+        )
+        .expect("additive Merkle proof members must be ignored");
+        assert_eq!(proof.leaf_index(), 7);
+        assert_eq!(proof.audit_path(), &[None]);
+
+        for json in [
+            r#"{"leaf_index":1,"leaf_index":2,"audit_path":[]}"#,
+            r#"{"leaf_index":1,"audit_path":[],"audit_path":[null]}"#,
+        ] {
+            let err = norito::json::from_str::<MerkleProof<()>>(json)
+                .expect_err("duplicate declared Merkle proof member must fail");
+            assert!(err.to_string().contains("duplicate field"));
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn compact_merkle_proof_json_ignores_unknown_members_and_rejects_duplicates() {
+        let proof: CompactMerkleProof<()> = norito::json::from_str(
+            r#"{
+                "depth": 1,
+                "future": [{"opaque": true}],
+                "dirs": 0,
+                "siblings": [null]
+            }"#,
+        )
+        .expect("additive compact Merkle proof members must be ignored");
+        assert_eq!(proof.depth(), 1);
+        assert_eq!(proof.dirs(), 0);
+        assert_eq!(proof.siblings(), &[None]);
+
+        for json in [
+            r#"{"depth":1,"depth":2,"dirs":0,"siblings":[]}"#,
+            r#"{"depth":1,"dirs":0,"dirs":1,"siblings":[]}"#,
+            r#"{"depth":1,"dirs":0,"siblings":[],"siblings":[null]}"#,
+        ] {
+            let err = norito::json::from_str::<CompactMerkleProof<()>>(json)
+                .expect_err("duplicate declared compact Merkle proof member must fail");
+            assert!(err.to_string().contains("duplicate field"));
+        }
     }
 
     #[test]

@@ -63,12 +63,8 @@ allowed_origins = [
   "https://nftstorage.link",
 ]
 allowed_methods = ["GET", "POST", "DELETE", "OPTIONS"]
-allowed_headers = ["accept", "authorization", "content-type"]
-exposed_headers = [
-  "x-iroha-api-version",
-  "x-iroha-api-supported",
-  "x-iroha-api-min-proof-version",
-]
+allowed_headers = ["accept", "authorization", "content-type", "idempotency-key"]
+exposed_headers = ["etag", "location", "retry-after"]
 
 [torii.mcp]
 enabled = true

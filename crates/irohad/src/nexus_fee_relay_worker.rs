@@ -68,6 +68,12 @@ struct DurableRelayWork {
     last_height: u64,
 }
 
+enum RelayAttemptDecision {
+    Deferred,
+    Rejected,
+    Ready(LaneRelayEnvelope),
+}
+
 #[derive(Clone, Debug, Decode, Encode)]
 struct DurableBudgetWork {
     sponsor_account_id: AccountId,
@@ -314,20 +320,22 @@ impl NexusFeeRelayWorker {
     }
 
     fn relay_work_for_attempt(&self, key: &str) -> Result<Option<LaneRelayEnvelope>> {
+        let current_height = self.committed_height();
         let mut durable = self.durable.lock();
         let Some(work) = durable.relays.get_mut(key) else {
             return Ok(None);
         };
-        if work.attempts >= self.config.max_retry_attempts.get() {
-            work.status = DurableWorkStatus::Rejected;
-            persist_durable_state(&self.state_path, &durable)?;
-            return Ok(None);
+        match prepare_relay_attempt(work, current_height, self.config.max_retry_attempts.get()) {
+            RelayAttemptDecision::Deferred => Ok(None),
+            RelayAttemptDecision::Rejected => {
+                persist_durable_state(&self.state_path, &durable)?;
+                Ok(None)
+            }
+            RelayAttemptDecision::Ready(envelope) => {
+                persist_durable_state(&self.state_path, &durable)?;
+                Ok(Some(envelope))
+            }
         }
-        work.attempts = work.attempts.saturating_add(1);
-        work.last_height = self.committed_height();
-        let envelope = work.envelope.clone();
-        persist_durable_state(&self.state_path, &durable)?;
-        Ok(Some(envelope))
     }
 
     fn update_relay_status(
@@ -686,6 +694,23 @@ impl NexusFeeRelayWorker {
                 )
             })
     }
+}
+
+fn prepare_relay_attempt(
+    work: &mut DurableRelayWork,
+    current_height: u64,
+    max_retry_attempts: u32,
+) -> RelayAttemptDecision {
+    if current_height < work.envelope.block_header.height().get() {
+        return RelayAttemptDecision::Deferred;
+    }
+    if work.attempts >= max_retry_attempts {
+        work.status = DurableWorkStatus::Rejected;
+        return RelayAttemptDecision::Rejected;
+    }
+    work.attempts = work.attempts.saturating_add(1);
+    work.last_height = current_height;
+    RelayAttemptDecision::Ready(work.envelope.clone())
 }
 
 fn sign_nexus_fee_relay_submission_transaction(
@@ -1116,6 +1141,93 @@ mod tests {
         LaneRelayEnvelope::new(header, None, None, settlement_commitment, 0)
             .expect("valid envelope")
             .with_manifest_root(Some(manifest_root))
+    }
+
+    #[test]
+    fn future_relay_deferral_preserves_durable_retry_budget_until_proposal_commits() {
+        let envelope = sample_envelope([0x41; 32]);
+        let key = relay_work_key(&envelope);
+        let mut durable = DurableWorkerState::default();
+        durable.relays.insert(
+            key.clone(),
+            DurableRelayWork {
+                envelope: envelope.clone(),
+                status: DurableWorkStatus::Pending,
+                attempts: 1,
+                last_height: 3,
+            },
+        );
+        let before = norito::to_bytes(&durable).expect("encode durable relay work before deferral");
+
+        for committed_height in 0..envelope.block_header.height().get() {
+            let decision = prepare_relay_attempt(
+                durable.relays.get_mut(&key).expect("durable relay work"),
+                committed_height,
+                3,
+            );
+            assert!(matches!(decision, RelayAttemptDecision::Deferred));
+            assert_eq!(
+                norito::to_bytes(&durable).expect("encode deferred durable relay work"),
+                before,
+                "a future proposal must not consume attempts or mutate persisted retry state"
+            );
+        }
+
+        let proposal_height = envelope.block_header.height().get();
+        let decision = prepare_relay_attempt(
+            durable.relays.get_mut(&key).expect("durable relay work"),
+            proposal_height,
+            3,
+        );
+        let RelayAttemptDecision::Ready(ready) = decision else {
+            panic!("relay should become retryable at its committed proposal height");
+        };
+        assert_eq!(ready, envelope);
+        let work = durable.relays.get(&key).expect("durable relay work");
+        assert_eq!(work.attempts, 2);
+        assert_eq!(work.last_height, proposal_height);
+        assert_eq!(work.status, DurableWorkStatus::Pending);
+    }
+
+    #[test]
+    fn exhausted_future_relay_is_not_rejected_before_proposal_commits() {
+        let envelope = sample_envelope([0x42; 32]);
+        let key = relay_work_key(&envelope);
+        let mut durable = DurableWorkerState::default();
+        durable.relays.insert(
+            key.clone(),
+            DurableRelayWork {
+                envelope: envelope.clone(),
+                status: DurableWorkStatus::Submitted,
+                attempts: 3,
+                last_height: 4,
+            },
+        );
+        let before = norito::to_bytes(&durable).expect("encode exhausted future relay work");
+        let proposal_height = envelope.block_header.height().get();
+
+        let decision = prepare_relay_attempt(
+            durable.relays.get_mut(&key).expect("durable relay work"),
+            proposal_height - 1,
+            3,
+        );
+        assert!(matches!(decision, RelayAttemptDecision::Deferred));
+        assert_eq!(
+            norito::to_bytes(&durable).expect("encode deferred exhausted relay work"),
+            before,
+            "retry exhaustion must not reject a relay before its proposal commits"
+        );
+
+        let decision = prepare_relay_attempt(
+            durable.relays.get_mut(&key).expect("durable relay work"),
+            proposal_height,
+            3,
+        );
+        assert!(matches!(decision, RelayAttemptDecision::Rejected));
+        let work = durable.relays.get(&key).expect("durable relay work");
+        assert_eq!(work.status, DurableWorkStatus::Rejected);
+        assert_eq!(work.attempts, 3);
+        assert_eq!(work.last_height, 4);
     }
 
     #[test]

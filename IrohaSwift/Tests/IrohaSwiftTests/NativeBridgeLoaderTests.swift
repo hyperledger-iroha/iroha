@@ -45,18 +45,57 @@ final class NativeBridgeLoaderTests: XCTestCase {
     }
 
     func testManifestlessBridgeUsesPinnedFallbackHash() throws {
-        let original = try bundledBridgeBinary()
+        // `dist` is an ignored local build output, so use controlled bytes to test the
+        // fallback policy independently of whichever XCFramework a developer materialized.
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let bridgeURL = stagedBridgeURL(root: tempDir, identifier: original.identifier)
+        let identifier = NoritoBridgeLoader.currentIdentifier()
+        let bridgeURL = stagedBridgeURL(root: tempDir, identifier: identifier)
         try FileManager.default.createDirectory(
             at: bridgeURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try FileManager.default.copyItem(at: original.url, to: bridgeURL)
+        let fixture = Data("manifestless-native-bridge-fixture-v1".utf8)
+        try fixture.write(to: bridgeURL, options: .atomic)
+        let pinnedHash = "6a917bf15f2d25afa0100a8d2b320eb1ec55c48b99ccb1cef3cf43d92b2af4f2"
+        XCTAssertEqual(
+            SHA256.hash(data: fixture).map { String(format: "%02x", $0) }.joined(),
+            pinnedHash
+        )
 
-        let status = NoritoBridgeLoader.validateForTests(at: bridgeURL.path, allowUntrustedLocation: true)
-        XCTAssertEqual(status, .valid(path: bridgeURL.path, identifier: original.identifier))
+        let status = NoritoBridgeLoader.validateForTests(
+            at: bridgeURL.path,
+            allowUntrustedLocation: true,
+            pinnedHashesForTests: [identifier: pinnedHash]
+        )
+        XCTAssertEqual(status, .valid(path: bridgeURL.path, identifier: identifier))
+    }
+
+    func testManifestlessBridgeRejectsBinaryThatDoesNotMatchPinnedFallbackHash() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let identifier = NoritoBridgeLoader.currentIdentifier()
+        let bridgeURL = stagedBridgeURL(root: tempDir, identifier: identifier)
+        try FileManager.default.createDirectory(
+            at: bridgeURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let fixture = Data("manifestless-native-bridge-fixture-v1".utf8)
+        try fixture.write(to: bridgeURL, options: .atomic)
+        let actualHash = SHA256.hash(data: fixture)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        let incorrectPin = String(repeating: "0", count: 64)
+
+        let status = NoritoBridgeLoader.validateForTests(
+            at: bridgeURL.path,
+            allowUntrustedLocation: true,
+            pinnedHashesForTests: [identifier: incorrectPin]
+        )
+        XCTAssertEqual(
+            status,
+            .hashMismatch(path: bridgeURL.path, expected: incorrectPin, actual: actualHash)
+        )
     }
 
     func testUntrustedPathIsDeniedWhenOverridesDisabled() throws {

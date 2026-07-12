@@ -35,6 +35,24 @@ function u32Le(value) {
   ]);
 }
 
+function u32Be(value) {
+  return Uint8Array.from([
+    (value >>> 24) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 8) & 0xff,
+    value & 0xff,
+  ]);
+}
+
+function readU32LeForTest(bytes, offset) {
+  return (
+    bytes[offset] |
+    (bytes[offset + 1] << 8) |
+    (bytes[offset + 2] << 16) |
+    (bytes[offset + 3] * 0x1000000)
+  ) >>> 0;
+}
+
 function u64Le(value) {
   let remaining = BigInt(value);
   return Uint8Array.from({ length: 8 }, () => {
@@ -129,6 +147,58 @@ function compilerArtifactFixture({
     u32Le(frame.length),
     frame,
     Uint8Array.from([0, 0, 0, 0]),
+  );
+}
+
+function pointerLiteralFixture({
+  typeId = 0x0006,
+  version = 1,
+  payload = Uint8Array.from([1, 2, 3]),
+  declaredLength = payload.length,
+} = {}) {
+  const hash = blake2b256(payload);
+  hash[hash.length - 1] |= 1;
+  return concatBytes(
+    Uint8Array.from([(typeId >>> 8) & 0xff, typeId & 0xff, version]),
+    u32Be(declaredLength),
+    payload,
+    hash,
+  );
+}
+
+function literalSectionStart(artifact) {
+  return 25 + readU32LeForTest(artifact, 21);
+}
+
+function literalArtifactFixture(literals, { unindexedData = new Uint8Array() } = {}) {
+  const artifact = compilerArtifactFixture();
+  const start = literalSectionStart(artifact);
+  const entriesLength = literals.length * 8;
+  const descriptors = [];
+  const payloads = [];
+  let relativeOffset = 16 + entriesLength;
+  for (const literal of literals) {
+    descriptors.push(u64Le((BigInt(literal.kind) << 56n) | BigInt(relativeOffset)));
+    payloads.push(literal.bytes);
+    relativeOffset += literal.bytes.length;
+  }
+  const data = concatBytes(...payloads, unindexedData);
+  const unpaddedLengthFromHeader =
+    start - 17 + 16 + entriesLength + data.length;
+  const padding = (4 - (unpaddedLengthFromHeader % 4)) % 4;
+  const section = concatBytes(
+    new TextEncoder().encode("LTLB"),
+    u32Le(literals.length),
+    u32Le(padding),
+    u32Le(data.length),
+    ...descriptors,
+    data,
+    new Uint8Array(padding),
+  );
+  return concatBytes(
+    artifact.subarray(0, start),
+    section,
+    artifact.subarray(start),
   );
 }
 
@@ -770,6 +840,17 @@ test("compiler output requires a framed self-describing IVM artifact bound to ma
       bytes[16] = 2;
       return bytes;
     })()],
+    ["contract HTM mode", (() => {
+      const bytes = SERVICE_ARTIFACT.slice();
+      bytes[6] = 0x04;
+      return bytes;
+    })()],
+    ["post-header image beyond IVM code memory", (() => {
+      const postHeaderBytes = SERVICE_ARTIFACT.length - 17;
+      const minimumExtra = 0x0010_0000 - postHeaderBytes + 1;
+      const alignedExtra = Math.ceil(minimumExtra / 4) * 4;
+      return concatBytes(SERVICE_ARTIFACT, new Uint8Array(alignedExtra));
+    })()],
     ["bad CNTR marker", (() => {
       const bytes = SERVICE_ARTIFACT.slice();
       bytes[17] ^= 1;
@@ -778,6 +859,16 @@ test("compiler output requires a framed self-describing IVM artifact bound to ma
     ["bad CNTR frame CRC", (() => {
       const bytes = SERVICE_ARTIFACT.slice();
       bytes[25 + 31] ^= 1;
+      return bytes;
+    })()],
+    ["noncanonical CNTR frame padding", (() => {
+      const frameLength = readU32LeForTest(SERVICE_ARTIFACT, 21);
+      const payloadOffset = 25 + 40;
+      const bytes = new Uint8Array(SERVICE_ARTIFACT.length + 1);
+      bytes.set(SERVICE_ARTIFACT.subarray(0, payloadOffset), 0);
+      bytes[payloadOffset] = 0;
+      bytes.set(SERVICE_ARTIFACT.subarray(payloadOffset), payloadOffset + 1);
+      bytes.set(u32Le(frameLength + 1), 21);
       return bytes;
     })()],
     ["unaligned instruction stream", SERVICE_ARTIFACT.slice(0, -1)],
@@ -822,6 +913,92 @@ test("compiler output requires a framed self-describing IVM artifact bound to ma
     ),
     /identity\/capabilities do not match/u,
   );
+});
+
+test("compiler literal-table validation matches Rust ABI-v1 framing", async () => {
+  const validPointer = pointerLiteralFixture();
+  const validArtifact = literalArtifactFixture([
+    { kind: 0, bytes: validPointer },
+    { kind: 1, bytes: u64Le(42) },
+  ]);
+  const validResult = await compileKotodamaWithNativeBinding(
+    { async compileKotodama() { return serviceSuccessWithArtifact(validArtifact); } },
+    "seiyaku Demo {}",
+  );
+  assert.equal(validResult.ok, true);
+
+  const emptyArtifact = literalArtifactFixture([]);
+  const emptyResult = await compileKotodamaWithNativeBinding(
+    { async compileKotodama() { return serviceSuccessWithArtifact(emptyArtifact); } },
+    "seiyaku Demo {}",
+  );
+  assert.equal(emptyResult.ok, true);
+
+  const duplicateTargets = literalArtifactFixture([
+    { kind: 0, bytes: validPointer },
+    { kind: 1, bytes: u64Le(7) },
+  ]);
+  const duplicateStart = literalSectionStart(duplicateTargets);
+  duplicateTargets.set(
+    duplicateTargets.subarray(duplicateStart + 16, duplicateStart + 24),
+    duplicateStart + 24,
+  );
+
+  const skippedFirstByte = literalArtifactFixture([
+    { kind: 0, bytes: validPointer },
+  ]);
+  const skippedStart = literalSectionStart(skippedFirstByte);
+  skippedFirstByte.set(u64Le(16 + 8 + 1), skippedStart + 16);
+
+  const badPointerHash = pointerLiteralFixture();
+  badPointerHash[badPointerHash.length - 1] ^= 1;
+
+  for (const [label, artifact, expected] of [
+    [
+      "unindexed data",
+      literalArtifactFixture([], { unindexedData: Uint8Array.from([1]) }),
+      /unindexed literal data/u,
+    ],
+    ["duplicate targets", duplicateTargets, /strictly increasing/u],
+    ["first target gap", skippedFirstByte, /first descriptor/u],
+    [
+      "short i64",
+      literalArtifactFixture([{ kind: 1, bytes: new Uint8Array(7) }]),
+      /exactly 8 bytes/u,
+    ],
+    [
+      "retired pointer type",
+      literalArtifactFixture([{ kind: 0, bytes: pointerLiteralFixture({ typeId: 0x0010 }) }]),
+      /not allowed by ABI v1/u,
+    ],
+    [
+      "pointer version",
+      literalArtifactFixture([{ kind: 0, bytes: pointerLiteralFixture({ version: 2 }) }]),
+      /must use version 1/u,
+    ],
+    [
+      "pointer declared length",
+      literalArtifactFixture([{
+        kind: 0,
+        bytes: pointerLiteralFixture({ declaredLength: 4 }),
+      }]),
+      /length does not match/u,
+    ],
+    [
+      "pointer payload hash",
+      literalArtifactFixture([{ kind: 0, bytes: badPointerHash }]),
+      /payload hash is invalid/u,
+    ],
+  ]) {
+    await assert.rejects(
+      compileKotodamaWithNativeBinding(
+        { async compileKotodama() { return serviceSuccessWithArtifact(artifact); } },
+        "seiyaku Demo {}",
+      ),
+      expected,
+      label,
+    );
+  }
 });
 
 test("compiler trigger metadata is exact, bounded, and non-recursive beyond policy", async () => {

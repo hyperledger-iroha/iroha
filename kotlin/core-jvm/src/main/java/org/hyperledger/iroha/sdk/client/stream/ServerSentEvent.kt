@@ -11,4 +11,13 @@ class ServerSentEvent internal constructor(
     @JvmField val data: String,
     /** Event identifier supplied via the `id:` field (may be `null`). */
     @JvmField val id: String?,
-)
+) {
+    /**
+     * Returns the typed terminal error carried by this event, or `null` for ordinary events.
+     *
+     * A malformed `stream_error` frame throws [ToriiStreamProtocolException] instead of being
+     * treated as an unrelated application event.
+     */
+    fun terminalStreamError(): ToriiStreamException? =
+        if (event == "stream_error") ToriiStreamErrorParser.parse(data) else null
+}

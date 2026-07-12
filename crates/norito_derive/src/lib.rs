@@ -31,7 +31,8 @@ fn consume_unknown_meta(meta: syn::meta::ParseNestedMeta) -> SynResult<()> {
         // Parse exactly one attribute value. Parsing a free-form TokenStream here
         // consumes every remaining comma-separated item in the enclosing
         // `#[norito(...)]` list, which can silently hide a later option from a
-        // different derive (for example `tag = "kind", deny_unknown_fields`).
+        // different derive (for example `tag = "kind", schema_name = "stable",
+        // deny_unknown_fields`).
         meta.value()?.parse::<syn::Expr>()?;
     }
     Ok(())
@@ -560,6 +561,7 @@ fn words(ident: &str) -> Vec<String> {
 #[derive(Debug, Default)]
 struct ContainerAttr {
     rename_all: Option<RenameRule>,
+    schema_name: Option<String>,
     deny_unknown_fields: bool,
 }
 
@@ -576,6 +578,14 @@ impl ContainerAttr {
                     let rule = RenameRule::from_str(&lit)?;
                     if out.rename_all.replace(rule).is_some() {
                         return Err(meta.error("duplicate rename_all attribute"));
+                    }
+                } else if meta.path.is_ident("schema_name") {
+                    let lit: syn::LitStr = meta.value()?.parse()?;
+                    if lit.value().is_empty() {
+                        return Err(meta.error("schema_name must not be empty"));
+                    }
+                    if out.schema_name.replace(lit.value()).is_some() {
+                        return Err(meta.error("duplicate schema_name attribute"));
                     }
                 } else if meta.path.is_ident("deny_unknown_fields") {
                     if meta.input.peek(Token![=]) || meta.input.peek(syn::token::Paren) {
@@ -615,6 +625,19 @@ impl ContainerAttr {
     }
 }
 
+fn schema_hash_body(schema_name: Option<&str>) -> TokenStream2 {
+    if let Some(schema_name) = schema_name {
+        quote! { norito::core::schema_hash_for_name(#schema_name) }
+    } else {
+        quote! {
+            #[cfg(feature = "schema-structural")]
+            { norito::core::schema_hash_structural::<Self>() }
+            #[cfg(not(feature = "schema-structural"))]
+            { norito::core::type_name_schema_hash::<Self>() }
+        }
+    }
+}
+
 #[cfg(test)]
 mod container_attr_tests {
     use super::*;
@@ -646,6 +669,20 @@ mod container_attr_tests {
         };
 
         let attrs = ContainerAttr::parse(&input.attrs).expect("valid mixed attributes");
+        assert!(attrs.deny_unknown_fields);
+    }
+
+    #[test]
+    fn schema_name_and_deny_unknown_fields_are_combined() {
+        let input: DeriveInput = syn::parse_quote! {
+            #[norito(schema_name = "stable", deny_unknown_fields)]
+            struct Demo {
+                value: u32,
+            }
+        };
+
+        let attrs = ContainerAttr::parse(&input.attrs).expect("valid combined attributes");
+        assert_eq!(attrs.schema_name.as_deref(), Some("stable"));
         assert!(attrs.deny_unknown_fields);
     }
 
@@ -933,7 +970,9 @@ fn derive_struct_serialize(
     generics: &Generics,
     fields: &Fields,
     container_attrs: &[Attribute],
+    schema_name: Option<&str>,
 ) -> TokenStream2 {
+    let schema_hash_body = schema_hash_body(schema_name);
     let mut r#gen = generics.clone();
     let has_flatten_fields = match fields {
         Fields::Named(named) => named
@@ -1506,10 +1545,7 @@ fn derive_struct_serialize(
         impl #impl_generics norito::core::NoritoSerialize for #ident #ty_generics #where_clause {
             #[inline]
             fn schema_hash() -> [u8; 16] {
-                #[cfg(feature = "schema-structural")]
-                { norito::core::schema_hash_structural::<Self>() }
-                #[cfg(not(feature = "schema-structural"))]
-                { norito::core::type_name_schema_hash::<Self>() }
+                #schema_hash_body
             }
             #[inline]
             fn encoded_len_hint(&self) -> Option<usize> {
@@ -1583,7 +1619,9 @@ fn derive_struct_deserialize(
     generics: &Generics,
     fields: &Fields,
     container_attrs: &[Attribute],
+    schema_name: Option<&str>,
 ) -> TokenStream2 {
+    let schema_hash_body = schema_hash_body(schema_name);
     let mut r#gen = generics.clone();
     let has_flatten_fields = match fields {
         Fields::Named(named) => named
@@ -2387,10 +2425,7 @@ fn derive_struct_deserialize(
                 impl #impl_generics norito::core::NoritoDeserialize<'de> for #ident #ty_generics #where_clause {
                     #[inline]
                     fn schema_hash() -> [u8; 16] {
-                        #[cfg(feature = "schema-structural")]
-                        { norito::core::schema_hash_structural::<Self>() }
-                        #[cfg(not(feature = "schema-structural"))]
-                        { norito::core::type_name_schema_hash::<Self>() }
+                        #schema_hash_body
                     }
                     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
                         match Self::try_deserialize(archived) {
@@ -2840,10 +2875,7 @@ fn derive_struct_deserialize(
                 impl #impl_generics norito::core::NoritoDeserialize<'de> for #ident #ty_generics #where_clause {
                     #[inline]
                     fn schema_hash() -> [u8; 16] {
-                        #[cfg(feature = "schema-structural")]
-                        { norito::core::schema_hash_structural::<Self>() }
-                        #[cfg(not(feature = "schema-structural"))]
-                        { norito::core::type_name_schema_hash::<Self>() }
+                        #schema_hash_body
                     }
                     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
                         match Self::try_deserialize(archived) {
@@ -3019,10 +3051,7 @@ fn derive_struct_deserialize(
                 impl #impl_generics norito::core::NoritoDeserialize<'de> for #ident #ty_generics #where_clause {
                     #[inline]
                     fn schema_hash() -> [u8; 16] {
-                        #[cfg(feature = "schema-structural")]
-                        { norito::core::schema_hash_structural::<Self>() }
-                        #[cfg(not(feature = "schema-structural"))]
-                        { norito::core::type_name_schema_hash::<Self>() }
+                        #schema_hash_body
                     }
                     fn deserialize(_archived: &'de norito::core::Archived<Self>) -> Self {
                         Self
@@ -3042,7 +3071,9 @@ fn derive_enum_serialize(
     generics: &Generics,
     data: &DataEnum,
     container_attrs: &[Attribute],
+    schema_name: Option<&str>,
 ) -> TokenStream2 {
+    let schema_hash_body = schema_hash_body(schema_name);
     let mut r#gen = generics.clone();
     let mut arms = Vec::new();
     let mut hint_arms = Vec::new();
@@ -3342,10 +3373,7 @@ fn derive_enum_serialize(
         impl #impl_generics norito::core::NoritoSerialize for #ident #ty_generics #where_clause {
             #[inline]
             fn schema_hash() -> [u8; 16] {
-                #[cfg(feature = "schema-structural")]
-                { norito::core::schema_hash_structural::<Self>() }
-                #[cfg(not(feature = "schema-structural"))]
-                { norito::core::type_name_schema_hash::<Self>() }
+                #schema_hash_body
             }
             #[inline]
             fn encoded_len_hint(&self) -> Option<usize> {
@@ -3372,6 +3400,7 @@ fn derive_enum_deserialize(
     generics: &Generics,
     data: &DataEnum,
     container_attrs: &[Attribute],
+    schema_name: Option<&str>,
 ) -> TokenStream2 {
     let mut r#gen = generics.clone();
     let mut arms = Vec::new();
@@ -4049,8 +4078,18 @@ fn derive_enum_deserialize(
     } else {
         quote! {}
     };
+    let schema_hash_override = schema_name.map(|schema_name| {
+        quote! {
+            #[inline]
+            fn schema_hash() -> [u8; 16] {
+                norito::core::schema_hash_for_name(#schema_name)
+            }
+        }
+    });
     quote! {
         impl #impl_generics norito::core::NoritoDeserialize<'de> for #ident #ty_generics #where_clause {
+            #schema_hash_override
+
             fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
                 match Self::try_deserialize(archived) {
                     Ok(value) => value,
@@ -4090,17 +4129,31 @@ fn derive_enum_deserialize(
 /// Entry point for the `#[derive(NoritoSerialize)]` macro.
 pub fn derive_norito_serialize(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
+    let container_attrs = match ContainerAttr::parse(&input.attrs) {
+        Ok(attrs) => attrs,
+        Err(error) => return error.to_compile_error().into(),
+    };
+    let schema_name = container_attrs.schema_name.as_deref();
     match &input.data {
         Data::Struct(data) => match validate_field_attrs(&data.fields) {
-            Ok(()) => {
-                derive_struct_serialize(&input.ident, &input.generics, &data.fields, &input.attrs)
-                    .into()
-            }
+            Ok(()) => derive_struct_serialize(
+                &input.ident,
+                &input.generics,
+                &data.fields,
+                &input.attrs,
+                schema_name,
+            )
+            .into(),
             Err(e) => e.to_compile_error().into(),
         },
-        Data::Enum(data) => {
-            derive_enum_serialize(&input.ident, &input.generics, data, &input.attrs).into()
-        }
+        Data::Enum(data) => derive_enum_serialize(
+            &input.ident,
+            &input.generics,
+            data,
+            &input.attrs,
+            schema_name,
+        )
+        .into(),
         _ => syn::Error::new_spanned(
             &input.ident,
             "NoritoSerialize only supports structs and enums",
@@ -4114,17 +4167,31 @@ pub fn derive_norito_serialize(input: TokenStream) -> TokenStream {
 /// Entry point for the `#[derive(NoritoDeserialize)]` macro.
 pub fn derive_norito_deserialize(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
+    let container_attrs = match ContainerAttr::parse(&input.attrs) {
+        Ok(attrs) => attrs,
+        Err(error) => return error.to_compile_error().into(),
+    };
+    let schema_name = container_attrs.schema_name.as_deref();
     match &input.data {
         Data::Struct(data) => match validate_field_attrs(&data.fields) {
-            Ok(()) => {
-                derive_struct_deserialize(&input.ident, &input.generics, &data.fields, &input.attrs)
-                    .into()
-            }
+            Ok(()) => derive_struct_deserialize(
+                &input.ident,
+                &input.generics,
+                &data.fields,
+                &input.attrs,
+                schema_name,
+            )
+            .into(),
             Err(e) => e.to_compile_error().into(),
         },
-        Data::Enum(data) => {
-            derive_enum_deserialize(&input.ident, &input.generics, data, &input.attrs).into()
-        }
+        Data::Enum(data) => derive_enum_deserialize(
+            &input.ident,
+            &input.generics,
+            data,
+            &input.attrs,
+            schema_name,
+        )
+        .into(),
         _ => syn::Error::new_spanned(
             &input.ident,
             "NoritoDeserialize only supports structs and enums",

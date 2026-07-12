@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import XCTest
 @testable import IrohaSwift
@@ -9,7 +10,7 @@ final class IrohaSDKConfidentialUnshieldWorkflowTests: XCTestCase {
             backend: "halo2/ipa",
             name: "unshield-v3"
         )
-        let recordNorito = Self.recordNorito()
+        let recordNorito = try Self.recordNorito()
         let detail = try Self.verifyingKeyDetail(
             id: verifierKeyId,
             recordNorito: recordNorito
@@ -62,7 +63,7 @@ final class IrohaSDKConfidentialUnshieldWorkflowTests: XCTestCase {
         )
         let detail = try Self.verifyingKeyDetail(
             id: returnedId,
-            recordNorito: Self.recordNorito()
+            recordNorito: try Self.recordNorito()
         )
         var buildWasCalled = false
 
@@ -96,10 +97,43 @@ final class IrohaSDKConfidentialUnshieldWorkflowTests: XCTestCase {
         XCTAssertFalse(buildWasCalled)
     }
 
-    private static func recordNorito() -> Data {
-        noritoEncode(
+    private static func recordNorito() throws -> Data {
+        let backend = KagemushaRecursiveSpendProver.recursiveAggregationProofBackend
+        let verifierKey = Data(repeating: 0x77, count: 96)
+        let schemaHash = IrohaHash.hash(
+            PrivacyConfidentialWitnessCodecs.confidentialUnshieldPublicInputsSchema()
+        )
+        let commitment = verifierKeyCommitment(backend: backend, bytes: verifierKey)
+
+        var keyWriter = OfflineCompactNoritoWriter()
+        keyWriter.writeField(OfflineCompactNorito.encodeString(backend))
+        keyWriter.writeField(byteVec(verifierKey))
+
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(OfflineCompactNorito.encodeUInt32(3))
+        writer.writeField(OfflineCompactNorito.encodeString(
+            KagemushaRecursiveSpendRequestCodecs.confidentialUnshieldV3CircuitId
+        ))
+        writer.writeField(option(OfflineCompactNorito.encodeString("confidential-v3")))
+        writer.writeField(OfflineCompactNorito.encodeString("offline_kagemusha"))
+        writer.writeField(OfflineCompactNorito.encodeUInt32(
+            VerifyingKeyBackendTag.halo2IpaPasta.rawValue
+        ))
+        writer.writeField(OfflineCompactNorito.encodeString("pallas"))
+        writer.writeField(schemaHash)
+        writer.writeField(commitment)
+        writer.writeField(OfflineCompactNorito.encodeUInt32(UInt32(verifierKey.count)))
+        writer.writeField(OfflineCompactNorito.encodeUInt32(196_608))
+        writer.writeField(option(nil))
+        writer.writeField(option(nil))
+        writer.writeField(option(nil))
+        writer.writeField(option(nil))
+        writer.writeField(option(nil))
+        writer.writeField(option(keyWriter.data))
+        writer.writeField(OfflineCompactNorito.encodeUInt32(1))
+        return noritoEncode(
             typeName: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName,
-            payload: Data([0x01]),
+            payload: writer.data,
             flags: NoritoHeader.compactLen
         )
     }
@@ -108,6 +142,12 @@ final class IrohaSDKConfidentialUnshieldWorkflowTests: XCTestCase {
         id: ToriiVerifyingKeyId,
         recordNorito: Data
     ) throws -> ToriiVerifyingKeyDetail {
+        let backend = KagemushaRecursiveSpendProver.recursiveAggregationProofBackend
+        let verifierKey = Data(repeating: 0x77, count: 96)
+        let schemaHash = IrohaHash.hash(
+            PrivacyConfidentialWitnessCodecs.confidentialUnshieldPublicInputsSchema()
+        )
+        let commitment = verifierKeyCommitment(backend: backend, bytes: verifierKey)
         let payload = """
         {
           "id": { "backend": "\(id.backend)", "name": "\(id.name)" },
@@ -119,15 +159,52 @@ final class IrohaSDKConfidentialUnshieldWorkflowTests: XCTestCase {
             "namespace": "offline_kagemusha",
             "backend": "halo2/ipa",
             "curve": "pallas",
-            "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "public_inputs_schema_hash": "\(schemaHash.hexLowercased())",
+            "commitment": "\(commitment.hexLowercased())",
             "vk_len": 96,
             "max_proof_bytes": 196608,
-            "status": "Active"
+            "status": "Active",
+            "key": {
+              "backend": "halo2/ipa",
+              "bytes_b64": "\(verifierKey.base64EncodedString())"
+            }
           }
         }
         """.data(using: .utf8)!
         return try JSONDecoder().decode(ToriiVerifyingKeyDetail.self, from: payload)
+    }
+
+    private static func verifierKeyCommitment(backend: String, bytes: Data) -> Data {
+        var preimage = Data("iroha:zk:v1:vk".utf8)
+        appendUInt64BE(UInt64(backend.utf8.count), to: &preimage)
+        preimage.append(Data(backend.utf8))
+        appendUInt64BE(UInt64(bytes.count), to: &preimage)
+        preimage.append(bytes)
+        return Data(SHA256.hash(data: preimage))
+    }
+
+    private static func byteVec(_ bytes: Data) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeUInt64LE(UInt64(bytes.count))
+        writer.writeBytes(bytes)
+        return writer.data
+    }
+
+    private static func option(_ payload: Data?) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        guard let payload else {
+            writer.writeUInt8(0)
+            return writer.data
+        }
+        writer.writeUInt8(1)
+        writer.writeField(payload)
+        return writer.data
+    }
+
+    private static func appendUInt64BE(_ value: UInt64, to data: inout Data) {
+        for shift in stride(from: 56, through: 0, by: -8) {
+            data.append(UInt8((value >> UInt64(shift)) & 0xff))
+        }
     }
 
     private static func unshieldWitness() throws -> PrivacyConfidentialWitnessV1 {

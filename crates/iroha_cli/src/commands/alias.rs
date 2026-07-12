@@ -1,8 +1,7 @@
 //! Alias resolution helpers.
 //!
-//! The underlying API surface is not yet stable; these commands focus on basic
-//! input validation, forwarding requests to the alias Torii endpoints while
-//! handling not-yet-implemented responses gracefully.
+//! These commands validate inputs and call the canonical first-release alias
+//! lookup resources.
 
 use crate::cli_output::print_with_optional_text;
 use crate::{Run, RunContext};
@@ -16,9 +15,9 @@ use iroha_i18n::{Bundle, Language, Localizer};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
-    /// Resolve an alias by its canonical name (placeholder).
+    /// Resolve an alias by its canonical name.
     Resolve(ResolveArgs),
-    /// Resolve an alias by Merkle index (placeholder).
+    /// Resolve an alias by deterministic index.
     ResolveIndex(ResolveIndexArgs),
     /// List aliases bound to a canonical account id.
     ByAccount(ByAccountArgs),
@@ -450,9 +449,6 @@ mod tests {
                 key_pair: kp,
                 basic_auth: None,
                 torii_api_url: Url::parse("http://localhost/").unwrap(),
-                torii_api_version: config::default_torii_api_version(),
-                torii_api_min_proof_version: config::DEFAULT_TORII_API_MIN_PROOF_VERSION
-                    .to_string(),
                 torii_request_timeout: config::DEFAULT_TORII_REQUEST_TIMEOUT,
                 transaction_ttl: config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
                 transaction_status_timeout: config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,

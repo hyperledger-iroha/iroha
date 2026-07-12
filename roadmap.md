@@ -7,6 +7,25 @@ The detailed engineering backlog lives in
 [`docs/source/engineering_backlog.md`](./docs/source/engineering_backlog.md),
 and completed history lives in [`status.md`](./status.md).
 
+Kagemusha V2 admission is fail-closed for the first release.
+`KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE = false` is the
+authoritative release state: Core top-up execution and every proof-gated
+init/append/redeem-change/verify/redeem path remain unavailable. Record-backed
+lineage and semantic aggregation are validation and fixture-convergence
+scaffolding, not funded alternatives. The 64-depth branch bound and eight-hop
+semantic limit are protocol bounds, not availability signals.
+The remaining release work is the ABI-18 two-layer Pasta IPA/Poseidon backend:
+an EqAffine/Vesta transition proof and EpAffine/Pallas state wrapper must
+authenticate the previous recursive proof and current transition proof under
+fixed verifier keys, bind their exact public instances to the Kagemusha
+amount/nullifier/commitment state transition, decide both canonical IPA
+openings, and pass proof/key/parameter/parity/instance/transition substitution
+tests. The checked-in KZG experiment is rejected by payload, latency, and
+memory measurements and must not be used as a production fallback.
+The canonical V2 transport/data model is now the only release target; no work
+is planned for decoding or migrating the retired nested-init, full-anchor peer,
+padded tag-history, duplicated peer-identity, or linear lineage-witness shapes.
+
 SCCP first-release readiness no longer carries a production diagnostic fixture
 activation path: the governance CLI has no TAIRA/TRON diagnostic bundle command,
 runtime crates no longer publish `sccp-test-fixtures` feature aliases, and
@@ -677,27 +696,22 @@ Kura-before-WSV and certificate-before-receipt restart boundaries, and lane
 retire/recreate/reset cycles. `lane_block_view` remains intentionally coupled to
 the locked global proposal view; independently paced lane views are future work.
 
-Kagemusha online-to-offline top-up now has a first-class
-`KagemushaRecursiveSpendTopUpRequestV1` producer path, a chain-side
-`TopUpKagemushaRecursive` instruction, and Torii
-`/v1/offline/v2/kagemusha/topup` submission that accepts only client-produced
-top-up request archives. SDKs now expose a mobile-facing top-up init encoder
-that emits the nested one-hop, lineage-free init request and a wrapper helper
-that derives the canonical top-up request from it; Kotlin/JVM and Java Android
-also expose `KagemushaTopUpClient.submitKagemushaTopUp` for the signed Torii
-submission route. Raw init-request submission helpers and compatibility aliases
-remain retired for the first release.
-Remaining launch work should focus on end-to-end operator/mobile rollout
-validation rather than reviving the retired Offline V2 `/notes/issue`
-construction path.
+Kagemusha online-to-offline top-up and redemption now use the typed V2 wire
+requests directly at `/v1/offline/top-up` and `/v1/offline/redeem`. Torii has no
+nested route version, archive-wrapper body, classic note issuer, or compatibility
+alias in the first-release surface. Accepted commands are idempotent asynchronous
+operations polled through `/v1/offline/operations/{operation_id}`. SDK work now
+targets this single contract. Remaining launch work is end-to-end
+operator/mobile validation plus the sound recursive-verifier and production
+artifact gates described below; no legacy offline HTTP surface should be
+revived.
 
-Kagemusha mobile offline transfer now has a practical first-release path that
-does not depend on packaged Reserved-lineage init artifacts: SDK init requests
-may omit both lineage key fields, the native bridge emits a semantic
-`kagemusha-recursive-aggregation-v1` bundle, and redemption carries the
-record-backed lineage witness. Reserved-lineage key artifact generation remains
-the active blocker for witnessless lineage packages and Reserved-lineage append
-output. The `lineage-key-artifacts` command now fails before Halo2 keygen when
+Canonical V2 has no funded first-release path while its proof backend is
+unavailable. Flat init requests, semantic lineage DAGs, and record-backed
+validation exist only for API and fixture convergence; they do not make top-up
+or redemption executable. The active blocker is the reviewed ABI-18 two-layer
+Pasta IPA/Poseidon backend and its signed production artifacts. The
+`lineage-key-artifacts` command now fails before Halo2 keygen when
 deterministic fixed-window layout estimates exceed the memory guard or when the
 direct verifier-slice row footprint cannot fit the canonical Halo2 domain,
 instead of silently entering unbounded configure/keygen on laptops. The
@@ -1475,7 +1489,7 @@ launch-scope section and are not current roadmap work.
 	  `--negative-control-kotlin-offline-outcome-exactness` plus
 	  `--negative-control-kotlin-offline-payment-token-commitment-exactness` plus
 	  `--negative-control-swift-offline-payment-token-commitment-exactness` plus
-	  `--negative-control-kotlin-offline-cash-request-strictness` plus
+	  `--negative-control-kotlin-retired-offline-cash-http-surface` plus
 	  `--negative-control-kotlin-offline-wallet-compact-certificate-profile` plus
 	  `--negative-control-kotlin-offline-wallet-recursive-proof-strictness` plus
 	  `--negative-control-kotlin-offline-wallet-device-binding-alias-strictness` plus
@@ -1525,14 +1539,14 @@ launch-scope section and are not current roadmap work.
   normalization, or Java Android Offline Note amount canonicalization drift,
   cannot return.
 
-- Keep Torii Offline V2 Kagemusha OpenAPI endpoint descriptions in
-  first-release terminology: Torii source plus both checked-in portal OpenAPI
-  snapshots must describe rejected `X-Iroha-*` app-auth headers as retired, and
-  retired note-issue/audit endpoints must describe themselves as retired routes
-  that fail closed without compatibility-route wording. The Torii OpenAPI unit
-  test and
-  the policy guard's `--negative-control-torii-offline-v2-kagemusha-openapi`
-  mode prove stale legacy or compatibility-route wording cannot return.
+- Keep the Torii first-release Offline OpenAPI surface sharp: Torii source plus
+  both checked-in portal snapshots expose only readiness, top-up, redemption,
+  and operation status. Removed note-issue, audit, nested-version paths, wrapper
+  bodies, and `X-Iroha-*` app-auth aliases are absent rather than documented as
+  deprecated or retired operations. OpenAPI/catalog/router negative tests and
+  the policy guard's historical
+  `--negative-control-torii-offline-v2-kagemusha-openapi` mode prove those
+  spellings and compatibility wording cannot return.
 
 - Keep Torii Offline V2 middleware attestation and structured redemption
   parsing first-release strict: receipt and key-certificate profile validation
@@ -1844,7 +1858,9 @@ launch-scope section and are not current roadmap work.
   `IssueOfflineNoteV2`, `RedeemOfflineNoteV2`, and `AuditOfflineNoteV2` wire
   aliases are rejected both directly and inside explorer-style envelopes, with
   `--negative-control-mobile-offline-note-v2-retired-instruction-aliases`
-  pinning the source and rejection-test coverage.
+  pinning the source and rejection-test coverage. The Rust data model likewise
+  exposes only the canonical instruction names; source-level parity guards
+  reject reintroducing the three version-suffixed compatibility type aliases.
   Telemetry must also stay first-release strict: the retired iOS App Attest
   retired signature counter is removed, and the Kagemusha policy guard's
   retired App Attest negative control rejects reintroducing that metric or
@@ -2304,10 +2320,11 @@ launch-scope section and are not current roadmap work.
   projection wrapper availability is split from the full recursive-compact
   prover/verifier gate, so `recursiveSpendCompactPaymentTokenFromBundle(...)`
   probes and requires only the ABI-7 compact projection symbol.
-  The SDK parity guard and workflow-routed negative controls must continue pinning those surfaces. Production-readiness negative controls also mutate the
-  Rust data-model, JavaScript, Python, Swift, Kotlin/JVM, Java Android, and C#
-  selectors back to the retired recursive-spend fallback, so ABI-7 compact
-  availability remains the protected production default for editable SDKs. The
+  The SDK parity guard and workflow-routed negative controls retain these
+  surfaces as regression history. Production-readiness negative controls also
+  mutate the Rust data-model, JavaScript, Python, Swift, Kotlin/JVM, Java
+  Android, and C# selectors back to the retired recursive-spend fallback so it
+  stays rejected; ABI-7 compact availability is not a production default. The
   production-readiness guard self-audits its
   negative-control handler list against the PR workflow and workflow
   requirements, including duplicate detection, so new hardening modes are not
@@ -4485,8 +4502,9 @@ launch-scope section and are not current roadmap work.
   `--localnet-lifecycle-evidence
   artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json` explicitly so
   the localnet lifecycle gate is not hidden behind tooling defaults.
-- Current Kagemusha live production readiness is narrowed to evidence
-  collection: the current best rollup accepts the checked
+- Current Kagemusha live production readiness is implementation-blocked on the
+  unavailable ABI-18 V2 proof backend. Historical evidence collection includes
+  the checked
   `artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json` 4-peer
   production-localnet lifecycle evidence, and the checked
   `artifacts/android/device_lab/google-pixel-6-6a-physical-1781260116917`
@@ -6918,7 +6936,8 @@ launch-scope section and are not current roadmap work.
   latest-weight discovery, sequenced snapshot events, bounded latest/historical
   snapshot provider readback, and bounded CLI event watching are also covered
   locally, with deterministic `ETag`/`Cache-Control` validators on reputation
-  GET responses and a live server-sent event stream plus `/ws/reputation`
+  GET responses and a live server-sent event stream plus
+  `/v1/sorafs/reputation/events/ws`
   WebSocket parity for snapshot publications. The
   `iroha_js_host` NAPI bridge, `iroha_python_rs` bridge, and
   `connect_norito_bridge` JSON decoder now also carry telemetry
@@ -22681,10 +22700,11 @@ digest-bound pending-XSD source probe summaries for reviewed
 	  `wallet-offline-bearer-cash-*` prefixes; and shared fixtures publish
 	  `offline_bearer_cash_v1` policy defaults for custody hops, lineage steps,
   QR/stream payload limits, and Android one-use-key pool sizing. Torii no
-  longer publishes retired offline transfer/revocation HTTP routes or the v1
-  redeem/audit issuer-unavailable stubs, and the versioned Offline V2 route
-  surface now exposes readiness, key refill, note issue, note
-	  redeem, and audit handlers under `/v1/offline/v2/*`. Governance council
+  longer publishes retired offline transfer/revocation HTTP routes or issuer
+  rejection shims. The first-release HTTP surface contains only typed
+  readiness, top-up, redeem, and operation-status resources under
+  `/v1/offline`; it has no nested route version or whole-payload wrapper.
+  Governance council
 	  persist/replace/derive-vrf mutation helpers are no longer advertised in
 	  default Torii builds unless `gov_vrf` is compiled, avoiding mounted
 	  not-implemented fallbacks in the production route/tool surface. The shared
@@ -23624,7 +23644,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   before nullifier consumption or public minting. Semantic v1 spend proofs
   without that witness still fail closed as admission-neutral, because they do
   not prove every private hop and accumulator
-  transition in-circuit. The witnessless constant-size proof path uses the
+  transition in-circuit. The planned witnessless constant-size proof path uses the
   profile-specific `kagemusha-recursive-spend-lineage-onehop-v1` and
   `kagemusha-recursive-spend-lineage-append-v1` proof ids; the generic
   `kagemusha-recursive-spend-lineage-v1` family label is not accepted as a
@@ -23650,10 +23670,11 @@ digest-bound pending-XSD source probe summaries for reviewed
   cheap preflight. It also rejects zero verifier-record commitments explicitly
   and pins the lineage proof envelope verifier-key hash to the verifier-record
 	  commitment. That preverification remains admission-neutral for registry-only
-	  callers. Chain admission validates the current Reserved-lineage profile and
-	  admits witnessless redemption for profile-valid bundles inside the configured
-	  64-hop cap after the active lineage verifier record, final proof, root,
-	  asset, commitment, and nullifier checks pass.
+	  callers. Chain admission validates the current Reserved-lineage profile but
+	  rejects witnessless redemption before backend verification because the
+	  transition circuit readiness flag is false. Record-backed redemption still
+	  verifies the active lineage records, final proof, root, asset, commitment,
+	  and nullifier bindings.
   Missing `IPAK`,
   missing `H2VK`, wrong IPA degree, duplicate
   verifier-key `CID1` tags, unexpected verifier-key TLVs, malformed trailing
@@ -23664,10 +23685,10 @@ digest-bound pending-XSD source probe summaries for reviewed
 	  redeem request validation now understand both semantic v1 and reserved
 	  lineage proof ids, so lineage-profile states can be represented in the
 		  accumulator and verified as D2D payloads. Direct redeem instruction
-		  serialization still requires a record-backed lineage witness for semantic v1
-		  bundles, while metadata-valid Reserved-lineage bundles redeem witnesslessly
-		  inside the configured 64-hop cap after active lineage-verifier-record and
-		  final-proof verification.
+		  serialization requires a record-backed lineage witness for every proof
+		  profile. Metadata-valid Reserved-lineage bundles do not redeem witnesslessly;
+		  the active verifier record and final proof remain necessary but are not a
+		  substitute for the lineage witness.
   Recursive spend append requests now carry an optional previous-lineage
   verifier record. Semantic v1 previous proofs must leave it empty and continue
   through the canonical recursive aggregation verifier; reserved-lineage
@@ -23701,8 +23722,8 @@ digest-bound pending-XSD source probe summaries for reviewed
   hop's Pallas open-envelope archive and enters the guarded Reserved-lineage
   output path. Missing, empty, and Reserved-lineage family selectors reject
   before proving. This keeps SDK-facing D2D payloads hop-count-independent across
-  offline re-spends, and witnessless multi-hop Reserved-lineage output is
-  available for supported transitions inside the configured 64-hop cap.
+  offline re-spends. Witnessless multi-hop Reserved-lineage output remains
+  unavailable until circuit-authenticated recursion is wired.
   The same init/append preflight now runs inside record-backed lineage-witness
   assembly before the helpers merge hop envelopes or carry previous recursive
   proofs, so the redeem-side witness cannot be assembled from a request that
@@ -23716,15 +23737,11 @@ digest-bound pending-XSD source probe summaries for reviewed
   The recursive-spend redeem bridge, JavaScript host, and Python PyO3 host now
   apply the same gate after public-binding validation: semantic v1 requests with
   a verified record-backed lineage witness and a verifying final recursive proof
-  serialize instructions. Metadata-valid Reserved-lineage requests serialize
-  witnessless redeem instructions inside
-  `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64` when the
-  transition circuit flag is wired, the active lineage verifier record matches,
-  and chain/asset, root, final commitment, proof, and nullifier checks pass.
-  Witnessless semantic v1 requests, Reserved-lineage requests missing or
-  mismatching that record, tampered final recursive-proof requests, malformed
-  Reserved-lineage requests, and over-cap Reserved-lineage requests return no
-  instruction bytes.
+  serialize instructions. Witnessless Reserved-lineage requests return no
+  instruction bytes for every circuit and hop while
+  `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = false`.
+  Active lineage verifier records, chain/asset, root, final commitment, proof,
+  and nullifier checks remain mandatory on the record-backed path.
   Ledger recursive redeem execution now checks the final unshield/redeem proof
   public binding before reserved-lineage chain-admission and backend proof
   verification, preserving the final-note mismatch diagnostic even when a
@@ -23754,9 +23771,9 @@ digest-bound pending-XSD source probe summaries for reviewed
   starts.
   The same 8 MiB archive cap is enforced at the data-model request boundary and
   exposed by every SDK recursive-spend helper. Witnessless Reserved-lineage
-  redeem serialization is enabled inside the 64-hop cap, and all SDKs now expose
-  `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64` so wallets can
-  branch without duplicating the chain-admission rule.
+  redeem serialization is disabled; all SDKs expose the 64-hop protocol bound
+  together with the false transition-circuit readiness flag so wallets cannot
+  mistake the bound for admission availability.
   SDKs also expose matching circuit-id/hop-count helpers
   (`canRedeem...Witnessless` / `requires...LineageWitnessForRedeem`) so wallet
   code does not duplicate the current Reserved-lineage branch. Native verify
@@ -23766,11 +23783,11 @@ digest-bound pending-XSD source probe summaries for reviewed
   same decoded bundle state before native dispatch, and C# exposes the same
   lineage-material preflight as a metadata-bound redeem overload: semantic
   aggregation bundles must carry `lineageWitness`, and Reserved-lineage bundles
-  must carry `lineageVerifierRecord` even when they are witnessless-redeemable;
+  must carry both the record-backed witness and matching lineage verifier records;
   parity CI includes `--negative-control-sdk-redeem-lineage-preflight` so Swift,
   JavaScript, Python, Kotlin/JVM, Android Java, and C# cannot silently regress.
-  Witnessless Reserved-lineage redeem serialization is available inside the
-  configured 64-hop cap.
+  Witnessless Reserved-lineage redeem serialization remains fail-closed for the
+  entire configured hop range.
   Direct redeem-request
   validation applies the same archive decode/count, transcript-shape, note-binding,
   record-snapshot, attachment-shape, and previous-proof

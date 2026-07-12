@@ -650,13 +650,14 @@ server-sent event feeds and surface parsed frames via the listener interface:
 ToriiEventStreamClient streams = httpTransport.newEventStreamClient();
 ToriiEventStream stream =
     streams.openSseStream(
-        "/v1/pipeline/events",
-        ToriiEventStreamOptions.builder()
-            .putQueryParameter("selector", "blocks")
-            .build(),
+        "/v1/events/sse",
+        ToriiEventStreamOptions.defaultOptions(),
         new ToriiEventStreamListener() {
           @Override
           public void onEvent(ServerSentEvent event) {
+            event.terminalStreamError().ifPresent(error -> {
+              throw error;
+            });
             System.out.println(event.event() + ": " + event.data());
           }
         });
@@ -671,13 +672,25 @@ emit the same hashed-authority metadata recorded for HTTP submissions. When the
 transport supports streaming responses (OkHttp/JDK/URLConnection), frames are
 parsed as they arrive; other executors buffer the response before parsing.
 
+The canonical `/v1/events/sse` and `/v1/contracts/events/sse` feeds are
+live-only and have no replay log. The client rejects every case variant of
+`Last-Event-ID` before HTTP dispatch for exactly those paths; replay-capable
+custom streams may still receive that header. Raw listeners receive terminal
+`event: stream_error` frames. Call `ServerSentEvent.terminalStreamError()`
+before category filtering to project one into a strict `ToriiStreamException`
+with its stable code, server message, optional unsigned dropped-message count,
+replay flag, and raw JSON. Malformed or schema-expanded terminal envelopes fail
+closed as `ToriiStreamProtocolException`. The typed pipeline-status stream does
+this projection automatically. Reconnecting to a canonical feed starts a new
+live subscription and can have a gap.
+
 Use `ToriiEventStreamSubscription` when a long-lived component needs automatic
 reconnects:
 
 ```java
 ToriiEventStreamSubscription subscription =
     ToriiEventStreamSubscription.builder(
-            streams, "/v1/pipeline/events", ToriiEventStreamOptions.defaultOptions(), listener)
+            streams, "/v1/events/sse", ToriiEventStreamOptions.defaultOptions(), listener)
         .setInitialBackoff(Duration.ofSeconds(1))
         .setMaxBackoff(Duration.ofSeconds(30))
         .addObserver(new ToriiEventStreamObserver() {
@@ -812,15 +825,8 @@ Map<String, String> headers =
 Signatures cover the canonical method/path/query/body layout plus freshness
 metadata, matching the Rust verifier Torii uses on app-facing endpoints.
 
-Offline V2 key-refill body-auth requests carry auth in the JSON body instead
-of `X-Iroha-*` headers. Use `CanonicalRequestSigner.withBodySignature(...)` to
-add `account_id`, `timestamp_ms`, `nonce`, and `signature_base64` to a request
-body. Multisig callers should build the canonical request witness separately and
-pass it as `witness_base64` with `withBodyWitness(...)`. Retired Offline Note
-issue, redeem, audit, and defund submission paths are retired; production
-offline payments use Kagemusha flows.
-`ToriiOfflineNoteIssuerClient` requires `ToriiCanonicalRequestAuth` for
-issuer requests, including flows that also attach device-proof payloads.
+Retired Offline Note issue, redeem, audit, and defund submission paths are not
+part of the first-release API. Production clients use the typed Offline API.
 
 ### Sora VPN native lease flow
 
@@ -1192,10 +1198,10 @@ Licensed under the Apache License, Version 2.0. See `LICENSE` for details.
 
 ## Offline readiness and auditing
 
-The SDK exposes a lightweight `OfflineToriiClient` for the maintained Offline
-readiness surface. Torii accepts body-signed key refill on the maintained
-Offline V2 API, but
-retired note issue, redemption, audit, and defund submission paths are retired.
+The SDK exposes a lightweight `OfflineToriiClient` for the first-release
+Offline API: readiness for a required asset definition, direct-Norito top-up
+and redeem submissions, and operation status. Classic note issue, redemption,
+audit, and defund models are fixture-only.
 `OfflineNoteWallet` and `OfflineBearerCashWallet` remain available for
 historical fixture records, but their default issuer and
 transaction submitter surfaces fail closed for retired note issue, audit,
@@ -1285,21 +1291,20 @@ Use
 `canRedeemWitnessless(circuitId, hopCount)` or
 `requiresLineageWitnessForRedeem(circuitId, hopCount)` before online redeem
 construction. `RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` is `64`, and
-`RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1` is `true`, so
-witnessless Reserved-lineage online redemption is available for lineage bundles
-inside the 64-hop cap.
-Use `canAppendWitnesslessLineage(previousHopCount)` before attempting a
-witnessless Reserved-lineage append; it returns `true` for previous hop counts
-`1..63`.
+`RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1` is `false`. The hop
+constant is only the protocol bound: witnessless Reserved-lineage redeem and
+append fail closed for every circuit and hop count, and redeem requires a
+record-backed lineage witness.
+`canAppendWitnesslessLineage(previousHopCount)` therefore returns `false` for
+every input while transition verification is unavailable.
 Use `preferredAppendOutputCircuitId(previousHopCount)` as the default append
-output selector; it selects Reserved-lineage append for previous hop counts `1..63`.
+output selector; it selects semantic recursive aggregation.
 Use `canProveAppendOutputCircuitId(outputCircuitId, previousHopCount)` before
 selecting an append output circuit; semantic recursive append returns true
-through hop 64, and Reserved-lineage append returns true for previous hop
-counts `1..63`.
-The semantic append path is bounded by `COMPACT_TOKEN_MAX_HOPS`; witnessless
-Reserved-lineage append and redeem use the separate
-`RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` cap.
+for previous hop counts `1..63`, while Reserved-lineage append is not currently
+provable. The semantic append path is bounded by `COMPACT_TOKEN_MAX_HOPS`; the
+separate `RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` remains a protocol
+bound and does not enable witnessless admission.
 Use `canSelectAppendOutputCircuitId(previousProofCircuitId, outputCircuitId,
 previousHopCount)` to apply the previous-proof transition rule before
 serializing an append request.
@@ -1463,11 +1468,9 @@ fractional, uppercase-prefix, or signed-64-overflow ids fail parsing. The core
 module also requires offline transfer-list metadata
 fields (`total`, `receipt_count`, `recorded_at_ms`, and `recorded_at_height`) to
 be JSON integer numbers; quoted, blank, fractional, or signed-64-overflow values
-fail parsing instead of being trimmed, defaulted, or truncated. The core module
-includes an in-memory store and `ToriiOfflineNoteIssuerClient` for body-signed
-key-refill in tests and JVM tooling. Retired note issue and
-`IrohaOfflineNoteTransactionSubmitter` audit/redeem/defund submissions are
-fail-closed historical APIs; production offline payments use Kagemusha flows.
+fail parsing instead of being trimmed, defaulted, or truncated. Retired note
+issue and `IrohaOfflineNoteTransactionSubmitter` audit/redeem/defund submissions
+are fail-closed fixture APIs.
 
 The client reuses the existing `ClientConfig` headers/observers and can be
 created from any `HttpClientTransport`:
@@ -1475,16 +1478,18 @@ created from any `HttpClientTransport`:
 ```java
 transport
     .offlineToriiClient()
-    .getOfflineReadiness()
-    .thenAccept(readiness -> System.out.println(readiness.offlineNote()));
+    .getOfflineReadiness("xor#wonderland")
+    .thenAccept(readiness -> System.out.println(readiness.ready()));
 ```
 
-Retired offline HTTP routes were removed from the public offline client surface
-so callers cannot accidentally target Torii routes that now return 404.
-
-Use `OfflineToriiClient#getOfflineReadiness()` to check whether Torii exposes the offline note
-capabilities before showing offline receive or payment-token UI.
-```
+`OfflineToriiClient` exposes only the first-release routes: readiness for a
+required asset definition, direct-Norito top-up and redeem submissions, and the
+operation status resource. Use `getOfflineReadiness(assetDefinitionId)` before
+showing offline receive or payment-token UI.
+`OfflineTopUpRequest` and `OfflineRedeemRequest` accept only the canonical
+schema-bound request archive and derive the lowercase `Idempotency-Key` from
+its nonzero 32-byte `operation_id`; callers cannot provide a second, mismatched
+operation ID.
 
 Use `OfflineJournal` (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournal.java`)
 to persist pending bundles with the shared `[kind|timestamp|len|tx_id|payload|chain|hmac]` layout used

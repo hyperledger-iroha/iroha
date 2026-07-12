@@ -115,7 +115,6 @@ use iroha_data_model::{
     },
 };
 
-use crate::api_version::{self, ApiVersion};
 use core::fmt;
 use std::{
     cmp::{Ordering, Reverse},
@@ -3488,7 +3487,7 @@ use core::convert::Infallible;
 #[cfg(feature = "app_api")]
 use std::num::NonZeroU64;
 
-use axum::response::sse::{Event as SseEvent, Sse};
+use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use futures::stream;
 #[cfg(feature = "app_api")]
 use iroha_data_model::events::{
@@ -5826,7 +5825,7 @@ pub async fn handle_v1_zk_verify(
         // For Norito, treat non-empty body as accepted. We avoid binding to a
         // specific envelope type in this app-facing convenience endpoint.
         !body.is_empty()
-    } else if ct.contains("application/json") || ct.contains("text/json") {
+    } else if ct.contains("application/json") {
         norito::json::from_slice::<norito::json::Value>(&body).is_ok()
     } else {
         // Unknown content type; try JSON as a last resort.
@@ -5869,7 +5868,7 @@ pub async fn handle_v1_sumeragi_pacemaker(
         view_timeout_target_ms: m.sumeragi_pacemaker_view_timeout_target_ms.get(),
         view_timeout_remaining_ms: m.sumeragi_pacemaker_view_timeout_remaining_ms.get(),
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -5880,7 +5879,7 @@ pub async fn handle_v1_sumeragi_pacemaker(
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_qc(accept: Option<axum::http::HeaderValue>) -> Result<Response> {
     let snap = sumeragi::status_snapshot();
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -5940,7 +5939,7 @@ pub async fn handle_v1_sumeragi_checkpoints(
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let checkpoints: Vec<ValidatorSetCheckpoint> = sumeragi::status::validator_checkpoint_history();
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -5976,7 +5975,7 @@ pub async fn handle_v1_sumeragi_consensus_keys(
             .then_with(|| a.id.cmp(&b.id))
     });
 
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -6011,7 +6010,7 @@ pub async fn handle_v1_sumeragi_commit_qcs(
         COMMIT_CERT_PAGE_CAP,
         |cert| cert.height,
     );
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -6122,9 +6121,9 @@ fn sccp_internal_error(message: impl Into<String>) -> Error {
 
 fn sccp_bundle_response<T>(value: &T, accept: Option<&axum::http::HeaderValue>) -> Result<Response>
 where
-    T: Clone + Send + norito::core::NoritoSerialize + norito::json::JsonSerialize,
+    T: Clone + Send + norito::core::NoritoSerialize + norito::json::JsonSerialize + 'static,
 {
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept) {
+    let format = match crate::utils::negotiate_response_format(accept) {
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
@@ -7976,7 +7975,7 @@ pub async fn handle_v1_sumeragi_validator_sets(
         COMMIT_CERT_PAGE_CAP,
         |snap| snap.height,
     );
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8108,7 +8107,7 @@ pub async fn handle_v1_sumeragi_phases(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
-/// GET /v1/sumeragi/bls_keys — map of network public keys -> BLS public keys (hex strings)
+/// GET /v1/sumeragi/bls-keys — map of network public keys -> BLS public keys (hex strings)
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_bls_keys(
     State(state): State<Arc<CoreState>>,
@@ -8155,7 +8154,7 @@ pub async fn handle_v1_sumeragi_leader(
             epoch_seed: seed_opt.map(hex::encode),
         },
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8243,7 +8242,7 @@ pub async fn handle_v1_sumeragi_collectors(
                 epoch_seed: epoch_seed_hex,
             },
         };
-        let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+        let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
             Ok(fmt) => fmt,
             Err(resp) => return Ok(resp),
         };
@@ -8332,7 +8331,7 @@ pub async fn handle_v1_sumeragi_collectors(
             epoch_seed: epoch_seed_hex,
         },
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8390,7 +8389,7 @@ pub async fn handle_v1_sumeragi_params(
         mode_activation_height: sp.mode_activation_height,
         chain_height: state.committed_height() as u64,
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8497,7 +8496,7 @@ pub async fn handle_v1_zk_submit_proof(
     let ok = if ct.contains(super::utils::NORITO_MIME_TYPE) {
         // For Norito, any non-empty payload is considered accepted by the demo handler.
         !body.is_empty()
-    } else if ct.contains("application/json") || ct.contains("text/json") {
+    } else if ct.contains("application/json") {
         norito::json::from_slice::<norito::json::Value>(&body).is_ok()
     } else {
         // Unknown content type; try JSON as a last resort.
@@ -8509,7 +8508,7 @@ pub async fn handle_v1_zk_submit_proof(
         hex::encode::<[u8; 32]>(h.into())
     };
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8666,7 +8665,7 @@ pub(crate) async fn handle_v1_zk_verify_batch_with_limits(
             statuses_json = bools_to_json_array(&statuses);
             ok = true;
         }
-    } else if ct.contains("application/json") || ct.contains("text/json") {
+    } else if ct.contains("application/json") {
         // JSON: accept array of base64-encoded Norito envelopes.
         if let Ok(v) = norito::json::from_slice::<norito::json::Value>(&body) {
             if let Some(arr) = v.as_array() {
@@ -8896,7 +8895,7 @@ pub async fn handle_v1_zk_roots(
         // For convenience, report the total number of roots recorded for this asset.
         height: roots_all.len() as u32,
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -9015,7 +9014,7 @@ pub async fn handle_v1_zk_merkle_path(
         next_zero_path,
         paths,
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -9038,7 +9037,7 @@ pub async fn handle_v1_zk_vote_tally(
         None => (false, Vec::new()),
     };
     let payload = ZkVoteGetTallyResponseDto { finalized, tally };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -9119,7 +9118,7 @@ pub async fn handle_v1_sumeragi_evidence_list(
         let end = core::cmp::min(total, offset + limit);
         &records[offset..end]
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -24927,7 +24926,7 @@ fn multisig_spec_response(
     })
 }
 
-/// POST /v1/multisig/proposals/list — list multisig proposals for a multisig authority.
+/// POST /v1/multisig/proposals/query — list multisig proposals for a multisig authority.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_proposals_list(
@@ -24973,7 +24972,7 @@ fn multisig_proposals_list_response(
     })
 }
 
-/// POST /v1/multisig/proposals/get — resolve a multisig selector and fetch a specific proposal.
+/// POST /v1/multisig/proposals/lookup — resolve a multisig selector and fetch a specific proposal.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_proposals_get(
@@ -25030,7 +25029,7 @@ fn multisig_proposals_get_response(
     })
 }
 
-/// POST /v1/multisig/approvals/list — list signer-visible multisig approvals.
+/// POST /v1/multisig/approvals/query — list signer-visible multisig approvals.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_approvals_list(
@@ -25135,7 +25134,7 @@ fn multisig_approvals_list_response(
     Ok(MultisigApprovalsListResponseDto { items, next_cursor })
 }
 
-/// POST /v1/multisig/approvals/get — fetch a signer-visible multisig approval by id/hash.
+/// POST /v1/multisig/approvals/lookup — fetch a signer-visible multisig approval by id/hash.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_approvals_get(
@@ -29643,19 +29642,6 @@ pub struct RecordUptimeObservationResponseDto {
     pub uptime_secs: u64,
     /// Total seconds observed for the sample.
     pub observed_secs: u64,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for recording a PoR challenge issued by governance.
-pub struct RecordPorChallengeDto {
-    /// Base64-encoded Norito `PorChallengeV1`.
-    pub challenge_b64: String,
 }
 
 #[cfg(feature = "app_api")]
@@ -40300,9 +40286,9 @@ pub const ENDPOINT_MULTISIG_CANCEL: &str = "/v1/multisig/cancel";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_SPEC: &str = "/v1/multisig/spec";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_MULTISIG_PROPOSALS_LIST: &str = "/v1/multisig/proposals/list";
+pub const ENDPOINT_MULTISIG_PROPOSALS_LIST: &str = "/v1/multisig/proposals/query";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_MULTISIG_PROPOSALS_GET: &str = "/v1/multisig/proposals/get";
+pub const ENDPOINT_MULTISIG_PROPOSALS_GET: &str = "/v1/multisig/proposals/lookup";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
     "/v1/accounts/{account_id}/transactions/query";
@@ -40429,12 +40415,12 @@ const CONTEXT_KAIGI_RELAY_DETAIL: &str = "/v1/kaigi/relays/{relay_id}";
 
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_NEXUS_PUBLIC_LANE_VALIDATORS: &str =
-    "/v1/nexus/public_lanes/{lane_id}/validators";
+    "/v1/nexus/public-lanes/{lane_id}/validators";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_NEXUS_PUBLIC_LANE_STAKE: &str = "/v1/nexus/public_lanes/{lane_id}/stake";
+pub const ENDPOINT_NEXUS_PUBLIC_LANE_STAKE: &str = "/v1/nexus/public-lanes/{lane_id}/stake";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_NEXUS_PUBLIC_LANE_REWARDS: &str =
-    "/v1/nexus/public_lanes/{lane_id}/rewards/pending";
+    "/v1/nexus/public-lanes/{lane_id}/rewards/pending";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY: &str =
     "/v1/nexus/dataspaces/accounts/{literal}/summary";
@@ -51157,6 +51143,70 @@ struct ContractEventsSseState {
     rx: tokio::sync::broadcast::Receiver<EventBox>,
     state: Arc<CoreState>,
     pending: VecDeque<ContractEventProjection>,
+    last_block_height: Option<u64>,
+    terminal: bool,
+}
+
+#[cfg(not(test))]
+const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+#[cfg(test)]
+const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(25);
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+struct StreamErrorEvent {
+    code: String,
+    message: String,
+    dropped_messages: Option<u64>,
+    replay_available: bool,
+}
+
+#[cfg(feature = "app_api")]
+fn stream_error_event(
+    code: &'static str,
+    message: impl Into<String>,
+    dropped_messages: Option<u64>,
+) -> SseEvent {
+    let payload = StreamErrorEvent {
+        code: code.to_owned(),
+        message: message.into(),
+        dropped_messages,
+        replay_available: false,
+    };
+    let data = norito::json::to_json(&payload).unwrap_or_else(|error| {
+        iroha_logger::error!(%error, code, "failed to encode SSE stream error payload");
+        "{\"code\":\"stream_internal_error\",\"message\":\"failed to encode stream error\",\"dropped_messages\":null,\"replay_available\":false}".to_owned()
+    });
+    SseEvent::default().event("stream_error").data(data)
+}
+
+/// Reject an SSE resume attempt before stream establishment.
+///
+/// The canonical live streams do not retain a replay log. Returning a native
+/// SSE error keeps the rejection compatible with `Accept: text/event-stream`
+/// while making the unsupported resume request explicit and machine-readable.
+#[cfg(feature = "app_api")]
+pub fn stream_resume_unsupported_response() -> Response {
+    let event = stream_error_event(
+        "stream_resume_unsupported",
+        "Last-Event-ID is unsupported because this live stream has no replay log.",
+        None,
+    );
+    let stream = stream::once(async move { Ok::<_, Infallible>(event) });
+    let mut response = Sse::new(stream).into_response();
+    *response.status_mut() = StatusCode::BAD_REQUEST;
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response.headers_mut().insert(
+        axum::http::HeaderName::from_static("x-iroha-stream-error"),
+        axum::http::HeaderValue::from_static("stream_resume_unsupported"),
+    );
+    response
+        .extensions_mut()
+        .insert(crate::ReviewedProtocolNativeError::StreamResumeUnsupported);
+    response
 }
 
 /// GET /v1/contracts/events/sse – Server-Sent Events stream of generic contract events.
@@ -51172,20 +51222,32 @@ pub fn handle_v1_contracts_events_sse(
             rx: events.subscribe(),
             state,
             pending: VecDeque::new(),
+            last_block_height: None,
+            terminal: false,
         },
         move |mut state| {
             let query = query.clone();
             async move {
                 use tokio::sync::broadcast::error::RecvError;
+                if state.terminal {
+                    return None;
+                }
                 loop {
                     if let Some(event) = state.pending.pop_front() {
                         let json_value = contract_event_projection_to_json_value(&event);
-                        let json =
-                            norito::json::to_json(&json_value).unwrap_or_else(|_| "{}".to_owned());
-                        let ev = SseEvent::default()
-                            .event("contract_event")
-                            .id(event.event_id.clone())
-                            .data(json);
+                        let ev = match norito::json::to_json(&json_value) {
+                            Ok(json) => SseEvent::default().event("contract_event").data(json),
+                            Err(error) => {
+                                iroha_logger::error!(%error, event_id = %event.event_id, "failed to encode contract SSE event");
+                                state.pending.clear();
+                                state.terminal = true;
+                                stream_error_event(
+                                    "stream_encode_error",
+                                    "The server could not encode a contract event.",
+                                    None,
+                                )
+                            }
+                        };
                         return Some((Ok(ev), state));
                     }
                     match state.rx.recv().await {
@@ -51193,6 +51255,13 @@ pub fn handle_v1_contracts_events_sse(
                             let Some(height) = committed_block_height(&event_box) else {
                                 continue;
                             };
+                            if state
+                                .last_block_height
+                                .is_some_and(|last_height| height <= last_height)
+                            {
+                                continue;
+                            }
+                            state.last_block_height = Some(height);
                             let Ok(height_usize) = usize::try_from(height) else {
                                 iroha_logger::warn!(
                                     height,
@@ -51210,18 +51279,36 @@ pub fn handle_v1_contracts_events_sse(
                                 }
                             }
                         }
-                        Err(RecvError::Lagged(_)) => {
-                            let ev = SseEvent::default().comment("lagged");
+                        Err(RecvError::Lagged(dropped_messages)) => {
+                            state.pending.clear();
+                            state.terminal = true;
+                            let ev = stream_error_event(
+                                "stream_lagged",
+                                "The contract event stream lost buffered events and cannot replay them.",
+                                Some(dropped_messages),
+                            );
                             return Some((Ok(ev), state));
                         }
-                        Err(RecvError::Closed) => return None,
+                        Err(RecvError::Closed) => {
+                            state.terminal = true;
+                            let ev = stream_error_event(
+                                "stream_source_closed",
+                                "The contract event source closed.",
+                                None,
+                            );
+                            return Some((Ok(ev), state));
+                        }
                     }
                 }
             }
         },
     );
 
-    Ok(Sse::new(stream))
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(SSE_HEARTBEAT_INTERVAL)
+            .text("heartbeat"),
+    ))
 }
 
 /// GET /v1/events/sse – Server-Sent Events stream of JSON events.
@@ -51259,6 +51346,7 @@ pub fn handle_v1_events_sse(
         EventsSseState {
             rx: events.subscribe(),
             pending: VecDeque::new(),
+            terminal: false,
         },
         move |mut state| {
             let filters = filters.clone();
@@ -51267,12 +51355,25 @@ pub fn handle_v1_events_sse(
             let proof_envelope_hash = proof_envelope_hash.clone();
             async move {
                 use tokio::sync::broadcast::error::RecvError;
+                if state.terminal {
+                    return None;
+                }
                 loop {
                     if let Some(event_box) = state.pending.pop_front() {
                         let json_val = event_to_json_value(&event_box);
-                        let json =
-                            norito::json::to_json(&json_val).unwrap_or_else(|_| "{}".to_owned());
-                        let ev = SseEvent::default().data(json);
+                        let ev = match norito::json::to_json(&json_val) {
+                            Ok(json) => SseEvent::default().data(json),
+                            Err(error) => {
+                                iroha_logger::error!(%error, "failed to encode SSE event");
+                                state.pending.clear();
+                                state.terminal = true;
+                                stream_error_event(
+                                    "stream_encode_error",
+                                    "The server could not encode an event.",
+                                    None,
+                                )
+                            }
+                        };
                         return Some((Ok(ev), state));
                     }
                     match state.rx.recv().await {
@@ -51307,25 +51408,43 @@ pub fn handle_v1_events_sse(
                                 }
                             }
                         }
-                        Err(RecvError::Lagged(_)) => {
-                            // Skip lagged messages but keep the stream alive.
-                            let ev = SseEvent::default().comment("lagged");
+                        Err(RecvError::Lagged(dropped_messages)) => {
+                            state.pending.clear();
+                            state.terminal = true;
+                            let ev = stream_error_event(
+                                "stream_lagged",
+                                "The event stream lost buffered events and cannot replay them.",
+                                Some(dropped_messages),
+                            );
                             return Some((Ok(ev), state));
                         }
-                        Err(RecvError::Closed) => return None,
+                        Err(RecvError::Closed) => {
+                            state.terminal = true;
+                            let ev = stream_error_event(
+                                "stream_source_closed",
+                                "The event source closed.",
+                                None,
+                            );
+                            return Some((Ok(ev), state));
+                        }
                     }
                 }
             }
         },
     );
 
-    Ok(Sse::new(stream))
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(SSE_HEARTBEAT_INTERVAL)
+            .text("heartbeat"),
+    ))
 }
 
 #[cfg(feature = "app_api")]
 struct EventsSseState {
     rx: tokio::sync::broadcast::Receiver<EventBox>,
     pending: VecDeque<EventBox>,
+    terminal: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -52880,7 +52999,7 @@ fn soradns_revoke_reason_label(reason: RadRevokeReason) -> &'static str {
 }
 
 #[cfg(feature = "app_api")]
-/// GET /v1/sumeragi/new_view/sse — SSE stream of NEW_VIEW counts polled periodically.
+/// GET /v1/sumeragi/new-view/sse — SSE stream of NEW_VIEW counts polled periodically.
 pub fn handle_v1_new_view_sse(
     poll_ms: u64,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
@@ -58132,7 +58251,7 @@ pub async fn handle_v1_sumeragi_status(
     accept: Option<axum::http::HeaderValue>,
     nexus_enabled: bool,
 ) -> Result<Response> {
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
@@ -58934,7 +59053,7 @@ fn rbc_status_summary_has_complete_delivery(summary: &rbc_status::Summary) -> bo
         && summary.received_chunks == summary.total_chunks
 }
 
-/// GET /v1/sumeragi/commit_qc/{hash} — return full commit QC record for a block hash (if present)
+/// GET /v1/sumeragi/commit-qcs/{block_hash} — return the full commit QC record for a block hash.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_commit_qc(
     State(state): State<std::sync::Arc<CoreState>>,
@@ -58951,7 +59070,7 @@ pub async fn handle_v1_sumeragi_commit_qc(
     let typed = iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(parsed);
     let world = state.world_view();
     let qc_opt = world.commit_qcs().get(&typed).cloned();
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -59717,6 +59836,7 @@ mod sse_filter_validation_tests {
 
 #[cfg(all(test, feature = "app_api"))]
 mod sse_stream_tests {
+    use axum::body::Body;
     use axum::response::IntoResponse as _;
     use http_body_util::BodyExt as _;
     use iroha_crypto::{Hash, HashOf};
@@ -59731,6 +59851,31 @@ mod sse_stream_tests {
     use tokio::time::{Duration, timeout};
 
     use super::*;
+
+    async fn next_sse_chunk(body: &mut Body) -> String {
+        let frame = timeout(Duration::from_secs(1), body.frame())
+            .await
+            .expect("timeout waiting for SSE frame")
+            .expect("stream ended before SSE frame")
+            .expect("SSE body frame");
+        let data = frame.into_data().expect("SSE data frame");
+        std::str::from_utf8(&data)
+            .expect("UTF-8 SSE frame")
+            .to_owned()
+    }
+
+    fn queued_transaction_event(byte: u8) -> EventBox {
+        let hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+            [byte; Hash::LENGTH],
+        ));
+        EventBox::Pipeline(PipelineEventBox::Transaction(TransactionEvent {
+            hash,
+            block_height: None,
+            lane_id: LaneId::new(0),
+            dataspace_id: DataSpaceId::new(0),
+            status: TransactionStatus::Queued,
+        }))
+    }
 
     #[tokio::test]
     async fn sse_stream_expands_pipeline_batches() {
@@ -59754,13 +59899,7 @@ mod sse_stream_tests {
             })]);
         events.send(batch).expect("send batch event");
 
-        let frame = timeout(Duration::from_secs(1), body.frame())
-            .await
-            .expect("timeout waiting for SSE frame")
-            .expect("frame")
-            .expect("frame data");
-        let data = frame.into_data().expect("data frame");
-        let payload = std::str::from_utf8(&data).expect("utf8");
+        let payload = next_sse_chunk(&mut body).await;
         let data_line = payload
             .lines()
             .find(|line| line.starts_with("data: "))
@@ -59768,6 +59907,143 @@ mod sse_stream_tests {
         let json = data_line.trim_start_matches("data: ").trim();
         let value: norito::json::Value = norito::json::from_str(json).expect("json payload");
         assert!(matches!(value, norito::json::Value::Object(_)));
+    }
+
+    #[tokio::test]
+    async fn sse_stream_preserves_pipeline_batch_order() {
+        let events: EventsSender = tokio::sync::broadcast::channel(8).0;
+        let sse = handle_v1_events_sse(
+            events.clone(),
+            crate::NoritoQuery(EventsSseParams { filter: None }),
+        )
+        .expect("create SSE stream");
+        let mut body = sse.into_response().into_body();
+
+        events
+            .send(EventBox::PipelineBatch(vec![
+                match queued_transaction_event(0x31) {
+                    EventBox::Pipeline(event) => event,
+                    _ => unreachable!(),
+                },
+                match queued_transaction_event(0x32) {
+                    EventBox::Pipeline(event) => event,
+                    _ => unreachable!(),
+                },
+            ]))
+            .expect("send batch");
+
+        let first = next_sse_chunk(&mut body).await;
+        let second = next_sse_chunk(&mut body).await;
+        assert!(first.contains(&Hash::prehashed([0x31; Hash::LENGTH]).to_string()));
+        assert!(second.contains(&Hash::prehashed([0x32; Hash::LENGTH]).to_string()));
+    }
+
+    #[tokio::test]
+    async fn sse_lag_is_machine_readable_and_terminal() {
+        let events: EventsSender = tokio::sync::broadcast::channel(1).0;
+        let sse = handle_v1_events_sse(
+            events.clone(),
+            crate::NoritoQuery(EventsSseParams { filter: None }),
+        )
+        .expect("create SSE stream");
+        let mut body = sse.into_response().into_body();
+
+        events
+            .send(queued_transaction_event(0x41))
+            .expect("send first");
+        events
+            .send(queued_transaction_event(0x42))
+            .expect("send second");
+
+        let error_frame = next_sse_chunk(&mut body).await;
+        assert!(error_frame.contains("event: stream_error"));
+        let data = error_frame
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .expect("stream error data");
+        let value: norito::json::Value = norito::json::from_str(data).expect("error JSON");
+        assert_eq!(value["code"].as_str(), Some("stream_lagged"));
+        assert_eq!(value["dropped_messages"].as_u64(), Some(1));
+        assert_eq!(value["replay_available"].as_bool(), Some(false));
+
+        let terminal = timeout(Duration::from_secs(1), body.frame())
+            .await
+            .expect("terminal stream should not hang");
+        assert!(
+            terminal.is_none(),
+            "lagged stream must close after its error event"
+        );
+    }
+
+    #[tokio::test]
+    async fn sse_idle_stream_emits_heartbeat_comment() {
+        let events: EventsSender = tokio::sync::broadcast::channel(1).0;
+        let sse = handle_v1_events_sse(
+            events.clone(),
+            crate::NoritoQuery(EventsSseParams { filter: None }),
+        )
+        .expect("create SSE stream");
+        let mut body = sse.into_response().into_body();
+
+        let heartbeat = next_sse_chunk(&mut body).await;
+        assert_eq!(heartbeat, ": heartbeat\n\n");
+    }
+
+    #[tokio::test]
+    async fn sse_source_shutdown_is_machine_readable_and_terminal() {
+        let events: EventsSender = tokio::sync::broadcast::channel(1).0;
+        let sse = handle_v1_events_sse(
+            events.clone(),
+            crate::NoritoQuery(EventsSseParams { filter: None }),
+        )
+        .expect("create SSE stream");
+        let mut body = sse.into_response().into_body();
+        drop(events);
+
+        let error_frame = next_sse_chunk(&mut body).await;
+        assert!(error_frame.contains("event: stream_error"));
+        assert!(error_frame.contains("\"code\":\"stream_source_closed\""));
+        let terminal = timeout(Duration::from_secs(1), body.frame())
+            .await
+            .expect("terminal stream should not hang");
+        assert!(terminal.is_none());
+    }
+
+    #[tokio::test]
+    async fn resume_rejection_uses_native_sse_error_contract() {
+        let response = stream_resume_unsupported_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response
+                .extensions()
+                .get::<crate::ReviewedProtocolNativeError>(),
+            Some(&crate::ReviewedProtocolNativeError::StreamResumeUnsupported)
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-stream-error")
+                .and_then(|value| value.to_str().ok()),
+            Some("stream_resume_unsupported")
+        );
+
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect rejection")
+            .to_bytes();
+        let payload = std::str::from_utf8(&body).expect("UTF-8 rejection");
+        assert!(payload.contains("event: stream_error"));
+        assert!(payload.contains("stream_resume_unsupported"));
+        assert!(payload.contains("\"replay_available\":false"));
     }
 }
 
@@ -85403,27 +85679,6 @@ pub fn handle_get_nexus_lane_lifecycle(state: &CoreState) -> Result<LaneLifecycl
     .map_err(|err| conversion_error(format!("invalid committed lane lifecycle status: {err}")))
 }
 
-/// Reject the retired node-local Nexus lane lifecycle mutation path.
-///
-/// Lane lifecycle changes must be submitted as signed transactions carrying a
-/// `SetParameter(nexus_lane_lifecycle_v1)` instruction. That path is permission
-/// checked, consensus replicated, and replay durable; mutating one Torii node
-/// directly would fork runtime topology from its peers.
-pub async fn handle_post_nexus_lane_lifecycle(
-    _state: Arc<CoreState>,
-    _queue: Arc<Queue>,
-) -> Result<Response> {
-    Err(Error::AppForbidden {
-        code: "local_lane_lifecycle_disabled",
-        message: concat!(
-            "node-local lane lifecycle mutation is disabled; submit a signed transaction with ",
-            "SetParameter custom id `nexus_lane_lifecycle_v1` from an account holding ",
-            "CanSetParameters"
-        )
-        .to_owned(),
-    })
-}
-
 #[cfg(test)]
 mod nexus_lane_lifecycle_tests {
     use super::*;
@@ -85441,42 +85696,6 @@ mod nexus_lane_lifecycle_tests {
             })
             .expect("enable Nexus for lifecycle test");
         Arc::new(state)
-    }
-
-    fn queue_for_lifecycle_test() -> Arc<Queue> {
-        let (events_sender, _) = tokio::sync::broadcast::channel(8);
-        Arc::new(Queue::from_config(
-            iroha_config::parameters::actual::Queue::default(),
-            events_sender,
-        ))
-    }
-
-    #[tokio::test]
-    async fn direct_lane_lifecycle_endpoint_fails_closed_without_mutation() {
-        let state = enabled_state_for_lifecycle_test();
-        let queue = queue_for_lifecycle_test();
-        let lane_id = LaneId::new(1);
-        let before_nexus = state.nexus_snapshot();
-        let before_limits = queue.queue_limits().for_lane(lane_id);
-        let err =
-            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue)).await {
-                Ok(_) => panic!("node-local lifecycle mutation must remain disabled"),
-                Err(err) => err,
-            };
-
-        assert!(matches!(
-            err,
-            Error::AppForbidden {
-                code: "local_lane_lifecycle_disabled",
-                message,
-            } if message.contains("nexus_lane_lifecycle_v1")
-                && message.contains("CanSetParameters")
-        ));
-        assert_eq!(
-            state.nexus_snapshot().lane_catalog,
-            before_nexus.lane_catalog
-        );
-        assert_eq!(queue.queue_limits().for_lane(lane_id), before_limits);
     }
 
     #[test]
@@ -85525,6 +85744,42 @@ pub mod block {
 
     type Result<T> = core::result::Result<T, Error>;
 
+    #[cfg(not(test))]
+    const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+    #[cfg(test)]
+    const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+
+    fn close_frame_for_error(error: &Error) -> (u16, String) {
+        use crate::stream::{
+            CLOSE_INTERNAL_ERROR, CLOSE_INVALID_PAYLOAD, CLOSE_POLICY_VIOLATION,
+            CLOSE_TRY_AGAIN_LATER, Error as StreamError,
+        };
+
+        match error {
+            Error::Consumer(block::Error::Stream(StreamError::Decode(_)))
+            | Error::Consumer(block::Error::Stream(StreamError::UnexpectedFrame { .. })) => (
+                CLOSE_INVALID_PAYLOAD,
+                "invalid_subscription_payload".to_owned(),
+            ),
+            Error::Consumer(block::Error::Stream(StreamError::ReadTimeout)) => {
+                (CLOSE_POLICY_VIOLATION, "subscription_timeout".to_owned())
+            }
+            Error::Consumer(block::Error::InvalidHeight(_)) => (
+                CLOSE_POLICY_VIOLATION,
+                "invalid_block_subscription".to_owned(),
+            ),
+            Error::Consumer(block::Error::Stream(StreamError::SendTimeout)) => {
+                (CLOSE_TRY_AGAIN_LATER, "stream_backpressure".to_owned())
+            }
+            Error::Consumer(block::Error::Stream(
+                StreamError::Encode(_) | StreamError::WebSocket(_),
+            )) => (CLOSE_INTERNAL_ERROR, "stream_internal_error".to_owned()),
+            Error::Consumer(block::Error::Stream(StreamError::Closed)) | Error::Close => {
+                (1000, "stream_closed".to_owned())
+            }
+        }
+    }
+
     #[iroha_futures::telemetry_future]
     pub async fn handle_blocks_stream(
         kura: Arc<Kura>,
@@ -85541,8 +85796,10 @@ pub mod block {
             Ok(()) => stream.close().await.map_err(Into::into),
             Err(Error::Close) => Ok(()),
             Err(err) => {
-                // NOTE: try close websocket and return initial error
-                let _ = stream.close().await;
+                let (code, reason) = close_frame_for_error(&err);
+                if let Err(close_error) = stream.close_with(code, reason).await {
+                    iroha_logger::debug!(%close_error, "failed to send block stream close frame");
+                }
                 Err(err.into())
             }
         }
@@ -85553,6 +85810,9 @@ pub mod block {
     /// Ideally should return `Result<!>` cause it either runs forever or returns error
     async fn subscribe_forever(consumer: &mut block::Consumer<'_>) -> Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(10));
+        let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        heartbeat.tick().await;
         loop {
             tokio::select! {
                 // Wait for stream to be closed by client
@@ -85564,6 +85824,9 @@ pub mod block {
                 }
                 // This branch sends blocks
                 _ = interval.tick() => consumer.consume().await?,
+                _ = heartbeat.tick() => {
+                    consumer.stream.ping().await.map_err(block::Error::from)?;
+                }
             }
         }
     }
@@ -85597,6 +85860,49 @@ pub mod event {
 
     type Result<T> = core::result::Result<T, Error>;
 
+    #[cfg(not(test))]
+    const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+    #[cfg(test)]
+    const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+
+    fn close_frame_for_error(error: &Error) -> (u16, String) {
+        use crate::stream::{
+            CLOSE_INTERNAL_ERROR, CLOSE_INVALID_PAYLOAD, CLOSE_POLICY_VIOLATION,
+            CLOSE_TRY_AGAIN_LATER, Error as StreamError,
+        };
+
+        match error {
+            Error::Event(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => (
+                CLOSE_TRY_AGAIN_LATER,
+                format!("event_stream_lagged:{skipped}"),
+            ),
+            Error::Event(tokio::sync::broadcast::error::RecvError::Closed) => {
+                (CLOSE_INTERNAL_ERROR, "event_source_closed".to_owned())
+            }
+            Error::Consumer(event::Error::Stream(StreamError::Decode(_)))
+            | Error::Consumer(event::Error::Stream(StreamError::UnexpectedFrame { .. })) => (
+                CLOSE_INVALID_PAYLOAD,
+                "invalid_subscription_payload".to_owned(),
+            ),
+            Error::Consumer(event::Error::Stream(StreamError::ReadTimeout)) => {
+                (CLOSE_POLICY_VIOLATION, "subscription_timeout".to_owned())
+            }
+            Error::Consumer(event::Error::InvalidSubscription(_)) => (
+                CLOSE_POLICY_VIOLATION,
+                "invalid_event_subscription".to_owned(),
+            ),
+            Error::Consumer(event::Error::Stream(StreamError::SendTimeout)) => {
+                (CLOSE_TRY_AGAIN_LATER, "stream_backpressure".to_owned())
+            }
+            Error::Consumer(event::Error::Stream(
+                StreamError::Encode(_) | StreamError::WebSocket(_),
+            )) => (CLOSE_INTERNAL_ERROR, "stream_internal_error".to_owned()),
+            Error::Consumer(event::Error::Stream(StreamError::Closed)) | Error::Close => {
+                (1000, "stream_closed".to_owned())
+            }
+        }
+    }
+
     /// Subscribes `stream` for `events` filtered by filter that is
     /// received through the `stream`
     #[iroha_futures::telemetry_future]
@@ -85627,8 +85933,10 @@ pub mod event {
             Ok(()) => stream.close().await.map_err(Into::into),
             Err(Error::Close) => Ok(()),
             Err(err) => {
-                // NOTE: try close websocket and return initial error
-                let _ = stream.close().await;
+                let (code, reason) = close_frame_for_error(&err);
+                if let Err(close_error) = stream.close_with(code, reason).await {
+                    iroha_logger::debug!(%close_error, "failed to send event stream close frame");
+                }
                 Err(err.into())
             }
         }
@@ -85641,6 +85949,9 @@ pub mod event {
         events: &mut tokio::sync::broadcast::Receiver<iroha_data_model::events::EventBox>,
         consumer: &mut event::Consumer<'_>,
     ) -> Result<()> {
+        let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        heartbeat.tick().await;
         loop {
             tokio::select! {
                 // Wait for stream to be closed by client
@@ -85657,11 +85968,11 @@ pub mod event {
                             iroha_logger::trace!(?event);
                             consumer.consume(event).await?;
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            iroha_logger::warn!("event stream lagged; skipping buffered events");
-                        }
                         Err(err) => return Err(Error::Event(err)),
                     }
+                }
+                _ = heartbeat.tick() => {
+                    consumer.stream.ping().await.map_err(event::Error::from)?;
                 }
             }
         }
@@ -85720,24 +86031,6 @@ mod version_tests {
             "genesis not applied"
         );
     }
-}
-
-/// List supported Torii API versions and defaults.
-pub fn handle_api_versions(
-    policy: &api_version::ApiVersionPolicy,
-) -> crate::utils::NoritoBody<iroha_torii_shared::ApiVersionInfo> {
-    let supported = policy
-        .supported
-        .iter()
-        .copied()
-        .map(ApiVersion::to_label)
-        .collect();
-    crate::utils::NoritoBody(iroha_torii_shared::ApiVersionInfo {
-        default: policy.default.to_label(),
-        supported,
-        sunset_unix: policy.sunset_unix,
-        min_proof_version: policy.min_proof.to_label(),
-    })
 }
 
 #[cfg(feature = "telemetry")]
@@ -86203,7 +86496,7 @@ mod tests {
                 .expect("paths section");
             assert!(!paths.contains_key("/v1/aliases/voprf/evaluate"));
             assert!(paths.contains_key("/v1/aliases/resolve"));
-            assert!(paths.contains_key("/v1/aliases/resolve_index"));
+            assert!(paths.contains_key("/v1/aliases/resolve-index"));
         });
     }
 
@@ -86965,6 +87258,84 @@ mod event_stream_tests {
 
     use super::event::handle_events_stream_with_receiver;
 
+    async fn spawn_event_stream_server(
+        receiver: tokio::sync::broadcast::Receiver<EventBox>,
+    ) -> Option<std::net::SocketAddr> {
+        let rx_holder = Arc::new(Mutex::new(Some(receiver)));
+        let app = Router::new().route(
+            "/ws",
+            get({
+                let rx_holder = Arc::clone(&rx_holder);
+                move |ws: WebSocketUpgrade| {
+                    let rx_holder = Arc::clone(&rx_holder);
+                    async move {
+                        ws.on_upgrade(move |ws| async move {
+                            let mut guard = rx_holder.lock().await;
+                            let rx = guard.take().expect("event receiver already used");
+                            let _ = handle_events_stream_with_receiver(
+                                rx,
+                                ws,
+                                std::time::Duration::from_millis(
+                                    iroha_config::parameters::defaults::torii::WS_MESSAGE_TIMEOUT_MS,
+                                ),
+                            )
+                            .await;
+                        })
+                    }
+                }
+            }),
+        );
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => return None,
+            Err(err) => panic!("tcp bind failed: {err}"),
+        };
+        let addr = listener.local_addr().expect("listener addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("axum server");
+        });
+        Some(addr)
+    }
+
+    async fn connect_event_stream(
+        addr: std::net::SocketAddr,
+    ) -> Option<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    > {
+        match tokio_tungstenite::connect_async(format!("ws://{addr}/ws")).await {
+            Ok((stream, _response)) => Some(stream),
+            Err(tokio_tungstenite::tungstenite::Error::Io(io_err))
+                if io_err.kind() == ErrorKind::PermissionDenied =>
+            {
+                None
+            }
+            Err(err) => panic!("ws connect failed: {err}"),
+        }
+    }
+
+    async fn next_close_frame(
+        stream: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    ) -> tokio_tungstenite::tungstenite::protocol::CloseFrame {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                match stream.next().await {
+                    Some(Ok(tokio_tungstenite::tungstenite::Message::Close(Some(frame)))) => {
+                        break frame;
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(err)) => panic!("ws message error: {err}"),
+                    None => panic!("ws stream closed without a close frame"),
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for close frame")
+    }
+
     #[tokio::test]
     async fn ws_stream_receives_buffered_events() {
         let events: EventsSender = tokio::sync::broadcast::channel(16).0;
@@ -87072,7 +87443,7 @@ mod event_stream_tests {
     }
 
     #[tokio::test]
-    async fn ws_stream_survives_lagged_receiver() {
+    async fn ws_stream_reports_lag_and_closes() {
         let events: EventsSender = tokio::sync::broadcast::channel(1).0;
         let lagged_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
             [0x11; Hash::LENGTH],
@@ -87116,9 +87487,9 @@ mod event_stream_tests {
                             let _ = handle_events_stream_with_receiver(
                                 rx,
                                 ws,
-                            std::time::Duration::from_millis(
-                                iroha_config::parameters::defaults::torii::WS_MESSAGE_TIMEOUT_MS,
-                            ),
+                                std::time::Duration::from_millis(
+                                    iroha_config::parameters::defaults::torii::WS_MESSAGE_TIMEOUT_MS,
+                                ),
                             )
                             .await;
                         })
@@ -87161,28 +87532,136 @@ mod event_stream_tests {
             .await
             .expect("send subscription");
 
-        let event = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let close = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
                 match ws_stream.next().await {
-                    Some(Ok(tokio_tungstenite::tungstenite::Message::Binary(bytes))) => {
-                        let event_msg: EventMessage =
-                            decode_from_bytes(bytes.as_ref()).expect("decode event message");
-                        let event_box: EventBox = event_msg.into();
-                        if let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event_box
-                        {
-                            break event;
-                        }
+                    Some(Ok(tokio_tungstenite::tungstenite::Message::Close(Some(frame)))) => {
+                        break frame;
                     }
                     Some(Ok(_)) => {}
                     Some(Err(err)) => panic!("ws message error: {err}"),
-                    None => panic!("ws stream closed before event received"),
+                    None => panic!("ws stream closed without a close frame"),
                 }
             }
         })
         .await
-        .expect("timed out waiting for event");
+        .expect("timed out waiting for close frame");
 
-        assert_eq!(event.hash(), &wanted_hash);
-        assert_eq!(event.status(), &TransactionStatus::Queued);
+        assert_eq!(u16::from(close.code), crate::stream::CLOSE_TRY_AGAIN_LATER);
+        assert_eq!(close.reason, "event_stream_lagged:1");
+    }
+
+    #[tokio::test]
+    async fn ws_stream_rejects_text_subscription_payload() {
+        let events: EventsSender = tokio::sync::broadcast::channel(4).0;
+        let Some(addr) = spawn_event_stream_server(events.subscribe()).await else {
+            return;
+        };
+        let Some(mut ws_stream) = connect_event_stream(addr).await else {
+            return;
+        };
+
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                "not-norito".into(),
+            ))
+            .await
+            .expect("send text subscription");
+        let close = next_close_frame(&mut ws_stream).await;
+        assert_eq!(u16::from(close.code), crate::stream::CLOSE_INVALID_PAYLOAD);
+        assert_eq!(close.reason, "invalid_subscription_payload");
+    }
+
+    #[tokio::test]
+    async fn ws_stream_rejects_empty_event_filter_set() {
+        let events: EventsSender = tokio::sync::broadcast::channel(4).0;
+        let Some(addr) = spawn_event_stream_server(events.subscribe()).await else {
+            return;
+        };
+        let Some(mut ws_stream) = connect_event_stream(addr).await else {
+            return;
+        };
+
+        let subscription = EventSubscriptionRequest::new(Vec::new());
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Binary(
+                to_bytes(&subscription)
+                    .expect("encode empty subscription")
+                    .into(),
+            ))
+            .await
+            .expect("send empty subscription");
+        let close = next_close_frame(&mut ws_stream).await;
+        assert_eq!(u16::from(close.code), crate::stream::CLOSE_POLICY_VIOLATION);
+        assert_eq!(close.reason, "invalid_event_subscription");
+    }
+
+    #[tokio::test]
+    async fn ws_stream_rejects_data_after_subscription() {
+        let events: EventsSender = tokio::sync::broadcast::channel(4).0;
+        let Some(addr) = spawn_event_stream_server(events.subscribe()).await else {
+            return;
+        };
+        let Some(mut ws_stream) = connect_event_stream(addr).await else {
+            return;
+        };
+
+        let subscription = EventSubscriptionRequest::new(vec![EventFilterBox::Pipeline(
+            TransactionEventFilter::default().into(),
+        )]);
+        let bytes = to_bytes(&subscription).expect("encode subscription");
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Binary(
+                bytes.clone().into(),
+            ))
+            .await
+            .expect("send subscription");
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Binary(
+                bytes.into(),
+            ))
+            .await
+            .expect("send unexpected second request");
+
+        let close = next_close_frame(&mut ws_stream).await;
+        assert_eq!(u16::from(close.code), crate::stream::CLOSE_INVALID_PAYLOAD);
+        assert_eq!(close.reason, "invalid_subscription_payload");
+    }
+
+    #[tokio::test]
+    async fn ws_stream_emits_transport_heartbeat() {
+        let events: EventsSender = tokio::sync::broadcast::channel(4).0;
+        let Some(addr) = spawn_event_stream_server(events.subscribe()).await else {
+            return;
+        };
+        let Some(mut ws_stream) = connect_event_stream(addr).await else {
+            return;
+        };
+
+        let subscription = EventSubscriptionRequest::new(vec![EventFilterBox::Pipeline(
+            TransactionEventFilter::default().into(),
+        )]);
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Binary(
+                to_bytes(&subscription).expect("encode subscription").into(),
+            ))
+            .await
+            .expect("send subscription");
+
+        let heartbeat = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                match ws_stream.next().await {
+                    Some(Ok(tokio_tungstenite::tungstenite::Message::Ping(payload))) => {
+                        break payload;
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(err)) => panic!("ws heartbeat error: {err}"),
+                    None => panic!("ws stream closed before heartbeat"),
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for heartbeat");
+        assert!(heartbeat.is_empty());
     }
 }

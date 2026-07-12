@@ -741,9 +741,10 @@ fn build_relay_artifacts(
         .map_err(|err| format!("failed to build lane relay envelope: {err}"))?
         .with_manifest_root(Some(manifest_root));
     let proof_blob = build_lane_relay_proof_blob(request, &base, manifest_root)?;
+    let verified_at_height = base.block_header.height().get();
     let envelope = base.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
         proof_digest: Hash::new(proof_blob.payload.as_slice()),
-        verified_at_height: block_height,
+        verified_at_height,
     }));
     let relay_ref = envelope.relay_ref();
     let relay_envelope_hex = norito_hex(&envelope)?;
@@ -813,7 +814,7 @@ fn build_lane_relay_proof_blob(
         normalized_parameter(&request.parameter),
         PublicInputs {
             dsid: dsid_bytes(request.source_dsid),
-            slot: envelope.block_height.max(1),
+            slot: envelope.block_header.height().get(),
             old_root: digest32_with_domain(
                 b"fastpq-json:lane-relay-old-root:v1",
                 &[relay_ref_bytes.as_slice()],

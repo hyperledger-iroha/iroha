@@ -14,15 +14,15 @@ translation_last_reviewed: 2026-01-01
 Esta página lista endpoints não consensuais, voltados a operadores, que ajudam com visibilidade e solução de problemas. As respostas são JSON salvo indicação.
 
 Consenso (Sumeragi)
-- GET `/v1/sumeragi/new_view`
+- GET `/v1/sumeragi/new-view`
   - Instantâneo das contagens de recebimento NEW_VIEW por `(height, view)`.
   - Formato: `{ "ts_ms": <u64>, "items": [{ "height": <u64>, "view": <u64>, "count": <u64> }, ...] }`
   - Exemplo:
-    - `curl -s http://127.0.0.1:8080/v1/sumeragi/new_view | jq .`
-- GET `/v1/sumeragi/new_view/sse` (SSE)
+    - `curl -s http://127.0.0.1:8080/v1/sumeragi/new-view | jq .`
+- GET `/v1/sumeragi/new-view/sse` (SSE)
   - Fluxo periódico (≈1 s) do mesmo payload para dashboards.
   - Exemplo:
-    - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
+    - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new-view/sse`
 - Métricas: os gauges `sumeragi_new_view_receipts_by_hv{height,view}` refletem as contagens.
 - GET `/v1/sumeragi/status`
   - Instantâneo do índice do líder, Highest/Locked QCs (`highest_qc`/`locked_qc`, alturas, views, hashes de subject), contadores de coletores/VRF, adiamentos do pacemaker, profundidade da fila de transações e saúde do armazenamento RBC (`rbc_store.{sessions,bytes,pressure_level,persist_drops_total,evictions_total,recent_evictions[...]}`).
@@ -95,7 +95,7 @@ TOKEN="${TOKEN:-}"
 HDR=()
 if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
 while true; do
-  curl -s "${HDR[@]}" "$TORII/v1/sumeragi/new_view" \
+  curl -s "${HDR[@]}" "$TORII/v1/sumeragi/new-view" \
     | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
   sleep "$INTERVAL"
 done
@@ -110,7 +110,7 @@ TORII="${TORII:-http://127.0.0.1:8080}"
 TOKEN="${TOKEN:-}"
 HDR=()
 if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
-curl -Ns "${HDR[@]}" "$TORII/v1/sumeragi/new_view/sse" \
+curl -Ns "${HDR[@]}" "$TORII/v1/sumeragi/new-view/sse" \
   | awk '/^data:/{sub(/^data: /,""); print}' \
   | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
 ```

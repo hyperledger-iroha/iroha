@@ -1845,6 +1845,7 @@ mod tests {
     use iroha_data_model::smart_contract::entrypoint::{
         EntrypointListTypeNodeV1, EntrypointStructTypeNodeV1, MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH,
     };
+    use iroha_primitives::numeric::Quantity;
 
     use super::*;
 

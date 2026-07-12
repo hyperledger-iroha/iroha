@@ -4,7 +4,7 @@ direction: rtl
 source: docs/portal/docs/sorafs/storage-capacity-marketplace.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d3468021402674d55f48d9eabe4cb36ceb6cbc2b704e9db95654373c544450d4
+source_hash: 37a9cb8ed10afec8d33b7ca6f92eb1c1587cf1c6fddbe18a46744b2bff0191dd
 source_last_modified: "2025-11-20T07:32:59.870730+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -107,10 +107,10 @@ rollout checks required before hosted production settlement.
   alongside the scheduler so operators (or background workers) can derive canonical
   `CapacityTelemetryV1` payloads capturing GiB·hour, uptime, and PoR success metrics before posting
   through Torii.【crates/iroha_torii/src/routing.rs:4806】【crates/sorafs_node/src/lib.rs:110】【crates/sorafs_node/src/telemetry.rs:1】
-- Local metering now surfaces dedicated observation endpoints. `POST /v1/sorafs/capacity/uptime`,
-  `POST /v1/sorafs/capacity/por`, and `POST /v1/sorafs/capacity/failure` update the embedded
-  `CapacityMeter`, telemetry accumulator, and Prometheus gauges without issuing transactions,
-  ensuring probe data and replication failures feed dashboards and fee accrual logic immediately.【crates/iroha_torii/src/routing.rs:5023】【crates/iroha_torii/src/lib.rs:5301】
+- Local metering accepts uptime and replication-failure observations. Authenticated proof and
+  trusted-threshold verdict transitions supply PoR telemetry; there is no caller-controlled PoR
+  observation route. These inputs update the embedded `CapacityMeter`, telemetry accumulator, and
+  Prometheus gauges without issuing transactions.【crates/iroha_torii/src/routing.rs:5023】【crates/iroha_torii/src/lib.rs:5301】
 - The trustless gateway profile enumerates the HTTP request/response matrix, proof formats, and
   telemetry expectations that gateways must satisfy before joining the SF-5 conformance suite. See
   `docs/source/sorafs_gateway_profile.md` for the normative specification.

@@ -2890,7 +2890,7 @@ _DEFAULT_RESOLVED_CONFIG = ResolvedToriiClientConfig(
 
 @dataclass(frozen=True)
 class SorafsPorSubmissionResponse:
-    """Response wrapper for PoR challenge/proof submissions."""
+    """Response wrapper for PoR proof submissions."""
 
     status: str
 
@@ -2902,26 +2902,6 @@ class SorafsPorSubmissionResponse:
         if not isinstance(status, str) or not status.strip():
             raise TypeError(f"{context} missing string `status` field")
         return cls(status=status.strip())
-
-
-@dataclass(frozen=True)
-class SorafsPorObservationResponse:
-    """Response wrapper for PoR observation submissions."""
-
-    status: str
-    success: bool
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any], context: str) -> "SorafsPorObservationResponse":
-        if not isinstance(payload, Mapping):
-            raise TypeError(f"{context} must be a JSON object")
-        status = payload.get("status")
-        if not isinstance(status, str) or not status.strip():
-            raise TypeError(f"{context} missing string `status` field")
-        success = payload.get("success")
-        if not isinstance(success, bool):
-            raise TypeError(f"{context} missing boolean `success` field")
-        return cls(status=status.strip(), success=success)
 
 
 @dataclass(frozen=True)
@@ -5603,9 +5583,101 @@ class WebSocketEvent:
     raw: str
 
 
+class SseStreamError(RuntimeError):
+    """Terminal error reported after an SSE response has been established.
+
+    Canonical Torii live streams cannot change their HTTP status after sending
+    the response headers, so they report a terminal ``event: stream_error``
+    frame instead.  The exception keeps the stable server error code and the
+    loss/replay metadata available to callers.
+    """
+
+    MALFORMED_CODE = "malformed_stream_error"
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        dropped_messages: Optional[int],
+        replay_available: Optional[bool],
+        payload: Any,
+        raw: str,
+        malformed_reason: Optional[str] = None,
+    ) -> None:
+        self.code = code
+        self.message = message
+        self.dropped_messages = dropped_messages
+        self.replay_available = replay_available
+        self.payload = payload
+        self.raw = raw
+        self.malformed_reason = malformed_reason
+        detail = f"{code}: {message}"
+        if dropped_messages is not None:
+            detail = f"{detail} (dropped_messages={dropped_messages})"
+        super().__init__(detail)
+
+    @classmethod
+    def from_event(cls, event: SseEvent) -> "SseStreamError":
+        """Validate and convert a terminal ``stream_error`` SSE frame."""
+
+        payload = event.data
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                return cls._malformed(event, "data must be a JSON object")
+        if not isinstance(payload, Mapping):
+            return cls._malformed(event, "data must be a JSON object")
+
+        code = payload.get("code")
+        if not isinstance(code, str) or not code.strip():
+            return cls._malformed(event, "code must be a non-empty string")
+        message = payload.get("message")
+        if not isinstance(message, str) or not message.strip():
+            return cls._malformed(event, "message must be a non-empty string")
+        if "dropped_messages" not in payload:
+            return cls._malformed(event, "dropped_messages is required")
+        dropped_messages = payload["dropped_messages"]
+        if dropped_messages is not None and (
+            isinstance(dropped_messages, bool)
+            or not isinstance(dropped_messages, int)
+            or dropped_messages < 0
+        ):
+            return cls._malformed(
+                event,
+                "dropped_messages must be a non-negative integer or null",
+            )
+        if "replay_available" not in payload:
+            return cls._malformed(event, "replay_available is required")
+        replay_available = payload["replay_available"]
+        if not isinstance(replay_available, bool):
+            return cls._malformed(event, "replay_available must be a boolean")
+        return cls(
+            code,
+            message,
+            dropped_messages=dropped_messages,
+            replay_available=replay_available,
+            payload=dict(payload),
+            raw=event.raw,
+        )
+
+    @classmethod
+    def _malformed(cls, event: SseEvent, reason: str) -> "SseStreamError":
+        return cls(
+            cls.MALFORMED_CODE,
+            f"Torii emitted a malformed stream_error event: {reason}",
+            dropped_messages=None,
+            replay_available=None,
+            payload=event.data,
+            raw=event.raw,
+            malformed_reason=reason,
+        )
+
+
 @dataclass
 class EventCursor:
-    """Track the last observed SSE event id so streams can resume after reconnects."""
+    """Track the last event id for an SSE endpoint with a replay log."""
 
     last_event_id: Optional[str] = None
 
@@ -7072,7 +7144,7 @@ class SumeragiCommitQcSummary:
 
 @dataclass(frozen=True)
 class SumeragiCommitQc:
-    """Commit QC record returned by `/v1/sumeragi/commit_qc/{hash}`."""
+    """Commit QC record returned by `/v1/sumeragi/commit-qcs/{block_hash}`."""
 
     phase: str
     parent_state_root: str
@@ -7153,7 +7225,7 @@ class SumeragiCommitQc:
 
 @dataclass(frozen=True)
 class SumeragiCommitQcRecord:
-    """Commit QC response wrapper returned by `/v1/sumeragi/commit_qc/{hash}`."""
+    """Commit QC response wrapper returned by `/v1/sumeragi/commit-qcs/{block_hash}`."""
 
     subject_block_hash: str
     commit_qc: Optional[SumeragiCommitQc]
@@ -8534,7 +8606,7 @@ class SumeragiNewViewReceipt:
 
 @dataclass(frozen=True)
 class SumeragiNewViewSnapshot:
-    """Snapshot returned by `/v1/sumeragi/new_view`."""
+    """Snapshot returned by `/v1/sumeragi/new-view`."""
 
     ts_ms: int
     items: List[SumeragiNewViewReceipt]
@@ -10708,6 +10780,7 @@ __all__ = [
     "resolve_torii_client_config",
     "ResolvedToriiClientConfig",
     "SseEvent",
+    "SseStreamError",
     "EventCursor",
     "NetworkTimeSnapshot",
     "NetworkTimeStatus",
@@ -10720,7 +10793,6 @@ __all__ = [
     "StreamingTransportConfig",
     "StreamingSoranetConfig",
     "SorafsPorSubmissionResponse",
-    "SorafsPorObservationResponse",
     "SorafsPorVerdictResponse",
     "SorafsPinAlias",
     "SorafsPinRegisterResponse",
@@ -11656,13 +11728,13 @@ class ToriiClient(_BaseToriiClient):
         *,
         timeout: Optional[float] = None,
     ) -> Optional[Any]:
-        """Fetch ISO bridge status via `GET /v1/iso20022/status/{message_id}`."""
+        """Fetch ISO bridge status via `GET /v1/iso20022/messages/{message_id}`."""
 
         normalized_id = _require_non_empty_string(message_id, "message_id")
         encoded_id = quote(normalized_id, safe="")
         response = self._request(
             "GET",
-            f"/v1/iso20022/status/{encoded_id}",
+            f"/v1/iso20022/messages/{encoded_id}",
             headers={"Accept": "application/json"},
             timeout=timeout,
         )
@@ -12161,6 +12233,7 @@ class ToriiClient(_BaseToriiClient):
             resume=should_resume,
             decode_json=decode_json,
             cursor=cursor,
+            allow_resume=True,
             on_event=_handle if on_event is not None else None,
         )
 
@@ -12496,6 +12569,7 @@ class ToriiClient(_BaseToriiClient):
             resume=should_resume,
             decode_json=decode_json,
             cursor=cursor,
+            allow_resume=True,
             on_event=_handle if on_event is not None else None,
         )
         if with_metadata:
@@ -12505,33 +12579,6 @@ class ToriiClient(_BaseToriiClient):
     # -------------------------
     # SoraFS Proof-of-Retrievability APIs
     # -------------------------
-
-    def record_sorafs_por_challenge(
-        self,
-        *,
-        challenge: Optional[Union[bytes, bytearray, memoryview]] = None,
-        challenge_b64: Optional[str] = None,
-        timeout: Optional[float] = None,
-    ) -> SorafsPorSubmissionResponse:
-        """Submit a `PorChallengeV1` record (auditor/governance only)."""
-
-        payload = {
-            "challenge_b64": _normalize_base64_payload(
-                challenge_b64, challenge, "record_sorafs_por_challenge.challenge"
-            )
-        }
-        response = self._request(
-            "POST",
-            "/v1/sorafs/capacity/por-challenge",
-            json_body=payload,
-            headers={"Accept": "application/json"},
-            timeout=timeout,
-        )
-        self._expect_status(response, (200,))
-        body = self._maybe_json(response)
-        if body is None:
-            raise RuntimeError("por-challenge endpoint returned an empty payload")
-        return SorafsPorSubmissionResponse.from_payload(body, "sorafs_por_challenge")
 
     def record_sorafs_por_proof(
         self,
@@ -12586,28 +12633,6 @@ class ToriiClient(_BaseToriiClient):
         if body is None:
             raise RuntimeError("por-verdict endpoint returned an empty payload")
         return SorafsPorVerdictResponse.from_payload(body, "sorafs_por_verdict")
-
-    def submit_sorafs_por_observation(
-        self,
-        success: bool,
-        *,
-        timeout: Optional[float] = None,
-    ) -> SorafsPorObservationResponse:
-        """Record the outcome of a PoR observation probe."""
-
-        payload = {"success": _coerce_bool_flag(success, "submit_sorafs_por_observation.success")}
-        response = self._request(
-            "POST",
-            "/v1/sorafs/capacity/por",
-            json_body=payload,
-            headers={"Accept": "application/json"},
-            timeout=timeout,
-        )
-        self._expect_status(response, (200,))
-        body = self._maybe_json(response)
-        if body is None:
-            raise RuntimeError("por observation endpoint returned an empty payload")
-        return SorafsPorObservationResponse.from_payload(body, "sorafs_por_observation")
 
     def get_sorafs_por_status(
         self,
@@ -17617,14 +17642,14 @@ class ToriiClient(_BaseToriiClient):
         return SumeragiStatusSnapshot.from_payload(payload)
 
     def get_sumeragi_new_view(self) -> Optional[Any]:
-        """Fetch NEW_VIEW receipt counts (`GET /v1/sumeragi/new_view/json`)."""
+        """Fetch NEW_VIEW receipt counts (`GET /v1/sumeragi/new-view`)."""
 
-        return self.request_json("GET", "/v1/sumeragi/new_view/json", expected_status=(200,))
+        return self.request_json("GET", "/v1/sumeragi/new-view", expected_status=(200,))
 
     def get_sumeragi_new_view_typed(self) -> SumeragiNewViewSnapshot:
         """Typed wrapper for :meth:`get_sumeragi_new_view`."""
 
-        payload = self.request_json("GET", "/v1/sumeragi/new_view/json", expected_status=(200,))
+        payload = self.request_json("GET", "/v1/sumeragi/new-view", expected_status=(200,))
         if not isinstance(payload, Mapping):
             raise TypeError("new_view response must be a JSON object")
         return SumeragiNewViewSnapshot.from_payload(payload)
@@ -17784,12 +17809,12 @@ class ToriiClient(_BaseToriiClient):
         return SumeragiQcSnapshot.from_payload(payload)
 
     def get_sumeragi_commit_qc(self, block_hash_hex: str) -> Optional[Any]:
-        """Fetch commit QC details for a block hash (`GET /v1/sumeragi/commit_qc/{hash}`)."""
+        """Fetch commit QC details for a block hash (`GET /v1/sumeragi/commit-qcs/{block_hash}`)."""
 
         normalized = _normalize_hash_hex(block_hash_hex, "block_hash_hex")
         return self.request_json(
             "GET",
-            f"/v1/sumeragi/commit_qc/{normalized}",
+            f"/v1/sumeragi/commit-qcs/{normalized}",
             expected_status=(200,),
         )
 
@@ -18195,25 +18220,22 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
-        """Stream JSON events from `/v1/events/sse`. Automatically retries on transient errors.
+        """Stream live JSON events from `/v1/events/sse`.
 
         The `filter` parameter accepts a JSON string, mapping, or an
         :class:`iroha_python.event_filter.EventFilter` instance.
+
+        Torii does not retain a replay log for this route. A reconnect starts a
+        new live subscription and can have a gap; use the committed block
+        stream when complete ledger history is required.
         """
 
         filter_payload = ensure_event_filter(filter)
         params = {"filter": filter_payload} if filter_payload else None
-        initial_event_id = last_event_id if last_event_id is not None else (
-            cursor.last_event_id if cursor is not None else None
-        )
-        should_resume = resume or cursor is not None or last_event_id is not None
 
         def _handle(event: SseEvent) -> None:
             if on_event is None:
@@ -18229,10 +18251,7 @@ class ToriiClient(_BaseToriiClient):
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=initial_event_id,
-            resume=should_resume,
             decode_json=decode_json,
-            cursor=cursor,
             on_event=_handle if on_event is not None else None,
         )
         if with_metadata:
@@ -18245,19 +18264,11 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
-        """Stream `/v1/sumeragi/status/sse` for live consensus metrics."""
-
-        initial_event_id = last_event_id if last_event_id is not None else (
-            cursor.last_event_id if cursor is not None else None
-        )
-        should_resume = resume or cursor is not None or last_event_id is not None
+        """Stream `/v1/sumeragi/status/sse` live consensus metrics."""
 
         def _handle(event: SseEvent) -> None:
             if on_event is None:
@@ -18272,10 +18283,7 @@ class ToriiClient(_BaseToriiClient):
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=initial_event_id,
-            resume=should_resume,
             decode_json=decode_json,
-            cursor=cursor,
             on_event=_handle if on_event is not None else None,
         )
         if with_metadata:
@@ -18288,19 +18296,11 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
-        """Stream `/v1/sumeragi/new_view/sse` for live NEW_VIEW receipt counts."""
-
-        initial_event_id = last_event_id if last_event_id is not None else (
-            cursor.last_event_id if cursor is not None else None
-        )
-        should_resume = resume or cursor is not None or last_event_id is not None
+        """Stream `/v1/sumeragi/new-view/sse` live NEW_VIEW receipt counts."""
 
         def _handle(event: SseEvent) -> None:
             if on_event is None:
@@ -18311,14 +18311,11 @@ class ToriiClient(_BaseToriiClient):
                 on_event(event.data, event.id)
 
         iterator = self._stream_sse(
-            "/v1/sumeragi/new_view/sse",
+            "/v1/sumeragi/new-view/sse",
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=initial_event_id,
-            resume=should_resume,
             decode_json=decode_json,
-            cursor=cursor,
             on_event=_handle if on_event is not None else None,
         )
         if with_metadata:
@@ -18335,10 +18332,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
@@ -18355,10 +18349,7 @@ class ToriiClient(_BaseToriiClient):
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=last_event_id,
-            resume=resume,
             on_event=on_event,
-            cursor=cursor,
             with_metadata=with_metadata,
             decode_json=decode_json,
         )
@@ -18373,10 +18364,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
@@ -18393,10 +18381,7 @@ class ToriiClient(_BaseToriiClient):
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=last_event_id,
-            resume=resume,
             on_event=on_event,
-            cursor=cursor,
             with_metadata=with_metadata,
             decode_json=decode_json,
         )
@@ -18414,10 +18399,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
@@ -18437,10 +18419,7 @@ class ToriiClient(_BaseToriiClient):
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=last_event_id,
-            resume=resume,
             on_event=on_event,
-            cursor=cursor,
             with_metadata=with_metadata,
             decode_json=decode_json,
         )
@@ -18454,10 +18433,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
@@ -18473,10 +18449,7 @@ class ToriiClient(_BaseToriiClient):
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=last_event_id,
-            resume=resume,
             on_event=on_event,
-            cursor=cursor,
             with_metadata=with_metadata,
             decode_json=decode_json,
         )
@@ -18489,10 +18462,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
@@ -18507,10 +18477,7 @@ class ToriiClient(_BaseToriiClient):
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=last_event_id,
-            resume=resume,
             on_event=on_event,
-            cursor=cursor,
             with_metadata=with_metadata,
             decode_json=decode_json,
         )
@@ -18524,10 +18491,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
@@ -18543,10 +18507,7 @@ class ToriiClient(_BaseToriiClient):
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=last_event_id,
-            resume=resume,
             on_event=on_event,
-            cursor=cursor,
             with_metadata=with_metadata,
             decode_json=decode_json,
         )
@@ -18558,10 +18519,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
@@ -18573,10 +18531,7 @@ class ToriiClient(_BaseToriiClient):
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=last_event_id,
-            resume=resume,
             on_event=on_event,
-            cursor=cursor,
             with_metadata=with_metadata,
             decode_json=decode_json,
         )
@@ -18868,16 +18823,36 @@ class ToriiClient(_BaseToriiClient):
         resume: bool = False,
         decode_json: bool = True,
         cursor: Optional[EventCursor] = None,
+        allow_resume: bool = False,
         on_event: Optional[Callable[[SseEvent], None]] = None,
     ):
         url = f"{self._base_url}{path}"
-        active_last_id = last_event_id if last_event_id is not None else (
-            cursor.last_event_id if cursor is not None else None
+        if not allow_resume and (last_event_id is not None or resume or cursor is not None):
+            raise ValueError(f"{path} does not support SSE replay")
+        active_last_id = (
+            last_event_id
+            if last_event_id is not None
+            else (cursor.last_event_id if cursor is not None else None)
         )
-        should_resume = resume or last_event_id is not None or cursor is not None
+        should_resume = allow_resume and (
+            resume or last_event_id is not None or cursor is not None
+        )
 
         def iterator():
             nonlocal active_last_id
+
+            def process_event(event: SseEvent) -> SseEvent:
+                nonlocal active_last_id
+                if event.event == "stream_error":
+                    raise SseStreamError.from_event(event)
+                if event.id is not None and allow_resume:
+                    active_last_id = event.id
+                    if cursor is not None:
+                        cursor.advance(event)
+                if on_event is not None:
+                    on_event(event)
+                return event
+
             attempt = 0
             backoff = max(backoff_base, 0.0)
             while True:
@@ -18886,6 +18861,10 @@ class ToriiClient(_BaseToriiClient):
                     final_headers.pop("Accept", None)
                     if headers:
                         final_headers.update(headers)
+                    if not allow_resume:
+                        for name in tuple(final_headers):
+                            if name.lower() == "last-event-id":
+                                final_headers.pop(name)
                     final_headers.setdefault("Accept", "text/event-stream")
                     if should_resume and active_last_id:
                         final_headers["Last-Event-ID"] = active_last_id
@@ -18910,26 +18889,14 @@ class ToriiClient(_BaseToriiClient):
                                     buffer.clear()
                                     if event is None:
                                         continue
-                                    if event.id is not None:
-                                        active_last_id = event.id
-                                        if cursor is not None:
-                                            cursor.advance(event)
-                                    if on_event is not None:
-                                        on_event(event)
-                                    yield event
+                                    yield process_event(event)
                                 continue
                             buffer.append(line)
                         if buffer:
                             event = self._parse_sse_event(buffer, decode_json=decode_json)
                             buffer.clear()
                             if event is not None:
-                                if event.id is not None:
-                                    active_last_id = event.id
-                                    if cursor is not None:
-                                        cursor.advance(event)
-                                if on_event is not None:
-                                    on_event(event)
-                                yield event
+                                yield process_event(event)
                         break
                 except requests.RequestException:
                     attempt += 1

@@ -86,7 +86,7 @@ async fn nexus_public_lane_endpoints_exist() {
         .clone()
         .oneshot(with_loopback_connect_info(
             Request::builder()
-                .uri("/v1/nexus/public_lanes/0/validators")
+                .uri("/v1/nexus/public-lanes/0/validators")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         ))
@@ -98,7 +98,7 @@ async fn nexus_public_lane_endpoints_exist() {
         .clone()
         .oneshot(with_loopback_connect_info(
             Request::builder()
-                .uri("/v1/nexus/public_lanes/0/stake")
+                .uri("/v1/nexus/public-lanes/0/stake")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         ))
@@ -122,7 +122,7 @@ async fn nexus_public_lane_endpoints_list_records() {
         .clone()
         .oneshot(with_loopback_connect_info(
             Request::builder()
-                .uri("/v1/nexus/public_lanes/0/validators")
+                .uri("/v1/nexus/public-lanes/0/validators")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         ))
@@ -144,7 +144,7 @@ async fn nexus_public_lane_endpoints_list_records() {
         .clone()
         .oneshot(with_loopback_connect_info(
             Request::builder()
-                .uri("/v1/nexus/public_lanes/0/stake")
+                .uri("/v1/nexus/public-lanes/0/stake")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         ))
@@ -158,7 +158,7 @@ async fn nexus_public_lane_endpoints_list_records() {
         .oneshot(with_loopback_connect_info(
             Request::builder()
                 .uri(format!(
-                    "/v1/nexus/public_lanes/0/stake?validator={validator}"
+                    "/v1/nexus/public-lanes/0/stake?validator={validator}"
                 ))
                 .body(axum::body::Body::empty())
                 .unwrap(),
@@ -180,7 +180,7 @@ async fn nexus_public_lane_endpoints_reject_when_nexus_disabled() {
         .clone()
         .oneshot(with_loopback_connect_info(
             Request::builder()
-                .uri("/v1/nexus/public_lanes/0/validators")
+                .uri("/v1/nexus/public-lanes/0/validators")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         ))

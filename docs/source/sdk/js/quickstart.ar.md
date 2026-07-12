@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sdk/js/quickstart.md
 status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: ed490b7e796183ba923148179dbbe4b923b6d5e52c203853bd2d1236e760e631
+source_hash: f55d6e0a07dc623a4a4751f6d6580ab1205c298ea6d225bfd9a054f15b2d813b
 source_last_modified: "2026-04-04T12:16:49.583988+00:00"
 translation_last_reviewed: 2026-04-05
 ---
@@ -446,15 +446,20 @@ for await (const nft of torii.iterateAccountNfts("<i105-account-id>", {
 // env-driven pagination/filters so you can smoke-test permissions against a live Torii.
 ```
 
-## Offline readiness
+## Offline lifecycle
 
-JavaScript integrations should use `GET /v1/offline/readiness` for offline feature discovery.
-Classic Offline Note issuance, redemption, and audit transaction paths are retired;
-Kagemusha readiness fields advertise the active offline payment implementation.
+JavaScript integrations use exactly four first-release routes:
+`GET /v1/offline/readiness?asset_definition_id=...`,
+`POST /v1/offline/top-up`, `POST /v1/offline/redeem`, and
+`GET /v1/offline/operations/{operation_id}`. Top-up and redemption send the
+typed request directly as structured JSON or Norito, return `202 Accepted`,
+and are followed through the response `Location`. Readiness returns `200`
+with `ready: false` when evaluation succeeds but requirements are unmet, and
+reserves `503 readiness_unavailable` for an evaluation failure.
 
 ```js
-const readiness = await torii.getOfflineReadiness();
-console.log("kagemusha", readiness.offline_kagemusha_recursive_compact_available);
+const readiness = await torii.getOfflineReadiness("xor#wonderland");
+console.log("offline ready", readiness.ready, readiness.blockers);
 ```
 ## Torii Queries & Streaming
 
@@ -670,23 +675,18 @@ metrics above satisfies the `connect.queue_depth`, `connect.queue_overflow_total
 `connect.queue_expired_total` dashboards referenced throughout the JS roadmap. For offline queue
 snapshot/evidence helpers, see {doc}`offline`.
 
-## Streaming watchers & event cursors
+## Live event streams
 
-`ToriiClient.streamEvents()` exposes `/v1/events/sse` as an async iterator with automatic
-retries, so Node/Bun CLIs can tail pipeline activity the same way the Rust CLI does.
-Persist the `Last-Event-ID` cursor alongside your runbook artefacts so operators can
-resume a stream without skipping events when a process restarts.
+`ToriiClient.streamEvents()` exposes `/v1/events/sse` as a live-only async
+iterator. Torii retains no replay log for this route, so the helper has no
+`lastEventId` option and reconnecting can leave a gap. A terminal
+`event: stream_error` is yielded before the iterator ends; handle it explicitly
+instead of treating closure as a lossless continuation point.
 
 ```js
-import fs from "node:fs/promises";
 import { ToriiClient, extractPipelineStatusKind } from "@iroha/iroha-js";
 
 const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080");
-const cursorFile = process.env.STREAM_CURSOR_FILE ?? ".cache/torii.cursor";
-const resumeId = await fs
-  .readFile(cursorFile, "utf8")
-  .then((value) => value.trim())
-  .catch(() => null);
 const controller = new AbortController();
 
 process.once("SIGINT", () => controller.abort());
@@ -694,28 +694,26 @@ process.once("SIGTERM", () => controller.abort());
 
 for await (const event of torii.streamEvents({
   filter: { Pipeline: { Transaction: { status: "Committed" } } },
-  lastEventId: resumeId || undefined,
   signal: controller.signal,
 })) {
-  if (event.id) {
-    await fs.writeFile(cursorFile, `${event.id}\n`, "utf8");
+  if (event.event === "stream_error") {
+    console.error("terminal stream error", event.data);
+    break;
   }
   const status = event.data ? extractPipelineStatusKind(event.data) : null;
-  console.log(`[${event.event}] id=${event.id ?? "∅"} status=${status ?? "n/a"}`);
+  console.log(`[${event.event}] status=${status ?? "n/a"}`);
 }
 ```
 
 - Switch `PIPELINE_STATUS` (for example `Pending`, `Applied`, or `Approved`) or set
-  `STREAM_FILTER_JSON` to replay the same filters the CLI accepts.
+  `STREAM_FILTER_JSON` to use the same filters the CLI accepts.
 - `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` keeps the iterator alive until a
   signal is received; pass `STREAM_MAX_EVENTS=25` when you only need the first few events
   for a smoke test.
-- `ToriiClient.streamSumeragiStatus()` mirrors the same interface for
-  `/v1/sumeragi/status/sse` so consensus telemetry can be tailed separately, and the
-  iterator honours `Last-Event-ID` the same way.
-- See `javascript/iroha_js/recipes/streaming.mjs` for a turnkey CLI (cursor persistence,
-  env-var filter overrides, and `extractPipelineStatusKind` logging) used in the JS4
-  streaming/WebSocket roadmap deliverable.
+- `ToriiClient.streamSumeragiStatus()` exposes the separate
+  `/v1/sumeragi/status/sse` consensus telemetry feed.
+- See `javascript/iroha_js/recipes/streaming.mjs` for a live-only turnkey CLI with
+  environment-driven filters and explicit terminal-error handling.
 
 ## Governance & ISO Bridge
 

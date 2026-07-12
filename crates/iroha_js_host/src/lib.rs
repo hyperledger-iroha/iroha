@@ -386,10 +386,10 @@ pub struct JsKeyPair {
 
 /// Canonical Kotodama compilation result envelope returned by the Rust compiler.
 ///
-/// Source errors are data, not rejected JavaScript promises. Exactly one of
-/// `output` and `diagnostics_json` is present according to `ok`; rejected
-/// promises are reserved for task or serialization failures in the binding.
-#[napi(object)]
+/// Source errors are data, not rejected JavaScript promises. Both result fields
+/// are always present: the inactive field is an explicit JavaScript `null`;
+/// rejected promises are reserved for task or serialization failures.
+#[napi(object, use_nullable = true)]
 pub struct JsKotodamaCompileResult {
     /// Whether canonical compilation succeeded.
     pub ok: bool,
@@ -15315,7 +15315,7 @@ mod tests {
                 hajimari() {}
                 kaizen() {}
                 kotoage fn run() authorize("RunDemo") {}
-                view fn ping() -> i64 { return 1; }
+                view fn ping() -> int { return 1; }
             }"#,
         );
         let result = compile_kotodama_request(&request).expect("compile canonical Kotodama source");
@@ -21515,19 +21515,22 @@ seiyaku Privacy {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_redeem_instruction_rejects_semantic_profile_after_public_binding()
-    {
+    fn kagemusha_recursive_spend_redeem_instruction_rejects_witnessless_semantic_profile_early() {
         let request = sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
-        request
+        let err = request
             .validate_public_binding()
-            .expect("semantic recursive spend redeem request has valid public bindings");
+            .expect_err("witnessless semantic recursive spend redeem must fail closed");
+        assert!(
+            err.to_string().contains("lineage_witness"),
+            "unexpected witnessless semantic public-binding error: {err}"
+        );
         let err = match kagemusha_recursive_spend_redeem_instruction_from_request(request) {
-            Ok(_) => panic!("semantic recursive spend redeem request must reject"),
+            Ok(_) => panic!("witnessless semantic recursive spend redeem request must reject"),
             Err(err) => err,
         };
         assert!(
-            err.to_string().contains("private-hop lineage"),
-            "unexpected semantic-profile error: {err}"
+            err.to_string().contains("lineage_witness"),
+            "unexpected witnessless semantic-profile error: {err}"
         );
 
         let wrong_amount = sample_kagemusha_recursive_spend_redeem_request_for_js_host(41);
@@ -21666,8 +21669,31 @@ seiyaku Privacy {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_redeem_instruction_rejects_backend_invalid_lineage() {
-        let mut request = sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
+    fn kagemusha_recursive_spend_redeem_instruction_rejects_witnessless_and_backend_invalid_lineage()
+     {
+        let mut witnessless = sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
+        attach_strict_reserved_lineage_envelope_for_js_host(&mut witnessless);
+        witnessless.lineage_verifier_record =
+            Some(sample_kagemusha_recursive_spend_lineage_verifier_record_for_js_host());
+        let err = witnessless
+            .validate_public_binding()
+            .expect_err("witnessless reserved-lineage redeem must fail closed");
+        assert!(
+            err.to_string().contains("lineage_witness"),
+            "unexpected witnessless reserved-lineage public-binding error: {err}"
+        );
+        let err = kagemusha_recursive_spend_redeem_instruction_from_request(witnessless)
+            .expect_err("JS host must reject witnessless reserved-lineage redeem before backend");
+        assert!(
+            err.to_string().contains("lineage_witness"),
+            "unexpected witnessless reserved-lineage host error: {err}"
+        );
+
+        let (bundle, lineage_witness) =
+            sample_fast_record_backed_recursive_spend_lineage_fixture_for_js_host();
+        let mut request = sample_kagemusha_recursive_spend_redeem_request_for_js_host(7);
+        request.bundle = bundle;
+        request.lineage_witness = Some(lineage_witness);
         attach_strict_reserved_lineage_envelope_for_js_host(&mut request);
         let mut lineage_record =
             sample_kagemusha_recursive_spend_lineage_verifier_record_for_js_host();
@@ -21677,7 +21703,7 @@ seiyaku Privacy {
         .expect("recursive proof envelope byte cap fits u32");
         request.lineage_verifier_record = Some(lineage_record);
         request.validate_public_binding().expect(
-            "witnessless reserved-lineage redeem validates before backend proof verification",
+            "record-backed reserved-lineage redeem validates before backend proof verification",
         );
 
         let mut wrong_record_circuit = request.clone();
@@ -21726,7 +21752,7 @@ seiyaku Privacy {
 
         let err = match kagemusha_recursive_spend_redeem_instruction_from_request(request.clone()) {
             Ok(_) => {
-                panic!("JS host must reject backend-invalid witnessless reserved-lineage redeem")
+                panic!("JS host must reject backend-invalid record-backed reserved-lineage redeem")
             }
             Err(err) => err,
         };
@@ -21738,11 +21764,8 @@ seiyaku Privacy {
             "unexpected backend-invalid lineage rejection: {err}"
         );
 
-        let mut missing_lineage_slice =
-            sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
+        let mut missing_lineage_slice = request.clone();
         attach_reserved_lineage_envelope_for_js_host(&mut missing_lineage_slice, false);
-        missing_lineage_slice.lineage_verifier_record =
-            Some(sample_kagemusha_recursive_spend_lineage_verifier_record_for_js_host());
         let err = match kagemusha_recursive_spend_redeem_instruction_from_request(
             missing_lineage_slice,
         ) {
@@ -21750,9 +21773,10 @@ seiyaku Privacy {
             Err(err) => err,
         };
         assert!(
-            err.to_string().contains("verifier-slice")
+            err.to_string().contains("inline key")
+                || err.to_string().contains("verifier-slice")
                 || err.to_string().contains("public instance columns"),
-            "unexpected missing-verifier-slice error: {err}"
+            "unexpected record-backed lineage backend-profile error: {err}"
         );
 
         let mut missing_scalar = request.clone();
@@ -21786,8 +21810,10 @@ seiyaku Privacy {
                 Err(err) => err,
             };
         assert!(
-            err.to_string()
-                .contains("failed to decode recursive spend lineage proof envelope"),
+            err.to_string().contains("inline key")
+                || err
+                    .to_string()
+                    .contains("failed to decode recursive spend lineage proof envelope"),
             "unexpected malformed-lineage-envelope error: {err}"
         );
     }
@@ -21865,6 +21891,14 @@ seiyaku Privacy {
             request: iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1,
             label: &str,
         ) {
+            let public_binding_err = match request.validate_public_binding() {
+                Ok(()) => panic!("malformed lineage witness must reject: {label}"),
+                Err(err) => err,
+            };
+            assert!(
+                !public_binding_err.to_string().is_empty(),
+                "public-binding validation must report a reason for {label}"
+            );
             let err = match kagemusha_recursive_spend_redeem_instruction_from_request(request) {
                 Ok(_) => panic!("JS host recursive redeem builder must reject {label}"),
                 Err(err) => err,
@@ -21877,10 +21911,16 @@ seiyaku Privacy {
 
         let base_request = {
             let mut request = sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
-            request.lineage_witness =
-                Some(sample_kagemusha_recursive_spend_lineage_witness_for_js_host(&request.bundle));
+            let (bundle, witness) =
+                sample_fast_record_backed_recursive_spend_lineage_fixture_for_js_host();
+            request.bundle = bundle;
+            request.public_amount = 7;
+            request.lineage_witness = Some(witness);
             request
         };
+        base_request
+            .validate_public_binding()
+            .expect("JS host adversarial lineage baseline must be structurally valid");
 
         let mut missing_record = base_request.clone();
         missing_record
@@ -21926,6 +21966,28 @@ seiyaku Privacy {
             .verifier_records
             .push(extra);
         assert_rejects(unreferenced_record, "unreferenced verifier record");
+
+        let mut inactive_record = base_request.clone();
+        inactive_record
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .record_bundle
+            .verifier_records[0]
+            .record
+            .status = iroha_data_model::confidential::ConfidentialStatus::Withdrawn;
+        assert_rejects(inactive_record, "inactive verifier record");
+
+        let mut missing_inline_key = base_request.clone();
+        missing_inline_key
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .record_bundle
+            .verifier_records[0]
+            .record
+            .key = None;
+        assert_rejects(missing_inline_key, "missing inline verifier key");
 
         let mut note_commitment_mismatch = base_request.clone();
         note_commitment_mismatch
@@ -21973,17 +22035,6 @@ seiyaku Privacy {
             "final note output-commitment collision",
         );
 
-        let mut reserved_lineage_with_record_witness = base_request.clone();
-        attach_strict_reserved_lineage_envelope_for_js_host(
-            &mut reserved_lineage_with_record_witness,
-        );
-        reserved_lineage_with_record_witness.lineage_verifier_record =
-            Some(sample_kagemusha_recursive_spend_lineage_verifier_record_for_js_host());
-        assert_rejects(
-            reserved_lineage_with_record_witness,
-            "reserved lineage bundle with record-backed witness",
-        );
-
         let mut unexpected_previous_proof = base_request.clone();
         let previous = unexpected_previous_proof.bundle.recursive_proof.clone();
         unexpected_previous_proof
@@ -21997,7 +22048,16 @@ seiyaku Privacy {
             "unexpected previous recursive proof for one-hop witness",
         );
 
-        assert_rejects(base_request, "malformed Pallas envelope archive");
+        let mut malformed_pallas_archive = base_request;
+        malformed_pallas_archive
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .pallas_open_envelopes_archive = vec![0xFF, 0x00, 0x01];
+        assert_rejects(
+            malformed_pallas_archive,
+            "malformed Pallas envelope archive",
+        );
     }
 
     fn sample_hash(byte: u8) -> [u8; Hash::LENGTH] {
@@ -22468,6 +22528,51 @@ seiyaku Privacy {
             lineage_proving_key_archive: None,
             block_height: None,
         }
+    }
+
+    fn sample_fast_record_backed_recursive_spend_lineage_fixture_for_js_host() -> (
+        iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+        iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
+    ) {
+        let request = sample_kagemusha_recursive_spend_init_request_for_js_host();
+        let evidence =
+            iroha_core::zk::kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive(
+                &request.record_bundle,
+                &request.pallas_open_envelopes_archive,
+            )
+            .expect("derive JS host record-backed recursive spend evidence");
+        let accumulator =
+            iroha_data_model::offline::kagemusha_recursive_spend_accumulator_from_initial_evidence(
+                &evidence,
+                &request.current_note,
+            )
+            .expect("derive JS host record-backed recursive spend accumulator");
+        let public_inputs =
+            iroha_data_model::offline::kagemusha_recursive_spend_public_inputs_from_accumulator(
+                &accumulator,
+            )
+            .expect("derive JS host record-backed recursive spend public inputs");
+        let public_inputs_hash = public_inputs
+            .public_inputs_hash()
+            .expect("derive JS host record-backed recursive spend public-input hash");
+        let bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator,
+            recursive_proof: iroha_data_model::offline::KagemushaRecursiveAggregationProof {
+                verifier_key_id: VerifyingKeyId::new(
+                    "halo2/ipa",
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                ),
+                public_inputs,
+                public_inputs_hash,
+                proof: ProofBox::new("halo2/ipa".to_owned(), vec![0xB5; 64]),
+            },
+        };
+        let lineage_witness =
+            iroha_data_model::offline::kagemusha_recursive_spend_lineage_witness_from_init_result(
+                &request, &bundle,
+            )
+            .expect("derive JS host record-backed recursive spend lineage witness");
+        (bundle, lineage_witness)
     }
 
     fn recursive_spend_lineage_scalar_projection(byte: u8) -> [u8; Hash::LENGTH] {

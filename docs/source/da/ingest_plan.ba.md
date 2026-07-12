@@ -52,7 +52,7 @@ Payload — Norito-кодланған `DaIngestRequest`. Яуаптар ҡулл
 | 500 Эске хата | Көтөлмәгән етешһеҙлек (лог, + иҫкәртмә). |
 
 ```
-GET /v1/da/proof_policies
+GET /v1/da/proof-policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ KZG йөкләмәләре булғанға тиклем ингест аша к�
 don’t кәрәк өҫтәмә round-сәйәхәт бәйләү өсөн дәлил әүҙем сәйәсәт йыйылмаһы.
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v1/da/proof-policies/snapshot
 Accept: application/json | application/x-norito
 ```
 

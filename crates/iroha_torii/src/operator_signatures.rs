@@ -31,7 +31,7 @@ use std::{
 use axum::{
     body::Body,
     extract::{Request, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode, header::WWW_AUTHENTICATE},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -230,6 +230,12 @@ impl IntoResponse for OperatorSignatureError {
         ]);
         let mut resp = JsonBody(payload).into_response();
         *resp.status_mut() = self.status;
+        if self.status == StatusCode::UNAUTHORIZED {
+            resp.headers_mut().insert(
+                WWW_AUTHENTICATE,
+                HeaderValue::from_static("IrohaOperatorSignature realm=\"torii\""),
+            );
+        }
         resp
     }
 }
@@ -681,6 +687,19 @@ mod tests {
             1024,
             crate::routing::MaybeTelemetry::disabled(),
         )
+    }
+
+    #[test]
+    fn unauthorized_operator_errors_advertise_the_signature_scheme() {
+        let response =
+            OperatorSignatureError::missing_header(HEADER_OPERATOR_SIGNATURE).into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.headers().get(WWW_AUTHENTICATE),
+            Some(&HeaderValue::from_static(
+                "IrohaOperatorSignature realm=\"torii\""
+            ))
+        );
     }
 
     fn signed_headers_with_nonce(

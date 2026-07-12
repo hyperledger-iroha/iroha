@@ -201,6 +201,7 @@ final class KagemushaTopUpParityTests: XCTestCase {
             recipient: sampleRecipient(),
             publicAmount: "7",
             redeemProof: attachment,
+            lineageWitness: sharedRecursiveSpendArchive(name: "lineage_witness_append_result"),
             lineageVerifierRecord: syntheticLineageVerifierRecord()
         )
         let redeemArchive = try KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(redeemRequest)
@@ -795,27 +796,31 @@ final class KagemushaTopUpParityTests: XCTestCase {
         recordFields[6] = encodeFixed32Payload(
             IrohaHash.hash(PrivacyConfidentialWitnessCodecs.confidentialUnshieldPublicInputsSchema())
         )
-        let elementFramedSchemaHashRecord = try KagemushaRecursiveSpendVerifierRecordRef(
-            verifierKeyId: fixture.verifierRecord.verifierKeyId,
-            recordBytes: verifierRecordArchive(fields: recordFields)
-        )
-        assertRedeemProofAttachmentRejected(
-            proofOutputArchive: fixture.proofOutputArchive,
-            verifierRecord: elementFramedSchemaHashRecord,
-            expected: .invalidArchive("unshieldVerifierRecord.public_inputs_schema_hash")
-        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendVerifierRecordRef(
+                verifierKeyId: fixture.verifierRecord.verifierKeyId,
+                recordBytes: verifierRecordArchive(fields: recordFields)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("verifierRecord.public_inputs_schema_hash")
+            )
+        }
 
         recordFields = try compactFields(recordPayload)
         recordFields[7] = encodeFixed32Payload(fixture.commitment)
-        let elementFramedCommitmentRecord = try KagemushaRecursiveSpendVerifierRecordRef(
-            verifierKeyId: fixture.verifierRecord.verifierKeyId,
-            recordBytes: verifierRecordArchive(fields: recordFields)
-        )
-        assertRedeemProofAttachmentRejected(
-            proofOutputArchive: fixture.proofOutputArchive,
-            verifierRecord: elementFramedCommitmentRecord,
-            expected: .invalidArchive("unshieldVerifierRecord.commitment")
-        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendVerifierRecordRef(
+                verifierKeyId: fixture.verifierRecord.verifierKeyId,
+                recordBytes: verifierRecordArchive(fields: recordFields)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("verifierRecord.commitment")
+            )
+        }
     }
 
     func testBuildRedeemProofAttachmentEnforcesVerifierLifecycleWindow() throws {
@@ -844,17 +849,18 @@ final class KagemushaTopUpParityTests: XCTestCase {
             )
         }
 
-        let invalidWindow = try unshieldVerifierRecord(
-            verifierKey: verifierKey(),
-            activationHeight: 20,
-            withdrawHeight: 20
-        )
-        assertRedeemProofAttachmentRejected(
-            proofOutputArchive: fixture.proofOutputArchive,
-            verifierRecord: invalidWindow,
-            blockHeight: 20,
-            expected: .invalidArchive("unshieldVerifierRecord")
-        )
+        XCTAssertThrowsError(
+            try unshieldVerifierRecord(
+                verifierKey: verifierKey(),
+                activationHeight: 20,
+                withdrawHeight: 20
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("verifierRecord")
+            )
+        }
     }
 
     func testBuildRedeemProofAttachmentRejectsMalformedVerifierRecordArchivesAndIds() throws {
@@ -867,37 +873,43 @@ final class KagemushaTopUpParityTests: XCTestCase {
         )
         let canonicalFields = try compactFields(canonicalPayload)
 
-        let noncompactRef = try KagemushaRecursiveSpendVerifierRecordRef(
-            verifierKeyId: fixture.verifierRecord.verifierKeyId,
-            recordBytes: verifierRecordArchive(fields: canonicalFields, flags: 0)
-        )
-        assertRedeemProofAttachmentRejected(
-            proofOutputArchive: fixture.proofOutputArchive,
-            verifierRecord: noncompactRef,
-            expected: .invalidArchive("unshieldVerifierRecord")
-        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendVerifierRecordRef(
+                verifierKeyId: fixture.verifierRecord.verifierKeyId,
+                recordBytes: verifierRecordArchive(fields: canonicalFields, flags: 0)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("verifierRecord")
+            )
+        }
 
-        let trailingRef = try KagemushaRecursiveSpendVerifierRecordRef(
-            verifierKeyId: fixture.verifierRecord.verifierKeyId,
-            recordBytes: verifierRecordArchive(fields: canonicalFields + [Data([0])])
-        )
-        assertRedeemProofAttachmentRejected(
-            proofOutputArchive: fixture.proofOutputArchive,
-            verifierRecord: trailingRef,
-            expected: .invalidArchive("unshieldVerifierRecord")
-        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendVerifierRecordRef(
+                verifierKeyId: fixture.verifierRecord.verifierKeyId,
+                recordBytes: verifierRecordArchive(fields: canonicalFields + [Data([0])])
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("verifierRecord")
+            )
+        }
 
         var invalidOptionFields = canonicalFields
         invalidOptionFields[2] = Data([2])
-        let invalidOptionRef = try KagemushaRecursiveSpendVerifierRecordRef(
-            verifierKeyId: fixture.verifierRecord.verifierKeyId,
-            recordBytes: verifierRecordArchive(fields: invalidOptionFields)
-        )
-        assertRedeemProofAttachmentRejected(
-            proofOutputArchive: fixture.proofOutputArchive,
-            verifierRecord: invalidOptionRef,
-            expected: .invalidArchive("optionString")
-        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendVerifierRecordRef(
+                verifierKeyId: fixture.verifierRecord.verifierKeyId,
+                recordBytes: verifierRecordArchive(fields: invalidOptionFields)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("optionString")
+            )
+        }
 
         for verifierKeyId in ["halo2/ipa:Unshield-v3", "halo2//ipa:unshield-v3"] {
             XCTAssertThrowsError(
@@ -949,29 +961,21 @@ final class KagemushaTopUpParityTests: XCTestCase {
 
     func testRejectsLegacyOneByteVerifierRecordStatus() throws {
         let verifierKey = verifierKey()
-        let vkHash = verifyingKeyCommitment(backend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
-                                            bytes: verifierKey)
-        let envelope = openVerifyEnvelope(vkHash: vkHash)
-        let proofOutput = privacyBuildResult(proof: envelope)
         let verifierRecord = try oneByteStatusRecord(
             KagemushaRecursiveSpendRequestCodecs
                 .encodeConfidentialTransferV2VerifierRecordArchive(verifierKey: verifierKey)
         )
-        let ref = try KagemushaRecursiveSpendVerifierRecordRef(
-            verifierKeyId: "halo2/ipa:transfer-v2",
-            recordBytes: verifierRecord
-        )
-        let hop = try KagemushaVerifiedFoldHopEvidence(
-            proofOutputArchive: proofOutput,
-            verifierRecord: ref,
-            chainId: "swift-kagemusha-chain",
-            assetDefinitionId: assetDefinitionId(),
-            rootAfter: fixed32(0x08)
-        )
-
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(hops: [hop])
-        )
+            try KagemushaRecursiveSpendVerifierRecordRef(
+                verifierKeyId: "halo2/ipa:transfer-v2",
+                recordBytes: verifierRecord
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("truncated")
+            )
+        }
     }
 
     func testVerifiedFoldRecordBundleRejectsAdversarialHopEvidence() throws {
@@ -1469,13 +1473,8 @@ final class KagemushaTopUpParityTests: XCTestCase {
     }
 
     private func syntheticLineageVerifierRecord() throws -> KagemushaRecursiveSpendVerifierRecordRef {
-        try KagemushaRecursiveSpendVerifierRecordRef(
-            verifierKeyId: "halo2/ipa:kagemusha-recursive-spend-lineage-test",
-            recordBytes: noritoEncode(
-                typeName: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName,
-                payload: Data([0x01, 0x02, 0x03]),
-                flags: NoritoHeader.compactLen
-            )
+        try canonicalKagemushaVerifierRecordRef(
+            verifierKeyId: "halo2/ipa:kagemusha-recursive-spend-lineage-test"
         )
     }
 

@@ -229,7 +229,23 @@ enum NoritoBridgeLoader {
         validateBridge(at: path, allowUntrustedLocation: allowUntrustedLocation)
     }
 
-    private static func validateBridge(at path: String, allowUntrustedLocation: Bool) -> ValidationStatus {
+    static func validateForTests(
+        at path: String,
+        allowUntrustedLocation: Bool,
+        pinnedHashesForTests: [String: String]
+    ) -> ValidationStatus {
+        validateBridge(
+            at: path,
+            allowUntrustedLocation: allowUntrustedLocation,
+            pinnedHashes: pinnedHashesForTests
+        )
+    }
+
+    private static func validateBridge(
+        at path: String,
+        allowUntrustedLocation: Bool,
+        pinnedHashes: [String: String] = expectedHashes
+    ) -> ValidationStatus {
         let url = URL(fileURLWithPath: path)
         guard FileManager.default.fileExists(atPath: url.path) else {
             return .missing(path: path)
@@ -245,7 +261,7 @@ enum NoritoBridgeLoader {
         if let version = manifest?.version, version != expectedVersion {
             return .versionMismatch(path: path, expected: expectedVersion, actual: version)
         }
-        guard let expectedHash = manifest?.hashes[identifier] ?? expectedHashes[identifier] else {
+        guard let expectedHash = manifest?.hashes[identifier] ?? pinnedHashes[identifier] else {
             return .pathDenied(path: path)
         }
 
@@ -669,6 +685,13 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     ) -> KagemushaRecursiveSpendArchiveFn? {
         guard let handle, let address = dlsym(handle, symbol) else { return nil }
         return unsafeBitCast(address, to: KagemushaRecursiveSpendArchiveFn.self)
+    }
+
+    static func bridgeHandleForStaticFallback(
+        currentHandle: UnsafeMutableRawPointer?,
+        processHandle: UnsafeMutableRawPointer?
+    ) -> UnsafeMutableRawPointer? {
+        processHandle ?? currentHandle
     }
 
     func resolveKagemushaV2Symbol<T>(_ symbol: String, as type: T.Type) -> T? {
@@ -2471,7 +2494,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         self.encodeTransferWithFeeSponsorWithAlgFn =
             connect_norito_encode_transfer_signed_transaction_with_fee_sponsor_alg
         let staticHandle = dlopen(nil, RTLD_NOW | RTLD_GLOBAL)
-        self.bridgeHandle = staticHandle
+        self.bridgeHandle = Self.bridgeHandleForStaticFallback(
+            currentHandle: self.bridgeHandle,
+            processHandle: staticHandle
+        )
         if let encodeValidationFeeSymbol = staticHandle.flatMap({ dlsym($0, "connect_norito_encode_validation_fee_transfer_signed_transaction") }) {
             self.encodeValidationFeeTransferFn = unsafeBitCast(
                 encodeValidationFeeSymbol,
@@ -4499,7 +4525,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    /// Whether ABI 17 exposes every reserved V2 negotiation stub.
+    /// Whether ABI 18 exposes the V3 capability and reserved proof stubs.
     ///
     /// This does not mean the V2 proof backend is available; every stub must
     /// return the canonical unavailable status until that backend is enabled.

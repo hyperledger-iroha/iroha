@@ -97,7 +97,6 @@ Torii encaminha cabeçalhos de entrada relacionados à autenticação para envio
 -`x-api-token`
 -`x-iroha-account`
 -`x-iroha-signature`
--`x-iroha-api-version`
 
 Os clientes também podem fornecer cabeçalhos adicionais por chamada via `arguments.headers`.
 `content-length`, `host` e `connection` de `arguments.headers` são ignorados.

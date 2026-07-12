@@ -72,11 +72,11 @@ EXPECTED_ABI6_HOP_POLICY = {
     "preferred_append_output": [
         {
             "previous_hop_count": 1,
-            "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
+            "circuit_id": "kagemusha-recursive-aggregation-v1",
         },
         {
             "previous_hop_count": 63,
-            "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
+            "circuit_id": "kagemusha-recursive-aggregation-v1",
         },
         {
             "previous_hop_count": 64,
@@ -89,8 +89,8 @@ EXPECTED_ABI6_HOP_POLICY = {
     ],
     "append_witnessless": [
         {"previous_hop_count": 0, "allowed": False},
-        {"previous_hop_count": 1, "allowed": True},
-        {"previous_hop_count": 63, "allowed": True},
+        {"previous_hop_count": 1, "allowed": False},
+        {"previous_hop_count": 63, "allowed": False},
         {"previous_hop_count": 64, "allowed": False},
     ],
     "redeem_witnessless": [
@@ -103,20 +103,20 @@ EXPECTED_ABI6_HOP_POLICY = {
         {
             "circuit_id": "kagemusha-recursive-spend-lineage-onehop-v1",
             "hop_count": 1,
-            "allowed": True,
-            "requires_lineage_witness": False,
+            "allowed": False,
+            "requires_lineage_witness": True,
         },
         {
             "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
             "hop_count": 2,
-            "allowed": True,
-            "requires_lineage_witness": False,
+            "allowed": False,
+            "requires_lineage_witness": True,
         },
         {
             "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
             "hop_count": 64,
-            "allowed": True,
-            "requires_lineage_witness": False,
+            "allowed": False,
+            "requires_lineage_witness": True,
         },
         {
             "circuit_id": "kagemusha-recursive-aggregation-v1",
@@ -499,8 +499,10 @@ TEXT_REQUIREMENTS = {
     ),
     "docs/source/offline_kagemusha.md": (
         "The profile-specific `kagemusha-recursive-spend-lineage-onehop-v1` and",
-        "`kagemusha-recursive-spend-lineage-append-v1` proof ids are the enabled",
-        "generic `kagemusha-recursive-spend-lineage-v1` family label is",
+        "`kagemusha-recursive-spend-lineage-append-v1` proof ids identify the reserved",
+        "verifier-slice profiles. Witnessless chain admission remains fail-closed",
+        "`kagemusha-recursive-spend-lineage-v1` family label is",
+        "not accepted as a verifier-record proof id",
         "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1",
         "direct `255 x 1` verifier profile",
         "LEN=4 one-hop verifier-slice keygen layout still requires 49,725 usable rows",
@@ -7762,6 +7764,15 @@ TEXT_REQUIREMENTS = {
         "test_secret_looking_compact_key_evidence_path_blocks_without_leak",
     ),
     "crates/iroha_data_model/src/offline/mod.rs": (
+        "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 18;",
+        "KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE: bool = false;",
+        "pub struct KagemushaRecursiveSpendNativeCapabilitiesV1",
+        "self.proof_backend_available != KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE",
+        "self.missing_gates != kagemusha_v3_missing_gates()",
+        "pub fn kagemusha_recursive_spend_native_capabilities_v1()",
+        "proof_backend_available: KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE",
+        "fn kagemusha_pasta_cycle_capability_is_explicitly_fail_closed()",
+        "forged.proof_backend_available = true;",
         "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1: u32 = 64;",
         "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
         "preferred_kagemusha_offline_spend_mode_for_capabilities(false, recursive_spend_available)",
@@ -7888,7 +7899,18 @@ TEXT_REQUIREMENTS = {
         "build_proof_attachment_from_json_rejects_empty_proof_bytes",
     ),
     "crates/connect_norito_bridge/src/lib.rs": (
-        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 17;",
+        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 18;",
+        "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+        "connect_norito_kagemusha_topup_finality_verify_v2",
+        "kagemusha_recursive_spend_native_capabilities_v1();",
+        "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
+        "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
+        "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
+        "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
+        "fn recursive_spend_capabilities_advertise_v3_and_remain_fail_closed()",
+        "assert!(!capabilities.proof_backend_available);",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePastaCycleV3BackendAvailable",
+        "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePastaCycleV3BackendAvailable",
         "KagemushaRecursiveCompactUnavailable",
         "prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive",
         "is_kagemusha_recursive_compact_unavailable_error",
@@ -7913,6 +7935,59 @@ TEXT_REQUIREMENTS = {
         "proof_attachment_json_rejects_noncanonical_envelope_hash_hex",
         "proof_attachment_json_rejects_zero_vk_commitment",
         "proof_attachment_json_rejects_empty_proof_bytes",
+    ),
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift": (
+        "The ABI-18 Kagemusha recursive spend V2 bridge is unavailable.",
+        "requiredNativeBridgeAbiVersion: UInt32 = 18",
+        "isProofBackendAvailable = false",
+        "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+        "connect_norito_kagemusha_topup_finality_verify_v2",
+        "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
+        "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
+        "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
+        "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
+    ),
+    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendV2Tests.swift": (
+        "testABI18InventoryRequiresExplicitFailClosedCapabilities",
+        "KagemushaRecursiveSpendV2.requiredNativeBridgeAbiVersion, 18",
+        "The ABI-18 Kagemusha recursive spend V2 bridge is unavailable.",
+        "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+        "connect_norito_kagemusha_topup_finality_verify_v2",
+        "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
+    ),
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt": (
+        "PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18",
+        "PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA",
+        "nativePastaCycleV3BackendAvailable",
+        "isPastaCycleV3BackendAvailable",
+    ),
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt": (
+        "PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
+        "PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA",
+        "PASTA_CYCLE_V3_PROOF_BACKEND",
+        "PASTA_CYCLE_V3_TRANSCRIPT_PROFILE",
+        "PASTA_CYCLE_V3_MAX_PROOF_BYTES",
+    ),
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java": (
+        "PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18",
+        "PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA",
+        "nativePastaCycleV3BackendAvailable",
+        "isPastaCycleV3BackendAvailable",
+    ),
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
+        "PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
+        "PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA",
+        "PASTA_CYCLE_V3_PROOF_BACKEND",
+        "PASTA_CYCLE_V3_TRANSCRIPT_PROFILE",
+        "PASTA_CYCLE_V3_MAX_PROOF_BYTES",
+    ),
+    "scripts/build_norito_xcframework.sh": (
+        "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+        "connect_norito_kagemusha_topup_finality_verify_v2",
+        "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
+        "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
+        "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
+        "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
     ),
     "crates/iroha_js_host/src/lib.rs": (
         "connect_norito_bridge_abi_version() -> u32",
@@ -8052,6 +8127,9 @@ SDK_SELECTOR_REQUIREMENTS = {
 }
 
 FORBIDDEN_SNIPPETS = {
+    "docs/source/offline_kagemusha.md": (
+        "verifier-slice profiles. Witnessless chain admission is enabled",
+    ),
     "crates/iroha_data_model/src/offline/mod.rs": (
         "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
     ),
@@ -10576,6 +10654,14 @@ if mode == "--negative-control-offline-doc-verifier-profile-exactness":
     run_negative_control(
         "offline Kagemusha verifier-witness profile exactness",
         mutate_offline_doc_verifier_profile,
+    )
+    run_negative_control(
+        "offline Kagemusha witnessless admission fail-closed wording",
+        lambda: override_text(
+            "docs/source/offline_kagemusha.md",
+            "verifier-slice profiles. Witnessless chain admission remains fail-closed",
+            "verifier-slice profiles. Witnessless chain admission is enabled",
+        ),
     )
     raise SystemExit(0)
 
@@ -21795,5 +21881,5 @@ if errors:
         print(f"error: {error}", file=sys.stderr)
     raise SystemExit(1)
 
-print("Kagemusha production readiness is routed through ABI-6 Reserved-lineage recursive spend; ABI-7 recursive compact has package-aware one-hop/append proof wiring, cross-SDK compact-first selection, and dedicated C# SDK native-bridge certification")
+print("Kagemusha production readiness is routed through ABI-6 Reserved-lineage recursive spend; ABI-7 recursive compact remains package-aware, and ABI-18 advertises the explicit fail-closed Pasta-cycle V3 capability contract")
 PY

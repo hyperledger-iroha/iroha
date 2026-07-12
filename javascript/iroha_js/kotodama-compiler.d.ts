@@ -201,7 +201,8 @@ export interface KotodamaCompiledManifestMetadata {
   states: KotodamaCompiledStateDescriptor[];
   error_codes: KotodamaCompiledErrorCodeDescriptor[] | null;
   kotoba: KotodamaCompiledKotobaEntry[] | null;
-  provenance: KotodamaCompiledManifestProvenance | null;
+  /** Signed provenance is not accepted until its exact V1 message can be verified. */
+  provenance: null;
 }
 
 export interface KotodamaCompilerRequestOptions {

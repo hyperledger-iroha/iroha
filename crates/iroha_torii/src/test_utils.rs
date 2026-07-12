@@ -569,10 +569,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         },
         torii: A::Torii {
             address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
-            api_versions: defaults::torii::api_supported_versions(),
-            api_version_default: defaults::torii::api_default_version(),
-            api_min_proof_version: defaults::torii::api_min_proof_version(),
-            api_version_sunset_unix: defaults::torii::API_SUNSET_UNIX,
             max_content_len: (1_048_576u64).into(),
             data_dir: defaults::torii::data_dir(),
             receipt_signer: None,

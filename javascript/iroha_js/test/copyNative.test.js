@@ -213,6 +213,39 @@ test("same-source publication is idempotent after a fresh probe and returns the 
   assertVerifiedPair(layout, bytes);
 });
 
+test("an identical binary with a different valid manifest encoding is idempotent", async (t) => {
+  const layout = createLayout(t);
+  const bytes = Buffer.from("same native with alternate manifest encoding");
+  const logs = [];
+  const options = publicationOptions(layout, {
+    log(message) {
+      logs.push(message);
+    },
+  });
+  writeFileSync(layout.source, bytes);
+  const first = await publishNativeBinding(options);
+
+  const alternateManifest = `${JSON.stringify(
+    JSON.parse(readFileSync(layout.manifestPath, "utf8")),
+  )}\n`;
+  writeFileSync(layout.manifestPath, alternateManifest);
+  assert.equal(
+    verifyNativeBinding(layout.bindingPath, {
+      manifestPath: layout.manifestPath,
+      platformKey: PLATFORM_KEY,
+    }).ok,
+    true,
+  );
+
+  // This failpoint would make the old implementation enter an unrecoverable
+  // transaction because the old and next binaries have the same digest.
+  const second = await publishNativeBinding({ ...options, failpoint: "after-native" });
+  assert.equal(second.sha256, first.sha256);
+  assert.equal(readFileSync(layout.manifestPath, "utf8"), alternateManifest);
+  assert.match(logs.at(-1), /already matches the verified build output/u);
+  assertVerifiedPair(layout, bytes);
+});
+
 test("every publication failpoint restores the exact previous pair and cleans staging", async (t) => {
   for (const failpoint of ["after-backup", "after-native", "after-manifest"]) {
     await t.test(failpoint, async (subtest) => {
@@ -453,6 +486,62 @@ test("recovery rejects a journal with injected fields before mutating the prior 
   assert.ok(publicationArtifacts(layout.destDir).includes(transaction));
 });
 
+test("recovery rejects a journal that skips durable phases", async (t) => {
+  const layout = createLayout(t);
+  const previous = Buffer.from("journal-phase-previous");
+  writeFileSync(layout.source, previous);
+  await publishNativeBinding(publicationOptions(layout));
+  writeFileSync(layout.source, Buffer.from("journal-phase-next"));
+  await killPublisherAtPhase(layout, "journal-prepared");
+
+  const transaction = readdirSync(layout.destDir).find((name) =>
+    name.startsWith(".iroha-js-host-txn-"),
+  );
+  assert.ok(transaction);
+  const journal = path.join(layout.destDir, transaction, "journal-000000.json");
+  const malicious = JSON.parse(readFileSync(journal, "utf8"));
+  malicious.phase = "committed";
+  writeFileSync(journal, `${JSON.stringify(malicious)}\n`);
+
+  await assert.rejects(
+    recoverNativeBindingPublication({
+      destDir: layout.destDir,
+      platform: PLATFORM,
+      arch: ARCH,
+    }),
+    /journal phases are non-canonical/u,
+  );
+  assert.deepEqual(readFileSync(layout.bindingPath), previous);
+  assert.ok(publicationArtifacts(layout.destDir).includes(transaction));
+});
+
+test("recovery bounds a maliciously oversized journal before parsing", async (t) => {
+  const layout = createLayout(t);
+  const previous = Buffer.from("oversized-journal-previous");
+  writeFileSync(layout.source, previous);
+  await publishNativeBinding(publicationOptions(layout));
+  writeFileSync(layout.source, Buffer.from("oversized-journal-next"));
+  await killPublisherAtPhase(layout, "journal-prepared");
+
+  const transaction = readdirSync(layout.destDir).find((name) =>
+    name.startsWith(".iroha-js-host-txn-"),
+  );
+  assert.ok(transaction);
+  const journal = path.join(layout.destDir, transaction, "journal-000000.json");
+  writeFileSync(journal, "[".repeat(16 * 1024 + 1));
+
+  await assert.rejects(
+    recoverNativeBindingPublication({
+      destDir: layout.destDir,
+      platform: PLATFORM,
+      arch: ARCH,
+    }),
+    /journal entry exceeds 16384 bytes/u,
+  );
+  assert.deepEqual(readFileSync(layout.bindingPath), previous);
+  assert.ok(publicationArtifacts(layout.destDir).includes(transaction));
+});
+
 test("recovery rejects duplicated exact old components instead of guessing ownership", async (t) => {
   const layout = createLayout(t);
   writeFileSync(layout.source, Buffer.from("duplicate-old-previous"));
@@ -576,3 +665,20 @@ test("required-export probe accepts a complete module and rejects missing symbol
     /non-empty identifier array/u,
   );
 });
+
+test(
+  "required-export probe loads a real addon through the recovery-compatible private suffix",
+  { skip: !existsSync(path.resolve("native", NATIVE_FILENAME)) },
+  (t) => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-dlopen-probe-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const staged = path.join(root, `${NATIVE_FILENAME}.next`);
+    copyFileSync(path.resolve("native", NATIVE_FILENAME), staged);
+    // This test isolates the loader path from the release export contract so a
+    // locally cached addon from an older compatible build cannot make the
+    // focused unit suite ambient-state dependent.
+    assert.doesNotThrow(() =>
+      probeNativeBindingExports(staged, ["noritoEncodeInstruction"]),
+    );
+  },
+);

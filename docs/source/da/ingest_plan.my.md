@@ -52,7 +52,7 @@ Payload သည် Norito-encoded `DaIngestRequest` ဖြစ်သည်။ တ�
 | 500 အတွင်းပိုင်းအမှား | မမျှော်လင့်ထားသော ပျက်ကွက်မှု (မှတ်တမ်းဝင် + သတိပေးချက်)။ |
 
 ```
-GET /v1/da/proof_policies
+GET /v1/da/proof-policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ DA ကတိကဝတ်များ သို့မဟုတ် အထောက
 တက်ကြွသောမူဝါဒသတ်မှတ်ထားသည့် သက်သေအထောက်အထားကို ချည်နှောင်ရန် အပိုအသွားအပြန် မလိုအပ်ပါ။
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v1/da/proof-policies/snapshot
 Accept: application/json | application/x-norito
 ```
 

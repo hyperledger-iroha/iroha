@@ -2516,25 +2516,19 @@ test(
       apiToken: API_TOKEN,
     });
 
-    const readiness = await client.getOfflineReadiness();
-    assert.equal(Object.prototype.hasOwnProperty.call(readiness, "offline_kagemusha_abi7"), false);
-    assert.equal(Object.prototype.hasOwnProperty.call(readiness, "offline_kagemusha_abi7_mode"), false);
-    assert.equal(
-      Object.prototype.hasOwnProperty.call(readiness, "offline_kagemusha_abi7_bridge_abi_version"),
-      false,
-    );
-    assert.equal(Object.prototype.hasOwnProperty.call(readiness, "offline_kagemusha_abi7_circuit_id"), false);
-    assert.equal(Object.prototype.hasOwnProperty.call(readiness, "offline_kagemusha_abi7_artifacts"), false);
-    assert.equal(readiness.offline_kagemusha_recursive_compact_available, true);
-    assert.equal(readiness.offline_kagemusha_recursive_compact_mode, "recursive_compact_v1");
-    assert.equal(readiness.offline_kagemusha_recursive_compact_required_native_bridge_abi_version, 7);
-    assert.equal(
-      readiness.offline_kagemusha_recursive_compact_circuit_id,
-      "kagemusha-recursive-compact-v1",
-    );
-    assert.equal(readiness.offline_kagemusha_recursive_compact_artifacts_available, false);
-    assert.equal(readiness.offline_telemetry, true);
-    assert.equal(Object.prototype.hasOwnProperty.call(readiness, "offline_note"), false);
+    const assetDefinitionId = INTEGRATION_ASSET_DEFINITION_IDS[0];
+    const readiness = await client.getOfflineReadiness(assetDefinitionId);
+    assert.equal(readiness.asset_definition_id, assetDefinitionId);
+    assert.equal(Number.isSafeInteger(readiness.evaluated_block_height), true);
+    assert.equal(readiness.evaluated_block_height >= 0, true);
+    assert.match(readiness.evaluated_block_hash, /^[0-9a-f]{64}$/u);
+    assert.equal(typeof readiness.ready, "boolean");
+    assert.equal(Array.isArray(readiness.blockers), true);
+    assert.equal(readiness.ready, readiness.blockers.length === 0);
+    for (const blocker of readiness.blockers) {
+      assert.match(blocker.code, /^[a-z][a-z0-9_]*$/u);
+      assert.equal(typeof blocker.message, "string");
+    }
   },
 );
 
@@ -3024,7 +3018,7 @@ test(
 );
 
 test(
-  "SoraFS capacity sampling endpoints respond (optional)",
+  "SoraFS uptime sampling endpoint responds (optional)",
   {
     skip: !!SKIP_REASON,
     timeout: 90_000,
@@ -3071,29 +3065,6 @@ test(
       "sorafs uptime response observed_secs must be non-negative",
     );
 
-    let porObservation;
-    try {
-      porObservation = await client.submitSorafsPorObservation({ success: true });
-    } catch (error) {
-      if (shouldSkipSorafsPorEndpoints(error)) {
-        t.diagnostic(
-          `SoraFS PoR observation endpoint unavailable on target node: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-        return;
-      }
-      throw error;
-    }
-    assert.ok(
-      typeof porObservation.status === "string" && porObservation.status.length > 0,
-      "SoraFS PoR observation response must include a status string",
-    );
-    assert.equal(
-      porObservation.success,
-      true,
-      "SoraFS PoR observation payload should echo the submitted success flag",
-    );
   },
 );
 

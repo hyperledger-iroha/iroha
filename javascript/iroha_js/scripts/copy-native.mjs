@@ -16,6 +16,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   readdirSync,
   renameSync,
   rmSync,
@@ -41,6 +42,8 @@ const CHECKSUM_FILENAME = "iroha_js_host.checksums.json";
 const TRANSACTION_PREFIX = ".iroha-js-host-txn-";
 const CLEANUP_PREFIX = ".iroha-js-host-cleanup-";
 const JOURNAL_VERSION = 1;
+const MAX_JOURNAL_BYTES = 16 * 1024;
+const MAX_CHECKSUM_MANIFEST_BYTES = 1024 * 1024;
 const JOURNAL_PATTERN = /^journal-(\d{6})\.json$/u;
 const JOURNAL_TEMP_PATTERN = /^\.journal-(\d{6})-[0-9a-f-]+\.tmp$/u;
 const NEXT_NATIVE_FILENAME = `${NATIVE_FILENAME}.next`;
@@ -75,6 +78,15 @@ function assertRegularFile(path, label) {
   if (!metadata.isFile() || metadata.isSymbolicLink()) {
     throw new Error(`${label} must be a regular non-symbolic-link file: ${path}`);
   }
+  return metadata;
+}
+
+function assertChecksumManifest(path, label) {
+  const metadata = assertRegularFile(path, label);
+  if (metadata.size > MAX_CHECKSUM_MANIFEST_BYTES) {
+    throw new Error(`${label} exceeds the native checksum manifest size limit`);
+  }
+  return metadata;
 }
 
 function assertDirectory(path, label) {
@@ -122,7 +134,20 @@ export function probeNativeBindingExports(
     throw new TypeError("required native exports must be a non-empty identifier array");
   }
   const probeSource = String.raw`
-const binding = require(process.argv[1]);
+const bindingPath = process.argv[1];
+let binding;
+if (/\.(?:cjs|js)$/iu.test(bindingPath)) {
+  // Test-only fixture support; production stages a native library.
+  binding = require(bindingPath);
+} else {
+  // Publication deliberately retains the legacy .node.next transaction name
+  // for crash-recovery compatibility. require() dispatches by the last
+  // extension and would parse that Mach-O/ELF/PE file as JavaScript, whereas
+  // process.dlopen loads the addon independent of its private filename.
+  const nativeModule = { exports: {} };
+  process.dlopen(nativeModule, bindingPath);
+  binding = nativeModule.exports;
+}
 const required = JSON.parse(process.argv[2]);
 const missing = required.filter((name) => typeof binding[name] !== "function");
 if (missing.length > 0) {
@@ -170,7 +195,19 @@ function verificationError(label, verification) {
 }
 
 function sha256File(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
+  const hash = createHash("sha256");
+  const descriptor = openSync(path, constants.O_RDONLY);
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  try {
+    let bytesRead;
+    do {
+      bytesRead = readSync(descriptor, buffer, 0, buffer.length, null);
+      if (bytesRead > 0) hash.update(buffer.subarray(0, bytesRead));
+    } while (bytesRead > 0);
+  } finally {
+    closeSync(descriptor);
+  }
+  return hash.digest("hex");
 }
 
 function assertSha256(value, label) {
@@ -202,7 +239,7 @@ function verifyExactPair({
   label,
 }) {
   assertRegularFile(nativePath, `${label} native binding`);
-  assertRegularFile(manifestPath, `${label} checksum manifest`);
+  assertChecksumManifest(manifestPath, `${label} checksum manifest`);
   const actual = pairIdentity(nativePath, manifestPath);
   if (!samePairIdentity(actual, expected)) {
     throw new Error(`${label} does not match its journaled binary/checksum identity`);
@@ -306,6 +343,7 @@ function readTransaction(directory) {
     .sort();
   if (journalNames.length === 0) return null;
   let baseline;
+  let expectedPhases;
   let last;
   for (let index = 0; index < journalNames.length; index += 1) {
     const expectedName = `journal-${String(index).padStart(6, "0")}.json`;
@@ -313,7 +351,13 @@ function readTransaction(directory) {
       throw new Error("native publication journal contains a gap or duplicate sequence");
     }
     const journalPath = join(directory, expectedName);
-    assertRegularFile(journalPath, "Native publication journal entry");
+    const journalMetadata = assertRegularFile(
+      journalPath,
+      "Native publication journal entry",
+    );
+    if (journalMetadata.size > MAX_JOURNAL_BYTES) {
+      throw new Error(`native publication journal entry exceeds ${MAX_JOURNAL_BYTES} bytes`);
+    }
     let parsed;
     try {
       parsed = JSON.parse(readFileSync(journalPath, "utf8"));
@@ -323,6 +367,15 @@ function readTransaction(directory) {
       });
     }
     const entry = validateJournalEntry(parsed, transactionId, index);
+    expectedPhases ??= entry.previous === null
+      ? JOURNAL_PHASES.filter(
+          (phase) =>
+            phase !== "previous-manifest-moved" && phase !== "previous-native-moved",
+        )
+      : JOURNAL_PHASES;
+    if (entry.phase !== expectedPhases[index]) {
+      throw new Error("native publication journal phases are non-canonical");
+    }
     const invariant = JSON.stringify({
       next: entry.next,
       platformKey: entry.platformKey,
@@ -333,11 +386,6 @@ function readTransaction(directory) {
     if (baseline === undefined) baseline = invariant;
     else if (baseline !== invariant) {
       throw new Error("native publication journal invariants changed between phases");
-    }
-    const expectedPhaseIndex = JOURNAL_PHASES.indexOf(entry.phase);
-    const previousPhaseIndex = last === undefined ? -1 : JOURNAL_PHASES.indexOf(last.phase);
-    if (expectedPhaseIndex <= previousPhaseIndex) {
-      throw new Error("native publication journal phases are not strictly ordered");
     }
     last = entry;
   }
@@ -400,7 +448,15 @@ function assertTransactionEntries(transaction) {
   for (const name of readdirSync(transaction.directory)) {
     if (JOURNAL_PATTERN.test(name) || JOURNAL_TEMP_PATTERN.test(name) || allowed.has(name)) {
       const path = join(transaction.directory, name);
-      assertRegularFile(path, "Native publication transaction artifact");
+      if (
+        name === NEXT_MANIFEST_FILENAME ||
+        name === PREVIOUS_MANIFEST_FILENAME ||
+        name === DISCARDED_MANIFEST_FILENAME
+      ) {
+        assertChecksumManifest(path, "Native publication transaction checksum manifest");
+      } else {
+        assertRegularFile(path, "Native publication transaction artifact");
+      }
       continue;
     }
     throw new Error(`native publication transaction contains an unexpected artifact: ${name}`);
@@ -706,7 +762,7 @@ function recoverInterruptedPublications({
   }
   if (!nativeExists) return { outcome: "none" };
   assertRegularFile(dest, "Existing native binding after recovery");
-  assertRegularFile(manifest, "Existing native checksum manifest after recovery");
+  assertChecksumManifest(manifest, "Existing native checksum manifest after recovery");
   const verification = verifyBinding(dest, { manifestPath: manifest, platformKey });
   if (!verification?.ok) {
     throw verificationError("Existing native binding after recovery", verification);
@@ -861,7 +917,7 @@ export async function publishNativeBinding({
     }
     if (nativeExists) {
       assertRegularFile(dest, "Existing native binding");
-      assertRegularFile(checksumManifestPath, "Existing native checksum manifest");
+      assertChecksumManifest(checksumManifestPath, "Existing native checksum manifest");
     }
 
     let previous = null;
@@ -901,9 +957,7 @@ export async function publishNativeBinding({
     syncDirectory(transaction.directory);
     phaseHook?.("staged-native-synced");
 
-    const sha256 = createHash("sha256")
-      .update(readFileSync(stagedNative))
-      .digest("hex");
+    const sha256 = sha256File(stagedNative);
     writeFileSync(
       stagedManifest,
       `${JSON.stringify(
@@ -932,7 +986,15 @@ export async function publishNativeBinding({
     if (staged.sha256 !== undefined && staged.sha256 !== transaction.next.nativeSha256) {
       throw new Error("Staged native verifier returned an inconsistent checksum");
     }
-    if (transaction.previous !== null && samePairIdentity(transaction.previous, transaction.next)) {
+    // A checksum manifest is an authentication sidecar, not part of the
+    // executable generation. Existing valid manifests may differ in harmless
+    // formatting or contain additional platform entries. Treat an identical
+    // probed binary as idempotent so recovery never has to distinguish two
+    // byte-identical native generations by their filesystem position alone.
+    if (
+      transaction.previous !== null &&
+      transaction.previous.nativeSha256 === transaction.next.nativeSha256
+    ) {
       const matchingSha256 = transaction.next.nativeSha256;
       cleanupTransactionDirectory(transaction.directory, destinationDirectory, lock);
       transaction = undefined;
@@ -993,10 +1055,12 @@ export async function publishNativeBinding({
         }
         transaction = undefined;
       } catch (recoveryError) {
-        throw new AggregateError(
+        const aggregate = new AggregateError(
           [error, recoveryError],
           "native publication failed and durable recovery could not restore the exact prior pair",
         );
+        primaryError = aggregate;
+        throw aggregate;
       }
     }
     throw error;

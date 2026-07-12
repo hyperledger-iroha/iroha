@@ -769,6 +769,91 @@ public final class OfflineNoteV2 {
     private final byte[] recentBlockHash;
     private final long expiresAtMs;
 
+    /**
+     * Builds the platform challenge before App Attest reveals its assertion public key.
+     *
+     * <p>Chain admission later binds the credential and certificate keys from the returned
+     * attestation evidence to the registration's assertion public key, so the assertion key is
+     * deliberately absent from this pre-attestation input.
+     */
+    public static byte[] preAttestationChallengeHash(
+        final int version,
+        final String platform,
+        final String keyId,
+        final String deviceId,
+        final String accountId,
+        final String assetDefinitionId,
+        final String iosTeamId,
+        final String iosBundleId,
+        final String iosEnvironment,
+        final String androidPackageName,
+        final byte[] androidSigningCertificateSha256,
+        final byte[] publicKey,
+        final String assertionScheme,
+        final String assertionKeyAlgorithm,
+        final Integer assertionUsageCountLimit,
+        final boolean oneUse,
+        final long recentBlockHeight,
+        final byte[] recentBlockHash,
+        final long expiresAtMs) {
+      final String checkedPlatform = Objects.requireNonNull(platform, "platform");
+      final String checkedKeyId = Objects.requireNonNull(keyId, "keyId");
+      final String checkedDeviceId = Objects.requireNonNull(deviceId, "deviceId");
+      final String checkedAccountId = Objects.requireNonNull(accountId, "accountId");
+      final String checkedAssertionScheme =
+          requireNonBlankUnpadded(assertionScheme, "assertion_scheme");
+      final String checkedAssertionKeyAlgorithm =
+          requireNonBlankUnpadded(assertionKeyAlgorithm, "assertion_key_algorithm");
+      final byte[] checkedPublicKey = copy(publicKey, "publicKey");
+      final byte[] checkedRecentBlockHash = copy(recentBlockHash, "recentBlockHash");
+      final byte[] checkedSigningCertificate =
+          androidSigningCertificateSha256 == null
+              ? null
+              : Arrays.copyOf(
+                  androidSigningCertificateSha256, androidSigningCertificateSha256.length);
+
+      requireCertificateCore(version, checkedAccountId, checkedPublicKey, oneUse);
+      requireAttestationIdentity(checkedKeyId, checkedDeviceId);
+      requireOptionalAttestationMetadata(
+          iosTeamId, iosBundleId, iosEnvironment, androidPackageName);
+      if (assetDefinitionId != null) {
+        AssetDefinitionIdEncoder.parseAddressBytes(assetDefinitionId);
+      }
+      if (assertionUsageCountLimit != null && assertionUsageCountLimit < 0) {
+        throw new IllegalArgumentException("assertion usage count limit must be non-negative");
+      }
+      if (checkedSigningCertificate != null && checkedSigningCertificate.length != 32) {
+        throw new IllegalArgumentException(
+            "android_signing_certificate_sha256 must be 32 bytes");
+      }
+      requireHash(checkedRecentBlockHash, "recent_block_hash");
+      return hash(
+          NoritoCodec.encode(
+              new DeviceAttestationChallengePreimage(
+                  version,
+                  checkedPlatform,
+                  checkedKeyId,
+                  checkedDeviceId,
+                  checkedAccountId,
+                  assetDefinitionId,
+                  iosTeamId,
+                  iosBundleId,
+                  iosEnvironment,
+                  androidPackageName,
+                  checkedSigningCertificate,
+                  checkedPublicKey,
+                  checkedAssertionScheme,
+                  checkedAssertionKeyAlgorithm,
+                  assertionUsageCountLimit,
+                  oneUse,
+                  recentBlockHeight,
+                  checkedRecentBlockHash,
+                  expiresAtMs),
+              DEVICE_ATTESTATION_CHALLENGE_PREIMAGE_SCHEMA,
+              DEVICE_ATTESTATION_CHALLENGE_PREIMAGE_ADAPTER,
+              NoritoHeader.COMPACT_LEN));
+    }
+
     public DeviceAttestationRegistrationV2(
         final int version,
         final String platform,
@@ -1051,32 +1136,26 @@ public final class OfflineNoteV2 {
     }
 
     private byte[] computeChallengeHash() {
-      return hash(
-          NoritoCodec.encode(
-              new DeviceAttestationChallengePreimage(
-                  version,
-                  platform,
-                  keyId,
-                  deviceId,
-                  accountId,
-                  assetDefinitionId,
-                  iosTeamId,
-                  iosBundleId,
-                  iosEnvironment,
-                  androidPackageName,
-                  androidSigningCertificateSha256(),
-                  publicKey(),
-                  assertionScheme,
-                  assertionKeyAlgorithm,
-                  assertionPublicKey(),
-                  assertionUsageCountLimit,
-                  oneUse,
-                  recentBlockHeight,
-                  recentBlockHash(),
-                  expiresAtMs),
-              DEVICE_ATTESTATION_CHALLENGE_PREIMAGE_SCHEMA,
-              DEVICE_ATTESTATION_CHALLENGE_PREIMAGE_ADAPTER,
-              NoritoHeader.COMPACT_LEN));
+      return preAttestationChallengeHash(
+          version,
+          platform,
+          keyId,
+          deviceId,
+          accountId,
+          assetDefinitionId,
+          iosTeamId,
+          iosBundleId,
+          iosEnvironment,
+          androidPackageName,
+          androidSigningCertificateSha256(),
+          publicKey(),
+          assertionScheme,
+          assertionKeyAlgorithm,
+          assertionUsageCountLimit,
+          oneUse,
+          recentBlockHeight,
+          recentBlockHash(),
+          expiresAtMs);
     }
   }
 
@@ -1096,7 +1175,6 @@ public final class OfflineNoteV2 {
     private final byte[] publicKey;
     private final String assertionScheme;
     private final String assertionKeyAlgorithm;
-    private final byte[] assertionPublicKey;
     private final Integer assertionUsageCountLimit;
     private final boolean oneUse;
     private final long recentBlockHeight;
@@ -1118,7 +1196,6 @@ public final class OfflineNoteV2 {
         final byte[] publicKey,
         final String assertionScheme,
         final String assertionKeyAlgorithm,
-        final byte[] assertionPublicKey,
         final Integer assertionUsageCountLimit,
         final boolean oneUse,
         final long recentBlockHeight,
@@ -1140,7 +1217,6 @@ public final class OfflineNoteV2 {
           publicKey,
           assertionScheme,
           assertionKeyAlgorithm,
-          assertionPublicKey,
           assertionUsageCountLimit,
           oneUse,
           recentBlockHeight,
@@ -1164,7 +1240,6 @@ public final class OfflineNoteV2 {
         final byte[] publicKey,
         final String assertionScheme,
         final String assertionKeyAlgorithm,
-        final byte[] assertionPublicKey,
         final Integer assertionUsageCountLimit,
         final boolean oneUse,
         final long recentBlockHeight,
@@ -1190,7 +1265,6 @@ public final class OfflineNoteV2 {
       this.assertionScheme = Objects.requireNonNull(assertionScheme, "assertionScheme");
       this.assertionKeyAlgorithm =
           Objects.requireNonNull(assertionKeyAlgorithm, "assertionKeyAlgorithm");
-      this.assertionPublicKey = copy(assertionPublicKey, "assertionPublicKey");
       this.assertionUsageCountLimit = assertionUsageCountLimit;
       this.oneUse = oneUse;
       this.recentBlockHeight = recentBlockHeight;
@@ -1258,10 +1332,6 @@ public final class OfflineNoteV2 {
 
     private String assertionKeyAlgorithm() {
       return assertionKeyAlgorithm;
-    }
-
-    private byte[] assertionPublicKey() {
-      return Arrays.copyOf(assertionPublicKey, assertionPublicKey.length);
     }
 
     private Integer assertionUsageCountLimit() {
@@ -2212,7 +2282,6 @@ public final class OfflineNoteV2 {
               writeField(encoder, child -> writeBytesVec(child, value.publicKey()));
               writeField(encoder, child -> writeString(child, value.assertionScheme()));
               writeField(encoder, child -> writeString(child, value.assertionKeyAlgorithm()));
-              writeField(encoder, child -> writeBytesVec(child, value.assertionPublicKey()));
               writeField(encoder, child -> writeOptionU32(child, value.assertionUsageCountLimit()));
               writeField(encoder, child -> child.writeByte(value.oneUse() ? 1 : 0));
               writeField(encoder, child -> child.writeUInt(value.recentBlockHeight(), 64));
@@ -2238,7 +2307,6 @@ public final class OfflineNoteV2 {
                   readField(decoder, OfflineNoteV2::readBytesVec),
                   readField(decoder, OfflineNoteV2::readString),
                   readField(decoder, OfflineNoteV2::readString),
-                  readField(decoder, OfflineNoteV2::readBytesVec),
                   readField(decoder, OfflineNoteV2::readOptionU32),
                   readField(decoder, OfflineNoteV2::readBool),
                   readField(decoder, child -> child.readUInt(64)),

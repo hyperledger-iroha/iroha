@@ -77,7 +77,7 @@ translator: machine-google-reviewed
 | ጠቋሚ-ABI ጥብቅ ማረጋገጫ እና ሰነድ ማመሳሰል | ◉ | በአስተናጋጅ/IVM ወርቃማ ሙከራዎች እና በተፈጠሩ ሰነዶች ላይ የTLV ፖሊሲ ተፈጻሚ ነው። | ሁኔታ.md:227; ሁኔታ.md:317; ሁኔታ.md:344; ሁኔታ.md:366; ሁኔታ.md:527 |
 | ZK syscall gating በ CoreHost | ◉ | በፔር-ኦፕ ወረፋዎች የተረጋገጡ ኤንቨሎፖች በር እና የሃሽ ማዛመድን ISI ከመፈጸሙ በፊት ያስገድዳል። | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
 | Kotodama ጠቋሚ-ABI ሰነዶች እና ሰዋሰው | ◉ | ሰዋሰው/ሰነዶች ከቀጥታ ገንቢዎች እና SCALL ካርታዎች ጋር ተመሳስለዋል። | ሁኔታ.md:299-301 |
-| ISO 20022 ሼማ የሚመራ ሞተር እና Torii ድልድይ | ◉ | ቀኖናዊ ISO 20022 መርሃግብሮች የተከተቱ፣ የሚወስን የኤክስኤምኤል ትንተና እና `/v1/iso20022/status/{MsgId}` ኤፒአይ ተጋልጧል። | ሁኔታ.md:65-70 |
+| ISO 20022 ሼማ የሚመራ ሞተር እና Torii ድልድይ | ◉ | ቀኖናዊ ISO 20022 መርሃግብሮች የተከተቱ፣ የሚወስን የኤክስኤምኤል ትንተና እና `/v1/iso20022/messages/{MsgId}` ኤፒአይ ተጋልጧል። | ሁኔታ.md:65-70 |
 
 ## የሃርድዌር ማጣደፍ
 

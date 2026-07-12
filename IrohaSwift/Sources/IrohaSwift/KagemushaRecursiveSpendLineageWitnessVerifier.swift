@@ -56,7 +56,7 @@ public struct KagemushaRecursiveSpendLineageWitnessVerifyRequest: Equatable, Sen
 }
 
 public enum KagemushaRecursiveSpendLineageWitnessVerifier {
-    /// ABI 17 verifies witnesses as part of redemption but does not export a
+    /// ABI 18 verifies witnesses as part of redemption but does not export a
     /// standalone verifier symbol yet.
     public static let isNativeAvailable = false
     public static let requestWireName =

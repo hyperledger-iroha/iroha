@@ -41,9 +41,8 @@ public enum KagemushaRecursiveSpendProverError: Error, Equatable, LocalizedError
     }
 }
 
-public enum KagemushaOfflineSpendMode: String, Equatable {
-    case recursiveCompactV1 = "recursive_compact_v1"
-    case recursiveSpendV1 = "recursive_spend_v1"
+public enum KagemushaOfflineSpendMode: String, Equatable, CaseIterable {
+    case recursiveSpendV2 = "recursive_spend_v2"
 }
 
 public enum KagemushaRecursiveSpendProver {
@@ -59,7 +58,8 @@ public enum KagemushaRecursiveSpendProver {
         "kagemusha-recursive-spend-lineage-append-v1"
     public static let compactTokenMaxHops: UInt32 = 64
     public static let recursiveSpendLineageWitnesslessMaxHopsV1: UInt32 = 64
-    public static let recursiveSpendLineageTransitionCircuitWiredV1 = true
+    /// Reserved-lineage transition proofs are not admitted until the verifier circuit is wired.
+    public static let recursiveSpendLineageTransitionCircuitWiredV1 = false
     public static let recursivePreviousProofOpenEnvelopesRequiredCountV1 = 1
     public static let recursivePreviousProofOpenEnvelopesMaxBytes = 8 * 1024 * 1024
     public static let recursivePallasOpenEnvelopeMaxTranscriptLabelBytes = 128
@@ -110,41 +110,24 @@ public enum KagemushaRecursiveSpendProver {
     }
 
     public static var preferredMode: KagemushaOfflineSpendMode? {
-        preferredMode(
-            recursiveCompactAvailable: KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable,
-            recursiveSpendAvailable: isNativeAvailable
-        )
+        preferredMode(pastaCycleV3BackendAvailable: KagemushaRecursiveSpendV2.isProofBackendAvailable)
     }
 
     public static func preferredMode(
-        recursiveCompactAvailable: Bool,
-        recursiveSpendAvailable: Bool
+        pastaCycleV3BackendAvailable: Bool
     ) -> KagemushaOfflineSpendMode? {
-        if recursiveCompactAvailable {
-            return .recursiveCompactV1
-        }
-        return recursiveSpendAvailable ? .recursiveSpendV1 : nil
+        pastaCycleV3BackendAvailable ? .recursiveSpendV2 : nil
     }
 
-    /// Selects a mode that represents cash which can be spent again offline.
-    ///
-    /// `preferredMode` retains the cross-SDK proof-surface preference for
-    /// compatibility. Product wallets must use this selector so an
-    /// admission-neutral recursive-compact projection is never presented as
-    /// a spendable balance.
+    /// The first release exposes the same single production mode for proving and spending.
     public static var preferredSpendableCashMode: KagemushaOfflineSpendMode? {
-        preferredSpendableCashMode(
-            recursiveCompactAvailable: KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable,
-            recursiveSpendAvailable: isNativeAvailable
-        )
+        preferredMode
     }
 
     public static func preferredSpendableCashMode(
-        recursiveCompactAvailable: Bool,
-        recursiveSpendAvailable: Bool
+        pastaCycleV3BackendAvailable: Bool
     ) -> KagemushaOfflineSpendMode? {
-        _ = recursiveCompactAvailable
-        return recursiveSpendAvailable ? .recursiveSpendV1 : nil
+        preferredMode(pastaCycleV3BackendAvailable: pastaCycleV3BackendAvailable)
     }
 
     public static func canRedeemWitnessless(circuitId: String, hopCount: UInt32) -> Bool {

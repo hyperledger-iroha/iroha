@@ -486,7 +486,8 @@ public static class KagemushaRecursiveSpendNative
     public const int FoldStepMaxInputs = 2;
     public const int FoldStepMaxOutputs = 2;
     public const uint RecursiveSpendLineageWitnesslessMaxHopsV1 = 64;
-    public const bool RecursiveSpendLineageTransitionCircuitWiredV1 = true;
+    /// <summary>Whether the Reserved-lineage transition verifier is wired for admission.</summary>
+    public const bool RecursiveSpendLineageTransitionCircuitWiredV1 = false;
     public const int RecursivePreviousProofOpenEnvelopesRequiredCountV1 = 1;
     public const int RecursivePreviousProofOpenEnvelopesMaxBytes = 8 * 1024 * 1024;
     public const int RecursivePallasOpenEnvelopeMaxTranscriptLabelBytes = 128;

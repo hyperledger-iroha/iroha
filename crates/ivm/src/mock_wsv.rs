@@ -25,7 +25,6 @@ use norito::{
     decode_from_bytes,
     derive::{Decode, Encode},
     json::{self as njson},
-    literal,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -81,18 +80,6 @@ pub struct DataspaceAxtPolicy {
     pub min_handle_era: u64,
     pub min_sub_nonce: u64,
     pub current_slot: u64,
-}
-
-fn decode_json_blob_hex_literal(raw: &str) -> Result<Vec<u8>, VMError> {
-    let raw = if raw.starts_with("hash:") {
-        literal::parse("hash", raw).map_err(|_| VMError::DecodeError)?
-    } else {
-        raw.strip_prefix("0x").unwrap_or(raw)
-    };
-    if raw.len() % 2 != 0 {
-        return Err(VMError::DecodeError);
-    }
-    hex::decode(raw).map_err(|_| VMError::DecodeError)
 }
 
 fn decode_json_blob_payload(payload: &[u8]) -> Result<Json, VMError> {

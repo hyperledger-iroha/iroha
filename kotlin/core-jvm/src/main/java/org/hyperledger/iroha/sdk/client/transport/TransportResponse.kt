@@ -23,11 +23,11 @@ class TransportResponse(
 
         private fun copyHeaders(source: Map<String, List<String>>?): Map<String, List<String>> {
             if (source == null) return emptyMap()
-            val copy = TreeMap<String, List<String>>(String.CASE_INSENSITIVE_ORDER)
+            val merged = TreeMap<String, MutableList<String>>(String.CASE_INSENSITIVE_ORDER)
             for ((key, value) in source) {
-                copy[key] = value?.toList() ?: emptyList()
+                merged.getOrPut(key) { ArrayList() }.addAll(value ?: emptyList())
             }
-            return copy
+            return merged.mapValues { (_, values) -> values.toList() }
         }
     }
 

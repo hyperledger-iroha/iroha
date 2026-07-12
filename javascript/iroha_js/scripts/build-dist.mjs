@@ -73,6 +73,40 @@ export function syncDirectory(directory) {
   }
 }
 
+function syncFile(path) {
+  const descriptor = openSync(path, constants.O_RDONLY);
+  try {
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+/** Persist every staged file and directory before its tree is made public. */
+function syncTree(directory) {
+  const metadata = lstatSync(directory);
+  if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+    throw new Error(`build:dist cannot sync non-directory root: ${directory}`);
+  }
+  const entries = readdirSync(directory, { withFileTypes: true }).sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+  for (const entry of entries) {
+    const entryPath = join(directory, entry.name);
+    const entryMetadata = lstatSync(entryPath);
+    if (entryMetadata.isDirectory()) {
+      syncTree(entryPath);
+    } else if (entryMetadata.isSymbolicLink()) {
+      throw new Error(`build:dist cannot sync symbolic link: ${entryPath}`);
+    } else if (entryMetadata.isFile()) {
+      syncFile(entryPath);
+    } else {
+      throw new Error(`build:dist cannot sync unsupported entry: ${entryPath}`);
+    }
+  }
+  syncDirectory(directory);
+}
+
 function processIsRunning(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return false;
   try {
@@ -135,6 +169,7 @@ function sameLockSnapshot(left, right) {
   return (
     sameLockIdentity(left?.identity, right?.identity) &&
     left?.digest === right?.digest &&
+    left?.mtimeMs === right?.mtimeMs &&
     left?.owner?.pid === right?.owner?.pid &&
     left?.owner?.token === right?.owner?.token
   );
@@ -224,23 +259,25 @@ export async function acquireDistLock({
   while (true) {
     const token = randomUUID();
     let descriptor;
+    let createdDigest;
     let createdIdentity;
     try {
       descriptor = openSync(lockPath, "wx", 0o600);
-      writeFileSync(
-        descriptor,
-        `${JSON.stringify({ pid: process.pid, token, createdAt: new Date().toISOString() })}\n`,
-        { encoding: "utf8" },
-      );
+      const ownerRecord = `${JSON.stringify({
+        pid: process.pid,
+        token,
+        createdAt: new Date().toISOString(),
+      })}\n`;
+      writeFileSync(descriptor, ownerRecord, { encoding: "utf8" });
       fsyncSync(descriptor);
+      createdDigest = createHash("sha256").update(ownerRecord, "utf8").digest("hex");
       createdIdentity = lockIdentity(fstatSync(descriptor));
       closeSync(descriptor);
       descriptor = undefined;
       onLockCreated?.({ lockPath });
       syncDirectory(resolvedRoot);
-      const current = snapshotLock(lockPath);
       const lock = {
-        digest: current.digest,
+        digest: createdDigest,
         identity: createdIdentity,
         lockPath,
         pid: process.pid,
@@ -376,14 +413,26 @@ function recoverInterruptedPublication(root, lock) {
   const backups = publicationArtifacts(root, BACKUP_PREFIX);
 
   if (!existsSync(dist)) {
-    const recoverable = backups.find(isValidDistribution);
+    const recoverableBackups = backups.filter(isValidDistribution);
+    if (recoverableBackups.length > 1) {
+      throw new Error(
+        "build:dist found multiple valid crash backups and cannot prove their generation order",
+      );
+    }
+    const recoverable = recoverableBackups[0];
     if (recoverable) {
       assertDistLockOwnership(lock);
       renameSync(recoverable, dist);
       syncDirectory(root);
     }
   } else if (!isValidDistribution(dist)) {
-    const recoverable = backups.find(isValidDistribution);
+    const recoverableBackups = backups.filter(isValidDistribution);
+    if (recoverableBackups.length > 1) {
+      throw new Error(
+        "build:dist found multiple valid crash backups and cannot prove their generation order",
+      );
+    }
+    const recoverable = recoverableBackups[0];
     if (recoverable) {
       const failed = join(root, `${FAILED_PREFIX}${process.pid}-${randomUUID()}`);
       assertDistLockOwnership(lock);
@@ -447,7 +496,7 @@ function triggerTestFailpoint(failpoint, point) {
   }
 }
 
-function publishStagingTree({ root, dist, staging, failpoint, lock }) {
+function publishStagingTree({ root, dist, staging, stagingDigest, failpoint, lock }) {
   const backup = join(root, `${BACKUP_PREFIX}${process.pid}-${randomUUID()}`);
   const failed = join(root, `${FAILED_PREFIX}${process.pid}-${randomUUID()}`);
   let previousMoved = false;
@@ -467,6 +516,10 @@ function publishStagingTree({ root, dist, staging, failpoint, lock }) {
     stagingPublished = true;
     triggerTestFailpoint(failpoint, "after-publish");
     validateDistOutputs(dist);
+    const publishedDigest = directoryDigest(dist);
+    if (publishedDigest !== stagingDigest) {
+      throw new Error("build:dist published tree changed after staged verification");
+    }
   } catch (error) {
     let rollbackError;
     try {
@@ -516,6 +569,10 @@ export async function buildDistribution({ root = ROOT } = {}) {
     cpSync(src, staging, { recursive: true, errorOnExist: true });
     validateDistOutputs(staging);
     const stagingDigest = directoryDigest(staging);
+    syncTree(staging);
+    if (directoryDigest(staging) !== stagingDigest) {
+      throw new Error("build:dist staging tree changed while it was being persisted");
+    }
     let distDigest;
     try {
       if (existsSync(dist)) distDigest = directoryDigest(dist);
@@ -525,7 +582,14 @@ export async function buildDistribution({ root = ROOT } = {}) {
     if (distDigest === stagingDigest) {
       return { changed: false, digest: distDigest };
     }
-    publishStagingTree({ root: resolvedRoot, dist, staging, failpoint, lock });
+    publishStagingTree({
+      root: resolvedRoot,
+      dist,
+      staging,
+      stagingDigest,
+      failpoint,
+      lock,
+    });
     return { changed: true, digest: stagingDigest };
   } catch (error) {
     resultError = error;

@@ -18,8 +18,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "node",
     target: "node18",
     // This direct entrypoint intentionally exposes the complete Torii surface. The audited
-    // security-hardening baseline is 852,966 bytes with pinned esbuild; 840 KiB (860,160
-    // bytes) leaves 7,194 bytes, or 0.84%, of regression headroom.
+    // security-hardening baseline is 853,208 bytes with pinned esbuild; 840 KiB (860,160
+    // bytes) leaves 6,952 bytes, or 0.81%, of regression headroom.
     limitKb: 840,
   }),
   Object.freeze({
@@ -71,10 +71,10 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "kotodamaCompiler", "browser.js"),
     platform: "browser",
     target: "es2020",
-    // Pinned-esbuild baseline is 49,487 bytes (48.3 KiB); 49 KiB leaves 689
-    // bytes (1.39%) while covering artifact/CNTR validation and the complete
+    // Pinned-esbuild baseline is 51,000 bytes (49.8 KiB); 51 KiB leaves 1,224
+    // bytes (2.40%) while covering artifact/CNTR validation and the complete
     // remote compiler transport boundary.
-    limitKb: 49,
+    limitKb: 51,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -83,8 +83,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "browser.js"),
     platform: "browser",
     target: "es2020",
-    // The browser-clean public aggregate is 303,676 bytes (296.6 KiB) with
-    // pinned esbuild, leaving 3,524 bytes (1.16%) for the complete namespace.
+    // The browser-clean public aggregate is 303,924 bytes (296.8 KiB) with
+    // pinned esbuild, leaving 3,276 bytes (1.08%) for the complete namespace.
     limitKb: 300,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,

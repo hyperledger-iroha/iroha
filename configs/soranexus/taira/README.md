@@ -429,7 +429,7 @@ allowlisting:
    views rather than a static file roster:
    - `iroha app nexus public-lane validators --lane 0 --summary`
    - `iroha app nexus public-lane stake --lane 0 --validator <i105-account-id> --summary`
-   - `curl -sS "${PUBLIC_TORII_ROOT}/v1/nexus/public_lanes/0/validators" | jq .`
+   - `curl -sS "${PUBLIC_TORII_ROOT}/v1/nexus/public-lanes/0/validators" | jq .`
    - `curl -sS "${PUBLIC_TORII_ROOT}/v1/sumeragi/validator-sets" | jq .`
 
 ## Public endpoints
@@ -449,13 +449,13 @@ allowlisting:
 Taira serves SoraFS-published static content primarily through immutable CID
 gateway paths on the Torii origin:
 
-- `GET /sorafs/cid/<cid>/`
+- `GET /sorafs/cid/<cid>`
 - `GET /sorafs/cid/<cid>/<path...>`
 - `GET /v1/sorafs/cid/<cid>` for lookup metadata
 
 For the Polkaswap static bundle, the browser URL is:
 
-- `${PUBLIC_TORII_ROOT}/sorafs/cid/<cid>/`
+- `${PUBLIC_TORII_ROOT}/sorafs/cid/<cid>`
 
 This keeps the chosen public node as the Torii/API origin while giving every
 public Torii node an IPFS-style address surface for static content.
@@ -474,7 +474,7 @@ Gateway behavior:
 
 Named host bindings in `sorafs_sites.json` remain available as an optional
 alias layer, but they are no longer the primary deployment path. Reserve
-`taira.sora.org` for Torii itself and serve apps from `/sorafs/cid/<cid>/` or
+`taira.sora.org` for Torii itself and serve apps from `/sorafs/cid/<cid>` or
 `<cid>.sorafs.taira.sora.org`.
 
 Named bindings are production configuration, not a runtime environment
@@ -659,7 +659,7 @@ that the same direct node serves:
 - `/v1/sccp/registry`
 - `/v1/zk/proofs/count`
 - `/v1/sumeragi/validator-sets`
-- `/v1/nexus/public_lanes/0/{validators,stake}`
+- `/v1/nexus/public-lanes/0/{validators,stake}`
 - `/v1/bridge/messages` preflight
 - `/v1/contracts/deploy`
 - `/v1/contracts/state`

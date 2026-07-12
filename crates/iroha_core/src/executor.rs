@@ -5350,7 +5350,9 @@ impl Executor {
             QueryRequest::Singular(singular) => AnyQueryBox::Singular(singular.clone()),
             QueryRequest::Start(iterable) => AnyQueryBox::Iterable(iterable.clone()),
             QueryRequest::Continue(_) => {
-                // The iterable query was already validated when it started
+                // The iterable query was validated when it started. Execution still
+                // binds the cursor to this request's authority in LiveQueryStore
+                // before advancing any stored state.
                 return Ok(());
             }
         };
@@ -9992,12 +9994,13 @@ mod tests {
             confidential::ConfidentialStatus,
             offline::{
                 KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
-                KagemushaRecursiveSpendBranchPathV2, KagemushaRecursiveSpendBundleV2,
+                KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBundleV2,
                 KagemushaRecursiveSpendLineageModeV2, KagemushaRecursiveSpendProofV2,
                 KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendRedeemRequestV2,
-                KagemushaRecursiveSpendRedemptionIntentV2, KagemushaRequestAuthorizationV2,
+                KagemushaRecursiveSpendRedemptionIntentBuildRequestV2,
+                KagemushaRecursiveSpendTopUpAnchorV2, KagemushaRequestAuthorizationV2,
                 KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
-                KagemushaUnshieldPublicInputsBindingV2,
+                KagemushaUnshieldPublicInputsBindingV2, kagemusha_recursive_spend_lineage_root_v2,
             },
             proof::{ProofBox, VerifyingKeyId, VerifyingKeyRecord},
             zk::BackendTag,
@@ -10015,36 +10018,67 @@ mod tests {
             spend_nullifier: [0x42; 32],
             amount,
         };
-        let branch_path = KagemushaRecursiveSpendBranchPathV2 {
-            lineage_root: [0x43; 32],
-            depth: 0,
-            path_bits: [0; 8],
-        };
+        let artifact_generation = "fee-policy-v2";
+        let topup_operation_id = [0x47; 32];
+        let topup_anchor = KagemushaRecursiveSpendTopUpAnchorV2 {
+            version: 2,
+            chain_id: chain_id.clone(),
+            payer: recipient.clone(),
+            asset: AssetId::new(asset.clone(), recipient.clone()),
+            asset_scale: amount.scale,
+            amount,
+            initial_root: [0x44; 32],
+            finalized_root: [0x45; 32],
+            topup_anchor_nullifiers: vec![[0x46; 32]],
+            current_note: note.clone(),
+            topup_operation_id,
+            transfer_verifier_id: VerifyingKeyId::new(
+                "halo2/ipa",
+                "fee-policy-confidential-transfer-v2",
+            ),
+            transfer_verifier_commitment: [0x53; 32],
+            artifact_generation: artifact_generation.to_owned(),
+            finalized_height: 1,
+            finalized_tx_hash: [0x54; 32],
+            anchor_digest: [0; 32],
+        }
+        .finalize_digest()
+        .expect("canonical fee-policy V2 top-up anchor");
+        let topup_anchor_ref = topup_anchor
+            .compact_ref()
+            .expect("canonical fee-policy V2 anchor reference");
+        let lineage_root =
+            kagemusha_recursive_spend_lineage_root_v2(topup_anchor_ref.anchor_digest)
+                .expect("canonical fee-policy V2 lineage root");
+        let branch_claim = KagemushaRecursiveSpendBranchClaimV2::root(lineage_root)
+            .expect("canonical fee-policy V2 root claim");
         let verifier_key_id = VerifyingKeyId::new(
             "halo2/ipa",
             KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
         );
+        let statement = KagemushaRecursiveSpendPublicStatementV2 {
+            chain_id: chain_id.clone(),
+            asset: asset.clone(),
+            asset_scale: amount.scale,
+            final_root: topup_anchor.finalized_root,
+            topup_anchor_refs: vec![topup_anchor_ref],
+            proof_step_count: 1,
+            peer_hop_count: 0,
+            current_note: note.clone(),
+            branch_claims: vec![branch_claim],
+            transition: None,
+            artifact_generation: artifact_generation.to_owned(),
+            lineage_mode: KagemushaRecursiveSpendLineageModeV2::Reserved,
+            verifier_key_id: verifier_key_id.clone(),
+        };
+        let public_statement_digest = statement
+            .digest()
+            .expect("canonical fee-policy V2 public statement");
         let bundle = KagemushaRecursiveSpendBundleV2 {
-            statement: KagemushaRecursiveSpendPublicStatementV2 {
-                chain_id: chain_id.clone(),
-                asset: asset.clone(),
-                asset_scale: 0,
-                initial_root: [0x44; 32],
-                final_root: [0x45; 32],
-                topup_anchor_nullifiers: vec![[0x46; 32]],
-                proof_step_count: 1,
-                peer_hop_count: 0,
-                current_note: note.clone(),
-                topup_operation_id: [0x47; 32],
-                branch_path,
-                transition: None,
-                artifact_generation: "fee-policy-v2".to_owned(),
-                lineage_mode: KagemushaRecursiveSpendLineageModeV2::Reserved,
-                verifier_key_id: verifier_key_id.clone(),
-            },
+            statement,
             recursive_proof: KagemushaRecursiveSpendProofV2 {
                 verifier_key_id: verifier_key_id.clone(),
-                public_statement_digest: [0x48; 32],
+                public_statement_digest,
                 proof: ProofBox::new("halo2/ipa".parse().expect("backend ident"), vec![0x49; 32]),
             },
         };
@@ -10062,20 +10096,20 @@ mod tests {
             asset_tag: [0x4B; 32],
             chain_tag: [0x4C; 32],
         };
-        let redemption = KagemushaRecursiveSpendRedemptionIntentV2 {
-            chain_id,
-            asset,
-            input_note: note,
-            parent_branch_path: branch_path,
-            parent_bundle_digest: [0x4D; 32],
-            input_root: bundle.statement.final_root,
+        let redemption = KagemushaRecursiveSpendRedemptionIntentBuildRequestV2 {
+            previous_bundle: bundle.clone(),
             recipient: recipient.clone(),
             public_amount: amount,
             change_output: None,
+            change_artifact_generation: None,
             unshield_public_inputs,
-            unshield_public_inputs_digest: [0x4E; 32],
+            unshield_public_inputs_digest: unshield_public_inputs
+                .digest()
+                .expect("canonical fee-policy V2 unshield digest"),
             operation_id,
-        };
+        }
+        .into_intent()
+        .expect("canonical fee-policy V2 redemption intent");
         let mut lineage_verifier_record = VerifyingKeyRecord::new(
             1,
             KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
