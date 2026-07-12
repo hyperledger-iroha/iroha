@@ -8,11 +8,11 @@
 
 #[cfg(not(test))]
 use std::sync::OnceLock;
-use std::thread;
 use std::sync::{
     Arc, RwLock, RwLockReadGuard, TryLockError,
     atomic::{AtomicU8, Ordering},
 };
+use std::thread;
 
 const OPEN: u8 = 0;
 const ACTIVATING: u8 = 1;
