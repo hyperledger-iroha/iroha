@@ -114,7 +114,7 @@ fn rejected_generic_proof_does_not_mutate_proof_registry() {
 
     assert!(format!("{error:?}").contains("authoritative on-chain verifier"));
     assert!(stx.world.proofs().get(&expected_id).is_none());
-    assert!(stx.world.internal_event_buf.is_empty());
+    assert!(stx.world.take_external_events().is_empty());
 }
 
 #[test]
