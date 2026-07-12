@@ -471,7 +471,6 @@ mod tests {
             finality::{FinalizedNextEpochSnapshot, V2FinalityArtifact},
         },
         offline::{
-            KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3,
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
             KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
@@ -487,6 +486,7 @@ mod tests {
             KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PARAMETERS_FILE_NAME_V3,
             KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROVING_KEY_FILE_NAME_V3,
             KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_VERIFYING_KEY_FILE_NAME_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_MODE_V2,
             KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2, KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2,
@@ -780,7 +780,7 @@ mod tests {
             schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
             bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-            mode: KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1.to_owned(),
+            mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V2.to_owned(),
             proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
             transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
             generation: "release-generation-1".to_owned(),
@@ -838,6 +838,77 @@ mod tests {
             finality_artifact,
             signing_keys: keys,
         }
+    }
+
+    fn epoch_boundary_proof(
+        fixture: &Fixture,
+        corrupt_next_epoch_pop: bool,
+    ) -> KagemushaTopUpFinalityProofV2 {
+        let window = fixture
+            .roster
+            .windows
+            .first()
+            .expect("fixture has one authenticated roster window");
+        let mut next_epoch_pops = window
+            .validator_set_pops
+            .iter()
+            .map(|pop| pop.to_vec())
+            .collect::<Vec<_>>();
+        if corrupt_next_epoch_pop {
+            next_epoch_pops[0][0] ^= 1;
+        }
+        let next_epoch_snapshot = FinalizedNextEpochSnapshot {
+            epoch: fixture.finality_artifact.height_context.epoch + 1,
+            epoch_end_height: fixture.finality_artifact.height_context.height + 100,
+            mode: window.consensus_mode,
+            roster: window.validator_set.clone(),
+            validator_set_pops: next_epoch_pops,
+            quorum: DualQuorum::from_roster(&window.validator_set)
+                .expect("fixture next-epoch roster has a canonical quorum"),
+            leader_seed: [0xA7; 32],
+        };
+
+        let mut complete_context = fixture.finality_artifact.height_context.clone();
+        complete_context.epoch_end_height = complete_context.height;
+        complete_context.next_epoch_snapshot = Some(next_epoch_snapshot.clone());
+        complete_context
+            .validate()
+            .expect("epoch-boundary fixture context is structurally valid");
+        let context_id = complete_context.id();
+
+        let mut proof = fixture.proof.clone();
+        proof.commit_qc.height_context.epoch_end_height = complete_context.epoch_end_height;
+        proof.commit_qc.height_context.next_epoch_snapshot = Some(next_epoch_snapshot);
+        proof.commit_qc.height_context.context_id = context_id;
+        proof.commit_qc.certificate.round.context_id = context_id;
+
+        let certificate = &mut proof.commit_qc.certificate;
+        let first_signer = certificate.signers[0];
+        let preimage = Vote {
+            round: certificate.round,
+            phase: certificate.phase,
+            subject: certificate.subject,
+            execution_commitment: certificate.execution_commitment,
+            signer: first_signer,
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let signatures = certificate
+            .signers
+            .iter()
+            .map(|signer| {
+                let index = usize::try_from(*signer).expect("fixture signer index fits usize");
+                Signature::try_new(fixture.signing_keys[index].private_key(), &preimage)
+                    .expect("sign epoch-boundary fixture vote")
+                    .payload()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+            &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        )
+        .expect("aggregate epoch-boundary fixture signatures");
+        proof
     }
 
     fn verify(

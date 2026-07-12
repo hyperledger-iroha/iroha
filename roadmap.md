@@ -856,33 +856,47 @@ Multisig authorities use preparation followed by the multisig workflow, never
 the direct detached-signature shortcut. The unified response uses
 `route_configuration_hash_hex`; the retired manifest alias is not accepted.
 
-The remaining SCCP release work is external deployment and audit evidence,
-plus the blocked broad workspace lanes:
+Successful outbound messages use one dense, zero-based `commitment_index` in
+block execution order, with a fixed maximum of 512 messages per block and 4,096
+canonical payload bytes per message. Kura persists the immutable canonical
+header and root-authenticated SCCP archive before finality publication or body
+eviction, so proof, proof-request, and recent-message reconstruction do not read
+historical bodies or mutable WSV payload copies. Recent discovery uses the
+compound `{ from, after_index }` cursor and cannot skip the remainder of a full
+same-height page.
 
-- complete the clean-build Core/Torii/CLI and four-peer admission matrix once
-  unrelated current-tree Core test fixtures compile; the full SCCP library and
-  production-validator suites, test-only release fixture, pinned
-  EVM/Ethereum/BSC/TRON contract corridor, Torii source schema, and focused
-  Swift, Python, JavaScript, and TypeScript lanes are green, while Java and
-  Windows .NET execution still require their host runtimes;
+Bulky pending WSV state is jointly bounded by
+`zk.sccp.max_pending_outbound_messages` and
+`zk.sccp.max_pending_outbound_payload_bytes` (defaults 65,536 and 268,435,456).
+Accepted destination proofs immediately replace the pending payload with a
+fixed terminal descriptor while retaining its locator and ordered index.
+Terminal replay/index records and immutable Kura history intentionally grow for
+permanent replay protection and proof history; immutable sidecars count in
+total/operator disk usage but are excluded from the evictable-body budget. No
+total-state bound is claimed.
+
+The remaining SCCP release work is external, independently verifiable evidence:
+
 - obtain independently audited, reproducible semantic circuit, witness
   generator, proving key, verifying key, toolchain, and audit-report artifacts
   for all three production profiles;
-- deploy the exact contracts and native source-verifier material, authenticate
-  finalized readbacks, and confirm every governed runtime/key/policy hash;
+- deploy the exact contracts and native source-verifier material, obtain
+  authenticated finalized verifier/runtime readbacks, and confirm every
+  governed runtime/key/policy hash;
 - apply the typed governance actions, run successful value-moving canaries in
   both directions, and confirm replay, stale-revision, wrong-route, and
-  unavailable-ingress failures remain closed; and
+  unavailable-ingress failures remain closed;
+- run the release SCCP .NET suite on Windows `.NET 8` and retain the direct
+  VSTest TRX plus OS/RID/architecture and native bridge-DLL evidence; and
 - publish a signed production release-evidence bundle accepted by the Rust
   validator and independently reproduced by release engineering and security.
 
 No fixture key, signal-binding circuit, synthetic receipt, unavailable lane,
 or self-consistent proof-controlled roster counts as production evidence.
 
-Any SCCP implementation-history paragraphs elsewhere in this file that mention
-Solana, TON, route manifests, generic proof jobs/artifacts, an external token
-constructor argument, or token-address precomputation are superseded by this
-launch-scope section and are not current roadmap work.
+SCCP V1 is only Taira↔Ethereum, Taira↔BSC, and Taira↔TRON. Solana, TON,
+generic proof jobs/artifacts, and retired route-manifest workflows are excluded
+from the first release and must not appear as launch blockers or evidence rows.
 
 ## Release and Stabilization
 

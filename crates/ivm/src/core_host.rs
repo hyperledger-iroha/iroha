@@ -3081,10 +3081,17 @@ mod tests {
         let host = CoreHost::new();
         let mut vm = IVM::new(u64::MAX);
         load_state_map_schema(&mut vm, "orders", EmbeddedStateType::Bytes);
-        let oversized = vec![0xff; syscalls::STATE_MAP_MAX_PAGE_BYTES + 1];
+        let mut oversized = Vec::with_capacity(7);
+        oversized.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+        oversized.push(1);
+        oversized.extend_from_slice(
+            &u32::try_from(syscalls::STATE_MAP_MAX_PAGE_BYTES + 1)
+                .expect("state map page bound fits u32")
+                .to_be_bytes(),
+        );
         let page_ptr = vm
-            .alloc_host_tlv(&make_pointer_tlv(PointerType::NoritoBytes, &oversized))
-            .expect("allocate oversized page");
+            .alloc_input_tlv(&oversized)
+            .expect("allocate forged oversized page header");
         let base: Name = "orders".parse().expect("map base");
         let base_ptr = vm
             .alloc_host_tlv(&make_pointer_tlv(
@@ -3342,10 +3349,7 @@ mod tests {
             .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &prefix_payload))
             .expect("allocate prefix");
         vm.load_program(&assemble_program(&[
-            encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                syscalls::SYSCALL_STATE_KEYS as u8,
-            ),
+            encoding::wide::encode_syscallx(syscalls::SYSCALL_STATE_KEYS),
             encoding::wide::encode_halt(),
         ]))
         .expect("load program");
@@ -3382,10 +3386,7 @@ mod tests {
             .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &prefix_payload))
             .expect("allocate prefix");
         vm.load_program(&assemble_program(&[
-            encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                syscalls::SYSCALL_STATE_KEYS as u8,
-            ),
+            encoding::wide::encode_syscallx(syscalls::SYSCALL_STATE_KEYS),
             encoding::wide::encode_halt(),
         ]))
         .expect("load program");
@@ -3423,10 +3424,7 @@ mod tests {
             .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &prefix_payload))
             .expect("allocate prefix");
         vm.load_program(&assemble_program(&[
-            encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                syscalls::SYSCALL_STATE_KEYS as u8,
-            ),
+            encoding::wide::encode_syscallx(syscalls::SYSCALL_STATE_KEYS),
             encoding::wide::encode_halt(),
         ]))
         .expect("load program");
@@ -3494,7 +3492,11 @@ mod tests {
             .expect_err("response cost exceeds the available syscall reserve");
 
         assert_eq!(error, VMError::OutOfGas);
-        assert_eq!(vm.remaining_gas(), 0);
+        assert_eq!(
+            vm.remaining_gas(),
+            quote - 1,
+            "an unaffordable up-front quote performs no host work and is not debited"
+        );
         assert!(
             !host.access_log.read_keys.contains("large"),
             "preparation must reject quote-minus-one before the host observes the state key"
@@ -3518,10 +3520,7 @@ mod tests {
             .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &key_payload))
             .expect("allocate key");
         vm.load_program(&assemble_program(&[
-            encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                syscalls::SYSCALL_STATE_LEN as u8,
-            ),
+            encoding::wide::encode_syscallx(syscalls::SYSCALL_STATE_LEN),
             encoding::wide::encode_halt(),
         ]))
         .expect("load program");
