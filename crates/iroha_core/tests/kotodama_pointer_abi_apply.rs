@@ -250,10 +250,10 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     let src = format!(
         r#"
         seiyaku PointerStateTransfer {{
-          state PoolAsset: StateMap<i64, AssetDefinitionId>;
+          state StateMap<int, AssetDefinitionId> PoolAsset;
           kotoage fn main() authorize("TransferAsset") {{
             let key = 7;
-            let amount: Amount = Amount::from_i64(1);
+            let quantity amount = 1;
             PoolAsset[key] = AssetDefinitionId::parse("{asset_literal}");
             let asset = PoolAsset.get(key).unwrap_or(AssetDefinitionId::parse("{asset_literal}"));
             ledger::asset::transfer(source: context::authority(), destination: context::authority(), asset_definition: asset, amount: amount, dataspace: DataSpaceId::parse("0"));
@@ -348,7 +348,7 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
     let write_src = format!(
         r#"
         seiyaku PointerStateWrite {{
-          state PoolAsset: StateMap<Name, AssetDefinitionId>;
+          state StateMap<Name, AssetDefinitionId> PoolAsset;
           kotoage fn main() authorize("WriteState") {{
             let key = Name::parse("pool");
             PoolAsset[key] = AssetDefinitionId::parse("{asset_literal}");
@@ -359,10 +359,10 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
     let read_src = format!(
         r#"
         seiyaku PointerStateRead {{
-          state PoolAsset: StateMap<Name, AssetDefinitionId>;
+          state StateMap<Name, AssetDefinitionId> PoolAsset;
           kotoage fn main() authorize("TransferAsset") {{
             let key = Name::parse("pool");
-            let amount: Amount = Amount::from_i64(1);
+            let quantity amount = 1;
             let asset = PoolAsset.get(key).unwrap_or(AssetDefinitionId::parse("{asset_literal}"));
             ledger::asset::transfer(source: context::authority(), destination: context::authority(), asset_definition: asset, amount: amount, dataspace: DataSpaceId::parse("0"));
           }}
@@ -429,8 +429,8 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
     let write_src = format!(
         r#"
         seiyaku PointerStateWrite {{
-          state PoolAsset: StateMap<Name, AssetDefinitionId>;
-          state VaultAccount: StateMap<Name, AccountId>;
+          state StateMap<Name, AssetDefinitionId> PoolAsset;
+          state StateMap<Name, AccountId> VaultAccount;
           kotoage fn main() authorize("WriteState") {{
             let key = Name::parse("pool");
             PoolAsset[key] = AssetDefinitionId::parse("{asset_literal}");
@@ -442,11 +442,11 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
     let read_src = format!(
         r#"
         seiyaku PointerStateRead {{
-          state PoolAsset: StateMap<Name, AssetDefinitionId>;
-          state VaultAccount: StateMap<Name, AccountId>;
+          state StateMap<Name, AssetDefinitionId> PoolAsset;
+          state StateMap<Name, AccountId> VaultAccount;
           kotoage fn main() authorize("TransferAsset") {{
             let key = Name::parse("pool");
-            let amount: Amount = Amount::from_i64(1);
+            let quantity amount = 1;
             let vault = VaultAccount.get(key).unwrap_or(AccountId::parse("{vault_literal}"));
             let asset = PoolAsset.get(key).unwrap_or(AssetDefinitionId::parse("{asset_literal}"));
             ledger::asset::transfer(source: context::authority(), destination: vault, asset_definition: asset, amount: amount, dataspace: DataSpaceId::parse("0"));
@@ -509,8 +509,8 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
     let write_src = format!(
         r#"
         seiyaku PointerStateWrite {{
-          state BaseAsset: StateMap<Name, AssetDefinitionId>;
-          state VaultAccount: StateMap<Name, AccountId>;
+          state StateMap<Name, AssetDefinitionId> BaseAsset;
+          state StateMap<Name, AccountId> VaultAccount;
           kotoage fn main() authorize("WriteState") {{
             let key = Name::parse("pool");
             BaseAsset[key] = AssetDefinitionId::parse("{asset_literal}");
@@ -522,14 +522,14 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
     let read_src = format!(
         r#"
         seiyaku PointerStateRead {{
-          state BaseAsset: StateMap<Name, AssetDefinitionId>;
-          state VaultAccount: StateMap<Name, AccountId>;
+          state StateMap<Name, AssetDefinitionId> BaseAsset;
+          state StateMap<Name, AccountId> VaultAccount;
           kotoage fn main() authorize("TransferAsset") {{
             let key = Name::parse("pool");
-            let ev = Json::parse("{{\"provider\":\"{authority_literal}\",\"base_amount\":1000}}");
+            let ev = json {{ provider: AccountId::parse("{authority_literal}"), base_amount: 1000 }};
             let provider = ev.get_account_id(Name::parse("provider")).unwrap_or(AccountId::parse("{authority_literal}"));
-            let zero: Amount = Amount::from_i64(0);
-            let base_amount = ev.get_amount(Name::parse("base_amount")).unwrap_or(zero);
+            let quantity zero = 0;
+            let base_amount = ev.get_quantity(Name::parse("base_amount")).unwrap_or(zero);
             let vault = VaultAccount.get(key).unwrap_or(AccountId::parse("{vault_literal}"));
             let asset = BaseAsset.get(key).unwrap_or(AssetDefinitionId::parse("{asset_literal}"));
             if base_amount > zero {{
@@ -585,21 +585,21 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
 fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
     let source = r#"
         seiyaku DlmmPool {
-          state BaseAsset: StateMap<Name, AssetDefinitionId>;
-          state QuoteAsset: StateMap<Name, AssetDefinitionId>;
-          state VaultAccount: StateMap<Name, AccountId>;
-          state FeePips: StateMap<Name, i64>;
-          state BinStep: StateMap<Name, i64>;
-          state ActiveBin: StateMap<Name, i64>;
-          state SeededBase: StateMap<i64, Amount>;
-          state SeededQuote: StateMap<i64, Amount>;
+          state StateMap<Name, AssetDefinitionId> BaseAsset;
+          state StateMap<Name, AssetDefinitionId> QuoteAsset;
+          state StateMap<Name, AccountId> VaultAccount;
+          state StateMap<Name, int> FeePips;
+          state StateMap<Name, int> BinStep;
+          state StateMap<Name, int> ActiveBin;
+          state StateMap<int, quantity> SeededBase;
+          state StateMap<int, quantity> SeededQuote;
 
-          kotoage fn init_pool(base_asset: AssetDefinitionId,
-                             quote_asset: AssetDefinitionId,
-                             vault_account: AccountId,
-                             fee_pips: i64,
-                             bin_step: i64,
-                             active_bin: i64) authorize("Admin") {
+          kotoage fn init_pool(AssetDefinitionId base_asset,
+                             AssetDefinitionId quote_asset,
+                             AccountId vault_account,
+                             int fee_pips,
+                             int bin_step,
+                             int active_bin) authorize("Admin") {
             let pool = Name::parse("pool");
             BaseAsset[pool] = base_asset;
             QuoteAsset[pool] = quote_asset;
@@ -609,10 +609,10 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
             ActiveBin[pool] = active_bin;
           }
 
-          kotoage fn seed_bin(provider: AccountId,
-                            bin_id: i64,
-                            base_amount: Amount,
-            quote_amount: Amount) authorize("Admin") {
+          kotoage fn seed_bin(AccountId provider,
+                            int bin_id,
+                            quantity base_amount,
+            quantity quote_amount) authorize("Admin") {
             let pool = Name::parse("pool");
             let vault = VaultAccount.get(pool).unwrap_or(provider);
             let base_asset = BaseAsset.get(pool).unwrap_or(AssetDefinitionId::parse("6qLb5RYJbzychndCXgFa9aZzjWyx"));

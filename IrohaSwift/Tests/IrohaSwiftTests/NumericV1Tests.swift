@@ -160,27 +160,39 @@ final class NumericV1Tests: XCTestCase {
             let id = try XCTUnwrap(vector["id"] as? String)
             let kind = try XCTUnwrap(vector["kind"] as? String)
             let canonical = try XCTUnwrap(vector["canonical"] as? String)
+            let fixtureFrame = try Data(hex: try XCTUnwrap(vector["frame_hex"] as? String))
+            let fixtureEnvelope = try Data(hex: try XCTUnwrap(vector["envelope_hex"] as? String))
             let frame: Data
             let envelope: Data
+            let decodedFrame: String
+            let decodedEnvelope: String
             switch kind {
             case "int":
                 let value = try KotodamaNumericV1Codec.decodeIntJSON(canonical)
                 frame = try KotodamaNumericV1Codec.encodeIntFrame(value)
                 envelope = try KotodamaNumericV1Codec.encodeIntEnvelope(value)
+                decodedFrame = try KotodamaNumericV1Codec.decodeIntFrame(fixtureFrame).canonicalString
+                decodedEnvelope = try KotodamaNumericV1Codec.decodeIntEnvelope(fixtureEnvelope).canonicalString
             case "decimal":
                 let value = try KotodamaNumericV1Codec.decodeDecimalJSON(canonical)
                 frame = try KotodamaNumericV1Codec.encodeDecimalFrame(value)
                 envelope = try KotodamaNumericV1Codec.encodeDecimalEnvelope(value)
+                decodedFrame = try KotodamaNumericV1Codec.decodeDecimalFrame(fixtureFrame).canonicalString
+                decodedEnvelope = try KotodamaNumericV1Codec.decodeDecimalEnvelope(fixtureEnvelope).canonicalString
             case "quantity":
                 let value = try KotodamaNumericV1Codec.decodeQuantityJSON(canonical)
                 frame = try KotodamaNumericV1Codec.encodeQuantityFrame(value)
                 envelope = try KotodamaNumericV1Codec.encodeQuantityEnvelope(value)
+                decodedFrame = try KotodamaNumericV1Codec.decodeQuantityFrame(fixtureFrame).canonicalString
+                decodedEnvelope = try KotodamaNumericV1Codec.decodeQuantityEnvelope(fixtureEnvelope).canonicalString
             default:
                 return XCTFail("unknown fixture kind \(kind)")
             }
             XCTAssertEqual(Data(frame.dropFirst(40)).hex, vector["body_hex"] as? String, "\(id) body")
             XCTAssertEqual(frame.hex, vector["frame_hex"] as? String, "\(id) frame")
             XCTAssertEqual(envelope.hex, vector["envelope_hex"] as? String, "\(id) envelope")
+            XCTAssertEqual(decodedFrame, canonical, "\(id) frame decode")
+            XCTAssertEqual(decodedEnvelope, canonical, "\(id) envelope decode")
         }
 
         for vector in try XCTUnwrap(object["invalid"] as? [[String: Any]]) {

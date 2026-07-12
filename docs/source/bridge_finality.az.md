@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2e4c6ed5974f623906f51259a634bcad5df703bcec899630ae29f4669b289ab6
-source_last_modified: "2026-01-08T21:52:45.509525+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-google-reviewed
 ---
 
@@ -14,111 +14,71 @@ translator: machine-google-reviewed
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Körpünün sonluğunun sübutları
+# Körpü yekunluğu sübutları
 
-Bu sənəd Iroha üçün ilkin körpünün sonluğunu sübut edən səthi təsvir edir.
-Məqsəd xarici zəncirlərə və ya yüngül müştərilərə Iroha blokunun olduğunu yoxlamaq imkanı verməkdir.
-zəncirdənkənar hesablamalar və ya etibarlı relelər olmadan yekunlaşdırılır.
+Bu sənəd ilk buraxılış üçün körpü yekunluğu formatını müəyyən edir. Sübut Sumeragi v2
+tərəfindən yaradılan və davamlı saxlanılan dəqiq yekunluq dəlilini daşıyır. Sübut
+zərfinin sxem versiyası `1`, daxilindəki konsensus protokolunun versiyası isə `2`-dir.
+Sumeragi v1 sertifikatına proyeksiya, dekoder və ya ehtiyat yol yoxdur.
 
-## Sübut formatı
+## Dəqiq sübut formatı
 
-`BridgeFinalityProof` (Norito/JSON) ehtiva edir:
+Norito və ya Norito JSON ilə kodlanan `BridgeFinalityProof` yalnız üç sahədən ibarətdir:
 
-- `height`: blok hündürlüyü.
-- `chain_id`: Çarpaz zəncir təkrarının qarşısını almaq üçün Iroha zəncir identifikatoru.
-- `block_header`: kanonik `BlockHeader`.
-- `block_hash`: başlığın hashı (müştərilər yoxlamaq üçün yenidən hesablayır).
-- `commit_certificate`: təsdiqləyici dəsti + bloku tamamlayan imzalar.
-- `validator_set_pops`: Doğrulayıcı dəstinə uyğunlaşdırılmış Sahiblik sübutu baytları
-  sifariş (BLS məcmu yoxlaması üçün tələb olunur).
+```text
+{ version, block_header, finality_artifact }
+```
 
-Sübut müstəqildir; heç bir xarici manifestlər və ya qeyri-şəffaf ləkələr tələb olunmur.
-Saxlama: Torii son öhdəlik sertifikatı pəncərəsi üçün yekun sübutlara xidmət edir
-(konfiqurasiya edilmiş tarix qapağı ilə məhdudlaşır; defolt olaraq vasitəsilə 512 giriş
-`sumeragi.commit_cert_history_cap` / `SUMERAGI_COMMIT_CERT_HISTORY_CAP`). Müştərilər
-Əgər daha uzun üfüqlərə ehtiyac varsa, sübutları önbelleğe almalı və ya lövbərləməlidir.
-Kanonik tuple `(block_header, block_hash, commit_certificate)`-dir: the
-Başlığın hashı öhdəçilik sertifikatının daxilindəki hash ilə uyğun olmalıdır və
-zəncir identifikatoru sübutu bir kitab dəftərinə bağlayır. Serverlər rədd edir və daxil olur a
-Sertifikat fərqli bloka işarə etdikdə `CommitCertificateHashMismatch`
-hash.
+- `version` mütləq `1` olmalıdır;
+- `block_header` tələb olunan hündürlüyün kanonik `BlockHeader`-idir;
+- `finality_artifact` həmin blok üçün saxlanmış dəqiq `V2FinalityArtifact`-dır. O,
+  height-context roster sırası ilə hər validatorun BLS-normal PoP-unu
+  (`validator_set_pops`) davamlı şəkildə özündə saxlayır.
 
-## Öhdəlik paketi
+Artefakt tam və dəyişməz `HeightContext`, dəqiq `BlockSubject`, blok hash-i, CommitQC və
+rosterə uyğun PoP-ları ehtiva edir. Height context zənciri, epoch-u, rosteri,
+`DualQuorum`-u, DA düzülüşünü, leader seed-i və digər konsensus məlumatlarını dondurur.
+Epoch-u bitirən ana blokun context-i optional `next_epoch_snapshot` daşıyır; bu sahə
+context id-yə daxil olduğuna görə, övlad rosterə icazə verməzdən əvvəl ana CommitQC onu
+autentifikasiya edir. Finalized snapshot növbəti epoch parametrləri ilə yanaşı
+`epoch_end_height` və növbəti rosterə uyğun `validator_set_pops`-u da autentifikasiya edir.
 
-`BridgeFinalityBundle` (Norito/JSON) əsas sübutu açıq şəkildə genişləndirir
-öhdəlik və əsaslandırma:
+## Davamlı saxlama və yoxlama
 
-- `commitment`: `{ chain_id, authority_set { id, validator_set, validator_set_hash, validator_set_hash_version }, block_height, block_hash, mmr_root?, mmr_leaf_index?, mmr_peaks?, next_authority_set? }`
-- `justification`: öhdəlik üzərində müəyyən edilmiş səlahiyyətdən imzalar
-  faydalı yük (təhsil-sertifikat imzalarını təkrar istifadə edir).
-- `block_header`, `commit_certificate`: əsas sübut kimi.
+Sumeragi v2 apply yolu artefaktı yoxlayır və dəyişməz Kura sidecar kimi saxlayır. Sübut
+qurucusu kanonik bloku və onun sidecar-ını oxuyur; tarixi PoP və sertifikatları dəyişən
+cari world state-dən yenidən qurmur. Çatışmayan, korlanmış, ziddiyyətli və ya yoxlanmayan
+sidecar qapalı şəkildə rədd edilir; əlçatanlıq yaxın in-memory tarix pəncərəsi ilə
+məhdudlaşmır.
 
-Cari yer tutucu: `mmr_root`/`mmr_peaks` yenidən hesablanmaqla əldə edilir
-yaddaşda blok-hash MMR; daxil edilmə sübutları hələ geri qaytarılmır. Müştərilər bilər
-bu gün də öhdəlik yükü vasitəsilə eyni hashı yoxlayın.
+Stateless yoxlayıcı version, chain, height, header hash, header-in canonical predecessor-i və
+view-u, context, subject və CommitQC-ni
+dəqiq tutuşdurur və artefaktdakı bütün PoP-ları yoxlayır. İmzalayan indekslər ciddi artan
+və sərhəd daxilində olmalıdır. CommitQC həm validator sayı, həm də səs gücü quorumunu
+ödəməli, dəqiq Sumeragi v2 vote preimage üzərində BLS aggregate signature düzgün olmalıdır.
 
-MMR zirvələri soldan sağa sıralanır. Zirvələri yığmaqla `mmr_root`-i yenidən hesablayın
-sağdan sola: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
+## Etibar lövbəri və ardıcıl yoxlama
 
-API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
+Ayrı sübut yalnız daşıdığı roster altında daxili uyğunluğu göstərir.
+`BridgeFinalityVerifier` ilk sübutdan əvvəl açıq şəkildə etibarlı `HeightContextId` tələb
+edir. Sonra yalnız dərhal növbəti hündürlüyü qəbul edir və övlad context-in parent
+CommitQC-sini əvvəlki dondurulmuş roster və PoP ilə yoxlayır. Epoch daxilində övlad
+artifact əvvəlki artifact-ın PoP-larını kopyalayır; sərhəddə epoch, roster, quorum, seed və
+PoP əvvəlki ana context-də CommitQC ilə autentifikasiya edilmiş `next_epoch_snapshot`-a,
+o cümlədən `epoch_end_height`-a uyğun olmalıdır. Köhnə, atlanmış və əlaqəsiz hündürlüklər rədd edilir.
 
-Doğrulama əsas sübuta bənzəyir: `block_hash`-i yenidən hesablayın
-başlıq, öhdəlik-sertifikat imzalarını yoxlayın və öhdəliyi yoxlayın
-sahələr sertifikat və blok hashına uyğun gəlir. Paket bir öhdəlik əlavə edir/
-ayırmağa üstünlük verən körpü protokolları üçün əsaslandırma paketi.
+SCCP eyni `BridgeFinalityProof`-dan istifadə edir. Mesajın verdiyi roster altında imza
+təkbaşına etibar deyil; governance ilə bərkidilmiş checkpoint context/artefaktından mesaj
+artefaktına qədər hər dərhal ardıcıl keçid yoxlanmalıdır.
 
-## Doğrulama addımları1. `block_header`-dən `block_hash`-i yenidən hesablayın; uyğunsuzluğa görə rədd edin.
-2. `commit_certificate.block_hash`-in yenidən hesablanmış `block_hash` ilə uyğunluğunu yoxlayın;
-   uyğun olmayan başlıqları rədd edin/sertifikat cütlərini yerinə yetirin.
-3. `chain_id`-in gözlənilən Iroha zəncirinə uyğunluğunu yoxlayın.
-4. `commit_certificate.validator_set`-dən `validator_set_hash`-i yenidən hesablayın və
-   onun qeydə alınmış hash/versiyaya uyğun olduğunu yoxlayın.
-5. `validator_set_pops` uzunluğunun validator dəstinə uyğun olduğundan əmin olun və doğrulayın
-   BLS açıq açarına qarşı hər bir PoP.
-6. Başlıq hash-dən istifadə edərək öhdəçilik sertifikatında imzaları yoxlayın
-   istinad edilən validator açıq açarları və indeksləri; kvorumu həyata keçirmək
-   (`2f+1`, `n>3`, başqa `n`) və dublikat/diapazondan kənar indeksləri rədd edin.
-7. Doğrulayıcı dəstinin hashini müqayisə edərək, istəyə görə etibarlı yoxlama məntəqəsinə qoşulun
-   bağlanmış dəyərə (zəif subyektivlik lövbəri).
-8. İsteğe bağlı olaraq gözlənilən dövr lövbərinə bağlayın, belə ki, köhnə/yenidən sübutlar
-   lövbər qəsdən fırlanana qədər dövrlər rədd edilir.
+## Bundle və API
 
-`BridgeFinalityVerifier` (`iroha_data_model::bridge` ilə) bu çekləri tətbiq edir,
-zəncir identifikatoru/hündürlük driftindən imtina, validator-set hash/versiya uyğunsuzluqları, çatışmayan
-və ya etibarsız PoP-lər, dublikat/diapazondan kənar imzalayanlar, etibarsız imzalar və
-kvorumu hesablamadan əvvəl gözlənilməz dövrlər
-yoxlayıcı.
+`BridgeFinalityBundle` dəqiq `{ commitment, finality_proof }` formasındadır. Commitment:
+`{ chain_id, height_context_id, block_height, block_hash }`.
 
-## İstinad yoxlayıcı
+- `GET /v1/bridge/finality/{height}` `BridgeFinalityProof` qaytarır;
+- `GET /v1/bridge/finality/bundle/{height}` `BridgeFinalityBundle` qaytarır.
 
-`BridgeFinalityVerifier` gözlənilən `chain_id` və isteğe bağlı etibarlı qəbul edir
-validator dəsti və dövr ankerləri. Başlıq/blok-hash/ tətbiq edir.
-commit-certificate tuple, validator-set hash/versiyasını yoxlayır, yoxlayır
-reklam edilən təsdiqləyici siyahısına qarşı imzalar/kvorum və ən son izləyir
-köhnəlmiş/atlanmış sübutları rədd etmək üçün hündürlük. Lövbərlər verildikdə rədd edir
-açıq `UnexpectedEpoch`/ ilə dövrlər/kadrlar üzrə təkrarlar
-`UnexpectedValidatorSet` səhvləri; lövbərsiz ilk sübutları qəbul edir
-dublikatı tətbiq etməyə davam etməzdən əvvəl validator-set hash və epoxa
-deterministik səhvlərlə diapazon/qeyri-kafi imzalar.
-
-## API səthi
-
-- `GET /v1/bridge/finality/{height}` - üçün `BridgeFinalityProof` qaytarır
-  tələb olunan blok hündürlüyü. `Accept` vasitəsilə məzmun danışıqları Norito və ya dəstəkləyir
-  JSON.
-- `GET /v1/bridge/finality/bundle/{height}` - `BridgeFinalityBundle` qaytarır
-  tələb olunan hündürlük üçün (öhdəlik + əsaslandırma + başlıq/sertifikat).
-
-## Qeydlər və təqiblər
-
-- Sübutlar hazırda saxlanılan öhdəlik sertifikatlarından əldə edilir. Sərhədli
-  tarix öhdəliyin sertifikatının saxlanması pəncərəsini izləyir; müştərilər keş saxlamalıdırlar
-  daha uzun üfüqlərə ehtiyac varsa, lövbər sübutları. Pəncərədən kənar sorğular geri qaytarılır
-  `CommitCertificateNotFound(height)`; səhvi üzə çıxarın və bir vəziyyətə qayıdın
-  lövbərlənmiş nəzarət məntəqəsi.
-- Uyğun olmayan `block_hash` ilə təkrar və ya saxta sübut (başlıq vs.
-  sertifikat) `CommitCertificateHashMismatch` ilə rədd edilir; müştərilər etməlidir
-  imzanın yoxlanılmasından əvvəl eyni dəst yoxlamasını yerinə yetirin və atın
-  uyğun olmayan yüklər.
-- Gələcək iş sübut ölçüsünü azaltmaq üçün MMR/səlahiyyət tərəfindən müəyyən edilmiş öhdəlik zəncirləri əlavə edə bilər
-  daha zəngin öhdəlik zərflərində öhdəlik sertifikatı.
+Blok və ya dəqiq davamlı v2 artefaktı yoxdursa və ya yanlışdırsa, hər iki endpoint qapalı
+şəkildə uğursuz olur. Naməlum sahələr, dəstəklənməyən versiyalar və köhnə sübut formaları
+rədd edilməlidir.

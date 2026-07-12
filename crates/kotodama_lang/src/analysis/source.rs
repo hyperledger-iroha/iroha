@@ -13,7 +13,6 @@ use crate::{
 pub fn run_static_analysis(program: &Program, typed: &TypedProgram) -> Vec<AnalysisFinding> {
     let state_names = collect_state_names(program);
     let mut findings = Vec::new();
-    detect_literal_overflow(typed, &mut findings);
     detect_division_by_zero(typed, &mut findings);
     detect_reentrancy(program, &state_names, &mut findings);
     detect_infinite_loops(program, &mut findings);
@@ -31,66 +30,6 @@ fn collect_state_names(program: &Program) -> HashSet<String> {
         .collect()
 }
 
-fn detect_literal_overflow(typed: &TypedProgram, findings: &mut Vec<AnalysisFinding>) {
-    for item in &typed.items {
-        let semantic::TypedItem::Function(func) = item;
-        visit_exprs(func, &mut |func_name, expr| {
-            if semantic::resolve_struct_type(&expr.ty) != semantic::Type::Int {
-                return;
-            }
-            if let ExprKind::Binary { op, left, right } = &expr.expr {
-                let lhs = literal_i64(left);
-                let rhs = literal_i64(right);
-                match op {
-                    crate::ast::BinaryOp::Add => {
-                        if let (Some(a), Some(b)) = (lhs, rhs) {
-                            let sum = (a as i128) + (b as i128);
-                            if sum < i64::MIN as i128 || sum > i64::MAX as i128 {
-                                findings.push(AnalysisFinding::warning(
-                                    AnalysisCategory::StaticSource,
-                                    "static-overflow-literal",
-                                    format!(
-                                        "function `{func_name}` adds {a} and {b}, which overflows 64-bit range"
-                                    ),
-                                ));
-                            }
-                        }
-                    }
-                    crate::ast::BinaryOp::Sub => {
-                        if let (Some(a), Some(b)) = (lhs, rhs) {
-                            let diff = (a as i128) - (b as i128);
-                            if diff < i64::MIN as i128 || diff > i64::MAX as i128 {
-                                findings.push(AnalysisFinding::warning(
-                                    AnalysisCategory::StaticSource,
-                                    "static-overflow-literal",
-                                    format!(
-                                        "function `{func_name}` subtracts {b} from {a}, which overflows 64-bit range"
-                                    ),
-                                ));
-                            }
-                        }
-                    }
-                    crate::ast::BinaryOp::Mul => {
-                        if let (Some(a), Some(b)) = (lhs, rhs) {
-                            let prod = (a as i128) * (b as i128);
-                            if prod < i64::MIN as i128 || prod > i64::MAX as i128 {
-                                findings.push(AnalysisFinding::warning(
-                                    AnalysisCategory::StaticSource,
-                                    "static-overflow-literal",
-                                    format!(
-                                        "function `{func_name}` multiplies {a} by {b}, which overflows 64-bit range"
-                                    ),
-                                ));
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        });
-    }
-}
-
 fn detect_division_by_zero(typed: &TypedProgram, findings: &mut Vec<AnalysisFinding>) {
     for item in &typed.items {
         let semantic::TypedItem::Function(func) = item;
@@ -100,7 +39,7 @@ fn detect_division_by_zero(typed: &TypedProgram, findings: &mut Vec<AnalysisFind
             }
             if let ExprKind::Binary { op, right, .. } = &expr.expr
                 && matches!(op, crate::ast::BinaryOp::Div | crate::ast::BinaryOp::Mod)
-                && literal_i64(right) == Some(0)
+                && exact_numeric_literal_is_zero(right)
             {
                 findings.push(AnalysisFinding::warning(
                     AnalysisCategory::StaticSource,
@@ -112,16 +51,16 @@ fn detect_division_by_zero(typed: &TypedProgram, findings: &mut Vec<AnalysisFind
     }
 }
 
-fn literal_i64(expr: &TypedExpr) -> Option<i64> {
+fn exact_numeric_literal_is_zero(expr: &TypedExpr) -> bool {
     match &expr.expr {
-        ExprKind::IntLiteral(n) => n.try_to_i64(),
-        ExprKind::NumericCast { expr } => literal_i64(expr),
-        ExprKind::NumericTryCast { .. } => None,
+        ExprKind::IntLiteral(value) => value.is_zero(),
+        ExprKind::DecimalLiteral { value, .. } => value.is_zero(),
+        ExprKind::NumericCast { expr } => exact_numeric_literal_is_zero(expr),
         ExprKind::Unary {
             op: crate::ast::UnaryOp::Neg,
             expr,
-        } => literal_i64(expr).and_then(|v| v.checked_neg()),
-        _ => None,
+        } => exact_numeric_literal_is_zero(expr),
+        _ => false,
     }
 }
 
@@ -857,17 +796,19 @@ mod tests {
     }
 
     #[test]
-    fn detects_constant_overflow() {
+    fn values_above_i64_do_not_trigger_a_legacy_overflow_warning() {
         let findings = analyze_static(
             r#"
-            fn overflow() -> int {
+            fn wide() -> int {
                 return 9223372036854775807 + 1;
             }
         "#,
         );
         assert!(
-            findings.iter().any(|f| f.code == "static-overflow-literal"),
-            "expected overflow finding, got {findings:?}"
+            findings
+                .iter()
+                .all(|finding| finding.code != "static-overflow-literal"),
+            "valid signed-512 arithmetic received a legacy-width warning: {findings:?}"
         );
     }
 

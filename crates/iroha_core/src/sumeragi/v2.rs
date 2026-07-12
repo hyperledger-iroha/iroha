@@ -14,7 +14,7 @@ use std::{
     path::PathBuf,
 };
 
-use iroha_crypto::{Algorithm, Hash, HashOf, Signature};
+use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
 use iroha_sumeragi_core as reducer;
 use norito::codec::{Decode, Encode};
@@ -110,6 +110,7 @@ impl VerifiedHeightContext {
             return Err(AdapterError::InvalidGenesisContext);
         }
         verify_roster_proofs(&context, &proofs_of_possession)?;
+        verify_next_epoch_snapshot_proofs(&context)?;
         Ok(Self {
             context,
             proofs_of_possession,
@@ -127,6 +128,7 @@ impl VerifiedHeightContext {
     ) -> Result<Self, AdapterError> {
         context.validate()?;
         parent_artifact.validate()?;
+        verify_next_epoch_snapshot_proofs(&context)?;
         if parent_artifact.validator_set_pops != parent_proofs_of_possession {
             return Err(AdapterError::ParentContextMismatch);
         }
@@ -159,10 +161,12 @@ impl VerifiedHeightContext {
         }
         if let Some(snapshot) = &parent_artifact.height_context.next_epoch_snapshot {
             if context.epoch != snapshot.epoch
+                || context.epoch_end_height != snapshot.epoch_end_height
                 || context.mode != snapshot.mode
                 || context.roster != snapshot.roster
                 || context.quorum != snapshot.quorum
                 || context.leader_seed != snapshot.leader_seed
+                || proofs_of_possession.as_slice() != snapshot.validator_set_pops.as_slice()
             {
                 return Err(AdapterError::EpochTransitionMismatch);
             }
@@ -171,6 +175,7 @@ impl VerifiedHeightContext {
             || context.roster != parent_artifact.height_context.roster
             || context.quorum != parent_artifact.height_context.quorum
             || context.leader_seed != parent_artifact.height_context.leader_seed
+            || proofs_of_possession.as_slice() != parent_artifact.validator_set_pops.as_slice()
         {
             return Err(AdapterError::EpochTransitionMismatch);
         }
@@ -1797,7 +1802,10 @@ impl WireRegistry {
         };
         let leader_height_seed = Hash::new((context.leader_seed, context.height).encode());
         reducer::HeightContext::new(
-            context_id(context.id()),
+            context_id(
+                self.context_id
+                    .expect("registry is constructed with a height context"),
+            ),
             reducer::ChainId::new(Hash::new(context.chain_id.encode()).into()),
             context.height,
             parent_commit,
@@ -1870,7 +1878,7 @@ impl WireRegistry {
         round: wire::ConsensusRound,
         context: &wire::HeightContext,
     ) -> Result<reducer::Round, AdapterError> {
-        if round.context_id != context.id() || round.height != context.height {
+        if Some(round.context_id) != self.context_id || round.height != context.height {
             return Err(wire::ValidationError::WrongHeightContext.into());
         }
         Ok(reducer::Round::new(round.height, round.view))
@@ -2585,14 +2593,10 @@ fn verify_authenticated_message(
     proofs_of_possession: &[Vec<u8>],
 ) -> Result<(), AdapterError> {
     message.validate_version()?;
-    context.validate()?;
-    if proofs_of_possession.len() != context.roster.len() {
-        return Err(AdapterError::ProofOfPossessionCount {
-            expected: context.roster.len(),
-            actual: proofs_of_possession.len(),
-        });
-    }
-    validate_bls_roster(context)?;
+    // `SumeragiV2Adapter` can only be built from `VerifiedHeightContext`,
+    // which has already validated the immutable context, every BLS key, and
+    // the complete aligned PoP vector. Do not rescan the boundary snapshot for
+    // every hostile ingress message.
 
     match &message.payload {
         wire::ConsensusMessageV2Payload::Proposal(proposal) => {
@@ -2670,23 +2674,6 @@ fn verify_authenticated_message(
     }
 }
 
-fn validate_bls_roster(context: &wire::HeightContext) -> Result<(), AdapterError> {
-    for entry in &context.roster {
-        let algorithm = entry
-            .validator
-            .public_key()
-            .try_algorithm()
-            .map_err(|error| AdapterError::Cryptography(error.to_string()))?;
-        if algorithm != Algorithm::BlsNormal {
-            return Err(AdapterError::Cryptography(format!(
-                "validator {} uses {algorithm:?}; expected BLS-normal",
-                entry.validator
-            )));
-        }
-    }
-    Ok(())
-}
-
 fn verify_roster_proofs(
     context: &wire::HeightContext,
     proofs_of_possession: &[Vec<u8>],
@@ -2700,6 +2687,17 @@ fn verify_roster_proofs(
             other => AdapterError::Cryptography(other.to_string()),
         }
     })
+}
+
+fn verify_next_epoch_snapshot_proofs(context: &wire::HeightContext) -> Result<(), AdapterError> {
+    let Some(snapshot) = &context.next_epoch_snapshot else {
+        return Ok(());
+    };
+    wire::finality::verify_validator_power_roster_pops(
+        &snapshot.roster,
+        &snapshot.validator_set_pops,
+    )
+    .map_err(|error| AdapterError::Cryptography(error.to_string()))
 }
 
 fn verify_individual_signature(
@@ -3032,6 +3030,64 @@ mod tests {
 
     #[cfg(feature = "bls")]
     #[test]
+    fn boundary_context_rejects_missing_invalid_and_foreign_future_pops_before_voting() {
+        let (mut context, _keys, proofs) = authenticated_context();
+        context.epoch_end_height = context.height;
+        context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
+            epoch: context.epoch + 1,
+            epoch_end_height: context.height + 10,
+            mode: context.mode,
+            roster: context.roster.clone(),
+            validator_set_pops: proofs.clone(),
+            quorum: context.quorum,
+            leader_seed: [0x6A; 32],
+        });
+        VerifiedHeightContext::genesis(context.clone(), proofs.clone())
+            .expect("valid future PoPs are admitted before voting");
+
+        let mut missing = context.clone();
+        missing
+            .next_epoch_snapshot
+            .as_mut()
+            .expect("boundary snapshot")
+            .validator_set_pops
+            .pop();
+        assert!(matches!(
+            VerifiedHeightContext::genesis(missing, proofs.clone()),
+            Err(AdapterError::WireValidation(
+                wire::ValidationError::NextEpochProofOfPossessionCount
+            ))
+        ));
+
+        let foreign_key =
+            KeyPair::try_from_seed(vec![0xE9; 32], Algorithm::BlsNormal).expect("foreign BLS key");
+        let foreign_pop =
+            iroha_crypto::bls_normal_pop_prove(foreign_key.private_key()).expect("foreign PoP");
+        let mut foreign = context.clone();
+        foreign
+            .next_epoch_snapshot
+            .as_mut()
+            .expect("boundary snapshot")
+            .validator_set_pops[0] = foreign_pop;
+        assert!(matches!(
+            VerifiedHeightContext::genesis(foreign, proofs.clone()),
+            Err(AdapterError::Cryptography(_))
+        ));
+
+        let mut corrupted = context;
+        corrupted
+            .next_epoch_snapshot
+            .as_mut()
+            .expect("boundary snapshot")
+            .validator_set_pops[0][0] ^= 0x80;
+        assert!(matches!(
+            VerifiedHeightContext::genesis(corrupted, proofs),
+            Err(AdapterError::Cryptography(_))
+        ));
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
     fn successor_context_requires_the_durable_cryptographic_parent() {
         let (parent_context, keys, proofs) = authenticated_context();
         let parent_subject = wire::BlockSubject {
@@ -3089,6 +3145,33 @@ mod tests {
             &proofs,
         )
         .expect("durable verified parent anchors successor");
+
+        let mut substituted_successor_pops = proofs.clone();
+        substituted_successor_pops.swap(0, 1);
+        assert!(matches!(
+            VerifiedHeightContext::successor(
+                successor.clone(),
+                substituted_successor_pops,
+                &artifact,
+                &receipt,
+                &proofs,
+            ),
+            Err(AdapterError::EpochTransitionMismatch)
+        ));
+
+        let mut substituted_parent_artifact = artifact.clone();
+        substituted_parent_artifact.validator_set_pops.swap(0, 1);
+        let substituted_receipt = KuraV2CommitReceipt::for_test(&substituted_parent_artifact);
+        assert!(matches!(
+            VerifiedHeightContext::successor(
+                successor.clone(),
+                proofs.clone(),
+                &substituted_parent_artifact,
+                &substituted_receipt,
+                &proofs,
+            ),
+            Err(AdapterError::ParentContextMismatch)
+        ));
 
         // The same parent decision can acquire a valid CommitQC in another
         // view. Semantic proposal admission accepts it, but the authentication

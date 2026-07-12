@@ -3,7 +3,10 @@ use std::collections::HashMap;
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::isi::transfer::{TransferAssetBatch, TransferAssetBatchEntry};
 use iroha_data_model::nexus::DataSpaceId;
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::{
+    numeric::{Numeric, Quantity},
+    numeric_abi::QuantityValueV1,
+};
 use ivm::{
     IVM, IVMHost, Memory, PointerType,
     mock_wsv::{
@@ -37,7 +40,7 @@ fn make_asset_tlv(asset: &AssetDefinitionId) -> Vec<u8> {
     make_tlv(PointerType::AssetDefinitionId as u16, &buf)
 }
 
-fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
+fn make_quantity_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
     let quantity = Quantity::try_from_numeric(amount.into()).expect("canonical quantity");
     ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity pointer envelope")
 }
@@ -112,13 +115,12 @@ fn balance_syscall_with_tlv_pointers() {
     vm.set_host(host);
     vm.load_program(&prog).unwrap();
     vm.run().expect("balance tlv syscall failed");
-    let tlv = vm
-        .memory
-        .validate_tlv(vm.register(10))
-        .expect("balance tlv");
-    assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode balance");
-    assert_eq!(value, Numeric::from(50_u64));
+    let tlv = vm.validate_tlv(vm.register(10)).expect("balance tlv");
+    assert_eq!(tlv.type_id, PointerType::Quantity);
+    let value = QuantityValueV1::decode_frame(tlv.payload)
+        .expect("decode canonical balance")
+        .into_quantity();
+    assert_eq!(value.as_numeric(), &Numeric::from(50_u64));
 }
 
 #[test]
@@ -157,7 +159,7 @@ fn transfer_syscall_with_tlv_pointers() {
     vm.memory
         .preload_input(acc_from.len() as u64 + acc_to.len() as u64 + 16, &asset_tlv)
         .expect("preload input");
-    let amount_tlv = make_numeric_tlv(10_u64);
+    let amount_tlv = make_quantity_tlv(10_u64);
     let amount_offset = acc_from.len() as u64 + acc_to.len() as u64 + asset_tlv.len() as u64 + 24;
     vm.memory
         .preload_input(amount_offset, &amount_tlv)
@@ -214,7 +216,7 @@ fn mint_syscall_with_tlv_pointers() {
     vm.memory
         .preload_input(acc.len() as u64 + 8, &asset_tlv)
         .expect("preload input");
-    let amount_tlv = make_numeric_tlv(20_u64);
+    let amount_tlv = make_quantity_tlv(20_u64);
     let amount_offset = acc.len() as u64 + asset_tlv.len() as u64 + 16;
     vm.memory
         .preload_input(amount_offset, &amount_tlv)
@@ -276,7 +278,7 @@ fn transfer_batch_syscalls_buffer_entries() {
     vm.set_register(10, 1);
     vm.set_register(11, 2);
     vm.set_register(12, 1);
-    let amount1 = make_numeric_tlv(10_u64);
+    let amount1 = make_quantity_tlv(10_u64);
     let amount1_ptr = vm.alloc_input_tlv(&amount1).expect("alloc amount 1 tlv");
     vm.set_register(13, amount1_ptr);
     host.syscall(syscalls::SYSCALL_TRANSFER_V1, &mut vm)
@@ -285,7 +287,7 @@ fn transfer_batch_syscalls_buffer_entries() {
     vm.set_register(10, 1);
     vm.set_register(11, 3);
     vm.set_register(12, 1);
-    let amount2 = make_numeric_tlv(5_u64);
+    let amount2 = make_quantity_tlv(5_u64);
     let amount2_ptr = vm.alloc_input_tlv(&amount2).expect("alloc amount 2 tlv");
     vm.set_register(13, amount2_ptr);
     host.syscall(syscalls::SYSCALL_TRANSFER_V1, &mut vm)

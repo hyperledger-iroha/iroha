@@ -244,13 +244,14 @@ fn transfer_payload(route: &SccpGovernedRouteV1, nonce: u64) -> SccpPayloadV1 {
 /// Build an exact cryptographically valid Sumeragi-v2 Taira finality proof.
 pub(crate) fn signed_finality_proof(commitment_root: H256) -> Vec<u8> {
     let height = 1;
+    let view = 1;
     let mut block_header = BlockHeader::new(
         NonZeroU64::new(height).expect("exact SCCP fixture height is nonzero"),
         None,
         None,
         None,
         0,
-        0,
+        view,
     );
     block_header.set_sccp_commitment_root(Some(commitment_root));
     let mut keypairs = vec![
@@ -301,7 +302,7 @@ pub(crate) fn signed_finality_proof(commitment_root: H256) -> Vec<u8> {
         round: ConsensusRound {
             context_id: context.id(),
             height,
-            view: 1,
+            view,
         },
         phase: GlobalPhase::Commit,
         subject,

@@ -1,6 +1,6 @@
 # Generated IVM Syscall Table
 
-This file is generated from `crates/ivm_abi/src/syscalls.rs`. Edit the source to change syscall numbers; then re-run this script.
+This file is generated from the ABI-v1 syscall specification and `crates/ivm_abi/src/syscalls.rs`. Edit those sources to change the surface; then re-run this script.
 
 | Name | Value (hex) | Note |
 |------|-------------|------|
@@ -237,10 +237,5 @@ This file is generated from `crates/ivm_abi/src/syscalls.rs`. Edit the source to
 | SYSCALL_JSON_GET_DECIMAL_DIRECT | 0x10164 |  |
 | SYSCALL_JSON_GET_QUANTITY_DIRECT | 0x10165 |  |
 | SYSCALL_JSON_BUILD | 0x1004E |  |
-| SYSCALL_KOTO_TEST_ACTOR_ACCOUNT | 0xFE0001 | host-private test helper; outside ABI |
-| SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY | 0xFE0002 | host-private test helper; outside ABI |
-| SYSCALL_KOTO_TEST_ACTOR_SIGN | 0xFE0003 | host-private test helper; outside ABI |
-| SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS | 0xFE0004 | host-private test helper; outside ABI |
-| SYSCALL_KOTO_TEST_EXPECT_REJECT_AS | 0xFE0005 | host-private test helper; outside ABI |
 
-Note: This table lists syscall constants. The contract ABI allowlist is enforced by `abi_syscall_list()`; host-private test helpers are outside that ABI.
+Note: This table contains only constants in the canonical ABI-v1 specification; retired and host-private constants are intentionally omitted.

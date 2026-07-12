@@ -61,7 +61,7 @@ fn kotodama_create_and_grant_role_enables_mint() {
 fn kotodama_grant_role_accepts_runtime_account_argument() {
     let src = r#"
         seiyaku RuntimeRoleGrant {
-        fn grant_it(who: AccountId) {
+        fn grant_it(AccountId who) {
           ledger::role::grant(who, Name::parse("minter"));
         }
 
@@ -94,7 +94,7 @@ fn kotodama_grant_role_accepts_runtime_account_argument() {
 fn kotodama_grant_permission_accepts_runtime_account_argument() {
     let src = r#"
         seiyaku RuntimePermissionGrant {
-        fn grant_it(who: AccountId) {
+        fn grant_it(AccountId who) {
           ledger::permission::grant(who, Name::parse("BenefitSpend"));
         }
 
@@ -123,7 +123,7 @@ fn kotodama_grant_permission_accepts_runtime_account_argument() {
 fn kotodama_runtime_account_argument_survives_syscall_before_grant_permission() {
     let src = r#"
         seiyaku RuntimePermissionGrantAfterSyscall {
-        fn grant_it(who: AccountId) {
+        fn grant_it(AccountId who) {
           let _now = context::current_time_ms();
           ledger::permission::grant(who, Name::parse("BenefitSpend"));
         }

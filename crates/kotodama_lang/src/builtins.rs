@@ -2478,7 +2478,7 @@ impl Builtin {
                 S::new(&["SoracloudRequest"], "SoracloudResponse")
             }
             Self::AddSignatory | Self::RemoveSignatory => S::new(&["AccountId", "Json"], "()"),
-            Self::SetAccountQuorum => S::new(&["AccountId", "quantity"], "()"),
+            Self::SetAccountQuorum => S::new(&["AccountId", "int"], "()"),
             Self::Path => S::new(&["Name", "int|bytes"], "Name"),
             Self::NameDecode => S::new(&["bytes"], "Name"),
             Self::TlvEq => S::new(&["pointer-ABI", "pointer-ABI"], "bool"),

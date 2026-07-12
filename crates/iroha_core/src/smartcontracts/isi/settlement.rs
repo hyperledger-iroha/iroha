@@ -226,6 +226,9 @@ fn ensure_leg_funding(stx: &StateTransaction<'_, '_>, leg: &SettlementLeg) -> Re
 }
 
 fn ensure_leg_quantity(leg: &SettlementLeg) -> Result<(), Error> {
+    if leg.quantity().mantissa().is_negative() {
+        return Err(MathError::NegativeValue.into());
+    }
     if leg.quantity().is_zero() {
         return Err(InstructionExecutionError::InvariantViolation(
             "settlement legs must specify non-zero quantities".into(),
@@ -2019,5 +2022,26 @@ mod tests {
 
         let math = InstructionExecutionError::Math(MathError::Overflow);
         assert_eq!(super::settlement_failure_reason(&math), "math_error");
+    }
+
+    #[test]
+    fn settlement_legs_reject_negative_quantities_before_funding_checks() {
+        let definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "usd".parse().expect("asset name"),
+        );
+        let leg = SettlementLeg::new(
+            definition_id,
+            Numeric::new(-1, 0),
+            ALICE_ID.clone(),
+            BOB_ID.clone(),
+        );
+
+        assert!(matches!(
+            super::ensure_leg_quantity(&leg),
+            Err(InstructionExecutionError::Math(
+                crate::smartcontracts::isi::error::MathError::NegativeValue
+            ))
+        ));
     }
 }

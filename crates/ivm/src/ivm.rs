@@ -3501,10 +3501,10 @@ impl IVM {
     /// Require a prospective pointer-ABI envelope range to have VM-owned
     /// provenance without scanning its complete payload.
     ///
-    /// Quote preparation uses this after authenticating the seven-byte public
-    /// header. Private guest stores are stack-only, while owned pointer-ABI
-    /// regions exclude the stack, so the complete privacy scan is deferred to
-    /// post-debit envelope validation.
+    /// Pointer decoders use this after reading a bounded public header and
+    /// before copying the complete declared range. Private guest stores are
+    /// stack-only, while owned pointer-ABI regions exclude the stack, so the
+    /// complete privacy check can occur after the corresponding staged debit.
     pub(crate) fn ensure_owned_tlv_range(&self, address: u64, len: u64) -> Result<(), VMError> {
         let end = address.checked_add(len).ok_or(VMError::NoritoInvalid)?;
         let in_code = end <= self.memory.code_len() && self.is_validated_literal_pointer(address);
@@ -3605,7 +3605,13 @@ impl IVM {
 
     /// Validate a pointer-ABI TLV in the INPUT region and return its decoded view.
     pub fn validate_input_tlv(&self, ptr: u64) -> Result<crate::pointer_abi::Tlv<'_>, VMError> {
-        self.memory.validate_tlv(ptr)
+        let input_end = Memory::INPUT_START
+            .checked_add(Memory::INPUT_SIZE)
+            .ok_or(VMError::NoritoInvalid)?;
+        if !(Memory::INPUT_START..input_end).contains(&ptr) {
+            return Err(VMError::NoritoInvalid);
+        }
+        self.validate_tlv(ptr)
     }
 
     /// Clone a validated TLV from any readable region into an owned buffer.
@@ -4728,12 +4734,19 @@ impl IVM {
         if self.staged_syscall.is_some() {
             return Err(VMError::SyscallMeteringModeMismatch { syscall: number });
         }
-        self.validate_syscall_privacy(number)?;
         self.staged_syscall = Some(StagedSyscallContext::new(number));
 
         if let Err(error) =
             self.charge_syscall_stage(SyscallMeteringPhase::Entry, STAGED_SYSCALL_ENTRY_GAS)
         {
+            self.finish_staged_syscall(SyscallCompletion::Trap);
+            return Err(error);
+        }
+
+        // Privacy validation is bounded syscall-entry work. Debit the entry
+        // phase first so a private or stack-backed pointer cannot trigger even
+        // that validation for free or take precedence over entry-phase OOG.
+        if let Err(error) = self.validate_syscall_privacy(number) {
             self.finish_staged_syscall(SyscallCompletion::Trap);
             return Err(error);
         }
@@ -9205,6 +9218,34 @@ mod tests {
         assert_eq!(ptr, Memory::HEAP_START);
         vm.validate_tlv(ptr)
             .expect("the same envelope is valid after its heap range is owned");
+    }
+
+    #[test]
+    fn input_tlv_validation_is_provenance_strict_and_region_specific() {
+        set_banner_enabled(false);
+        let tlv = empty_blob_tlv();
+        let mut vm = IVM::new(u64::MAX);
+        let input = vm.alloc_input_tlv(&tlv).expect("allocate INPUT envelope");
+        vm.validate_input_tlv(input)
+            .expect("accept an owned INPUT envelope");
+
+        let heap = vm
+            .alloc_heap(u64::try_from(tlv.len()).expect("TLV length fits u64"))
+            .expect("allocate HEAP envelope");
+        vm.store_bytes(heap, &tlv).expect("store HEAP envelope");
+        vm.validate_tlv(heap)
+            .expect("the central decoder accepts allocated HEAP");
+        assert!(matches!(
+            vm.validate_input_tlv(heap),
+            Err(VMError::NoritoInvalid)
+        ));
+
+        vm.store_bytes(Memory::OUTPUT_START, &tlv)
+            .expect("store adversarial OUTPUT envelope");
+        assert!(matches!(
+            vm.validate_input_tlv(Memory::OUTPUT_START),
+            Err(VMError::NoritoInvalid)
+        ));
     }
 
     #[test]

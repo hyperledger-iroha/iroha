@@ -2778,26 +2778,6 @@ fn multisig_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/multisig/proposals/list".to_owned(),
-        Value::Object(multisig_post_operation(
-            "List active multisig proposals (compatibility route).",
-            "Compatibility spelling for `/v1/multisig/proposals/query`; resolve a multisig selector and list nonterminal proposals for the active concrete multisig authority.",
-            "#/components/schemas/MultisigProposalsListRequest",
-            "#/components/schemas/MultisigProposalsListResponse",
-            "Multisig alias not found.",
-        )),
-    );
-    paths.insert(
-        "/v1/multisig/proposals/get".to_owned(),
-        Value::Object(multisig_post_operation(
-            "Fetch a multisig proposal (compatibility route).",
-            "Compatibility spelling for `/v1/multisig/proposals/lookup`; resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
-            "#/components/schemas/MultisigProposalsGetRequest",
-            "#/components/schemas/MultisigProposalGetResponse",
-            "Multisig alias or proposal not found.",
-        )),
-    );
-    paths.insert(
         "/v1/multisig/approvals/query".to_owned(),
         Value::Object(multisig_post_operation(
             "List multisig approvals.",
@@ -6925,7 +6905,7 @@ fn bridge_finality_bundle_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Returns an MMR commitment bound to the block hash and immutable height-context id, \
+            "Returns a compact commitment bound to the chain, block hash, height, and immutable height-context id, \
              together with the canonical block header and exact durable Sumeragi-v2 finality \
              artifact, including its roster-aligned BLS proofs of possession. The response contains no \
              legacy authority-set or detached-justification projection."
@@ -8709,8 +8689,6 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/multisig/approvals/lookup-for-authority"
                     | "/v1/multisig/approvals/query"
                     | "/v1/multisig/approvals/query-for-authority"
-                    | "/v1/multisig/proposals/get"
-                    | "/v1/multisig/proposals/list"
                     | "/v1/multisig/proposals/lookup"
                     | "/v1/multisig/proposals/query"
                     | "/v1/multisig/spec"
@@ -12667,10 +12645,17 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         "SumeragiV2FinalizedNextEpochSnapshot".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["epoch", "mode", "roster", "quorum", "leader_seed"],
+            "required": [
+                "epoch", "epoch_end_height", "mode", "roster", "validator_set_pops",
+                "quorum", "leader_seed"
+            ],
             "additionalProperties": false,
             "properties": {
                 "epoch": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                },
+                "epoch_end_height": {
                     "type": "integer", "format": "uint64", "minimum": 1,
                     "maximum": 18446744073709551615_u64
                 },
@@ -12680,9 +12665,15 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                     "uniqueItems": true,
                     "items": { "$ref": "#/components/schemas/SumeragiV2ValidatorPower" }
                 },
+                "validator_set_pops": {
+                    "type": "array", "minItems": 1, "maxItems": 4096,
+                    "items": { "$ref": "#/components/schemas/SumeragiV2BlsProof" },
+                    "description": "Parent-authenticated BLS proofs of possession aligned one-for-one with the next roster."
+                },
                 "quorum": { "$ref": "#/components/schemas/SumeragiV2DualQuorum" },
                 "leader_seed": { "$ref": "#/components/schemas/SumeragiV2Bytes32" }
-            }
+            },
+            "description": "Complete parent-CommitQC-authenticated transition into the next epoch, including its end height and immutable validator PoPs."
         }),
     );
     schemas.insert(
@@ -12773,10 +12764,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         "BridgeCommitment".to_owned(),
         norito::json!({
             "type": "object",
-            "required": [
-                "chain_id", "height_context_id", "block_height", "block_hash", "mmr_root",
-                "mmr_leaf_index", "mmr_peaks"
-            ],
+            "required": ["chain_id", "height_context_id", "block_height", "block_hash"],
             "additionalProperties": false,
             "properties": {
                 "chain_id": { "type": "string", "minLength": 1 },
@@ -12787,26 +12775,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                     "type": "integer", "format": "uint64", "minimum": 1,
                     "maximum": 18446744073709551615_u64
                 },
-                "block_hash": { "$ref": "#/components/schemas/Hash" },
-                "mmr_root": {
-                    "anyOf": [
-                        { "$ref": "#/components/schemas/SumeragiV2Bytes32" },
-                        { "type": "null" }
-                    ]
-                },
-                "mmr_leaf_index": {
-                    "type": ["integer", "null"], "format": "uint64", "minimum": 0,
-                    "maximum": 18446744073709551615_u64
-                },
-                "mmr_peaks": {
-                    "anyOf": [
-                        {
-                            "type": "array", "minItems": 1, "maxItems": 64,
-                            "items": { "$ref": "#/components/schemas/SumeragiV2Bytes32" }
-                        },
-                        { "type": "null" }
-                    ]
-                }
+                "block_hash": { "$ref": "#/components/schemas/Hash" }
             }
         }),
     );
@@ -17772,6 +17741,63 @@ mod tests {
             .expect("component schemas")
     }
 
+    fn assert_component_schema_refs_resolve(
+        value: &Value,
+        schemas: &Map,
+        location: &str,
+        reference_count: &mut usize,
+    ) {
+        match value {
+            Value::Array(values) => {
+                for (index, value) in values.iter().enumerate() {
+                    assert_component_schema_refs_resolve(
+                        value,
+                        schemas,
+                        &format!("{location}[{index}]"),
+                        reference_count,
+                    );
+                }
+            }
+            Value::Object(object) => {
+                for (key, value) in object {
+                    let child_location = format!("{location}.{key}");
+                    if key == "$ref" {
+                        *reference_count += 1;
+                        let reference = value.as_str().unwrap_or_else(|| {
+                            panic!("OpenAPI $ref at {child_location} must be a string")
+                        });
+                        let schema_name = reference
+                            .strip_prefix(COMPONENT_SCHEMA_REF_PREFIX)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "OpenAPI $ref at {child_location} must target a local component schema: {reference}"
+                                )
+                            });
+                        assert!(
+                            !schema_name.is_empty(),
+                            "OpenAPI $ref at {child_location} has no component schema name"
+                        );
+                        assert!(
+                            !schema_name.contains('/'),
+                            "OpenAPI $ref at {child_location} must not target a nested schema path: {reference}"
+                        );
+                        assert!(
+                            schemas.contains_key(schema_name),
+                            "OpenAPI $ref at {child_location} targets missing component schema {schema_name}"
+                        );
+                    }
+                    assert_component_schema_refs_resolve(
+                        value,
+                        schemas,
+                        &child_location,
+                        reference_count,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn component_properties<'a>(schemas: &'a Map, name: &str) -> &'a Map {
         schemas
             .get(name)
@@ -17903,6 +17929,20 @@ mod tests {
             }
             _ => {}
         }
+    }
+
+    #[test]
+    fn generated_openapi_has_only_resolvable_component_schema_refs() {
+        let document = generate_spec();
+        let schemas = component_schemas(&document);
+        let mut reference_count = 0;
+
+        assert_component_schema_refs_resolve(&document, schemas, "$", &mut reference_count);
+
+        assert!(
+            reference_count > 0,
+            "generated OpenAPI document unexpectedly contains no schema references"
+        );
     }
 
     #[test]
@@ -19345,8 +19385,8 @@ mod tests {
         assert!(paths.contains_key("/v1/multisig/spec"));
         assert!(paths.contains_key("/v1/multisig/proposals/query"));
         assert!(paths.contains_key("/v1/multisig/proposals/lookup"));
-        assert!(paths.contains_key("/v1/multisig/proposals/list"));
-        assert!(paths.contains_key("/v1/multisig/proposals/get"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/list"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/get"));
         assert!(paths.contains_key("/v1/multisig/approvals/query"));
         assert!(paths.contains_key("/v1/multisig/approvals/lookup"));
         assert!(paths.contains_key("/v1/multisig/approvals/query-for-authority"));
@@ -20418,23 +20458,9 @@ mod tests {
             Some("read")
         );
 
-        for (path, canonical_path) in [
-            (
-                "/v1/multisig/proposals/query",
-                "/v1/multisig/proposals/query",
-            ),
-            (
-                "/v1/multisig/proposals/lookup",
-                "/v1/multisig/proposals/lookup",
-            ),
-            (
-                "/v1/multisig/proposals/list",
-                "/v1/multisig/proposals/query",
-            ),
-            (
-                "/v1/multisig/proposals/get",
-                "/v1/multisig/proposals/lookup",
-            ),
+        for path in [
+            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
         ] {
             let operation = paths
                 .get(path)
@@ -20447,22 +20473,9 @@ mod tests {
                 Some("read"),
                 "{path} must retain unsigned/read semantics"
             );
-            let canonical_operation = paths
-                .get(canonical_path)
-                .and_then(Value::as_object)
-                .and_then(|path| path.get("post"))
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| {
-                    panic!("missing canonical multisig proposal operation: {canonical_path}")
-                });
-            for field in ["tags", "requestBody", "responses"] {
-                assert_eq!(
-                    operation.get(field),
-                    canonical_operation.get(field),
-                    "{path} must match {canonical_path} field {field}"
-                );
-            }
         }
+        assert!(!paths.contains_key("/v1/multisig/proposals/list"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/get"));
 
         let protected_namespaces = paths
             .get("/v1/gov/protected-namespaces")
@@ -21817,8 +21830,24 @@ mod tests {
         assert_closed_shape(
             &schemas,
             "SumeragiV2FinalizedNextEpochSnapshot",
-            &["epoch", "mode", "roster", "quorum", "leader_seed"],
-            &["epoch", "mode", "roster", "quorum", "leader_seed"],
+            &[
+                "epoch",
+                "epoch_end_height",
+                "mode",
+                "roster",
+                "validator_set_pops",
+                "quorum",
+                "leader_seed",
+            ],
+            &[
+                "epoch",
+                "epoch_end_height",
+                "mode",
+                "roster",
+                "validator_set_pops",
+                "quorum",
+                "leader_seed",
+            ],
         );
         assert_closed_shape(
             &schemas,
@@ -21828,18 +21857,12 @@ mod tests {
                 "height_context_id",
                 "block_height",
                 "block_hash",
-                "mmr_root",
-                "mmr_leaf_index",
-                "mmr_peaks",
             ],
             &[
                 "chain_id",
                 "height_context_id",
                 "block_height",
                 "block_hash",
-                "mmr_root",
-                "mmr_leaf_index",
-                "mmr_peaks",
             ],
         );
         assert_closed_shape(
@@ -21937,16 +21960,21 @@ mod tests {
             Some("^ea0130[0-9A-F]{96}$")
         );
 
-        let pops = property(&schemas, "SumeragiV2FinalityArtifact", "validator_set_pops");
-        assert_eq!(pops.get("minItems").and_then(Value::as_u64), Some(1));
-        assert_eq!(pops.get("maxItems").and_then(Value::as_u64), Some(4096));
-        assert_eq!(
-            pops.get("items")
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/SumeragiV2BlsProof")
-        );
+        for owner in [
+            "SumeragiV2FinalityArtifact",
+            "SumeragiV2FinalizedNextEpochSnapshot",
+        ] {
+            let pops = property(&schemas, owner, "validator_set_pops");
+            assert_eq!(pops.get("minItems").and_then(Value::as_u64), Some(1));
+            assert_eq!(pops.get("maxItems").and_then(Value::as_u64), Some(4096));
+            assert_eq!(
+                pops.get("items")
+                    .and_then(Value::as_object)
+                    .and_then(|items| items.get("$ref"))
+                    .and_then(Value::as_str),
+                Some("#/components/schemas/SumeragiV2BlsProof")
+            );
+        }
         let bls_proof = schema(&schemas, "SumeragiV2BlsProof");
         assert_eq!(bls_proof.get("minItems").and_then(Value::as_u64), Some(96));
         assert_eq!(bls_proof.get("maxItems").and_then(Value::as_u64), Some(96));
@@ -22020,6 +22048,9 @@ mod tests {
             "aggregate",
             "signers_bitmap",
             "bls_aggregate_signature",
+            "mmr_root",
+            "mmr_leaf_index",
+            "mmr_peaks",
         ] {
             assert!(
                 !serialized.contains(&format!("\"{retired}\"")),

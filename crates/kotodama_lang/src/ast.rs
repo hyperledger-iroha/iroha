@@ -197,7 +197,7 @@ pub struct ErrorVariant {
     pub code: u32,
 }
 
-/// A seiyaku-level `const` declaration: `const NAME: Type = expr;`.
+/// A seiyaku-level `const` declaration: `const Type name = expr;`.
 #[derive(Debug, PartialEq, Clone)]
 pub struct ConstDecl {
     pub name: String,

@@ -25,7 +25,10 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
 }
 
 fn encoded_state_path(name: &str, key: i64) -> String {
-    let key = norito::to_bytes(&key).expect("encode canonical StateMap key");
+    let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(
+        i128::from(key),
+    ))
+    .expect("encode canonical pointer-backed StateMap key");
     format!("{name}/{}", hex::encode(key))
 }
 
@@ -72,7 +75,7 @@ fn kotodama_state_map_set_writes_corehost_state() {
     let p_out = vm.register(10);
     let tlv = vm.memory.validate_tlv(p_out).expect("validate out");
     assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    assert_eq!(common::decode_i64_state_value(tlv.payload), 7);
+    assert_eq!(common::decode_int_state_value(tlv.payload), 7);
 }
 
 #[test]
@@ -163,12 +166,12 @@ fn kotodama_foreach_reads_durable_state_map_entries() {
     let mut wsv = MockWorldStateView::new();
     wsv.sc_set(
         &encoded_state_path("M", 0),
-        common::encode_i64_state_value(5),
+        common::encode_int_state_value(5),
     )
     .expect("write state index 0");
     wsv.sc_set(
         &encoded_state_path("M", 1),
-        common::encode_i64_state_value(9),
+        common::encode_int_state_value(9),
     )
     .expect("write state index 1");
     let alice = account(
@@ -202,6 +205,6 @@ fn kotodama_foreach_reads_durable_state_map_entries() {
         let out = vm.register(10);
         let tlv = vm.memory.validate_tlv(out).expect("validate out");
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        assert_eq!(common::decode_i64_state_value(tlv.payload), expected);
+        assert_eq!(common::decode_int_state_value(tlv.payload), expected);
     }
 }

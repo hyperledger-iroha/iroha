@@ -10,6 +10,7 @@ use ivm::{
     pointer_abi::PointerType,
 };
 use norito::json as njson;
+mod common;
 
 fn compile_and_run(source: &str) -> IVM {
     let code = Compiler::new()
@@ -108,7 +109,7 @@ fn argument_host(
     left: i64,
     right: i64,
 ) -> DefaultHost {
-    let payload = Json::from_str_norito(&format!(r#"{{"left":{left},"right":{right}}}"#))
+    let payload = Json::from_str_norito(&format!(r#"{{"left":"{left}","right":"{right}"}}"#))
         .expect("valid comparison arguments");
     let payload = ivm::encode_argument_record_from_json(schema, &payload)
         .expect("encode comparison argument record");
@@ -155,7 +156,7 @@ seiyaku StateMapOptionAcceptance {
 "#;
 
     let vm = compile_and_run(source);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
@@ -191,7 +192,7 @@ seiyaku AggregateStateAcceptance {
 "#;
 
     let vm = compile_and_run(source);
-    assert_eq!(vm.register(10), 9);
+    assert_eq!(common::decode_i64_register(&vm, 10), 9);
 }
 
 #[test]
@@ -232,7 +233,7 @@ seiyaku AggregateSumAcceptance {
 "#;
 
     let vm = compile_and_run(source);
-    assert_eq!(vm.register(10), 67);
+    assert_eq!(common::decode_i64_register(&vm, 10), 67);
 }
 
 #[test]
@@ -345,7 +346,7 @@ seiyaku DefaultHostNativeJsonAcceptance {
 }
 "#;
     let vm = compile_and_run_with_default_host(source);
-    assert_eq!(vm.register(10), 7);
+    assert_eq!(common::decode_i64_register(&vm, 10), 7);
 }
 
 #[test]
@@ -386,7 +387,7 @@ seiyaku StateRootAcceptance {
 "#;
 
     let vm = compile_init_and_run(source);
-    assert_eq!(vm.register(10), 27);
+    assert_eq!(common::decode_i64_register(&vm, 10), 27);
 }
 
 #[test]
@@ -406,7 +407,7 @@ seiyaku PointerStateAcceptance {
 "#;
 
     let vm = compile_init_and_run(source);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
@@ -447,7 +448,7 @@ seiyaku ShortCircuitAcceptance {
 "#;
 
     let vm = compile_and_run(source);
-    assert_eq!(vm.register(10), 2);
+    assert_eq!(common::decode_i64_register(&vm, 10), 2);
 }
 
 #[test]
@@ -477,7 +478,12 @@ seiyaku StateMapIterationAcceptance {
 "#,
     );
     let mut expected = inserted;
-    expected.sort_by_key(|key| norito::to_bytes(key).expect("encode canonical i64 key"));
+    expected.sort_by_key(|key| {
+        ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(i128::from(
+            *key,
+        )))
+        .expect("encode canonical pointer-backed int key")
+    });
     for (index, key) in expected.into_iter().enumerate() {
         writeln!(
             source,
@@ -498,7 +504,7 @@ seiyaku StateMapIterationAcceptance {
     );
 
     let vm = compile_and_run(&source);
-    assert_eq!(vm.register(10), 64);
+    assert_eq!(common::decode_i64_register(&vm, 10), 64);
 }
 
 #[test]
@@ -588,8 +594,8 @@ seiyaku SignedComparisonAcceptance {
                     "value comparison {index} failed for {left} and {right}"
                 );
                 assert_eq!(
-                    vm.register(16 + index),
-                    u64::from(expected),
+                    common::decode_i64_register(&vm, 16 + index),
+                    i64::from(expected),
                     "branch comparison {index} failed for {left} and {right}"
                 );
             }

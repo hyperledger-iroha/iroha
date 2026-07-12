@@ -13,6 +13,7 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     pointer_abi::PointerType,
 };
+mod common;
 
 fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
@@ -184,7 +185,7 @@ seiyaku ArgumentRecordRuntime {
     vm.set_host(host);
     vm.run().expect("execute parameterized wrapper");
 
-    assert_eq!(vm.register(10), 41);
+    assert_eq!(common::decode_i64_register(&vm, 10), 41);
 }
 
 #[test]
@@ -222,10 +223,11 @@ seiyaku JsonArgumentRecordRuntime {
     vm.set_host(host);
     vm.run().expect("execute Json argument wrapper");
     let layout = ivm::sum::SumLayoutV1::option(1).expect("Option<int> layout");
-    assert_eq!(
-        ivm::sum::read_words(&vm, vm.register(10), layout),
-        Ok((true, vec![29]))
-    );
+    let (present, payload) =
+        ivm::sum::read_words(&vm, vm.register(10), layout).expect("read Option<int>");
+    assert!(present);
+    assert_eq!(payload.len(), 1);
+    assert_eq!(common::decode_i64_word(&vm, payload[0]), 29);
 }
 
 #[test]
@@ -241,7 +243,7 @@ seiyaku RecursiveArgumentRecordRuntime {
     Result<int, bool> outcome
   ) -> int {
     let optional = match maybe { Option::some(value) => value, Option::none => 0 };
-    let result = match outcome { Result::ok(value) => value, Result::err(error) => 0 };
+    let result = match outcome { Result::ok(value) => value, Result::err(_) => 0 };
     if (!request.ready || !pair.1) { return 0; }
     return request.count + pair.0 + optional + result;
   }
@@ -279,5 +281,5 @@ seiyaku RecursiveArgumentRecordRuntime {
         .expect("select run wrapper");
     vm.set_host(host);
     vm.run().expect("execute recursive wrapper");
-    assert_eq!(vm.register(10), 48);
+    assert_eq!(common::decode_i64_register(&vm, 10), 48);
 }

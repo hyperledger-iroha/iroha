@@ -13318,10 +13318,13 @@ mod tests {
                 .is_empty()
         );
 
-        // Model an operator/recovery worker discarding an uncertified local proposal. Once no
-        // certified or autonomous work remains, the already-proven snapshot may release storage.
+        // Model an operator/recovery worker discarding an uncertified local proposal. Remove the
+        // fixture-created directory as well as its sidecars so the archived block image exactly
+        // matches the durable move seal again. Once no certified or autonomous work remains, the
+        // already-proven snapshot may release storage.
         fs::remove_file(autonomous_data).expect("remove uncertified payload");
         fs::remove_file(autonomous_index).expect("remove uncertified index");
+        fs::remove_dir(lane_artifacts).expect("restore sealed archived block image");
         let resumed = kura
             .resume_proven_lane_geometry_archive_gc()
             .expect("empty retired work set releases after repair");
@@ -13785,7 +13788,7 @@ mod tests {
         assert_kura_io_error(
             &error,
             std::io::ErrorKind::InvalidData,
-            "lane geometry checkpoint commitment or catalog is invalid",
+            "lane geometry checkpoint commitment, catalog, height, block hash, or activation is invalid",
         );
     }
 

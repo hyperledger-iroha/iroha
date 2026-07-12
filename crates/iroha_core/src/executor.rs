@@ -29,7 +29,9 @@ use iroha_data_model::{
     executor::{self as data_model_executor, ExecutorDataModel},
     isi::{
         CustomInstruction, InstructionBox, InstructionBox as DMInstructionBox, RemoveKeyValueBox,
-        SetKeyValueBox, TransferBox, error::InstructionExecutionError, mint_burn::MintBox,
+        SetKeyValueBox, TransferBox,
+        error::{InstructionExecutionError, MathError},
+        mint_burn::MintBox,
         register::RegisterBox,
     },
     metadata::Metadata,
@@ -227,6 +229,15 @@ impl FixtureExecutorKind {
     }
 }
 
+fn ensure_detached_asset_quantity_non_negative(quantity: &Numeric) -> Result<(), ValidationFail> {
+    if quantity.mantissa().is_negative() {
+        return Err(ValidationFail::InstructionFailed(
+            InstructionExecutionError::Math(MathError::NegativeValue),
+        ));
+    }
+    Ok(())
+}
+
 /// Execute a single instruction in a detached overlay, recording only the state deltas.
 ///
 /// This helper is used by the parallel validator to pre-apply side-effect-free
@@ -298,6 +309,7 @@ pub(crate) fn execute_instruction_detached(
             MintBox::Asset(m) => {
                 let asset_id = m.destination.clone();
                 let qty = m.object.clone();
+                ensure_detached_asset_quantity_non_negative(&qty)?;
                 // Record per-account balance increase and total supply increase
                 delta.add_asset_add(asset_id.clone(), qty.clone());
                 delta.add_total_add(asset_id.definition().clone(), qty);
@@ -317,6 +329,7 @@ pub(crate) fn execute_instruction_detached(
             BurnBox::Asset(b) => {
                 let asset_id = b.destination.clone();
                 let qty = b.object.clone();
+                ensure_detached_asset_quantity_non_negative(&qty)?;
                 // Record per-account balance decrease and total supply decrease
                 delta.add_asset_sub(asset_id.clone(), qty.clone());
                 delta.add_total_sub(asset_id.definition().clone(), qty);
@@ -353,6 +366,7 @@ pub(crate) fn execute_instruction_detached(
             TransferBox::Asset(t) => {
                 let src = t.source.clone();
                 let qty = t.object.clone();
+                ensure_detached_asset_quantity_non_negative(&qty)?;
                 delta.transfer_asset(src, t.destination.clone(), qty);
             }
             TransferBox::Domain(t) => {
@@ -1091,6 +1105,12 @@ fn unsettled_verified_nexus_fee_amount(
             if world.smart_contract_state().get(&marker).is_some() {
                 continue;
             }
+            if receipt.fee_amount.mantissa().is_negative() {
+                return Err(NexusFeeAdmissionError::ConfigInvalid(format!(
+                    "verified lane relay contains negative Nexus fee receipt {}",
+                    hex::encode(receipt.source_id)
+                )));
+            }
             total = checked_nexus_fee_add(total, receipt.fee_amount.clone(), "unsettled receipts")?;
         }
     }
@@ -1116,6 +1136,11 @@ fn check_lane_relay_burn_fee_budget(
         return Err(NexusFeeAdmissionError::Rejected(format!(
             "verified Nexus fee budget record does not match payer `{payer}` and asset `{}`",
             cfg.fee_asset_id
+        )));
+    }
+    if record.verified_balance.mantissa().is_negative() {
+        return Err(NexusFeeAdmissionError::ConfigInvalid(format!(
+            "verified Nexus fee budget for payer `{payer}` has a negative balance"
         )));
     }
     if record.manifest_root.iter().all(|byte| *byte == 0)
@@ -2600,6 +2625,23 @@ pub(crate) fn compute_nexus_fee_amount(
     instruction_count: usize,
     gas_used: u64,
 ) -> Result<Numeric, ValidationFail> {
+    for (label, value) in [
+        ("base_fee", &cfg.base_fee),
+        ("per_byte_fee", &cfg.per_byte_fee),
+        ("per_instruction_fee", &cfg.per_instruction_fee),
+        ("per_gas_unit_fee", &cfg.per_gas_unit_fee),
+        ("sponsor_max_fee", &cfg.sponsor_max_fee),
+        (
+            "sponsor_verified_balance_safety_floor",
+            &cfg.sponsor_verified_balance_safety_floor,
+        ),
+    ] {
+        if value.mantissa().is_negative() {
+            return Err(ValidationFail::InternalError(format!(
+                "nexus.fees.{label} must be non-negative"
+            )));
+        }
+    }
     let tx_bytes_u64 = u64::try_from(tx_bytes_len).map_err(|_| {
         ValidationFail::InternalError("transaction too large for fee accounting".to_owned())
     })?;
@@ -8249,6 +8291,45 @@ mod tests {
     }
 
     #[test]
+    fn detached_asset_instructions_reject_negative_quantities_before_recording() {
+        let definition_id = AssetDefinitionId::new(
+            DomainId::try_new("detached_negative", "universal").expect("domain id"),
+            "coin".parse().expect("asset name"),
+        );
+        let asset_id = AssetId::new(definition_id, alice());
+        let negative = Numeric::new(-1_i32, 0);
+        let instructions: [InstructionBox; 3] = [
+            Mint::asset_numeric(negative.clone(), asset_id.clone()).into(),
+            Burn::asset_numeric(negative.clone(), asset_id.clone()).into(),
+            Transfer::asset_numeric(asset_id, negative, BOB_ID.clone()).into(),
+        ];
+
+        for instruction in instructions {
+            let mut delta = crate::state::DetachedStateTransactionDelta::default();
+            let error = execute_instruction_detached(&alice(), &instruction, &mut delta)
+                .expect_err("negative detached asset quantity must be rejected");
+            assert!(matches!(
+                error,
+                ValidationFail::InstructionFailed(InstructionExecutionError::Math(
+                    MathError::NegativeValue
+                ))
+            ));
+        }
+    }
+
+    #[test]
+    fn nexus_fee_computation_rejects_negative_runtime_schedule() {
+        let mut fees = iroha_config::parameters::actual::NexusFees::default();
+        fees.base_fee = Numeric::new(-1_i32, 0);
+        let error = compute_nexus_fee_amount(&fees, 1, 1, 1)
+            .expect_err("negative runtime fee schedule must fail closed");
+        assert!(matches!(
+            error,
+            ValidationFail::InternalError(message) if message.contains("must be non-negative")
+        ));
+    }
+
+    #[test]
     fn detached_nft_metadata_records_delta() {
         let (bob_id, _bob_kp) = gen_account_in("wonderland");
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -12764,7 +12845,7 @@ mod tests {
     fn prepared_parameterized_trigger_contract() -> ivm::PreparedContract {
         let source = r#"
 seiyaku TriggerArguments {
-  kotoage fn run(val: Amount) authorize("Admin") {
+  kotoage fn run(Quantity val) authorize("Admin") {
     let _val = val;
   }
 }
@@ -12783,10 +12864,12 @@ seiyaku TriggerArguments {
             .compile_source_with_manifest(
                 r#"
 seiyaku GuardedValue {
-  state guarded_value: i64;
-
-  kotoage fn write(value: i64) authorize("CanWriteGuardedValue") {
-    guarded_value = value;
+  kotoage fn write(int value) authorize("CanWriteGuardedValue") {
+    ledger::account::set_detail(
+      account: context::authority(),
+      key: Name::parse("guarded_value"),
+      value: Json::parse("{\"authorized\":true}")
+    );
   }
 }
 "#,
@@ -12806,7 +12889,7 @@ seiyaku GuardedValue {
             .expect("write argument schema");
         let arguments = ivm::encode_argument_record_from_json(
             schema,
-            &Json::from(norito::json!({ "value": 7 })),
+            &Json::from(norito::json!({ "value": "7" })),
         )
         .expect("encode valid protected arguments");
         let arguments =
@@ -12828,11 +12911,9 @@ seiyaku GuardedValue {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
-        let contract_scope =
-            hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
-        let durable_marker: Name = format!("sc/{contract_scope}/guarded_value")
+        let metadata_marker: Name = "guarded_value"
             .parse()
-            .expect("valid scoped direct-call marker");
+            .expect("valid direct-call metadata marker");
         world.contract_code.insert(code_hash, program);
         world
             .contract_manifests
@@ -12885,10 +12966,12 @@ seiyaku GuardedValue {
         assert!(
             state_tx
                 .world
-                .smart_contract_state
-                .get(&durable_marker)
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&metadata_marker)
                 .is_none(),
-            "denied direct contract call must apply no durable state"
+            "denied direct contract call must apply no queued effect"
         );
 
         let entrypoint_permission = Permission::new(REQUIRED_PERMISSION.to_owned(), Json::new(()));
@@ -12911,10 +12994,12 @@ seiyaku GuardedValue {
         );
         let authorized_marker = state_tx
             .world
-            .smart_contract_state
-            .get(&durable_marker)
+            .account(&authority)
+            .expect("authority account")
+            .metadata()
+            .get(&metadata_marker)
             .cloned()
-            .expect("authorized direct call writes its durable marker");
+            .expect("authorized direct call writes its metadata marker");
 
         Revoke::account_permission(entrypoint_permission.clone(), authority.clone())
             .execute(&authority, &mut state_tx)
@@ -12935,7 +13020,12 @@ seiyaku GuardedValue {
             "revoked direct-call arguments must remain undecoded"
         );
         assert_eq!(
-            state_tx.world.smart_contract_state.get(&durable_marker),
+            state_tx
+                .world
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&metadata_marker),
             Some(&authorized_marker),
             "revoked direct contract call must preserve authorized state"
         );
@@ -12961,9 +13051,14 @@ seiyaku GuardedValue {
             "deactivated direct-call arguments must remain undecoded"
         );
         assert_eq!(
-            state_tx.world.smart_contract_state.get(&durable_marker),
+            state_tx
+                .world
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&metadata_marker),
             Some(&authorized_marker),
-            "deactivated direct contract call must apply no durable state"
+            "deactivated direct contract call must apply no queued effect"
         );
     }
 
@@ -12978,7 +13073,7 @@ seiyaku GuardedValue {
             .compile_source(
                 r#"
 seiyaku IdentityRequired {
-  kotoage fn write(value: i64) {
+  kotoage fn write(int value) {
     let _value = value;
   }
 }

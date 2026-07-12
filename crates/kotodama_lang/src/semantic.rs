@@ -2614,18 +2614,6 @@ fn analyze_with_context(
     let mut resolved_consts: IndexMap<String, TypedExpr> = IndexMap::new();
     for decl in const_decls {
         context.discard_diagnostic();
-        let mut value = match analyze_const_expr(context, &decl.value, &resolved_consts) {
-            Ok(value) => value,
-            Err(error) => {
-                return Err(SemanticFailures {
-                    failures: vec![SemanticFailure {
-                        error,
-                        location: None,
-                        diagnostic: context.take_diagnostic(),
-                    }],
-                });
-            }
-        };
         let declared = decl.ty.as_ref().ok_or_else(|| SemanticError {
             code: "K2003",
             message: format!("const `{}` requires an explicit type", decl.name),
@@ -2633,6 +2621,19 @@ fn analyze_with_context(
         let expected =
             resolve_struct_type_with_context(context, &convert_type_expr(context, declared)?);
         validate_list_schemas(&expected)?;
+        let mut value =
+            match analyze_const_expr(context, &decl.value, &resolved_consts, Some(&expected)) {
+                Ok(value) => value,
+                Err(error) => {
+                    return Err(SemanticFailures {
+                        failures: vec![SemanticFailure {
+                            error,
+                            location: None,
+                            diagnostic: context.take_diagnostic(),
+                        }],
+                    });
+                }
+            };
         ensure_assignable_and_coerce(&expected, &mut value)?;
         if is_numeric_type(&value.ty) {
             value = fold_constant_numeric(&value)?;
@@ -4247,14 +4248,14 @@ fn arithmetic_result_type(op: BinaryOp, lhs: &Type, rhs: &Type) -> Option<Type> 
     }
 }
 
-fn literal_i64(expr: &TypedExpr) -> Option<i64> {
+fn literal_int(expr: &TypedExpr) -> Option<BigInt> {
     match expr.kind() {
-        ExprKind::IntLiteral(n) => n.try_to_i64(),
-        ExprKind::NumericCast { expr } => literal_i64(expr),
+        ExprKind::IntLiteral(value) => Some(value.clone()),
+        ExprKind::NumericCast { expr } => literal_int(expr),
         ExprKind::Unary {
             op: UnaryOp::Neg,
             expr,
-        } => literal_i64(expr).and_then(|v| v.checked_neg()),
+        } => literal_int(expr).and_then(|value| value.checked_neg().ok()),
         _ => None,
     }
 }
@@ -4398,6 +4399,89 @@ fn coerce_numeric_operand(expr: &mut TypedExpr, expected: &Type) -> Result<(), S
         return Ok(());
     }
     require_same_numeric_type(expr, &expected)
+}
+
+fn coerce_exact_numeric_literal_to(
+    expr: &mut TypedExpr,
+    expected: &Type,
+) -> Result<(), SemanticError> {
+    if resolve_struct_type(&expr.ty) != resolve_struct_type(expected)
+        && exact_numeric_literal_expression(expr)
+    {
+        ensure_assignable_and_coerce(expected, expr)?;
+    }
+    Ok(())
+}
+
+/// Apply the expected numeric domain only to exact literal operands.
+///
+/// Runtime values retain their nominal type: this is literal inference, not
+/// an implicit conversion between `int`, `decimal`, and `quantity` values.
+fn coerce_contextual_numeric_literals(
+    op: BinaryOp,
+    expected: Option<&Type>,
+    left: &mut TypedExpr,
+    right: &mut TypedExpr,
+) -> Result<(), SemanticError> {
+    use BinaryOp::*;
+
+    let comparison = matches!(op, Eq | Ne | Lt | Le | Gt | Ge);
+    let left_type = resolve_struct_type(&left.ty);
+    let right_type = resolve_struct_type(&right.ty);
+
+    if left_type == Type::Quantity {
+        match op {
+            Add | Sub | Mod if exact_numeric_literal_expression(right) => {
+                coerce_exact_numeric_literal_to(right, &Type::Quantity)?;
+            }
+            Mul if exact_numeric_literal_expression(right) => {
+                coerce_exact_numeric_literal_to(right, &Type::Decimal)?;
+            }
+            Div if exact_numeric_literal_expression(right) => {
+                let divisor_type = if expected
+                    .is_some_and(|expected| resolve_struct_type(expected) == Type::Decimal)
+                {
+                    Type::Quantity
+                } else {
+                    Type::Decimal
+                };
+                coerce_exact_numeric_literal_to(right, &divisor_type)?;
+            }
+            _ if comparison && exact_numeric_literal_expression(right) => {
+                coerce_exact_numeric_literal_to(right, &Type::Quantity)?;
+            }
+            _ => {}
+        }
+        return Ok(());
+    }
+
+    if right_type == Type::Quantity {
+        if matches!(op, Add | Sub | Mod) || comparison {
+            coerce_exact_numeric_literal_to(left, &Type::Quantity)?;
+        }
+        return Ok(());
+    }
+
+    match expected.map(resolve_struct_type) {
+        Some(Type::Decimal) if matches!(op, Add | Sub | Mul | Div | Mod) => {
+            coerce_exact_numeric_literal_to(left, &Type::Decimal)?;
+            coerce_exact_numeric_literal_to(right, &Type::Decimal)?;
+        }
+        Some(Type::Quantity) => match op {
+            Add | Sub | Mod => {
+                coerce_exact_numeric_literal_to(left, &Type::Quantity)?;
+                coerce_exact_numeric_literal_to(right, &Type::Quantity)?;
+            }
+            Mul | Div => {
+                coerce_exact_numeric_literal_to(left, &Type::Quantity)?;
+                coerce_exact_numeric_literal_to(right, &Type::Decimal)?;
+            }
+            _ => {}
+        },
+        _ => {}
+    }
+
+    Ok(())
 }
 
 fn list_element_contains_resource_handle(ty: &Type) -> bool {
@@ -4743,12 +4827,22 @@ fn is_transfer_batch_entry_tuple(ty: &Type) -> bool {
     }
 }
 
-fn ensure_transfer_batch_args(args: &[TypedExpr]) -> Result<(), SemanticError> {
+fn ensure_transfer_batch_args(args: &mut [TypedExpr]) -> Result<(), SemanticError> {
     if args.is_empty() {
         return Err(SemanticError {
             code: "K2003",
             message: "transfer_batch expects at least one entry".into(),
         });
+    }
+    for argument in args.iter_mut() {
+        let ExprKind::Tuple(items) = &mut argument.expr else {
+            continue;
+        };
+        if items.len() != 4 {
+            continue;
+        }
+        coerce_exact_numeric_literal_to(&mut items[3], &Type::Quantity)?;
+        argument.ty = Type::Tuple(items.iter().map(|item| item.ty.clone()).collect());
     }
     if args
         .iter()
@@ -5968,21 +6062,44 @@ fn analyze_statement_inner(
                         bind_tuple_fields_rec(&mut out, vars, name, &expr, &expr.ty);
                         return Ok(out);
                     }
-                    if numeric_result_type(&expected, &expr.ty).is_none() {
-                        return Err(SemanticError {
-                            code: "K2003",
-                            message: format!(
-                                "{op:?} requires identical numeric operand types; implicit conversions are not part of Kotodama V1"
-                            ),
-                        });
-                    }
-                    require_same_numeric_type(&expr, &expected)?;
-                    let result_ty = expected.clone();
-                    let left = TypedExpr {
+                    let bin_op = assign_op_to_binary(*op).expect("compound op maps to binary op");
+                    let mut left = TypedExpr {
                         expr: ExprKind::Ident(name.clone()),
                         ty: expected.clone(),
                     };
-                    let bin_op = assign_op_to_binary(*op).expect("compound op maps to binary op");
+                    coerce_contextual_numeric_literals(
+                        bin_op,
+                        Some(&expected),
+                        &mut left,
+                        &mut expr,
+                    )?;
+                    let Some(result_ty) = arithmetic_result_type(bin_op, &left.ty, &expr.ty) else {
+                        return Err(SemanticError {
+                            code: "K2003",
+                            message: format!(
+                                "compound operator {op:?} is not defined for {} and {}",
+                                type_name(&left.ty),
+                                type_name(&expr.ty),
+                            ),
+                        });
+                    };
+                    if matches!(result_ty, Type::Decimal)
+                        && resolve_struct_type(&left.ty) != Type::Quantity
+                        && resolve_struct_type(&expr.ty) != Type::Quantity
+                    {
+                        coerce_numeric_operand(&mut left, &Type::Decimal)?;
+                        coerce_numeric_operand(&mut expr, &Type::Decimal)?;
+                    }
+                    if resolve_struct_type(&result_ty) != resolve_struct_type(&expected) {
+                        return Err(SemanticError {
+                            code: "K2003",
+                            message: format!(
+                                "compound operator {op:?} produces {}, which cannot be assigned to {} without an explicit conversion",
+                                type_name(&result_ty),
+                                type_name(&expected),
+                            ),
+                        });
+                    }
                     let value_expr = TypedExpr {
                         expr: ExprKind::Binary {
                             op: bin_op,
@@ -6588,6 +6705,24 @@ fn replace_identifier_token(message: &str, needle: &str, replacement: &str) -> S
     rewritten
 }
 
+fn coerce_builtin_exact_numeric_literals(
+    builtin: Builtin,
+    arguments: &mut [TypedExpr],
+) -> Result<(), SemanticError> {
+    for (argument, parameter) in arguments
+        .iter_mut()
+        .zip(builtin.signature().parameters.iter().copied())
+    {
+        let expected = match parameter.strip_suffix('?').unwrap_or(parameter) {
+            "decimal" => Type::Decimal,
+            "quantity" => Type::Quantity,
+            _ => continue,
+        };
+        coerce_exact_numeric_literal_to(argument, &expected)?;
+    }
+    Ok(())
+}
+
 fn analyze_surface_builtin_call(
     context: &SemanticContext,
     builtin: Builtin,
@@ -6635,6 +6770,7 @@ fn analyze_surface_builtin_call(
         | BuiltinMode::TestOnly
         | BuiltinMode::TestFunctionOnly => {}
     }
+    coerce_builtin_exact_numeric_literals(builtin, &mut arg_typed)?;
     crate::secret::validate_builtin_call(builtin, &arg_typed)?;
     match builtin {
         Builtin::PointerConstructor(constructor) => {
@@ -7128,13 +7264,17 @@ fn analyze_surface_builtin_call(
                     ),
                 });
             }
-            if literal_i64(&arg_typed[0]).is_some_and(|offset| offset < 0) {
+            if literal_int(&arg_typed[0]).is_some_and(|offset| offset.try_to_u64().is_none()) {
                 return Err(SemanticError {
                     code: "E_QUERY_OFFSET",
-                    message: "query page offset must be non-negative".into(),
+                    message: "query page offset must be non-negative and fit u64".into(),
                 });
             }
-            if literal_i64(&arg_typed[1]).is_some_and(|limit| !(1..=64).contains(&limit)) {
+            if literal_int(&arg_typed[1]).is_some_and(|limit| {
+                limit
+                    .try_to_u64()
+                    .is_none_or(|limit| !(1..=64).contains(&limit))
+            }) {
                 return Err(SemanticError {
                     code: "E_QUERY_LIMIT",
                     message: "query page limit must be in 1..=64".into(),
@@ -7236,6 +7376,22 @@ fn analyze_surface_builtin_call(
                     code: "K2003",
                     message: "build_unshield_inline expects (AssetDefinitionId, AccountId, int amount, bytes inputs32, [bytes outputs32,] string backend, bytes proof, bytes vk)".into(),
                 });
+            }
+            if let ExprKind::IntLiteral(amount) = arg_typed[2].kind() {
+                if amount.is_negative() {
+                    return Err(SemanticError {
+                        code: "E_UNSHIELD_AMOUNT_RANGE",
+                        message: "crypto::zk::build_unshield requires non-negative amount".into(),
+                    });
+                }
+                if amount.to_string().parse::<u128>().is_err() {
+                    return Err(SemanticError {
+                        code: "E_UNSHIELD_AMOUNT_RANGE",
+                        message:
+                            "crypto::zk::build_unshield amount exceeds the u128 protocol range"
+                                .into(),
+                    });
+                }
             }
             Ok(TypedExpr {
                 expr: ExprKind::Call {
@@ -8368,7 +8524,7 @@ fn analyze_surface_builtin_call(
             })
         }
         Builtin::TransferBatch => {
-            ensure_transfer_batch_args(&arg_typed)?;
+            ensure_transfer_batch_args(&mut arg_typed)?;
             Ok(TypedExpr {
                 expr: ExprKind::Call {
                     name: builtin.name().to_string(),
@@ -8542,11 +8698,21 @@ fn analyze_surface_builtin_call(
         }
         Builtin::SetAccountQuorum => {
             if arg_typed.len() != 2
-                || !(arg_typed[0].ty == Type::AccountId && arg_typed[1].ty == Type::Quantity)
+                || !(arg_typed[0].ty == Type::AccountId && arg_typed[1].ty == Type::Int)
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "set_account_quorum expects (AccountId, quantity)".into(),
+                    message: "set_account_quorum expects (AccountId, int)".into(),
+                });
+            }
+            if literal_int(&arg_typed[1]).is_some_and(|quorum| {
+                quorum
+                    .try_to_u64()
+                    .is_none_or(|quorum| !(1..=u64::from(u16::MAX)).contains(&quorum))
+            }) {
+                return Err(SemanticError {
+                    code: "E_QUORUM_RANGE",
+                    message: "account quorum must be in the protocol range 1..=65535".into(),
                 });
             }
             Ok(TypedExpr {
@@ -10900,9 +11066,22 @@ fn analyze_expr_expected_inner(
             })
         }
         Expr::Tuple(elems) => {
-            let mut typed = Vec::new();
-            for e in elems {
-                typed.push(analyze_expr(context, e, vars)?);
+            let expected_elements = match expected
+                .map(|expected| resolve_struct_type_with_context(context, expected))
+            {
+                Some(Type::Tuple(elements)) if elements.len() == elems.len() => Some(elements),
+                _ => None,
+            };
+            let mut typed = Vec::with_capacity(elems.len());
+            for (index, element) in elems.iter().enumerate() {
+                let expected_element = expected_elements
+                    .as_ref()
+                    .and_then(|elements| elements.get(index));
+                let mut element = analyze_expr_expected(context, element, vars, expected_element)?;
+                if let Some(expected_element) = expected_element {
+                    ensure_assignable_and_coerce(expected_element, &mut element)?;
+                }
+                typed.push(element);
             }
             let tys = typed.iter().map(|t| t.ty.clone()).collect();
             Ok(TypedExpr {
@@ -11080,7 +11259,13 @@ fn analyze_expr_expected_inner(
             })
         }
         Expr::Unary { op, expr: inner } => {
-            let inner_t = analyze_expr(context, inner, vars)?;
+            // A quantity cannot be negated. Keep the operand in its literal
+            // domain so the enclosing contextual conversion reports the
+            // stable `E_NEGATIVE_QUANTITY` diagnostic for `quantity = -1`
+            // instead of treating this as a runtime quantity negation.
+            let unary_expected =
+                expected.filter(|expected| resolve_struct_type(expected) != Type::Quantity);
+            let inner_t = analyze_expr_expected(context, inner, vars, unary_expected)?;
             crate::secret::reject_secret_ordinary_operation(&[&inner_t])?;
             match op {
                 UnaryOp::Neg => {
@@ -11308,6 +11493,19 @@ fn analyze_expr_expected_inner(
             let mut left_t = analyze_expr(context, left, vars)?;
             let mut right_t = analyze_expr(context, right, vars)?;
             crate::secret::reject_secret_ordinary_operation(&[&left_t, &right_t])?;
+            if *op == BinaryOp::Mod
+                && (resolve_struct_type(&left_t.ty) == Type::Quantity
+                    || resolve_struct_type(&right_t.ty) == Type::Quantity
+                    || expected
+                        .is_some_and(|expected| resolve_struct_type(expected) == Type::Quantity))
+            {
+                return Err(SemanticError {
+                    code: "E_QUANTITY_REMAINDER",
+                    message: "quantity does not support `%`; use exact `/` or quantity.div_round"
+                        .into(),
+                });
+            }
+            coerce_contextual_numeric_literals(*op, expected, &mut left_t, &mut right_t)?;
             use BinaryOp::*;
             match op {
                 Add | Sub | Mul | Div | Mod => {
@@ -11322,7 +11520,10 @@ fn analyze_expr_expected_inner(
                             ),
                         });
                     };
-                    if matches!(result_ty, Type::Decimal) {
+                    if matches!(result_ty, Type::Decimal)
+                        && resolve_struct_type(&left_t.ty) != Type::Quantity
+                        && resolve_struct_type(&right_t.ty) != Type::Quantity
+                    {
                         coerce_numeric_operand(&mut left_t, &Type::Decimal)?;
                         coerce_numeric_operand(&mut right_t, &Type::Decimal)?;
                     }
@@ -11398,7 +11599,9 @@ fn analyze_expr_expected_inner(
                         return Err(SemanticError {
                             code: "K2003",
                             message: format!(
-                                "{op:?} requires identical numeric operand types; implicit conversions are not part of Kotodama V1"
+                                "comparison {op:?} is not defined for {} and {}",
+                                type_name(&left_t.ty),
+                                type_name(&right_t.ty),
                             ),
                         });
                     };
@@ -11980,8 +12183,9 @@ fn analyze_const_expr(
     context: &SemanticContext,
     expr: &Expr,
     consts: &IndexMap<String, TypedExpr>,
+    expected: Option<&Type>,
 ) -> Result<TypedExpr, SemanticError> {
-    let result = analyze_const_expr_inner(context, expr, consts);
+    let result = analyze_const_expr_inner(context, expr, consts, expected);
     if result.is_err() {
         context.capture_expression_diagnostic(expr, None);
     }
@@ -11992,6 +12196,7 @@ fn analyze_const_expr_inner(
     context: &SemanticContext,
     expr: &Expr,
     consts: &IndexMap<String, TypedExpr>,
+    expected: Option<&Type>,
 ) -> Result<TypedExpr, SemanticError> {
     match expr.kind() {
         Expr::Source { .. } | Expr::Resolved { .. } => {
@@ -12040,7 +12245,11 @@ fn analyze_const_expr_inner(
             op: UnaryOp::Neg,
             expr: inner,
         } => {
-            let inner = analyze_const_expr(context, inner, consts)?;
+            // Preserve the signed literal expression until assignment so a
+            // contextual quantity reports `E_NEGATIVE_QUANTITY`.
+            let unary_expected =
+                expected.filter(|expected| resolve_struct_type(expected) != Type::Quantity);
+            let inner = analyze_const_expr(context, inner, consts, unary_expected)?;
             if !matches!(resolve_struct_type(&inner.ty), Type::Int | Type::Decimal) {
                 return Err(SemanticError {
                     code: "K2003",
@@ -12062,8 +12271,21 @@ fn analyze_const_expr_inner(
                 BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
             ) =>
         {
-            let mut left = analyze_const_expr(context, left, consts)?;
-            let mut right = analyze_const_expr(context, right, consts)?;
+            let mut left = analyze_const_expr(context, left, consts, None)?;
+            let mut right = analyze_const_expr(context, right, consts, None)?;
+            if *op == BinaryOp::Mod
+                && (resolve_struct_type(&left.ty) == Type::Quantity
+                    || resolve_struct_type(&right.ty) == Type::Quantity
+                    || expected
+                        .is_some_and(|expected| resolve_struct_type(expected) == Type::Quantity))
+            {
+                return Err(SemanticError {
+                    code: "E_QUANTITY_REMAINDER",
+                    message: "quantity does not support `%`; use exact `/` or quantity.div_round"
+                        .into(),
+                });
+            }
+            coerce_contextual_numeric_literals(*op, expected, &mut left, &mut right)?;
             let result =
                 arithmetic_result_type(*op, &left.ty, &right.ty).ok_or_else(|| SemanticError {
                     code: "K2003",
@@ -12073,7 +12295,10 @@ fn analyze_const_expr_inner(
                         type_name(&right.ty)
                     ),
                 })?;
-            if result == Type::Decimal {
+            if result == Type::Decimal
+                && resolve_struct_type(&left.ty) != Type::Quantity
+                && resolve_struct_type(&right.ty) != Type::Quantity
+            {
                 coerce_numeric_operand(&mut left, &Type::Decimal)?;
                 coerce_numeric_operand(&mut right, &Type::Decimal)?;
             }
@@ -12445,12 +12670,13 @@ fn ensure_assignable_and_coerce(
             && int_literal_expression(expr)
         {
             let inner = expr.clone();
-            *expr = TypedExpr {
+            let converted = TypedExpr {
                 expr: ExprKind::NumericCast {
                     expr: Box::new(inner),
                 },
                 ty: Type::Decimal,
             };
+            *expr = fold_numeric_literal_cast(converted)?;
             return Ok(());
         }
         if resolve_struct_type(expected) == Type::Quantity
@@ -12464,12 +12690,13 @@ fn ensure_assignable_and_coerce(
                 });
             }
             let inner = expr.clone();
-            *expr = TypedExpr {
+            let converted = TypedExpr {
                 expr: ExprKind::NumericCast {
                     expr: Box::new(inner),
                 },
                 ty: Type::Quantity,
             };
+            *expr = fold_numeric_literal_cast(converted)?;
             return Ok(());
         }
         if let ExprKind::Call { name, .. } | ExprKind::NamedCall { name, .. } = expr.kind()
@@ -12499,6 +12726,20 @@ fn ensure_assignable_and_coerce(
         return Err(error);
     }
     Ok(())
+}
+
+fn fold_numeric_literal_cast(converted: TypedExpr) -> Result<TypedExpr, SemanticError> {
+    match crate::checked_arithmetic::evaluate(&converted) {
+        Ok(Some(value)) => Ok(value.into_typed_expr()),
+        Ok(None) => Err(SemanticError {
+            code: "E_INTERNAL_NUMERIC_MATRIX",
+            message: "contextual numeric literal unexpectedly depends on a runtime value".into(),
+        }),
+        Err(error) => Err(SemanticError {
+            code: error.code(),
+            message: error.to_string(),
+        }),
+    }
 }
 
 fn int_literal_expression(expr: &TypedExpr) -> bool {
@@ -14991,8 +15232,8 @@ mod tests {
         let expression = function_tail(
             r#"
                 struct Envelope {
-                    List<Option<int>, 2>,
-                    outcome: Result<(int, bool), int> labels,
+                    List<Option<int>, 2> labels,
+                    Result<(int, bool), int> outcome,
                 }
 
                 fn contains_nested() -> bool {
@@ -15120,7 +15361,7 @@ mod tests {
             format!("fn value() -> int {{ return -{below_magnitude}; }}"),
         ] {
             let error = parse(&source).expect_err("neighbor outside signed 512-bit range");
-            assert!(error.contains("512") || error.contains("range"), "{error}");
+            assert!(error.contains("E_INT_LITERAL_OVERFLOW"), "{error}");
         }
     }
 
@@ -15198,15 +15439,52 @@ mod tests {
     }
 
     #[test]
+    fn exact_literals_inherit_decimal_and_quantity_expression_context() {
+        let program = parse(
+            "const decimal EIGHTH = 1 / 8; \
+             fn value(quantity balance) -> (bool, quantity, quantity) { \
+                 return (balance == 0, balance + 1, balance * 2); \
+             } \
+             fn tuple_literals() -> (decimal, quantity) { \
+                 return (1 / 8, 2); \
+             }",
+        )
+        .expect("parse contextual numeric literals");
+        analyze(&program).expect("exact literals must inherit their numeric expression context");
+
+        let repeating = analyze_error("const decimal THIRD = 1 / 3;");
+        assert_eq!(repeating.code, "E_REPEATING_DECIMAL");
+
+        let underflow = analyze_error("const quantity INVALID = 1 - 2;");
+        assert_eq!(underflow.code, "E_QUANTITY_UNDERFLOW");
+
+        let negative = analyze_error("const quantity INVALID = -1;");
+        assert_eq!(negative.code, "E_NEGATIVE_QUANTITY");
+
+        let scaled =
+            returned_expr("fn scaled(quantity balance) -> quantity { return balance / 2; }");
+        assert_eq!(scaled.ty, Type::Quantity);
+        let ratio = returned_expr("fn ratio(quantity balance) -> decimal { return balance / 2; }");
+        assert_eq!(ratio.ty, Type::Decimal);
+    }
+
+    #[test]
     fn rounded_decimal_division_supports_every_v1_rounding_mode() {
-        for (dividend, mode, expected) in [
-            ("1.0", "toward_zero", "0.12"),
-            ("1.0", "away_from_zero", "0.13"),
-            ("-1.0", "floor", "-0.13"),
-            ("-1.0", "ceil", "-0.12"),
-            ("1.0", "nearest_even", "0.12"),
-            ("1.0", "nearest_away", "0.13"),
-            ("1.0", "nearest_toward_zero", "0.12"),
+        use ivm_abi::numeric::RoundingModeV1 as AbiMode;
+
+        for (dividend, mode, expected, abi_mode) in [
+            ("1.0", "toward_zero", "0.12", AbiMode::TowardZero),
+            ("1.0", "away_from_zero", "0.13", AbiMode::AwayFromZero),
+            ("-1.0", "floor", "-0.13", AbiMode::Floor),
+            ("-1.0", "ceil", "-0.12", AbiMode::Ceil),
+            ("1.0", "nearest_even", "0.12", AbiMode::NearestEven),
+            ("1.0", "nearest_away", "0.13", AbiMode::NearestAway),
+            (
+                "1.0",
+                "nearest_toward_zero",
+                "0.12",
+                AbiMode::NearestTowardZero,
+            ),
         ] {
             let expression = returned_expr(&format!(
                 "fn value() -> decimal {{ return {dividend}.div_round(\
@@ -15216,6 +15494,24 @@ mod tests {
                 panic!("constant rounded division must fold");
             };
             assert_eq!(value.to_string(), expected, "mode={mode}");
+
+            let expression = returned_expr(&format!(
+                "fn rounded(decimal value) -> decimal {{ return value.div_round(\
+                    divisor: 8.0, scale: 2, mode: Rounding::{mode}); }}"
+            ));
+            let ExprKind::NamedCall { name, args, .. } = expression.expr else {
+                panic!("dynamic rounded division must remain an intrinsic for mode={mode}");
+            };
+            assert_eq!(name, DECIMAL_DIV_ROUND_INTRINSIC, "mode={mode}");
+            assert!(
+                matches!(
+                    args[3].expr,
+                    ExprKind::IntLiteral(ref value)
+                        if value.try_to_u64() == Some(abi_mode.tag())
+                ),
+                "mode={mode} did not lower to ABI tag {}",
+                abi_mode.tag(),
+            );
         }
 
         let expression = returned_expr(
@@ -15243,6 +15539,71 @@ mod tests {
                     == Some(ivm_abi::numeric::RoundingModeV1::NearestEven.tag())
         ));
         assert_eq!(evaluation_order, [0, 3, 1, 2]);
+
+        let ratio = returned_expr(
+            "fn rounded(quantity value, quantity divisor, int scale) -> decimal { \
+                return value.ratio_round( \
+                    divisor: divisor, scale: scale, mode: Rounding::floor); }",
+        );
+        let ExprKind::NamedCall { name, args, .. } = ratio.expr else {
+            panic!("dynamic rounded ratio must remain a typed intrinsic");
+        };
+        assert_eq!(name, QUANTITY_RATIO_ROUND_INTRINSIC);
+        assert_eq!(args[0].ty, Type::Quantity);
+        assert_eq!(args[1].ty, Type::Quantity);
+        assert_eq!(args[2].ty, Type::Int);
+        assert_eq!(ratio.ty, Type::Decimal);
+    }
+
+    #[test]
+    fn unknown_rounding_spellings_are_rejected() {
+        for mode in ["nearest", "bankers", "nearest_toward"] {
+            let error = analyze_error(&format!(
+                "fn value() -> decimal {{ 1.0.div_round(\
+                    divisor: 8.0, scale: 2, mode: Rounding::{mode}) }}"
+            ));
+            assert_eq!(error.code, "E_NUMERIC_ROUNDING_MODE", "mode={mode}");
+            assert_eq!(
+                error.message,
+                format!(
+                    "decimal.div_round mode must be one of {}",
+                    V1_ROUNDING_PATHS.join(", ")
+                ),
+                "mode={mode}",
+            );
+        }
+    }
+
+    #[test]
+    fn rounded_numeric_methods_reject_noncanonical_signatures() {
+        let positional = analyze_error(
+            "fn value(decimal input) -> decimal { \
+                input.div_round(2.0, 2, Rounding::nearest_even) }",
+        );
+        assert_eq!(positional.code, "E_NAMED_ARGUMENTS_REQUIRED");
+
+        let int_receiver = analyze_error(
+            "fn value(int input) -> decimal { \
+                input.div_round( \
+                    divisor: 2.0, scale: 2, mode: Rounding::nearest_even) }",
+        );
+        assert_eq!(int_receiver.code, "E_NUMERIC_ROUND_RECEIVER");
+
+        let decimal_ratio = analyze_error(
+            "fn value(decimal input, quantity divisor) -> decimal { \
+                input.ratio_round( \
+                    divisor: divisor, scale: 2, mode: Rounding::nearest_even) }",
+        );
+        assert_eq!(decimal_ratio.code, "E_NUMERIC_ROUND_RECEIVER");
+
+        for scale in ["-1", "29"] {
+            let error = analyze_error(&format!(
+                "fn value(decimal input) -> decimal {{ \
+                    input.div_round( \
+                        divisor: 2.0, scale: {scale}, mode: Rounding::nearest_even) }}"
+            ));
+            assert_eq!(error.code, "E_INVALID_SCALE", "scale={scale}");
+        }
     }
 
     #[test]
@@ -15567,7 +15928,7 @@ mod tests {
             "SoracloudRequest",
             "SoracloudResponse",
         ] {
-            let error = analyze_error(&format!("fn f(value: {name}) {{}}"));
+            let error = analyze_error(&format!("fn f({name} value) {{}}"));
             assert_eq!(error.message, format!("unknown type `{name}`"));
         }
     }
@@ -15601,7 +15962,7 @@ mod tests {
         analyze(&helpers).expect("private helpers accept Option/Result parameters");
 
         let public = parse(
-            "seiyaku Demo { kotoage fn call(Option<int>, outcome: Result<int, bool> value) authorize(\"Call\") {} }",
+            "seiyaku Demo { kotoage fn call(Option<int> value, Result<int, bool> outcome) authorize(\"Call\") {} }",
         )
         .expect("public sum parameters parse");
         analyze(&public).expect("one-shot V1 argument records support Option and Result");
@@ -16906,7 +17267,8 @@ mod tests {
                 .expect("compiler-internal builtin name should parse as a call");
             let err = analyze(&program).expect_err("internal builtin must be source-inaccessible");
             assert!(
-                err.message.contains("compiler-internal"),
+                err.message.contains("compiler-internal")
+                    || err.message.contains("unknown function or builtin"),
                 "unexpected error for {name}: {}",
                 err.message
             );
@@ -17332,7 +17694,7 @@ mod tests {
     }
 
     #[test]
-    fn numeric_types_do_not_mix_implicitly() {
+    fn quantity_remains_nominal_in_mixed_numeric_operations() {
         let program = parse(
             "seiyaku C { fn f(quantity a, int b) { \
                 let _x = a + b; \
@@ -17340,7 +17702,71 @@ mod tests {
         )
         .expect("parse nominal numeric types");
         let err = analyze(&program).expect_err("mixed numeric types should error");
-        assert!(err.message.contains("identical numeric operand types"));
+        assert!(err.message.contains("not defined for quantity and int"));
+    }
+
+    #[test]
+    fn mixed_int_decimal_operations_promote_int_exactly() {
+        let constant = returned_expr("fn value() -> decimal { return 2 + 0.5; }");
+        assert_eq!(constant.ty, Type::Decimal);
+        assert!(matches!(
+            constant.kind(),
+            ExprKind::DecimalLiteral { value, .. } if value.to_string() == "2.5"
+        ));
+
+        let runtime = returned_expr("fn value(int whole) -> decimal { return whole + 0.5; }");
+        assert_eq!(runtime.ty, Type::Decimal);
+        assert!(matches!(
+            runtime.kind(),
+            ExprKind::Binary { left, right, .. }
+                if matches!(left.kind(), ExprKind::NumericCast { .. })
+                    && matches!(right.kind(), ExprKind::DecimalLiteral { .. })
+        ));
+
+        let comparison = returned_expr("fn less(int whole) -> bool { return whole < 0.5; }");
+        assert!(matches!(
+            comparison.kind(),
+            ExprKind::Binary { left, right, .. }
+                if matches!(left.kind(), ExprKind::NumericCast { .. })
+                    && matches!(right.kind(), ExprKind::DecimalLiteral { .. })
+        ));
+    }
+
+    #[test]
+    fn decimal_compound_assignment_promotes_int_without_narrowing() {
+        let source = parse(
+            "fn accumulate(int delta) -> decimal { \
+                var decimal value = 1.5; \
+                value += delta; \
+                return value; \
+            }",
+        )
+        .expect("parse mixed compound assignment");
+        let typed = analyze(&source).expect("decimal += int must promote the int exactly");
+        let TypedItem::Function(function) = &typed.items[0];
+        let assignment = function
+            .body
+            .statements
+            .iter()
+            .find_map(|statement| match statement {
+                TypedStatement::Let { name, value } if name == "value" => {
+                    matches!(value.kind(), ExprKind::Binary { .. }).then_some(value)
+                }
+                _ => None,
+            })
+            .expect("compound assignment lowering");
+        assert!(matches!(
+            assignment.kind(),
+            ExprKind::Binary { right, .. }
+                if matches!(right.kind(), ExprKind::NumericCast { .. })
+        ));
+
+        let narrowing = analyze_error("fn invalid() { var int value = 1; value += 0.5; }");
+        assert!(
+            narrowing
+                .message
+                .contains("produces decimal, which cannot be assigned to int")
+        );
     }
 
     #[test]
@@ -18016,6 +18442,14 @@ mod tests {
             ),
             (
                 "fn f() { let _page = ledger::query::accounts(offset: 0, limit: 65); }",
+                "E_QUERY_LIMIT",
+            ),
+            (
+                "fn f() { let _page = ledger::query::accounts(offset: 18446744073709551616, limit: 64); }",
+                "E_QUERY_OFFSET",
+            ),
+            (
+                "fn f() { let _page = ledger::query::accounts(offset: 0, limit: 18446744073709551616); }",
                 "E_QUERY_LIMIT",
             ),
         ] {

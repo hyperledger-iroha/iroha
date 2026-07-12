@@ -7,7 +7,7 @@ use std::{
 
 use iroha_core::bridge::{
     BridgeFinalityError, BridgeStateReadOnly, FinalityProofVerificationConfig,
-    build_finality_proof, verify_finality_proof,
+    VerifiedV2FinalityArtifact, build_finality_proof, verify_finality_proof,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
@@ -158,11 +158,15 @@ impl BridgeStateReadOnly for TestState {
             .cloned()
     }
 
-    fn bridge_v2_finality_artifact(
+    fn bridge_verified_v2_finality_artifact(
         &self,
         _height: u64,
-    ) -> Result<Option<V2FinalityArtifact>, String> {
-        self.artifact.clone()
+    ) -> Result<Option<VerifiedV2FinalityArtifact>, String> {
+        self.artifact
+            .clone()?
+            .map(VerifiedV2FinalityArtifact::verify)
+            .transpose()
+            .map_err(|error| format!("test storage rejected finality artifact: {error}"))
     }
 }
 
@@ -214,10 +218,10 @@ fn builder_rejects_artifact_block_chain_and_durable_pop_attacks() {
     let mut mismatched = fixture.artifact.clone();
     mismatched.block_hash = HashOf::from_untyped_unchecked(Hash::new(b"wrong canonical block"));
     state.artifact = Ok(Some(mismatched));
-    assert_eq!(
+    assert!(matches!(
         build_finality_proof(&state, 1),
-        Err(BridgeFinalityError::FinalityArtifactMismatch { height: 1 })
-    );
+        Err(BridgeFinalityError::FinalityArtifactRead { height: 1, .. })
+    ));
 
     let mut state = state_from_fixture(&fixture);
     state.chain_id = "wrong-chain".parse().expect("chain id");
@@ -232,7 +236,7 @@ fn builder_rejects_artifact_block_chain_and_durable_pop_attacks() {
     state.artifact = Ok(Some(missing_pop));
     assert!(matches!(
         build_finality_proof(&state, 1),
-        Err(BridgeFinalityError::InvalidFinalityArtifact { height: 1, .. })
+        Err(BridgeFinalityError::FinalityArtifactRead { height: 1, .. })
     ));
 
     let mut state = state_from_fixture(&fixture);
@@ -241,7 +245,7 @@ fn builder_rejects_artifact_block_chain_and_durable_pop_attacks() {
     state.artifact = Ok(Some(forged_pop));
     assert!(matches!(
         build_finality_proof(&state, 1),
-        Err(BridgeFinalityError::InvalidFinalityArtifact { height: 1, .. })
+        Err(BridgeFinalityError::FinalityArtifactRead { height: 1, .. })
     ));
 }
 
@@ -274,6 +278,6 @@ fn builder_rejects_cryptographically_invalid_durable_artifact() {
 
     assert!(matches!(
         build_finality_proof(&state, 1),
-        Err(BridgeFinalityError::InvalidFinalityArtifact { height: 1, .. })
+        Err(BridgeFinalityError::FinalityArtifactRead { height: 1, .. })
     ));
 }

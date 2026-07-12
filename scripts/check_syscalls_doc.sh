@@ -17,5 +17,5 @@ if ! diff -u "$OUT" "$TMP" >/dev/null; then
 fi
 
 rm -f "$TMP"
+python3 "$GEN" --check-localized
 echo "Syscall docs are up to date."
-

@@ -52,7 +52,9 @@ use iroha_data_model::{
         },
         consensus_v2::{
             BlockSubject, HeightContextId, QuorumCertificateRef,
-            finality::{V2FinalityArtifact, V2FinalityValidationError},
+            finality::{
+                V2FinalityArtifact, V2FinalityValidationError, V2QuorumCertificateVerificationError,
+            },
         },
         decode_framed_signed_block,
     },
@@ -114,9 +116,27 @@ const DA_BLOCKS_DIR_NAME: &str = "da_blocks";
 const WSV_CHECKPOINTS_DIR_NAME: &str = "wsv_checkpoints";
 const COMMIT_MANIFESTS_DIR_NAME: &str = "commit_manifests";
 const V2_FINALITY_ARTIFACTS_DIR_NAME: &str = "v2_finality";
+/// Hard read limit for one self-contained v2 finality artifact.
+///
+/// The maximum 4,096-validator roster, its current PoPs, and a boundary
+/// snapshot containing the next roster and PoPs fit well below this limit.
+/// Keeping an independent ceiling prevents a corrupted local sidecar from
+/// turning recovery or bridge-proof reads into an unbounded allocation.
+const MAX_V2_FINALITY_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
+/// Number of immutable sidecar identities whose successful BLS verification
+/// is remembered. Entries retain only metadata and an artifact hash, not the
+/// potentially multi-megabyte artifact itself.
+const V2_FINALITY_VERIFICATION_CACHE_CAPACITY: usize = 64;
 const LANE_ARTIFACTS_DIR_NAME: &str = "lane_artifacts";
 const LANE_ARTIFACTS_DATA_FILE: &str = "ownerships.norito";
 const LANE_ARTIFACTS_INDEX_FILE: &str = "ownerships.index";
+
+#[derive(Debug, Clone)]
+struct VerifiedV2FinalityCacheEntry {
+    height: u64,
+    artifact_hash: HashOf<V2FinalityArtifact>,
+    metadata: std::fs::Metadata,
+}
 const CERTIFIED_LANE_BLOCKS_DATA_FILE: &str = "certified_blocks.norito";
 const CERTIFIED_LANE_BLOCKS_INDEX_FILE: &str = "certified_blocks.index";
 const AUTONOMOUS_LANE_BLOCKS_DATA_FILE: &str = "autonomous_blocks.norito";
@@ -337,6 +357,8 @@ pub struct Kura {
     block_plain_text_path: Mutex<Option<PathBuf>>,
     /// Serialize sidecar writes to avoid index/data races.
     sidecar_lock: Mutex<()>,
+    /// Bounded identities of immutable v2 finality sidecars already BLS-verified.
+    v2_finality_verification_cache: Mutex<VecDeque<VerifiedV2FinalityCacheEntry>>,
     /// Serialize sparse merge-carrier index publication and reconciliation.
     merge_carrier_lock: Mutex<()>,
     /// Validated in-memory sparse carrier maps loaded during startup reconciliation.
@@ -431,6 +453,9 @@ pub struct Kura {
     /// Test hook for forcing the next Sumeragi v2 finality sidecar write to fail.
     #[cfg(test)]
     fail_next_v2_finality_write: AtomicBool,
+    /// Counts actual v2 finality BLS verification passes for cache tests.
+    #[cfg(test)]
+    v2_finality_crypto_verifications: AtomicUsize,
     /// Counts raw durable-budget metadata reads for focused cache tests.
     #[cfg(test)]
     durable_budget_metadata_reads: AtomicUsize,
@@ -2274,6 +2299,7 @@ impl Kura {
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(block_plain_text_path),
             sidecar_lock: Mutex::new(()),
+            v2_finality_verification_cache: Mutex::new(VecDeque::new()),
             merge_carrier_lock: Mutex::new(()),
             merge_carrier_index: Mutex::new(MergeCarrierIndex::default()),
             pipeline_sidecar_queue: Mutex::new(VecDeque::new()),
@@ -2330,6 +2356,8 @@ impl Kura {
             fail_lane_geometry_gc_stage: AtomicUsize::new(0),
             #[cfg(test)]
             fail_next_v2_finality_write: AtomicBool::new(false),
+            #[cfg(test)]
+            v2_finality_crypto_verifications: AtomicUsize::new(0),
             #[cfg(test)]
             durable_budget_metadata_reads: AtomicUsize::new(0),
             #[cfg(test)]
@@ -2405,6 +2433,7 @@ impl Kura {
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(None),
             sidecar_lock: Mutex::new(()),
+            v2_finality_verification_cache: Mutex::new(VecDeque::new()),
             merge_carrier_lock: Mutex::new(()),
             merge_carrier_index: Mutex::new(MergeCarrierIndex::default()),
             pipeline_sidecar_queue: Mutex::new(VecDeque::new()),
@@ -2464,6 +2493,8 @@ impl Kura {
             fail_lane_geometry_gc_stage: AtomicUsize::new(0),
             #[cfg(test)]
             fail_next_v2_finality_write: AtomicBool::new(false),
+            #[cfg(test)]
+            v2_finality_crypto_verifications: AtomicUsize::new(0),
             #[cfg(test)]
             durable_budget_metadata_reads: AtomicUsize::new(0),
             #[cfg(test)]
@@ -2897,7 +2928,7 @@ impl Kura {
             let length: usize = entry.length.try_into()?;
             buffer.resize(length, 0);
             Self::read_block_data_from_file(&mut data_source, entry.start, &mut buffer)?;
-            Self::write_atomic_synced(&path, &buffer)?;
+            self.write_atomic_synced(&path, &buffer)?;
             let da_after = Self::file_len_or_zero(&path)?;
             da_added = da_added.saturating_add(da_after.saturating_sub(da_before));
         }
@@ -3523,34 +3554,192 @@ impl Kura {
             .join(format!("{block_height}.norito"))
     }
 
+    #[cfg(unix)]
+    fn sidecar_metadata_same_object(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+
+        left.dev() == right.dev() && left.ino() == right.ino()
+    }
+
+    #[cfg(windows)]
+    fn sidecar_metadata_same_object(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+        use std::os::windows::fs::MetadataExt as _;
+
+        left.volume_serial_number() == right.volume_serial_number()
+            && left.file_index() == right.file_index()
+            && left.volume_serial_number().is_some()
+            && left.file_index().is_some()
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
+    fn sidecar_metadata_same_object(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+        left.file_type() == right.file_type() && left.created().ok() == right.created().ok()
+    }
+
+    #[cfg(unix)]
+    fn sidecar_file_metadata_unchanged(
+        left: &std::fs::Metadata,
+        right: &std::fs::Metadata,
+    ) -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+
+        Self::sidecar_metadata_same_object(left, right)
+            && left.nlink() == 1
+            && right.nlink() == 1
+            && left.len() == right.len()
+            && left.mtime() == right.mtime()
+            && left.mtime_nsec() == right.mtime_nsec()
+            && left.ctime() == right.ctime()
+            && left.ctime_nsec() == right.ctime_nsec()
+    }
+
+    #[cfg(windows)]
+    fn sidecar_file_metadata_unchanged(
+        left: &std::fs::Metadata,
+        right: &std::fs::Metadata,
+    ) -> bool {
+        use std::os::windows::fs::MetadataExt as _;
+
+        Self::sidecar_metadata_same_object(left, right)
+            && left.number_of_links() == Some(1)
+            && right.number_of_links() == Some(1)
+            && left.file_size() == right.file_size()
+            && left.last_write_time() == right.last_write_time()
+            && left.creation_time() == right.creation_time()
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
+    fn sidecar_file_metadata_unchanged(
+        left: &std::fs::Metadata,
+        right: &std::fs::Metadata,
+    ) -> bool {
+        Self::sidecar_metadata_same_object(left, right)
+            && left.len() == right.len()
+            && left.modified().ok() == right.modified().ok()
+    }
+
+    #[cfg(unix)]
+    fn sidecar_is_single_link(metadata: &std::fs::Metadata) -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+
+        metadata.nlink() == 1
+    }
+
+    #[cfg(windows)]
+    fn sidecar_is_single_link(metadata: &std::fs::Metadata) -> bool {
+        use std::os::windows::fs::MetadataExt as _;
+
+        metadata.number_of_links() == Some(1)
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
+    fn sidecar_is_single_link(_metadata: &std::fs::Metadata) -> bool {
+        true
+    }
+
+    fn canonical_sidecar_directory(
+        &self,
+        expected_directory: &Path,
+    ) -> Result<Option<(PathBuf, std::fs::Metadata)>> {
+        let before = match std::fs::symlink_metadata(expected_directory) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(Error::IO(error, expected_directory.to_path_buf())),
+        };
+        if before.file_type().is_symlink() || !before.is_dir() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "sidecar directory is not a direct directory",
+                ),
+                expected_directory.to_path_buf(),
+            ));
+        }
+        let relative = expected_directory
+            .strip_prefix(&self.store_root)
+            .map_err(|_| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "sidecar directory is outside the configured Kura root",
+                    ),
+                    expected_directory.to_path_buf(),
+                )
+            })?;
+        let canonical_root = std::fs::canonicalize(&self.store_root)
+            .map_err(|error| Error::IO(error, self.store_root.clone()))?;
+        let canonical_directory = std::fs::canonicalize(expected_directory)
+            .map_err(|error| Error::IO(error, expected_directory.to_path_buf()))?;
+        if canonical_directory != canonical_root.join(relative) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "sidecar directory contains a symlink or escapes the Kura root",
+                ),
+                expected_directory.to_path_buf(),
+            ));
+        }
+        let after = std::fs::symlink_metadata(expected_directory)
+            .map_err(|error| Error::IO(error, expected_directory.to_path_buf()))?;
+        if after.file_type().is_symlink()
+            || !after.is_dir()
+            || !Self::sidecar_metadata_same_object(&before, &after)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "sidecar directory changed during canonical validation",
+                ),
+                expected_directory.to_path_buf(),
+            ));
+        }
+        Ok(Some((canonical_directory, after)))
+    }
+
     fn regular_sidecar_metadata(
         &self,
         path: &Path,
         expected_directory: &Path,
     ) -> Result<Option<std::fs::Metadata>> {
+        if path.parent() != Some(expected_directory) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "sidecar path is not an immediate child of its expected directory",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        let directory = self.canonical_sidecar_directory(expected_directory)?;
         let metadata = match std::fs::symlink_metadata(path) {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(Error::IO(err, path.to_path_buf())),
         };
-        if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        let Some((canonical_directory, _)) = directory else {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
-                    "sidecar path is not a regular no-follow file",
+                    "sidecar exists without its expected direct directory",
+                ),
+                path.to_path_buf(),
+            ));
+        };
+        if !metadata.file_type().is_file()
+            || metadata.file_type().is_symlink()
+            || !Self::sidecar_is_single_link(&metadata)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "sidecar path is not a single-link regular file",
                 ),
                 path.to_path_buf(),
             ));
         }
-        let canonical_root = std::fs::canonicalize(&self.store_root)
-            .map_err(|err| Error::IO(err, self.store_root.clone()))?;
-        let canonical_directory = std::fs::canonicalize(expected_directory)
-            .map_err(|err| Error::IO(err, expected_directory.to_path_buf()))?;
         let canonical_path =
             std::fs::canonicalize(path).map_err(|err| Error::IO(err, path.to_path_buf()))?;
-        if !canonical_directory.starts_with(&canonical_root)
-            || canonical_path.parent() != Some(canonical_directory.as_path())
-        {
+        if canonical_path.parent() != Some(canonical_directory.as_path()) {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
@@ -3568,8 +3757,18 @@ impl Kura {
         expected_directory: &Path,
         byte_limit: usize,
     ) -> Result<Option<Vec<u8>>> {
+        let directory_before = self.canonical_sidecar_directory(expected_directory)?;
         let Some(metadata) = self.regular_sidecar_metadata(path, expected_directory)? else {
             return Ok(None);
+        };
+        let Some((_, directory_before)) = directory_before else {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "sidecar exists without a stable direct directory",
+                ),
+                path.to_path_buf(),
+            ));
         };
         if metadata.len() > u64::try_from(byte_limit)? {
             return Err(Error::IO(
@@ -3580,33 +3779,45 @@ impl Kura {
                 path.to_path_buf(),
             ));
         }
-        let file = std::fs::File::open(path).map_err(|err| Error::IO(err, path.to_path_buf()))?;
+        let mut file =
+            std::fs::File::open(path).map_err(|err| Error::IO(err, path.to_path_buf()))?;
         let opened_metadata = file
             .metadata()
             .map_err(|err| Error::IO(err, path.to_path_buf()))?;
-        #[cfg(unix)]
+        if !opened_metadata.is_file()
+            || !Self::sidecar_file_metadata_unchanged(&metadata, &opened_metadata)
         {
-            use std::os::unix::fs::MetadataExt as _;
-            if metadata.dev() != opened_metadata.dev() || metadata.ino() != opened_metadata.ino() {
-                return Err(Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        "sidecar file changed during no-follow validation",
-                    ),
-                    path.to_path_buf(),
-                ));
-            }
+            return Err(Error::IO(
+                std::io::Error::new(ErrorKind::InvalidData, "sidecar file changed while opening"),
+                path.to_path_buf(),
+            ));
         }
         let mut bytes = Vec::new();
         bytes.try_reserve_exact(usize::try_from(metadata.len())?)?;
-        file.take(u64::try_from(byte_limit.saturating_add(1))?)
+        Read::by_ref(&mut file)
+            .take(u64::try_from(byte_limit.saturating_add(1))?)
             .read_to_end(&mut bytes)
             .map_err(|err| Error::IO(err, path.to_path_buf()))?;
-        if bytes.len() > byte_limit {
+        let opened_after = file
+            .metadata()
+            .map_err(|err| Error::IO(err, path.to_path_buf()))?;
+        let path_after =
+            std::fs::symlink_metadata(path).map_err(|err| Error::IO(err, path.to_path_buf()))?;
+        let directory_after = self.canonical_sidecar_directory(expected_directory)?;
+        if bytes.len() > byte_limit
+            || u64::try_from(bytes.len())? != metadata.len()
+            || !path_after.is_file()
+            || path_after.file_type().is_symlink()
+            || !Self::sidecar_file_metadata_unchanged(&metadata, &opened_after)
+            || !Self::sidecar_file_metadata_unchanged(&metadata, &path_after)
+            || !directory_after.is_some_and(|(_, after)| {
+                Self::sidecar_metadata_same_object(&directory_before, &after)
+            })
+        {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
-                    "sidecar grew past its hard byte limit while reading",
+                    "sidecar changed or exceeded its hard byte limit while reading",
                 ),
                 path.to_path_buf(),
             ));
@@ -5762,6 +5973,123 @@ impl Kura {
         Self::v2_finality_artifact_path_for(&self.active_blocks_dir.lock(), height)
     }
 
+    fn v2_finality_cache_hit(
+        &self,
+        height: u64,
+        artifact_hash: HashOf<V2FinalityArtifact>,
+        metadata: &std::fs::Metadata,
+    ) -> bool {
+        let mut cache = self.v2_finality_verification_cache.lock();
+        let hit = cache.iter().position(|entry| {
+            entry.height == height
+                && entry.artifact_hash == artifact_hash
+                && Self::sidecar_file_metadata_unchanged(&entry.metadata, metadata)
+        });
+        let Some(position) = hit else {
+            cache.retain(|entry| entry.height != height);
+            return false;
+        };
+        let entry = cache
+            .remove(position)
+            .expect("located v2 finality cache entry exists");
+        cache.push_back(entry);
+        true
+    }
+
+    fn remember_verified_v2_finality(
+        &self,
+        height: u64,
+        artifact_hash: HashOf<V2FinalityArtifact>,
+        metadata: std::fs::Metadata,
+    ) {
+        let mut cache = self.v2_finality_verification_cache.lock();
+        cache.retain(|entry| entry.height != height);
+        while cache.len() >= V2_FINALITY_VERIFICATION_CACHE_CAPACITY {
+            cache.pop_front();
+        }
+        cache.push_back(VerifiedV2FinalityCacheEntry {
+            height,
+            artifact_hash,
+            metadata,
+        });
+    }
+
+    fn verify_v2_finality_crypto(&self, artifact: &V2FinalityArtifact) -> Result<()> {
+        #[cfg(test)]
+        self.v2_finality_crypto_verifications
+            .fetch_add(1, Ordering::Relaxed);
+        artifact.verify()?;
+        Ok(())
+    }
+
+    fn verify_v2_finality_artifact_at(
+        &self,
+        path: &Path,
+        artifact: &V2FinalityArtifact,
+    ) -> Result<()> {
+        let directory = self.v2_finality_artifact_dir();
+        let metadata = self
+            .regular_sidecar_metadata(path, &directory)?
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        "v2 finality sidecar disappeared before verification",
+                    ),
+                    path.to_path_buf(),
+                )
+            })?;
+        let artifact_hash = HashOf::new(artifact);
+        if self.v2_finality_cache_hit(artifact.height, artifact_hash, &metadata) {
+            return Ok(());
+        }
+
+        self.verify_v2_finality_crypto(artifact)?;
+        let after = self
+            .regular_sidecar_metadata(path, &directory)?
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        "v2 finality sidecar disappeared after verification",
+                    ),
+                    path.to_path_buf(),
+                )
+            })?;
+        if !Self::sidecar_file_metadata_unchanged(&metadata, &after) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "v2 finality sidecar changed during cryptographic verification",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        self.remember_verified_v2_finality(artifact.height, artifact_hash, after);
+        Ok(())
+    }
+
+    fn cache_newly_verified_v2_finality(
+        &self,
+        path: &Path,
+        artifact: &V2FinalityArtifact,
+    ) -> Result<()> {
+        let directory = self.v2_finality_artifact_dir();
+        let metadata = self
+            .regular_sidecar_metadata(path, &directory)?
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        "new v2 finality sidecar is missing after durable rename",
+                    ),
+                    path.to_path_buf(),
+                )
+            })?;
+        self.remember_verified_v2_finality(artifact.height, HashOf::new(artifact), metadata);
+        Ok(())
+    }
+
     /// Return the chain-scoped root for consensus-v2 journals and transport stores.
     ///
     /// The returned directory is adjacent to Kura's canonical block and finality
@@ -5772,7 +6100,7 @@ impl Kura {
         self.active_blocks_dir.lock().join("sumeragi_v2")
     }
 
-    /// Persist a structurally valid v2 finality artifact for an already durable block.
+    /// Persist a cryptographically valid v2 finality artifact for an already durable block.
     ///
     /// The returned [`KuraV2CommitReceipt`] is created only after the artifact
     /// contents, atomic rename, artifact directory, and a newly created
@@ -5796,6 +6124,32 @@ impl Kura {
         let _sidecar_guard = self.sidecar_lock.lock();
         let _block_write_guard = self.block_store_write_lock.lock();
         self.ensure_durable_block_at_height(height, block_hash)?;
+        let block_height = NonZeroUsize::new(usize::try_from(height)?)
+            .ok_or(Error::V2FinalityCanonicalHeaderUnavailable { height })?;
+        let canonical_block = self
+            .get_block(block_height)
+            .ok_or(Error::V2FinalityCanonicalHeaderUnavailable { height })?;
+        artifact.validate_for_header(&canonical_block.header())?;
+
+        let dir = self.v2_finality_artifact_dir();
+        let path = dir.join(format!("{height:020}.norito"));
+        if let Some(existing) = self.decode_v2_finality_artifact_at(&path)? {
+            existing.validate_for_header(&canonical_block.header())?;
+            self.verify_v2_finality_artifact_at(&path, &existing)?;
+            if existing != *artifact {
+                return Err(Error::ConflictingV2FinalityArtifact { height });
+            }
+            return Ok(v2_commit_receipt(&existing));
+        }
+
+        let bytes = artifact.encode();
+        if bytes.len() > MAX_V2_FINALITY_ARTIFACT_BYTES {
+            return Err(Error::V2FinalityArtifactTooLarge {
+                actual: bytes.len(),
+                max: MAX_V2_FINALITY_ARTIFACT_BYTES,
+            });
+        }
+        self.verify_v2_finality_crypto(artifact)?;
         #[cfg(test)]
         if self
             .fail_next_v2_finality_write
@@ -5807,30 +6161,21 @@ impl Kura {
             ));
         }
 
-        let dir = self.v2_finality_artifact_dir();
         create_dir_all_with_context(&dir)?;
         if let Some(parent) = dir.parent() {
             sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         }
-
-        let path = dir.join(format!("{height:020}.norito"));
-        if let Some(existing) = Self::decode_v2_finality_artifact_at(&path)? {
-            existing.validate()?;
-            if existing != *artifact {
-                return Err(Error::ConflictingV2FinalityArtifact { height });
-            }
-            return Ok(v2_commit_receipt(&existing));
-        }
-        let bytes = artifact.encode();
-        Self::write_atomic_synced(&path, &bytes)?;
+        self.write_atomic_synced(&path, &bytes)?;
+        self.cache_newly_verified_v2_finality(&path, artifact)?;
         Ok(v2_commit_receipt(artifact))
     }
 
-    fn decode_v2_finality_artifact_at(path: &Path) -> Result<Option<V2FinalityArtifact>> {
-        let bytes = match std::fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(Error::IO(error, path.to_path_buf())),
+    fn decode_v2_finality_artifact_at(&self, path: &Path) -> Result<Option<V2FinalityArtifact>> {
+        let directory = self.v2_finality_artifact_dir();
+        let Some(bytes) =
+            self.read_regular_sidecar_bytes(path, &directory, MAX_V2_FINALITY_ARTIFACT_BYTES)?
+        else {
+            return Ok(None);
         };
         let mut cursor = bytes.as_slice();
         V2FinalityArtifact::decode_all(&mut cursor)
@@ -5838,7 +6183,7 @@ impl Kura {
             .map_err(Error::NoritoFrame)
     }
 
-    /// Read and structurally validate a v2 finality artifact for a durable block.
+    /// Read and cryptographically validate a v2 finality artifact for a durable block.
     ///
     /// A missing final path returns `Ok(None)`. Incomplete temporary files left
     /// before the atomic rename are ignored. A malformed final path or an
@@ -5846,15 +6191,15 @@ impl Kura {
     ///
     /// # Errors
     ///
-    /// Returns an error if decoding or structural validation fails, the height
-    /// is zero or absent from the durable chain, or the canonical hash differs.
+    /// Returns an error if decoding, header association, proof-of-possession,
+    /// or CommitQC verification fails, the height is zero or absent from the
+    /// durable chain, or the canonical header differs.
     pub fn v2_finality_artifact(&self, height: u64) -> Result<Option<V2FinalityArtifact>> {
         let _sidecar_guard = self.sidecar_lock.lock();
         let path = self.v2_finality_artifact_path(height);
-        let Some(artifact) = Self::decode_v2_finality_artifact_at(&path)? else {
+        let Some(artifact) = self.decode_v2_finality_artifact_at(&path)? else {
             return Ok(None);
         };
-        artifact.validate()?;
 
         let Some(block_height) = NonZeroUsize::new(usize::try_from(height)?) else {
             return Err(Error::NoritoFrame(norito::core::Error::Message(
@@ -5867,7 +6212,18 @@ impl Kura {
                 actual_height: height,
             });
         };
-        artifact.validate_for_block(height, block_hash)?;
+        let canonical_block = self
+            .get_block(block_height)
+            .ok_or(Error::V2FinalityCanonicalHeaderUnavailable { height })?;
+        if canonical_block.hash() != block_hash {
+            return Err(Error::BlockHeightConflict {
+                height,
+                expected: block_hash,
+                actual: canonical_block.hash(),
+            });
+        }
+        artifact.validate_for_header(&canonical_block.header())?;
+        self.verify_v2_finality_artifact_at(&path, &artifact)?;
         Ok(Some(artifact))
     }
 
@@ -6856,20 +7212,128 @@ impl Kura {
         })
     }
 
-    fn write_atomic_synced(path: &Path, bytes: &[u8]) -> Result<()> {
-        let tmp_path = path.with_extension("norito.tmp");
-        let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
-            opts.write(true).create(true).truncate(true);
+    fn write_atomic_synced(&self, path: &Path, bytes: &[u8]) -> Result<()> {
+        let parent = path.parent().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "atomic sidecar path has no parent directory",
+                ),
+                path.to_path_buf(),
+            )
         })?;
-        tmp_file.try_io(|file| {
-            file.write_all(bytes)?;
-            file.flush()?;
-            file.sync_data()
+        let (_, directory_before) = self.canonical_sidecar_directory(parent)?.ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::NotFound,
+                    "atomic sidecar directory does not exist",
+                ),
+                parent.to_path_buf(),
+            )
         })?;
-        std::fs::rename(&tmp_path, path).map_err(|err| Error::IO(err, path.to_path_buf()))?;
-        if let Some(parent) = path.parent() {
-            sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+        let mut temporary = tempfile::Builder::new()
+            .prefix(".kura-sidecar-")
+            .tempfile_in(parent)
+            .map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        let (_, directory_after_create) =
+            self.canonical_sidecar_directory(parent)?.ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        "atomic sidecar directory disappeared",
+                    ),
+                    parent.to_path_buf(),
+                )
+            })?;
+        if !Self::sidecar_metadata_same_object(&directory_before, &directory_after_create) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "atomic sidecar directory changed while creating the temporary file",
+                ),
+                parent.to_path_buf(),
+            ));
         }
+        let temporary_metadata = temporary
+            .as_file()
+            .metadata()
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        if !temporary_metadata.is_file() || !Self::sidecar_is_single_link(&temporary_metadata) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "atomic sidecar temporary path is not a single-link regular file",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        temporary
+            .as_file_mut()
+            .write_all(bytes)
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        temporary
+            .as_file_mut()
+            .flush()
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let (_, directory_before_persist) =
+            self.canonical_sidecar_directory(parent)?.ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        "atomic sidecar directory disappeared before rename",
+                    ),
+                    parent.to_path_buf(),
+                )
+            })?;
+        if !Self::sidecar_metadata_same_object(&directory_before, &directory_before_persist) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "atomic sidecar directory changed before rename",
+                ),
+                parent.to_path_buf(),
+            ));
+        }
+        let persisted = temporary
+            .persist(path)
+            .map_err(|error| Error::IO(error.error, path.to_path_buf()))?;
+        persisted
+            .sync_all()
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let persisted_metadata = persisted
+            .metadata()
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let path_metadata = std::fs::symlink_metadata(path)
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let (_, directory_after_persist) =
+            self.canonical_sidecar_directory(parent)?.ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        "atomic sidecar directory disappeared after rename",
+                    ),
+                    parent.to_path_buf(),
+                )
+            })?;
+        if !Self::sidecar_metadata_same_object(&directory_before, &directory_after_persist)
+            || path_metadata.file_type().is_symlink()
+            || !path_metadata.is_file()
+            || !Self::sidecar_file_metadata_unchanged(&persisted_metadata, &path_metadata)
+            || persisted_metadata.len() != u64::try_from(bytes.len())?
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "atomic sidecar changed during durable rename",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
         Ok(())
     }
 
@@ -18351,6 +18815,20 @@ pub enum Error {
     NoritoFrame(#[from] norito::core::Error),
     /// Invalid Sumeragi v2 finality artifact: {0}
     V2FinalityArtifact(#[from] V2FinalityValidationError),
+    /// Invalid Sumeragi v2 finality cryptography: {0}
+    V2FinalityCryptography(#[from] V2QuorumCertificateVerificationError),
+    /// Encoded Sumeragi v2 finality artifact is {actual} bytes; hard maximum is {max}
+    V2FinalityArtifactTooLarge {
+        /// Encoded artifact size.
+        actual: usize,
+        /// Hard persistence/read limit.
+        max: usize,
+    },
+    /// Canonical block header for Sumeragi v2 finality height `{height}` is unavailable
+    V2FinalityCanonicalHeaderUnavailable {
+        /// Height whose complete canonical header could not be loaded.
+        height: u64,
+    },
     /// Conflicting immutable Sumeragi v2 finality artifact at height `{height}`
     ConflictingV2FinalityArtifact {
         /// Height whose finality path already contains a different artifact.
@@ -18740,13 +19218,22 @@ mod tests {
     }
 
     fn v2_finality_artifact_for_block(block: &SignedBlock) -> V2FinalityArtifact {
-        let mut roster = (0..4)
-            .map(|_| ValidatorPower {
-                validator: checked_peer_id(),
+        let mut keypairs = (0..4)
+            .map(|_| {
+                KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+                    .expect("generate Kura finality BLS fixture key")
+            })
+            .collect::<Vec<_>>();
+        keypairs.sort_by(|left, right| {
+            PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
+        });
+        let roster = keypairs
+            .iter()
+            .map(|keypair| ValidatorPower {
+                validator: PeerId::new(keypair.public_key().clone()),
                 power: 1,
             })
             .collect::<Vec<_>>();
-        roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         let height = block.header().height().get();
         assert_eq!(height, 1, "fixture uses a genesis-height block");
         let context = HeightContext {
@@ -18776,7 +19263,7 @@ mod tests {
             block_hash: block.hash(),
             payload_hash: Hash::new(b"canonical consensus body"),
         };
-        let commit_qc = QuorumCertificate {
+        let mut commit_qc = QuorumCertificate {
             round: ConsensusRound {
                 context_id: context.id(),
                 height,
@@ -18785,10 +19272,40 @@ mod tests {
             phase: GlobalPhase::Commit,
             subject,
             signers: vec![0, 1, 2],
-            aggregate_signature: vec![0xA5; 48],
+            aggregate_signature: vec![1],
         };
-        let validator_set_pops = vec![vec![0x5B]; context.roster.len()];
-        V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops)
+        let preimage = commit_qc
+            .signer_preimage(&context, 0)
+            .expect("valid Kura finality fixture signer");
+        let signatures = commit_qc
+            .signers
+            .iter()
+            .map(|index| {
+                Signature::try_new(
+                    keypairs[usize::try_from(*index).expect("fixture signer index")].private_key(),
+                    &preimage,
+                )
+                .expect("sign Kura finality fixture vote")
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        commit_qc.aggregate_signature =
+            iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+                .expect("aggregate Kura finality fixture votes");
+        let validator_set_pops = keypairs
+            .iter()
+            .map(|keypair| {
+                bls_normal_pop_prove(keypair.private_key())
+                    .expect("derive Kura finality fixture PoP")
+            })
+            .collect();
+        let artifact = V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops);
+        artifact
+            .verify()
+            .expect("Kura finality fixture is cryptographically valid");
+        artifact
     }
 
     #[test]
@@ -18865,6 +19382,71 @@ mod tests {
     }
 
     #[test]
+    fn v2_finality_crypto_cache_is_bounded_to_an_exact_immutable_sidecar_identity() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        assert_eq!(
+            kura.v2_finality_crypto_verifications
+                .load(Ordering::Relaxed),
+            0
+        );
+
+        kura.store_v2_finality_artifact(&artifact)
+            .expect("persist and verify finality artifact");
+        assert_eq!(
+            kura.v2_finality_crypto_verifications
+                .load(Ordering::Relaxed),
+            1
+        );
+        for _ in 0..8 {
+            assert_eq!(
+                kura.v2_finality_artifact(artifact.height)
+                    .expect("cached finality read"),
+                Some(artifact.clone())
+            );
+        }
+        kura.store_v2_finality_artifact(&artifact)
+            .expect("idempotent store reuses verified immutable identity");
+        assert_eq!(
+            kura.v2_finality_crypto_verifications
+                .load(Ordering::Relaxed),
+            1,
+            "unchanged immutable bytes must receive one cryptographic pass total"
+        );
+
+        let path = kura.v2_finality_artifact_path(artifact.height);
+        let mut forged = artifact.clone();
+        forged.commit_qc.aggregate_signature[0] ^= 0x80;
+        std::fs::write(&path, forged.encode()).expect("substitute forged sidecar bytes");
+        assert!(matches!(
+            kura.v2_finality_artifact(artifact.height),
+            Err(Error::V2FinalityCryptography(_))
+        ));
+        assert_eq!(
+            kura.v2_finality_crypto_verifications
+                .load(Ordering::Relaxed),
+            2,
+            "replacement identity must invalidate the successful cache entry"
+        );
+
+        std::fs::write(&path, artifact.encode()).expect("restore exact valid sidecar bytes");
+        assert_eq!(
+            kura.v2_finality_artifact(artifact.height)
+                .expect("reverify restored sidecar"),
+            Some(artifact)
+        );
+        assert_eq!(
+            kura.v2_finality_crypto_verifications
+                .load(Ordering::Relaxed),
+            3,
+            "restored bytes require a fresh successful cryptographic pass"
+        );
+    }
+
+    #[test]
     fn v2_finality_artifact_is_immutable_after_first_durable_write() {
         let kura = Kura::blank_kura_for_testing();
         let block = DummyBlocks::new().next();
@@ -18882,11 +19464,11 @@ mod tests {
             first_receipt.artifact_hash()
         );
 
-        let mut conflicting = artifact.clone();
-        conflicting.commit_qc.aggregate_signature[0] ^= 0x80;
+        let conflicting = v2_finality_artifact_for_block(&block);
         conflicting
-            .validate()
-            .expect("changed aggregate bytes remain structurally valid");
+            .verify()
+            .expect("conflicting fixture is independently cryptographically valid");
+        assert_ne!(conflicting, artifact);
         assert!(matches!(
             kura.store_v2_finality_artifact(&conflicting),
             Err(Error::ConflictingV2FinalityArtifact { height: 1 })
@@ -18896,6 +19478,39 @@ mod tests {
                 .expect("read immutable original"),
             Some(artifact)
         );
+    }
+
+    #[test]
+    fn v2_finality_store_and_read_reject_invalid_aggregate_cryptography() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        let mut forged = artifact.clone();
+        forged.commit_qc.aggregate_signature[0] ^= 0x80;
+        forged
+            .validate()
+            .expect("aggregate substitution remains structurally well formed");
+
+        assert!(matches!(
+            kura.store_v2_finality_artifact(&forged),
+            Err(Error::V2FinalityCryptography(_))
+        ));
+        let path = kura.v2_finality_artifact_path(artifact.height);
+        assert!(
+            !path.exists(),
+            "cryptographically invalid bytes must not reach the durable path"
+        );
+
+        kura.store_v2_finality_artifact(&artifact)
+            .expect("persist valid finality artifact");
+        std::fs::write(&path, forged.encode())
+            .expect("replace durable artifact with structurally valid forgery");
+        assert!(matches!(
+            kura.v2_finality_artifact(artifact.height),
+            Err(Error::V2FinalityCryptography(_))
+        ));
     }
 
     #[test]
@@ -18960,6 +19575,147 @@ mod tests {
             kura.v2_finality_artifact(1),
             Err(Error::NoritoFrame(_))
         ));
+    }
+
+    #[test]
+    fn v2_finality_read_rejects_oversized_final_file_before_decode() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        let _receipt = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("persist finality artifact");
+        let path = kura.v2_finality_artifact_path(artifact.height);
+        std::fs::write(&path, vec![0xA5; MAX_V2_FINALITY_ARTIFACT_BYTES + 1])
+            .expect("replace artifact with oversized hostile bytes");
+
+        assert!(matches!(
+            kura.v2_finality_artifact(artifact.height),
+            Err(Error::IO(error, observed_path))
+                if error.kind() == ErrorKind::InvalidData && observed_path == path
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn v2_finality_read_and_rewrite_reject_symlink_substitution() {
+        use std::os::unix::fs::symlink;
+
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        let _receipt = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("persist finality artifact");
+        let path = kura.v2_finality_artifact_path(artifact.height);
+        let target = path.with_extension("attacker.norito");
+        std::fs::rename(&path, &target).expect("move valid bytes behind attacker path");
+        symlink(&target, &path).expect("substitute finality path with symlink");
+
+        assert!(matches!(
+            kura.v2_finality_artifact(artifact.height),
+            Err(Error::IO(error, observed_path))
+                if error.kind() == ErrorKind::InvalidData && observed_path == path
+        ));
+        assert!(matches!(
+            kura.store_v2_finality_artifact(&artifact),
+            Err(Error::IO(error, observed_path))
+                if error.kind() == ErrorKind::InvalidData && observed_path == path
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn v2_finality_read_and_rewrite_reject_hardlink_aliases() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        kura.store_v2_finality_artifact(&artifact)
+            .expect("persist finality artifact");
+        let path = kura.v2_finality_artifact_path(artifact.height);
+        let alias = path.with_extension("hardlink.norito");
+        std::fs::hard_link(&path, &alias).expect("create attacker-controlled hardlink alias");
+
+        assert!(matches!(
+            kura.v2_finality_artifact(artifact.height),
+            Err(Error::IO(error, observed_path))
+                if error.kind() == ErrorKind::InvalidData && observed_path == path
+        ));
+        assert!(matches!(
+            kura.store_v2_finality_artifact(&artifact),
+            Err(Error::IO(error, observed_path))
+                if error.kind() == ErrorKind::InvalidData && observed_path == path
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn v2_finality_write_rejects_symlinked_parent_directory_even_when_file_is_missing() {
+        use std::os::unix::fs::symlink;
+
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        let attacker = TempDir::new().expect("create attacker-controlled directory");
+        let finality_dir = kura
+            .store_root()
+            .join("blocks")
+            .join(V2_FINALITY_ARTIFACTS_DIR_NAME);
+        symlink(attacker.path(), &finality_dir).expect("substitute finality directory symlink");
+
+        assert!(matches!(
+            kura.store_v2_finality_artifact(&artifact),
+            Err(Error::IO(error, observed_path))
+                if error.kind() == ErrorKind::InvalidData && observed_path == finality_dir
+        ));
+        assert!(
+            std::fs::read_dir(attacker.path())
+                .expect("read attacker directory")
+                .next()
+                .is_none(),
+            "rejected parent substitution must not write outside Kura"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn v2_finality_write_ignores_preplanted_predictable_temp_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        let path = kura.v2_finality_artifact_path(artifact.height);
+        std::fs::create_dir_all(path.parent().expect("finality path parent"))
+            .expect("create finality directory");
+        let victim = kura.store_root().join("attacker-victim");
+        let victim_bytes = b"must remain untouched";
+        std::fs::write(&victim, victim_bytes).expect("create attacker victim");
+        let predictable = path.with_extension("norito.tmp");
+        symlink(&victim, &predictable).expect("preplant retired predictable temp symlink");
+
+        kura.store_v2_finality_artifact(&artifact)
+            .expect("random create-new temp path avoids the preplanted symlink");
+        assert_eq!(
+            std::fs::read(&victim).expect("read attacker victim"),
+            victim_bytes
+        );
+        assert!(predictable.is_symlink());
+        assert_eq!(
+            kura.v2_finality_artifact(artifact.height)
+                .expect("read finality artifact"),
+            Some(artifact)
+        );
     }
 
     #[test]

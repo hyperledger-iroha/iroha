@@ -12,7 +12,6 @@ use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
     block::{BlockHeader, consensus_v2 as wire},
     nexus::PublicLaneValidatorStatus,
-    peer::PeerId,
 };
 use mv::storage::StorageReadOnly;
 use thiserror::Error;
@@ -27,10 +26,7 @@ use super::{
 };
 use crate::{
     kura::{Kura, KuraV2CommitReceipt},
-    state::{
-        State, WorldReadOnly, live_consensus_key_pop_for_peer,
-        public_lane_validator_record_matches_key,
-    },
+    state::{State, WorldReadOnly, public_lane_validator_record_matches_key},
 };
 
 /// Fully verified active-height inputs selected before network ingress opens.
@@ -248,7 +244,6 @@ pub(crate) fn build_verified_successor(
         parent_artifact,
         &state_view,
         committed_nexus_amx_context_hash(state),
-        next_epoch_end_height(state, parent_artifact)?,
     )?;
     if expected.height != target_height {
         return Err(V2RecoveryError::HeightOverflow);
@@ -261,7 +256,7 @@ pub(crate) fn build_verified_successor(
             record
         }
         None => {
-            let proofs = proofs_for_context(state, &expected)?;
+            let proofs = successor_proofs_of_possession(parent_artifact);
             let verified = VerifiedHeightContext::successor(
                 expected,
                 proofs,
@@ -321,7 +316,6 @@ fn verify_persisted_height(
             &parent_artifact,
             &state_view,
             committed_nexus_amx_context_hash(state),
-            next_epoch_end_height(state, &parent_artifact)?,
         )?;
         if record.context() != &expected {
             return Err(V2RecoveryError::ConflictingDerivedContext(height));
@@ -337,19 +331,15 @@ fn verify_persisted_height(
     .map_err(Into::into)
 }
 
-fn proofs_for_context(
-    state: &State,
-    context: &wire::HeightContext,
-) -> Result<Vec<Vec<u8>>, V2RecoveryError> {
-    let view = state.view();
-    context
-        .roster
-        .iter()
-        .map(|entry| {
-            live_consensus_key_pop_for_peer(view.world(), &entry.validator, context.height)
-                .ok_or_else(|| V2RecoveryError::MissingProof(entry.validator.clone()))
-        })
-        .collect()
+fn successor_proofs_of_possession(parent: &wire::finality::V2FinalityArtifact) -> Vec<Vec<u8>> {
+    parent
+        .height_context
+        .next_epoch_snapshot
+        .as_ref()
+        .map_or_else(
+            || parent.validator_set_pops.clone(),
+            |snapshot| snapshot.validator_set_pops.clone(),
+        )
 }
 
 pub(crate) fn committed_nexus_amx_context_hash(state: &State) -> Hash {
@@ -387,40 +377,6 @@ pub(crate) fn committed_nexus_amx_context_hash(state: &State) -> Hash {
         &active_validators,
         &lane_lifecycle,
     )
-}
-
-fn next_epoch_end_height(
-    state: &State,
-    parent: &wire::finality::V2FinalityArtifact,
-) -> Result<Option<wire::Height>, V2RecoveryError> {
-    if parent.height_context.next_epoch_snapshot.is_none() {
-        return checked_next_epoch_end(parent.height, false, None);
-    }
-    let view = state.view();
-    let epoch_length = view
-        .world()
-        .sumeragi_npos_parameters()
-        .ok_or(V2RecoveryError::MissingNposParameters)?
-        .epoch_length_blocks();
-    checked_next_epoch_end(parent.height, true, Some(epoch_length))
-}
-
-fn checked_next_epoch_end(
-    parent_height: wire::Height,
-    epoch_boundary: bool,
-    epoch_length: Option<u64>,
-) -> Result<Option<wire::Height>, V2RecoveryError> {
-    if !epoch_boundary {
-        return Ok(None);
-    }
-    let epoch_length = epoch_length.ok_or(V2RecoveryError::MissingNposParameters)?;
-    if epoch_length == 0 {
-        return Err(V2RecoveryError::InvalidEpochLength);
-    }
-    parent_height
-        .checked_add(epoch_length)
-        .map(Some)
-        .ok_or(V2RecoveryError::HeightOverflow)
 }
 
 /// Fail-closed active-height selection error.
@@ -495,15 +451,6 @@ pub(crate) enum V2RecoveryError {
     /// Persisted successor differs from the unique projection of finalized state.
     #[error("persisted Sumeragi v2 context conflicts with finalized state at height {0}")]
     ConflictingDerivedContext(wire::Height),
-    /// A frozen voter has no live BLS proof of possession.
-    #[error("missing live Sumeragi v2 consensus-key proof for validator {0}")]
-    MissingProof(PeerId),
-    /// NPoS boundary state omitted its finalized parameters.
-    #[error("Sumeragi v2 NPoS epoch boundary is missing on-chain parameters")]
-    MissingNposParameters,
-    /// NPoS epoch length is zero.
-    #[error("Sumeragi v2 NPoS epoch length must be positive")]
-    InvalidEpochLength,
     /// Height arithmetic overflowed.
     #[error("Sumeragi v2 height overflow")]
     HeightOverflow,
@@ -521,7 +468,7 @@ mod tests {
         peer::PeerId,
     };
 
-    use super::{V2RecoveryError, checked_next_epoch_end, recover_active_height};
+    use super::{V2RecoveryError, recover_active_height, successor_proofs_of_possession};
     use crate::{
         block::{CommittedBlock, ValidBlock},
         kura::Kura,
@@ -728,31 +675,67 @@ mod tests {
     }
 
     #[test]
-    fn non_boundary_carries_no_new_epoch_end() {
-        assert_eq!(
-            checked_next_epoch_end(41, false, None).expect("non-boundary"),
-            None
-        );
-    }
+    fn successor_pops_are_copied_only_from_the_durable_parent_artifact() {
+        let (verified, current_keys) = verified_context();
+        let current_context = verified.context().clone();
+        let block = dummy_block(&current_keys[0], current_context.height, None);
 
-    #[test]
-    fn boundary_uses_positive_finalized_epoch_length() {
+        let parent =
+            authenticated_artifact_for(current_context.clone(), block.as_ref(), &current_keys);
+        parent.verify().expect("authenticated non-boundary parent");
         assert_eq!(
-            checked_next_epoch_end(100, true, Some(25)).expect("boundary"),
-            Some(125)
+            successor_proofs_of_possession(&parent),
+            parent.validator_set_pops,
+            "non-boundary recovery must retain the exact historical PoP bytes"
         );
-        assert!(matches!(
-            checked_next_epoch_end(100, true, Some(0)),
-            Err(V2RecoveryError::InvalidEpochLength)
-        ));
-    }
 
-    #[test]
-    fn boundary_height_overflow_fails_closed() {
-        assert!(matches!(
-            checked_next_epoch_end(u64::MAX, true, Some(1)),
-            Err(V2RecoveryError::HeightOverflow)
-        ));
+        let mut next_keys = (21_u8..=24)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic next-epoch BLS key")
+            })
+            .collect::<Vec<_>>();
+        next_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let next_roster = next_keys
+            .iter()
+            .map(|key| wire::ValidatorPower {
+                validator: PeerId::new(key.public_key().clone()),
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        let next_pops = next_keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("valid next-epoch PoP")
+            })
+            .collect::<Vec<_>>();
+
+        let mut boundary_context = current_context;
+        boundary_context.epoch_end_height = boundary_context.height;
+        boundary_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
+            epoch: boundary_context.epoch + 1,
+            epoch_end_height: u64::MAX,
+            mode: boundary_context.mode,
+            quorum: wire::DualQuorum::from_roster(&next_roster).expect("valid next-epoch quorum"),
+            roster: next_roster,
+            validator_set_pops: next_pops.clone(),
+            leader_seed: [0x73; 32],
+        });
+        let boundary_parent =
+            authenticated_artifact_for(boundary_context, block.as_ref(), &current_keys);
+        boundary_parent
+            .verify()
+            .expect("old roster authenticates the complete boundary snapshot");
+        assert_eq!(
+            successor_proofs_of_possession(&boundary_parent),
+            next_pops,
+            "boundary recovery must use the authenticated successor PoPs"
+        );
+        assert_ne!(
+            successor_proofs_of_possession(&boundary_parent),
+            boundary_parent.validator_set_pops,
+            "next-epoch PoPs must not be reconstructed from the current roster"
+        );
     }
 
     #[test]

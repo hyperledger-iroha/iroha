@@ -377,6 +377,7 @@ impl norito::json::JsonDeserialize for ConfidentialStatus {
     )
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
 pub struct ConfidentialFeatureDigest {
     /// Optional hash summarizing the set of active verifying keys.
     #[cfg_attr(

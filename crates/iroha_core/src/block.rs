@@ -26266,9 +26266,9 @@ mod tests {
 
         let source = r#"
 seiyaku GuardedOverlay {
-  state Values: StateMap<i64, i64>;
+  state StateMap<int, int> Values;
 
-  kotoage fn write(value: i64) authorize("CanWriteGuardedOverlay") {
+  kotoage fn write(int value) authorize("CanWriteGuardedOverlay") {
     Values[0] = value;
   }
 }
@@ -26302,7 +26302,7 @@ seiyaku GuardedOverlay {
             LiveQueryStore::start_test(),
             chain_id.clone(),
         );
-        let payload = Json::new(norito::json!({ "value": 9 }));
+        let payload = Json::new(norito::json!({ "value": "9" }));
         let schema = interface
             .entrypoints
             .iter()
@@ -26383,19 +26383,19 @@ seiyaku GuardedOverlay {
 
         let source = r#"
 seiyaku DynamicAccessCounter {
-  state Counters: StateMap<i64, i64>;
+  state StateMap<int, int> Counters;
 
-  fn bump_hidden(key: i64, delta: i64) {
+  fn bump_hidden(int key, int delta) {
     let current = Counters.get(key).unwrap_or(0);
     Counters[key] = current + delta;
   }
 
-  kotoage fn bump_direct(key: i64, delta: i64) authorize("CanEnactGovernance") {
+  kotoage fn bump_direct(int key, int delta) authorize("CanEnactGovernance") {
     let current = Counters.get(key).unwrap_or(0);
     Counters[key] = current + delta;
   }
 
-  kotoage fn bump_via_helper(key: i64, delta: i64) authorize("CanEnactGovernance") {
+  kotoage fn bump_via_helper(int key, int delta) authorize("CanEnactGovernance") {
     bump_hidden(key, delta);
   }
 }
@@ -26439,7 +26439,10 @@ seiyaku DynamicAccessCounter {
                 "gas_limit".parse().expect("gas_limit name"),
                 Json::new(100_000_u64),
             );
-            let payload = Json::new(norito::json!({ "key": 7, "delta": delta }));
+            let payload = Json::new(norito::json!({
+                "key": "7",
+                "delta": (delta.to_string()),
+            }));
             let schema = contract_interface
                 .entrypoints
                 .iter()
@@ -26486,7 +26489,9 @@ seiyaku DynamicAccessCounter {
             "both co-batched contract calls must succeed: {results:?}"
         );
 
-        let encoded_key = norito::to_bytes(&7_i64).expect("encode StateMap key");
+        let encoded_key =
+            ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(7))
+                .expect("encode canonical StateMap int key");
         let logical_path = format!("Counters/{}", hex::encode(encoded_key));
         let scope_id = contract_address.to_string();
         let scope_digest = hex::encode(Hash::new(scope_id.as_bytes()).as_ref());
@@ -26500,8 +26505,12 @@ seiyaku DynamicAccessCounter {
             .expect("counter state must be persisted");
         let tlv = ivm::pointer_abi::validate_tlv_bytes(stored)
             .expect("counter state uses a canonical pointer-ABI envelope");
-        let counter: i64 =
-            norito::decode_from_bytes(tlv.payload).expect("decode persisted counter");
+        assert_eq!(tlv.type_id, ivm::PointerType::Int);
+        let counter = iroha_primitives::numeric_abi::IntValueV1::decode_frame(tlv.payload)
+            .expect("decode persisted counter")
+            .into_int()
+            .try_to_i64()
+            .expect("counter fits i64");
         assert_eq!(
             counter, 8,
             "the second overlay must be recomputed from the first call's committed value"
@@ -26543,23 +26552,23 @@ seiyaku DynamicTarget {
     SelectorClosed = 1,
   }
 
-  state Selector: StateMap<i64, i64>;
-  state Counters: StateMap<i64, i64>;
+  state StateMap<int, int> Selector;
+  state StateMap<int, int> Counters;
 
-  kotoage fn choose(key: i64) authorize("CanEnactGovernance") {
+  kotoage fn choose(int key) authorize("CanEnactGovernance") {
     Selector[0] = key;
   }
 
-  kotoage fn set_selected(value: i64) authorize("CanEnactGovernance") {
+  kotoage fn set_selected(int value) authorize("CanEnactGovernance") {
     let key = Selector.get(0).unwrap_or(1);
     Counters[key] = value;
   }
 
-  kotoage fn set_direct(key: i64, value: i64) authorize("CanEnactGovernance") {
+  kotoage fn set_direct(int key, int value) authorize("CanEnactGovernance") {
     Counters[key] = value;
   }
 
-  kotoage fn guarded_set(value: i64) authorize("CanEnactGovernance") {
+  kotoage fn guarded_set(int value) authorize("CanEnactGovernance") {
     require(Selector.get(0).unwrap_or(0) == 2, DynamicTargetError::SelectorClosed);
     Counters[3] = value;
   }
@@ -26633,25 +26642,25 @@ seiyaku DynamicTarget {
             alice.clone(),
             &alice_keypair,
             "choose",
-            Json::new(norito::json!({ "key": 2 })),
+            Json::new(norito::json!({ "key": "2" })),
         );
         let selected = make_call(
             bob,
             &bob_keypair,
             "set_selected",
-            Json::new(norito::json!({ "value": 5 })),
+            Json::new(norito::json!({ "value": "5" })),
         );
         let direct = make_call(
             charlie,
             &charlie_keypair,
             "set_direct",
-            Json::new(norito::json!({ "key": 2, "value": 7 })),
+            Json::new(norito::json!({ "key": "2", "value": "7" })),
         );
         let guarded = make_call(
             dave,
             &dave_keypair,
             "guarded_set",
-            Json::new(norito::json!({ "value": 11 })),
+            Json::new(norito::json!({ "value": "11" })),
         );
         let accepted = [choose, selected, direct, guarded]
             .into_iter()
@@ -26675,7 +26684,9 @@ seiyaku DynamicTarget {
             "all dynamic-target calls must succeed: {results:?}"
         );
 
-        let encoded_key = norito::to_bytes(&2_i64).expect("encode StateMap key");
+        let encoded_key =
+            ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(2))
+                .expect("encode canonical StateMap int key");
         let logical_path = format!("Counters/{}", hex::encode(encoded_key));
         let scope_digest = hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
         let scoped_path: Name = format!("sc/{scope_digest}/{logical_path}")
@@ -26688,14 +26699,20 @@ seiyaku DynamicTarget {
             .expect("selected counter must be persisted");
         let tlv = ivm::pointer_abi::validate_tlv_bytes(stored)
             .expect("counter state uses a canonical pointer-ABI envelope");
-        let counter: i64 =
-            norito::decode_from_bytes(tlv.payload).expect("decode persisted counter");
+        assert_eq!(tlv.type_id, ivm::PointerType::Int);
+        let counter = iroha_primitives::numeric_abi::IntValueV1::decode_frame(tlv.payload)
+            .expect("decode persisted counter")
+            .into_int()
+            .try_to_i64()
+            .expect("counter fits i64");
         assert_eq!(
             counter, 7,
             "a key selected during live re-execution must retain source-order conflict semantics"
         );
 
-        let guarded_key = norito::to_bytes(&3_i64).expect("encode guarded StateMap key");
+        let guarded_key =
+            ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(3))
+                .expect("encode canonical guarded StateMap int key");
         let guarded_path: Name = format!("sc/{scope_digest}/Counters/{}", hex::encode(guarded_key))
             .parse()
             .expect("valid guarded StateMap path");
@@ -26706,8 +26723,13 @@ seiyaku DynamicTarget {
             .expect("an initially failing VM overlay must be retried against live state");
         let guarded_tlv = ivm::pointer_abi::validate_tlv_bytes(guarded_stored)
             .expect("guarded state uses a canonical pointer-ABI envelope");
-        let guarded_value: i64 =
-            norito::decode_from_bytes(guarded_tlv.payload).expect("decode guarded persisted value");
+        assert_eq!(guarded_tlv.type_id, ivm::PointerType::Int);
+        let guarded_value =
+            iroha_primitives::numeric_abi::IntValueV1::decode_frame(guarded_tlv.payload)
+                .expect("decode guarded persisted value")
+                .into_int()
+                .try_to_i64()
+                .expect("guarded value fits i64");
         assert_eq!(guarded_value, 11);
     }
 

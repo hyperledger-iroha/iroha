@@ -146,7 +146,7 @@ const SERVICE_DIAGNOSTICS = [
       },
     ],
     notes: ["the preceding 🙂 occupies one Unicode display column"],
-    help: "write name: Type",
+    help: "write Type name",
     fix: {
       span: {
         source: "契約/送金.ko",
@@ -154,7 +154,7 @@ const SERVICE_DIAGNOSTICS = [
         end: { line: 2, column: 9 },
         byte_range: { start: 20, end: 20 },
       },
-      replacement: "amount: i64",
+      replacement: "int amount",
     },
   },
   {
@@ -262,7 +262,7 @@ test("TypeScript exposes only the bounded source-name and ZK request policy", ()
 });
 
 test("Node delegates asynchronously to iroha_js_host exactly once", async () => {
-  const source = "seiyaku Demo { view fn ping() -> i64 { return 1; } }";
+  const source = "seiyaku Demo { view fn ping() -> int { return 1; } }";
   const options = { sourceName: "contracts/demo.ko", zk: true };
   let finishCompilation;
   const nativeCompletion = new Promise((resolve) => {
@@ -504,7 +504,7 @@ test("browser compiler client uses the explicit Rust service and normalizes outp
     fetchImpl: successfulFetch(calls),
   });
   const result = await client.compile(
-    "seiyaku Demo { view fn ping() -> i64 { return 1; } }",
+    "seiyaku Demo { view fn ping() -> int { return 1; } }",
     { sourceName: "contracts/demo.ko", zk: true },
   );
 
@@ -520,7 +520,7 @@ test("browser compiler client uses the explicit Rust service and normalizes outp
   assert.equal(calls[0].init.method, "POST");
   assert.equal(calls[0].init.headers.accept, "application/json");
   assert.deepEqual(JSON.parse(calls[0].init.body), {
-    source: "seiyaku Demo { view fn ping() -> i64 { return 1; } }",
+    source: "seiyaku Demo { view fn ping() -> int { return 1; } }",
     sourceName: "contracts/demo.ko",
     zk: true,
   });
@@ -599,7 +599,7 @@ test("compiler failures preserve every canonical semantic diagnostic field", asy
   });
   assert.deepEqual(result.diagnostics[0].labels, SERVICE_DIAGNOSTICS[0].labels);
   assert.deepEqual(result.diagnostics[0].notes, SERVICE_DIAGNOSTICS[0].notes);
-  assert.equal(result.diagnostics[0].help, "write name: Type");
+  assert.equal(result.diagnostics[0].help, "write Type name");
   assert.deepEqual(result.diagnostics[0].fix, SERVICE_DIAGNOSTICS[0].fix);
 });
 

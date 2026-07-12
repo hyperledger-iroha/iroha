@@ -7,6 +7,12 @@
 use crate::error::VMError;
 use iroha_primitives::numeric::NumericWorkStep;
 
+/// Version of the complete consensus numeric-gas formula and staged phase map.
+///
+/// This value is included in the gas-schedule descriptor. Any change to a
+/// logical-work formula, charge-point ordering, or stable staged-phase tag
+/// MUST increment it and regenerate the gas-schedule golden hash.
+pub const NUMERIC_GAS_FORMULA_VERSION_V1: u64 = 3;
 /// Fixed staged-syscall entry charge.
 pub const NUMERIC_ENTRY_GAS: u64 = 16;
 /// Gas charged for each logical 64-bit limb of arithmetic work.
@@ -56,25 +62,60 @@ pub fn envelope_tail_bytes(payload_bytes: usize) -> Result<u64, VMError> {
     checked_add(POINTER_HASH_BYTES, checked_bytes(payload_bytes)?)
 }
 
+/// Payload-authentication gas for one input frame.
+///
+/// The fixed digest term covers reading/comparing the supplied digest. The
+/// frame term covers the complete traversal performed by `Hash::new(frame)`;
+/// snapshot transport is charged separately by the pointer-envelope phases.
+pub fn payload_hash_gas(frame_bytes: usize) -> Result<u64, VMError> {
+    checked_add(POINTER_HASH_BYTES, checked_bytes(frame_bytes)?)
+}
+
+/// Output byte work for canonical framing, authentication, and publication.
+///
+/// `envelope_bytes` covers building/publishing the complete envelope. Two
+/// additional frame traversals cover Norito checksum/framing and the outer
+/// authentication hash.
+pub fn output_serialization_gas(envelope_bytes: usize, frame_bytes: usize) -> Result<u64, VMError> {
+    checked_add(
+        checked_bytes(envelope_bytes)?,
+        checked_mul(2, checked_bytes(frame_bytes)?)?,
+    )
+}
+
 /// Logical work needed to decode and validate one numeric frame.
 ///
-/// The strict decoder examines every complete or partial eight-byte word of
-/// the bounded frame. The first word covers the Norito header/schema/length
-/// checks; every remaining word covers mantissa minimality and decimal-domain
-/// canonicality. This is the only frame-validation work charge: the frame
-/// bytes themselves are charged once as input-envelope bytes.
+/// Structural Norito validation scans every complete or partial eight-byte
+/// word, including the payload CRC. Canonical value decoding then scans every
+/// complete or partial body word. Counting both passes prevents the nested
+/// checksum traversal from disappearing behind the pointer-envelope byte
+/// charge. Scaled decimal/quantity values additionally charge their observed
+/// quotient/remainder canonicality probe. Frame bytes themselves are still
+/// charged exactly once as transport.
 pub fn numeric_frame_validation_work(frame_bytes: usize) -> Result<u64, VMError> {
-    Ok(checked_bytes(frame_bytes)?
-        .div_ceil(NUMERIC_VALIDATION_WORD_BYTES)
-        .max(1))
+    let (decode, canonical) = numeric_frame_validation_phase_work(frame_bytes)?;
+    checked_add(decode, canonical)
 }
 
 /// Split frame validation into stable decode and canonicality phases.
 ///
 /// The sum of the two values is always [`numeric_frame_validation_work`].
 pub fn numeric_frame_validation_phase_work(frame_bytes: usize) -> Result<(u64, u64), VMError> {
-    let total = numeric_frame_validation_work(frame_bytes)?;
-    Ok((1, total - 1))
+    let decode = checked_bytes(frame_bytes)?
+        .div_ceil(NUMERIC_VALIDATION_WORD_BYTES)
+        .max(1);
+    let body_bytes =
+        frame_bytes.saturating_sub(iroha_primitives::numeric_abi::NUMERIC_FRAME_HEADER_BYTES_V1);
+    let canonical = numeric_frame_body_validation_work(body_bytes)?;
+    Ok((decode, canonical))
+}
+
+/// Logical word work for decoding and validating a canonical numeric body,
+/// excluding the separately observed decimal divide-by-ten probe.
+pub fn numeric_frame_body_validation_work(body_bytes: usize) -> Result<u64, VMError> {
+    Ok(checked_bytes(body_bytes)?
+        .div_ceil(NUMERIC_VALIDATION_WORD_BYTES)
+        .max(1))
 }
 
 /// Logical limb count for a bit width. Zero still occupies one logical limb.
@@ -121,7 +162,36 @@ pub fn scale_work(value_limbs: u64, exponent: u8) -> Result<u64, VMError> {
     if exponent == 0 {
         return Ok(0);
     }
-    checked_mul(value_limbs.max(1), pow10_limbs(exponent)?)
+    checked_add(
+        power_construction_work(exponent)?,
+        checked_mul(value_limbs.max(1), pow10_limbs(exponent)?)?,
+    )
+}
+
+/// Work for copying an unchanged value into one owned conceptual temporary.
+pub const fn materialization_work(value_limbs: u64) -> u64 {
+    if value_limbs == 0 { 1 } else { value_limbs }
+}
+
+fn alignment_operand_work(value_limbs: u64, exponent: u8) -> Result<u64, VMError> {
+    if exponent == 0 {
+        Ok(materialization_work(value_limbs))
+    } else {
+        scale_work(value_limbs, exponent)
+    }
+}
+
+/// Logical work for deterministically constructing `10^exponent`.
+///
+/// The primitive implementation starts at one and performs one multiplication
+/// by the one-limb constant ten for each decimal place. The operand before step
+/// `k + 1` is `10^k`, so the exact schoolbook work is the sum of those widths.
+pub fn power_construction_work(exponent: u8) -> Result<u64, VMError> {
+    let mut work = 0_u64;
+    for power in 0..exponent {
+        work = checked_add(work, pow10_limbs(power)?)?;
+    }
+    Ok(work)
 }
 
 /// Aligned add/subtract/compare work, including both decimal scale shifts.
@@ -133,8 +203,8 @@ pub fn aligned_work(
     rhs_scale_delta: u8,
     rhs_aligned_limbs: u64,
 ) -> Result<u64, VMError> {
-    let lhs_scale = scale_work(lhs_limbs, lhs_scale_delta)?;
-    let rhs_scale = scale_work(rhs_limbs, rhs_scale_delta)?;
+    let lhs_scale = alignment_operand_work(lhs_limbs, lhs_scale_delta)?;
+    let rhs_scale = alignment_operand_work(rhs_limbs, rhs_scale_delta)?;
     checked_add(
         checked_add(lhs_scale, rhs_scale)?,
         lhs_aligned_limbs.max(rhs_aligned_limbs).max(1),
@@ -199,6 +269,113 @@ pub fn quotient_remainder_work(dividend_limbs: u64, divisor_limbs: u64) -> Resul
     )
 }
 
+/// Conservative all-rounding-mode work for a rounded quotient.
+///
+/// In addition to the quotient/remainder operation, the implementation scans
+/// and doubles the remainder, scans the absolute denominator, compares the
+/// doubled remainder, probes quotient parity for nearest-even, and may add one
+/// to the quotient. Charging the all-mode bound keeps gas independent of the
+/// selected rounding tag and of whether the remainder is a tie.
+pub fn rounded_division_work(dividend_limbs: u64, divisor_limbs: u64) -> Result<u64, VMError> {
+    let dividend = dividend_limbs.max(1);
+    let divisor = divisor_limbs.max(1);
+    let remainder = dividend.min(divisor);
+    let doubled_remainder = checked_add(remainder, 1)?;
+    let quotient = quotient_limb_bound(dividend, divisor)?;
+    let ancillary = checked_add(
+        checked_add(remainder, remainder)?,
+        checked_add(
+            checked_add(divisor, doubled_remainder.max(divisor))?,
+            checked_add(1, checked_add(quotient, 1)?)?,
+        )?,
+    )?;
+    checked_add(quotient_remainder_work(dividend, divisor)?, ancillary)
+}
+
+/// Work for absolute-value preparation before exact denominator classification.
+///
+/// The numerator is copied once. The denominator is copied once for the GCD
+/// state and once for the later reduced-denominator state.
+pub fn classification_prepare_work(
+    numerator_limbs: u64,
+    denominator_limbs: u64,
+) -> Result<u64, VMError> {
+    checked_add(
+        numerator_limbs.max(1),
+        checked_mul(2, denominator_limbs.max(1))?,
+    )
+}
+
+/// Work for the final signed-domain scan of a conceptual result.
+pub const fn finalization_work(value_limbs: u64) -> u64 {
+    if value_limbs == 0 { 1 } else { value_limbs }
+}
+
+/// Work for converting/truncating/sign-filling an intermediate modulo `2^512`.
+pub fn wrapping_reduction_work(source_limbs: u64) -> Result<u64, VMError> {
+    let source = source_limbs.max(1);
+    checked_add(
+        source,
+        checked_add(
+            checked_mul(3, MAX_VALUE_LIMBS)?,
+            source.min(MAX_VALUE_LIMBS),
+        )?,
+    )
+}
+
+/// Checked integer negation including generic and V1 signed-domain scans.
+pub fn checked_int_unary_work(value_limbs: u64) -> Result<u64, VMError> {
+    let value = value_limbs.max(1);
+    let result = checked_add(value, 1)?;
+    checked_add(value, checked_mul(2, result)?)
+}
+
+/// Checked integer add/subtract including generic and V1 domain scans.
+pub fn checked_int_additive_work(lhs_limbs: u64, rhs_limbs: u64) -> Result<u64, VMError> {
+    let operands = lhs_limbs.max(rhs_limbs).max(1);
+    let result = checked_add(operands, 1)?;
+    checked_add(operands, checked_mul(2, result)?)
+}
+
+/// Checked integer multiplication including generic and V1 domain scans.
+pub fn checked_int_multiplication_work(lhs_limbs: u64, rhs_limbs: u64) -> Result<u64, VMError> {
+    let lhs = lhs_limbs.max(1);
+    let rhs = rhs_limbs.max(1);
+    let result = checked_add(lhs, rhs)?;
+    checked_add(multiplication_work(lhs, rhs)?, checked_mul(2, result)?)
+}
+
+/// Checked integer quotient/remainder including both generic and V1 scans.
+pub fn checked_int_division_work(dividend_limbs: u64, divisor_limbs: u64) -> Result<u64, VMError> {
+    let dividend = dividend_limbs.max(1);
+    let divisor = divisor_limbs.max(1);
+    let quotient = quotient_limb_bound(dividend, divisor)?;
+    let remainder = dividend.min(divisor);
+    checked_add(
+        quotient_remainder_work(dividend, divisor)?,
+        checked_mul(2, checked_add(quotient, remainder)?)?,
+    )
+}
+
+/// Generic wrapping arithmetic before the explicit 512-bit reduction.
+pub fn wrapping_unary_work(value_limbs: u64) -> Result<u64, VMError> {
+    let value = value_limbs.max(1);
+    checked_add(value, checked_add(value, 1)?)
+}
+
+/// Generic wrapping add/subtract before the explicit 512-bit reduction.
+pub fn wrapping_additive_work(lhs_limbs: u64, rhs_limbs: u64) -> Result<u64, VMError> {
+    let operands = lhs_limbs.max(rhs_limbs).max(1);
+    checked_add(operands, checked_add(operands, 1)?)
+}
+
+/// Generic wrapping multiplication before the explicit 512-bit reduction.
+pub fn wrapping_multiplication_work(lhs_limbs: u64, rhs_limbs: u64) -> Result<u64, VMError> {
+    let lhs = lhs_limbs.max(1);
+    let rhs = rhs_limbs.max(1);
+    checked_add(multiplication_work(lhs, rhs)?, checked_add(lhs, rhs)?)
+}
+
 /// Work for one exact or rounded division scale attempt.
 pub fn division_attempt_work(
     numerator_limbs: u64,
@@ -210,26 +387,10 @@ pub fn division_attempt_work(
 ) -> Result<u64, VMError> {
     checked_add(
         checked_add(
-            scale_work(numerator_limbs, numerator_scale_delta)?,
-            scale_work(denominator_limbs, denominator_scale_delta)?,
+            alignment_operand_work(numerator_limbs, numerator_scale_delta)?,
+            alignment_operand_work(denominator_limbs, denominator_scale_delta)?,
         )?,
         quotient_remainder_work(scaled_numerator_limbs, scaled_denominator_limbs)?,
-    )
-}
-
-/// Logical work reserved for canonical decimal normalization.
-///
-/// The canonical algorithm performs one divisibility-by-ten probe per possible
-/// scale position. Charging the complete scale bound keeps the formula
-/// independent of backend early-exit behavior while still scaling by actual
-/// intermediate width.
-pub fn normalization_work(intermediate_limbs: u64, intermediate_scale: u8) -> Result<u64, VMError> {
-    if intermediate_scale > MAX_PRODUCT_SCALE {
-        return Err(VMError::GasCostOverflow);
-    }
-    checked_mul(
-        quotient_remainder_work(intermediate_limbs.max(1), 1)?,
-        u64::from(intermediate_scale),
     )
 }
 
@@ -241,8 +402,8 @@ pub fn work_gas(limb_work: u64) -> Result<u64, VMError> {
 /// Gas for one core-reported arithmetic step.
 ///
 /// The primitive layer invokes the observer immediately before performing each
-/// normalization or division. This conversion is the sole VM mapping from that
-/// logical work protocol into gas.
+/// bounded work step. This conversion is the sole VM mapping from that logical
+/// work protocol into gas.
 pub fn work_step_gas(step: NumericWorkStep) -> Result<u64, VMError> {
     let work = match step {
         NumericWorkStep::CanonicalityProbe { mantissa_limbs, .. } => {
@@ -252,8 +413,10 @@ pub fn work_step_gas(step: NumericWorkStep) -> Result<u64, VMError> {
         NumericWorkStep::ScaleByPowerOfTen {
             value_limbs,
             exponent,
-            ..
         } => scale_work(u64::from(value_limbs), exponent)?,
+        NumericWorkStep::Materialize { value_limbs } => {
+            materialization_work(u64::from(value_limbs))
+        }
         NumericWorkStep::Negate { value_limbs } => u64::from(value_limbs).max(1),
         NumericWorkStep::Add {
             lhs_limbs,
@@ -274,37 +437,53 @@ pub fn work_step_gas(step: NumericWorkStep) -> Result<u64, VMError> {
             numerator_limbs,
             denominator_limbs,
             ..
-        }
-        | NumericWorkStep::RoundedDivision {
+        } => quotient_remainder_work(u64::from(numerator_limbs), u64::from(denominator_limbs))?,
+        NumericWorkStep::RoundedDivision {
             numerator_limbs,
             denominator_limbs,
             ..
-        } => quotient_remainder_work(u64::from(numerator_limbs), u64::from(denominator_limbs))?,
+        } => rounded_division_work(u64::from(numerator_limbs), u64::from(denominator_limbs))?,
         NumericWorkStep::DivisionClassification {
             dividend_limbs,
             divisor_limbs,
         } => quotient_remainder_work(u64::from(dividend_limbs), u64::from(divisor_limbs))?,
+        NumericWorkStep::DivisionClassificationPrepare {
+            numerator_limbs,
+            denominator_limbs,
+        } => classification_prepare_work(u64::from(numerator_limbs), u64::from(denominator_limbs))?,
+        NumericWorkStep::Finalize { value_limbs } => finalization_work(u64::from(value_limbs)),
     };
     work_gas(work)
 }
 
 /// Complete successful-call formula used by golden tests and documentation.
 ///
-/// Input and output lengths include the complete pointer envelopes. The input
-/// count adds one fixed schema-frame decode charge per value; control booleans
-/// add their stable validation phases. Canonical validation and normalization
-/// work remain explicit so they cannot disappear into a codec or bigint backend.
+/// Input and output lengths include the complete pointer envelopes; frame-byte
+/// arguments account for authentication and output framing traversals. The
+/// input count adds one fixed schema-frame decode charge per value; control
+/// booleans add their stable validation phases. Canonical validation,
+/// output-length, and normalization work remain explicit so they cannot
+/// disappear into a codec or bigint backend.
 pub fn successful_call_gas(
     input_envelope_bytes: u64,
+    input_hash_frame_bytes: u64,
     output_envelope_bytes: u64,
+    output_frame_bytes: u64,
+    output_length_limb_work: u64,
     arithmetic_limb_work: u64,
     validation_limb_work: u64,
     normalization_limb_work: u64,
 ) -> Result<u64, VMError> {
-    let bytes = checked_add(input_envelope_bytes, output_envelope_bytes)?;
+    let bytes = checked_add(
+        checked_add(input_envelope_bytes, input_hash_frame_bytes)?,
+        checked_add(output_envelope_bytes, checked_mul(2, output_frame_bytes)?)?,
+    )?;
     let work = checked_add(
-        checked_add(arithmetic_limb_work, validation_limb_work)?,
-        normalization_limb_work,
+        checked_add(
+            checked_add(arithmetic_limb_work, validation_limb_work)?,
+            normalization_limb_work,
+        )?,
+        output_length_limb_work,
     )?;
     checked_add(checked_add(NUMERIC_ENTRY_GAS, bytes)?, work_gas(work)?)
 }
@@ -322,6 +501,12 @@ mod tests {
         assert_eq!(pow10_limbs(28), Ok(2));
         assert_eq!(pow10_limbs(56), Ok(3));
         assert_eq!(pow10_bit_length(57), Err(VMError::GasCostOverflow));
+        assert_eq!(power_construction_work(0), Ok(0));
+        assert_eq!(power_construction_work(1), Ok(1));
+        assert_eq!(power_construction_work(19), Ok(19));
+        assert_eq!(power_construction_work(20), Ok(20));
+        assert_eq!(power_construction_work(28), Ok(36));
+        assert_eq!(power_construction_work(56), Ok(109));
     }
 
     #[test]
@@ -336,13 +521,20 @@ mod tests {
     }
 
     #[test]
-    fn frame_validation_is_one_charge_split_without_byte_double_counting() {
-        assert_eq!(numeric_frame_validation_work(0), Ok(1));
-        assert_eq!(numeric_frame_validation_phase_work(1), Ok((1, 0)));
-        assert_eq!(numeric_frame_validation_phase_work(8), Ok((1, 0)));
-        assert_eq!(numeric_frame_validation_phase_work(9), Ok((1, 1)));
-        assert_eq!(numeric_frame_validation_phase_work(44), Ok((1, 5)));
+    fn frame_validation_accounts_for_structural_and_body_passes_without_transport_double_counting()
+    {
+        assert_eq!(numeric_frame_validation_work(0), Ok(2));
+        assert_eq!(numeric_frame_validation_phase_work(1), Ok((1, 1)));
+        assert_eq!(numeric_frame_validation_phase_work(8), Ok((1, 1)));
+        assert_eq!(numeric_frame_validation_phase_work(9), Ok((2, 1)));
+        assert_eq!(numeric_frame_validation_phase_work(44), Ok((6, 1)));
+        assert_eq!(numeric_frame_validation_work(44), Ok(7));
+        assert_eq!(numeric_frame_validation_phase_work(109), Ok((14, 9)));
         assert_eq!(envelope_tail_bytes(44), Ok(76));
+        assert_eq!(payload_hash_gas(44), Ok(76));
+        assert_eq!(payload_hash_gas(108), Ok(140));
+        assert_eq!(output_serialization_gas(83, 44), Ok(171));
+        assert_eq!(output_serialization_gas(147, 108), Ok(363));
     }
 
     #[test]
@@ -360,8 +552,9 @@ mod tests {
     #[test]
     fn multiplication_and_scale_intermediates_exceed_value_width() {
         assert_eq!(multiplication_work(8, 8), Ok(64));
+        assert_eq!(aligned_work(8, 28, 10, 1, 0, 1), Ok(63));
+        assert_eq!(MAX_PRODUCT_SCALE, 56);
         assert_eq!(MAX_PRODUCT_LIMBS, 16);
-        assert_eq!(normalization_work(16, 56), Ok(3_640));
     }
 
     #[test]
@@ -380,6 +573,24 @@ mod tests {
         assert_eq!(quotient_remainder_work(1, 1), Ok(5));
         assert_eq!(quotient_remainder_work(8, 3), Ok(55));
         assert_eq!(quotient_remainder_work(10, 8), Ok(76));
+        assert_eq!(rounded_division_work(1, 1), Ok(13));
+        assert_eq!(rounded_division_work(2, 1), Ok(18));
+        assert_eq!(rounded_division_work(10, 8), Ok(114));
+        assert_eq!(classification_prepare_work(8, 3), Ok(14));
+        assert_eq!(finalization_work(16), 16);
+    }
+
+    #[test]
+    fn integer_domain_and_wrapping_passes_are_pinned() {
+        assert_eq!(checked_int_unary_work(8), Ok(26));
+        assert_eq!(checked_int_additive_work(8, 8), Ok(26));
+        assert_eq!(checked_int_multiplication_work(8, 8), Ok(96));
+        assert_eq!(checked_int_division_work(10, 8), Ok(98));
+        assert_eq!(wrapping_unary_work(8), Ok(17));
+        assert_eq!(wrapping_additive_work(8, 8), Ok(17));
+        assert_eq!(wrapping_multiplication_work(8, 8), Ok(80));
+        assert_eq!(wrapping_reduction_work(9), Ok(41));
+        assert_eq!(wrapping_reduction_work(16), Ok(48));
     }
 
     #[test]
@@ -395,9 +606,12 @@ mod tests {
             work_step_gas(NumericWorkStep::ScaleByPowerOfTen {
                 value_limbs: 8,
                 exponent: 56,
-                result_limbs: 11,
             }),
-            Ok(96)
+            Ok(532)
+        );
+        assert_eq!(
+            work_step_gas(NumericWorkStep::Materialize { value_limbs: 8 }),
+            Ok(32)
         );
         assert_eq!(
             work_step_gas(NumericWorkStep::Multiply {
@@ -414,12 +628,39 @@ mod tests {
             Ok(28)
         );
         assert_eq!(
+            work_step_gas(NumericWorkStep::Normalize {
+                mantissa_limbs: 16,
+                remaining_scale: 56,
+            }),
+            Ok(260),
+            "a maximum-width multiplication intermediate is pinned explicitly"
+        );
+        assert_eq!(
             work_step_gas(NumericWorkStep::ExactDivisionAttempt {
                 numerator_limbs: 8,
                 denominator_limbs: 3,
                 output_scale: 28,
             }),
             Ok(116)
+        );
+        assert_eq!(
+            work_step_gas(NumericWorkStep::RoundedDivision {
+                numerator_limbs: 2,
+                denominator_limbs: 1,
+                output_scale: 28,
+            }),
+            Ok(72)
+        );
+        assert_eq!(
+            work_step_gas(NumericWorkStep::DivisionClassificationPrepare {
+                numerator_limbs: 8,
+                denominator_limbs: 3,
+            }),
+            Ok(56)
+        );
+        assert_eq!(
+            work_step_gas(NumericWorkStep::Finalize { value_limbs: 16 }),
+            Ok(64)
         );
     }
 
@@ -429,7 +670,7 @@ mod tests {
         assert_eq!(checked_mul(u64::MAX, 2), Err(VMError::GasCostOverflow));
         assert_eq!(work_gas(u64::MAX), Err(VMError::GasCostOverflow));
         assert_eq!(
-            successful_call_gas(u64::MAX, 1, 0, 0, 0),
+            successful_call_gas(u64::MAX, 1, 0, 0, 0, 0, 0, 0),
             Err(VMError::GasCostOverflow)
         );
     }
@@ -437,6 +678,6 @@ mod tests {
     #[test]
     fn zero_work_is_not_artificially_rounded_up() {
         assert_eq!(work_gas(0), Ok(0));
-        assert_eq!(successful_call_gas(39, 0, 0, 0, 0), Ok(55));
+        assert_eq!(successful_call_gas(39, 0, 0, 0, 0, 0, 0, 0), Ok(55));
     }
 }

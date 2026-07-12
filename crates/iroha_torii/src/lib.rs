@@ -3511,56 +3511,6 @@ mod preauth_connection_lifetime_tests {
     }
 }
 
-fn api_token_rejection(app: &AppState, headers: &HeaderMap) -> Option<Response> {
-    if !app.require_api_token {
-        return None;
-    }
-    if app.api_tokens_set.is_empty() {
-        return Some(utils::respond_with_status_and_format(
-            StatusCode::SERVICE_UNAVAILABLE,
-            ErrorEnvelope::new(
-                "api_token_unavailable",
-                "Torii requires an API token, but no tokens are configured.",
-            ),
-            utils::current_response_format(),
-        ));
-    }
-    let mut token_values = headers.get_all(HEADER_API_TOKEN).iter();
-    let valid = token_values
-        .next()
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|token| app.api_tokens_set.contains(token))
-        && token_values.next().is_none();
-    if valid {
-        return None;
-    }
-
-    let mut response = utils::respond_with_status_and_format(
-        StatusCode::UNAUTHORIZED,
-        ErrorEnvelope::new(
-            "api_token_required",
-            "A valid Torii API token is required for this request.",
-        ),
-        utils::current_response_format(),
-    );
-    response.headers_mut().insert(
-        axum::http::header::WWW_AUTHENTICATE,
-        HeaderValue::from_static("IrohaApiToken realm=\"torii\""),
-    );
-    Some(response)
-}
-
-async fn enforce_api_token(
-    State(app): State<SharedAppState>,
-    req: axum::http::Request<Body>,
-    next: Next,
-) -> Result<axum::response::Response, Infallible> {
-    if let Some(response) = api_token_rejection(&app, req.headers()) {
-        return Ok(response);
-    }
-    Ok(next.run(req).await)
-}
-
 #[cfg(feature = "app_api")]
 const SCCP_SUBMIT_MAX_TRANSACTION_PAYLOAD_BYTES_V1: usize = 16 * 1024 * 1024;
 #[cfg(feature = "app_api")]
@@ -3793,6 +3743,56 @@ async fn enforce_sccp_submit_ingress(
     }
     let request = axum::http::Request::from_parts(parts, Body::from(body));
     Ok(next.run(request).await)
+}
+
+fn api_token_rejection(app: &AppState, headers: &HeaderMap) -> Option<Response> {
+    if !app.require_api_token {
+        return None;
+    }
+    if app.api_tokens_set.is_empty() {
+        return Some(utils::respond_with_status_and_format(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorEnvelope::new(
+                "api_token_unavailable",
+                "Torii requires an API token, but no tokens are configured.",
+            ),
+            utils::current_response_format(),
+        ));
+    }
+    let mut token_values = headers.get_all(HEADER_API_TOKEN).iter();
+    let valid = token_values
+        .next()
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|token| app.api_tokens_set.contains(token))
+        && token_values.next().is_none();
+    if valid {
+        return None;
+    }
+
+    let mut response = utils::respond_with_status_and_format(
+        StatusCode::UNAUTHORIZED,
+        ErrorEnvelope::new(
+            "api_token_required",
+            "A valid Torii API token is required for this request.",
+        ),
+        utils::current_response_format(),
+    );
+    response.headers_mut().insert(
+        axum::http::header::WWW_AUTHENTICATE,
+        HeaderValue::from_static("IrohaApiToken realm=\"torii\""),
+    );
+    Some(response)
+}
+
+async fn enforce_api_token(
+    State(app): State<SharedAppState>,
+    req: axum::http::Request<Body>,
+    next: Next,
+) -> Result<axum::response::Response, Infallible> {
+    if let Some(response) = api_token_rejection(&app, req.headers()) {
+        return Ok(response);
+    }
+    Ok(next.run(req).await)
 }
 
 #[cfg(feature = "app_api")]
@@ -6561,13 +6561,24 @@ fn route_scoped_rate_limit_key(
 }
 
 async fn rate_limit_requests(app: &SharedAppState, key: &str) -> Result<(), Error> {
-    if !limits::allow_conditionally(&app.rate_limiter, key, true).await {
+    rate_limit_requests_with_cost(app, key, 1).await
+}
+
+async fn rate_limit_requests_with_cost(
+    app: &SharedAppState,
+    key: &str,
+    cost: u64,
+) -> Result<(), Error> {
+    if !limits::allow_cost_conditionally(&app.rate_limiter, key, cost.max(1), true).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
     Ok(())
 }
+
+const FINALITY_HEAVY_QUERY_RATE_COST: u64 = 8;
+const SCCP_RECENT_QUERY_RATE_COST: u64 = 4;
 
 #[cfg(test)]
 fn loopback_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
@@ -32422,7 +32433,6 @@ async fn handler_sumeragi_commit_qcs(
         .into_response())
 }
 
-#[cfg(feature = "telemetry")]
 async fn handler_bridge_finality_proof(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<u64>,
@@ -32450,7 +32460,9 @@ async fn handler_bridge_finality_proof(
         "/v1/bridge/finality/{height}",
         app.api_token_enforced(),
     );
-    rate_limit_requests(&app, &key).await?;
+    rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
+    #[cfg(feature = "telemetry")]
     if let Some(api_token) = token_hdr {
         crate::telemetry::report_torii_api_hit(&app.telemetry, &api_token, "v1/bridge/finality");
     }
@@ -32462,7 +32474,6 @@ async fn handler_bridge_finality_proof(
     )
 }
 
-#[cfg(feature = "telemetry")]
 async fn handler_bridge_finality_bundle(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<u64>,
@@ -32490,7 +32501,9 @@ async fn handler_bridge_finality_bundle(
         "/v1/bridge/finality/bundle/{height}",
         app.api_token_enforced(),
     );
-    rate_limit_requests(&app, &key).await?;
+    rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
+    #[cfg(feature = "telemetry")]
     if let Some(api_token) = token_hdr {
         crate::telemetry::report_torii_api_hit(
             &app.telemetry,
@@ -32535,7 +32548,8 @@ async fn handler_sccp_message_proof(
         "/v1/sccp/proofs/message/{message_id}",
         app.api_token_enforced(),
     );
-    rate_limit_requests(&app, &key).await?;
+    rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
     #[cfg(feature = "telemetry")]
     if let Some(api_token) = token_hdr {
         crate::telemetry::report_torii_api_hit(
@@ -32546,7 +32560,7 @@ async fn handler_sccp_message_proof(
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     Ok(
-        routing::handle_v1_sccp_message_bundle(app.state.as_ref(), message_id, accept)
+        routing::handle_v1_sccp_message_bundle(Arc::clone(&app.state), message_id, accept)
             .await?
             .into_response(),
     )
@@ -32620,7 +32634,8 @@ async fn handler_sccp_proof_request(
         "/v1/sccp/proof-requests/{message_id}",
         app.api_token_enforced(),
     );
-    rate_limit_requests(&app, &key).await?;
+    rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
     #[cfg(feature = "telemetry")]
     if let Some(api_token) = token_hdr {
         crate::telemetry::report_torii_api_hit(
@@ -32631,7 +32646,7 @@ async fn handler_sccp_proof_request(
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     Ok(
-        routing::handle_v1_sccp_proof_request(app.state.as_ref(), message_id, accept)
+        routing::handle_v1_sccp_proof_request(Arc::clone(&app.state), message_id, accept)
             .await?
             .into_response(),
     )
@@ -32705,7 +32720,8 @@ async fn handler_sccp_messages_recent(
         "/v1/sccp/messages/recent",
         app.api_token_enforced(),
     );
-    rate_limit_requests(&app, &key).await?;
+    rate_limit_requests_with_cost(&app, &key, SCCP_RECENT_QUERY_RATE_COST).await?;
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
     #[cfg(feature = "telemetry")]
     if let Some(api_token) = token_hdr {
         crate::telemetry::report_torii_api_hit(
@@ -32716,7 +32732,7 @@ async fn handler_sccp_messages_recent(
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     Ok(
-        routing::handle_v1_sccp_messages_recent(app.state.as_ref(), window, accept)
+        routing::handle_v1_sccp_messages_recent(Arc::clone(&app.state), window, accept)
             .await?
             .into_response(),
     )
@@ -42877,6 +42893,8 @@ impl Torii {
         mount_get!(SCCP_REGISTRY, handler_sccp_registry);
         mount_get!(VRF_PENALTIES, handler_sumeragi_vrf_penalties);
         mount_get!(VRF_EPOCH, handler_sumeragi_vrf_epoch);
+        mount_get!(BRIDGE_FINALITY, handler_bridge_finality_proof);
+        mount_get!(BRIDGE_FINALITY_BUNDLE, handler_bridge_finality_bundle);
 
         #[cfg(feature = "telemetry")]
         {
@@ -42897,8 +42915,6 @@ impl Torii {
             mount_get!(QC, handler_sumeragi_qc);
             mount_get!(CHECKPOINTS, handler_sumeragi_checkpoints);
             mount_get!(COMMIT_CERTIFICATES, handler_sumeragi_commit_qcs);
-            mount_get!(BRIDGE_FINALITY, handler_bridge_finality_proof);
-            mount_get!(BRIDGE_FINALITY_BUNDLE, handler_bridge_finality_bundle);
             mount_get!(VALIDATOR_SETS, handler_sumeragi_validator_sets);
             mount_get!(
                 VALIDATOR_SET_BY_HEIGHT,
@@ -43335,13 +43351,15 @@ impl Torii {
     fn add_contracts_and_vk_routes(&self, builder: &mut RouterBuilder) {
         let app_state = builder.state().clone();
         let bridge_submit_state = SccpSubmitIngressState {
-            app: builder.state().clone(),
+            app: app_state.clone(),
             operator_max_body_bytes: self
                 .transaction_max_content_len
                 .get()
                 .try_into()
                 .expect("transaction content limit should fit usize"),
         };
+        let bridge_submit_layer =
+            axum::middleware::from_fn_with_state(bridge_submit_state, enforce_sccp_submit_ingress);
         let contracts_body_limit = DefaultBodyLimit::max(
             self.transaction_max_content_len
                 .get()
@@ -43384,19 +43402,13 @@ impl Torii {
             &route_catalog::contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
             catalog_post(handler_post_bridge_proof_submit)
                 .layer(DefaultBodyLimit::disable())
-                .layer(axum::middleware::from_fn_with_state(
-                    bridge_submit_state.clone(),
-                    enforce_sccp_submit_ingress,
-                )),
+                .layer(bridge_submit_layer.clone()),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::BRIDGE_MESSAGES_POST,
             catalog_post(handler_post_bridge_message_submit)
                 .layer(DefaultBodyLimit::disable())
-                .layer(axum::middleware::from_fn_with_state(
-                    bridge_submit_state,
-                    enforce_sccp_submit_ingress,
-                )),
+                .layer(bridge_submit_layer),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_VIEW_POST,
@@ -45225,9 +45237,14 @@ impl Torii {
         let _ = self;
         use route_catalog::runtime_governance as routes;
 
-        let proof_route_state = builder.state().clone();
-        let proof_body_limit =
-            usize::try_from(proof_route_state.proof_limits.max_body_bytes).unwrap_or(usize::MAX);
+        let app_state = builder.state().clone();
+        let proof_body_limit = DefaultBodyLimit::max(
+            usize::try_from(app_state.proof_limits.max_body_bytes).unwrap_or(usize::MAX),
+        );
+        let proof_body_admission = axum::middleware::from_fn_with_state(
+            app_state.clone(),
+            proof_body_admission_middleware,
+        );
 
         macro_rules! mount_get {
             ($descriptor:ident, $handler:expr) => {
@@ -45239,22 +45256,19 @@ impl Torii {
                 builder.route(&routes::$descriptor, catalog_post($handler));
             };
         }
-        macro_rules! mount_delete {
-            ($descriptor:ident, $handler:expr) => {
-                builder.route(&routes::$descriptor, catalog_delete($handler));
-            };
-        }
         macro_rules! mount_proof_post {
             ($descriptor:ident, $handler:expr) => {
                 builder.route(
                     &routes::$descriptor,
                     catalog_post($handler)
-                        .layer(DefaultBodyLimit::max(proof_body_limit))
-                        .layer(axum::middleware::from_fn_with_state(
-                            proof_route_state.clone(),
-                            proof_body_admission_middleware,
-                        )),
+                        .layer(proof_body_limit.clone())
+                        .layer(proof_body_admission.clone()),
                 );
+            };
+        }
+        macro_rules! mount_delete {
+            ($descriptor:ident, $handler:expr) => {
+                builder.route(&routes::$descriptor, catalog_delete($handler));
             };
         }
 
@@ -45275,7 +45289,6 @@ impl Torii {
             handler_node_query_projection_checkpoint
         );
 
-        let app_state = builder.state().clone();
         builder.route(
             &routes::RUNTIME_UPGRADES,
             catalog_get(handler_runtime_upgrades_list).authenticated_operator(app_state.clone()),
@@ -49042,7 +49055,14 @@ pub(crate) mod tests_runtime_handlers {
     use iroha_data_model::{
         ChainId, Registrable, ValidationFail,
         account::{Account, AccountAlias, AccountId, OpaqueAccountId},
-        block::{BlockHeader, BlockSignature, SignedBlock},
+        block::{
+            BlockHeader, BlockSignature, SignedBlock,
+            consensus_v2::{
+                BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
+                GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate,
+                ValidatorPower, finality::V2FinalityArtifact,
+            },
+        },
         consensus::{
             ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus, Qc,
             QcAggregate, VALIDATOR_SET_HASH_VERSION_V1,
@@ -49089,14 +49109,6 @@ pub(crate) mod tests_runtime_handlers {
         utils::extractors::NoritoJson,
     };
 
-    fn proof_json_headers() -> HeaderMap {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            axum::http::header::CONTENT_TYPE,
-            HeaderValue::from_static("application/json"),
-        );
-        headers
-    }
     fn query_conversion_message(err: &Error) -> Option<&str> {
         match err {
             Error::Query(ValidationFail::QueryFailed(
@@ -58242,7 +58254,10 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(proofs.entry_hash, entry_hash);
     }
 
-    fn app_with_indexed_sccp_message_for_test(height: u64) -> (SharedAppState, [u8; 32]) {
+    fn app_with_indexed_sccp_message_for_test(
+        persist_finality: bool,
+    ) -> (SharedAppState, [u8; 32], V2FinalityArtifact) {
+        const HEIGHT: u64 = 1;
         let keypair = checked_torii_test_ed25519_keypair(
             0x31,
             "derive indexed Torii SCCP-message fixture key",
@@ -58292,7 +58307,7 @@ pub(crate) mod tests_runtime_handlers {
         );
         let entry_hash = tx.hash_as_entrypoint();
         let header = BlockHeader::new(
-            std::num::NonZeroU64::new(height).expect("nonzero height"),
+            std::num::NonZeroU64::new(HEIGHT).expect("nonzero height"),
             None,
             None,
             None,
@@ -58319,11 +58334,6 @@ pub(crate) mod tests_runtime_handlers {
         let commitment_root = iroha_core::bridge::sccp_commitment_root_from_messages(&messages)
             .expect("SCCP commitment root");
         block.set_sccp_commitment_root(Some(commitment_root));
-        let expected_root = block
-            .header()
-            .result_merkle_root()
-            .map(|hash| iroha_crypto::Hash::prehashed(*hash.as_ref()))
-            .expect("result root");
         let block_hash = block.hash();
         let message_id = message.commitment.message_id;
         let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1::new(context.lane, message_id)
@@ -58332,41 +58342,133 @@ pub(crate) mod tests_runtime_handlers {
             destination_binding_hash: context.destination_binding_hash,
             route_configuration_hash: context.route_configuration_hash,
             payload_hash: message.commitment.payload_hash,
-            recorded_at_height: height,
+            recorded_at_height: HEIGHT,
         };
         app.state
             .insert_sccp_outbound_message_for_testing(key, durable)
             .expect("insert indexed outbound record");
-        store_block(&app, block);
 
-        let (qc, validator_pop) = sample_commit_qc(
-            app.state.chain_id_ref(),
+        let mut validator_keys = (1_u8..=4)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("derive deterministic SCCP finality validator")
+            })
+            .collect::<Vec<_>>();
+        validator_keys.sort_by(|left, right| {
+            PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
+        });
+        let roster = validator_keys
+            .iter()
+            .zip([40_u64, 30, 20, 10])
+            .map(|(key, power)| ValidatorPower {
+                validator: PeerId::new(key.public_key().clone()),
+                power,
+            })
+            .collect::<Vec<_>>();
+        let context = HeightContext {
+            chain_id: app.state.chain_id_ref().clone(),
+            protocol_version: PROTOCOL_VERSION,
+            height: HEIGHT,
+            epoch: 0,
+            epoch_end_height: 10,
+            next_epoch_snapshot: None,
+            mode: ConsensusMode::Npos,
+            parent_commit_qc: None,
+            quorum: DualQuorum::from_roster(&roster).expect("valid SCCP finality roster"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"Torii SCCP exact-v2 finality context"),
+            da_layout: DataAvailabilityLayout {
+                encoding: PayloadEncoding::Plain,
+                chunk_size_bytes: 1024,
+                data_shards: 0,
+                parity_shards: 0,
+                max_payload_size_bytes: 4096,
+                max_chunk_count: 4,
+            },
+            leader_seed: [0x42; 32],
+        };
+        let subject = BlockSubject {
+            parent_block_hash: block.header().prev_block_hash(),
             block_hash,
-            expected_root,
-            height,
-            height.saturating_add(1),
-            0,
-        );
-        record_commit_qc(qc.clone());
-        let mut app = app;
-        let app_mut = Arc::get_mut(&mut app).expect("unique app state for test");
-        let state = Arc::get_mut(&mut app_mut.state).expect("unique core state for test");
-        state.world.register_validator_pop_for_testing(
-            qc.validator_set[0].public_key().clone(),
-            validator_pop,
-        );
-        state.insert_commit_qc_for_testing(block_hash, qc);
-        (app, message_id)
+            payload_hash: Hash::new(
+                block
+                    .canonical_wire()
+                    .expect("encode exact SCCP fixture block")
+                    .as_framed(),
+            ),
+        };
+        let mut commit_qc = QuorumCertificate {
+            round: ConsensusRound {
+                context_id: context.id(),
+                height: HEIGHT,
+                view: block.header().view_change_index(),
+            },
+            phase: GlobalPhase::Commit,
+            subject,
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![1],
+        };
+        let preimage = commit_qc
+            .signer_preimage(&context, 0)
+            .expect("valid SCCP finality signer");
+        let signatures = commit_qc
+            .signers
+            .iter()
+            .map(|index| {
+                Signature::try_new(
+                    validator_keys[usize::try_from(*index).expect("fixture signer index")]
+                        .private_key(),
+                    &preimage,
+                )
+                .expect("sign exact SCCP Commit vote")
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        commit_qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+            &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        )
+        .expect("aggregate exact SCCP Commit votes");
+        let validator_set_pops = validator_keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("derive SCCP finality validator PoP")
+            })
+            .collect();
+        let artifact = V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops);
+        artifact
+            .validate_for_header(&block.header())
+            .expect("SCCP finality fixture binds the exact block header");
+        artifact
+            .verify()
+            .expect("SCCP finality fixture is cryptographically valid");
+
+        let stored_block_hash = store_block(&app, block);
+        assert_eq!(stored_block_hash, artifact.block_hash);
+        if persist_finality {
+            let receipt = app
+                .kura
+                .store_v2_finality_artifact(&artifact)
+                .expect("persist exact SCCP v2 finality artifact");
+            assert_eq!(receipt.height(), artifact.height);
+            assert_eq!(receipt.block_hash(), artifact.block_hash);
+            assert_eq!(receipt.context_id(), artifact.context_id());
+            assert_eq!(receipt.subject(), artifact.subject);
+            assert_eq!(receipt.certificate(), artifact.commit_qc.as_ref());
+            assert_eq!(receipt.artifact_hash(), HashOf::new(&artifact));
+        }
+        (app, message_id, artifact)
     }
 
     #[tokio::test]
-    async fn sccp_bundle_and_recent_endpoints_use_authoritative_indexes() {
-        let (app, message_id) = app_with_indexed_sccp_message_for_test(1);
+    async fn sccp_bundle_endpoint_uses_exact_v2_artifact_and_authoritative_index() {
+        let (app, message_id, expected_artifact) = app_with_indexed_sccp_message_for_test(true);
         let message_id_hex = hex::encode(message_id);
         let bundle_response = routing::handle_v1_sccp_message_bundle(
-            app.state.as_ref(),
+            Arc::clone(&app.state),
             message_id_hex.clone(),
-            None,
+            Some(HeaderValue::from_static("application/json")),
         )
         .await
         .expect("indexed bundle response");
@@ -58377,19 +58479,47 @@ pub(crate) mod tests_runtime_handlers {
             .expect("typed bundle JSON");
         assert_eq!(bundle.commitment.message_id, message_id);
         assert!(iroha_sccp::verify_message_bundle_structure(&bundle));
+        let verified_finality =
+            iroha_sccp::verified_sccp_message_taira_finality_proof_cryptographically_self_consistent(
+                &bundle,
+            )
+            .expect("bundle carries a cryptographically self-consistent exact-v2 proof");
+        assert_eq!(verified_finality.finality_artifact, expected_artifact);
+
+        let request_error =
+            routing::handle_v1_sccp_proof_request(Arc::clone(&app.state), message_id_hex, None)
+                .await
+                .expect_err("proof request must require its historical governed route");
+        let Error::Query(ValidationFail::InternalError(message)) = request_error else {
+            panic!("unexpected missing-route error: {request_error}");
+        };
+        assert!(message.contains("retained destination binding"));
+    }
+
+    #[tokio::test]
+    async fn sccp_recent_endpoint_never_reads_or_verifies_finality_sidecars() {
+        let (app, message_id, _) = app_with_indexed_sccp_message_for_test(false);
+        let message_id_hex = hex::encode(message_id);
+        let sidecar = app
+            .kura
+            .store_root()
+            .join("blocks")
+            .join("v2_finality")
+            .join("00000000000000000001.norito");
+        assert!(!sidecar.exists(), "fixture starts without finality sidecar");
 
         let recent_response = routing::handle_v1_sccp_messages_recent(
-            app.state.as_ref(),
+            Arc::clone(&app.state),
             crate::NoritoQuery(routing::HistoryWindowQuery::default()),
-            None,
+            Some(HeaderValue::from_static("application/json")),
         )
         .await
-        .expect("indexed recent response");
-        let recent_bytes = axum::body::to_bytes(recent_response.into_body(), usize::MAX)
+        .expect("recent metadata does not require finality");
+        let recent_before = axum::body::to_bytes(recent_response.into_body(), usize::MAX)
             .await
             .expect("recent body");
         let recent =
-            norito::json::from_slice::<norito::json::Value>(&recent_bytes).expect("recent JSON");
+            norito::json::from_slice::<norito::json::Value>(&recent_before).expect("recent JSON");
         let item = recent
             .get("items")
             .and_then(norito::json::Value::as_array)
@@ -58409,14 +58539,136 @@ pub(crate) mod tests_runtime_handlers {
         assert!(links.contains_key("bundle_path"));
         assert!(links.contains_key("proof_request_path"));
 
-        let request_error =
-            routing::handle_v1_sccp_proof_request(app.state.as_ref(), message_id_hex, None)
-                .await
-                .expect_err("proof request must require its historical governed route");
-        let Error::Query(ValidationFail::InternalError(message)) = request_error else {
-            panic!("unexpected missing-route error: {request_error}");
-        };
-        assert!(message.contains("retained destination binding"));
+        assert!(matches!(
+            routing::handle_v1_sccp_message_bundle(
+                Arc::clone(&app.state),
+                message_id_hex.clone(),
+                None,
+            )
+            .await,
+            Err(Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound
+            )))
+        ));
+
+        std::fs::create_dir_all(sidecar.parent().expect("sidecar directory"))
+            .expect("create adversarial finality directory");
+        std::fs::write(&sidecar, b"malformed-finality-sidecar")
+            .expect("write adversarial finality sidecar");
+        let recent_response = routing::handle_v1_sccp_messages_recent(
+            Arc::clone(&app.state),
+            crate::NoritoQuery(routing::HistoryWindowQuery::default()),
+            Some(HeaderValue::from_static("application/json")),
+        )
+        .await
+        .expect("malformed finality remains outside recent metadata path");
+        let recent_after = axum::body::to_bytes(recent_response.into_body(), usize::MAX)
+            .await
+            .expect("recent body after sidecar corruption");
+        assert_eq!(recent_after, recent_before);
+
+        assert!(matches!(
+            routing::handle_v1_sccp_message_bundle(app.state.clone(), message_id_hex, None).await,
+            Err(Error::Query(ValidationFail::InternalError(_)))
+        ));
+    }
+
+    #[tokio::test]
+    async fn finality_and_sccp_proof_routes_require_heavy_query_admission() {
+        let mut app = mk_app_state_for_tests();
+        let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
+        app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+        app_mut.query_queue_timeout = Duration::from_millis(1);
+        let message_id = "11".repeat(32);
+
+        let errors = [
+            handler_bridge_finality_proof(
+                State(app.clone()),
+                axum::extract::Path(1),
+                HeaderMap::new(),
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect_err("finality proof must acquire heavy admission"),
+            handler_bridge_finality_bundle(
+                State(app.clone()),
+                axum::extract::Path(1),
+                HeaderMap::new(),
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect_err("finality bundle must acquire heavy admission"),
+            handler_sccp_message_proof(
+                State(app.clone()),
+                axum::extract::Path(message_id.clone()),
+                axum::extract::RawQuery(None),
+                HeaderMap::new(),
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect_err("SCCP message proof must acquire heavy admission"),
+            handler_sccp_proof_request(
+                State(app.clone()),
+                axum::extract::Path(message_id),
+                axum::extract::RawQuery(None),
+                HeaderMap::new(),
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect_err("SCCP proof request must acquire heavy admission"),
+            handler_sccp_messages_recent(
+                State(app),
+                crate::NoritoQuery(routing::HistoryWindowQuery::default()),
+                axum::extract::RawQuery(None),
+                HeaderMap::new(),
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect_err("SCCP recent query must acquire heavy admission"),
+        ];
+        for error in errors {
+            assert!(
+                matches!(
+                    error,
+                    Error::Query(ValidationFail::QueryFailed(
+                        iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+                    ))
+                ),
+                "unexpected heavy-admission error: {error}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn finality_rate_weight_rejects_cost_above_burst_without_throttling_light_registry() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique Torii app fixture")
+            .rate_limiter = limits::RateLimiter::new(Some(1), Some(7));
+
+        let finality_error = handler_bridge_finality_proof(
+            State(app.clone()),
+            axum::extract::Path(1),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+        )
+        .await
+        .expect_err("eight-token finality query must exceed seven-token burst");
+        assert!(matches!(
+            finality_error,
+            Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+            ))
+        ));
+
+        handler_sccp_registry(
+            State(app),
+            axum::extract::RawQuery(None),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+        )
+        .await
+        .expect("one-token SCCP registry read remains available");
     }
 
     #[tokio::test]
@@ -65951,16 +66203,20 @@ pub(crate) mod tests_runtime_handlers {
         let app = mk_app_state_for_tests_with_options(None, Some((1, 1)), None, None);
         let headers = HeaderMap::new();
         let remote_ip = std::net::IpAddr::from([127, 0, 0, 1]);
-        for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
+        let rate_limit_keys = ["/v1/bridge/proofs/submit", "/v1/bridge/messages"].map(|path| {
             let policy = super::sccp_submit_ingress_policy(path).expect("known policy");
-            let key = super::rate_limit_key(
+            super::rate_limit_key(
                 &headers,
                 Some(remote_ip),
                 policy.rate_limit_hint,
                 app.api_token_enforced(),
-            );
-            assert!(app.deploy_rate_limiter.allow(&key).await);
-        }
+            )
+        });
+        assert_eq!(
+            rate_limit_keys[0], rate_limit_keys[1],
+            "identified callers must share one deploy-rate bucket across SCCP submit routes"
+        );
+        assert!(app.deploy_rate_limiter.allow(&rate_limit_keys[0]).await);
         let router = sccp_ingress_test_router(app);
 
         for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {

@@ -2318,9 +2318,9 @@ pub mod sumeragi {
     );
     /// Read a self-contained bridge finality proof.
     pub const BRIDGE_FINALITY: RouteDescriptor =
-        telemetry_get("bridge.finality_proof.read", "/v1/bridge/finality/{height}");
+        public_get("bridge.finality_proof.read", "/v1/bridge/finality/{height}");
     /// Read a bridge finality commitment and justification bundle.
-    pub const BRIDGE_FINALITY_BUNDLE: RouteDescriptor = telemetry_get(
+    pub const BRIDGE_FINALITY_BUNDLE: RouteDescriptor = public_get(
         "bridge.finality_bundle.read",
         "/v1/bridge/finality/bundle/{height}",
     );
@@ -2609,10 +2609,10 @@ pub mod runtime_governance {
         "governance.proposal.deploy_contract",
         "/v1/gov/proposals/deploy-contract",
     );
-    /// Draft typed SCCP route-governance parameters.
+    /// Draft an SCCP route-governance proposal.
     pub const GOV_PROPOSE_SCCP: RouteDescriptor = app_post(
         "governance.proposal.sccp_route_governance",
-        crate::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE,
+        "/v1/gov/proposals/sccp-route-governance",
     );
     /// Read one governance proposal.
     pub const GOV_PROPOSAL_GET: RouteDescriptor =
@@ -3602,12 +3602,6 @@ pub mod contracts_and_verification_keys {
         .with_cors_options(true)
     }
 
-    const fn app_compat_post(id: &'static str, path: &'static str) -> RouteDescriptor {
-        app_post(id, path).with_path_policy(PathPolicy::ProtocolException {
-            reason: "retained browser compatibility spelling",
-        })
-    }
-
     const fn app_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_get(id, path).with_projections(RouteProjections::SDK)
     }
@@ -3686,8 +3680,6 @@ pub mod contracts_and_verification_keys {
         MULTISIG_SPEC_POST => app_post("contracts.multisig_spec_post", "/v1/multisig/spec");
         MULTISIG_PROPOSALS_QUERY_POST => app_post("contracts.multisig_proposals_query_post", "/v1/multisig/proposals/query");
         MULTISIG_PROPOSALS_LOOKUP_POST => app_post("contracts.multisig_proposals_lookup_post", "/v1/multisig/proposals/lookup");
-        MULTISIG_PROPOSALS_LIST_POST => app_compat_post("contracts.multisig_proposals_list_post", "/v1/multisig/proposals/list");
-        MULTISIG_PROPOSALS_GET_POST => app_compat_post("contracts.multisig_proposals_get_post", "/v1/multisig/proposals/get");
         MULTISIG_APPROVALS_QUERY_POST => app_post("contracts.multisig_approvals_query_post", "/v1/multisig/approvals/query");
         MULTISIG_APPROVALS_LOOKUP_POST => app_post("contracts.multisig_approvals_lookup_post", "/v1/multisig/approvals/lookup");
         MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST => app_post("contracts.multisig_approvals_query_for_authority_post", "/v1/multisig/approvals/query-for-authority");
@@ -4401,8 +4393,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::MULTISIG_SPEC_POST,
     contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
     contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
-    contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST,
-    contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST,
     contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST,
     contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST,
     contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST,
@@ -4571,6 +4561,21 @@ mod tests {
             .collect();
         assert_eq!(ids.len(), offline::ROUTES.len());
         assert_eq!(method_paths.len(), offline::ROUTES.len());
+    }
+
+    #[test]
+    fn sccp_governance_descriptor_uses_the_canonical_uri() {
+        assert_eq!(
+            runtime_governance::GOV_PROPOSE_SCCP.path(),
+            crate::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE
+        );
+    }
+
+    #[test]
+    fn bridge_finality_routes_are_not_telemetry_gated() {
+        for route in [sumeragi::BRIDGE_FINALITY, sumeragi::BRIDGE_FINALITY_BUNDLE] {
+            assert_eq!(route.feature_gate(), FeatureGate::Always);
+        }
     }
 
     #[test]
@@ -4755,6 +4760,8 @@ mod tests {
         }
 
         for unsupported_path in [
+            "/v1/multisig/proposals/list",
+            "/v1/multisig/proposals/get",
             "/v1/multisig/approvals/list",
             "/v1/multisig/approvals/get",
             "/v1/multisig/approvals/list_for_authority",
@@ -4785,48 +4792,6 @@ mod tests {
                 routes.iter().any(|route| route.path() == canonical_path),
                 "missing canonical first-release route: {canonical_path}"
             );
-        }
-
-        for (compatibility_route, canonical_route) in [
-            (
-                contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST,
-                contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
-            ),
-            (
-                contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST,
-                contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
-            ),
-        ] {
-            assert!(routes.contains(&compatibility_route));
-            assert_eq!(compatibility_route.method(), canonical_route.method());
-            assert_eq!(compatibility_route.surface(), canonical_route.surface());
-            assert_eq!(compatibility_route.listener(), canonical_route.listener());
-            assert_eq!(
-                compatibility_route.authentication(),
-                canonical_route.authentication()
-            );
-            assert_eq!(
-                compatibility_route.feature_gate(),
-                canonical_route.feature_gate()
-            );
-            assert_eq!(
-                compatibility_route.projections(),
-                canonical_route.projections()
-            );
-            assert_eq!(
-                compatibility_route.cors_options(),
-                canonical_route.cors_options()
-            );
-            assert_eq!(
-                compatibility_route.path_normalization(),
-                canonical_route.path_normalization()
-            );
-            assert!(matches!(
-                compatibility_route.path_policy(),
-                PathPolicy::ProtocolException { reason }
-                    if reason == "retained browser compatibility spelling"
-            ));
-            assert_eq!(canonical_route.path_policy(), PathPolicy::CanonicalV1);
         }
 
         for route in [

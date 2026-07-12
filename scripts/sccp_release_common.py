@@ -187,9 +187,17 @@ FORBIDDEN_FIXTURE_PUBLIC_KEYS = frozenset(
         "07ecef22532a6859823046b92b183b90e38b6c367fc1af6ead429be7cbbdc0f5",
         "1b60f8f63d68bb772e5cb5ff7dd98996895a5a7430d9e82f48f48d4776cd1a3b",
         "366e703d99bdbe0a2a4db1a664acd52c43b03f9d053025eb19bda13a5e0a6066",
-        # Current ephemeral release-role seal.
+        # Previous ephemeral release-role seal.
         "df62654404d5e37e3ba68dd14b97117eb199803f4a10a2473e3b7b848e67a1b5",
         "073fb6ce0ac504252d2fe848ad7cbf6afe92bc727a340667f9d2ca56e3331ad7",
+        # Current in-memory-only fixture seal.
+        "f34444167e0c2810cf4072d1c34b7175d380de2e0efdf48b762247b8bfd5d04b",
+        "0666855cf4012140b0cea429d456f14cfbdc53982eab592af675f918d435947c",
+        # External release-role seal prepared on 2026-07-12.
+        "b38b424605d0a3d4a4718f497dde90932444e7f96f48539a7f5a9b6ad8ef0fdd",
+        "4fceb3bc8a659bce4beba05fe63c79671a4430a112c4c5448e69deeec1d52770",
+        "38861629012e021d8fcfc202ae485b431adff8aa87d5b0b3b8c92048461c1779",
+        "330dde2b028c8853134e29aa3ae92832df2ecbe1a5d36f4d800a233fd7e8f4ae",
     )
 )
 
@@ -1059,17 +1067,16 @@ def reject_secret_material(data: bytes, *, label: str) -> None:
                 _fail(f"{label} contains encoded forbidden credential material")
 
 
-def load_trust_policy(
-    path: Path, *, allow_test_policy: bool = False
+def validate_trust_policy_bytes(
+    data: bytes, *, allow_test_policy: bool = False
 ) -> tuple[dict[str, Any], bytes]:
-    """Load a canonical external role-to-key trust root.
+    """Validate canonical external role-to-key trust-root bytes.
 
-    Production callers never set ``allow_test_policy``. The separate fixture
-    runner is the only entrypoint allowed to consume the deliberately distinct
+    Production callers never set ``allow_test_policy``. Separate fixture-only
+    tools are the only entrypoints allowed to consume the deliberately distinct
     test policy schema.
     """
 
-    data = read_direct_file(path, label="release trust policy", maximum=MAX_TRUST_POLICY_BYTES)
     value = parse_json_bytes(data, label="release trust policy", maximum=MAX_TRUST_POLICY_BYTES)
     require_canonical_json_file(data, value, label="release trust policy")
     policy = _require_object(
@@ -1378,6 +1385,15 @@ def load_trust_policy(
                 _fail("proof-system audit has an invalid detached signature")
     reject_secret_material(data, label="release trust policy")
     return policy, data
+
+
+def load_trust_policy(
+    path: Path, *, allow_test_policy: bool = False
+) -> tuple[dict[str, Any], bytes]:
+    """Load and validate a canonical external role-to-key trust root."""
+
+    data = read_direct_file(path, label="release trust policy", maximum=MAX_TRUST_POLICY_BYTES)
+    return validate_trust_policy_bytes(data, allow_test_policy=allow_test_policy)
 
 
 def _workspace_crate_version() -> str:
@@ -2009,30 +2025,27 @@ def verify_production_semantic_artifacts(
     return tuple(proof_records)
 
 
-def validate_evidence(
-    value: Any, trust_policy: Mapping[str, Any]
-) -> dict[str, Any]:
-    """Validate one complete SCCP release document against an external trust root."""
+_UNSIGNED_EVIDENCE_KEYS = (
+    "schema",
+    "release_id",
+    "protocol_version",
+    "hub_profile",
+    "hub_chain_id",
+    "created_at_unix_ms",
+    "trust_policy_id",
+    "trust_policy_sha256_hex",
+    "validator",
+    "lanes",
+    "artifacts",
+    "validation",
+)
 
-    evidence = _require_object(
-        value,
-        label="release evidence",
-        keys=(
-            "schema",
-            "release_id",
-            "protocol_version",
-            "hub_profile",
-            "hub_chain_id",
-            "created_at_unix_ms",
-            "trust_policy_id",
-            "trust_policy_sha256_hex",
-            "validator",
-            "lanes",
-            "artifacts",
-            "validation",
-            "provenance",
-        ),
-    )
+
+def _validate_evidence_body(
+    evidence: dict[str, Any], trust_policy: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Validate every release-evidence field covered by detached signatures."""
+
     if evidence["schema"] != EVIDENCE_SCHEMA:
         _fail(f"release evidence schema must be exactly {EVIDENCE_SCHEMA}")
     _require_id(evidence["release_id"], label="release_id")
@@ -2067,6 +2080,47 @@ def validate_evidence(
     if referenced != set(artifact_by_path):
         missing = sorted(set(artifact_by_path) - referenced)
         _fail("release evidence contains unreferenced artifacts: " + ",".join(missing))
+    return evidence
+
+
+def validate_test_fixture_evidence_signing_candidate(
+    value: Any, trust_policy: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Validate unsigned test-fixture evidence before external signing.
+
+    This helper accepts no provenance field and performs no signing.  Complete
+    release admission continues to use :func:`validate_evidence`, which requires
+    and verifies both detached signatures.
+    """
+
+    if (
+        trust_policy.get("schema") != TEST_TRUST_POLICY_SCHEMA
+        or trust_policy.get("environment") != "test-fixture"
+    ):
+        _fail("unsigned evidence validation is restricted to the test fixture")
+    evidence = _require_object(
+        value,
+        label="unsigned release evidence",
+        keys=_UNSIGNED_EVIDENCE_KEYS,
+    )
+    _validate_evidence_body(evidence, trust_policy)
+    reject_secret_material(
+        canonical_json_bytes(evidence), label="unsigned release evidence"
+    )
+    return evidence
+
+
+def validate_evidence(
+    value: Any, trust_policy: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Validate one complete SCCP release document against an external trust root."""
+
+    evidence = _require_object(
+        value,
+        label="release evidence",
+        keys=(*_UNSIGNED_EVIDENCE_KEYS, "provenance"),
+    )
+    _validate_evidence_body(evidence, trust_policy)
     _validate_provenance(evidence["provenance"], evidence, trust_policy)
     reject_secret_material(canonical_json_bytes(evidence), label="release evidence")
     return evidence
@@ -2313,6 +2367,43 @@ def _invoke_validator_command(
                 safe_environment,
             )
     return stdout, stderr, return_code, executed_validator_hash
+
+
+def derive_validator_identity(
+    validator_path: Path,
+) -> tuple[dict[str, Any], str]:
+    """Derive and authenticate the selected validator's exact current identity.
+
+    The executable is hashed before it is invoked through the bounded validator
+    runner.  Its self-reported identity must bind that exact executable and the
+    current checked-in source, manifests, lockfile, build script, and toolchain.
+    """
+
+    executable = _read_validator_executable(validator_path)
+    expected_hash = sha256_hex(executable)
+    stdout, stderr, return_code, executed_hash = _invoke_validator_command(
+        validator_path,
+        ("identity",),
+        expected_hash,
+    )
+    if executed_hash != expected_hash:
+        _fail("canonical Rust release validator changed during identity derivation")
+    if return_code != 0:
+        detail = public_error(stderr.decode("utf-8", "replace"))
+        _fail(f"canonical Rust validator identity failed: {detail}")
+    if stderr:
+        _fail("canonical Rust validator identity wrote unexpected stderr")
+    if not stdout.endswith(b"\n") or stdout.count(b"\n") != 1:
+        _fail("canonical Rust validator identity must emit exactly one JSON line")
+    value = parse_json_bytes(
+        stdout[:-1],
+        label="Rust validator identity",
+        maximum=MAX_VALIDATOR_OUTPUT_BYTES,
+    )
+    identity = _validate_validator_identity(value)
+    if identity["executable_sha256_hex"] != expected_hash:
+        _fail("Rust validator identity does not bind the selected executable")
+    return identity, expected_hash
 
 
 def _invoke_lane_validator(

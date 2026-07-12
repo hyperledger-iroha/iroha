@@ -6588,14 +6588,14 @@ seiyaku TriggerDispatch {
                 authority "{multisig_id}";
               }}
 
-              state Requests_requested_by_actor: StateMap<Name, bytes>;
-              state ToAccount: StateMap<Name, AccountId>;
-              state Amount: StateMap<Name, i64>;
-              state ProposalStatus: StateMap<Name, i64>;
-              state CreatedAtMs: StateMap<Name, i64>;
-              state ExpiresAtMs: StateMap<Name, i64>;
+              state StateMap<Name, bytes> Requests_requested_by_actor;
+              state StateMap<Name, AccountId> ToAccount;
+              state StateMap<Name, int> Amount;
+              state StateMap<Name, int> ProposalStatus;
+              state StateMap<Name, int> CreatedAtMs;
+              state StateMap<Name, int> ExpiresAtMs;
 
-              fn run_impl(ev: Json) -> Option<bool> {{
+              fn run_impl(Json ev) -> Option<bool> {{
                 let request_id = ev.get_name(Name::parse("request_id"))?;
                 assert(!ProposalStatus.contains(request_id), "mint request already exists");
                 let action = ev.get_name(Name::parse("action"))?;
@@ -6620,7 +6620,7 @@ seiyaku TriggerDispatch {
                 Option::some(true)
               }}
 
-              kotoage fn run(ev: Json) authorize("staged_mint_request_run") {{
+              kotoage fn run(Json ev) authorize("staged_mint_request_run") {{
                 assert(run_impl(ev).is_some(), "missing or invalid staged mint field");
               }}
             }}

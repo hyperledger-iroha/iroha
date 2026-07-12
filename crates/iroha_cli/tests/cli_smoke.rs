@@ -516,8 +516,8 @@ fn write_contract_app_manifest(dir: &torii_mock_support::TempDir) -> PathBuf {
         &contract_path,
         r#"
             seiyaku Greeter {
-                hajimari(value: i64) {}
-                view fn status() -> i64 { return 7; }
+                hajimari(int value) {}
+                view fn status() -> int { return 7; }
             }
         "#,
     )
@@ -541,14 +541,14 @@ fn write_contract_app_manifest(dir: &torii_mock_support::TempDir) -> PathBuf {
             contract = "demo.greeter"
             entrypoint = "hajimari"
             gas_limit = 1000
-            payload = { value = 7 }
+            payload = { value = "7" }
 
             [[assertions]]
             id = "status"
             contract = "demo.greeter"
             entrypoint = "status"
             gas_limit = 1000
-            expected_result = 7
+            expected_result = "7"
         "#,
     )
     .expect("write contract app manifest");
