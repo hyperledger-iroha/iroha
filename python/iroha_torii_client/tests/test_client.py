@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import json
 import re
@@ -32,6 +33,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     OfflineRedeemRequest,
     OfflineRejectedOperation,
     OfflineTopUpAnchor,
+    OfflineTopUpFinalityProof,
     OfflineTopUpRequest,
     ToriiCanonicalRequestAuth,
     ToriiClient,
@@ -4084,11 +4086,40 @@ def test_trigger_registration_deletion_and_query() -> None:
     }
 
 
+def _offline_active_transfer_verifier(**overrides: Any) -> Dict[str, Any]:
+    verifier = {
+        "id": {"backend": "halo2-ipa-pasta", "name": "transfer-v2"},
+        "version": 7,
+        "circuit_id": "confidential-transfer-v2",
+        "commitment": "44" * 32,
+        "public_inputs_schema_hash": "55" * 32,
+        "max_proof_bytes": 4096,
+        "activation_height": 1,
+        "withdrawal_height": None,
+    }
+    verifier.update(overrides)
+    return verifier
+
+
+def _offline_active_topup_shield_verifier(**overrides: Any) -> Dict[str, Any]:
+    verifier = _offline_active_transfer_verifier(
+        id={"backend": "halo2-ipa-pasta", "name": "topup-shield-v2"},
+        circuit_id="kagemusha-topup-shield-v2",
+        commitment="66" * 32,
+        public_inputs_schema_hash="77" * 32,
+    )
+    verifier.update(overrides)
+    return verifier
+
+
 def _offline_readiness_payload(**overrides: Any) -> Dict[str, Any]:
     payload = {
         "asset_definition_id": CANONICAL_ASSET_DEFINITION_ID,
+        "asset_scale": 4,
         "evaluated_block_height": 42,
         "evaluated_block_hash": "ab" * 32,
+        "active_transfer_verifier": _offline_active_transfer_verifier(),
+        "active_topup_shield_verifier": _offline_active_topup_shield_verifier(),
         "ready": True,
         "blockers": [],
     }
@@ -4188,15 +4219,54 @@ def _offline_top_up_anchor(**overrides: Any) -> Dict[str, Any]:
     return anchor
 
 
+def _offline_top_up_finality_proof(
+    anchor: Optional[Mapping[str, Any]] = None,
+    *,
+    finalized_height: int = 12,
+    **overrides: Any,
+) -> Dict[str, Any]:
+    bound_anchor = anchor if anchor is not None else _offline_top_up_anchor()
+    proof = {
+        "version": 1,
+        "anchor": {
+            "topup_operation_id": list(
+                bound_anchor.get("topup_operation_id", OFFLINE_OPERATION_BYTES)
+            ),
+            "anchor_digest": list(
+                bound_anchor.get("anchor_digest", _offline_fixed_bytes(0x71))
+            ),
+        },
+        "commit_qc": {
+            "height_context": {
+                "height": finalized_height,
+                "opaque_context": {"protocol_version": 2},
+            },
+            "certificate": {
+                "round": {"height": finalized_height, "view": 0},
+                "opaque_certificate": [1, 2, 3],
+            },
+        },
+        "anchor_path": {"leaf_index": 0, "leaf_count": 1, "siblings": []},
+    }
+    proof.update(overrides)
+    return proof
+
+
 def _offline_applied_top_up_status(
     anchor: Optional[Mapping[str, Any]] = None,
     **result_overrides: Any,
 ) -> Dict[str, Any]:
+    finalized_height = result_overrides.get("finalized_block_height", 12)
+    bound_anchor = dict(anchor if anchor is not None else _offline_top_up_anchor())
     result = {
         "transaction_hash": OFFLINE_TRANSACTION_HASH,
-        "finalized_block_height": 12,
+        "finalized_block_height": finalized_height,
         "server_time_ms": 13,
-        "anchor": dict(anchor if anchor is not None else _offline_top_up_anchor()),
+        "anchor": bound_anchor,
+        "finality_proof": _offline_top_up_finality_proof(
+            bound_anchor,
+            finalized_height=finalized_height,
+        ),
     }
     result.update(result_overrides)
     return {
@@ -4246,8 +4316,14 @@ def test_get_offline_readiness_sends_exact_asset_selector_and_parses_blockers() 
     readiness = client.get_offline_readiness(CANONICAL_ASSET_DEFINITION_ID)
 
     assert readiness.asset_definition_id == CANONICAL_ASSET_DEFINITION_ID
+    assert readiness.asset_scale == 4
     assert readiness.evaluated_block_height == 42
     assert readiness.evaluated_block_hash == "ab" * 32
+    assert readiness.active_transfer_verifier is not None
+    assert readiness.active_transfer_verifier.id.backend == "halo2-ipa-pasta"
+    assert readiness.active_transfer_verifier.max_proof_bytes == 4096
+    assert readiness.active_topup_shield_verifier is not None
+    assert readiness.active_topup_shield_verifier.id.name == "topup-shield-v2"
     assert readiness.ready is False
     assert readiness.blockers[0].code == "proof_backend_unavailable"
     call = session.calls[0]
@@ -4257,10 +4333,27 @@ def test_get_offline_readiness_sends_exact_asset_selector_and_parses_blockers() 
     assert call["headers"]["Accept"] == "application/json"
 
 
+def test_get_offline_readiness_resolves_alias_to_canonical_asset_id() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload=_offline_readiness_payload()))
+    readiness = ToriiClient("http://node.test", session=session).get_offline_readiness(
+        "xor#sora"
+    )
+
+    assert readiness.asset_definition_id == CANONICAL_ASSET_DEFINITION_ID
+    assert session.calls[0]["params"] == {"asset_definition_id": "xor#sora"}
+
+
 def test_get_offline_readiness_rejects_invalid_selector_before_network() -> None:
     session = RecordingSession()
     client = ToriiClient("http://node.test", session=session)
-    for asset in ("", f" {CANONICAL_ASSET_DEFINITION_ID}", f"{CANONICAL_ASSET_DEFINITION_ID} "):
+    for asset in (
+        "",
+        "different-asset",
+        "XOR#sora",
+        f" {CANONICAL_ASSET_DEFINITION_ID}",
+        f"{CANONICAL_ASSET_DEFINITION_ID} ",
+    ):
         with pytest.raises(RuntimeError, match="asset_definition_id"):
             client.get_offline_readiness(asset)
     assert session.calls == []
@@ -4269,8 +4362,17 @@ def test_get_offline_readiness_rejects_invalid_selector_before_network() -> None
 def test_get_offline_readiness_rejects_adversarial_snapshots() -> None:
     missing_hash = _offline_readiness_payload()
     missing_hash.pop("evaluated_block_hash")
+    missing_scale = _offline_readiness_payload()
+    missing_scale.pop("asset_scale")
+    missing_verifier = _offline_readiness_payload()
+    missing_verifier.pop("active_transfer_verifier")
+    missing_topup_shield_verifier = _offline_readiness_payload()
+    missing_topup_shield_verifier.pop("active_topup_shield_verifier")
     payloads = [
         missing_hash,
+        missing_scale,
+        missing_verifier,
+        missing_topup_shield_verifier,
         _offline_readiness_payload(asset_definition_id="different-asset"),
         _offline_readiness_payload(
             ready=True,
@@ -4278,6 +4380,7 @@ def test_get_offline_readiness_rejects_adversarial_snapshots() -> None:
         ),
         _offline_readiness_payload(ready=False, blockers=[]),
         _offline_readiness_payload(evaluated_block_height=-1),
+        _offline_readiness_payload(evaluated_block_height=1 << 64),
         _offline_readiness_payload(evaluated_block_hash="AB" * 32),
         _offline_readiness_payload(evaluated_block_hash="ab" * 31),
         _offline_readiness_payload(blockers=[{"code": "NOT-CANONICAL", "message": "no"}]),
@@ -4289,6 +4392,58 @@ def test_get_offline_readiness_rejects_adversarial_snapshots() -> None:
         ),
         _offline_readiness_payload(
             ready=False, blockers=[{"code": "not_ready", "message": "line\nbreak"}]
+        ),
+        _offline_readiness_payload(asset_scale=-1),
+        _offline_readiness_payload(asset_scale=1 << 32),
+        _offline_readiness_payload(asset_scale=29),
+        _offline_readiness_payload(
+            asset_scale=None,
+            ready=False,
+            blockers=[{"code": "not_ready", "message": "missing scale"}],
+        ),
+        _offline_readiness_payload(active_transfer_verifier=None),
+        _offline_readiness_payload(active_topup_shield_verifier=None),
+        _offline_readiness_payload(
+            active_transfer_verifier=_offline_active_transfer_verifier(
+                max_proof_bytes=0
+            )
+        ),
+        _offline_readiness_payload(
+            active_transfer_verifier=_offline_active_transfer_verifier(
+                activation_height=43
+            )
+        ),
+        _offline_readiness_payload(
+            active_transfer_verifier=_offline_active_transfer_verifier(
+                withdrawal_height=42
+            )
+        ),
+        _offline_readiness_payload(
+            active_transfer_verifier=_offline_active_transfer_verifier(
+                commitment="AA" * 32
+            )
+        ),
+        _offline_readiness_payload(
+            active_topup_shield_verifier=_offline_active_topup_shield_verifier(
+                max_proof_bytes=0
+            )
+        ),
+        _offline_readiness_payload(
+            active_topup_shield_verifier=_offline_active_topup_shield_verifier(
+                activation_height=43
+            )
+        ),
+        _offline_readiness_payload(
+            active_topup_shield_verifier=_offline_active_topup_shield_verifier(
+                withdrawal_height=42
+            )
+        ),
+        _offline_readiness_payload(
+            ready=False,
+            blockers=[
+                {"code": "not_ready", "message": "one"},
+                {"code": "not_ready", "message": "two"},
+            ],
         ),
     ]
     for payload in payloads:
@@ -4315,6 +4470,68 @@ def test_offline_readiness_uses_finite_codes_and_strips_unknown_members() -> Non
     )
     assert readiness.blockers[0].code == "1_future_code"
     assert not hasattr(readiness, "unknown_member")
+
+    exact_numeric_session = RecordingSession()
+    exact_numeric_json = json.dumps(_offline_readiness_payload())[:-1]
+    exact_numeric_json += ',"future_numeric":[1.25,1e400]}'
+    exact_numeric_session.queue(
+        StubResponse(
+            text=exact_numeric_json,
+            headers={"Content-Type": "application/json"},
+        )
+    )
+    exact_numeric = ToriiClient(
+        "http://node.test", session=exact_numeric_session
+    ).get_offline_readiness(CANONICAL_ASSET_DEFINITION_ID)
+    assert exact_numeric.asset_definition_id == CANONICAL_ASSET_DEFINITION_ID
+
+    expected_unavailable_session = RecordingSession()
+    expected_unavailable_session.queue(
+        StubResponse(
+            payload=_offline_readiness_payload(
+                asset_scale=29,
+                active_transfer_verifier=_offline_active_transfer_verifier(
+                    ignored_verifier_field=True
+                ),
+                ready=False,
+                blockers=[
+                    {
+                        "code": "asset_scale_unsupported",
+                        "message": "unsupported scale",
+                    }
+                ],
+            )
+        )
+    )
+    expected_unavailable = ToriiClient(
+        "http://node.test", session=expected_unavailable_session
+    ).get_offline_readiness(CANONICAL_ASSET_DEFINITION_ID)
+    assert expected_unavailable.asset_scale == 29
+    assert expected_unavailable.active_transfer_verifier is not None
+    assert not hasattr(
+        expected_unavailable.active_transfer_verifier,
+        "ignored_verifier_field",
+    )
+
+    topup_unavailable_session = RecordingSession()
+    topup_unavailable_session.queue(
+        StubResponse(
+            payload=_offline_readiness_payload(
+                active_topup_shield_verifier=None,
+                ready=False,
+                blockers=[
+                    {
+                        "code": "topup_shield_verifier_unavailable",
+                        "message": "top-up shield verifier unavailable",
+                    }
+                ],
+            )
+        )
+    )
+    topup_unavailable = ToriiClient(
+        "http://node.test", session=topup_unavailable_session
+    ).get_offline_readiness(CANONICAL_ASSET_DEFINITION_ID)
+    assert topup_unavailable.active_topup_shield_verifier is None
 
     for code in ("", "_leading_underscore", "a" * 65):
         invalid_session = RecordingSession()
@@ -4465,6 +4682,7 @@ def test_get_offline_operation_status_parses_all_tagged_states() -> None:
                             "finalized_block_height": 12,
                             "server_time_ms": 13,
                             "anchor": _offline_top_up_anchor(),
+                            "finality_proof": _offline_top_up_finality_proof(),
                         },
                     },
                 },
@@ -4516,6 +4734,92 @@ def test_offline_top_up_anchor_is_closed_typed_and_cross_checked() -> None:
     assert typed_anchor.transfer_verifier_id.backend == "halo2/ipa"
     assert typed_anchor.topup_operation_id == tuple(OFFLINE_OPERATION_BYTES)
     assert not hasattr(typed_anchor, "unknown_member")
+
+
+def test_offline_top_up_finality_proof_is_direct_typed_and_preserves_opaque_internals() -> None:
+    proof = _offline_top_up_finality_proof()
+    proof["commit_qc"]["future_qc_field"] = {"opaque": [7, 8, 9]}
+    proof["anchor_path"]["future_path_field"] = "preserved"
+    session = RecordingSession()
+    session.queue(
+        StubResponse(payload=_offline_applied_top_up_status(finality_proof=proof))
+    )
+
+    status = ToriiClient(
+        "http://node.test", session=session
+    ).get_offline_operation_status(OFFLINE_OPERATION_ID)
+
+    assert isinstance(status, OfflineAppliedOperation)
+    assert status.result.kind == "top_up"
+    typed_proof = status.result.result.finality_proof
+    assert isinstance(typed_proof, OfflineTopUpFinalityProof)
+    assert typed_proof.version == 1
+    assert typed_proof.anchor.topup_operation_id == tuple(OFFLINE_OPERATION_BYTES)
+    assert typed_proof.anchor.anchor_digest == tuple(_offline_fixed_bytes(0x71))
+    assert typed_proof.commit_qc["future_qc_field"] == {"opaque": [7, 8, 9]}
+    assert typed_proof.anchor_path["future_path_field"] == "preserved"
+
+    proof["commit_qc"]["future_qc_field"]["opaque"][0] = 255
+    assert typed_proof.commit_qc["future_qc_field"] == {"opaque": [7, 8, 9]}
+
+
+def test_offline_top_up_finality_proof_rejects_missing_mismatched_and_type_confused_fields() -> None:
+    missing = _offline_applied_top_up_status()
+    del missing["value"]["result"]["result"]["finality_proof"]
+
+    def mutated(*path_and_value: Any) -> Dict[str, Any]:
+        *path, value = path_and_value
+        proof = copy.deepcopy(_offline_top_up_finality_proof())
+        cursor: Dict[str, Any] = proof
+        for component in path[:-1]:
+            cursor = cursor[component]
+        cursor[path[-1]] = value
+        return _offline_applied_top_up_status(finality_proof=proof)
+
+    invalid = [
+        missing,
+        _offline_applied_top_up_status(finality_proof="bm90LWEtZGlyZWN0LXByb29m"),
+        mutated("version", 2),
+        mutated("anchor", "topup_operation_id", _offline_fixed_bytes(0x12)),
+        mutated("anchor", "anchor_digest", _offline_fixed_bytes(0x72)),
+        mutated("commit_qc", []),
+        mutated("commit_qc", "height_context", []),
+        mutated("commit_qc", "height_context", "height", 11),
+        mutated("commit_qc", "certificate", []),
+        mutated("commit_qc", "certificate", "round", []),
+        mutated("commit_qc", "certificate", "round", "height", 13),
+        mutated("anchor_path", []),
+    ]
+    for payload in invalid:
+        session = RecordingSession()
+        session.queue(StubResponse(payload=payload))
+        with pytest.raises(RuntimeError):
+            ToriiClient(
+                "http://node.test", session=session
+            ).get_offline_operation_status(OFFLINE_OPERATION_ID)
+
+
+def test_offline_redeem_result_rejects_every_top_up_only_field() -> None:
+    for field in ("anchor", "finality_proof"):
+        result = {
+            "transaction_hash": OFFLINE_TRANSACTION_HASH,
+            "finalized_block_height": 12,
+            "server_time_ms": 13,
+            field: {},
+        }
+        payload = {
+            "state": "applied",
+            "value": {
+                "operation_id": OFFLINE_OPERATION_ID,
+                "result": {"kind": "redeem", "result": result},
+            },
+        }
+        session = RecordingSession()
+        session.queue(StubResponse(payload=payload))
+        with pytest.raises(RuntimeError, match=field):
+            ToriiClient(
+                "http://node.test", session=session
+            ).get_offline_operation_status(OFFLINE_OPERATION_ID)
 
 
 def test_offline_top_up_anchor_preserves_full_width_amounts_and_heights() -> None:
@@ -4632,8 +4936,13 @@ def test_offline_applied_status_rejects_zero_finality_fields() -> None:
             }
             result[field] = 0
             if kind == "top_up":
-                result["anchor"] = _offline_top_up_anchor(
+                anchor = _offline_top_up_anchor(
                     finalized_height=result["finalized_block_height"]
+                )
+                result["anchor"] = anchor
+                result["finality_proof"] = _offline_top_up_finality_proof(
+                    anchor,
+                    finalized_height=result["finalized_block_height"],
                 )
             payload = {
                 "state": "applied",

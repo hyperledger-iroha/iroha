@@ -133,9 +133,17 @@ fn is_list_intrinsic(name: &str) -> bool {
     )
 }
 
+fn is_sum_type_intrinsic(name: &str) -> bool {
+    matches!(
+        name,
+        "is_some" | "is_none" | "is_ok" | "is_err" | "unwrap_or" | "unwrap_err_or"
+    )
+}
+
 fn is_lowered_intrinsic(name: &str) -> bool {
     name == STATE_MAP_GET_INTRINSIC
         || is_list_intrinsic(name)
+        || is_sum_type_intrinsic(name)
         || matches!(
             name,
             DECIMAL_DIV_ROUND_INTRINSIC
@@ -427,6 +435,18 @@ pub struct FunctionSignature {
     /// This is part of the exported module interface because an importing
     /// source unit cannot inspect the callee body to recover its effects.
     pub requires_named_arguments: bool,
+    /// Source-level function kind and authorization retained for test linking.
+    pub modifiers: FunctionModifiers,
+}
+
+/// Complete typed interface exposed by a deployable target to local test modules.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TestTargetEnvironment {
+    pub(crate) functions: BTreeMap<String, FunctionSignature>,
+    pub(crate) structs: HashMap<String, Vec<(String, Type)>>,
+    pub(crate) states: IndexMap<String, Type>,
+    pub(crate) consts: IndexMap<String, TypedExpr>,
+    pub(crate) error_codes: HashMap<String, u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -966,6 +986,7 @@ impl SemanticContext {
                     return_type,
                     requires_named_arguments: function.params.len() >= 3
                         && (privileged || effectful),
+                    modifiers: function.modifiers.clone(),
                 },
             );
         }
@@ -988,17 +1009,34 @@ impl SemanticContext {
         program: &crate::resolved::ResolvedProgram,
         external_functions: &BTreeMap<String, FunctionSignature>,
     ) -> Result<TypedProgram, SemanticError> {
-        self.analyze_resolved_environment(program, external_functions, &IndexMap::new())
+        let environment = TestTargetEnvironment {
+            functions: external_functions.clone(),
+            ..TestTargetEnvironment::default()
+        };
+        self.analyze_resolved_environment(program, &environment)
             .map_err(SemanticFailures::into_first)
     }
 
     pub(crate) fn analyze_resolved_with_test_target(
         &self,
         program: &crate::resolved::ResolvedProgram,
-        external_functions: &BTreeMap<String, FunctionSignature>,
-        external_states: &IndexMap<String, Type>,
+        environment: &TestTargetEnvironment,
     ) -> Result<TypedProgram, SemanticFailures> {
-        self.analyze_resolved_environment(program, external_functions, external_states)
+        self.analyze_resolved_environment(program, environment)
+    }
+
+    pub(crate) fn test_target_environment(
+        &self,
+        functions: BTreeMap<String, FunctionSignature>,
+        states: IndexMap<String, Type>,
+    ) -> TestTargetEnvironment {
+        TestTargetEnvironment {
+            functions,
+            structs: self.structs.borrow().clone(),
+            states,
+            consts: self.consts.borrow().clone(),
+            error_codes: self.error_codes.borrow().clone(),
+        }
     }
 
     pub(crate) fn analyze_all(&self, program: &Program) -> Result<TypedProgram, SemanticFailures> {
@@ -1011,19 +1049,22 @@ impl SemanticContext {
         &self,
         program: &crate::resolved::ResolvedProgram,
     ) -> Result<TypedProgram, SemanticFailures> {
-        self.analyze_resolved_environment(program, &BTreeMap::new(), &IndexMap::new())
+        self.analyze_resolved_environment(program, &TestTargetEnvironment::default())
     }
 
     fn analyze_resolved_environment(
         &self,
         program: &crate::resolved::ResolvedProgram,
-        external_functions: &BTreeMap<String, FunctionSignature>,
-        external_states: &IndexMap<String, Type>,
+        environment: &TestTargetEnvironment,
     ) -> Result<TypedProgram, SemanticFailures> {
         self.reset();
         self.resolved_arena.replace(Some(program.arena()));
-        self.external_functions.replace(external_functions.clone());
-        self.external_states.replace(external_states.clone());
+        self.external_functions
+            .replace(environment.functions.clone());
+        self.external_states.replace(environment.states.clone());
+        self.structs.replace(environment.structs.clone());
+        self.consts.replace(environment.consts.clone());
+        self.error_codes.replace(environment.error_codes.clone());
         let mut result = analyze_with_context(self, program.program());
         let pending = self.take_diagnostic();
         if let Err(failures) = &mut result {
@@ -1219,7 +1260,8 @@ impl SemanticContext {
             }
             ResolvedValueTarget::ErrorCode(_)
             | ResolvedValueTarget::Intrinsic
-            | ResolvedValueTarget::ExternalState => None,
+            | ResolvedValueTarget::ExternalState
+            | ResolvedValueTarget::ExternalConst => None,
         };
         Ok(Some((target, ty)))
     }
@@ -1357,7 +1399,9 @@ impl SemanticContext {
                 }
             }
             ResolvedValueTarget::ExternalState => {}
-            ResolvedValueTarget::ErrorCode(_) | ResolvedValueTarget::Intrinsic => {
+            ResolvedValueTarget::ExternalConst
+            | ResolvedValueTarget::ErrorCode(_)
+            | ResolvedValueTarget::Intrinsic => {
                 return Err(SemanticError {
                     code: "E_TYPE_ANNOTATION_MISMATCH",
                     message: format!("resolved value `{name}` is not assignable"),
@@ -1382,28 +1426,44 @@ impl SemanticContext {
             }
             return Ok(());
         };
-        let ResolvedTarget::StructLiteral(symbol) = target else {
-            return Err(SemanticError {
-                code: "E_INTERNAL_RESOLUTION",
-                message: format!("struct literal `{name}` carries a non-struct resolver target"),
-            });
-        };
-        let arena = self.resolved_arena.borrow();
-        let symbol = arena
-            .as_ref()
-            .and_then(|arena| arena.symbol(symbol))
-            .ok_or_else(|| SemanticError {
-                code: "E_INTERNAL_RESOLUTION",
-                message: "struct literal references an unknown symbol".into(),
-            })?;
-        if symbol.kind != ResolvedSymbolKind::Struct || symbol.name != name {
-            return Err(SemanticError {
-                code: "E_INTERNAL_RESOLUTION",
-                message: format!(
-                    "struct literal `{name}` diverges from resolver symbol `{}`",
-                    symbol.name
-                ),
-            });
+        match target {
+            ResolvedTarget::StructLiteral(symbol) => {
+                let arena = self.resolved_arena.borrow();
+                let symbol = arena
+                    .as_ref()
+                    .and_then(|arena| arena.symbol(symbol))
+                    .ok_or_else(|| SemanticError {
+                        code: "E_INTERNAL_RESOLUTION",
+                        message: "struct literal references an unknown symbol".into(),
+                    })?;
+                if symbol.kind != ResolvedSymbolKind::Struct || symbol.name != name {
+                    return Err(SemanticError {
+                        code: "E_INTERNAL_RESOLUTION",
+                        message: format!(
+                            "struct literal `{name}` diverges from resolver symbol `{}`",
+                            symbol.name
+                        ),
+                    });
+                }
+            }
+            ResolvedTarget::ExternalStructLiteral => {
+                if !self.structs.borrow().contains_key(name) {
+                    return Err(SemanticError {
+                        code: "E_INTERNAL_RESOLUTION",
+                        message: format!(
+                            "external struct literal `{name}` is absent from the typed target interface"
+                        ),
+                    });
+                }
+            }
+            _ => {
+                return Err(SemanticError {
+                    code: "E_INTERNAL_RESOLUTION",
+                    message: format!(
+                        "struct literal `{name}` carries a non-struct resolver target"
+                    ),
+                });
+            }
         }
         Ok(())
     }
@@ -1451,6 +1511,16 @@ impl SemanticContext {
                         message: format!(
                             "type `{name}` diverges from resolver symbol `{}`",
                             symbol.name
+                        ),
+                    });
+                }
+            }
+            ResolvedTypeTarget::ExternalStruct => {
+                if !self.structs.borrow().contains_key(name) {
+                    return Err(SemanticError {
+                        code: "E_INTERNAL_RESOLUTION",
+                        message: format!(
+                            "external type `{name}` is absent from the typed target interface"
                         ),
                     });
                 }
@@ -2477,14 +2547,22 @@ fn analyze_with_context(
     program: &Program,
 ) -> Result<TypedProgram, SemanticFailures> {
     reject_test_surface_without_test_mode(context, program)?;
+    let external_structs = context.structs.borrow().clone();
+    let external_consts = context.consts.borrow().clone();
+    let external_error_codes = context.error_codes.borrow().clone();
     // Collect definitions up front so source order does not affect name resolution.
-    let mut structs: HashMap<String, Vec<(String, Type)>> = HashMap::new();
+    let mut structs = external_structs.clone();
     let mut state_decls: Vec<(String, TypeExpr)> = Vec::new();
     let mut const_decls: Vec<ConstDecl> = Vec::new();
     let mut fn_returns: HashMap<String, Type> = HashMap::new();
-    let mut fn_modifiers: HashMap<String, FunctionModifiers> = HashMap::new();
+    let mut fn_modifiers = context
+        .external_functions
+        .borrow()
+        .iter()
+        .map(|(name, signature)| (name.clone(), signature.modifiers.clone()))
+        .collect::<HashMap<_, _>>();
     let mut trigger_callbacks: HashSet<String> = HashSet::new();
-    let mut error_codes = HashMap::new();
+    let mut error_codes = external_error_codes;
     let mut typed_error_codes = Vec::new();
     let struct_names = validate_declaration_uniqueness(program)?;
     let mut global_declarations = std::iter::once(program.unit.name.clone())
@@ -2499,14 +2577,12 @@ fn analyze_with_context(
         .collect::<HashSet<_>>();
     global_declarations.extend(context.external_functions.borrow().keys().cloned());
     global_declarations.extend(context.external_states.borrow().keys().cloned());
+    global_declarations.extend(external_structs.keys().cloned());
+    global_declarations.extend(external_consts.keys().cloned());
     context.global_declarations.replace(global_declarations);
-    context.structs.replace(
-        struct_names
-            .iter()
-            .cloned()
-            .map(|name| (name, Vec::new()))
-            .collect(),
-    );
+    let mut known_structs = external_structs;
+    known_structs.extend(struct_names.iter().cloned().map(|name| (name, Vec::new())));
+    context.structs.replace(known_structs);
     for item in &program.items {
         match item {
             Item::Struct(def) => {
@@ -2620,7 +2696,7 @@ fn analyze_with_context(
             .into());
         }
     }
-    let mut resolved_consts: IndexMap<String, TypedExpr> = IndexMap::new();
+    let mut resolved_consts = external_consts;
     for decl in const_decls {
         context.discard_diagnostic();
         let declared = decl.ty.as_ref().ok_or_else(|| SemanticError {
@@ -7504,17 +7580,10 @@ fn analyze_surface_builtin_call(
             })
         }
         Builtin::VrfVerify => {
-            if arg_typed.len() != 4 {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "vrf_verify expects (bytes, bytes, bytes, int variant)".into(),
-                });
-            }
-            if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty)) || !is_int_like(&arg_typed[3].ty)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "vrf_verify expects (bytes, bytes, bytes, int variant)".into(),
+                    message: "vrf_verify expects one bytes-encoded VrfVerifyRequest".into(),
                 });
             }
             Ok(TypedExpr {
@@ -8253,6 +8322,24 @@ fn analyze_surface_builtin_call(
                 return Err(SemanticError {
                     code: "K2003",
                     message: format!("{} expects (AccountId, Name|Json)", builtin.name()),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::GrantContractEntrypoint | Builtin::RevokeContractEntrypoint => {
+            if arg_typed.len() != 2
+                || arg_typed[0].ty != Type::AccountId
+                || arg_typed[1].ty != Type::String
+            {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: format!("{} expects (AccountId, string)", builtin.name()),
                 });
             }
             Ok(TypedExpr {
@@ -11286,7 +11373,7 @@ fn analyze_expr_expected_inner(
                                 "resolved state `{name}` is absent from the typed environment"
                             ),
                         }),
-                    ResolvedValueTarget::Const(_) => context
+                    ResolvedValueTarget::Const(_) | ResolvedValueTarget::ExternalConst => context
                         .consts
                         .borrow()
                         .get(name)
@@ -11846,6 +11933,17 @@ fn analyze_expr_expected_inner(
                 is_named: false,
             };
             if let Some(builtin) = Builtin::from_name(&name) {
+                if builtin == Builtin::VrfVerify
+                    && (args.len() != 1
+                        || argument_names
+                            .as_deref()
+                            .is_some_and(|names| !names.iter().map(String::as_str).eq(["request"])))
+                {
+                    return Err(SemanticError {
+                        code: "E_RETIRED_VRF_VERIFY_ARGS",
+                        message: "the four-register VRF verify form is retired; pass one bytes-encoded VrfVerifyRequest as `request`".into(),
+                    });
+                }
                 let signature = builtin.signature();
                 let receiver_count = usize::from(*implicit_receiver);
                 let parameter_names = signature
@@ -12314,7 +12412,11 @@ fn analyze_const_expr_inner(
         }),
         Expr::Ident(name) => {
             if let Some((target, _)) = context.validate_value_target(expr, name, &HashMap::new())?
-                && !matches!(target, crate::resolved::ResolvedValueTarget::Const(_))
+                && !matches!(
+                    target,
+                    crate::resolved::ResolvedValueTarget::Const(_)
+                        | crate::resolved::ResolvedValueTarget::ExternalConst
+                )
             {
                 return Err(SemanticError {
                     code: "E_INTERNAL_RESOLUTION",

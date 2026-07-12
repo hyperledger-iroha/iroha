@@ -5036,13 +5036,17 @@ impl Iroha {
         // Compute consensus handshake caps for gating peers
         // Use WSV Sumeragi parameters (canonical JSON) so fingerprint is stable across peers
         let (computed_mode_tag, computed_bls_domain, consensus_caps, confidential_features) = {
-            let world = state.world_view();
-            let height = u64::try_from(state.committed_height()).expect("height fits into u64");
-            let zk = state.zk_snapshot();
-            let confidential_features =
-                iroha_core::state::compute_confidential_feature_digest(&world, &zk, height);
+            let view = state.view();
+            let height =
+                u64::try_from(view.block_hashes().len()).expect("height fits into u64");
+            let confidential_features = iroha_core::state::compute_confidential_feature_digest(
+                view.world(),
+                &view.zk,
+                view.sccp_registry.as_ref(),
+                height,
+            );
             let (mode_tag, bls_domain, caps) = compute_consensus_handshake_caps(
-                &world,
+                view.world(),
                 height,
                 &config,
                 &config_caps,

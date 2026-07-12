@@ -62,7 +62,9 @@ public final class ContractManifestJsonParser {
           "state_map_get", "__kotodama_list_len", "__kotodama_list_get",
           "__kotodama_list_try_set", "__kotodama_list_try_push", "__kotodama_list_pop",
           "__kotodama_list_contains", "__kotodama_list_take", "__kotodama_list_enumerate",
-          "__kotodama_decimal_div_round", "__kotodama_quantity_div_round");
+          "__kotodama_decimal_div_round", "__kotodama_quantity_div_round",
+          "__kotodama_quantity_ratio_round", "__kotodama_decimal_to_int_trunc",
+          "__kotodama_decimal_to_int_round");
   private static final Map<String, ContractManifest.ValueKindV1> VALUE_KINDS = valueKinds();
 
   private ContractManifestJsonParser() {}

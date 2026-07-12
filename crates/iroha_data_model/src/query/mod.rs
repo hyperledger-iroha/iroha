@@ -1057,6 +1057,10 @@ mod model {
         FindLaneRelayEnvelopeByRef(self::nexus::prelude::FindLaneRelayEnvelopeByRef),
         /// Fetch a fee sponsor policy by identifier.
         FindFeeSponsorPolicyById(self::nexus::prelude::FindFeeSponsorPolicyById),
+        /// Fetch the protected native FX corridor policy registry.
+        FindFxCorridorPolicyRegistry(self::settlement::prelude::FindFxCorridorPolicyRegistry),
+        /// Fetch one native FX corridor policy by identifier.
+        FindFxCorridorPolicyById(self::settlement::prelude::FindFxCorridorPolicyById),
         /// Fetch the registered owner for a `SoraFS` provider.
         FindSorafsProviderOwner(sorafs::prelude::FindSorafsProviderOwner),
         /// Fetch the active SNS owner for a dataspace alias.
@@ -1147,6 +1151,10 @@ mod model {
         VerifiedLaneRelayRecord(crate::nexus::VerifiedLaneRelayRecord),
         /// Fee sponsor policy payload.
         FeeSponsorPolicy(crate::nexus::FeeSponsorPolicy),
+        /// Protected native FX corridor policy registry payload.
+        FxCorridorPolicyRegistry(crate::isi::settlement::FxCorridorPolicyRegistry),
+        /// Native FX corridor policy payload.
+        FxCorridorPolicy(crate::isi::settlement::FxCorridorPolicy),
         /// Musubi release payload.
         MusubiRelease(crate::musubi::MusubiRelease),
         /// Musubi version list payload.
@@ -3781,6 +3789,8 @@ impl_singular_queries! {
     da::prelude::FindDaPinIntentByLaneEpochSequence => crate::da::pin_intent::DaPinIntentWithLocation,
     nexus::prelude::FindLaneRelayEnvelopeByRef => crate::nexus::VerifiedLaneRelayRecord,
     nexus::prelude::FindFeeSponsorPolicyById => crate::nexus::FeeSponsorPolicy,
+    settlement::prelude::FindFxCorridorPolicyRegistry => crate::isi::settlement::FxCorridorPolicyRegistry,
+    settlement::prelude::FindFxCorridorPolicyById => crate::isi::settlement::FxCorridorPolicy,
     sns::prelude::FindDataspaceNameOwnerById => crate::account::AccountId,
     musubi::prelude::FindMusubiReleaseByRef => crate::musubi::MusubiRelease,
     musubi::prelude::FindMusubiPackageVersions => Vec<crate::musubi::MusubiVersion>,
@@ -4642,6 +4652,37 @@ pub mod da {
     }
 }
 
+pub mod settlement {
+    //! Native settlement query definitions.
+
+    use crate::name::Name;
+
+    queries! {
+        /// Fetch the complete protected native FX corridor policy registry.
+        #[derive(Copy)]
+        pub struct FindFxCorridorPolicyRegistry;
+
+        /// Fetch one native FX corridor policy by its stable identifier.
+        #[repr(transparent)]
+        pub struct FindFxCorridorPolicyById {
+            /// Policy identifier to look up.
+            pub policy_id: Name,
+        }
+    }
+
+    impl FindFxCorridorPolicyById {
+        /// Return the queried policy identifier.
+        pub fn policy_id(&self) -> &Name {
+            &self.policy_id
+        }
+    }
+
+    pub mod prelude {
+        //! Prelude re-exports for native settlement queries.
+        pub use super::{FindFxCorridorPolicyById, FindFxCorridorPolicyRegistry};
+    }
+}
+
 pub mod nexus {
     //! Nexus query definitions.
 
@@ -5487,7 +5528,8 @@ pub mod prelude {
         builder::prelude::*, da::prelude::*, domain::prelude::*, dsl::prelude::*,
         endorsement::prelude::*, escrow::prelude::*, executor::prelude::*, nft::prelude::*,
         oracle::prelude::*, parameters::prelude::*, peer::prelude::*, permission::prelude::*,
-        role::prelude::*, rwa::prelude::*, transaction::prelude::*, trigger::prelude::*,
+        role::prelude::*, rwa::prelude::*, settlement::prelude::*, transaction::prelude::*,
+        trigger::prelude::*,
     };
 }
 

@@ -23,11 +23,15 @@ public final class OfflineOperationCodec {
       "iroha_torii_shared::offline_api::OfflineOperationStatus";
   private static final String TOP_UP_ANCHOR_SCHEMA =
       "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpAnchorV2";
+  private static final String TOP_UP_FINALITY_PROOF_SCHEMA =
+      "iroha_data_model::offline::model::KagemushaTopUpFinalityProofV2";
   private static final String TOP_UP_REQUEST_SCHEMA =
       "iroha.torii.v1.offline.top_up.request";
   private static final String REDEEM_REQUEST_SCHEMA =
       "iroha.torii.v1.offline.redeem.request";
   private static final int STATUS_HEADER_PADDING = 8;
+  private static final int TOP_UP_ANCHOR_MAX_ARCHIVE_BYTES = 64 * 1024;
+  private static final int TOP_UP_FINALITY_PROOF_MAX_ARCHIVE_BYTES = 1024 * 1024;
   private static final char[] LOWER_HEX = "0123456789abcdef".toCharArray();
 
   private OfflineOperationCodec() {}
@@ -58,6 +62,27 @@ public final class OfflineOperationCodec {
   public static byte[] encodeStatus(final OfflineOperationStatus status) {
     return addStatusPadding(
         NoritoCodec.encode(status, STATUS_SCHEMA, STATUS_ADAPTER, NoritoHeader.COMPACT_LEN));
+  }
+
+  /** Validate and wrap one canonical finalized top-up anchor archive. */
+  public static OfflineOperationStatus.TopUpAnchor decodeTopUpAnchor(final byte[] archive) {
+    return new OfflineOperationStatus.TopUpAnchor(
+        requireTypedArchive(
+            archive,
+            TOP_UP_ANCHOR_SCHEMA,
+            TOP_UP_ANCHOR_MAX_ARCHIVE_BYTES,
+            "Top-up anchor archive"));
+  }
+
+  /** Validate and wrap one canonical finalized top-up consensus proof archive. */
+  public static OfflineOperationStatus.TopUpFinalityProof decodeTopUpFinalityProof(
+      final byte[] archive) {
+    return new OfflineOperationStatus.TopUpFinalityProof(
+        requireTypedArchive(
+            archive,
+            TOP_UP_FINALITY_PROOF_SCHEMA,
+            TOP_UP_FINALITY_PROOF_MAX_ARCHIVE_BYTES,
+            "Top-up finality proof archive"));
   }
 
   public static String requireOperationId(final String value) {
@@ -347,6 +372,19 @@ public final class OfflineOperationCodec {
                   }
                   child.writeBytes(view.asBytes());
                 });
+            writeField(
+                variant,
+                child -> {
+                  final NoritoCodec.ArchiveView view =
+                      NoritoCodec.fromBytesView(
+                          value.finalityProof().noritoArchive(),
+                          TOP_UP_FINALITY_PROOF_SCHEMA);
+                  if (view.flags() != encoder.flags()) {
+                    throw new IllegalArgumentException(
+                        "Top-up finality proof flags must match operation status flags");
+                  }
+                  child.writeBytes(view.asBytes());
+                });
           });
     } else if (result instanceof OfflineOperationStatus.Result.Redeem) {
       final OfflineOperationStatus.RedeemResult value =
@@ -375,13 +413,24 @@ public final class OfflineOperationCodec {
           readField(variant.decoder, OfflineOperationCodec::readRemainingBytes);
       final byte[] anchorArchive =
           frameArchive(TOP_UP_ANCHOR_SCHEMA, anchorPayload, decoder.flags());
+      requireArchiveBound(
+          anchorArchive, TOP_UP_ANCHOR_MAX_ARCHIVE_BYTES, "Top-up anchor archive");
+      final byte[] finalityProofPayload =
+          readField(variant.decoder, OfflineOperationCodec::readRemainingBytes);
+      final byte[] finalityProofArchive =
+          frameArchive(TOP_UP_FINALITY_PROOF_SCHEMA, finalityProofPayload, decoder.flags());
+      requireArchiveBound(
+          finalityProofArchive,
+          TOP_UP_FINALITY_PROOF_MAX_ARCHIVE_BYTES,
+          "Top-up finality proof archive");
       result =
           new OfflineOperationStatus.Result.TopUp(
               new OfflineOperationStatus.TopUpResult(
                   transactionHash,
                   finalizedHeight,
                   serverTime,
-                  new OfflineOperationStatus.TopUpAnchor(anchorArchive)));
+                  new OfflineOperationStatus.TopUpAnchor(anchorArchive),
+                  new OfflineOperationStatus.TopUpFinalityProof(finalityProofArchive)));
     } else if (variant.tag == 1) {
       result =
           new OfflineOperationStatus.Result.Redeem(
@@ -401,6 +450,31 @@ public final class OfflineOperationCodec {
     writeField(encoder, child -> writeString(child, error.code()));
     writeField(encoder, child -> writeString(child, error.message()));
     writeField(encoder, child -> writeOption(child, error.details(), OfflineOperationCodec::writeErrorDetails));
+  }
+
+  private static void requireArchiveBound(
+      final byte[] archive, final int maximumBytes, final String field) {
+    if (archive.length == 0 || archive.length > maximumBytes) {
+      throw new IllegalArgumentException(
+          field + " must contain 1..=" + maximumBytes + " canonical bytes");
+    }
+  }
+
+  private static byte[] requireTypedArchive(
+      final byte[] value, final String schema, final int maximumBytes, final String field) {
+    Objects.requireNonNull(value, field);
+    final byte[] archive = Arrays.copyOf(value, value.length);
+    requireArchiveBound(archive, maximumBytes, field);
+    final NoritoHeader.DecodeResult decoded =
+        NoritoHeader.decode(archive, SchemaHash.hash16(schema));
+    if (decoded.header().compression() != NoritoHeader.COMPRESSION_NONE
+        || decoded.header().flags() != NoritoHeader.COMPACT_LEN
+        || archive.length != NoritoHeader.HEADER_LENGTH + decoded.header().payloadLength()) {
+      throw new IllegalArgumentException(
+          field + " must be an uncompressed, unpadded compact Norito archive");
+    }
+    decoded.header().validateChecksum(decoded.payload());
+    return archive;
   }
 
   private static OfflineOperationStatus.Error readError(final NoritoDecoder decoder) {

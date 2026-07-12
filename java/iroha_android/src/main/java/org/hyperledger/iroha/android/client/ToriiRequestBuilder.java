@@ -118,7 +118,12 @@ final class ToriiRequestBuilder {
     if (normalizedHash.isEmpty()) {
       throw new IllegalArgumentException("hashHex must not be blank");
     }
-    final URI target = resolve(baseUri, STATUS_PATH + "?hash=" + normalizedHash);
+    if (!normalizedHash.matches("[0-9a-f]{64}")) {
+      throw new IllegalArgumentException(
+          "hashHex must be a canonical lowercase 32-byte transaction hash");
+    }
+    final URI target =
+        resolve(baseUri, STATUS_PATH + "?hash=" + normalizedHash + "&scope=auto");
     TransportSecurity.requireHttpRequestAllowed(
         "HttpClientTransport", baseUri, target, extraHeaders, null);
     final TransportRequest.Builder builder =

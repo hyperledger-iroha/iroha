@@ -1311,7 +1311,7 @@ fn minimal_config_snapshot() {
                         8388608,
                     ),
                     egress_burst_bytes: Some(
-                        33554432,
+                        67108864,
                     ),
                     max_list_limit: 200,
                     request_timeout: 1s,

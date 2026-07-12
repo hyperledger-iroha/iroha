@@ -13,11 +13,12 @@ use crate::{ChainId, nexus::LaneId, proof::ProofBox};
 pub mod sccp;
 mod sccp_registry;
 pub use sccp::{
+    SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1, SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
     SCCP_V1_JSON_SAFE_INTEGER_MAX, SccpEvmSourceEmitterV1, SccpInboundAnchorHighWaterKeyV1,
     SccpInboundMessageKeyV1, SccpInboundMessageRecordV1, SccpLaneIdV1, SccpNetworkV1,
-    SccpOutboundMessageContextV1, SccpOutboundMessageIndexKeyV1, SccpOutboundMessageKeyV1,
-    SccpOutboundMessageRecordV1, SccpOutboundProofRecordV1, SccpSourceEmitterV1,
-    SccpSourceIdentityV1, SccpTronSourceEmitterV1,
+    SccpOutboundMessageContextV1, SccpOutboundMessageDescriptorV1, SccpOutboundMessageIndexKeyV1,
+    SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1, SccpOutboundPendingUsageV1,
+    SccpOutboundProofRecordV1, SccpSourceEmitterV1, SccpSourceIdentityV1, SccpTronSourceEmitterV1,
 };
 pub use sccp_registry::{
     SCCP_V1_MAX_GOVERNED_LANES, SCCP_V1_MAX_KEY_BYTES, SCCP_V1_MAX_LIVE_GOVERNED_ROUTES,
@@ -1686,14 +1687,16 @@ mod tests {
 
     #[test]
     fn sccp_outbound_message_record_roundtrip() {
-        let record = SccpOutboundMessageRecordV1 {
+        let record = SccpOutboundPendingMessageRecordV1 {
             destination_binding_hash: [0x23; 32],
             route_configuration_hash: [0x25; 32],
             payload_hash: [0x24; 32],
+            payload_bytes: vec![0x53, 0x43, 0x43, 0x50],
             recorded_at_height: 77,
+            commitment_index: 0,
         };
         let buf = record.encode();
-        let dec = SccpOutboundMessageRecordV1::decode_all(&mut &buf[..]).expect("decode");
+        let dec = SccpOutboundPendingMessageRecordV1::decode_all(&mut &buf[..]).expect("decode");
         assert_eq!(record, dec);
     }
 

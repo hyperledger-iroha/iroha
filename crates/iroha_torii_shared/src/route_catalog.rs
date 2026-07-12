@@ -820,8 +820,15 @@ fn validate_path(route: &RouteDescriptor) -> Result<(), &'static str> {
             if !valid_kebab_segment(segment) {
                 return Err("static path segments must use lowercase kebab-case");
             }
-            if matches!(segment, "get" | "list" | "json" | "sse") {
-                return Err("static path segment uses a forbidden transport or CRUD word");
+            if matches!(segment, "json" | "sse") {
+                return Err("static path segment uses a forbidden transport word");
+            }
+            if matches!(segment, "get" | "list")
+                && !is_terminal_post_read_operation(route, segment, index, segment_count)
+            {
+                return Err(
+                    "CRUD read operation segments require a matching POST route id and must appear last",
+                );
             }
             if segment.strip_prefix('v').is_some_and(|suffix| {
                 !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
@@ -832,6 +839,23 @@ fn validate_path(route: &RouteDescriptor) -> Result<(), &'static str> {
     }
 
     validate_wildcard_shape(path, route.route_match)
+}
+
+fn is_terminal_post_read_operation(
+    route: &RouteDescriptor,
+    segment: &str,
+    index: usize,
+    segment_count: usize,
+) -> bool {
+    if route.method != HttpMethod::Post || index + 1 != segment_count {
+        return false;
+    }
+
+    match segment {
+        "get" => route.stable_route_id.ends_with("_get_post"),
+        "list" => route.stable_route_id.ends_with("_list_post"),
+        _ => false,
+    }
 }
 
 fn validate_wildcard_shape(path: &str, route_match: RouteMatch) -> Result<(), &'static str> {
@@ -3678,12 +3702,8 @@ pub mod contracts_and_verification_keys {
         MULTISIG_APPROVE_POST => app_post("contracts.multisig_approve_post", "/v1/multisig/approve");
         MULTISIG_CANCEL_POST => app_post("contracts.multisig_cancel_post", "/v1/multisig/cancel");
         MULTISIG_SPEC_POST => app_post("contracts.multisig_spec_post", "/v1/multisig/spec");
-        MULTISIG_PROPOSALS_QUERY_POST => app_post("contracts.multisig_proposals_query_post", "/v1/multisig/proposals/query");
-        MULTISIG_PROPOSALS_LOOKUP_POST => app_post("contracts.multisig_proposals_lookup_post", "/v1/multisig/proposals/lookup");
-        MULTISIG_APPROVALS_QUERY_POST => app_post("contracts.multisig_approvals_query_post", "/v1/multisig/approvals/query");
-        MULTISIG_APPROVALS_LOOKUP_POST => app_post("contracts.multisig_approvals_lookup_post", "/v1/multisig/approvals/lookup");
-        MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST => app_post("contracts.multisig_approvals_query_for_authority_post", "/v1/multisig/approvals/query-for-authority");
-        MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST => app_post("contracts.multisig_approvals_lookup_for_authority_post", "/v1/multisig/approvals/lookup-for-authority");
+        MULTISIG_PROPOSALS_LIST_POST => app_post("contracts.multisig_proposals_list_post", "/v1/multisig/proposals/list");
+        MULTISIG_PROPOSALS_GET_POST => app_post("contracts.multisig_proposals_get_post", "/v1/multisig/proposals/get");
         CONTROLS_ASSET_TRANSFER_QUERY_POST => app_post("contracts.controls_asset_transfer_query_post", "/v1/controls/asset-transfer/query");
         ZK_VK_REGISTER_POST => app_sdk_post("contracts.zk_vk_register_post", "/v1/zk/vk/register");
         ZK_VK_UPDATE_POST => app_sdk_post("contracts.zk_vk_update_post", "/v1/zk/vk/update");
@@ -4391,12 +4411,8 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::MULTISIG_APPROVE_POST,
     contracts_and_verification_keys::MULTISIG_CANCEL_POST,
     contracts_and_verification_keys::MULTISIG_SPEC_POST,
-    contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
-    contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST,
+    contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST,
+    contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST,
     contracts_and_verification_keys::CONTROLS_ASSET_TRANSFER_QUERY_POST,
     contracts_and_verification_keys::ZK_VK_REGISTER_POST,
     contracts_and_verification_keys::ZK_VK_UPDATE_POST,
@@ -4760,8 +4776,12 @@ mod tests {
         }
 
         for unsupported_path in [
-            "/v1/multisig/proposals/list",
-            "/v1/multisig/proposals/get",
+            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
+            "/v1/multisig/approvals/query",
+            "/v1/multisig/approvals/lookup",
+            "/v1/multisig/approvals/query-for-authority",
+            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/multisig/approvals/list",
             "/v1/multisig/approvals/get",
             "/v1/multisig/approvals/list_for_authority",
@@ -4779,12 +4799,8 @@ mod tests {
         }
 
         for canonical_path in [
-            "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/lookup",
-            "/v1/multisig/approvals/query",
-            "/v1/multisig/approvals/lookup",
-            "/v1/multisig/approvals/query-for-authority",
-            "/v1/multisig/approvals/lookup-for-authority",
+            "/v1/multisig/proposals/list",
+            "/v1/multisig/proposals/get",
             "/v1/controls/asset-transfer/query",
             "/v1/nexus/public-lanes/{lane_id}/validators",
         ] {
@@ -4821,7 +4837,7 @@ mod tests {
             RouteMatch::Wildcard
         );
         assert!(
-            contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST
+            contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST
                 .projections()
                 .openapi()
         );
@@ -5121,6 +5137,81 @@ mod tests {
             assert!(
                 validate_catalog(&[descriptor]).is_err(),
                 "path should be rejected: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_path_grammar_limits_body_bearing_read_operation_segments() {
+        for descriptor in [
+            RouteDescriptor::new(
+                "test.resources_list_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/list",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+            RouteDescriptor::new(
+                "test.resources_get_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/get",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+        ] {
+            assert_eq!(validate_path(&descriptor), Ok(()));
+        }
+
+        for descriptor in [
+            RouteDescriptor::new(
+                "test.resources_list_get",
+                HttpMethod::Get,
+                "/v1/tests/resources/list",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+            RouteDescriptor::new(
+                "test.resources_list_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/list/details",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+            RouteDescriptor::new(
+                "test.resources_query_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/list",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+        ] {
+            assert_eq!(
+                validate_path(&descriptor),
+                Err(
+                    "CRUD read operation segments require a matching POST route id and must appear last"
+                )
+            );
+        }
+
+        for descriptor in [
+            RouteDescriptor::new(
+                "test.resources_json_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/json",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+            RouteDescriptor::new(
+                "test.resources_sse_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/sse",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+        ] {
+            assert_eq!(
+                validate_path(&descriptor),
+                Err("static path segment uses a forbidden transport word")
             );
         }
     }

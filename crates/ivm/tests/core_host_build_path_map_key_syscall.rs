@@ -1,54 +1,37 @@
-//! CoreHost: build path from base Name and int key via SYSCALL_BUILD_PATH_MAP_KEY.
+//! Regression coverage for the permanently retired decimal-i64 map-key helper.
 
-use iroha_data_model::prelude::Name;
-use ivm::{CoreHost, IVM, PointerType, encoding, syscalls};
+use ivm::{CoreHost, IVM, VMError, encoding, syscalls};
 mod common;
 
-fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
-    let payload = common::payload_for_type(pty, payload);
-    let mut v = Vec::with_capacity(7 + payload.len() + 32);
-    v.extend_from_slice(&(pty as u16).to_be_bytes());
-    v.push(1);
-    v.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    v.extend_from_slice(payload.as_ref());
-    let h: [u8; 32] = iroha_crypto::Hash::new(payload).into();
-    v.extend_from_slice(&h);
-    v
-}
-
 #[test]
-fn core_host_build_path_map_key() {
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_host(CoreHost::new());
-    let base_tlv = make_tlv(PointerType::Name, b"M");
-    let p_base = vm.alloc_input_tlv(&base_tlv).expect("alloc base");
-    // Program: publish base; move key to r11; SCALL BUILD_PATH_MAP_KEY; HALT
-    let mut code = Vec::new();
-    // publish r10
-    code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            ivm::instruction::wide::system::SCALL,
-            syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-        )
-        .to_le_bytes(),
+fn decimal_i64_map_key_helper_is_not_part_of_abi_v1() {
+    let retired = syscalls::RETIRED_SYSCALL_BUILD_PATH_MAP_KEY;
+    assert_eq!(retired, 0x54);
+    assert!(!syscalls::is_syscall_allowed(
+        ivm::SyscallPolicy::AbiV1,
+        retired
+    ));
+    assert_eq!(syscalls::registered_syscall_access(retired), None);
+    assert_eq!(syscalls::syscall_name(retired), None);
+    assert!(!syscalls::abi_syscall_list().contains(&retired));
+    assert_eq!(
+        ivm::host::registered_host_syscall_gas_formula(retired),
+        None
     );
-    // jal-like: not needed here
+
+    let mut code = Vec::new();
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             ivm::instruction::wide::system::SCALL,
-            syscalls::SYSCALL_BUILD_PATH_MAP_KEY as u8,
+            u8::try_from(retired).expect("retired syscall fits compact encoding"),
         )
         .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let prog = common::assemble(&code);
-    vm.set_register(10, p_base);
-    vm.set_register(11, 42);
-    vm.load_program(&prog).expect("load");
-    vm.run().expect("run");
-    let p_path = vm.register(10);
-    let tlv = vm.memory.validate_tlv(p_path).expect("validate");
-    assert_eq!(tlv.type_id, PointerType::Name);
-    let name: Name = norito::decode_from_bytes(tlv.payload).expect("decode name");
-    assert_eq!(name.as_ref(), "M/42");
+
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    vm.load_program(&common::assemble(&code))
+        .expect("load retired-syscall fixture");
+    assert_eq!(vm.run(), Err(VMError::UnknownSyscall(retired)));
 }

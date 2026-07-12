@@ -17,10 +17,10 @@ public enum ToriiContractEntrypointKind
 public enum ToriiEntrypointValueKindV1
 {
     Int,
-    U128,
+    Decimal,
+    Quantity,
     Bool,
     String,
-    Amount,
     Json,
     Name,
     AccountId,

@@ -437,6 +437,19 @@ class SccpClientExactTest {
         assertEquals("/v1/sccp/proof-requests/{message_id}", parsed.proofRequestPath)
         assertEquals(64, parsed.registryLimits.maxRetainedRoutesPerLane)
         assertEquals(4_096, parsed.registryLimits.maxRetainedNativeTrustAnchorsPerLane)
+        assertEquals(512, parsed.resourceLimits.maxOutboundMessagesPerBlock)
+        assertEquals(
+            BigInteger.valueOf(4_096),
+            parsed.resourceLimits.maxOutboundMessagePayloadBytes,
+        )
+        assertEquals(
+            BigInteger.valueOf(65_536),
+            parsed.resourceLimits.maxPendingOutboundMessages,
+        )
+        assertEquals(
+            BigInteger.valueOf(268_435_456),
+            parsed.resourceLimits.maxPendingOutboundPayloadBytes,
+        )
         assertEquals(131_713, parsed.resourceLimits.maxBlsSignerContributionsPerTransaction)
         assertNull(parsed.proofSubmitPath)
 
@@ -479,6 +492,8 @@ class SccpClientExactTest {
         }
 
         val resourceKeys = listOf(
+            "max_outbound_messages_per_block", "max_outbound_message_payload_bytes",
+            "max_pending_outbound_messages", "max_pending_outbound_payload_bytes",
             "max_proofs_per_transaction", "max_proofs_per_block", "max_proof_bytes_per_proof",
             "max_proof_bytes_per_transaction", "max_proof_bytes_per_block",
             "max_native_headers_per_transaction", "max_native_headers_per_block",
@@ -499,8 +514,44 @@ class SccpClientExactTest {
                 SccpJsonParser.parseCapabilities(jsonBytes(hostile))
             }
         }
+        for (fixedField in listOf(
+            "max_outbound_messages_per_block",
+            "max_outbound_message_payload_bytes",
+            "max_pending_outbound_messages",
+            "max_pending_outbound_payload_bytes",
+        )) {
+            val missing = capabilities()
+            @Suppress("UNCHECKED_CAST")
+            (missing["resource_limits"] as MutableMap<String, Any?>).remove(fixedField)
+            assertFailsWith<IllegalArgumentException>("missing $fixedField") {
+                SccpJsonParser.parseCapabilities(jsonBytes(missing))
+            }
+        }
+        val unknownResourceLimit = capabilities()
+        @Suppress("UNCHECKED_CAST")
+        (unknownResourceLimit["resource_limits"] as MutableMap<String, Any?>)[
+            "max_outbound_messages_per_transaction"
+        ] = 1
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseCapabilities(jsonBytes(unknownResourceLimit))
+        }
+        for ((fixedField, hostileValues) in listOf(
+            "max_outbound_messages_per_block" to listOf<Any?>(511, 513, "512", null),
+            "max_outbound_message_payload_bytes" to listOf<Any?>(4_095, 4_097, "4096", null),
+        )) {
+            for (hostileValue in hostileValues) {
+                val hostile = capabilities()
+                @Suppress("UNCHECKED_CAST")
+                (hostile["resource_limits"] as MutableMap<String, Any?>)[fixedField] = hostileValue
+                assertFailsWith<IllegalArgumentException>("$fixedField=$hostileValue") {
+                    SccpJsonParser.parseCapabilities(jsonBytes(hostile))
+                }
+            }
+        }
         val jsSafeMaximum = 9_007_199_254_740_991L
         val byteLimitKeys = listOf(
+            "max_pending_outbound_messages",
+            "max_pending_outbound_payload_bytes",
             "max_proof_bytes_per_proof",
             "max_proof_bytes_per_transaction",
             "max_proof_bytes_per_block",
@@ -1044,9 +1095,17 @@ class SccpClientExactTest {
     @Test
     fun recentMessagesRequireTransferOnlyBothHashRolesAndExactLinks() {
         val parsed = SccpJsonParser.parseRecentMessages(
-            jsonBytes(linkedMapOf("items" to mutableListOf(recent(9, MESSAGE_ID), recent(8, hash(0x12))))),
+            jsonBytes(linkedMapOf(
+                "items" to mutableListOf(recent(9, MESSAGE_ID), recent(8, hash(0x12))),
+                "next" to linkedMapOf("from" to 8, "after_index" to 0),
+            )),
         )
-        assertEquals(listOf(9L, 8L), parsed.items.map { it.height })
+        assertEquals(
+            listOf(BigInteger.valueOf(9), BigInteger.valueOf(8)),
+            parsed.items.map { it.height },
+        )
+        assertEquals(listOf(0, 0), parsed.items.map { it.commitmentIndex })
+        assertEquals(SccpRecentCursor(BigInteger.valueOf(8), 0), parsed.next)
         assertEquals(prefixed(0x72), parsed.items.first().routeConfigurationHash)
         assertTrue(parsed.items.first().payloadProjection.containsKey("Transfer"))
         @Suppress("UNCHECKED_CAST")
@@ -1054,6 +1113,95 @@ class SccpClientExactTest {
             as MutableMap<String, Any?>
         assertFailsWith<UnsupportedOperationException> {
             immutableProjectionTransfer["version"] = 2
+        }
+
+        val sameHeight = SccpJsonParser.parseRecentMessages(
+            jsonBytes(linkedMapOf(
+                "items" to listOf(
+                    recent(9, MESSAGE_ID, 0),
+                    recent(9, hash(0x12), 1),
+                ),
+                "next" to null,
+            )),
+        )
+        assertEquals(listOf(0, 1), sameHeight.items.map { it.commitmentIndex })
+        assertNull(sameHeight.next)
+        assertNull(
+            SccpJsonParser.parseRecentMessages(
+                jsonBytes(linkedMapOf("items" to emptyList<Any>())),
+            ).next,
+        )
+        val maxU64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
+        val maxHeight = SccpJsonParser.parseRecentMessages(
+            jsonBytes(linkedMapOf(
+                "items" to listOf(recent(maxU64, MESSAGE_ID, 511)),
+                "next" to linkedMapOf("from" to maxU64, "after_index" to 511),
+            )),
+        )
+        assertEquals(maxU64, maxHeight.items.single().height)
+        assertEquals(SccpRecentCursor(maxU64, 511), maxHeight.next)
+
+        for (replacement in listOf<Any?>(null, -1, 512, "0", 0.0, true)) {
+            val hostile = recent(9, MESSAGE_ID).also { it["commitment_index"] = replacement }
+            assertFailsWith<IllegalArgumentException>("commitment_index=$replacement") {
+                SccpJsonParser.parseRecentMessages(
+                    jsonBytes(linkedMapOf("items" to listOf(hostile))),
+                )
+            }
+        }
+        val missingCommitmentIndex = recent(9, MESSAGE_ID).also {
+            it.remove("commitment_index")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRecentMessages(
+                jsonBytes(linkedMapOf("items" to listOf(missingCommitmentIndex))),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRecentMessages(
+                jsonBytes(linkedMapOf(
+                    "items" to listOf(recent(BigInteger.ONE.shiftLeft(64), MESSAGE_ID)),
+                )),
+            )
+        }
+        for (items in listOf(
+            listOf(recent(9, MESSAGE_ID, 1), recent(9, hash(0x12), 0)),
+            listOf(recent(9, MESSAGE_ID, 0), recent(9, hash(0x12), 0)),
+        )) {
+            assertFailsWith<IllegalArgumentException> {
+                SccpJsonParser.parseRecentMessages(jsonBytes(linkedMapOf("items" to items)))
+            }
+        }
+        val cursorHostiles = listOf(
+            linkedMapOf<String, Any?>("from" to 9),
+            linkedMapOf<String, Any?>("after_index" to 0),
+            linkedMapOf<String, Any?>("from" to 0, "after_index" to 0),
+            linkedMapOf<String, Any?>(
+                "from" to BigInteger.ONE.shiftLeft(64),
+                "after_index" to 0,
+            ),
+            linkedMapOf<String, Any?>("from" to 9, "after_index" to 512),
+            linkedMapOf<String, Any?>("from" to 9, "after_index" to 0, "offset" to 0),
+            linkedMapOf<String, Any?>("from" to 8, "after_index" to 0),
+            linkedMapOf<String, Any?>("from" to 9, "after_index" to 1),
+        )
+        for (cursor in cursorHostiles) {
+            assertFailsWith<IllegalArgumentException>(cursor.toString()) {
+                SccpJsonParser.parseRecentMessages(
+                    jsonBytes(linkedMapOf(
+                        "items" to listOf(recent(9, MESSAGE_ID, 0)),
+                        "next" to cursor,
+                    )),
+                )
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRecentMessages(
+                jsonBytes(linkedMapOf(
+                    "items" to emptyList<Any>(),
+                    "next" to linkedMapOf("from" to 9, "after_index" to 0),
+                )),
+            )
         }
 
         val tronProjection = recent(9, MESSAGE_ID).also {
@@ -1191,6 +1339,10 @@ class SccpClientExactTest {
             "max_retained_native_trust_anchors_per_lane" to 4_096,
         ),
         "resource_limits" to linkedMapOf(
+            "max_outbound_messages_per_block" to 512,
+            "max_outbound_message_payload_bytes" to 4_096,
+            "max_pending_outbound_messages" to 65_536,
+            "max_pending_outbound_payload_bytes" to 268_435_456,
             "max_proofs_per_transaction" to 1,
             "max_proofs_per_block" to 4,
             "max_proof_bytes_per_proof" to 8 * 1024 * 1024,
@@ -1597,8 +1749,13 @@ class SccpClientExactTest {
         )
     }
 
-    private fun recent(height: Int, id: String): MutableMap<String, Any?> = linkedMapOf(
+    private fun recent(
+        height: Number,
+        id: String,
+        commitmentIndex: Int = 0,
+    ): MutableMap<String, Any?> = linkedMapOf(
         "height" to height,
+        "commitment_index" to commitmentIndex,
         "message_id_hex" to id,
         "kind" to "transfer",
         "source_profile" to "sora-taira",

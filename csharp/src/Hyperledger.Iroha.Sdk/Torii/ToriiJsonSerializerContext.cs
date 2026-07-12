@@ -7,8 +7,10 @@ namespace Hyperledger.Iroha.Torii;
 
 [JsonSerializable(typeof(JsonNode))]
 [JsonSerializable(typeof(JsonObject))]
+[JsonSerializable(typeof(OfflineActiveTransferVerifier))]
 [JsonSerializable(typeof(OfflineReadiness))]
 [JsonSerializable(typeof(OfflineReadinessBlocker))]
+[JsonSerializable(typeof(OfflineVerifierId))]
 [JsonSerializable(typeof(SccpBridgeProofSubmitRequest))]
 [JsonSerializable(typeof(SccpBridgeMessageSubmitRequest))]
 [JsonSerializable(typeof(ToriiAccountAliasLookupRequest))]

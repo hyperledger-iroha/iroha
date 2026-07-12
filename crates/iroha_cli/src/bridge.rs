@@ -125,6 +125,9 @@ pub struct RecentArgs {
     /// Inclusive block height through which to scan backwards.
     #[arg(long)]
     from: Option<u64>,
+    /// Last commitment index already consumed at `--from` (inclusive range `0..=511`).
+    #[arg(long, requires = "from")]
+    after_index: Option<u32>,
     /// Maximum number of messages to return (inclusive range `1..=50`).
     #[arg(long)]
     limit: Option<u64>,
@@ -134,6 +137,7 @@ impl RecentArgs {
     fn query(&self) -> SccpRecentMessagesQuery {
         SccpRecentMessagesQuery {
             from: self.from,
+            after_index: self.after_index,
             limit: self.limit,
         }
     }
@@ -579,7 +583,7 @@ fn sccp_submit_native_message(
 
 fn render_sccp_capabilities_summary(capabilities: &SccpCapabilities) -> String {
     format!(
-        "sccp capabilities: version={} registry_revision={} registry={} bundle={} proof_request={} recent={} proof_submit={} native_submit={}\nregistry_limits: lanes={} live_total={} live_per_lane={} retained_routes_per_lane={} retained_anchors_per_lane={}\nresource_limits: proofs_tx/block={}/{} proof_bytes_each/tx/block={}/{}/{} native_headers_tx/block={}/{} eth_updates_tx/block={}/{} native_bytes_tx/block={}/{} secp_tx/block={}/{} bls_checks_tx/block={}/{} bls_contributions_tx/block={}/{} bn254_tx/block={}/{}",
+        "sccp capabilities: version={} registry_revision={} registry={} bundle={} proof_request={} recent={} proof_submit={} native_submit={}\nregistry_limits: lanes={} live_total={} live_per_lane={} retained_routes_per_lane={} retained_anchors_per_lane={}\nresource_limits: outbound_messages_block={} outbound_payload_bytes={} pending_messages/pending_bytes={}/{} proofs_tx/block={}/{} proof_bytes_each/tx/block={}/{}/{} native_headers_tx/block={}/{} eth_updates_tx/block={}/{} native_bytes_tx/block={}/{} secp_tx/block={}/{} bls_checks_tx/block={}/{} bls_contributions_tx/block={}/{} bn254_tx/block={}/{}",
         capabilities.version,
         capabilities.registry_revision,
         capabilities.registry_path,
@@ -601,6 +605,14 @@ fn render_sccp_capabilities_summary(capabilities: &SccpCapabilities) -> String {
         capabilities
             .registry_limits
             .max_retained_native_trust_anchors_per_lane,
+        capabilities.resource_limits.max_outbound_messages_per_block,
+        capabilities
+            .resource_limits
+            .max_outbound_message_payload_bytes,
+        capabilities.resource_limits.max_pending_outbound_messages,
+        capabilities
+            .resource_limits
+            .max_pending_outbound_payload_bytes,
         capabilities.resource_limits.max_proofs_per_transaction,
         capabilities.resource_limits.max_proofs_per_block,
         capabilities.resource_limits.max_proof_bytes_per_proof,
@@ -702,8 +714,9 @@ fn render_sccp_recent_messages_summary(messages: &SccpRecentMessages) -> String 
     )];
     lines.extend(messages.items.iter().map(|message| {
         format!(
-            "height={} id={} kind={} {}->{} target_domain={} binding={} configuration={} route={} asset={} amount={} bundle={} proof_request={}",
+            "height={} commitment_index={} id={} kind={} {}->{} target_domain={} binding={} configuration={} route={} asset={} amount={} bundle={} proof_request={}",
             message.height,
+            message.commitment_index,
             message.message_id_hex,
             message.kind,
             message.source_profile,
@@ -718,6 +731,12 @@ fn render_sccp_recent_messages_summary(messages: &SccpRecentMessages) -> String 
             message.links.proof_request_path,
         )
     }));
+    if let Some(next) = messages.next {
+        lines.push(format!(
+            "next: --from {} --after-index {}",
+            next.from, next.after_index
+        ));
+    }
     lines.join("\n")
 }
 
@@ -1152,6 +1171,10 @@ mod tests {
                 max_retained_native_trust_anchors_per_lane: 4_096,
             },
             resource_limits: SccpResourceLimits {
+                max_outbound_messages_per_block: 512,
+                max_outbound_message_payload_bytes: 4_096,
+                max_pending_outbound_messages: 65_536,
+                max_pending_outbound_payload_bytes: 256 * 1024 * 1024,
                 max_proofs_per_transaction: 1,
                 max_proofs_per_block: 4,
                 max_proof_bytes_per_proof: 8 * 1024 * 1024,
@@ -1187,6 +1210,7 @@ mod tests {
     fn recent_query_enforces_closed_first_release_bounds() {
         let query = RecentArgs {
             from: Some(1),
+            after_index: Some(0),
             limit: Some(50),
         }
         .query();
@@ -1194,16 +1218,19 @@ mod tests {
         for query in [
             RecentArgs {
                 from: Some(0),
+                after_index: None,
                 limit: Some(1),
             }
             .query(),
             RecentArgs {
                 from: Some(1),
+                after_index: None,
                 limit: Some(0),
             }
             .query(),
             RecentArgs {
                 from: Some(1),
+                after_index: None,
                 limit: Some(51),
             }
             .query(),
@@ -1234,6 +1261,7 @@ mod tests {
         let summary = render_sccp_recent_messages_summary(&SccpRecentMessages {
             items: vec![iroha::client::SccpRecentMessage {
                 height: 9,
+                commitment_index: 0,
                 message_id_hex: "11".repeat(32),
                 kind: "transfer".to_owned(),
                 source_profile: "sora-taira".to_owned(),
@@ -1273,6 +1301,7 @@ mod tests {
                     proof_request_path: "/v1/sccp/proof-requests/id".to_owned(),
                 },
             }],
+            next: None,
         });
         assert!(summary.contains(&"22".repeat(32)));
         assert!(summary.contains(&"33".repeat(32)));

@@ -8,6 +8,7 @@ import java.util.Collections
 import java.util.LinkedHashMap
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
+import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.offline.OfflineJsonParser
@@ -35,14 +36,18 @@ class OfflineToriiClient private constructor(builder: Builder) {
     private val observers: List<ClientObserver> = builder.observers.toList()
 
     fun getOfflineReadiness(assetDefinitionId: String): CompletableFuture<OfflineReadiness> {
-        require(assetDefinitionId.isNotEmpty() && assetDefinitionId == assetDefinitionId.trim()) {
-            "assetDefinitionId must be exact non-empty text"
-        }
+        requireOfflineAssetSelector(assetDefinitionId)
+        val canonicalRequestedId = assetDefinitionId.takeIf(AssetDefinitionIdEncoder::isCanonicalAddress)
         val encoded = URLEncoder.encode(assetDefinitionId, StandardCharsets.UTF_8.name())
         return executeGet(
             "$OFFLINE_READINESS_PATH?asset_definition_id=$encoded",
-            OfflineJsonParser::parseOfflineReadiness,
-        )
+        ) { body ->
+            val readiness = OfflineJsonParser.parseOfflineReadiness(body)
+            require(canonicalRequestedId == null || readiness.assetDefinitionId == canonicalRequestedId) {
+                "Offline readiness response assetDefinitionId does not match the requested asset definition"
+            }
+            readiness
+        }
     }
 
     /** Submit the final first-release Offline top-up request. */
@@ -240,6 +245,21 @@ class OfflineToriiClient private constructor(builder: Builder) {
         private const val OFFLINE_REDEEM_PATH = "/v1/offline/redeem"
         private const val OFFLINE_OPERATIONS_PATH = "/v1/offline/operations"
         private const val NORITO_MEDIA_TYPE = "application/x-norito"
+        private val OFFLINE_ASSET_ALIAS_PATTERN = Regex(
+            "^[a-z0-9]+(?:[._-][a-z0-9]+)*#[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)?$",
+        )
+
+        private fun requireOfflineAssetSelector(value: String) {
+            require(value.isNotEmpty() && value == value.trim()) {
+                "assetDefinitionId must be exact non-empty text"
+            }
+            require(
+                AssetDefinitionIdEncoder.isCanonicalAddress(value) ||
+                    OFFLINE_ASSET_ALIAS_PATTERN.matches(value),
+            ) {
+                "assetDefinitionId must be a canonical Base58 id or lowercase scoped asset alias"
+            }
+        }
 
         @JvmStatic fun builder(): Builder = Builder()
         private fun extractRejectCode(headers: Map<String, List<String>>, body: ByteArray?): String? =

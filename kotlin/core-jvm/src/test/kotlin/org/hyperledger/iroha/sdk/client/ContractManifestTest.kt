@@ -56,6 +56,20 @@ class ContractManifestTest {
             fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"Option\""),
             fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"__kotodama_link_private\""),
             fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"state_map_get\""),
+            fullResponse().replaceFirst(
+                "\"seiyaku_name\":\"Ledger\"",
+                "\"seiyaku_name\":\"__kotodama_quantity_ratio_round\"",
+            ),
+            fullResponse().replaceFirst(
+                "\"seiyaku_name\":\"Ledger\"",
+                "\"seiyaku_name\":\"__kotodama_decimal_to_int_trunc\"",
+            ),
+            fullResponse().replaceFirst(
+                "\"seiyaku_name\":\"Ledger\"",
+                "\"seiyaku_name\":\"__kotodama_decimal_to_int_round\"",
+            ),
+            fullResponse().replaceFirst("\"kind\":\"Quantity\"", "\"kind\":\"Amount\""),
+            fullResponse().replaceFirst("\"kind\":\"Decimal\"", "\"kind\":\"U128\""),
             fullResponse().replaceFirst("\"namespace\":\"TransferError\"", "\"namespace\":\"Option\""),
             fullResponse().replaceFirst("\"features_bitmap\":0", "\"features_bitmap\":4"),
             fullResponse().replaceFirst("\"dynamic_writes\":[]", "\"dynamic_writes\":[],\"unknown\":true"),

@@ -354,7 +354,11 @@ impl Simulation {
             self.nodes[index].wal.clone(),
         )
         .expect("complete in-memory WAL replays");
-        let effects = reducer.resume_after_replay();
+        let tag = reducer.current_tag();
+        let effects = reducer
+            .step(Event::ResumeAfterReplay { tag })
+            .expect("replay resumption passes the production refinement gate")
+            .into_effects();
         self.nodes[index].reducer = reducer;
         self.nodes[index].online = true;
         self.drive_effects(index, effects);

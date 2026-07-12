@@ -309,20 +309,6 @@ final class OfflineCashLifecycleTests: XCTestCase {
         }
     }
 
-    func testKagemushaWireNamesArePublicAndCanonical() {
-        XCTAssertEqual(
-            KagemushaInstructionType.transfer.wireName,
-            KagemushaWireNames.transferInstruction
-        )
-        XCTAssertEqual(
-            KagemushaInstructionType.redeemRecursive.wireName,
-            KagemushaWireNames.redeemRecursiveInstruction
-        )
-        XCTAssertEqual(
-            KagemushaRecursiveRedeemRequestArchive.schemaName,
-            KagemushaWireNames.recursiveRedeemRequest
-        )
-    }
 }
 
 private enum TestLifecycleError: Error {

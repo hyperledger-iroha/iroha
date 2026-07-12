@@ -989,6 +989,12 @@ fn preflight_singular_source_materialization(
                 charge(policy, &mut remaining)?;
             }
         }
+        SingularQueryBox::FindFxCorridorPolicyRegistry(_) => {
+            return Err(reject_unbounded("FindFxCorridorPolicyRegistry"));
+        }
+        SingularQueryBox::FindFxCorridorPolicyById(_) => {
+            return Err(reject_unbounded("FindFxCorridorPolicyById"));
+        }
         SingularQueryBox::FindSorafsProviderOwner(query) => {
             if let Some(owner) = world.provider_owners().get(&query.provider_id) {
                 charge(owner, &mut remaining)?;
@@ -1112,6 +1118,12 @@ impl ExecuteSingularQuery for SingularQueryBox {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindFeeSponsorPolicyById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindFxCorridorPolicyRegistry(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindFxCorridorPolicyById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsProviderOwner(q) => {

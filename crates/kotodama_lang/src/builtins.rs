@@ -387,6 +387,8 @@ pub enum Builtin {
     RevokeRole,
     GrantPermission,
     RevokePermission,
+    GrantContractEntrypoint,
+    RevokeContractEntrypoint,
     EscrowOpenOffer,
     EscrowAccept,
     EscrowMarkPaymentSent,
@@ -665,6 +667,8 @@ impl Builtin {
         Self::RevokeRole,
         Self::GrantPermission,
         Self::RevokePermission,
+        Self::GrantContractEntrypoint,
+        Self::RevokeContractEntrypoint,
         Self::EscrowOpenOffer,
         Self::EscrowAccept,
         Self::EscrowMarkPaymentSent,
@@ -903,6 +907,8 @@ impl Builtin {
             "revoke_role" => Self::RevokeRole,
             "grant_permission" => Self::GrantPermission,
             "revoke_permission" => Self::RevokePermission,
+            "grant_contract_entrypoint" => Self::GrantContractEntrypoint,
+            "revoke_contract_entrypoint" => Self::RevokeContractEntrypoint,
             "escrow_open_offer" => Self::EscrowOpenOffer,
             "escrow_accept" => Self::EscrowAccept,
             "escrow_mark_payment_sent" => Self::EscrowMarkPaymentSent,
@@ -1138,6 +1144,8 @@ impl Builtin {
             Self::RevokeRole => "revoke_role",
             Self::GrantPermission => "grant_permission",
             Self::RevokePermission => "revoke_permission",
+            Self::GrantContractEntrypoint => "grant_contract_entrypoint",
+            Self::RevokeContractEntrypoint => "revoke_contract_entrypoint",
             Self::EscrowOpenOffer => "escrow_open_offer",
             Self::EscrowAccept => "escrow_accept",
             Self::EscrowMarkPaymentSent => "escrow_mark_payment_sent",
@@ -1427,6 +1435,8 @@ impl Builtin {
             Self::RevokeRole => "ledger::role::revoke",
             Self::GrantPermission => "ledger::permission::grant",
             Self::RevokePermission => "ledger::permission::revoke",
+            Self::GrantContractEntrypoint => "ledger::contract::grant_entrypoint",
+            Self::RevokeContractEntrypoint => "ledger::contract::revoke_entrypoint",
             Self::EscrowOpenOffer => "ledger::escrow::open_offer",
             Self::EscrowAccept => "ledger::escrow::accept",
             Self::EscrowMarkPaymentSent => "ledger::escrow::mark_payment_sent",
@@ -1687,6 +1697,8 @@ impl Builtin {
             | Self::RevokeRole
             | Self::GrantPermission
             | Self::RevokePermission
+            | Self::GrantContractEntrypoint
+            | Self::RevokeContractEntrypoint
             | Self::EscrowOpenOffer
             | Self::EscrowAccept
             | Self::EscrowMarkPaymentSent
@@ -1966,19 +1978,13 @@ impl Builtin {
                 &[s::SYSCALL_RESOLVE_ACCOUNT_ALIAS]
             }
             Self::PointerConstructor(_) => &[],
-            Self::Contains => &[
-                s::SYSCALL_BUILD_PATH_MAP_KEY,
-                s::SYSCALL_BUILD_PATH_KEY_NORITO,
-                s::SYSCALL_STATE_GET,
-            ],
+            Self::Contains => &[s::SYSCALL_BUILD_PATH_KEY_NORITO, s::SYSCALL_STATE_GET],
             Self::GetOrDefault | Self::GetOr => &[
-                s::SYSCALL_BUILD_PATH_MAP_KEY,
                 s::SYSCALL_BUILD_PATH_KEY_NORITO,
                 s::SYSCALL_STATE_GET,
                 s::SYSCALL_STATE_VALUE_DECODE,
             ],
             Self::Ensure => &[
-                s::SYSCALL_BUILD_PATH_MAP_KEY,
                 s::SYSCALL_BUILD_PATH_KEY_NORITO,
                 s::SYSCALL_STATE_GET,
                 s::SYSCALL_STATE_VALUE_DECODE,
@@ -1986,7 +1992,6 @@ impl Builtin {
                 s::SYSCALL_STATE_SET,
             ],
             Self::StateMapRemove => &[
-                s::SYSCALL_BUILD_PATH_MAP_KEY,
                 s::SYSCALL_BUILD_PATH_KEY_NORITO,
                 s::SYSCALL_STATE_GET,
                 s::SYSCALL_STATE_VALUE_DECODE,
@@ -2069,6 +2074,8 @@ impl Builtin {
             Self::RevokeRole => &[s::SYSCALL_REVOKE_ROLE],
             Self::GrantPermission => &[s::SYSCALL_GRANT_PERMISSION],
             Self::RevokePermission => &[s::SYSCALL_REVOKE_PERMISSION],
+            Self::GrantContractEntrypoint => &[s::SYSCALL_GRANT_CONTRACT_ENTRYPOINT],
+            Self::RevokeContractEntrypoint => &[s::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT],
             Self::EscrowOpenOffer => &[s::SYSCALL_ESCROW_OPEN_OFFER],
             Self::EscrowAccept => &[s::SYSCALL_ESCROW_ACCEPT],
             Self::EscrowMarkPaymentSent => &[s::SYSCALL_ESCROW_MARK_PAYMENT_SENT],
@@ -2151,10 +2158,7 @@ impl Builtin {
             Self::AddSignatory => &[s::SYSCALL_ADD_SIGNATORY],
             Self::RemoveSignatory => &[s::SYSCALL_REMOVE_SIGNATORY],
             Self::SetAccountQuorum => &[s::SYSCALL_SET_ACCOUNT_QUORUM],
-            Self::Path => &[
-                s::SYSCALL_BUILD_PATH_MAP_KEY,
-                s::SYSCALL_BUILD_PATH_KEY_NORITO,
-            ],
+            Self::Path => &[s::SYSCALL_BUILD_PATH_KEY_NORITO],
             Self::NameDecode => &[s::SYSCALL_NAME_DECODE],
             Self::TlvEq => &[s::SYSCALL_TLV_EQ],
             Self::TlvLen => &[s::SYSCALL_TLV_LEN],
@@ -2459,6 +2463,9 @@ impl Builtin {
             Self::GrantPermission | Self::RevokePermission => {
                 S::new(&["AccountId", "Name|Json"], "()")
             }
+            Self::GrantContractEntrypoint | Self::RevokeContractEntrypoint => {
+                S::new(&["AccountId", "string"], "()")
+            }
             Self::EscrowOpenOffer => {
                 S::new(&["Name", "AssetDefinitionId", "quantity", "bytes?"], "()")
             }
@@ -2501,7 +2508,7 @@ impl Builtin {
             | Self::ZkVerifyBatch
             | Self::ZkVoteVerifyBallot
             | Self::ZkVoteVerifyTally => S::new(&["bytes"], "()"),
-            Self::VrfVerify => S::new(&["bytes", "bytes", "bytes", "int"], "bytes"),
+            Self::VrfVerify => S::new(&["bytes"], "bytes"),
             Self::VrfVerifyBatch => S::new(&["bytes"], "bytes"),
             Self::Sm3Hash
             | Self::Sha256Hash
@@ -2721,6 +2728,9 @@ impl Builtin {
             Self::GrantPermission | Self::RevokePermission => {
                 signature.with_names(&["account", "permission"])
             }
+            Self::GrantContractEntrypoint | Self::RevokeContractEntrypoint => {
+                signature.with_names(&["account", "entrypoint"])
+            }
             Self::EscrowOpenOffer => {
                 signature.with_names(&["offer", "asset_definition", "amount", "evidence"])
             }
@@ -2734,7 +2744,7 @@ impl Builtin {
             Self::AxtTouch => signature.with_names(&["dataspace", "proof"]),
             Self::VerifyDsProof => signature.with_names(&["dataspace", "proof"]),
             Self::UseAssetHandle => signature.with_names(&["handle", "operation", "proof"]),
-            Self::VrfVerify => signature.with_names(&["message", "proof", "public_key", "variant"]),
+            Self::VrfVerify => signature.with_names(&["request"]),
             Self::Sm2Verify => {
                 signature.with_names(&["message", "signature", "public_key", "distid"])
             }
@@ -3200,6 +3210,41 @@ mod tests {
             let signature = builtin.signature();
             assert_eq!(signature.parameters, parameters);
             assert_eq!(signature.parameter_names, parameter_names);
+            assert_eq!(signature.return_type, "()");
+        }
+    }
+
+    #[test]
+    fn contract_entrypoint_capability_registry_is_exact_and_namespaced() {
+        use ivm_abi::syscalls as s;
+
+        for (builtin, internal_name, source_name, syscall) in [
+            (
+                Builtin::GrantContractEntrypoint,
+                "grant_contract_entrypoint",
+                "ledger::contract::grant_entrypoint",
+                s::SYSCALL_GRANT_CONTRACT_ENTRYPOINT,
+            ),
+            (
+                Builtin::RevokeContractEntrypoint,
+                "revoke_contract_entrypoint",
+                "ledger::contract::revoke_entrypoint",
+                s::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT,
+            ),
+        ] {
+            assert_eq!(builtin.name(), internal_name);
+            assert_eq!(builtin.source_name(), source_name);
+            assert_eq!(Builtin::from_name(internal_name), Some(builtin));
+            assert_eq!(Builtin::from_source_name(source_name), Some(builtin));
+            assert_eq!(Builtin::from_source_name(internal_name), None);
+            assert_eq!(builtin.operation_syscalls(), &[syscall]);
+            assert_eq!(builtin.syscall(), Some(syscall));
+            assert_eq!(builtin.lowering(), BuiltinLowering::DirectSyscall);
+            assert_eq!(builtin.effects(), BuiltinEffects::HOST);
+            assert_eq!(builtin.access(), BuiltinAccess::LedgerWrite);
+            let signature = builtin.signature();
+            assert_eq!(signature.parameters, &["AccountId", "string"]);
+            assert_eq!(signature.parameter_names, &["account", "entrypoint"]);
             assert_eq!(signature.return_type, "()");
         }
     }

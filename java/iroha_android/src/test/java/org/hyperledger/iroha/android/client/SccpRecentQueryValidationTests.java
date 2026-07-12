@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.client;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
 
+import java.math.BigInteger;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -21,18 +22,41 @@ public final class SccpRecentQueryValidationTests {
     final CountingExecutor executor = new CountingExecutor();
     final HttpClientTransport transport = transport(executor);
 
-    for (final long from : new long[] {Long.MIN_VALUE, -1L, 0L}) {
+    for (final BigInteger from :
+        List.of(
+            BigInteger.valueOf(Long.MIN_VALUE),
+            BigInteger.valueOf(-1),
+            BigInteger.ZERO,
+            BigInteger.ONE.shiftLeft(64))) {
       assertThrows(
           "from=" + from,
           IllegalArgumentException.class,
-          () -> transport.getSccpRecentMessages(from, 1));
+          () -> transport.getSccpRecentMessages(from, null, 1));
     }
     for (final int limit : new int[] {Integer.MIN_VALUE, -1, 0, 51, Integer.MAX_VALUE}) {
       assertThrows(
           "limit=" + limit,
           IllegalArgumentException.class,
-          () -> transport.getSccpRecentMessages(1L, limit));
+          () -> transport.getSccpRecentMessages(BigInteger.ONE, null, limit));
     }
+    for (final int afterIndex : new int[] {Integer.MIN_VALUE, -1, 512, Integer.MAX_VALUE}) {
+      assertThrows(
+          "afterIndex=" + afterIndex,
+          IllegalArgumentException.class,
+          () -> transport.getSccpRecentMessages(BigInteger.ONE, afterIndex, 1));
+    }
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> transport.getSccpRecentMessages(null, 0, 1));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new SccpModels.RecentCursor(BigInteger.ZERO, 0));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new SccpModels.RecentCursor(BigInteger.ONE.shiftLeft(64), 0));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new SccpModels.RecentCursor(BigInteger.ONE, 512));
 
     assertEquals("invalid queries must not reach HTTP execution", 0, executor.requests.size());
   }
@@ -42,14 +66,21 @@ public final class SccpRecentQueryValidationTests {
     final CountingExecutor executor = new CountingExecutor();
     final HttpClientTransport transport = transport(executor);
 
-    transport.getSccpRecentMessages(1L, 1).join();
-    transport.getSccpRecentMessages(Long.MAX_VALUE, 50).join();
+    final BigInteger maxU64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
+    transport.getSccpRecentMessages(BigInteger.ONE, null, 1).join();
+    transport.getSccpRecentMessages(maxU64, 0, 50).join();
+    transport
+        .getSccpRecentMessages(new SccpModels.RecentCursor(BigInteger.valueOf(7), 511), 1)
+        .join();
 
-    assertEquals(2, executor.requests.size());
+    assertEquals(3, executor.requests.size());
     assertEquals("from=1&limit=1", executor.requests.get(0).uri().getRawQuery());
     assertEquals(
-        "from=" + Long.MAX_VALUE + "&limit=50",
+        "from=" + maxU64 + "&after_index=0&limit=50",
         executor.requests.get(1).uri().getRawQuery());
+    assertEquals(
+        "from=7&after_index=511&limit=1",
+        executor.requests.get(2).uri().getRawQuery());
   }
 
   @Test
@@ -62,7 +93,7 @@ public final class SccpRecentQueryValidationTests {
     transport.getSccpRegistry();
     transport.getSccpMessageBundle(messageId);
     transport.getSccpProofRequest(messageId);
-    transport.getSccpRecentMessages(1L, 1);
+    transport.getSccpRecentMessages(BigInteger.ONE, null, 1);
 
     final List<Long> responseLimits = new ArrayList<>();
     for (final TransportRequest request : executor.requests) {
@@ -92,7 +123,10 @@ public final class SccpRecentQueryValidationTests {
       final CountingExecutor executor = new CountingExecutor(response);
       assertThrows(
           CompletionException.class,
-          () -> transport(executor).getSccpRecentMessages(1L, 1).join());
+          () ->
+              transport(executor)
+                  .getSccpRecentMessages(BigInteger.ONE, null, 1)
+                  .join());
       assertEquals(1, executor.requests.size());
     }
   }

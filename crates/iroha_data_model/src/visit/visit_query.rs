@@ -331,6 +331,8 @@ mod tests {
             SingularQueryBox::FindMusubiShortAliasByName(_) => {}
             SingularQueryBox::FindDomainById(_) => {}
             SingularQueryBox::FindFeeSponsorPolicyById(_) => {}
+            SingularQueryBox::FindFxCorridorPolicyRegistry(_) => {}
+            SingularQueryBox::FindFxCorridorPolicyById(_) => {}
             SingularQueryBox::FindDomainEndorsements(_) => {}
             SingularQueryBox::FindDomainEndorsementPolicy(_) => {}
             SingularQueryBox::FindDomainCommittee(_) => {}

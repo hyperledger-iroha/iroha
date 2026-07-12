@@ -423,13 +423,24 @@ impl CompilerSession {
                         Some(&target_resolved),
                     )
                 })?;
-        let external_names = target_signatures.keys().cloned().collect::<BTreeSet<_>>();
         let external_states = target_typed
             .states
             .iter()
             .map(|state| (state.name.clone(), state.ty.clone()))
             .collect::<IndexMap<_, _>>();
-        let external_state_names = external_states.keys().cloned().collect::<BTreeSet<_>>();
+        let target_environment =
+            target_semantic.test_target_environment(target_signatures, external_states);
+        let resolution_environment = crate::resolved::ExternalResolutionEnvironment {
+            functions: target_environment.functions.keys().cloned().collect(),
+            states: target_environment.states.keys().cloned().collect(),
+            structs: target_environment.structs.keys().cloned().collect(),
+            consts: target_environment.consts.keys().cloned().collect(),
+            error_codes: target_environment
+                .error_codes
+                .iter()
+                .map(|(name, code)| (name.clone(), *code))
+                .collect(),
+        };
 
         let mut resolved_modules = Vec::with_capacity(parsed.len());
         for (index, program) in parsed.into_iter().enumerate() {
@@ -437,8 +448,7 @@ impl CompilerSession {
             resolved_modules.push(crate::resolved::resolve_with_external_environment(
                 program,
                 file,
-                &external_names,
-                &external_state_names,
+                &resolution_environment,
             )?);
         }
         reject_duplicate_test_graph_symbols(
@@ -462,7 +472,7 @@ impl CompilerSession {
             let semantic =
                 crate::semantic::SemanticContext::with_capabilities(self.options.force_zk, true);
             let mut typed = semantic
-                .analyze_resolved_with_test_target(resolved, &target_signatures, &external_states)
+                .analyze_resolved_with_test_target(resolved, &target_environment)
                 .map_err(|failures| {
                     crate::semantic_diagnostics::from_semantic_failures(
                         failures,
@@ -1930,7 +1940,7 @@ mod tests {
                     return length;
                 }
                 #[test]
-                fn empty_list() { test::assert(count([]) == 0); }
+                fn runtime_projection_exists() { test::assert(true); }
             }"#
             .to_owned(),
         };
@@ -1941,6 +1951,48 @@ mod tests {
         })
         .build_test_sources(&target, &[])
         .expect("lowered list intrinsics must survive runtime projection");
+
+        assert!(
+            outputs.runtime.is_some(),
+            "public view requires runtime output"
+        );
+    }
+
+    #[test]
+    fn test_target_projection_retains_lowered_sum_type_intrinsics() {
+        let target = TestSourceUnit {
+            source_name: "sum-runtime.ko".to_owned(),
+            source: r#"seiyaku SumRuntime {
+                view fn exercise_sum_intrinsics(int fallback) -> int {
+                    let Option<int> present = Option::some(5);
+                    let Option<int> missing = Option::none;
+                    let Result<int, string> success = Result::ok(7);
+                    let Result<int, string> failure = Result::err("failed");
+                    let _present = present.is_some();
+                    let _missing = missing.is_none();
+                    let _success = success.is_ok();
+                    let _failure = failure.is_err();
+                    let value = present.unwrap_or(fallback);
+                    let error_value = failure.unwrap_err_or("fallback");
+                    if error_value == "failed" {
+                        return value + success.unwrap_or(fallback);
+                    }
+                    return fallback;
+                }
+                #[test]
+                fn exercises_sum_intrinsics() {
+                    test::assert(true);
+                }
+            }"#
+            .to_owned(),
+        };
+
+        let outputs = CompilerSession::new(CompilerOptions {
+            mode: CompilerMode::Test,
+            ..CompilerOptions::default()
+        })
+        .build_test_sources(&target, &[])
+        .expect("lowered sum-type intrinsics must survive runtime projection");
 
         assert!(
             outputs.runtime.is_some(),

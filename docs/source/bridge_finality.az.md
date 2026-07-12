@@ -45,11 +45,12 @@ autentifikasiya edir. Finalized snapshot növbəti epoch parametrləri ilə yana
 
 ## Davamlı saxlama və yoxlama
 
-Sumeragi v2 apply yolu artefaktı yoxlayır və dəyişməz Kura sidecar kimi saxlayır. Sübut
-qurucusu kanonik bloku və onun sidecar-ını oxuyur; tarixi PoP və sertifikatları dəyişən
-cari world state-dən yenidən qurmur. Çatışmayan, korlanmış, ziddiyyətli və ya yoxlanmayan
-sidecar qapalı şəkildə rədd edilir; əlçatanlıq yaxın in-memory tarix pəncərəsi ilə
-məhdudlaşmır.
+Kura finality dərc edilməzdən və ya block body çıxarılmazdan əvvəl dəqiq kanonik header-i
+və `commitment_index` sırasındakı SCCP arxivini dəyişməz retained record-da saxlayır.
+Finality artefaktı sonra eyni header-lə ayrıca dəyişməz record-da saxlanır. Sübut qurucusu
+yalnız retained header və finality record-u oxuyur; tarixi block body-yə və ya dəyişən WSV
+payload-ına ehtiyac duymur. Çatışmayan, korlanmış, ziddiyyətli və ya yoxlanmayan record
+qapalı şəkildə rədd edilir.
 
 Stateless yoxlayıcı version, chain, height, header hash, header-in canonical predecessor-i və
 view-u, context, subject və CommitQC-ni
@@ -79,6 +80,6 @@ artefaktına qədər hər dərhal ardıcıl keçid yoxlanmalıdır.
 - `GET /v1/bridge/finality/{height}` `BridgeFinalityProof` qaytarır;
 - `GET /v1/bridge/finality/bundle/{height}` `BridgeFinalityBundle` qaytarır.
 
-Blok və ya dəqiq davamlı v2 artefaktı yoxdursa və ya yanlışdırsa, hər iki endpoint qapalı
-şəkildə uğursuz olur. Naməlum sahələr, dəstəklənməyən versiyalar və köhnə sübut formaları
-rədd edilməlidir.
+Retained kanonik header və ya dəqiq davamlı v2 artefaktı yoxdursa və ya yanlışdırsa, hər iki
+endpoint qapalı şəkildə uğursuz olur. Block-body eviction düzgün sübutu əlçatmaz etmir.
+Naməlum sahələr, dəstəklənməyən versiyalar və köhnə sübut formaları rədd edilməlidir.

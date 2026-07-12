@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Linq;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -180,7 +181,7 @@ public sealed class SccpExactTests
             Assert.ThrowsAny<ArgumentException>(() => SccpV1.DecodeCanonicalPayload(malformed));
         }
 
-        Assert.Throws<ArgumentException>(() => SccpV1.DecodeCanonicalPayload(bytes.Concat([0]).ToArray()));
+        Assert.Throws<ArgumentException>(() => SccpV1.DecodeCanonicalPayload(bytes.Concat([(byte)0]).ToArray()));
         Assert.Throws<ArgumentOutOfRangeException>(() => new SccpTransferPayloadV1(
             0, 2, 7, 0, 0,
             SccpCodecV1.CanonicalText, "xor"u8.ToArray(), 1000,
@@ -219,7 +220,7 @@ public sealed class SccpExactTests
             Assert.Throws<ArgumentException>(() => SccpV1.DecodeCanonicalCommitment(malformed));
         }
 
-        Assert.Throws<ArgumentException>(() => SccpV1.DecodeCanonicalCommitment(bytes.Concat([0]).ToArray()));
+        Assert.Throws<ArgumentException>(() => SccpV1.DecodeCanonicalCommitment(bytes.Concat([(byte)0]).ToArray()));
         Assert.Throws<ArgumentException>(() => new SccpOutboundMessageContextV1(
             BundleLane(),
             Enumerable.Repeat((byte)1, 32).ToArray(),
@@ -267,7 +268,7 @@ public sealed class SccpExactTests
             Assert.ThrowsAny<ArgumentException>(() => SccpV1.DecodeCanonicalMessageBundle(malformed));
         }
 
-        Assert.Throws<ArgumentException>(() => SccpV1.DecodeCanonicalMessageBundle(bytes.Concat([0]).ToArray()));
+        Assert.Throws<ArgumentException>(() => SccpV1.DecodeCanonicalMessageBundle(bytes.Concat([(byte)0]).ToArray()));
     }
 
     [Fact]
@@ -411,7 +412,7 @@ public sealed class SccpExactTests
         {
             value => { value[39] = 0x80; return value; },
             value => { value.AsSpan(6, 16).Clear(); return value; },
-            value => value.Concat([0]).ToArray(),
+            value => value.Concat([(byte)0]).ToArray(),
             value => value[..NoritoHeader.EncodedLength].Concat(new byte[8]).Concat(value[NoritoHeader.EncodedLength..]).ToArray(),
             value => { value[31] ^= 1; return value; },
         })
@@ -466,6 +467,10 @@ public sealed class SccpExactTests
         Assert.Equal("/v1/sccp/proof-requests/{message_id}", parsed.ProofRequestPath);
         Assert.Equal(64U, parsed.RegistryLimits.MaxRetainedRoutesPerLane);
         Assert.Equal(4_096U, parsed.RegistryLimits.MaxRetainedNativeTrustAnchorsPerLane);
+        Assert.Equal(512U, parsed.ResourceLimits.MaxOutboundMessagesPerBlock);
+        Assert.Equal(4_096UL, parsed.ResourceLimits.MaxOutboundMessagePayloadBytes);
+        Assert.Equal(65_536UL, parsed.ResourceLimits.MaxPendingOutboundMessages);
+        Assert.Equal(256UL * 1024 * 1024, parsed.ResourceLimits.MaxPendingOutboundPayloadBytes);
         Assert.Equal(131_713U, parsed.ResourceLimits.MaxBlsSignerContributionsPerTransaction);
         var readOnly = CapabilitiesObject();
         readOnly.Remove("proof_submit_path");
@@ -544,6 +549,19 @@ public sealed class SccpExactTests
         Assert.Throws<ArgumentException>(
             () => SccpCapabilities.Parse(Json(driftedRegistryLimits)));
 
+        foreach (var (field, value) in new (string Field, ulong Value)[]
+        {
+            ("max_outbound_messages_per_block", 511),
+            ("max_outbound_messages_per_block", 513),
+            ("max_outbound_message_payload_bytes", 4_095),
+            ("max_outbound_message_payload_bytes", 4_097),
+        })
+        {
+            var drifted = CapabilitiesObject();
+            ((Dictionary<string, object?>)drifted["resource_limits"]!)[field] = value;
+            Assert.Throws<ArgumentException>(() => SccpCapabilities.Parse(Json(drifted)));
+        }
+
         var canonical = Encoding.UTF8.GetString(CapabilitiesJson());
         const string needle = "\"max_proofs_per_transaction\":1";
         Assert.Contains(needle, canonical, StringComparison.Ordinal);
@@ -562,6 +580,7 @@ public sealed class SccpExactTests
         var boundaryLimits = (Dictionary<string, object?>)boundary["resource_limits"]!;
         foreach (var field in new[]
         {
+            "max_pending_outbound_messages", "max_pending_outbound_payload_bytes",
             "max_proof_bytes_per_proof", "max_proof_bytes_per_transaction",
             "max_proof_bytes_per_block", "max_native_header_bytes_per_transaction",
             "max_native_header_bytes_per_block",
@@ -574,6 +593,17 @@ public sealed class SccpExactTests
             SccpCapabilities.Parse(Json(boundary)).ResourceLimits.MaxProofBytesPerBlock);
         boundaryLimits["max_proof_bytes_per_block"] = jsonSafeMaximum + 1;
         Assert.Throws<ArgumentException>(() => SccpCapabilities.Parse(Json(boundary)));
+        foreach (var field in new[]
+        {
+            "max_pending_outbound_messages",
+            "max_pending_outbound_payload_bytes",
+        })
+        {
+            var oversized = CapabilitiesObject();
+            ((Dictionary<string, object?>)oversized["resource_limits"]!)[field] =
+                jsonSafeMaximum + 1;
+            Assert.Throws<ArgumentException>(() => SccpCapabilities.Parse(Json(oversized)));
+        }
     }
 
     [Fact]
@@ -955,8 +985,42 @@ public sealed class SccpExactTests
 
         var first = RecentItem(9, MessageId);
         var second = RecentItem(8, new string('2', 64));
-        var recent = SccpRecentMessages.Parse(Json(new Dictionary<string, object?> { ["items"] = new[] { first, second } }));
+        var recent = SccpRecentMessages.Parse(Json(new Dictionary<string, object?>
+        {
+            ["items"] = new[] { first, second },
+            ["next"] = new Dictionary<string, object?>
+            {
+                ["from"] = 8,
+                ["after_index"] = 0,
+            },
+        }));
         Assert.Equal(new[] { 9UL, 8UL }, recent.Items.Select(static item => item.Height));
+        Assert.Equal(new SccpRecentCursor(8, 0), recent.Next);
+        var sameHeight = SccpRecentMessages.Parse(Json(new Dictionary<string, object?>
+        {
+            ["items"] = new[]
+            {
+                RecentItem(9, MessageId, 509),
+                RecentItem(9, new string('2', 64), 510),
+                RecentItem(9, new string('3', 64), 511),
+                RecentItem(8, new string('4', 64), 0),
+            },
+        }));
+        Assert.Equal(
+            new uint[] { 509, 510, 511, 0 },
+            sameHeight.Items.Select(static item => item.CommitmentIndex));
+        Assert.Null(sameHeight.Next);
+        var fullHeight = SccpRecentMessages.Parse(Json(new Dictionary<string, object?>
+        {
+            ["items"] = new[] { RecentItem(ulong.MaxValue, MessageId) },
+            ["next"] = new Dictionary<string, object?>
+            {
+                ["from"] = ulong.MaxValue,
+                ["after_index"] = 0,
+            },
+        }));
+        Assert.Equal(ulong.MaxValue, fullHeight.Items[0].Height);
+        Assert.Equal(ulong.MaxValue, fullHeight.Next!.From);
         var retired = DeepClone(first);
         ((Dictionary<string, object?>)retired["links"]!)["artifact_path"] = $"/v1/sccp/artifacts/message/{MessageId}";
         Assert.Throws<ArgumentException>(() => SccpRecentMessages.Parse(Json(new Dictionary<string, object?> { ["items"] = new[] { retired } })));
@@ -999,6 +1063,88 @@ public sealed class SccpExactTests
         var impossibleSummaryRecipient = DeepClone(first);
         impossibleSummaryRecipient["recipient"] = "0x" + new string('1', 40);
         Assert.Throws<ArgumentException>(() => SccpRecentMessages.Parse(Json(new Dictionary<string, object?> { ["items"] = new[] { impossibleSummaryRecipient } })));
+
+        foreach (var mutation in new Action<Dictionary<string, object?>>[]
+        {
+            value => value.Remove("commitment_index"),
+            value => value["commitment_index"] = -1,
+            value => value["commitment_index"] = 512,
+            value => value["commitment_index"] = 1.5,
+        })
+        {
+            var invalid = RecentItem(9, MessageId);
+            mutation(invalid);
+            Assert.Throws<ArgumentException>(() => SccpRecentMessages.Parse(Json(
+                new Dictionary<string, object?> { ["items"] = new[] { invalid } })));
+        }
+
+        foreach (var items in new[]
+        {
+            new[] { RecentItem(9, MessageId, 4), RecentItem(9, new string('2', 64), 6) },
+            new[] { RecentItem(9, MessageId, 4), RecentItem(9, new string('2', 64), 3) },
+            new[] { RecentItem(9, MessageId, 4), RecentItem(8, new string('2', 64), 1) },
+        })
+        {
+            Assert.Throws<ArgumentException>(() => SccpRecentMessages.Parse(Json(
+                new Dictionary<string, object?> { ["items"] = items })));
+        }
+
+        foreach (var response in new[]
+        {
+            new Dictionary<string, object?>
+            {
+                ["items"] = new[] { RecentItem(9, MessageId) },
+                ["next"] = null,
+            },
+            new Dictionary<string, object?>
+            {
+                ["items"] = Array.Empty<object>(),
+                ["next"] = new Dictionary<string, object?> { ["from"] = 9, ["after_index"] = 0 },
+            },
+            new Dictionary<string, object?>
+            {
+                ["items"] = new[] { RecentItem(9, MessageId, 3) },
+                ["next"] = new Dictionary<string, object?> { ["from"] = 9, ["after_index"] = 2 },
+            },
+            new Dictionary<string, object?>
+            {
+                ["items"] = new[] { RecentItem(9, MessageId, 3) },
+                ["next"] = new Dictionary<string, object?> { ["from"] = 8, ["after_index"] = 3 },
+            },
+            new Dictionary<string, object?>
+            {
+                ["items"] = new[] { RecentItem(9, MessageId, 3) },
+                ["next"] = new Dictionary<string, object?> { ["from"] = 0, ["after_index"] = 3 },
+            },
+            new Dictionary<string, object?>
+            {
+                ["items"] = new[] { RecentItem(9, MessageId, 3) },
+                ["next"] = new Dictionary<string, object?> { ["from"] = 9, ["after_index"] = -1 },
+            },
+            new Dictionary<string, object?>
+            {
+                ["items"] = new[] { RecentItem(9, MessageId, 3) },
+                ["next"] = new Dictionary<string, object?> { ["from"] = 9, ["after_index"] = 1.5 },
+            },
+            new Dictionary<string, object?>
+            {
+                ["items"] = new[] { RecentItem(9, MessageId, 3) },
+                ["next"] = new Dictionary<string, object?> { ["from"] = 9, ["after_index"] = 512 },
+            },
+            new Dictionary<string, object?>
+            {
+                ["items"] = new[] { RecentItem(9, MessageId, 3) },
+                ["next"] = new Dictionary<string, object?>
+                {
+                    ["from"] = 9,
+                    ["after_index"] = 3,
+                    ["cursor"] = 1,
+                },
+            },
+        })
+        {
+            Assert.Throws<ArgumentException>(() => SccpRecentMessages.Parse(Json(response)));
+        }
     }
 
     [Fact]
@@ -1234,7 +1380,7 @@ public sealed class SccpExactTests
         var preparedText = Encoding.UTF8.GetString(prepared);
         Assert.Throws<ArgumentException>(() => SccpBridgeSubmitResponse.Parse(Encoding.UTF8.GetBytes(
             preparedText.Replace("\"creation_time_ms\":7", "\"creation_time_ms\":8", StringComparison.Ordinal))));
-        var trailingTransaction = transaction.Concat([0]).ToArray();
+        var trailingTransaction = transaction.Concat([(byte)0]).ToArray();
         Assert.Throws<ArgumentException>(() => SccpBridgeSubmitResponse.Parse(ResponseJson(
             false,
             null,
@@ -1280,12 +1426,32 @@ public sealed class SccpExactTests
         _ = await client.GetSccpRegistryAsync(TestContext.Current.CancellationToken);
         _ = await client.GetSccpMessageBundleAsync(MessageId, TestContext.Current.CancellationToken);
         _ = await client.GetSccpProofRequestAsync(MessageId, TestContext.Current.CancellationToken);
-        _ = await client.GetSccpRecentMessagesAsync(1, 1, TestContext.Current.CancellationToken);
+        _ = await client.GetSccpRecentMessagesAsync(
+            from: 1,
+            afterIndex: 0,
+            limit: 1,
+            cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(5, calls.Count);
+        Assert.Equal("/v1/sccp/messages/recent?from=1&after_index=0&limit=1", calls[^1]);
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
-            client.GetSccpRecentMessagesAsync(0, 1, TestContext.Current.CancellationToken));
+            client.GetSccpRecentMessagesAsync(
+                from: 0,
+                limit: 1,
+                cancellationToken: TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
-            client.GetSccpRecentMessagesAsync(1, 0, TestContext.Current.CancellationToken));
+            client.GetSccpRecentMessagesAsync(
+                from: 1,
+                limit: 0,
+                cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.GetSccpRecentMessagesAsync(
+                afterIndex: 0,
+                cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            client.GetSccpRecentMessagesAsync(
+                from: 1,
+                afterIndex: 512,
+                cancellationToken: TestContext.Current.CancellationToken));
         foreach (var attack in new[]
         {
             "0x" + MessageId, new string('A', 64), MessageId + "?network=bsc",
@@ -1556,6 +1722,10 @@ public sealed class SccpExactTests
         },
         ["resource_limits"] = new Dictionary<string, object?>
         {
+            ["max_outbound_messages_per_block"] = 512,
+            ["max_outbound_message_payload_bytes"] = 4_096,
+            ["max_pending_outbound_messages"] = 65_536,
+            ["max_pending_outbound_payload_bytes"] = 256 * 1024 * 1024,
             ["max_proofs_per_transaction"] = 1,
             ["max_proofs_per_block"] = 4,
             ["max_proof_bytes_per_proof"] = 8 * 1024 * 1024,
@@ -1695,9 +1865,13 @@ public sealed class SccpExactTests
         };
     }
 
-    private static Dictionary<string, object?> RecentItem(ulong height, string id) => new()
+    private static Dictionary<string, object?> RecentItem(
+        ulong height,
+        string id,
+        uint commitmentIndex = 0) => new()
     {
         ["height"] = height,
+        ["commitment_index"] = commitmentIndex,
         ["message_id_hex"] = id,
         ["kind"] = "transfer",
         ["source_profile"] = "sora-taira",

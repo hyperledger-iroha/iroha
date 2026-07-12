@@ -990,8 +990,8 @@ pub fn kagemusha_recursive_spend_init_transition_values_v2(
         || statement.topup_anchor_refs.as_slice()
             != std::slice::from_ref(&anchor.compact_ref().map_err(|err| err.to_string())?)
         || anchor.artifact_generation != statement.artifact_generation
-        || anchor.transfer_verifier_id != step.attachment.vk_ref
-        || step.attachment.vk_commitment != Some(anchor.transfer_verifier_commitment)
+        || anchor.shield_verifier_id != step.attachment.vk_ref
+        || step.attachment.vk_commitment != Some(anchor.shield_verifier_commitment)
     {
         return Err(
             "Kagemusha V2 init statement does not match finalized top-up anchor".to_owned(),

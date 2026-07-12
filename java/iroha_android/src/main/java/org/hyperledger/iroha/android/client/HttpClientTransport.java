@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.client;
 
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
+import java.math.BigInteger;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -511,26 +512,56 @@ public final class HttpClientTransport implements IrohaClient {
 
   /** Fetch newest-first exact-context SCCP outbound messages. */
   public CompletableFuture<SccpModels.RecentMessages> getSccpRecentMessages() {
-    return getSccpRecentMessages(null, null);
+    return getSccpRecentMessages(null, null, null);
   }
 
-  /** Fetch newest-first exact-context SCCP outbound messages using an explicit window. */
+  /** Fetch newest-first exact-context SCCP outbound messages using an explicit compound window. */
   public CompletableFuture<SccpModels.RecentMessages> getSccpRecentMessages(
-      final Long from, final Integer limit) {
-    if (from != null && from.longValue() <= 0) {
-      throw new IllegalArgumentException("from must be a positive height");
+      final BigInteger from, final Integer afterIndex, final Integer limit) {
+    if (from != null && (from.signum() <= 0 || from.bitLength() > 64)) {
+      throw new IllegalArgumentException("from must be a positive u64 height");
+    }
+    if (afterIndex != null && from == null) {
+      throw new IllegalArgumentException("afterIndex requires the paired from height");
+    }
+    if (afterIndex != null
+        && (afterIndex.intValue() < 0
+            || afterIndex.intValue()
+                >= SccpModels.SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1)) {
+      throw new IllegalArgumentException(
+          "afterIndex must be between 0 and "
+              + (SccpModels.SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 - 1));
     }
     if (limit != null && (limit.intValue() < 1 || limit.intValue() > 50)) {
       throw new IllegalArgumentException("limit must be between 1 and 50");
     }
     final Map<String, String> query = new LinkedHashMap<>();
-    if (from != null) query.put("from", Long.toString(from.longValue()));
+    if (from != null) query.put("from", from.toString());
+    if (afterIndex != null) {
+      query.put("after_index", Integer.toString(afterIndex.intValue()));
+    }
     if (limit != null) query.put("limit", Integer.toString(limit.intValue()));
     return fetchSccpJson(
         buildJsonGetRequest(
             "/v1/sccp/messages/recent", query, SCCP_RECENT_RESPONSE_MAX_BYTES),
         SccpJsonParser::parseRecentMessages,
         "SCCP recent messages");
+  }
+
+  /** Continue newest-first SCCP discovery from an exact server-issued cursor. */
+  public CompletableFuture<SccpModels.RecentMessages> getSccpRecentMessages(
+      final SccpModels.RecentCursor cursor) {
+    return getSccpRecentMessages(cursor, null);
+  }
+
+  /** Continue newest-first SCCP discovery from a cursor with an optional page limit. */
+  public CompletableFuture<SccpModels.RecentMessages> getSccpRecentMessages(
+      final SccpModels.RecentCursor cursor, final Integer limit) {
+    if (cursor == null) {
+      throw new IllegalArgumentException("cursor must not be null");
+    }
+    return getSccpRecentMessages(
+        cursor.from, Integer.valueOf(cursor.afterIndex), limit);
   }
 
   /** Fetches a persisted identifier claim by its deterministic receipt hash. */

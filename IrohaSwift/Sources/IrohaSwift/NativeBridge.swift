@@ -100,7 +100,7 @@ enum NoritoBridgeLoader {
         guard let actual else {
             return false
         }
-        return actual >= expectedBridgeAbiVersion(for: identifier)
+        return actual == expectedBridgeAbiVersion(for: identifier)
     }
 
     private static func packagedBinaryRelativePaths(for identifier: String = currentIdentifier()) -> [String] {
@@ -726,7 +726,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         defer {
             free(pointer)
         }
-        guard length <= CUnsignedLong(KagemushaRecursiveSpend.artifactMaximumFileBytes) else {
+        guard length <= CUnsignedLong(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) else {
             throw NativeBridgeError.kagemushaProve
         }
         return Data(bytes: pointer, count: Int(length))
@@ -4517,7 +4517,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return isKagemushaRecursiveSpendAvailable
-            && loadedBridgeAbiVersion.map { $0 >= KagemushaRecursiveSpendProver.topUpRequiredNativeBridgeAbiVersion } == true
+            && loadedBridgeAbiVersion.map {
+                $0 >= KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion
+            } == true
             && kagemushaRecursiveSpendTopUpFn != nil
             && kagemushaRecursiveSpendTopUpNativeProbeOk
         #else
@@ -4525,11 +4527,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    /// Whether ABI 18 exposes the complete first-release recursive-spend symbol set.
+    /// Whether ABI 18 exposes the V3 capability and reserved proof stubs.
     ///
-    /// This does not mean the proof backend is available; every reserved entrypoint must
+    /// This does not mean the V2 proof backend is available; every stub must
     /// return the canonical unavailable status until that backend is enabled.
-    public var hasKagemushaRecursiveSpendContractSymbols: Bool {
+    public var isKagemushaRecursiveSpendV2StubAvailable: Bool {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         let hasRequiredSymbols = (

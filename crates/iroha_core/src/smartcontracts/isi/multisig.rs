@@ -752,11 +752,15 @@ pub(crate) fn replace_account_controller(
     }
 
     let previous_state = load_multisig_account_state_optional(state_transaction, old_account)
-        .and_then(|state| match state {
-            Some(state) => Ok(Some(state)),
-            None => reconstruct_multisig_account_state(state_transaction, old_account),
-        })
         .map_err(map_validation_fail)?;
+    if old_account.multisig_policy().is_some() && previous_state.is_none() {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "multisig account `{old_account}` is missing its canonical native account state"
+            )
+            .into(),
+        ));
+    }
     let home_domain = previous_state
         .as_ref()
         .and_then(|state| state.home_domain.clone());
@@ -1445,8 +1449,15 @@ fn execute_register(
                 "multisig account `{multisig_account_id}` already exists and cannot be rekeyed to `{expected_account}` by registration"
             )));
         }
-        ensure_multisig_account_state_materialized(state_transaction, &multisig_account_id)?;
-        let previous_state = load_multisig_account_state(state_transaction, &multisig_account_id)?;
+        let previous_state = load_multisig_account_state_optional(
+            state_transaction,
+            &multisig_account_id,
+        )?
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(format!(
+                "multisig account `{multisig_account_id}` already exists without canonical native account state"
+            ))
+        })?;
         if previous_state.home_domain != home_domain {
             return Err(ValidationFail::NotPermitted(format!(
                 "multisig account `{multisig_account_id}` already exists with a different home domain"
@@ -1528,17 +1539,6 @@ fn execute_propose(
             return Err(err);
         }
     };
-    if let Err(err) =
-        ensure_multisig_account_state_materialized(state_transaction, &multisig_account)
-    {
-        iroha_logger::error!(
-            proposer = %proposer,
-            multisig_account = %multisig_account,
-            error = ?err,
-            "multisig propose failed to materialize multisig account state"
-        );
-        return Err(err);
-    }
     let home_domain = match multisig_home_domain(state_transaction, &multisig_account) {
         Ok(value) => value,
         Err(err) => {
@@ -1794,7 +1794,6 @@ fn execute_approve(
 ) -> Result<(), ValidationFail> {
     let approver = authority.clone();
     let multisig_account = resolve_signatory_account(state_transaction, &instruction.account)?;
-    ensure_multisig_account_state_materialized(state_transaction, &multisig_account)?;
     let home_domain = multisig_home_domain(state_transaction, &multisig_account)?;
     let instructions_hash = instruction.instructions_hash;
 
@@ -1992,7 +1991,6 @@ fn execute_cancel(
 ) -> Result<(), ValidationFail> {
     let canceler = authority.clone();
     let multisig_account = resolve_signatory_account(state_transaction, &instruction.account)?;
-    ensure_multisig_account_state_materialized(state_transaction, &multisig_account)?;
     let instructions_hash = instruction.instructions_hash;
 
     if !canceler_is_authorized(&multisig_account, &canceler) {
@@ -2642,181 +2640,64 @@ fn load_multisig_account_state_optional(
     };
     let state = norito::decode_from_bytes::<MultisigAccountState>(bytes)
         .map_err(multisig_state_decode_error)?;
-    Ok(Some(state))
-}
-
-fn ensure_multisig_account_state_materialized(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    multisig_account: &AccountId,
-) -> Result<(), ValidationFail> {
-    let resolved_account = resolve_signatory_account(state_transaction, multisig_account)?;
-    let key = multisig_account_state_key(&resolved_account);
-    if state_transaction
-        .world
-        .smart_contract_state
-        .get(&key)
-        .is_some()
-    {
-        return Ok(());
+    if state.account_id != resolved_account {
+        return Err(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
+            format!(
+                "native multisig account state is bound to `{}`, not `{resolved_account}`",
+                state.account_id
+            ),
+        )));
     }
-    let Some(reconstructed) =
-        reconstruct_multisig_account_state(state_transaction, &resolved_account)?
-    else {
-        return Ok(());
-    };
-    iroha_logger::warn!(
-        multisig_account = %resolved_account,
-        "reconstructing missing multisig account state from controller metadata"
+    ensure_quorum_reachable(&state.spec)?;
+    ensure_signatories_are_single(&state.spec)?;
+    let expected_account = AccountId::new_multisig(
+        multisig_policy_from_spec(&state.spec).map_err(ValidationFail::InstructionFailed)?,
     );
-    persist_multisig_account_state(state_transaction, None, &reconstructed)?;
-    Ok(())
-}
+    if expected_account != resolved_account {
+        return Err(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
+            format!(
+                "native multisig account state policy derives `{expected_account}`, not `{resolved_account}`"
+            ),
+        )));
+    }
 
-fn reconstruct_multisig_account_state(
-    state_transaction: &StateTransaction<'_, '_>,
-    multisig_account: &AccountId,
-) -> Result<Option<MultisigAccountState>, ValidationFail> {
-    let resolved_account = resolve_signatory_account(state_transaction, multisig_account)?;
     let account = state_transaction
         .world
         .account(&resolved_account)
         .map_err(map_find_error)?;
-
-    let home_domain = if let Some(raw) = account.metadata().get(&home_domain_key()) {
-        decode_multisig_home_domain_metadata(raw, &resolved_account)?
-    } else {
-        infer_multisig_home_domain(state_transaction, &resolved_account)?
-    };
-
-    if let Some(raw) = account.metadata().get(&spec_key()) {
-        let spec = raw.try_into_any_norito::<MultisigSpec>().map_err(|err| {
-            ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
-                "multisig spec malformed for `{resolved_account}`: {err}"
-            )))
-        })?;
-        return Ok(Some(MultisigAccountState::new(
-            resolved_account,
-            home_domain,
-            spec,
-        )));
-    }
-
-    let Some(policy) = account.id().multisig_policy() else {
-        return Ok(None);
-    };
-    let mut signatories = BTreeMap::new();
-    for member in policy.members() {
-        let seeded = AccountId::new(member.public_key().clone());
-        let Some(signatory_account) = state_transaction
-            .world
-            .accounts_iter()
-            .find(|candidate| candidate.id().subject_id() == seeded.subject_id())
-            .map(|candidate| candidate.id().clone())
-        else {
-            return Err(ValidationFail::QueryFailed(QueryExecutionFail::NotFound));
-        };
-        let weight = u8::try_from(member.weight()).map_err(|_| {
-            ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
-                "multisig member weight {} exceeds u8 for `{resolved_account}`",
-                member.weight()
-            )))
-        })?;
-        signatories.insert(signatory_account, weight);
-    }
-    let quorum = std::num::NonZeroU16::new(policy.threshold()).ok_or_else(|| {
-        ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
-            "multisig threshold is zero for `{resolved_account}`"
-        )))
-    })?;
-    let transaction_ttl_ms = std::num::NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS)
-        .expect("default multisig ttl must be non-zero");
-
-    Ok(Some(MultisigAccountState::new(
-        resolved_account,
-        home_domain,
-        MultisigSpec {
-            signatories,
-            quorum,
-            transaction_ttl_ms,
-        },
-    )))
-}
-
-fn decode_multisig_home_domain_metadata(
-    raw: &Json,
-    multisig_account: &AccountId,
-) -> Result<Option<iroha_data_model::domain::DomainId>, ValidationFail> {
-    match raw.try_into_any_norito::<Option<iroha_data_model::domain::DomainId>>() {
-        Ok(home_domain) => Ok(home_domain),
-        Err(primary_err) => {
-            let literal = raw.get().trim();
-            iroha_data_model::DomainId::parse_fully_qualified(literal)
-                .map(Some)
-                .map_err(|legacy_err| {
-                    ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
-                        "multisig home_domain malformed for `{multisig_account}`: {primary_err}; legacy literal parse failed: {legacy_err}"
-                    )))
-                })
+    if let Some(metadata_spec) = account.metadata().get(&spec_key()).cloned() {
+        let metadata_spec = metadata_spec
+            .try_into_any_norito::<MultisigSpec>()
+            .map_err(|err| {
+                ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
+                    "invalid multisig/spec metadata for `{resolved_account}`: {err}"
+                )))
+            })?;
+        if metadata_spec != state.spec {
+            return Err(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
+                format!(
+                    "multisig/spec metadata disagrees with canonical native account state for `{resolved_account}`"
+                ),
+            )));
         }
     }
-}
-
-fn infer_multisig_home_domain(
-    state_transaction: &StateTransaction<'_, '_>,
-    account_id: &AccountId,
-) -> Result<Option<iroha_data_model::domain::DomainId>, ValidationFail> {
-    let alias_domain = infer_multisig_home_domain_from_aliases(state_transaction, account_id)?;
-    Ok(alias_domain
-        .or_else(|| infer_multisig_home_domain_from_roles(state_transaction, account_id)))
-}
-
-fn infer_multisig_home_domain_from_aliases(
-    state_transaction: &StateTransaction<'_, '_>,
-    account_id: &AccountId,
-) -> Result<Option<iroha_data_model::domain::DomainId>, ValidationFail> {
-    let hierarchy = state_transaction
-        .world
-        .account_scope_hierarchy(account_id)
-        .map_err(|err| {
-            ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
-                "multisig alias hierarchy malformed for `{account_id}`: {err}"
-            )))
-        })?;
-    let domains = hierarchy.into_values().flatten().collect();
-    Ok(unique_home_domain_candidate(domains))
-}
-
-fn infer_multisig_home_domain_from_roles(
-    state_transaction: &StateTransaction<'_, '_>,
-    account_id: &AccountId,
-) -> Option<iroha_data_model::domain::DomainId> {
-    let mut domains = BTreeSet::new();
-    for role_id in state_transaction.world.account_roles_iter(account_id) {
-        let mut segments = role_id.name().as_ref().split(DELIMITER);
-        let (Some(prefix), Some(domain), Some(_suffix), None) = (
-            segments.next(),
-            segments.next(),
-            segments.next(),
-            segments.next(),
-        ) else {
-            continue;
-        };
-        if prefix != MULTISIG_SIGNATORY || domain == DOMAINLESS_NAMESPACE {
-            continue;
+    if let Some(metadata_home_domain) = account.metadata().get(&home_domain_key()).cloned() {
+        let metadata_home_domain = metadata_home_domain
+            .try_into_any_norito::<Option<iroha_data_model::domain::DomainId>>()
+            .map_err(|err| {
+                ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
+                    "invalid multisig home-domain metadata for `{resolved_account}`: {err}"
+                )))
+            })?;
+        if metadata_home_domain != state.home_domain {
+            return Err(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
+                format!(
+                    "multisig home-domain metadata disagrees with canonical native account state for `{resolved_account}`"
+                ),
+            )));
         }
-        let Ok(domain_id) = iroha_data_model::DomainId::parse_fully_qualified(domain) else {
-            continue;
-        };
-        domains.insert(domain_id);
     }
-    unique_home_domain_candidate(domains)
-}
-
-fn unique_home_domain_candidate(
-    mut domains: BTreeSet<iroha_data_model::domain::DomainId>,
-) -> Option<iroha_data_model::domain::DomainId> {
-    let domain = domains.pop_first()?;
-    domains.is_empty().then_some(domain)
+    Ok(Some(state))
 }
 
 fn load_multisig_account_state(
@@ -5334,68 +5215,14 @@ mod tests {
     }
 
     #[test]
-    fn multisig_home_domain_inference_resolves_qualified_alias_domains() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::new(), kura, query_handle);
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(block_header);
-        let mut state_transaction = block.transaction();
-
-        let retail_dataspace = DataSpaceId::new(17);
-        let dataspace_catalog = DataSpaceCatalog::new(vec![
-            DataSpaceMetadata {
-                id: DataSpaceId::UNIVERSAL,
-                alias: "universal".to_string(),
-                description: None,
-                fault_tolerance: 1,
-            },
-            DataSpaceMetadata {
-                id: retail_dataspace,
-                alias: "retail".to_string(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("dataspace catalog");
-        state_transaction.nexus.dataspace_catalog = dataspace_catalog.clone();
-        state_transaction.world.dataspace_catalog = dataspace_catalog;
-
-        let account_id = new_account_id(&checked_keypair());
-        Register::account(iroha_data_model::account::NewAccount::new(
-            account_id.clone(),
-        ))
-        .execute(&account_id, &mut state_transaction)
-        .expect("register subject account");
-
-        let retail_domain: iroha_data_model::domain::DomainId =
-            DomainId::try_new("ops", "retail").expect("retail domain");
-        bind_account_label_in_dataspace(
-            &mut state_transaction,
-            &account_id,
-            &account_id,
-            &retail_domain,
-            retail_dataspace,
-            "desk",
-        );
-
-        assert_eq!(
-            infer_multisig_home_domain_from_aliases(&state_transaction, &account_id)
-                .expect("infer home domain"),
-            Some(retail_domain),
-            "alias inference should preserve the dataspace-qualified home domain",
-        );
-    }
-
-    #[test]
-    fn multisig_state_reconstruction_accepts_legacy_literal_home_domain_metadata() {
+    fn multisig_metadata_cannot_reconstruct_missing_native_account_state() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(
             World::new(),
             kura,
             query_handle,
-            ChainId::from("multisig-legacy-literal-home-domain"),
+            ChainId::from("multisig-native-state-required"),
         );
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
@@ -5447,29 +5274,125 @@ mod tests {
             .world
             .smart_contract_state
             .remove(multisig_account_state_key(&registered_multisig_id));
-        state_transaction
-            .world
-            .accounts
-            .get_mut(&registered_multisig_id)
-            .expect("registered multisig account")
-            .metadata
-            .insert(
-                home_domain_key(),
-                Json::from_string_unchecked(domain_id.to_string()),
-            );
-
-        execute_propose(
+        let error = execute_propose(
             &mut state_transaction,
             &signer_id,
             &MultisigPropose::new(registered_multisig_id.clone(), Vec::new(), None),
         )
-        .expect("proposal should materialize state from legacy home-domain metadata");
-
-        assert_eq!(
-            multisig_home_domain(&state_transaction, &registered_multisig_id)
-                .expect("home domain should decode after reconstruction"),
-            Some(domain_id),
+        .expect_err("metadata alone must not materialize native multisig state");
+        assert!(matches!(
+            error,
+            ValidationFail::QueryFailed(QueryExecutionFail::NotFound)
+        ));
+        assert!(
+            state_transaction
+                .world
+                .smart_contract_state
+                .get(&multisig_account_state_key(&registered_multisig_id))
+                .is_none(),
+            "rejected proposal must not recreate native account state",
         );
+    }
+
+    #[test]
+    fn multisig_metadata_must_match_native_account_state() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(
+            World::new(),
+            kura,
+            query_handle,
+            ChainId::from("multisig-metadata-native-state-consistency"),
+        );
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+
+        let domain_id = DomainId::try_new("bsp", "cbsi").expect("parse FI domain");
+        let owner_id = new_account_id(&checked_keypair());
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
+        register_account_in_domain(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            &owner_id,
+            "register owner",
+        );
+
+        let signer_id = new_account_id(&checked_keypair());
+        register_account_in_domain(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            &signer_id,
+            "register signer",
+        );
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer_id.clone(), 1)]),
+            quorum: NonZeroU16::new(1).unwrap(),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
+        };
+        execute_register(
+            &mut state_transaction,
+            &owner_id,
+            MultisigRegister::with_account(
+                new_account_id(&checked_keypair()),
+                domain_id.clone(),
+                spec.clone(),
+            ),
+        )
+        .expect("register multisig");
+
+        let registered_multisig_id =
+            AccountId::new_multisig(multisig_policy_from_spec(&spec).expect("policy"));
+        let mut divergent_spec = spec.clone();
+        divergent_spec.transaction_ttl_ms = NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS + 1).unwrap();
+        state_transaction
+            .world
+            .accounts
+            .get_mut(&registered_multisig_id)
+            .expect("multisig account")
+            .metadata
+            .insert(spec_key(), Json::new(divergent_spec));
+
+        let error = execute_propose(
+            &mut state_transaction,
+            &signer_id,
+            &MultisigPropose::new(registered_multisig_id.clone(), Vec::new(), None),
+        )
+        .expect_err("spec metadata disagreement must fail closed");
+        assert!(matches!(
+            error,
+            ValidationFail::QueryFailed(QueryExecutionFail::Conversion(message))
+                if message.contains("multisig/spec metadata disagrees")
+        ));
+
+        let account = state_transaction
+            .world
+            .accounts
+            .get_mut(&registered_multisig_id)
+            .expect("multisig account");
+        account.metadata.insert(spec_key(), Json::new(spec));
+        account
+            .metadata
+            .insert(home_domain_key(), Json::new(None::<DomainId>));
+
+        let error = execute_propose(
+            &mut state_transaction,
+            &signer_id,
+            &MultisigPropose::new(registered_multisig_id, Vec::new(), None),
+        )
+        .expect_err("home-domain metadata disagreement must fail closed");
+        assert!(matches!(
+            error,
+            ValidationFail::QueryFailed(QueryExecutionFail::Conversion(message))
+                if message.contains("home-domain metadata disagrees")
+        ));
     }
 
     #[test]
@@ -6588,14 +6511,14 @@ seiyaku TriggerDispatch {
                 authority "{multisig_id}";
               }}
 
-              state Requests_requested_by_actor: StateMap<Name, bytes>;
-              state ToAccount: StateMap<Name, AccountId>;
-              state Amount: StateMap<Name, i64>;
-              state ProposalStatus: StateMap<Name, i64>;
-              state CreatedAtMs: StateMap<Name, i64>;
-              state ExpiresAtMs: StateMap<Name, i64>;
+              state StateMap<Name, bytes> Requests_requested_by_actor;
+              state StateMap<Name, AccountId> ToAccount;
+              state StateMap<Name, quantity> Amount;
+              state StateMap<Name, int> ProposalStatus;
+              state StateMap<Name, int> CreatedAtMs;
+              state StateMap<Name, int> ExpiresAtMs;
 
-              fn run_impl(ev: Json) -> Option<bool> {{
+              fn run_impl(Json ev) -> Option<bool> {{
                 let request_id = ev.get_name(Name::parse("request_id"))?;
                 assert(!ProposalStatus.contains(request_id), "mint request already exists");
                 let action = ev.get_name(Name::parse("action"))?;
@@ -6605,22 +6528,22 @@ seiyaku TriggerDispatch {
                 assert(asset_id == expected_asset, "unsupported asset definition");
                 let to_account_id = ev.get_account_id(Name::parse("to_account_id"))?;
                 assert(to_account_id == context::authority(), "mint destination account mismatch");
-                let amount_i64 = ev.get_int(Name::parse("amount_i64"))?;
+                let amount = ev.get_quantity(Name::parse("amount"))?;
                 let requested_by_actor = ev.get_blob_hex(Name::parse("requested_by_actor_hex"))?;
                 let created_at_ms = ev.get_int(Name::parse("created_at_ms"))?;
                 let expires_at_ms = ev.get_int(Name::parse("expires_at_ms"))?;
-                assert(amount_i64 > 0, "invalid amount");
+                assert(amount > 0, "invalid amount");
 
                 Requests_requested_by_actor[request_id] = requested_by_actor;
                 ToAccount[request_id] = to_account_id;
-                Amount[request_id] = amount_i64;
+                Amount[request_id] = amount;
                 ProposalStatus[request_id] = 1;
                 CreatedAtMs[request_id] = created_at_ms;
                 ExpiresAtMs[request_id] = expires_at_ms;
                 Option::some(true)
               }}
 
-              kotoage fn run(ev: Json) authorize("staged_mint_request_run") {{
+              kotoage fn run(Json ev) authorize("staged_mint_request_run") {{
                 assert(run_impl(ev).is_some(), "missing or invalid staged mint field");
               }}
             }}
@@ -6658,10 +6581,10 @@ seiyaku TriggerDispatch {
                 "request_id":"mrtest",
                 "asset_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa",
                 "to_account_id":"{multisig_id}",
-                "amount_i64":111,
+                "amount":"111",
                 "requested_by_actor_hex":"7b226163746f72223a226f70657261746f7231227d",
-                "created_at_ms":1779225455574,
-                "expires_at_ms":1779311855574
+                "created_at_ms":"1779225455574",
+                "expires_at_ms":"1779311855574"
             }}"#,
             multisig_id = multisig_id,
         );

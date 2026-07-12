@@ -903,22 +903,22 @@ impl SignedProposal {
 }
 
 /// A durable timeout intent for one view.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TimeoutVote {
     context_id: ContextId,
     round: Round,
     signer: ValidatorId,
-    highest_prepare: Option<CertificateRef>,
+    highest_prepare: Option<QuorumCertificate>,
 }
 
 impl TimeoutVote {
     /// Constructs a timeout vote.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         context_id: ContextId,
         round: Round,
         signer: ValidatorId,
-        highest_prepare: Option<CertificateRef>,
+        highest_prepare: Option<QuorumCertificate>,
     ) -> Self {
         Self {
             context_id,
@@ -930,26 +930,34 @@ impl TimeoutVote {
 
     /// Returns the height context identifier.
     #[must_use]
-    pub const fn context_id(self) -> ContextId {
+    pub const fn context_id(&self) -> ContextId {
         self.context_id
     }
 
     /// Returns the timed-out round.
     #[must_use]
-    pub const fn round(self) -> Round {
+    pub const fn round(&self) -> Round {
         self.round
     }
 
     /// Returns the signer.
     #[must_use]
-    pub const fn signer(self) -> ValidatorId {
+    pub const fn signer(&self) -> ValidatorId {
         self.signer
     }
 
     /// Returns the highest durable `PrepareQC` observed by the signer.
     #[must_use]
-    pub const fn highest_prepare(self) -> Option<CertificateRef> {
+    pub const fn highest_prepare(&self) -> Option<&QuorumCertificate> {
+        self.highest_prepare.as_ref()
+    }
+
+    /// Returns the stable reference authenticated by this vote.
+    #[must_use]
+    pub fn highest_prepare_ref(&self) -> Option<CertificateRef> {
         self.highest_prepare
+            .as_ref()
+            .map(QuorumCertificate::reference)
     }
 }
 
@@ -969,8 +977,8 @@ impl SignedTimeoutVote {
 
     /// Returns the timeout vote.
     #[must_use]
-    pub const fn vote(&self) -> TimeoutVote {
-        self.vote
+    pub fn vote(&self) -> TimeoutVote {
+        self.vote.clone()
     }
 
     /// Returns the opaque signature.

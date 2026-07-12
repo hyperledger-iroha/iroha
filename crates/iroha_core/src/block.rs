@@ -2766,6 +2766,13 @@ pub enum BlockValidationError {
         /// SCCP message identifier derived from the exact lane and canonical payload.
         message_id: [u8; 32],
     },
+    /// SCCP committed block contains too many successful outbound messages. Actual: {actual}, maximum: {max}
+    SccpTooManyOutboundMessages {
+        /// Successful outbound messages reconstructed from committed results.
+        actual: usize,
+        /// Fixed first-release per-block maximum.
+        max: usize,
+    },
     /// Mismatch between the actual and expected hashes of the previous block. Expected: {expected:?}, actual: {actual:?}
     PrevBlockHashMismatch {
         /// Expected value
@@ -6035,6 +6042,10 @@ pub(crate) mod valid {
                         target_profile: key.lane.target,
                         message_id: key.message_id,
                     },
+                    crate::bridge::SccpCommittedBlockValidationError::TooManyOutboundMessages {
+                        actual,
+                        max,
+                    } => BlockValidationError::SccpTooManyOutboundMessages { actual, max },
                     crate::bridge::SccpCommittedBlockValidationError::CommitmentRootMismatch {
                         expected,
                         actual,
@@ -14928,7 +14939,13 @@ pub(crate) mod valid {
                 signed_block.header().sccp_commitment_root(),
                 Some(candidate_root)
             );
-            assert!(state_block.world.sccp_outbound_messages.get(&key).is_none());
+            assert!(
+                state_block
+                    .world
+                    .sccp_outbound_pending_messages
+                    .get(&key)
+                    .is_none()
+            );
             assert!(matches!(
                 err,
                 BlockValidationError::SccpCommitmentRootMismatch {
@@ -14969,7 +14986,11 @@ pub(crate) mod valid {
                 "rejected SCCP records must be omitted from the signed root"
             );
             assert!(
-                state_block.world.sccp_outbound_messages.get(&key).is_none(),
+                state_block
+                    .world
+                    .sccp_outbound_pending_messages
+                    .get(&key)
+                    .is_none(),
                 "rejected SCCP records must not persist outbound messages"
             );
         }
@@ -15019,7 +15040,13 @@ pub(crate) mod valid {
                 signed_block.header().sccp_commitment_root(),
                 Some(candidate_root)
             );
-            assert!(state_block.world.sccp_outbound_messages.get(&key).is_none());
+            assert!(
+                state_block
+                    .world
+                    .sccp_outbound_pending_messages
+                    .get(&key)
+                    .is_none()
+            );
             assert!(matches!(
                 err,
                 BlockValidationError::SccpCommitmentRootMismatch {
@@ -23788,6 +23815,9 @@ mod event {
                 Reason::SccpCommitmentRootMismatch
             }
             BlockValidationError::SccpDuplicateOutboundMessage { .. } => {
+                Reason::SccpCommitmentRootMismatch
+            }
+            BlockValidationError::SccpTooManyOutboundMessages { .. } => {
                 Reason::SccpCommitmentRootMismatch
             }
             BlockValidationError::ExecutionContextInvalid(_)

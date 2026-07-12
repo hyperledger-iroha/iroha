@@ -1,5 +1,10 @@
 /** First-release Torii Offline HTTP contract helpers. */
 
+import {
+  normalizeAssetAliasFqn,
+  normalizeAssetDefinitionId,
+} from "./normalizers.js";
+
 export const OFFLINE_READINESS_PATH = "/v1/offline/readiness";
 export const OFFLINE_TOP_UP_PATH = "/v1/offline/top-up";
 export const OFFLINE_REDEEM_PATH = "/v1/offline/redeem";
@@ -13,6 +18,35 @@ const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_U128 = (1n << 128n) - 1n;
 const MAX_OFFLINE_ASSET_SCALE = 28n;
 const MAX_JSON_DEPTH = 128;
+const JSON_INTEGER_TOKEN_PATTERN = /^-?(?:0|[1-9][0-9]*)$/u;
+const PARSED_NUMBER_LEXEMES = new WeakMap();
+
+class ParsedOfflineJsonNumber {
+  constructor(value, token) {
+    this.value = value;
+    this.token = token;
+  }
+}
+
+function materializeParsedJsonValue(container, key, parsed) {
+  if (!(parsed instanceof ParsedOfflineJsonNumber)) return parsed;
+  let lexemes = PARSED_NUMBER_LEXEMES.get(container);
+  if (lexemes === undefined) {
+    lexemes = new Map();
+    PARSED_NUMBER_LEXEMES.set(container, lexemes);
+  }
+  lexemes.set(key, parsed.token);
+  return parsed.value;
+}
+
+function requireIntegerJsonToken(container, key, context) {
+  const token = PARSED_NUMBER_LEXEMES.get(container)?.get(key);
+  if (token !== undefined && !JSON_INTEGER_TOKEN_PATTERN.test(token)) {
+    throw new TypeError(
+      `${context} must use a JSON integer token without a fraction or exponent`,
+    );
+  }
+}
 
 function isPlainObject(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -33,6 +67,7 @@ function requireOwn(record, field, context) {
   if (!Object.prototype.hasOwnProperty.call(record, field)) {
     throw new TypeError(`${context}.${field} is required`);
   }
+  requireIntegerJsonToken(record, field, `${context}.${field}`);
   return record[field];
 }
 
@@ -55,6 +90,9 @@ function requireHumanMessage(value, context) {
   if (/[\u0000-\u001f\u007f-\u009f]/u.test(message)) {
     throw new TypeError(`${context} must not contain control characters`);
   }
+  if (Array.from(message).length > 1024) {
+    throw new RangeError(`${context} must not exceed 1024 Unicode characters`);
+  }
   return message;
 }
 
@@ -73,7 +111,14 @@ function assertWellFormedUnicode(value, context) {
   }
 }
 
-/** Parse a Torii Offline JSON body without rounding wide integer tokens. */
+/**
+ * Parse a Torii Offline JSON body without rounding wide integer tokens.
+ *
+ * Number lexemes are retained out-of-band so typed integer fields can reject
+ * fractional or exponent-form tokens even when JavaScript would coerce them
+ * to an integral Number (for example `1.0` or `1e3`). Unknown members remain
+ * ordinary JSON values and cannot affect the typed canonical value.
+ */
 export function parseOfflineJson(text, context = "Offline JSON response") {
   if (typeof text !== "string") {
     throw new TypeError(`${context} must be JSON text`);
@@ -122,19 +167,19 @@ export function parseOfflineJson(text, context = "Offline JSON response") {
     if (!match) syntax("invalid JSON number");
     const token = match[0];
     index += token.length;
-    if (/^-?(?:0|[1-9][0-9]*)$/u.test(token)) {
+    if (JSON_INTEGER_TOKEN_PATTERN.test(token)) {
       const integer = BigInt(token);
       if (
         integer >= BigInt(Number.MIN_SAFE_INTEGER)
         && integer <= BigInt(Number.MAX_SAFE_INTEGER)
       ) {
-        return Number(token);
+        return new ParsedOfflineJsonNumber(Number(token), token);
       }
-      return integer;
+      return new ParsedOfflineJsonNumber(integer, token);
     }
     const number = Number(token);
     if (!Number.isFinite(number)) syntax("non-finite JSON number");
-    return number;
+    return new ParsedOfflineJsonNumber(number, token);
   };
   const parseLiteral = (literal, value) => {
     if (!text.startsWith(literal, index)) syntax(`expected ${literal}`);
@@ -166,7 +211,8 @@ export function parseOfflineJson(text, context = "Offline JSON response") {
         skipWhitespace();
         if (text[index] !== ":") syntax("expected ':' after object key");
         index += 1;
-        const value = parseValue(depth + 1);
+        const parsed = parseValue(depth + 1);
+        const value = materializeParsedJsonValue(result, key, parsed);
         Object.defineProperty(result, key, {
           value,
           enumerable: true,
@@ -193,7 +239,8 @@ export function parseOfflineJson(text, context = "Offline JSON response") {
         return result;
       }
       while (index < text.length) {
-        result.push(parseValue(depth + 1));
+        const parsed = parseValue(depth + 1);
+        result.push(materializeParsedJsonValue(result, result.length, parsed));
         skipWhitespace();
         if (text[index] === "]") {
           index += 1;
@@ -211,14 +258,22 @@ export function parseOfflineJson(text, context = "Offline JSON response") {
     return parseNumber();
   };
 
-  const value = parseValue(0);
+  const parsed = parseValue(0);
+  const value = parsed instanceof ParsedOfflineJsonNumber ? parsed.value : parsed;
   skipWhitespace();
   if (index !== text.length) syntax("trailing JSON data");
   return value;
 }
 
 export function requireOfflineAssetDefinitionId(value, context = "assetDefinitionId") {
-  return requireExactString(value, context);
+  const exact = requireExactString(value, context);
+  const normalized = exact.includes("#")
+    ? normalizeAssetAliasFqn(exact, context)
+    : normalizeAssetDefinitionId(exact, context);
+  if (normalized !== exact) {
+    throw new TypeError(`${context} must use an exact canonical asset selector`);
+  }
+  return normalized;
 }
 
 function requireUnsignedInteger(value, context, maximum, { positive = false } = {}) {
@@ -226,7 +281,7 @@ function requireUnsignedInteger(value, context, maximum, { positive = false } = 
   if (typeof value === "bigint") {
     integer = value;
   } else if (typeof value === "number") {
-    if (!Number.isSafeInteger(value)) {
+    if (!Number.isSafeInteger(value) || Object.is(value, -0)) {
       throw new TypeError(`${context} must be a safe integer or bigint`);
     }
     integer = BigInt(value);
@@ -242,15 +297,23 @@ function requireUnsignedInteger(value, context, maximum, { positive = false } = 
 
 function requireUnsignedResponseInteger(value, context, { positive = false } = {}) {
   if (typeof value === "bigint") {
-    if (value < 0n || (positive && value === 0n) || value > MAX_U128) {
+    if (value < 0n || (positive && value === 0n) || value > MAX_U64) {
       const lower = positive ? 1 : 0;
-      throw new RangeError(`${context} must be between ${lower} and ${MAX_U128}`);
+      throw new RangeError(`${context} must be between ${lower} and ${MAX_U64}`);
     }
     return value;
   }
-  if (Number.isSafeInteger(value) && value >= (positive ? 1 : 0)) return value;
+  if (
+    Number.isSafeInteger(value)
+    && !Object.is(value, -0)
+    && value >= (positive ? 1 : 0)
+  ) return value;
   const requirement = positive ? "a positive lossless integer" : "a non-negative lossless integer";
   throw new TypeError(`${context} must be ${requirement}`);
+}
+
+function responseIntegerAsBigInt(value) {
+  return typeof value === "bigint" ? value : BigInt(value);
 }
 
 function requireByteArray(value, context, exactLength = null) {
@@ -264,8 +327,9 @@ function requireByteArray(value, context, exactLength = null) {
     if (!Object.prototype.hasOwnProperty.call(value, index)) {
       throw new TypeError(`${context} must not be sparse`);
     }
+    requireIntegerJsonToken(value, index, `${context}[${index}]`);
     const byte = value[index];
-    if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
+    if (!Number.isInteger(byte) || Object.is(byte, -0) || byte < 0 || byte > 255) {
       throw new RangeError(`${context}[${index}] must be an integer byte`);
     }
   }
@@ -336,7 +400,7 @@ function snapshotJson(value, context, ancestors = new Set(), depth = 0) {
     return value;
   }
   if (typeof value === "number") {
-    if (!Number.isSafeInteger(value) || value < 0) {
+    if (!Number.isSafeInteger(value) || Object.is(value, -0) || value < 0) {
       throw new TypeError(`${context} numbers must be non-negative safe integers`);
     }
     return value;
@@ -361,6 +425,7 @@ function snapshotJson(value, context, ancestors = new Set(), depth = 0) {
         if (!Object.prototype.hasOwnProperty.call(value, index)) {
           throw new TypeError(`${context} must not contain sparse arrays`);
         }
+        requireIntegerJsonToken(value, index, `${context}[${index}]`);
         result.push(snapshotJson(value[index], `${context}[${index}]`, ancestors, depth + 1));
       }
       return result;
@@ -378,6 +443,7 @@ function snapshotJson(value, context, ancestors = new Set(), depth = 0) {
         continue;
       }
       assertWellFormedUnicode(key, `${context} key`);
+      requireIntegerJsonToken(value, key, `${context}.${key}`);
       Object.defineProperty(result, key, {
         value: snapshotJson(value[key], `${context}.${key}`, ancestors, depth + 1),
         enumerable: true,
@@ -501,16 +567,96 @@ export function normalizeOfflineRedeemRequest(input, context = "submitOfflineRed
   return snapshotAndValidateCommand(input, context, "redeem");
 }
 
+function normalizeOfflineVerifierId(value, context) {
+  const record = requireObject(value, context);
+  const backend = requireExactString(requireOwn(record, "backend", context), `${context}.backend`);
+  const name = requireExactString(requireOwn(record, "name", context), `${context}.name`);
+  if (Array.from(backend).length > 256 || Array.from(name).length > 256) {
+    throw new RangeError(`${context} backend and name must not exceed 256 Unicode characters`);
+  }
+  return { backend, name };
+}
+
+function normalizeActiveTransferVerifier(value, evaluatedBlockHeight, context) {
+  const record = requireObject(value, context);
+  const id = normalizeOfflineVerifierId(requireOwn(record, "id", context), `${context}.id`);
+  const version = Number(requireUnsignedInteger(
+    requireOwn(record, "version", context),
+    `${context}.version`,
+    MAX_U32,
+  ));
+  const circuitId = requireExactString(
+    requireOwn(record, "circuit_id", context),
+    `${context}.circuit_id`,
+  );
+  const commitment = requireTransactionHash(
+    requireOwn(record, "commitment", context),
+    `${context}.commitment`,
+  );
+  const publicInputsSchemaHash = requireTransactionHash(
+    requireOwn(record, "public_inputs_schema_hash", context),
+    `${context}.public_inputs_schema_hash`,
+  );
+  const maxProofBytes = Number(requireUnsignedInteger(
+    requireOwn(record, "max_proof_bytes", context),
+    `${context}.max_proof_bytes`,
+    MAX_U32,
+    { positive: true },
+  ));
+  const activationHeight = requireUnsignedInteger(
+    requireOwn(record, "activation_height", context),
+    `${context}.activation_height`,
+    MAX_U64,
+  );
+  const rawWithdrawalHeight = requireOwn(record, "withdrawal_height", context);
+  const withdrawalHeight = rawWithdrawalHeight === null
+    ? null
+    : requireUnsignedInteger(
+      rawWithdrawalHeight,
+      `${context}.withdrawal_height`,
+      MAX_U64,
+      { positive: true },
+    );
+  const evaluated = responseIntegerAsBigInt(evaluatedBlockHeight);
+  if (responseIntegerAsBigInt(activationHeight) > evaluated) {
+    throw new RangeError(`${context}.activation_height is after the evaluated block`);
+  }
+  if (withdrawalHeight !== null && responseIntegerAsBigInt(withdrawalHeight) <= evaluated) {
+    throw new RangeError(`${context}.withdrawal_height is not after the evaluated block`);
+  }
+  return {
+    id,
+    version,
+    circuit_id: circuitId,
+    commitment,
+    public_inputs_schema_hash: publicInputsSchemaHash,
+    max_proof_bytes: maxProofBytes,
+    activation_height: activationHeight,
+    withdrawal_height: withdrawalHeight,
+  };
+}
+
 export function normalizeOfflineReadinessResponse(payload, expectedAssetDefinitionId) {
   const context = "offline readiness response";
+  const requestedSelector = requireOfflineAssetDefinitionId(
+    expectedAssetDefinitionId,
+    "requested asset selector",
+  );
   const record = requireObject(payload, context);
-  const assetDefinitionId = requireExactString(
-    requireOwn(record, "asset_definition_id", context),
+  const assetDefinitionId = normalizeAssetDefinitionId(
+    requireExactString(
+      requireOwn(record, "asset_definition_id", context),
+      `${context}.asset_definition_id`,
+    ),
     `${context}.asset_definition_id`,
   );
-  if (assetDefinitionId !== expectedAssetDefinitionId) {
+  if (!requestedSelector.includes("#") && assetDefinitionId !== requestedSelector) {
     throw new TypeError(`${context}.asset_definition_id does not match the requested asset`);
   }
+  const rawAssetScale = requireOwn(record, "asset_scale", context);
+  const assetScale = rawAssetScale === null
+    ? null
+    : Number(requireUnsignedInteger(rawAssetScale, `${context}.asset_scale`, MAX_U32));
   const evaluatedBlockHeight = requireUnsignedResponseInteger(
     requireOwn(record, "evaluated_block_height", context),
     `${context}.evaluated_block_height`,
@@ -527,6 +673,7 @@ export function normalizeOfflineReadinessResponse(payload, expectedAssetDefiniti
   if (!Array.isArray(blockersValue)) {
     throw new TypeError(`${context}.blockers must be an array`);
   }
+  const blockerCodes = new Set();
   const blockers = blockersValue.map((value, index) => {
     const blockerContext = `${context}.blockers[${index}]`;
     const blocker = requireObject(value, blockerContext);
@@ -534,19 +681,83 @@ export function normalizeOfflineReadinessResponse(payload, expectedAssetDefiniti
     if (!ERROR_CODE_PATTERN.test(code)) {
       throw new TypeError(`${blockerContext}.code must be a stable lowercase code of 1 to 64 characters`);
     }
+    if (blockerCodes.has(code)) {
+      throw new TypeError(`${context}.blockers must not repeat blocker code ${code}`);
+    }
+    blockerCodes.add(code);
     const message = requireHumanMessage(
       requireOwn(blocker, "message", blockerContext),
       `${blockerContext}.message`,
     );
     return { code, message };
   });
+  const rawActiveTransferVerifier = requireOwn(record, "active_transfer_verifier", context);
+  const activeTransferVerifier = rawActiveTransferVerifier === null
+    ? null
+    : normalizeActiveTransferVerifier(
+      rawActiveTransferVerifier,
+      evaluatedBlockHeight,
+      `${context}.active_transfer_verifier`,
+    );
+  const rawActiveTopUpShieldVerifier = requireOwn(
+    record,
+    "active_topup_shield_verifier",
+    context,
+  );
+  const activeTopUpShieldVerifier = rawActiveTopUpShieldVerifier === null
+    ? null
+    : normalizeActiveTransferVerifier(
+      rawActiveTopUpShieldVerifier,
+      evaluatedBlockHeight,
+      `${context}.active_topup_shield_verifier`,
+    );
   if (ready !== (blockers.length === 0)) {
     throw new TypeError(`${context}.ready must be true exactly when blockers is empty`);
   }
+  const scaleUnavailable = blockerCodes.has("asset_scale_unavailable");
+  if ((assetScale === null) !== scaleUnavailable) {
+    throw new TypeError(
+      `${context}.asset_scale must be null exactly with asset_scale_unavailable`,
+    );
+  }
+  const scaleUnsupported = blockerCodes.has("asset_scale_unsupported");
+  if ((assetScale !== null && BigInt(assetScale) > MAX_OFFLINE_ASSET_SCALE) !== scaleUnsupported) {
+    throw new TypeError(
+      `${context}.asset_scale_unsupported must reflect whether asset_scale exceeds 28`,
+    );
+  }
+  const verifierUnavailable = blockerCodes.has("transfer_verifier_unavailable");
+  if ((activeTransferVerifier === null) !== verifierUnavailable) {
+    throw new TypeError(
+      `${context}.active_transfer_verifier must be null exactly with transfer_verifier_unavailable`,
+    );
+  }
+  const topUpShieldVerifierUnavailable = blockerCodes.has(
+    "topup_shield_verifier_unavailable",
+  );
+  if ((activeTopUpShieldVerifier === null) !== topUpShieldVerifierUnavailable) {
+    throw new TypeError(
+      `${context}.active_topup_shield_verifier must be null exactly with topup_shield_verifier_unavailable`,
+    );
+  }
+  if (
+    ready
+    && (
+      assetScale === null
+      || BigInt(assetScale) > MAX_OFFLINE_ASSET_SCALE
+      || activeTransferVerifier === null
+      || activeTopUpShieldVerifier === null
+    )
+  ) {
+    throw new TypeError(`${context}.ready requires an Offline-supported scale and active verifiers`);
+  }
   return {
     asset_definition_id: assetDefinitionId,
+    asset_scale: assetScale,
     evaluated_block_height: evaluatedBlockHeight,
     evaluated_block_hash: evaluatedBlockHash,
+    active_transfer_verifier: activeTransferVerifier,
+    active_topup_shield_verifier: activeTopUpShieldVerifier,
     ready,
     blockers,
   };
@@ -640,7 +851,11 @@ function optionalErrorUnsigned(record, field, context, maximum) {
   if (!Object.prototype.hasOwnProperty.call(record, field) || record[field] === null) {
     return undefined;
   }
-  return requireUnsignedInteger(record[field], `${context}.${field}`, maximum);
+  return requireUnsignedInteger(
+    requireOwn(record, field, context),
+    `${context}.${field}`,
+    maximum,
+  );
 }
 
 function normalizeQueueErrorDetails(value, context) {
@@ -930,6 +1145,78 @@ function normalizeTopUpAnchor(value, context, expected) {
   };
 }
 
+function normalizeTopUpFinalityProof(value, context, expected) {
+  // Preserve the complete direct proof for the native verifier, while only
+  // inspecting the small set of public bindings needed to reject response
+  // substitution before cryptographic verification.
+  const directProof = snapshotJson(value, context);
+  const record = requireObject(directProof, context);
+  const version = requireUnsignedInteger(
+    requireOwn(record, "version", context),
+    `${context}.version`,
+    0xffffn,
+  );
+  if (BigInt(version) !== 1n) {
+    throw new TypeError(`${context}.version must be 1`);
+  }
+
+  const anchorContext = `${context}.anchor`;
+  const proofAnchor = requireObject(requireOwn(record, "anchor", context), anchorContext);
+  const topupOperationId = normalizeFixedBytes(
+    requireOwn(proofAnchor, "topup_operation_id", anchorContext),
+    `${anchorContext}.topup_operation_id`,
+    { nonZero: true },
+  );
+  if (fixedBytesHex(topupOperationId) !== expected.operationId) {
+    throw new TypeError(`${anchorContext}.topup_operation_id does not match the operation`);
+  }
+  const anchorDigest = normalizeFixedBytes(
+    requireOwn(proofAnchor, "anchor_digest", anchorContext),
+    `${anchorContext}.anchor_digest`,
+    { nonZero: true },
+  );
+  if (!fixedBytesEqual(anchorDigest, expected.anchor.anchor_digest)) {
+    throw new TypeError(`${anchorContext}.anchor_digest does not match the finalized anchor`);
+  }
+
+  const commitQcContext = `${context}.commit_qc`;
+  const commitQc = requireObject(requireOwn(record, "commit_qc", context), commitQcContext);
+  const heightContextContext = `${commitQcContext}.height_context`;
+  const heightContext = requireObject(
+    requireOwn(commitQc, "height_context", commitQcContext),
+    heightContextContext,
+  );
+  const contextHeight = requireUnsignedResponseInteger(
+    requireOwn(heightContext, "height", heightContextContext),
+    `${heightContextContext}.height`,
+    { positive: true },
+  );
+  if (BigInt(contextHeight) !== BigInt(expected.finalizedBlockHeight)) {
+    throw new TypeError(
+      `${heightContextContext}.height does not match finalized_block_height`,
+    );
+  }
+
+  const certificateContext = `${commitQcContext}.certificate`;
+  const certificate = requireObject(
+    requireOwn(commitQc, "certificate", commitQcContext),
+    certificateContext,
+  );
+  const roundContext = `${certificateContext}.round`;
+  const round = requireObject(requireOwn(certificate, "round", certificateContext), roundContext);
+  const certificateHeight = requireUnsignedResponseInteger(
+    requireOwn(round, "height", roundContext),
+    `${roundContext}.height`,
+    { positive: true },
+  );
+  if (BigInt(certificateHeight) !== BigInt(expected.finalizedBlockHeight)) {
+    throw new TypeError(`${roundContext}.height does not match finalized_block_height`);
+  }
+
+  requireObject(requireOwn(record, "anchor_path", context), `${context}.anchor_path`);
+  return directProof;
+}
+
 function normalizeOperationResult(value, context, operationId) {
   const record = requireObject(value, context);
   const kind = requireOwn(record, "kind", context);
@@ -965,8 +1252,23 @@ function normalizeOperationResult(value, context, operationId) {
         finalizedBlockHeight: result.finalized_block_height,
       },
     );
-  } else if (Object.prototype.hasOwnProperty.call(rawResult, "anchor")) {
-    throw new TypeError(`${resultContext}.anchor is invalid for a redeem result`);
+    result.finality_proof = normalizeTopUpFinalityProof(
+      requireOwn(rawResult, "finality_proof", resultContext),
+      `${resultContext}.finality_proof`,
+      {
+        operationId,
+        anchor: result.anchor,
+        finalizedBlockHeight: result.finalized_block_height,
+      },
+    );
+  } else {
+    for (const topUpOnlyField of ["anchor", "finality_proof"]) {
+      if (Object.prototype.hasOwnProperty.call(rawResult, topUpOnlyField)) {
+        throw new TypeError(
+          `${resultContext}.${topUpOnlyField} is invalid for a redeem result`,
+        );
+      }
+    }
   }
   return { kind, result };
 }

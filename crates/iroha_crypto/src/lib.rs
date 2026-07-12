@@ -1126,6 +1126,110 @@ pub fn bls_small_verify_batch_deterministic(
 }
 
 #[cfg(feature = "bls")]
+const BLS_POP_CACHE_CAPACITY: usize = 8_192;
+
+#[cfg(feature = "bls")]
+#[derive(Debug, PartialEq, Eq)]
+struct BlsPopCacheKey {
+    algorithm: Algorithm,
+    public_key: Vec<u8>,
+    proof: Vec<u8>,
+}
+
+#[cfg(feature = "bls")]
+impl BlsPopCacheKey {
+    fn matches(&self, algorithm: Algorithm, public_key: &[u8], proof: &[u8]) -> bool {
+        self.algorithm == algorithm
+            && self.public_key.as_slice() == public_key
+            && self.proof.as_slice() == proof
+    }
+}
+
+/// Process-wide cache of successfully verified BLS proofs of possession.
+///
+/// The digest is only an index. Every hit is confirmed against the exact
+/// algorithm, public-key bytes, and proof bytes retained in its collision
+/// bucket, so a digest collision cannot turn an unverified proof into a hit.
+/// FIFO eviction keeps memory bounded while allowing two complete 4,096-entry
+/// Sumeragi validator snapshots to remain resident.
+#[cfg(feature = "bls")]
+#[derive(Debug, Default)]
+struct BlsPopCache {
+    entries: std::collections::BTreeMap<Hash, Vec<Arc<BlsPopCacheKey>>>,
+    insertion_order: std::collections::VecDeque<(Hash, Arc<BlsPopCacheKey>)>,
+}
+
+#[cfg(feature = "bls")]
+impl BlsPopCache {
+    fn contains(&self, algorithm: Algorithm, public_key: &[u8], proof: &[u8]) -> bool {
+        let digest = bls_pop_cache_digest(algorithm, public_key, proof);
+        self.contains_at_digest(digest, algorithm, public_key, proof)
+    }
+
+    fn contains_at_digest(
+        &self,
+        digest: Hash,
+        algorithm: Algorithm,
+        public_key: &[u8],
+        proof: &[u8],
+    ) -> bool {
+        self.entries.get(&digest).is_some_and(|bucket| {
+            bucket
+                .iter()
+                .any(|entry| entry.matches(algorithm, public_key, proof))
+        })
+    }
+
+    fn remember(&mut self, algorithm: Algorithm, public_key: &[u8], proof: &[u8]) {
+        if self.contains(algorithm, public_key, proof) {
+            return;
+        }
+        while self.insertion_order.len() >= BLS_POP_CACHE_CAPACITY {
+            self.evict_oldest();
+        }
+        let digest = bls_pop_cache_digest(algorithm, public_key, proof);
+        let entry = Arc::new(BlsPopCacheKey {
+            algorithm,
+            public_key: public_key.to_vec(),
+            proof: proof.to_vec(),
+        });
+        self.entries.entry(digest).or_default().push(entry.clone());
+        self.insertion_order.push_back((digest, entry));
+    }
+
+    fn evict_oldest(&mut self) {
+        let Some((digest, entry)) = self.insertion_order.pop_front() else {
+            return;
+        };
+        let remove_bucket = if let Some(bucket) = self.entries.get_mut(&digest) {
+            if let Some(position) = bucket
+                .iter()
+                .position(|candidate| Arc::ptr_eq(candidate, &entry))
+            {
+                bucket.remove(position);
+            }
+            bucket.is_empty()
+        } else {
+            false
+        };
+        if remove_bucket {
+            self.entries.remove(&digest);
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.values().map(Vec::len).sum()
+    }
+}
+
+#[cfg(feature = "bls")]
+fn bls_pop_cache() -> &'static Mutex<BlsPopCache> {
+    static CACHE: OnceLock<Mutex<BlsPopCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(BlsPopCache::default()))
+}
+
+#[cfg(feature = "bls")]
 fn bls_collect_pks_with_pop<'a>(
     public_keys: &[&'a PublicKey],
     pops: &[&'a [u8]],
@@ -1133,11 +1237,6 @@ fn bls_collect_pks_with_pop<'a>(
     pop_verify: fn(&PublicKey, &[u8]) -> Result<(), Error>,
 ) -> Result<Vec<&'a [u8]>, Error> {
     use std::collections::BTreeSet;
-
-    fn pop_cache() -> &'static Mutex<std::collections::BTreeSet<Hash>> {
-        static CACHE: OnceLock<Mutex<std::collections::BTreeSet<Hash>>> = OnceLock::new();
-        CACHE.get_or_init(|| Mutex::new(std::collections::BTreeSet::new()))
-    }
 
     if public_keys.len() != pops.len() || public_keys.is_empty() {
         return Err(Error::BadSignature);
@@ -1149,17 +1248,7 @@ fn bls_collect_pks_with_pop<'a>(
         if !seen.insert(bytes) {
             return Err(Error::BadSignature);
         }
-        let cache_key = bls_pop_cache_key(bytes, pop);
-        let cached = pop_cache()
-            .lock()
-            .ok()
-            .is_some_and(|cache| cache.contains(&cache_key));
-        if !cached {
-            pop_verify(pk, pop)?;
-            if let Ok(mut cache) = pop_cache().lock() {
-                cache.insert(cache_key);
-            }
-        }
+        pop_verify(pk, pop)?;
         pk_bytes.push(bytes);
     }
     Ok(pk_bytes)
@@ -1177,6 +1266,12 @@ fn bls_public_key_payload(pk: &PublicKey, expected: Algorithm) -> Result<&[u8], 
 #[cfg(feature = "bls")]
 fn bls_pop_cache_key(pk_bytes: &[u8], pop: &[u8]) -> Hash {
     Hash::new_from_chunks(&[pk_bytes, pop])
+}
+
+#[cfg(feature = "bls")]
+fn bls_pop_cache_digest(algorithm: Algorithm, pk_bytes: &[u8], pop: &[u8]) -> Hash {
+    let material = bls_pop_cache_key(pk_bytes, pop);
+    Hash::new_from_chunks(&[&[algorithm as u8], material.as_ref()])
 }
 
 #[cfg(feature = "bls")]
@@ -1506,9 +1601,20 @@ pub fn bls_normal_verify_preaggregated_same_message(
 #[cfg(feature = "bls")]
 pub fn bls_normal_pop_verify(pk: &PublicKey, pop: &[u8]) -> Result<(), Error> {
     let pk_bytes = bls_public_key_payload(pk, Algorithm::BlsNormal)?;
+    if bls_pop_cache()
+        .lock()
+        .ok()
+        .is_some_and(|cache| cache.contains(Algorithm::BlsNormal, pk_bytes, pop))
+    {
+        return Ok(());
+    }
     let vk = signature::bls::BlsNormal::parse_public_key(pk_bytes)?;
     let msg_hashed = bls_pop_message_hash(pk_bytes);
-    signature::bls::BlsNormal::verify(&msg_hashed, pop, &vk)
+    signature::bls::BlsNormal::verify(&msg_hashed, pop, &vk)?;
+    if let Ok(mut cache) = bls_pop_cache().lock() {
+        cache.remember(Algorithm::BlsNormal, pk_bytes, pop);
+    }
+    Ok(())
 }
 
 /// Create BLS-Normal Proof-of-Possession for the corresponding public key.
@@ -1545,9 +1651,20 @@ pub fn bls_normal_pop_prove(sk: &PrivateKey) -> Result<Vec<u8>, Error> {
 #[cfg(feature = "bls")]
 pub fn bls_small_pop_verify(pk: &PublicKey, pop: &[u8]) -> Result<(), Error> {
     let pk_bytes = bls_public_key_payload(pk, Algorithm::BlsSmall)?;
+    if bls_pop_cache()
+        .lock()
+        .ok()
+        .is_some_and(|cache| cache.contains(Algorithm::BlsSmall, pk_bytes, pop))
+    {
+        return Ok(());
+    }
     let vk = signature::bls::BlsSmall::parse_public_key(pk_bytes)?;
     let msg_h = bls_pop_message_hash(pk_bytes);
-    signature::bls::BlsSmall::verify(&msg_h, pop, &vk)
+    signature::bls::BlsSmall::verify(&msg_h, pop, &vk)?;
+    if let Ok(mut cache) = bls_pop_cache().lock() {
+        cache.remember(Algorithm::BlsSmall, pk_bytes, pop);
+    }
+    Ok(())
 }
 
 /// Create BLS-Small Proof-of-Possession for the corresponding public key.
@@ -3860,6 +3977,77 @@ mod tests {
         assert_eq!(
             bls_pop_cache_key(&pk_bytes, &pop),
             Hash::new(&legacy_cache_key)
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "bls")]
+    fn bls_pop_cache_is_exact_and_adversarially_bounded() {
+        fn material(index: usize) -> (Vec<u8>, Vec<u8>) {
+            let index = u64::try_from(index).expect("test index fits u64");
+            let mut public_key = vec![0x42; 48];
+            public_key[..8].copy_from_slice(&index.to_le_bytes());
+            let mut proof = vec![0xA5; 96];
+            proof[..8].copy_from_slice(&index.rotate_left(17).to_le_bytes());
+            (public_key, proof)
+        }
+
+        let mut cache = BlsPopCache::default();
+        let overflow = 257;
+        for index in 0..BLS_POP_CACHE_CAPACITY + overflow {
+            let (public_key, proof) = material(index);
+            cache.remember(Algorithm::BlsNormal, &public_key, &proof);
+        }
+        assert_eq!(cache.len(), BLS_POP_CACHE_CAPACITY);
+        assert_eq!(cache.insertion_order.len(), BLS_POP_CACHE_CAPACITY);
+
+        for index in 0..overflow {
+            let (public_key, proof) = material(index);
+            assert!(
+                !cache.contains(Algorithm::BlsNormal, &public_key, &proof),
+                "oldest entry {index} must be evicted"
+            );
+        }
+        let (oldest_retained_key, oldest_retained_proof) = material(overflow);
+        assert!(cache.contains(
+            Algorithm::BlsNormal,
+            &oldest_retained_key,
+            &oldest_retained_proof
+        ));
+        let (newest_key, newest_proof) = material(BLS_POP_CACHE_CAPACITY + overflow - 1);
+        assert!(cache.contains(Algorithm::BlsNormal, &newest_key, &newest_proof));
+
+        let mut substituted_proof = newest_proof.clone();
+        substituted_proof[0] ^= 1;
+        assert!(!cache.contains(Algorithm::BlsNormal, &newest_key, &substituted_proof));
+        assert!(!cache.contains(Algorithm::BlsSmall, &newest_key, &newest_proof));
+
+        // A digest is only an index: even an adversarially populated collision
+        // bucket cannot make different exact material appear cached.
+        let collision_digest =
+            bls_pop_cache_digest(Algorithm::BlsNormal, &newest_key, &substituted_proof);
+        let mut collision_cache = BlsPopCache::default();
+        collision_cache
+            .entries
+            .entry(collision_digest)
+            .or_default()
+            .push(Arc::new(BlsPopCacheKey {
+                algorithm: Algorithm::BlsNormal,
+                public_key: newest_key.clone(),
+                proof: newest_proof.clone(),
+            }));
+        assert!(!collision_cache.contains_at_digest(
+            collision_digest,
+            Algorithm::BlsNormal,
+            &newest_key,
+            &substituted_proof,
+        ));
+
+        cache.remember(Algorithm::BlsNormal, &newest_key, &newest_proof);
+        assert_eq!(
+            cache.len(),
+            BLS_POP_CACHE_CAPACITY,
+            "an exact duplicate must not consume capacity"
         );
     }
 

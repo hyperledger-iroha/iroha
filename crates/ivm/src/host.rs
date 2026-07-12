@@ -20,9 +20,13 @@ use iroha_crypto::{
     },
 };
 use iroha_data_model::{
+    account::AccountId,
+    asset::{AssetDefinitionId, AssetId},
+    domain::DomainId,
     isi::transfer::TransferAssetBatch,
     name::Name,
     nexus::{AxtPolicySnapshot, DataSpaceId},
+    nft::NftId,
     zk::{OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, OpenVerifyEnvelopeValidationError},
 };
 #[cfg(test)]
@@ -297,6 +301,222 @@ pub fn canonical_state_map_path(base: &Name, key: &[u8]) -> Result<Name, VMError
     let path = path.parse().map_err(|_| VMError::NoritoInvalid)?;
     validate_state_path_name(&path)?;
     Ok(path)
+}
+
+fn declared_state_map_key_type<'a>(
+    vm: &'a IVM,
+    base: &Name,
+) -> Result<&'a crate::metadata::EmbeddedStateType, VMError> {
+    let interface = vm.contract_interface().ok_or(VMError::NoritoInvalid)?;
+    let mut matches = interface
+        .states
+        .iter()
+        .filter(|state| state.name == base.as_ref());
+    let state = matches.next().ok_or(VMError::NoritoInvalid)?;
+    if matches.next().is_some() {
+        return Err(VMError::NoritoInvalid);
+    }
+    match &state.ty {
+        crate::metadata::EmbeddedStateType::StateMap { key, .. } => Ok(key),
+        _ => Err(VMError::NoritoInvalid),
+    }
+}
+
+/// Require `base` to name exactly one declared top-level `StateMap`.
+pub(crate) fn validate_declared_state_map_base(vm: &IVM, base: &Name) -> Result<(), VMError> {
+    declared_state_map_key_type(vm, base).map(drop)
+}
+
+fn validate_canonical_pointer_key<T>(key: &[u8], expected_type: PointerType) -> Result<(), VMError>
+where
+    T: norito::NoritoSerialize,
+    for<'de> T: norito::NoritoDeserialize<'de>,
+{
+    let tlv = pointer_abi::validate_tlv_bytes(key)?;
+    if tlv.type_id != expected_type {
+        return Err(VMError::NoritoInvalid);
+    }
+    let decoded: T = decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+    let canonical = canonical_norito_bytes(&decoded)?;
+    if canonical != tlv.payload {
+        return Err(VMError::NoritoInvalid);
+    }
+    Ok(())
+}
+
+pub(crate) fn canonical_norito_bytes<T: norito::NoritoSerialize>(
+    value: &T,
+) -> Result<Vec<u8>, VMError> {
+    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    norito::to_bytes(value).map_err(|_| VMError::NoritoInvalid)
+}
+
+/// Validate canonical `StateMap` key bytes against the loaded CNTR declaration.
+///
+/// The key carrier contains a complete pointer envelope for pointer-backed
+/// keys and canonical framed `i64` bytes for `bool`. Numeric decoders enforce
+/// their nominal type as well as the unique mantissa/scale representation.
+pub(crate) fn validate_declared_state_map_key(
+    vm: &IVM,
+    base: &Name,
+    key: &[u8],
+) -> Result<(), VMError> {
+    use crate::metadata::EmbeddedStateType;
+
+    match declared_state_map_key_type(vm, base)? {
+        EmbeddedStateType::Int => crate::numeric_tlv::decode_int_bytes(key).map(drop),
+        EmbeddedStateType::Decimal => crate::numeric_tlv::decode_decimal_bytes(key).map(drop),
+        EmbeddedStateType::Quantity => crate::numeric_tlv::decode_quantity_bytes(key).map(drop),
+        EmbeddedStateType::Bool => {
+            let value: i64 = decode_from_bytes(key).map_err(|_| VMError::NoritoInvalid)?;
+            if !matches!(value, 0 | 1) || canonical_norito_bytes(&value)? != key {
+                return Err(VMError::NoritoInvalid);
+            }
+            Ok(())
+        }
+        EmbeddedStateType::String => {
+            let tlv = pointer_abi::validate_tlv_bytes(key)?;
+            if tlv.type_id != PointerType::Blob || core::str::from_utf8(tlv.payload).is_err() {
+                return Err(VMError::NoritoInvalid);
+            }
+            Ok(())
+        }
+        EmbeddedStateType::Bytes => {
+            let tlv = pointer_abi::validate_tlv_bytes(key)?;
+            if tlv.type_id != PointerType::Blob {
+                return Err(VMError::NoritoInvalid);
+            }
+            Ok(())
+        }
+        EmbeddedStateType::DataSpaceId => {
+            validate_canonical_pointer_key::<DataSpaceId>(key, PointerType::DataSpaceId)
+        }
+        EmbeddedStateType::AccountId => {
+            validate_canonical_pointer_key::<AccountId>(key, PointerType::AccountId)
+        }
+        EmbeddedStateType::AssetDefinitionId => {
+            validate_canonical_pointer_key::<AssetDefinitionId>(key, PointerType::AssetDefinitionId)
+        }
+        EmbeddedStateType::AssetId => {
+            validate_canonical_pointer_key::<AssetId>(key, PointerType::AssetId)
+        }
+        EmbeddedStateType::NftId => {
+            validate_canonical_pointer_key::<NftId>(key, PointerType::NftId)
+        }
+        EmbeddedStateType::DomainId => {
+            validate_canonical_pointer_key::<DomainId>(key, PointerType::DomainId)
+        }
+        EmbeddedStateType::Name => validate_canonical_pointer_key::<Name>(key, PointerType::Name),
+        EmbeddedStateType::Json
+        | EmbeddedStateType::Tuple(_)
+        | EmbeddedStateType::Struct { .. }
+        | EmbeddedStateType::StateMap { .. }
+        | EmbeddedStateType::Option(_)
+        | EmbeddedStateType::Result { .. }
+        | EmbeddedStateType::List { .. } => Err(VMError::NoritoInvalid),
+    }
+}
+
+/// Build a map path only after binding the canonical key to its CNTR type.
+pub(crate) fn canonical_typed_state_map_path(
+    vm: &IVM,
+    base: &Name,
+    key: &[u8],
+) -> Result<Name, VMError> {
+    let path = canonical_state_map_path(base, key)?;
+    validate_declared_state_map_key(vm, base, key)?;
+    Ok(path)
+}
+
+enum DeclaredStatePath<'a> {
+    Value(&'a crate::metadata::EmbeddedStateType),
+    MapBase,
+}
+
+fn resolve_declared_state_path<'a>(
+    vm: &'a IVM,
+    path: &Name,
+) -> Result<Option<DeclaredStatePath<'a>>, VMError> {
+    let Some(interface) = vm.contract_interface() else {
+        return Ok(None);
+    };
+    let (base, suffix) = path
+        .as_ref()
+        .split_once('/')
+        .map_or((path.as_ref(), None), |(base, suffix)| (base, Some(suffix)));
+    let mut matches = interface.states.iter().filter(|state| state.name == base);
+    let state = matches.next().ok_or(VMError::NoritoInvalid)?;
+    if matches.next().is_some() {
+        return Err(VMError::NoritoInvalid);
+    }
+
+    match (&state.ty, suffix) {
+        (crate::metadata::EmbeddedStateType::StateMap { .. }, None) => {
+            Ok(Some(DeclaredStatePath::MapBase))
+        }
+        (crate::metadata::EmbeddedStateType::StateMap { value, .. }, Some(suffix)) => {
+            if suffix.is_empty()
+                || suffix.len() % 2 != 0
+                || suffix.contains('/')
+                || !suffix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            {
+                return Err(VMError::NoritoInvalid);
+            }
+            let key = hex::decode(suffix).map_err(|_| VMError::NoritoInvalid)?;
+            let base: Name = base.parse().map_err(|_| VMError::NoritoInvalid)?;
+            if canonical_state_map_path(&base, &key)?.as_ref() != path.as_ref() {
+                return Err(VMError::NoritoInvalid);
+            }
+            validate_declared_state_map_key(vm, &base, &key)?;
+            Ok(Some(DeclaredStatePath::Value(value)))
+        }
+        (ty, None) => Ok(Some(DeclaredStatePath::Value(ty))),
+        (_, Some(_)) => Err(VMError::NoritoInvalid),
+    }
+}
+
+/// Bind one value operation to the loaded CNTR durable-state declaration.
+///
+/// Generic non-contract programs without CNTR metadata retain raw state-path
+/// behavior. For self-describing contracts, the first path segment must name
+/// exactly one declared scalar or one canonical `StateMap` entry. The bare map
+/// base is a collection prefix and is therefore invalid for value operations.
+pub fn validate_declared_state_path(vm: &IVM, path: &Name) -> Result<(), VMError> {
+    match resolve_declared_state_path(vm, path)? {
+        Some(DeclaredStatePath::MapBase) => Err(VMError::NoritoInvalid),
+        Some(DeclaredStatePath::Value(_)) | None => Ok(()),
+    }
+}
+
+/// Bind a scan/count prefix to the loaded CNTR durable-state declaration.
+///
+/// Unlike value operations, scans may address the bare base of a declared
+/// `StateMap`. Existing scalar-prefix behavior is retained for generic host
+/// tooling, while malformed or undeclared typed paths still fail closed.
+pub fn validate_declared_state_scan_path(vm: &IVM, path: &Name) -> Result<(), VMError> {
+    resolve_declared_state_path(vm, path).map(drop)
+}
+
+/// Validate a `STATE_SET` payload against the exact type declared by CNTR.
+///
+/// Compiler-emitted durable values are canonical `StateValueRecordV1`
+/// payloads bound to the canonical schema hash. This check prevents callers
+/// from writing a well-formed record for a different scalar or aggregate type.
+pub fn validate_declared_state_value_payload(
+    vm: &IVM,
+    path: &Name,
+    payload: &[u8],
+) -> Result<(), VMError> {
+    let Some(declared) = resolve_declared_state_path(vm, path)? else {
+        return Ok(());
+    };
+    let DeclaredStatePath::Value(ty) = declared else {
+        return Err(VMError::NoritoInvalid);
+    };
+    let schema = crate::state_value_runtime::schema_for_embedded_state_type(ty)?;
+    crate::state_value_runtime::validate_state_value_record(vm, &schema, payload)
 }
 
 /// Validate header-only `StateMap` path inputs and return their gas lengths.
@@ -839,6 +1059,8 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_REVOKE_ROLE
             | syscalls::SYSCALL_GRANT_PERMISSION
             | syscalls::SYSCALL_REVOKE_PERMISSION
+            | syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT
+            | syscalls::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT
             | syscalls::SYSCALL_CREATE_TRIGGER
             | syscalls::SYSCALL_REMOVE_TRIGGER
             | syscalls::SYSCALL_SET_TRIGGER_ENABLED
@@ -933,7 +1155,6 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT
             | syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT
             | syscalls::SYSCALL_NAME_DECODE
-            | syscalls::SYSCALL_BUILD_PATH_MAP_KEY
             | syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
             | syscalls::SYSCALL_ENCODE_INT
             | syscalls::SYSCALL_DECODE_INT
@@ -2258,6 +2479,18 @@ impl DefaultHost {
         }
         let path: Name = decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
         validate_state_path_name(&path)?;
+        validate_declared_state_path(vm, &path)?;
+        Ok((path, tlv.payload.len()))
+    }
+
+    fn decode_state_scan_path_tlv(vm: &IVM, reg: usize) -> Result<(Name, usize), VMError> {
+        let tlv = Self::expect_tlv(vm, reg, PointerType::Name)?;
+        if tlv.payload.len() > syscalls::STATE_MAX_PATH_BYTES {
+            return Err(VMError::NoritoInvalid);
+        }
+        let path: Name = decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+        validate_state_path_name(&path)?;
+        validate_declared_state_scan_path(vm, &path)?;
         Ok((path, tlv.payload.len()))
     }
 
@@ -2860,6 +3093,7 @@ impl IVMHost for DefaultHost {
                     validate_state_value_payload_len(value.len())?;
                     let gas = state_value_gas(path_len, value.len());
                     preflight_reserved_syscall_gas(vm, gas)?;
+                    validate_declared_state_value_payload(vm, &path, value)?;
                     let value = value.clone();
                     self.access_log.read_keys.insert(path.as_ref().to_string());
                     let ptr = Self::alloc_norito_bytes_tlv(vm, &value)?;
@@ -2878,6 +3112,7 @@ impl IVMHost for DefaultHost {
                 let value = {
                     let tlv = Self::expect_tlv(vm, 11, PointerType::NoritoBytes)?;
                     validate_state_value_payload_len(tlv.payload.len())?;
+                    validate_declared_state_value_payload(vm, &path, tlv.payload)?;
                     tlv.payload.to_vec()
                 };
                 let value_len = value.len();
@@ -2892,7 +3127,7 @@ impl IVMHost for DefaultHost {
                 Ok(state_path_gas(path_len))
             }
             crate::syscalls::SYSCALL_STATE_KEYS => {
-                let (prefix, path_len) = Self::decode_state_path_tlv(vm, 10)?;
+                let (prefix, path_len) = Self::decode_state_scan_path_tlv(vm, 10)?;
                 let (selected, total, scan_work_gas) = self.state_keys_page_with_prefix(
                     vm,
                     &prefix,
@@ -2930,7 +3165,11 @@ impl IVMHost for DefaultHost {
                 }
                 let base: Name =
                     decode_from_bytes(base_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                validate_declared_state_map_base(vm, &base)?;
                 let key = canonical_state_map_key_at(page.payload, &base, vm.register(12))?;
+                if let Some(key) = key.as_deref() {
+                    validate_declared_state_map_key(vm, &base, key)?;
+                }
                 let gas = Self::path_gas(
                     page.payload.len().saturating_add(base_tlv.payload.len()),
                     key.as_ref().map_or(0, Vec::len),
@@ -2970,7 +3209,7 @@ impl IVMHost for DefaultHost {
                 }
             }
             crate::syscalls::SYSCALL_STATE_COUNT => {
-                let (prefix, path_len) = Self::decode_state_path_tlv(vm, 10)?;
+                let (prefix, path_len) = Self::decode_state_scan_path_tlv(vm, 10)?;
                 let (_, total, scan_work_gas) =
                     self.state_keys_page_with_prefix(vm, &prefix, path_len, u64::MAX, 0)?;
                 let gas = STATE_QUERY_GAS_BASE.saturating_add(scan_work_gas);
@@ -4762,8 +5001,12 @@ mod tests {
     }
 
     #[test]
-    fn state_keys_page_bound_covers_admissible_pages_and_rejects_oversized_pages() {
-        for count in [0_usize, 1] {
+    fn state_keys_page_bound_covers_admissible_pages_and_rejects_item_overflow() {
+        for count in [
+            0_usize,
+            1,
+            usize::try_from(syscalls::STATE_KEYS_MAX_ITEMS).unwrap(),
+        ] {
             let keys: Vec<Name> = (0..count).map(maximum_bounded_state_name).collect();
             let encoded = norito::to_bytes(&keys).expect("encode bounded state-key page");
             let quote =
@@ -4774,16 +5017,13 @@ mod tests {
                     >= u64::try_from(encoded.len()).expect("encoded page length"),
                 "page bound underquoted {count} maximum-sized names"
             );
+            assert!(encoded.len() <= syscalls::STATE_MAP_MAX_PAGE_BYTES);
         }
-        let oversized: Vec<Name> = (0..64).map(maximum_bounded_state_name).collect();
-        assert!(
-            norito::to_bytes(&oversized)
-                .expect("encode oversized state-key page")
-                .len()
-                > syscalls::STATE_MAP_MAX_PAGE_BYTES
-        );
+        let oversized: Vec<Name> = (0..=syscalls::STATE_KEYS_MAX_ITEMS)
+            .map(maximum_bounded_state_name)
+            .collect();
         assert_eq!(
-            state_keys_page_gas_quote(&oversized, 0, 0, syscalls::STATE_KEYS_MAX_ITEMS),
+            state_keys_page_gas_quote(&oversized, 0, 0, syscalls::STATE_KEYS_MAX_ITEMS + 1,),
             Err(VMError::NoritoInvalid)
         );
     }
@@ -6157,9 +6397,9 @@ mod tests {
         let noncanonical_ptr = vm
             .alloc_input_tlv(&test_tlv(
                 PointerType::Quantity,
-                &norito::to_bytes(&noncanonical).expect("encode noncanonical Amount"),
+                &norito::to_bytes(&noncanonical).expect("encode noncanonical quantity"),
             ))
-            .expect("allocate noncanonical Amount");
+            .expect("allocate noncanonical quantity");
         vm.set_register(13, noncanonical_ptr);
         assert_eq!(
             DefaultHost::expect_amount(&vm, 13),

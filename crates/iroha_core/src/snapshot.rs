@@ -3375,29 +3375,46 @@ mod tests {
     }
 
     #[test]
-    async fn snapshot_roundtrip_preserves_sccp_outbound_messages() {
+    async fn snapshot_roundtrip_preserves_sccp_outbound_pending_messages() {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let kura = Kura::blank_kura_for_testing();
         let mut state = state_factory_with_kura(Arc::clone(&kura));
+        state.chain_id =
+            iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
         let block =
             signed_block_with_transaction(accepted_log_transaction("sccp-outbound-snapshot"));
         store_block_and_mark_state_height(&mut state, &kura, block);
+        let exact = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        state.set_sccp_registry_for_testing(
+            crate::state::ValidatedSccpRegistryV1::try_from_wire(
+                iroha_data_model::bridge::SccpRegistryV1 {
+                    version: 1,
+                    lanes: vec![iroha_data_model::bridge::SccpGovernedLaneV1 {
+                        lane_id: exact.route.lane_id,
+                        native_trust_anchors: Vec::new(),
+                        current_native_trust_anchor_hash: None,
+                        routes: vec![exact.route.clone()],
+                    }],
+                },
+            )
+            .expect("exact outbound snapshot registry validates"),
+        );
         let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1 {
-            lane: iroha_data_model::bridge::SccpLaneIdV1 {
-                source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
-                target: iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
-            },
-            message_id: [0xA5; 32],
+            lane: exact.bundle.commitment.context.lane,
+            message_id: exact.bundle.commitment.message_id,
         };
-        let record = iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
-            destination_binding_hash: [0x4A; 32],
-            route_configuration_hash: [0x6A; 32],
-            payload_hash: [0x5A; 32],
+        let record = iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
+            destination_binding_hash: exact.bundle.commitment.context.destination_binding_hash,
+            route_configuration_hash: exact.bundle.commitment.context.route_configuration_hash,
+            payload_hash: exact.bundle.commitment.payload_hash,
+            payload_bytes: iroha_sccp::canonical_sccp_payload_bytes(&exact.bundle.payload)
+                .expect("exact fixture payload encodes canonically"),
             recorded_at_height: u64::try_from(state.view().height()).expect("height fits u64"),
+            commitment_index: 0,
         };
         state
-            .insert_sccp_outbound_message_for_testing(key.clone(), record)
+            .insert_sccp_outbound_message_for_testing(key, record.clone())
             .expect("insert canonical SCCP outbound snapshot fixture");
         let key_pair = checked_random_snapshot_keypair();
 
@@ -3408,8 +3425,12 @@ mod tests {
         let snapshot_value: json::Value =
             json::from_slice(&snapshot_bytes).expect("snapshot JSON should parse");
         assert!(
-            snapshot_world_has_field(&snapshot_value, "sccp_outbound_messages"),
+            snapshot_world_has_field(&snapshot_value, "sccp_outbound_pending_messages"),
             "new snapshots must carry the SCCP outbound replay registry"
+        );
+        assert!(
+            snapshot_world_has_field(&snapshot_value, "sccp_outbound_pending_usage"),
+            "new snapshots must carry exact SCCP pending usage"
         );
 
         let snapshot_state = try_read_snapshot(
@@ -3428,11 +3449,20 @@ mod tests {
         let restored = snapshot_state
             .view()
             .world
-            .sccp_outbound_messages
+            .sccp_outbound_pending_messages
             .get(&key)
-            .copied()
+            .cloned()
             .expect("SCCP outbound replay key should survive snapshot roundtrip");
         assert_eq!(restored, record);
+        assert_eq!(
+            snapshot_state
+                .view()
+                .world
+                .sccp_outbound_pending_usage
+                .get()
+                .message_count,
+            1
+        );
     }
 
     #[test]

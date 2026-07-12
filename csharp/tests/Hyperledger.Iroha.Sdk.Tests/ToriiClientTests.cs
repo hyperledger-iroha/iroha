@@ -29596,7 +29596,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 ["params"] = new JsonArray(new JsonObject
                 {
                     ["name"] = "amount",
-                    ["type_name"] = "u128",
+                    ["type_name"] = "int",
                 }),
                 ["return_type"] = "bool",
                 ["permission"] = "can_execute_contract",
@@ -29816,7 +29816,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
               "{{propertyName}}": "amount",
               "{{propertyName}}": "amount",
-              "type_name": "u128"
+              "type_name": "int"
             }
             """;
     }
@@ -29890,7 +29890,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["params"] = new JsonArray(new JsonObject
             {
                 ["name"] = "amount",
-                ["type_name"] = "u128",
+                ["type_name"] = "int",
             }),
             ["return_type"] = "bool",
             ["permission"] = "can_execute_contract",

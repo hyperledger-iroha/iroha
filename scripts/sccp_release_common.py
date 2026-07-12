@@ -195,6 +195,12 @@ FORBIDDEN_FIXTURE_PUBLIC_KEYS = frozenset(
         "0666855cf4012140b0cea429d456f14cfbdc53982eab592af675f918d435947c",
         "38861629012e021d8fcfc202ae485b431adff8aa87d5b0b3b8c92048461c1779",
         "330dde2b028c8853134e29aa3ae92832df2ecbe1a5d36f4d800a233fd7e8f4ae",
+        # Latest ephemeral in-memory release-role seal.
+        "dbbcfd7c3b1c494e9bf8e52d76c4d388d45a4f62da5b36dead40a852e7693bb3",
+        "971e807f423e356f0b14adc7a933448b409b97e2f59e75f74e9999875daf384c",
+        # Post-merge ephemeral in-memory release-role seal.
+        "fe2b875714f38b99fdfc116fa3f86baba2377602c08f91818f115042afa9360b",
+        "28606717bbb2ad7b0540afc392dda40c1df589161243f06b3ab84455d3ceae52",
     )
 )
 

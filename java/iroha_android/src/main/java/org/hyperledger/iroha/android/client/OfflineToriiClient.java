@@ -11,6 +11,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.regex.Pattern;
+import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.offline.OfflineJsonParser;
@@ -37,6 +39,9 @@ public final class OfflineToriiClient {
   private static final String OFFLINE_REDEEM_PATH = "/v1/offline/redeem";
   private static final String OFFLINE_OPERATIONS_PATH = "/v1/offline/operations";
   private static final String NORITO_MEDIA_TYPE = "application/x-norito";
+  private static final Pattern OFFLINE_ASSET_ALIAS_PATTERN =
+      Pattern.compile(
+          "^[a-z0-9]+(?:[._-][a-z0-9]+)*#[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)?$");
 
   private final HttpTransportExecutor executor;
   private final URI baseUri;
@@ -60,12 +65,24 @@ public final class OfflineToriiClient {
   /** Fetch Torii's Offline readiness flags. */
   public CompletableFuture<OfflineReadiness> getOfflineReadiness(
       final String assetDefinitionId) {
-    requireExactNonEmptyText(assetDefinitionId, "assetDefinitionId");
+    requireOfflineAssetSelector(assetDefinitionId);
+    final String canonicalRequestedId =
+        AssetDefinitionIdEncoder.isCanonicalAddress(assetDefinitionId)
+            ? assetDefinitionId
+            : null;
     return executeGet(
         OFFLINE_READINESS_PATH
             + "?asset_definition_id="
             + urlEncode(assetDefinitionId),
-        OfflineJsonParser::parseOfflineReadiness);
+        body -> {
+          final OfflineReadiness readiness = OfflineJsonParser.parseOfflineReadiness(body);
+          if (canonicalRequestedId != null
+              && !canonicalRequestedId.equals(readiness.assetDefinitionId())) {
+            throw new IllegalArgumentException(
+                "Offline readiness response assetDefinitionId does not match the requested asset definition");
+          }
+          return readiness;
+        });
   }
 
   /** Submit the final first-release Offline top-up request. */
@@ -271,6 +288,15 @@ public final class OfflineToriiClient {
     Objects.requireNonNull(value, field);
     if (value.isEmpty() || !value.equals(value.trim())) {
       throw new IllegalArgumentException(field + " must be exact non-empty text");
+    }
+  }
+
+  private static void requireOfflineAssetSelector(final String value) {
+    requireExactNonEmptyText(value, "assetDefinitionId");
+    if (!AssetDefinitionIdEncoder.isCanonicalAddress(value)
+        && !OFFLINE_ASSET_ALIAS_PATTERN.matcher(value).matches()) {
+      throw new IllegalArgumentException(
+          "assetDefinitionId must be a canonical Base58 id or lowercase scoped asset alias");
     }
   }
 

@@ -32,12 +32,67 @@ public final class OfflineJsonParser {
               asExactReadinessString(blocker.get("code"), path + ".code"),
               asExactReadinessString(blocker.get("message"), path + ".message")));
     }
+    final Object rawAssetScale = required(object, "asset_scale", "root");
+    final BigInteger evaluatedBlockHeight =
+        asReadinessU64(required(object, "evaluated_block_height", "root"),
+            "evaluated_block_height");
+    final Object rawActiveTransferVerifier =
+        required(object, "active_transfer_verifier", "root");
+    final Object rawActiveTopUpShieldVerifier =
+        required(object, "active_topup_shield_verifier", "root");
     return new OfflineReadiness(
-        asExactReadinessString(object.get("asset_definition_id"), "asset_definition_id"),
-        asReadinessU64(object.get("evaluated_block_height"), "evaluated_block_height"),
-        asExactLowercaseHash(object.get("evaluated_block_hash"), "evaluated_block_hash"),
-        asBoolean(object.get("ready"), "ready"),
+        asExactReadinessString(
+            required(object, "asset_definition_id", "root"), "asset_definition_id"),
+        rawAssetScale == null ? null : Long.valueOf(asReadinessU32(rawAssetScale, "asset_scale")),
+        evaluatedBlockHeight,
+        asExactLowercaseHash(
+            required(object, "evaluated_block_hash", "root"), "evaluated_block_hash"),
+        rawActiveTransferVerifier == null
+            ? null
+            : parseActiveTransferVerifier(
+                rawActiveTransferVerifier,
+                evaluatedBlockHeight,
+                "active_transfer_verifier"),
+        rawActiveTopUpShieldVerifier == null
+            ? null
+            : parseActiveTransferVerifier(
+                rawActiveTopUpShieldVerifier,
+                evaluatedBlockHeight,
+                "active_topup_shield_verifier"),
+        asBoolean(required(object, "ready", "root"), "ready"),
         blockers);
+  }
+
+  private static OfflineActiveTransferVerifier parseActiveTransferVerifier(
+      final Object value, final BigInteger evaluatedBlockHeight, final String path) {
+    final Map<String, Object> object = expectObject(value, path);
+    final String idPath = path + ".id";
+    final Map<String, Object> id = expectObject(required(object, "id", path), idPath);
+    final Object rawWithdrawalHeight = required(object, "withdrawal_height", path);
+    final OfflineActiveTransferVerifier verifier =
+        new OfflineActiveTransferVerifier(
+            new OfflineVerifierId(
+                asExactReadinessString(required(id, "backend", idPath), idPath + ".backend"),
+                asExactReadinessString(required(id, "name", idPath), idPath + ".name")),
+            asReadinessU32(required(object, "version", path), path + ".version"),
+            asExactReadinessString(
+                required(object, "circuit_id", path), path + ".circuit_id"),
+            asExactLowercaseHash(
+                required(object, "commitment", path), path + ".commitment"),
+            asExactLowercaseHash(
+                required(object, "public_inputs_schema_hash", path),
+                path + ".public_inputs_schema_hash"),
+            asReadinessU32(
+                required(object, "max_proof_bytes", path), path + ".max_proof_bytes"),
+            asReadinessU64(
+                required(object, "activation_height", path), path + ".activation_height"),
+            rawWithdrawalHeight == null
+                ? null
+                : asReadinessU64(rawWithdrawalHeight, path + ".withdrawal_height"));
+    if (!verifier.isActiveAt(evaluatedBlockHeight)) {
+      throw new IllegalStateException(path + " must be active at evaluated_block_height");
+    }
+    return verifier;
   }
 
   public static String canonicalJson(final byte[] payload) {
@@ -66,8 +121,7 @@ public final class OfflineJsonParser {
               .onMalformedInput(CodingErrorAction.REPORT)
               .onUnmappableCharacter(CodingErrorAction.REPORT)
               .decode(ByteBuffer.wrap(payload))
-              .toString()
-              .trim();
+              .toString();
     } catch (final CharacterCodingException error) {
       throw new IllegalStateException("Offline JSON payload must be valid UTF-8", error);
     }
@@ -83,6 +137,14 @@ public final class OfflineJsonParser {
       throw new IllegalStateException(path + " is not a JSON object");
     }
     return (Map<String, Object>) map;
+  }
+
+  private static Object required(
+      final Map<String, Object> object, final String field, final String path) {
+    if (!object.containsKey(field)) {
+      throw new IllegalStateException(path + "." + field + " is required");
+    }
+    return object.get(field);
   }
 
   private static boolean asBoolean(final Object value, final String path) {
@@ -120,12 +182,8 @@ public final class OfflineJsonParser {
     final BigInteger integer;
     if (value instanceof BigInteger bigInteger) {
       integer = bigInteger;
-    } else if (value instanceof BigDecimal bigDecimal) {
-      try {
-        integer = bigDecimal.toBigIntegerExact();
-      } catch (final ArithmeticException ex) {
-        throw new IllegalStateException(path + " must be an integer", ex);
-      }
+    } else if (value instanceof BigDecimal) {
+      throw new IllegalStateException(path + " must be a JSON integer number");
     } else if (value instanceof Byte
         || value instanceof Short
         || value instanceof Integer
@@ -140,6 +198,14 @@ public final class OfflineJsonParser {
       throw new IllegalStateException(path + " must fit in an unsigned 64-bit integer");
     }
     return integer;
+  }
+
+  private static long asReadinessU32(final Object value, final String path) {
+    final BigInteger integer = asReadinessU64(value, path);
+    if (integer.compareTo(BigInteger.valueOf(0xffff_ffffL)) > 0) {
+      throw new IllegalStateException(path + " must fit in an unsigned 32-bit integer");
+    }
+    return integer.longValue();
   }
 
   private static OfflineTransferList.OfflineTransferItem parseTransferItem(
@@ -236,12 +302,8 @@ public final class OfflineJsonParser {
     if (value instanceof BigInteger bigInteger) {
       return checkedLong(bigInteger, path);
     }
-    if (value instanceof BigDecimal bigDecimal) {
-      try {
-        return checkedLong(bigDecimal.toBigIntegerExact(), path);
-      } catch (final ArithmeticException ex) {
-        throw new IllegalStateException(path + " must be an integer", ex);
-      }
+    if (value instanceof BigDecimal) {
+      throw new IllegalStateException(path + " must be an integer");
     }
     if (value instanceof Byte
         || value instanceof Short

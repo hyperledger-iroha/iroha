@@ -346,6 +346,11 @@ test("JavaScript identifier validation consumes the normative V1 keyword table",
   const typeNames = [...typeTable[1].matchAll(/"([A-Za-z_][A-Za-z0-9_]*)"/gu)].map(
     (match) => match[1],
   );
+  const intrinsicNames = [
+    ...semantic.matchAll(
+      /pub\(crate\) const [A-Z0-9_]+_INTRINSIC: &str = "([^"]+)";/gu,
+    ),
+  ].map((match) => match[1]);
   assert.deepEqual(KOTODAMA_V1_DECLARATION_RESERVED, [
     ...typeNames,
     "AxtDescriptor",
@@ -354,6 +359,7 @@ test("JavaScript identifier validation consumes the normative V1 keyword table",
     "SoracloudRequest",
     "SoracloudResponse",
     "state_map_get",
+    ...intrinsicNames,
   ]);
 });
 
@@ -381,7 +387,7 @@ const SERVICE_DIAGNOSTICS = [
       },
     ],
     notes: ["the preceding 🙂 occupies one Unicode display column"],
-    help: "write name: Type",
+    help: "write Type name",
     fix: {
       span: {
         source: "契約/送金.ko",
@@ -389,7 +395,7 @@ const SERVICE_DIAGNOSTICS = [
         end: { line: 2, column: 9 },
         byte_range: { start: 20, end: 20 },
       },
-      replacement: "amount: i64",
+      replacement: "int amount",
     },
   },
   {
@@ -659,6 +665,8 @@ test("compiler adapters preserve branded selectors and reject forged manifest de
     "seiyaku",
     "match",
     "int",
+    "decimal",
+    "quantity",
     "state_map_get",
     "__kotodama_link_forged",
   ]) {
@@ -694,7 +702,7 @@ test("compiler adapters preserve branded selectors and reject forged manifest de
   await assert.rejects(
     compileResponse((manifest) => {
       manifest.states = [
-        { name: "match", type_name: "i64" },
+        { name: "match", type_name: "int" },
       ];
     }),
     /state 0.name is not canonical/u,
@@ -1700,7 +1708,7 @@ test("compiler failures preserve every canonical semantic diagnostic field", asy
   });
   assert.deepEqual(result.diagnostics[0].labels, SERVICE_DIAGNOSTICS[0].labels);
   assert.deepEqual(result.diagnostics[0].notes, SERVICE_DIAGNOSTICS[0].notes);
-  assert.equal(result.diagnostics[0].help, "write name: Type");
+  assert.equal(result.diagnostics[0].help, "write Type name");
   assert.deepEqual(result.diagnostics[0].fix, SERVICE_DIAGNOSTICS[0].fix);
 });
 

@@ -15,6 +15,10 @@ This initial slice provides the foundation needed for a usable managed SDK:
   construction, initialization, and access plus strict v1 frame decode checks
   for magic/version, schema, compression, reserved layout flags, zero padding,
   length, and CRC
+- lossless Kotodama numeric V1 values for signed 512-bit `int`, exact
+  scale-bounded `decimal`, and nominal non-negative `quantity`, with canonical
+  string-only JSON, minimal two's-complement Norito frames, authenticated
+  pointer envelopes, and no conversion through CLR floating-point types
 - canonical Torii request signing headers with exact account, matching
   Ed25519 private seed, method, path, 16-byte lowercase-hex nonce, canonical
   64-byte signature-header base64, and positive timestamp validation before
@@ -438,6 +442,15 @@ using var torii = new ToriiClient(new Uri("https://torii.example"));
 
 var readiness = await torii.GetOfflineReadinessAsync("xor#wonderland");
 Console.WriteLine($"evaluated at {readiness.EvaluatedBlockHeight}: {readiness.EvaluatedBlockHash}");
+Console.WriteLine($"authoritative asset scale: {readiness.AssetScale?.ToString() ?? "unavailable"}");
+if (readiness.ActiveTransferVerifier is { } verifier)
+{
+    Console.WriteLine($"transfer verifier: {verifier.Id.Backend}:{verifier.Id.Name} v{verifier.Version}");
+}
+if (readiness.ActiveTopUpShieldVerifier is { } shieldVerifier)
+{
+    Console.WriteLine($"top-up shield verifier: {shieldVerifier.Id.Backend}:{shieldVerifier.Id.Name} v{shieldVerifier.Version}");
+}
 if (!readiness.Ready)
 {
     foreach (var blocker in readiness.Blockers)
@@ -466,6 +479,16 @@ switch (status)
         break;
 }
 ```
+
+Readiness preserves the chain's full nullable `uint` asset scale. A scale above
+28 is therefore decoded together with `asset_scale_unsupported`; only a ready
+response requires the 0-through-28 Offline amount range. The typed active
+transfer and top-up shield verifiers are separate authoritative fields bound
+to the same evaluated block and contain no key material. Each non-null verifier
+must be active at that height. A null transfer verifier requires exactly the
+`transfer_verifier_unavailable` blocker; a null top-up shield verifier requires
+exactly `topup_shield_verifier_unavailable`. `Ready` can be true only when the
+scale is supported, both verifier roles are present, and `Blockers` is empty.
 
 Operation references and statuses are negotiated as
 `application/x-norito`. The decoder returns closed pending/applied/rejected
@@ -809,13 +832,12 @@ parsing or builder mutation. These builders require valid Norito archives,
 reject empty, malformed, tampered, or wrong-type instruction archives, and keep
 recursive redeem derivation inside the native bridge.
 
-Use `PreferredMode(...)` to select `recursive_compact_v1` when the complete
-ABI-7 compact-token native surface is available, `recursive_spend_v1` when only
-the complete ABI-6-or-later native surface is available, and otherwise `null`.
-Zero-argument selection probes the native bridge; explicit capability selection
-must pass both `recursiveCompactAvailable` and `recursiveSpendAvailable`.
-The ABI-7 `recursive_compact_v1` compact-token symbols remain source-stable and
-probe `kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend.
+Use `PreferredMode(...)` to select only the first-release spend-again product
+mode `recursive_spend_v2` when the exact ABI-18 native surface is available, and
+otherwise `null`. `IsSpendAgainMode(...)` rejects the retired `recursive_spend_v1`
+and `recursive_compact_v1`. Compact-token projection symbols are not alternate
+product selectors; the internal projection circuit remains
+`kagemusha-recursive-compact-v1`.
 Use `BuildPallasOpenEnvelopesArchive(...)` for the current-hop record bundle
 and `BuildPreviousProofOpenEnvelopesArchive(...)` for the previous recursive
 proof bundle; gate both builders with

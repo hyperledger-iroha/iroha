@@ -45,11 +45,12 @@ CommitQC уны аутентификациялай. Finalized snapshot килә�
 
 ## Даими һаҡлау һәм тикшереү
 
-Sumeragi v2 apply path artifact-ты тикшерә һәм үҙгәрмәҫ Kura sidecar итеп һаҡлай. Proof
-builder каноник block менән уның sidecar-ын уҡый, ә тарихи PoP йәки certificate-ты
-үҙгәреүсән ағымдағы world state-тән яңынан төҙөмәй. Юғалған, боҙолған, ҡапма-ҡаршы йәки
-тикшерелмәгән sidecar fail-closed рәүештә кире ҡағыла; ҡулланыу мөмкинлеге һуңғы
-in-memory history window менән сикләнмәй.
+Kura finality баҫтырылғанға йәки block body сығарылғанға тиклем теүәл canonical header һәм
+`commitment_index` тәртибендәге SCCP archive-ты immutable retained record-та һаҡлай.
+Finality artifact шунан һуң шул уҡ header менән айырым immutable record-та һаҡлана. Proof
+builder retained header һәм finality record-ты ғына уҡый; тарихи block body йәки үҙгәреүсән
+WSV payload кәрәкмәй. Юғалған, боҙолған, ҡапма-ҡаршы йәки тикшерелмәгән record fail-closed
+рәүештә кире ҡағыла.
 
 Stateless verifier version, chain, height, header hash, header-ҙың canonical predecessor-ы
 һәм view-ы, context, subject һәм CommitQC-ны
@@ -81,6 +82,6 @@ artifact-ына тиклем һәр тура successor тикшерелергә 
 - `GET /v1/bridge/finality/{height}` `BridgeFinalityProof` ҡайтара;
 - `GET /v1/bridge/finality/bundle/{height}` `BridgeFinalityBundle` ҡайтара.
 
-Block йәки теүәл даими v2 artifact юҡ йә яраҡһыҙ булһа, ике endpoint та fail closed
-була. Билдәһеҙ яландар, хупланмаған version-дар һәм иҫкергән proof shape-тар кире
-ҡағылырға тейеш.
+Retained canonical header йәки теүәл даими v2 artifact юҡ йә яраҡһыҙ булһа, ике endpoint
+та fail closed була. Block-body eviction дөрөҫ proof-ты юғалтмай. Билдәһеҙ яландар,
+хупланмаған version-дар һәм иҫкергән proof shape-тар кире ҡағылырға тейеш.

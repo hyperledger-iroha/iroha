@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.offline;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.hyperledger.iroha.android.client.JsonNumbers;
 import java.util.Objects;
 
 /** Immutable log entry describing an Offline note event for audit exports. */
@@ -88,9 +89,6 @@ public final class OfflineAuditEntry {
     if (!(value instanceof Number number)) {
       throw new IllegalStateException(field + " is not numeric");
     }
-    if (number instanceof Float || number instanceof Double) {
-      throw new IllegalStateException(field + " must be an integer");
-    }
-    return number.longValue();
+    return JsonNumbers.asLong(number, field);
   }
 }

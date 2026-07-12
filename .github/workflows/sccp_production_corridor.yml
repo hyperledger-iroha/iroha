@@ -21,6 +21,7 @@ on:
           - contract-smoke
           - tvm-contract-smoke
           - core-admission
+          - runtime-api
   pull_request:
     branches: [main]
     paths:
@@ -395,9 +396,33 @@ jobs:
           path: dist/sccp-production-corridor/core-admission.log
           if-no-files-found: error
 
+  runtime-api:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.phase == 'all' || github.event.inputs.phase == 'runtime-api' }}
+    needs: runner-self-check
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+      - name: SCCP runtime, API, finality, and generated-spec corridor
+        run: |
+          set -o pipefail
+          mkdir -p dist/sccp-production-corridor
+          bash scripts/check_sccp_production_corridor.sh --phase runtime-api 2>&1 | tee dist/sccp-production-corridor/runtime-api.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sccp-production-corridor-runtime-api
+          path: dist/sccp-production-corridor/runtime-api.log
+          if-no-files-found: error
+
   sccp-production-corridor:
     if: ${{ always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.phase == 'all') }}
-    needs: [runner-self-check, rust-sccp, evidence-scripts, js-sdk, python-sdk, swift-sdk, kotlin-sdk, java-android, dotnet-sdk, contract-smoke, tvm-contract-smoke, core-admission]
+    needs: [runner-self-check, rust-sccp, evidence-scripts, js-sdk, python-sdk, swift-sdk, kotlin-sdk, java-android, dotnet-sdk, contract-smoke, tvm-contract-smoke, core-admission, runtime-api]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

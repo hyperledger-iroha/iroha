@@ -199,8 +199,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                     Executable::ContractCall(call) => {
                         println!(
-                            "  contract call: address={} entrypoint={} payload={:?}",
-                            call.contract_address, call.entrypoint, call.payload
+                            "  contract call: address={} entrypoint={} arguments={:?}",
+                            call.contract_address, call.entrypoint, call.arguments
                         );
                     }
                     Executable::Ivm(bytecode) => {

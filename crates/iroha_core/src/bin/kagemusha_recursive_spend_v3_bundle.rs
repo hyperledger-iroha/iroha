@@ -31,7 +31,8 @@ use iroha_data_model::{
     offline::{
         KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3,
         KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
-        KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3, KAGEMUSHA_RECURSIVE_SPEND_MODE_V2,
+        KAGEMUSHA_RECURSIVE_SPEND_MODE_V2,
+        KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3,
         KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
@@ -1396,9 +1397,9 @@ fn verify_owner_private_regular_file(file: &File) -> io::Result<()> {
 mod tests {
     use std::{collections::BTreeSet, fs};
 
-    use iroha_crypto::{Algorithm, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        block::consensus_v2::{ConsensusMode, ValidatorPower},
         domain::DomainId,
         offline::{
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1,
@@ -1462,7 +1463,10 @@ mod tests {
             .collect::<Vec<_>>();
         let validator_set = keypairs
             .iter()
-            .map(|key| PeerId::from(key.public_key().clone()))
+            .map(|key| ValidatorPower {
+                validator: PeerId::from(key.public_key().clone()),
+                power: 1,
+            })
             .collect::<Vec<_>>();
         let validator_set_pops = keypairs
             .iter()
@@ -1473,7 +1477,6 @@ mod tests {
                     .expect("96-byte BLS proof of possession")
             })
             .collect::<Vec<_>>();
-        let validator_set_hash = HashOf::new(&validator_set);
         let roster = KagemushaTopUpFinalityRosterArtifactV2 {
             version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
             chain_id: ChainId::from("kagemusha-pasta-cycle"),
@@ -1481,8 +1484,7 @@ mod tests {
             windows: vec![KagemushaTopUpFinalityRosterWindowV2 {
                 activates_at_height: 100,
                 withdraws_at_height: 1_000,
-                validator_set_hash: *validator_set_hash.as_ref(),
-                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                consensus_mode: ConsensusMode::Permissioned,
                 validator_set,
                 validator_set_pops,
             }],

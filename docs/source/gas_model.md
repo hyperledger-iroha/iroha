@@ -13,12 +13,20 @@ view of that canonical mapping.
 
 ## Determinism and schedule hash
 
-The gas schedule is deterministic and derived from opcode → cost pairs. The
-canonical digest is computed over the ordered opcode list with each entry
-serialized as:
+The gas schedule is deterministic. Descriptor format 3, domain-separated as
+`iroha.ivm.gas-schedule.v3`, commits to:
 
-- opcode byte (u8)
-- cost (u64, little-endian)
+- the ordered opcode byte (`u8`) and cost (`u64`, little-endian) table;
+- every ordered, named host/numeric formula parameter;
+- every staged-metering phase name and `u8` tag directly; and
+- the exhaustive ordered ABI-v1 syscall metering records (mode, gas class,
+  quote strategy, formula, parameter family, and minimum gas).
+
+The staged phase table is `0 Entry`, `1 PointerHeader`, `2 PointerEnvelope`,
+`3 PayloadHash`, `4 NoritoDecode`, `5 CanonicalValidation`, `6 Arithmetic`,
+`7 Normalization`, and `8 OutputSerialization`. Changing a phase name, tag, or
+order therefore changes the schedule hash even if all numeric constants remain
+unchanged.
 
 The hash is exposed by:
 

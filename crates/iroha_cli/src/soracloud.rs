@@ -16298,7 +16298,7 @@ fn single_api_contract_ko(app_name: &str) -> String {
     };
   }
 
-  view fn serve_healthz(_request_body: bytes, _request_meta: Json, int observed_height) -> Json {
+  view fn serve_healthz(bytes _request_body, Json _request_meta, int observed_height) -> Json {
     return {
       app: "__APP_NAME__",
       observed_height: observed_height,
@@ -16569,92 +16569,57 @@ pre {
 
 fn hayahi_app_contract_ko(service_name: &str) -> String {
     r#"seiyaku __CONTRACT_NAME__ {
-  fn with_observed_height(payload: Json, int observed_height) -> Json {
-    return json_set_int(payload, Name::parse("observed_height"), observed_height);
-  }
-
-  fn with_execution_metadata(payload: Json, int execution_sequence, int observed_height) -> Json {
-    let updated = json_set_int(payload, Name::parse("execution_sequence"), execution_sequence);
-    return with_observed_height(updated, observed_height);
-  }
-
-  fn user_preferences_payload() -> Json {
-    let payload = Json::parse("{\"route\":\"/api/v1/user/preferences\",\"service\":\"__SERVICE_NAME__\",\"storage_scope\":\"confidential_state\"}");
-    return payload;
-  }
-
-  fn saved_searches_payload() -> Json {
-    let payload = Json::parse("{\"route\":\"/api/v1/user/saved-searches\",\"service\":\"__SERVICE_NAME__\",\"storage_scope\":\"confidential_state\"}");
-    return payload;
-  }
-
   view fn main() -> Json {
     let payload = Json::parse("{\"entrypoint\":\"main\",\"runtime\":\"soracloud_ivm\",\"service\":\"__SERVICE_NAME__\",\"status\":\"compiled\"}");
     return payload;
   }
 
-  view fn serve_health(_request_body: bytes, _request_meta: Json, int observed_height) -> Json {
-    let payload = Json::parse("{\"ok\":true,\"route\":\"/api/v1/health\",\"service\":\"__SERVICE_NAME__\"}");
-    return with_observed_height(payload, observed_height);
+  view fn serve_health(bytes _request_body, Json _request_meta, int observed_height) -> Json {
+    return json { ok: true, route: "/api/v1/health", service: "__SERVICE_NAME__", observed_height: observed_height };
   }
 
-  view fn serve_state_overview(_request_body: bytes, _request_meta: Json, int observed_height) -> Json {
-    let payload = Json::parse("{\"route\":\"/api/v1/state/overview\",\"service\":\"__SERVICE_NAME__\",\"storage\":\"service_manifest_state_bindings\"}");
-    return with_observed_height(payload, observed_height);
+  view fn serve_state_overview(bytes _request_body, Json _request_meta, int observed_height) -> Json {
+    return json { route: "/api/v1/state/overview", service: "__SERVICE_NAME__", storage: "service_manifest_state_bindings", observed_height: observed_height };
   }
 
-  view fn serve_collector_status(_request_body: bytes, _request_meta: Json, int observed_height) -> Json {
-    let payload = Json::parse("{\"collectors\":\"validator_workers\",\"route\":\"/api/v1/collector/status\",\"service\":\"__SERVICE_NAME__\"}");
-    return with_observed_height(payload, observed_height);
+  view fn serve_collector_status(bytes _request_body, Json _request_meta, int observed_height) -> Json {
+    return json { collectors: "validator_workers", route: "/api/v1/collector/status", service: "__SERVICE_NAME__", observed_height: observed_height };
   }
 
-  view fn serve_auth_me(_request_body: bytes, _request_meta: Json, int observed_height) -> Json {
-    let payload = Json::parse("{\"auth_surface\":\"/api/auth/me\",\"service\":\"__SERVICE_NAME__\",\"wallet_session_mode\":\"planned\"}");
-    return with_observed_height(payload, observed_height);
+  view fn serve_auth_me(bytes _request_body, Json _request_meta, int observed_height) -> Json {
+    return json { auth_surface: "/api/auth/me", service: "__SERVICE_NAME__", wallet_session_mode: "planned", observed_height: observed_height };
   }
 
-  view fn serve_user_preferences(_request_body: bytes, _request_meta: Json, int observed_height) -> Json {
-    return with_observed_height(user_preferences_payload(), observed_height);
+  view fn serve_user_preferences(bytes _request_body, Json _request_meta, int observed_height) -> Json {
+    return json { route: "/api/v1/user/preferences", service: "__SERVICE_NAME__", storage_scope: "confidential_state", observed_height: observed_height };
   }
 
-  view fn serve_saved_searches(_request_body: bytes, _request_meta: Json, int observed_height) -> Json {
-    return with_observed_height(saved_searches_payload(), observed_height);
+  view fn serve_saved_searches(bytes _request_body, Json _request_meta, int observed_height) -> Json {
+    return json { route: "/api/v1/user/saved-searches", service: "__SERVICE_NAME__", storage_scope: "confidential_state", observed_height: observed_height };
   }
 
-  view fn issue_auth_challenge(_request_body: bytes, int execution_sequence, int observed_height) -> Json {
-    let payload = Json::parse("{\"route\":\"/api/auth/challenge\",\"service\":\"__SERVICE_NAME__\"}");
-    return with_execution_metadata(payload, execution_sequence, observed_height);
+  view fn issue_auth_challenge(bytes _request_body, int execution_sequence, int observed_height) -> Json {
+    return json { route: "/api/auth/challenge", service: "__SERVICE_NAME__", execution_sequence: execution_sequence, observed_height: observed_height };
   }
 
-  view fn enqueue_search_request(_request_body: bytes, int execution_sequence, int observed_height) -> Json {
-    let payload = Json::parse("{\"route\":\"/api/v1/search\",\"service\":\"__SERVICE_NAME__\"}");
-    return with_execution_metadata(payload, execution_sequence, observed_height);
+  view fn enqueue_search_request(bytes _request_body, int execution_sequence, int observed_height) -> Json {
+    return json { route: "/api/v1/search", service: "__SERVICE_NAME__", execution_sequence: execution_sequence, observed_height: observed_height };
   }
 
-  view fn complete_auth_login(_request_body: bytes, int execution_sequence, int observed_height) -> Json {
-    let payload = Json::parse("{\"route\":\"/api/auth/login\",\"service\":\"__SERVICE_NAME__\"}");
-    return with_execution_metadata(payload, execution_sequence, observed_height);
+  view fn complete_auth_login(bytes _request_body, int execution_sequence, int observed_height) -> Json {
+    return json { route: "/api/auth/login", service: "__SERVICE_NAME__", execution_sequence: execution_sequence, observed_height: observed_height };
   }
 
-  view fn close_auth_session(_request_body: bytes, int execution_sequence, int observed_height) -> Json {
-    let payload = Json::parse("{\"route\":\"/api/auth/logout\",\"service\":\"__SERVICE_NAME__\"}");
-    return with_execution_metadata(payload, execution_sequence, observed_height);
+  view fn close_auth_session(bytes _request_body, int execution_sequence, int observed_height) -> Json {
+    return json { route: "/api/auth/logout", service: "__SERVICE_NAME__", execution_sequence: execution_sequence, observed_height: observed_height };
   }
 
-  view fn store_user_preferences(_request_body: bytes, int execution_sequence, int observed_height) -> Json {
-    return with_execution_metadata(
-      user_preferences_payload(),
-      execution_sequence,
-      observed_height
-    );
+  view fn store_user_preferences(bytes _request_body, int execution_sequence, int observed_height) -> Json {
+    return json { route: "/api/v1/user/preferences", service: "__SERVICE_NAME__", storage_scope: "confidential_state", execution_sequence: execution_sequence, observed_height: observed_height };
   }
 
-  view fn store_saved_search(_request_body: bytes, int execution_sequence, int observed_height) -> Json {
-    return with_execution_metadata(
-      saved_searches_payload(),
-      execution_sequence,
-      observed_height
-    );
+  view fn store_saved_search(bytes _request_body, int execution_sequence, int observed_height) -> Json {
+    return json { route: "/api/v1/user/saved-searches", service: "__SERVICE_NAME__", storage_scope: "confidential_state", execution_sequence: execution_sequence, observed_height: observed_height };
   }
 }
 "#
@@ -19443,54 +19408,36 @@ fn split_app_vault_contract_ko(app_name: &str) -> String {
     let seiyaku_name = format!("{}_vault_api", normalized_contract_identifier(app_name));
     format!(
         r#"seiyaku {seiyaku_name} {{
-  fn with_observed_height(payload: Json, int observed_height) -> Json {{
-    return json_set_int(payload, Name::parse("observed_height"), observed_height);
+  view fn serve_auth_me(bytes _request_body, Json _request_meta, int observed_height) -> Json {{
+    return json {{ authenticated: false, wallet: null, observed_height: observed_height }};
   }}
 
-  fn with_execution_sequence(payload: Json, int execution_sequence, int observed_height) -> Json {{
-    let updated = json_set_int(payload, Name::parse("sequence"), execution_sequence);
-    return with_observed_height(updated, observed_height);
+  view fn serve_user_preferences(bytes _request_body, Json _request_meta, int observed_height) -> Json {{
+    return json {{ preferences: json {{}}, observed_height: observed_height }};
   }}
 
-  view fn serve_auth_me(_request_body: bytes, _request_meta: Json, int observed_height) -> Json {{
-    let payload = Json::parse("{{\"authenticated\":false,\"wallet\":null}}");
-    return with_observed_height(payload, observed_height);
+  view fn serve_saved_searches(bytes _request_body, Json _request_meta, int observed_height) -> Json {{
+    return json {{ saved_searches: json [], observed_height: observed_height }};
   }}
 
-  view fn serve_user_preferences(_request_body: bytes, _request_meta: Json, int observed_height) -> Json {{
-    let payload = Json::parse("{{\"preferences\":{{}}}}");
-    return with_observed_height(payload, observed_height);
+  view fn issue_auth_challenge(bytes _request_body, int execution_sequence, int observed_height) -> Json {{
+    return json {{ accepted: true, challenge_id: execution_sequence, observed_height: observed_height }};
   }}
 
-  view fn serve_saved_searches(_request_body: bytes, _request_meta: Json, int observed_height) -> Json {{
-    let payload = Json::parse("{{\"saved_searches\":[]}}");
-    return with_observed_height(payload, observed_height);
+  view fn complete_auth_login(bytes _request_body, int execution_sequence, int observed_height) -> Json {{
+    return json {{ accepted: true, action: "login", sequence: execution_sequence, observed_height: observed_height }};
   }}
 
-  view fn issue_auth_challenge(_request_body: bytes, int execution_sequence, int observed_height) -> Json {{
-    let payload = Json::parse("{{\"accepted\":true}}");
-    let payload = json_set_int(payload, Name::parse("challenge_id"), execution_sequence);
-    return with_observed_height(payload, observed_height);
+  view fn close_auth_session(bytes _request_body, int execution_sequence, int observed_height) -> Json {{
+    return json {{ accepted: true, action: "logout", sequence: execution_sequence, observed_height: observed_height }};
   }}
 
-  view fn complete_auth_login(_request_body: bytes, int execution_sequence, int observed_height) -> Json {{
-    let payload = Json::parse("{{\"accepted\":true,\"action\":\"login\"}}");
-    return with_execution_sequence(payload, execution_sequence, observed_height);
+  view fn store_user_preferences(bytes _request_body, int execution_sequence, int observed_height) -> Json {{
+    return json {{ accepted: true, action: "store_preferences", sequence: execution_sequence, observed_height: observed_height }};
   }}
 
-  view fn close_auth_session(_request_body: bytes, int execution_sequence, int observed_height) -> Json {{
-    let payload = Json::parse("{{\"accepted\":true,\"action\":\"logout\"}}");
-    return with_execution_sequence(payload, execution_sequence, observed_height);
-  }}
-
-  view fn store_user_preferences(_request_body: bytes, int execution_sequence, int observed_height) -> Json {{
-    let payload = Json::parse("{{\"accepted\":true,\"action\":\"store_preferences\"}}");
-    return with_execution_sequence(payload, execution_sequence, observed_height);
-  }}
-
-  view fn store_saved_search(_request_body: bytes, int execution_sequence, int observed_height) -> Json {{
-    let payload = Json::parse("{{\"accepted\":true,\"action\":\"store_saved_search\"}}");
-    return with_execution_sequence(payload, execution_sequence, observed_height);
+  view fn store_saved_search(bytes _request_body, int execution_sequence, int observed_height) -> Json {{
+    return json {{ accepted: true, action: "store_saved_search", sequence: execution_sequence, observed_height: observed_height }};
   }}
 }}
 "#

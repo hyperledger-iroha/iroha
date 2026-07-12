@@ -1,0 +1,82 @@
+name: Numeric V1 gas calibration
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  reference_calibration:
+    name: Supported-runner calibration (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - macos-14
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+          shared-key: numeric-v1-calibration-${{ matrix.runner }}
+      - name: Capture reference-host identity
+        shell: bash
+        run: |
+          mkdir -p target/numeric-v1-calibration
+          {
+            echo "runner=${{ matrix.runner }}"
+            echo "runner_os=${{ runner.os }}"
+            echo "runner_arch=${{ runner.arch }}"
+            uname -a
+            uname -m
+            if command -v sysctl >/dev/null 2>&1; then
+              sysctl -n hw.model 2>/dev/null || true
+              sysctl -n machdep.cpu.brand_string 2>/dev/null || true
+            fi
+            if command -v lscpu >/dev/null 2>&1; then
+              lscpu
+            fi
+            if command -v powershell.exe >/dev/null 2>&1; then
+              powershell.exe -NoProfile -Command \
+                'Get-CimInstance Win32_Processor | Format-List Name,NumberOfCores,NumberOfLogicalProcessors'
+            fi
+            rustc -Vv
+            git rev-parse HEAD
+          } | tee target/numeric-v1-calibration/host.txt
+      - name: Run release calibration
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo bench --locked -p ivm --bench gas_calibration -- \
+            --sample-size 100 \
+            --warm-up-time 3 \
+            --measurement-time 5 \
+            --noplot \
+            --save-baseline numeric-v1-release \
+            2>&1 | tee target/numeric-v1-calibration/console.log
+      - name: Verify consensus weights and safety margin
+        shell: bash
+        run: |
+          python3 scripts/check_numeric_v1_calibration.py target/criterion \
+            --json-output target/numeric-v1-calibration/report.json \
+            | tee target/numeric-v1-calibration/verification.log
+      - name: Archive Criterion evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: numeric-v1-gas-calibration-${{ matrix.runner }}-${{ runner.arch }}-${{ github.sha }}
+          path: |
+            target/criterion
+            target/numeric-v1-calibration
+          if-no-files-found: error
+          retention-days: 90
