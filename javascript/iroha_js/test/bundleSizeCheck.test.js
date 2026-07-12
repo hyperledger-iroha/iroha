@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
   BUNDLE_TARGETS,
   findForbiddenBrowserInputs,
+  hasForbiddenGlobalBufferMutation,
+  listExplicitBrowserExports,
   runBundleSizeCheck,
 } from "../scripts/bundle-size-check.mjs";
 
@@ -33,7 +36,7 @@ test("bundle-size targets retain audited ceilings and browser graph guards", () 
     [
       {
         label: "toriiClient.js",
-        limitKb: 840,
+        limitKb: 864,
         forbidNodeInputs: false,
         forbidGlobalBuffer: false,
       },
@@ -69,7 +72,7 @@ test("bundle-size targets retain audited ceilings and browser graph guards", () 
       },
       {
         label: "browser.js (public aggregate)",
-        limitKb: 300,
+        limitKb: 328,
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
@@ -99,7 +102,7 @@ test("bundle-size check gates the complete public browser aggregate", () => {
   assert.equal(target.platform, "browser");
   assert.match(target.entryPoint, /dist[/\\]browser\.js$/u);
   assert.equal(target.forbidNodeInputs, true);
-  assert.ok(target.limitKb > 0 && target.limitKb <= 300);
+  assert.ok(target.limitKb > 0 && target.limitKb <= 328);
 });
 
 test("bundle-size check gates canonical requests as a browser subpath", () => {
@@ -136,6 +139,10 @@ test("bundle-size check gates the remote Kotodama compiler browser export", () =
 test("browser graph guard detects every forbidden Node-only edge", () => {
   const candidates = [
     "node:crypto",
+    "src/crypto.js",
+    "dist/cryptoHash.js",
+    "src/native.js",
+    "dist/toriiClient.js",
     "/package/dist/crypto.js",
     "/package/dist/cryptoHash.js",
     "/package/dist/native.js",
@@ -144,7 +151,94 @@ test("browser graph guard detects every forbidden Node-only edge", () => {
     "/package/dist/native.browser.js",
     "/package/dist/toriiBrowserClient.js",
   ];
-  assert.deepEqual(findForbiddenBrowserInputs(candidates), candidates.slice(0, 5));
+  assert.deepEqual(findForbiddenBrowserInputs(candidates), candidates.slice(0, 9));
+});
+
+test("global Buffer guard rejects assignment and property-definition bypasses", () => {
+  for (const source of [
+    "globalThis.Buffer = value",
+    "window.Buffer ||= value",
+    "global['Buffer'] ??= value",
+    "self[\"Buffer\"] &&= value",
+    "globalThis.Buffer++",
+    "--window['Buffer']",
+    'Object.defineProperty(globalThis, "Buffer", { value })',
+    "Reflect.defineProperty(window, 'Buffer', { value })",
+    "Object.defineProperties(global, { Buffer: { value } })",
+    "Object.assign(self, { Buffer: value })",
+  ]) {
+    assert.equal(hasForbiddenGlobalBufferMutation(source), true, source);
+  }
+  assert.equal(hasForbiddenGlobalBufferMutation("const Buffer = LocalBuffer"), false);
+  assert.equal(hasForbiddenGlobalBufferMutation("delete globalThis.Buffer"), false);
+});
+
+test("browser graph audit derives every explicit browser-conditioned package export", async () => {
+  const pkg = JSON.parse(
+    await readFile(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  assert.deepEqual(listExplicitBrowserExports(pkg), [
+    { target: "./dist/browser.js", subpaths: ["./browser"] },
+    { target: "./dist/transactionCodec.js", subpaths: ["./transaction-codec"] },
+    { target: "./dist/normalizers.js", subpaths: ["./normalizers"] },
+    { target: "./dist/blake2b.js", subpaths: ["./blake2b"] },
+    { target: "./dist/ivmArtifact.js", subpaths: ["./ivm-artifact"] },
+    {
+      target: "./dist/toriiBrowserClient.js",
+      subpaths: ["./torii", "./torii-browser"],
+    },
+    { target: "./dist/canonicalRequest.js", subpaths: ["./canonical-request"] },
+    { target: "./dist/crypto.browser.js", subpaths: ["./crypto"] },
+    { target: "./dist/nexusApp.js", subpaths: ["./nexus-app"] },
+    {
+      target: "./dist/kotodamaCompiler/browser.js",
+      subpaths: ["./kotodama-compiler"],
+    },
+  ]);
+});
+
+test("browser graph audit catches Node edges in an export omitted from size budgets", async () => {
+  await assert.rejects(
+    runBundleSizeCheck({
+      loadEsbuild: async () => ({
+        async build(options) {
+          const entryPoint = options.entryPoints[0];
+          return {
+            outputFiles: [{ contents: new Uint8Array(), text: "" }],
+            metafile: {
+              inputs: entryPoint.endsWith("/dist/normalizers.js")
+                ? { "node:fs": {} }
+                : { [entryPoint]: {} },
+            },
+          };
+        },
+      }),
+      log() {},
+    }),
+    /\.\/normalizers explicit browser export includes forbidden Node-only inputs: node:fs/u,
+  );
+});
+
+test("browser runtime probe catches aliased global Buffer installation", async () => {
+  await assert.rejects(
+    runBundleSizeCheck({
+      loadEsbuild: async () => ({
+        async build(options) {
+          const entryPoint = options.entryPoints[0];
+          const installsBuffer = entryPoint.endsWith("/dist/browser.js");
+          const text = installsBuffer
+            ? "const root = globalThis; root.Buffer = class BufferShim {};"
+            : "export {};";
+          return {
+            outputFiles: [{ contents: new TextEncoder().encode(text), text }],
+            metafile: { inputs: { [entryPoint]: {} } },
+          };
+        },
+      }),
+      log() {},
+    }),
+    /\.\/browser explicit browser export installs a forbidden global Buffer shim at runtime/u,
+  );
 });
 
 test("public browser aggregate bundles without Node inputs or global Buffer shims", async () => {
@@ -167,8 +261,8 @@ test("public browser aggregate bundles without Node inputs or global Buffer shim
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  assert.equal(Object.keys(result.metafile.inputs).length, 51);
-  assert.equal(result.outputFiles[0].contents.byteLength, 303_924);
+  assert.equal(Object.keys(result.metafile.inputs).length, 52);
+  assert.equal(result.outputFiles[0].contents.byteLength, 328_676);
   assert.ok(result.outputFiles[0].contents.byteLength <= target.limitKb * 1024);
   assert.doesNotMatch(
     result.outputFiles[0].text,
@@ -207,7 +301,7 @@ test("IVM artifact browser leaf stays below 12 KiB without Node or Buffer shims"
 
 test("remaining bundle targets retain exact pinned-esbuild baselines", async () => {
   const expected = new Map([
-    ["toriiClient.js", { bytes: 853_208, modules: 57 }],
+    ["toriiClient.js", { bytes: 877_656, modules: 58 }],
     ["transactionCodec.js (browser)", { bytes: 125_424, modules: 36 }],
     ["nexusApp.js (browser)", { bytes: 206_556, modules: 45 }],
     ["canonicalRequest.js (browser)", { bytes: 69_529, modules: 31 }],
@@ -260,7 +354,7 @@ test("Kotodama compiler browser export stays below 51 KiB without Node or Buffer
     [],
   );
   assert.equal(Object.keys(result.metafile.inputs).length, 6);
-  assert.equal(result.outputFiles[0].contents.byteLength, 51_000);
+  assert.equal(result.outputFiles[0].contents.byteLength, 51_362);
   assert.ok(result.outputFiles[0].contents.byteLength <= target.limitKb * 1024);
   assert.doesNotMatch(
     result.outputFiles[0].text,

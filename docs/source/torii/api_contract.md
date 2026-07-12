@@ -341,8 +341,8 @@ public response schema.
 
 Both Offline command routes use the configured Torii `max_content_len` request
 limit, the same operator-controlled ceiling used for transaction ingress. They
-do not inherit Axum's smaller framework default: a semantic-lineage redemption
-that is within the configured limit reaches typed decoding. A streamed or
+do not inherit Axum's smaller framework default: a Kagemusha redemption that is
+within the configured limit reaches typed decoding. A streamed or
 declared body that exceeds the configured limit fails with typed `413` code
 `request_payload_too_large` before command admission.
 

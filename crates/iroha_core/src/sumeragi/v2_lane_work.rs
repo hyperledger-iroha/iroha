@@ -39,9 +39,9 @@ use thiserror::Error;
 
 use super::{
     InboundBlockMessage, LaneRelayMessage,
-    main_loop::lane_scheduler::{
-        lane_block_redrive_leader, prepare_v2_lane_payload_plan, proposal_lookahead_enabled,
-        v2_known_lane_tip_for_route,
+    lane_planner::{
+        lane_block_redrive_leader, pinned_autoscale_validator_pops_for_set,
+        prepare_v2_lane_payload_plan, proposal_lookahead_enabled, v2_known_lane_tip_for_route,
     },
     message::BlockMessage,
     v2_candidate::{
@@ -2382,11 +2382,7 @@ impl V2LaneWorkAdapter {
                 .map(|validator| historical.get(validator).cloned())
                 .collect();
         }
-        let pinned = super::main_loop::pinned_autoscale_validator_pops_for_set(
-            &self.state,
-            lane_id,
-            validator_set,
-        )?;
+        let pinned = pinned_autoscale_validator_pops_for_set(&self.state, lane_id, validator_set)?;
         let pops = if let Some(pops) = pinned {
             pops
         } else {
@@ -2842,8 +2838,6 @@ impl V2LaneWorkAdapter {
                         break;
                     }
                 }
-                self.lane_drain_votes
-                    .mark_local_vote_broadcast(Instant::now());
             }
         }
         let _ = active_view;
@@ -4910,11 +4904,8 @@ impl V2LaneWorkAdapter {
             participant_dataspace,
             authority_height,
         )?;
-        let pinned = super::main_loop::pinned_autoscale_validator_pops_for_set(
-            &self.state,
-            participant_lane,
-            &validators,
-        )?;
+        let pinned =
+            pinned_autoscale_validator_pops_for_set(&self.state, participant_lane, &validators)?;
         let aligned_pops = if let Some(pops) = pinned {
             pops
         } else {
@@ -9453,14 +9444,13 @@ mod tests {
     fn production_default_native_signing_capacity_constructs_for_validator_and_observer() {
         use iroha_config::parameters::defaults::sumeragi as defaults;
 
-        let control = NonZeroUsize::new(defaults::MSG_CHANNEL_CAP_VOTES)
-            .expect("production control queue default is nonzero");
-        let max_transactions = defaults::V2_BLOCK_MAX_TRANSACTIONS;
+        let control = defaults::QUEUE_COMMAND_CAPACITY;
+        let max_transactions = defaults::BLOCK_MAX_TRANSACTIONS;
         let one = NonZeroUsize::new(1).expect("nonzero");
         let limits = V2LaneWorkLimits::new(control, max_transactions, one, one, one, control);
         assert_eq!(
             control.get().checked_mul(max_transactions.get()),
-            Some(4_194_304),
+            Some(524_288),
             "test must exercise the exact production-default product"
         );
         assert_eq!(

@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_config::parameters::actual::SumeragiNpos;
-use iroha_crypto::{Hash, KeyPair, Signature};
+use iroha_crypto::{Hash, KeyPair, PrivateKey, Signature};
 use iroha_data_model::{
     block::consensus_v2 as wire,
     consensus::{
@@ -19,13 +19,51 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly;
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use super::{
     NposEpochParams,
     consensus::{NPOS_TAG, VrfCommit, VrfReveal, vrf_commit_preimage, vrf_reveal_preimage},
-    main_loop::vrf::derive_vrf_material_from_key,
 };
 use crate::state::{State, WorldReadOnly};
+
+/// Domain separator for deterministic NPoS VRF input derivation.
+const VRF_INPUT_DOMAIN: &[u8] = b"iroha:npos:vrf:input:v1";
+
+fn derive_vrf_material_from_key(
+    chain_hash: &Hash,
+    private_key: &PrivateKey,
+    epoch: u64,
+    signer: wire::ValidatorIndex,
+) -> Result<([u8; 32], [u8; 32]), String> {
+    let mut message = Vec::with_capacity(
+        VRF_INPUT_DOMAIN.len() + chain_hash.as_ref().len() + core::mem::size_of::<u64>() * 2,
+    );
+    message.extend_from_slice(VRF_INPUT_DOMAIN);
+    message.extend_from_slice(chain_hash.as_ref());
+    message.extend_from_slice(&epoch.to_be_bytes());
+    message.extend_from_slice(&u64::from(signer).to_be_bytes());
+    let reveal: [u8; 32] = if private_key.algorithm() == iroha_crypto::Algorithm::BlsNormal {
+        let payload =
+            Zeroizing::new(private_key.try_payload().map_err(|error| {
+                format!("failed to expose BLS key for VRF derivation: {error}")
+            })?);
+        let secret = iroha_crypto::BlsNormal::parse_private_key(payload.as_slice())
+            .map_err(|error| format!("failed to parse BLS key for VRF derivation: {error}"))?;
+        let (output, _proof) =
+            iroha_crypto::vrf::prove_normal_with_chain(&secret, chain_hash.as_ref(), &message)
+                .map_err(|error| {
+                    format!("failed to derive deterministic BLS VRF material: {error}")
+                })?;
+        output.0
+    } else {
+        let signature = Signature::try_new(private_key, &message)
+            .map_err(|error| format!("failed to sign local VRF input material: {error}"))?;
+        Hash::new(signature.payload()).into()
+    };
+    let commitment: [u8; 32] = Hash::new(reveal).into();
+    Ok((reveal, commitment))
+}
 
 /// Result of admitting one authenticated VRF observation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

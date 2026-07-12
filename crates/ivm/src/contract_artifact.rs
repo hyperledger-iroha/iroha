@@ -85,6 +85,13 @@ impl StdError for ContractArtifactError {}
 pub fn verify_contract_artifact(
     artifact: &[u8],
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
+    verify_contract_artifact_with_profile(artifact, ArtifactValidationProfile::Production)
+}
+
+fn verify_contract_artifact_with_profile(
+    artifact: &[u8],
+    profile: ArtifactValidationProfile,
+) -> Result<VerifiedContractArtifact, ContractArtifactError> {
     let parsed = parse_contract_metadata(artifact)?;
     let envelope = validate_contract_envelope(artifact, &parsed)?;
     let decoded = IvmCache::decode_stream(&artifact[parsed.code_offset..]).map_err(|err| {
@@ -92,13 +99,8 @@ pub fn verify_contract_artifact(
             "instruction decode failed for executable stream: {err}"
         ))
     })?;
-    let verified = verify_decoded_contract_artifact(
-        artifact,
-        &parsed,
-        envelope,
-        decoded.as_ref(),
-        ArtifactValidationProfile::Production,
-    )?;
+    let verified =
+        verify_decoded_contract_artifact(artifact, &parsed, envelope, decoded.as_ref(), profile)?;
     let literal_table = decode_literal_table(
         artifact,
         parsed.header_len,

@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Localnet simulation for a public-style Taira rollout with churn and fixed TPS load.
+//! Taira-profile localnet soak with fixed load, packet impairment, and validator churn.
 
 use std::{
     any::Any,
@@ -41,9 +41,10 @@ const READY_TIMEOUT: Duration = Duration::from_secs(300);
 const STATUS_POLL: Duration = Duration::from_millis(200);
 const MONITOR_PERIOD: Duration = Duration::from_secs(1);
 const DEFAULT_STALL_TIMEOUT_SECS: u64 = 300;
-const DEFAULT_SIM_DURATION_SECS: u64 = 3_600;
+const DEFAULT_SIM_DURATION_SECS: u64 = 24 * 60 * 60;
 const DEFAULT_LOAD_TPS: u64 = 5;
 const DEFAULT_CHURN_INTERVAL_SECS: u64 = 300;
+const DEFAULT_PACKET_LOSS_PERCENT: u8 = 10;
 const DEFAULT_MAX_HEIGHT_SKEW: u64 = 2;
 const DEFAULT_MAX_HEIGHT_SKEW_GRACE_SECS: u64 = 30;
 const INTERIM_CONVERGENCE_MAX_SKEW: u64 = 6;
@@ -88,6 +89,7 @@ struct SimulationModes {
 struct SimulationConfig {
     duration: Duration,
     tps: u64,
+    packet_loss_percent: u8,
     churn_interval: Duration,
     max_height_skew: u64,
     max_height_skew_grace: Duration,
@@ -108,6 +110,12 @@ impl SimulationConfig {
                 30,
             )),
             tps: env_u64("IROHA_TAIRA_LOAD_TPS", DEFAULT_LOAD_TPS, 1),
+            packet_loss_percent: env_u8(
+                "IROHA_TAIRA_PACKET_LOSS_PERCENT",
+                DEFAULT_PACKET_LOSS_PERCENT,
+                0,
+                100,
+            ),
             churn_interval: Duration::from_secs(env_u64(
                 "IROHA_TAIRA_CHURN_INTERVAL_SECS",
                 DEFAULT_CHURN_INTERVAL_SECS,
@@ -152,6 +160,7 @@ impl SimulationConfig {
         Self {
             duration: Duration::from_secs(duration_secs),
             tps: DEFAULT_LOAD_TPS,
+            packet_loss_percent: 0,
             churn_interval: Duration::from_secs(churn_interval_secs),
             max_height_skew: DEFAULT_MAX_HEIGHT_SKEW,
             max_height_skew_grace: Duration::from_secs(DEFAULT_MAX_HEIGHT_SKEW_GRACE_SECS),
@@ -169,6 +178,7 @@ impl SimulationConfig {
 struct SimulationSummary {
     duration_secs: u64,
     target_tps: u64,
+    packet_loss_percent: u8,
     tx_attempted: u64,
     tx_sent: u64,
     tx_submit_errors: u64,
@@ -195,6 +205,7 @@ impl SimulationSummary {
         norito::json!({
             "duration_secs": (self.duration_secs),
             "target_tps": (self.target_tps),
+            "packet_loss_percent": (self.packet_loss_percent),
             "tx_attempted": (self.tx_attempted),
             "tx_sent": (self.tx_sent),
             "tx_submit_errors": (self.tx_submit_errors),
@@ -434,7 +445,7 @@ async fn taira_localnet_bootstrap_validators() -> Result<()> {
     let temp_dir = localnet_tempdir("taira-bootstrap")?;
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async {
-        let harness = setup_taira_harness(&out_dir, "taira-bootstrap").await?;
+        let harness = setup_taira_harness(&out_dir, "taira-bootstrap", 0).await?;
         wait_for_cluster_convergence(
             &harness.validator_clients,
             harness.primary_client.get_status()?.blocks,
@@ -469,7 +480,7 @@ async fn taira_localnet_joiner_register_unregister_behavior() -> Result<()> {
     let temp_dir = localnet_tempdir("taira-membership")?;
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async {
-        let mut harness = setup_taira_harness(&out_dir, "taira-membership").await?;
+        let mut harness = setup_taira_harness(&out_dir, "taira-membership", 0).await?;
         let mut joiner_warning_state = JoinerCatchupWarningState::default();
         let _ = membership_join_cycle(&mut harness, &mut joiner_warning_state).await?;
         let _ = membership_leave_cycle(&mut harness).await?;
@@ -493,7 +504,7 @@ async fn taira_localnet_restart_catchup_behavior() -> Result<()> {
     let temp_dir = localnet_tempdir("taira-restart")?;
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async {
-        let mut harness = setup_taira_harness(&out_dir, "taira-restart").await?;
+        let mut harness = setup_taira_harness(&out_dir, "taira-restart", 0).await?;
         let _ = process_churn_cycle(&mut harness, 0, Duration::from_secs(PROCESS_DOWNTIME_SECS))
             .await?;
         Ok(())
@@ -504,8 +515,8 @@ async fn taira_localnet_restart_catchup_behavior() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "long-running taira simulation"]
-async fn taira_public_localnet_5tps_churn_stability() -> Result<()> {
+#[ignore = "24-hour Taira-profile soak with validator restarts and packet impairment"]
+async fn taira_profile_24h_packet_impairment_and_restart_soak() -> Result<()> {
     init_instruction_registry();
     let _guard = sandbox::serial_guard();
 
@@ -517,7 +528,7 @@ async fn taira_public_localnet_5tps_churn_stability() -> Result<()> {
     let temp_dir = localnet_tempdir("taira-simulation")?;
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async move {
-        let mut harness = setup_taira_harness(&out_dir, &seed).await?;
+        let mut harness = setup_taira_harness(&out_dir, &seed, cfg.packet_loss_percent).await?;
         let summary = run_taira_simulation(
             &mut harness,
             cfg,
@@ -534,7 +545,7 @@ async fn taira_public_localnet_5tps_churn_stability() -> Result<()> {
 
     finalize_result(
         temp_dir,
-        "taira_public_localnet_5tps_churn_stability",
+        "taira_profile_24h_packet_impairment_and_restart_soak",
         result,
     )
 }
@@ -962,6 +973,7 @@ async fn run_taira_simulation(
     Ok(SimulationSummary {
         duration_secs,
         target_tps: cfg.tps,
+        packet_loss_percent: cfg.packet_loss_percent,
         tx_attempted,
         tx_sent,
         tx_submit_errors,
@@ -1332,7 +1344,11 @@ async fn membership_leave_cycle(harness: &mut TairaHarness) -> Result<Membership
     Ok(outcome)
 }
 
-async fn setup_taira_harness(out_dir: &Path, seed: &str) -> Result<TairaHarness> {
+async fn setup_taira_harness(
+    out_dir: &Path,
+    seed: &str,
+    packet_loss_percent: u8,
+) -> Result<TairaHarness> {
     let api_ports = alloc_port_block(TAIRA_TOTAL_PORT_SLOTS)?;
     let p2p_ports = alloc_port_block(TAIRA_TOTAL_PORT_SLOTS)?;
     let base_api_port = api_ports.base();
@@ -1344,6 +1360,7 @@ async fn setup_taira_harness(out_dir: &Path, seed: &str) -> Result<TairaHarness>
         base_p2p_port,
         TAIRA_VALIDATORS,
         seed,
+        packet_loss_percent,
     )?;
     let irohad_bin = Program::Irohad
         .resolve()
@@ -1553,6 +1570,15 @@ fn apply_client_transaction_ttl(root: &mut Table, ttl_ms: i64) -> Result<()> {
     Ok(())
 }
 
+fn apply_packet_impairment(root: &mut Table, percent: u8) -> Result<()> {
+    ensure!(percent <= 100, "packet loss must be at most 100 percent");
+    let network = get_subtable_mut(root, "network")?;
+    let percent = TomlValue::Integer(i64::from(percent));
+    network.insert("debug_packet_loss_inbound_percent".into(), percent.clone());
+    network.insert("debug_packet_loss_outbound_percent".into(), percent);
+    Ok(())
+}
+
 fn override_localnet_transaction_ttl(out_dir: &Path, peers: u16, ttl_ms: i64) -> Result<()> {
     for idx in 0..peers {
         let config_path = out_dir.join(format!("peer{idx}.toml"));
@@ -1586,6 +1612,26 @@ fn override_localnet_transaction_ttl(out_dir: &Path, peers: u16, ttl_ms: i64) ->
     )
     .wrap_err_with(|| format!("write client config {}", client_path.display()))?;
 
+    Ok(())
+}
+
+fn override_localnet_packet_impairment(out_dir: &Path, peers: u16, percent: u8) -> Result<()> {
+    for idx in 0..peers {
+        let config_path = out_dir.join(format!("peer{idx}.toml"));
+        let config_text = fs::read_to_string(&config_path)
+            .wrap_err_with(|| format!("read peer config {}", config_path.display()))?;
+        let mut parsed: TomlValue = toml::from_str(&config_text)
+            .wrap_err_with(|| format!("parse peer config {}", config_path.display()))?;
+        let root = parsed
+            .as_table_mut()
+            .ok_or_else(|| eyre!("peer config root must be a TOML table"))?;
+        apply_packet_impairment(root, percent)?;
+        fs::write(
+            &config_path,
+            toml::to_string(&parsed).expect("serialize peer config TOML"),
+        )
+        .wrap_err_with(|| format!("write peer config {}", config_path.display()))?;
+    }
     Ok(())
 }
 
@@ -2455,6 +2501,14 @@ fn env_u64(key: &str, default: u64, min: u64) -> u64 {
         .unwrap_or(default)
 }
 
+fn env_u8(key: &str, default: u8, min: u8, max: u8) -> u8 {
+    std::env::var(key)
+        .ok()
+        .and_then(|raw| raw.parse::<u8>().ok())
+        .filter(|value| (min..=max).contains(value))
+        .unwrap_or(default)
+}
+
 fn env_f64(key: &str, default: f64, min: f64) -> f64 {
     std::env::var(key)
         .ok()
@@ -2497,6 +2551,7 @@ fn generate_localnet(
     base_p2p_port: u16,
     peers: u16,
     seed: &str,
+    packet_loss_percent: u8,
 ) -> Result<()> {
     let kagami_bin = resolve_kagami_bin()?;
     let mut command = Command::new(kagami_bin);
@@ -2534,6 +2589,7 @@ fn generate_localnet(
         String::from_utf8_lossy(&output.stderr)
     );
     override_localnet_transaction_ttl(out_dir, peers, LOCALNET_TRANSACTION_TTL_MS)?;
+    override_localnet_packet_impairment(out_dir, peers, packet_loss_percent)?;
     Ok(())
 }
 
@@ -2555,6 +2611,7 @@ fn simulation_config_defaults_are_valid() {
     let cfg = SimulationConfig::quick(90, 30);
     assert!(cfg.duration >= Duration::from_secs(1));
     assert!(cfg.tps >= 1);
+    assert!(cfg.packet_loss_percent <= 100);
     assert!(cfg.churn_interval >= Duration::from_secs(1));
     assert!(cfg.max_height_skew_grace >= Duration::from_secs(1));
     assert!(cfg.max_transient_height_skew >= cfg.max_height_skew);
@@ -2566,6 +2623,11 @@ fn simulation_config_defaults_are_valid() {
 #[test]
 fn env_u64_respects_minimum() {
     assert_eq!(env_u64("IROHA_TAIRA_NO_SUCH_VAR", 10, 2), 10);
+}
+
+#[test]
+fn env_u8_respects_closed_range() {
+    assert_eq!(env_u8("IROHA_TAIRA_NO_SUCH_U8_VAR", 10, 0, 100), 10);
 }
 
 #[test]
@@ -2835,6 +2897,30 @@ fn apply_client_transaction_ttl_caps_status_timeout() {
 }
 
 #[test]
+fn apply_packet_impairment_sets_both_directions() {
+    let mut root = Table::new();
+    root.insert("network".into(), TomlValue::Table(Table::new()));
+    apply_packet_impairment(&mut root, 10).expect("packet impairment should apply");
+    let network = root
+        .get("network")
+        .and_then(TomlValue::as_table)
+        .expect("network section should exist");
+    assert_eq!(
+        network
+            .get("debug_packet_loss_inbound_percent")
+            .and_then(TomlValue::as_integer),
+        Some(10)
+    );
+    assert_eq!(
+        network
+            .get("debug_packet_loss_outbound_percent")
+            .and_then(TomlValue::as_integer),
+        Some(10)
+    );
+    assert!(apply_packet_impairment(&mut root, 101).is_err());
+}
+
+#[test]
 fn joiner_stall_warning_threshold_matches_policy() {
     assert!(!should_count_joiner_stall_as_warning(0));
     assert!(!should_count_joiner_stall_as_warning(1));
@@ -2847,6 +2933,7 @@ fn simulation_summary_json_includes_membership_warning_cycles() {
     let summary = SimulationSummary {
         duration_secs: 60,
         target_tps: 5,
+        packet_loss_percent: 10,
         tx_attempted: 300,
         tx_sent: 295,
         tx_submit_errors: 0,
@@ -2876,5 +2963,11 @@ fn simulation_summary_json_includes_membership_warning_cycles() {
             .get("membership_churn_warning_cycles")
             .and_then(norito::json::Value::as_u64),
         Some(2)
+    );
+    assert_eq!(
+        object
+            .get("packet_loss_percent")
+            .and_then(norito::json::Value::as_u64),
+        Some(10)
     );
 }

@@ -17,8 +17,6 @@ mod sumeragi_kagami_localnet;
 mod sumeragi_localnet_smoke;
 #[path = "sumeragi_lock_convergence.rs"]
 mod sumeragi_lock_convergence;
-#[path = "sumeragi_mode_cutover.rs"]
-mod sumeragi_mode_cutover;
 #[path = "sumeragi_negative_paths.rs"]
 mod sumeragi_negative_paths;
 #[path = "sumeragi_npos_happy_path.rs"]

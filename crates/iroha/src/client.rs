@@ -54,9 +54,9 @@ use iroha_torii_shared::{
     AccountReadResponse, ErrorEnvelope, NORITO_V1_WEBSOCKET_SUBPROTOCOL,
     PipelineTransactionStatusResponse, TriggerCompletionListResponse,
     offline_api::{
-        OfflineActiveTransferVerifier, OfflineOperationKind, OfflineOperationReference,
-        OfflineOperationResult, OfflineOperationState, OfflineOperationStatus, OfflineReadiness,
-        OfflineRedeemRequest, OfflineTopUpRequest,
+        OfflineOperationKind, OfflineOperationReference, OfflineOperationResult,
+        OfflineOperationState, OfflineOperationStatus, OfflineReadiness, OfflineRedeemRequest,
+        OfflineTopUpRequest,
     },
     uri as torii_uri,
 };
@@ -1936,8 +1936,8 @@ fn validate_sccp_bridge_submit_signing_state(
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Selector-explicit request for the Torii multisig proposals query API.
-pub struct MultisigProposalsQueryRequest {
+/// Selector-explicit request for the Torii multisig proposals listing API.
+pub struct MultisigProposalsListRequest {
     /// Active concrete multisig account id.
     #[norito(default)]
     pub multisig_account_id: Option<iroha_data_model::account::AccountId>,
@@ -1995,8 +1995,8 @@ pub struct MultisigProposalEntry {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Response payload returned by the Torii multisig proposals query API.
-pub struct MultisigProposalsQueryResponse {
+/// Response payload returned by the Torii multisig proposals listing API.
+pub struct MultisigProposalsListResponse {
     /// Canonical multisig account id resolved by the server.
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     /// Matching proposal entries.
@@ -2017,7 +2017,7 @@ pub struct MultisigProposalsQueryResponse {
     norito::derive::NoritoDeserialize,
 )]
 /// Selector-explicit request for one multisig proposal.
-pub struct MultisigProposalsLookupRequest {
+pub struct MultisigProposalsGetRequest {
     /// Active concrete multisig account id.
     #[norito(default)]
     pub multisig_account_id: Option<iroha_data_model::account::AccountId>,
@@ -2042,8 +2042,8 @@ pub struct MultisigProposalsLookupRequest {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Response payload returned by the Torii multisig proposal lookup API.
-pub struct MultisigProposalLookupResponse {
+/// Response payload returned by the Torii multisig proposal get API.
+pub struct MultisigProposalGetResponse {
     /// Canonical multisig account id resolved by the server.
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     /// Stable proposal identifier.
@@ -2738,13 +2738,9 @@ const ZK_PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS: &[&str] = &[
     "halo2/pasta/kaigi-usage-v1",
     "halo2/pasta/ivm-overlay-bind",
     "halo2/pasta/ivm-execution-v1",
-    "halo2/pasta/offline-note-recursive",
-    "halo2/pasta/kagemusha-folded-v1",
-    "halo2/pasta/kagemusha-recursive-aggregation-v1",
-    "halo2/pasta/kagemusha-recursive-compact-v1",
-    "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
-    "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
-    "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
+    "halo2/pasta/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
+    "halo2/pasta/kagemusha-recursive-spend-transition-eq-v1",
+    "halo2/pasta/kagemusha-recursive-spend-state-ep-v1",
     "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
     "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
     "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",
@@ -4883,8 +4879,8 @@ fn commit_qc_json_payload(hash_hex: &str, qc_opt: Option<Qc>) -> norito::json::V
 }
 
 #[cfg(test)]
-fn canonical_hash_string<H: norito::json::JsonSerialize>(hash: H) -> String {
-    norito::json::to_value(&hash)
+fn canonical_hash_string<H: norito::json::JsonSerialize>(hash: &H) -> String {
+    norito::json::to_value(hash)
         .expect("serialize Sumeragi status hash")
         .as_str()
         .expect("serialized Sumeragi status hash must be a JSON string")
@@ -4909,18 +4905,14 @@ fn sumeragi_safety_halt_json_payload(halt: &SumeragiSafetyHaltStatus) -> norito:
     map.insert("epoch".into(), Value::from(halt.epoch));
     map.insert(
         "first_block_hash".into(),
-        optional_display(
-            halt.first_block_hash
-                .as_ref()
-                .map(|hash| canonical_hash_string(*hash)),
-        ),
+        optional_display(halt.first_block_hash.as_ref().map(canonical_hash_string)),
     );
     map.insert(
         "conflicting_block_hash".into(),
         optional_display(
             halt.conflicting_block_hash
                 .as_ref()
-                .map(|hash| canonical_hash_string(*hash)),
+                .map(canonical_hash_string),
         ),
     );
     map.insert(
@@ -4928,7 +4920,7 @@ fn sumeragi_safety_halt_json_payload(halt: &SumeragiSafetyHaltStatus) -> norito:
         optional_display(
             halt.first_parent_state_root
                 .as_ref()
-                .map(|hash| canonical_hash_string(*hash)),
+                .map(canonical_hash_string),
         ),
     );
     map.insert(
@@ -4936,7 +4928,7 @@ fn sumeragi_safety_halt_json_payload(halt: &SumeragiSafetyHaltStatus) -> norito:
         optional_display(
             halt.first_post_state_root
                 .as_ref()
-                .map(|hash| canonical_hash_string(*hash)),
+                .map(canonical_hash_string),
         ),
     );
     map.insert(
@@ -4944,7 +4936,7 @@ fn sumeragi_safety_halt_json_payload(halt: &SumeragiSafetyHaltStatus) -> norito:
         optional_display(
             halt.conflicting_parent_state_root
                 .as_ref()
-                .map(|hash| canonical_hash_string(*hash)),
+                .map(canonical_hash_string),
         ),
     );
     map.insert(
@@ -4952,7 +4944,7 @@ fn sumeragi_safety_halt_json_payload(halt: &SumeragiSafetyHaltStatus) -> norito:
         optional_display(
             halt.conflicting_post_state_root
                 .as_ref()
-                .map(|hash| canonical_hash_string(*hash)),
+                .map(canonical_hash_string),
         ),
     );
     Value::Object(map)
@@ -6534,13 +6526,13 @@ fn sumeragi_qc_json_payload(snapshot: SumeragiQcSnapshot) -> norito::json::Value
 }
 
 #[derive(Clone, Copy)]
-struct OfflineVerifierValidationProfile {
-    display_name: &'static str,
+struct OfflineVerifierExpectation {
+    field: &'static str,
     unavailable_blocker: &'static str,
-    circuit_name: &'static str,
-    commitment_field: &'static str,
-    schema_field: &'static str,
-    zero_metadata_name: &'static str,
+    role: &'static str,
+    circuit_id: &'static str,
+    schema_hash: Option<[u8; 32]>,
+    max_proof_bytes: u32,
 }
 
 impl Client {
@@ -6650,7 +6642,7 @@ impl Client {
         ))
     }
 
-    fn require_lower_hex_32(value: &str, field: &'static str) -> Result<()> {
+    fn require_lower_hex_32(value: &str, field: &str) -> Result<()> {
         if value.len() == Hash::LENGTH * 2
             && value
                 .bytes()
@@ -6774,44 +6766,54 @@ impl Client {
         Self::require_lower_hex_32(transaction_hash, "transaction_hash")
     }
 
-    fn validate_offline_active_verifier(
-        verifier: Option<&OfflineActiveTransferVerifier>,
-        evaluated_block_height: u64,
-        has_unavailable_blocker: bool,
-        profile: OfflineVerifierValidationProfile,
+    fn validate_offline_readiness_verifier(
+        readiness: &OfflineReadiness,
+        verifier: Option<&iroha_torii_shared::offline_api::OfflineActiveTransferVerifier>,
+        expectation: OfflineVerifierExpectation,
     ) -> Result<()> {
+        let OfflineVerifierExpectation {
+            field,
+            unavailable_blocker,
+            role,
+            circuit_id,
+            schema_hash,
+            max_proof_bytes,
+        } = expectation;
+        let has_unavailable_blocker = readiness
+            .blockers
+            .iter()
+            .any(|blocker| blocker.code == unavailable_blocker);
         let Some(verifier) = verifier else {
-            if has_unavailable_blocker {
-                return Ok(());
+            if !has_unavailable_blocker {
+                return Err(eyre!(
+                    "offline readiness response omitted {field} without a {unavailable_blocker} blocker"
+                ));
             }
-            return Err(eyre!(
-                "offline readiness response omitted the active {} verifier without a {} blocker",
-                profile.display_name,
-                profile.unavailable_blocker
-            ));
+            return Ok(());
         };
         if has_unavailable_blocker {
             return Err(eyre!(
-                "offline readiness response contains both an active {} verifier and an unavailable blocker",
-                profile.display_name
+                "offline readiness response contains both {field} and a {unavailable_blocker} blocker"
             ));
         }
-        if !iroha_data_model::proof::verifying_key_id_field_is_portable(&verifier.id.backend)
-            || !iroha_data_model::proof::verifying_key_id_field_is_portable(&verifier.id.name)
+        if verifier.id.backend != ZK_PRODUCTION_BACKEND_HALO2_IPA
+            || verifier.id.name != role
+            || verifier.circuit_id != circuit_id
         {
             return Err(eyre!(
-                "offline readiness response contains a non-portable {} verifier id",
-                profile.display_name
+                "offline readiness response contains substituted {field} metadata"
             ));
         }
-        if !iroha_data_model::zk::open_verify_circuit_id_is_portable(&verifier.circuit_id) {
+        if verifier.version == 0 {
             return Err(eyre!(
-                "offline readiness response contains a non-portable {} circuit id",
-                profile.circuit_name
+                "offline readiness response selected {field} with version zero"
             ));
         }
-        Self::require_lower_hex_32(&verifier.commitment, profile.commitment_field)?;
-        Self::require_lower_hex_32(&verifier.public_inputs_schema_hash, profile.schema_field)?;
+        Self::require_lower_hex_32(&verifier.commitment, &format!("{field}.commitment"))?;
+        Self::require_lower_hex_32(
+            &verifier.public_inputs_schema_hash,
+            &format!("{field}.public_inputs_schema_hash"),
+        )?;
         if verifier.commitment.bytes().all(|byte| byte == b'0')
             || verifier
                 .public_inputs_schema_hash
@@ -6819,29 +6821,231 @@ impl Client {
                 .all(|byte| byte == b'0')
         {
             return Err(eyre!(
-                "offline readiness response contains zero {} metadata",
-                profile.zero_metadata_name
+                "offline readiness response contains zero {field} metadata"
             ));
         }
-        if verifier.max_proof_bytes == 0 {
+        if let Some(schema_hash) = schema_hash
+            && verifier.public_inputs_schema_hash != hex::encode(schema_hash)
+        {
             return Err(eyre!(
-                "offline readiness response selected a {} verifier with a zero proof limit",
-                profile.display_name
+                "offline readiness response contains a substituted {field} public-input schema"
             ));
         }
-        if verifier.activation_height > evaluated_block_height {
+        if verifier.max_proof_bytes == 0 || verifier.max_proof_bytes > max_proof_bytes {
             return Err(eyre!(
-                "offline readiness response selected a {} verifier before activation",
-                profile.display_name
+                "offline readiness response selected {field} with an invalid proof limit"
+            ));
+        }
+        if verifier.activation_height > readiness.evaluated_block_height {
+            return Err(eyre!(
+                "offline readiness response selected {field} before activation"
             ));
         }
         if verifier.withdrawal_height.is_some_and(|withdrawal_height| {
             withdrawal_height <= verifier.activation_height
-                || evaluated_block_height >= withdrawal_height
+                || readiness.evaluated_block_height >= withdrawal_height
         }) {
             return Err(eyre!(
-                "offline readiness response selected a {} verifier outside its activation window",
-                profile.display_name
+                "offline readiness response selected {field} outside its activation window"
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_offline_readiness_contract(
+        readiness: &OfflineReadiness,
+        expected_asset_definition_id: &str,
+    ) -> Result<()> {
+        if readiness.asset_definition_id != expected_asset_definition_id {
+            return Err(eyre!(
+                "offline readiness response is not bound to the requested asset definition"
+            ));
+        }
+        Self::require_lower_hex_32(&readiness.evaluated_block_hash, "evaluated_block_hash")?;
+        if readiness.required_bridge_abi_version
+            != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
+            || readiness.max_hops
+                != u32::from(
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2,
+                )
+        {
+            return Err(eyre!(
+                "offline readiness response does not describe the first-release Kagemusha contract"
+            ));
+        }
+        if readiness.ready != readiness.blockers.is_empty() {
+            return Err(eyre!(
+                "offline readiness response has an inconsistent ready/blockers state"
+            ));
+        }
+        let has_blocker = |code: &str| {
+            readiness
+                .blockers
+                .iter()
+                .any(|blocker| blocker.code == code)
+        };
+        let mut blocker_codes = std::collections::BTreeSet::new();
+        for blocker in &readiness.blockers {
+            let code = blocker.code.as_str();
+            if code.is_empty()
+                || !code
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+                || !blocker_codes.insert(code)
+            {
+                return Err(eyre!(
+                    "offline readiness response contains an invalid or duplicate blocker code"
+                ));
+            }
+        }
+        match readiness.asset_scale {
+            None if !has_blocker("asset_scale_unavailable") => {
+                return Err(eyre!(
+                    "offline readiness response omitted the live asset scale without an asset_scale_unavailable blocker"
+                ));
+            }
+            Some(scale)
+                if scale > iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
+                    && !has_blocker("asset_scale_unsupported") =>
+            {
+                return Err(eyre!(
+                    "offline readiness response exposes an unsupported asset scale without an asset_scale_unsupported blocker"
+                ));
+            }
+            Some(scale)
+                if scale <= iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
+                    && (has_blocker("asset_scale_unavailable")
+                        || has_blocker("asset_scale_unsupported")) =>
+            {
+                return Err(eyre!(
+                    "offline readiness response has an inconsistent asset scale blocker"
+                ));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn validate_offline_readiness_verifiers(readiness: &OfflineReadiness) -> Result<()> {
+        let confidential_proof_limit =
+            u32::try_from(iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2)
+                .expect("Kagemusha proof limit fits u32");
+        let verifiers = [
+            (
+                readiness.active_transfer_verifier.as_ref(),
+                OfflineVerifierExpectation {
+                    field: "active_transfer_verifier",
+                    unavailable_blocker: "transfer_verifier_unavailable",
+                    role: iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
+                    circuit_id:
+                        "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+                    schema_hash: None,
+                    max_proof_bytes: confidential_proof_limit,
+                },
+            ),
+            (
+                readiness.active_topup_shield_verifier.as_ref(),
+                OfflineVerifierExpectation {
+                    field: "active_topup_shield_verifier",
+                    unavailable_blocker: "topup_shield_verifier_unavailable",
+                    role: iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2,
+                    circuit_id:
+                        "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
+                    schema_hash: None,
+                    max_proof_bytes: confidential_proof_limit,
+                },
+            ),
+            (
+                readiness.active_unshield_verifier.as_ref(),
+                OfflineVerifierExpectation {
+                    field: "active_unshield_verifier",
+                    unavailable_blocker: "unshield_verifier_unavailable",
+                    role: iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
+                    circuit_id:
+                        "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+                    schema_hash: None,
+                    max_proof_bytes: confidential_proof_limit,
+                },
+            ),
+            (
+                readiness.active_recursive_transition_verifier.as_ref(),
+                OfflineVerifierExpectation {
+                    field: "active_recursive_transition_verifier",
+                    unavailable_blocker: "recursive_transition_verifier_unavailable",
+                    role: iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSITION_V3,
+                    circuit_id: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1,
+                    schema_hash: Some(
+                        iroha_data_model::offline::kagemusha_recursive_spend_transition_public_inputs_schema_hash_v3(),
+                    ),
+                    max_proof_bytes: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+                },
+            ),
+            (
+                readiness.active_recursive_state_verifier.as_ref(),
+                OfflineVerifierExpectation {
+                    field: "active_recursive_state_verifier",
+                    unavailable_blocker: "recursive_state_verifier_unavailable",
+                    role: iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STATE_V3,
+                    circuit_id: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+                    schema_hash: Some(
+                        iroha_data_model::offline::kagemusha_recursive_spend_state_public_inputs_schema_hash_v3(),
+                    ),
+                    max_proof_bytes: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+                },
+            ),
+        ];
+        for (verifier, expectation) in verifiers {
+            Self::validate_offline_readiness_verifier(readiness, verifier, expectation)?;
+        }
+        Ok(())
+    }
+
+    fn validate_offline_readiness_verifier_uniqueness(readiness: &OfflineReadiness) -> Result<()> {
+        let mut verifier_ids = std::collections::BTreeSet::new();
+        let mut verifier_commitments = std::collections::BTreeSet::new();
+        let mut verifier_schema_hashes = std::collections::BTreeSet::new();
+        for verifier in [
+            readiness.active_transfer_verifier.as_ref(),
+            readiness.active_topup_shield_verifier.as_ref(),
+            readiness.active_unshield_verifier.as_ref(),
+            readiness.active_recursive_transition_verifier.as_ref(),
+            readiness.active_recursive_state_verifier.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !verifier_ids.insert((verifier.id.backend.as_str(), verifier.id.name.as_str()))
+                || !verifier_commitments.insert(verifier.commitment.as_str())
+                || !verifier_schema_hashes.insert(verifier.public_inputs_schema_hash.as_str())
+            {
+                return Err(eyre!(
+                    "offline readiness response reuses verifier identity material across roles"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_offline_readiness_capabilities(readiness: &OfflineReadiness) -> Result<()> {
+        let has_blocker = |code: &str| {
+            readiness
+                .blockers
+                .iter()
+                .any(|blocker| blocker.code == code)
+        };
+        if readiness.proof_backend_available == has_blocker("proof_backend_unavailable") {
+            return Err(eyre!(
+                "offline readiness response has an inconsistent proof backend blocker"
+            ));
+        }
+        let expected_recursive_lineage = readiness.proof_backend_available
+            && readiness.active_recursive_transition_verifier.is_some()
+            && readiness.active_recursive_state_verifier.is_some();
+        if readiness.recursive_lineage_supported != expected_recursive_lineage
+            || readiness.recursive_lineage_supported == has_blocker("recursive_lineage_unavailable")
+        {
+            return Err(eyre!(
+                "offline readiness response has an inconsistent recursive lineage state"
             ));
         }
         Ok(())
@@ -6871,74 +7075,10 @@ impl Client {
             StatusCode::OK,
             "Failed to evaluate offline readiness",
         )?;
-        if readiness.asset_definition_id != asset_definition_id {
-            return Err(eyre!(
-                "offline readiness response is not bound to the requested asset definition"
-            ));
-        }
-        Self::require_lower_hex_32(&readiness.evaluated_block_hash, "evaluated_block_hash")?;
-        if readiness.ready != readiness.blockers.is_empty() {
-            return Err(eyre!(
-                "offline readiness response has an inconsistent ready/blockers state"
-            ));
-        }
-        let has_blocker = |code: &str| {
-            readiness
-                .blockers
-                .iter()
-                .any(|blocker| blocker.code == code)
-        };
-        match readiness.asset_scale {
-            None if !has_blocker("asset_scale_unavailable") => {
-                return Err(eyre!(
-                    "offline readiness response omitted the live asset scale without an asset_scale_unavailable blocker"
-                ));
-            }
-            Some(scale)
-                if scale > iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
-                    && !has_blocker("asset_scale_unsupported") =>
-            {
-                return Err(eyre!(
-                    "offline readiness response exposes an unsupported asset scale without an asset_scale_unsupported blocker"
-                ));
-            }
-            Some(scale)
-                if scale <= iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
-                    && (has_blocker("asset_scale_unavailable")
-                        || has_blocker("asset_scale_unsupported")) =>
-            {
-                return Err(eyre!(
-                    "offline readiness response has an inconsistent asset scale blocker"
-                ));
-            }
-            _ => {}
-        }
-        Self::validate_offline_active_verifier(
-            readiness.active_transfer_verifier.as_ref(),
-            readiness.evaluated_block_height,
-            has_blocker("transfer_verifier_unavailable"),
-            OfflineVerifierValidationProfile {
-                display_name: "transfer",
-                unavailable_blocker: "transfer_verifier_unavailable",
-                circuit_name: "confidential-transfer",
-                commitment_field: "active_transfer_verifier.commitment",
-                schema_field: "active_transfer_verifier.public_inputs_schema_hash",
-                zero_metadata_name: "transfer-verifier",
-            },
-        )?;
-        Self::validate_offline_active_verifier(
-            readiness.active_topup_shield_verifier.as_ref(),
-            readiness.evaluated_block_height,
-            has_blocker("topup_shield_verifier_unavailable"),
-            OfflineVerifierValidationProfile {
-                display_name: "top-up shield",
-                unavailable_blocker: "topup_shield_verifier_unavailable",
-                circuit_name: "top-up shield",
-                commitment_field: "active_topup_shield_verifier.commitment",
-                schema_field: "active_topup_shield_verifier.public_inputs_schema_hash",
-                zero_metadata_name: "top-up shield verifier",
-            },
-        )?;
+        Self::validate_offline_readiness_contract(&readiness, &asset_definition_id)?;
+        Self::validate_offline_readiness_verifiers(&readiness)?;
+        Self::validate_offline_readiness_verifier_uniqueness(&readiness)?;
+        Self::validate_offline_readiness_capabilities(&readiness)?;
         Ok(readiness)
     }
 
@@ -7659,57 +7799,119 @@ mod offline_client_tests {
             .expect("response")
     }
 
-    fn active_transfer_verifier() -> iroha_torii_shared::offline_api::OfflineActiveTransferVerifier
-    {
+    fn active_verifier(
+        role: &str,
+        circuit_id: &str,
+        schema_hash: String,
+        commitment_byte: &str,
+        max_proof_bytes: u32,
+    ) -> iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
         iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
             id: iroha_torii_shared::offline_api::OfflineVerifierId {
                 backend: "halo2/ipa".to_owned(),
-                name: "confidential-transfer-v2".to_owned(),
+                name: role.to_owned(),
             },
             version: 1,
-            circuit_id: "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified"
-                .to_owned(),
-            commitment: "11".repeat(32),
-            public_inputs_schema_hash: "22".repeat(32),
-            max_proof_bytes: 65_536,
+            circuit_id: circuit_id.to_owned(),
+            commitment: commitment_byte.repeat(32),
+            public_inputs_schema_hash: schema_hash,
+            max_proof_bytes,
             activation_height: 1,
             withdrawal_height: None,
         }
+    }
+
+    fn active_transfer_verifier() -> iroha_torii_shared::offline_api::OfflineActiveTransferVerifier
+    {
+        active_verifier(
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
+            "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+            "22".repeat(32),
+            "11",
+            65_536,
+        )
     }
 
     fn active_topup_shield_verifier()
     -> iroha_torii_shared::offline_api::OfflineActiveTopUpShieldVerifier {
-        iroha_torii_shared::offline_api::OfflineActiveTopUpShieldVerifier {
-            id: iroha_torii_shared::offline_api::OfflineVerifierId {
-                backend: "halo2/ipa".to_owned(),
-                name: "kagemusha-topup-shield-v2".to_owned(),
-            },
-            version: 3,
-            circuit_id: "kagemusha-topup-shield-v2".to_owned(),
-            commitment: "33".repeat(32),
-            public_inputs_schema_hash: "44".repeat(32),
-            max_proof_bytes: 196_608,
-            activation_height: 1,
-            withdrawal_height: None,
-        }
+        active_verifier(
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2,
+            "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
+            "44".repeat(32),
+            "33",
+            196_608,
+        )
     }
 
-    #[test]
-    fn readiness_request_is_typed_negotiated_and_asset_bound() {
-        let asset_definition_id = asset_definition_id("xor");
-        let readiness = OfflineReadiness {
+    fn active_unshield_verifier() -> iroha_torii_shared::offline_api::OfflineActiveUnshieldVerifier
+    {
+        active_verifier(
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
+            "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+            "66".repeat(32),
+            "55",
+            196_608,
+        )
+    }
+
+    fn active_recursive_transition_verifier()
+    -> iroha_torii_shared::offline_api::OfflineActiveRecursiveTransitionVerifier {
+        active_verifier(
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSITION_V3,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1,
+            hex::encode(
+                iroha_data_model::offline::kagemusha_recursive_spend_transition_public_inputs_schema_hash_v3(),
+            ),
+            "77",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+        )
+    }
+
+    fn active_recursive_state_verifier()
+    -> iroha_torii_shared::offline_api::OfflineActiveRecursiveStateVerifier {
+        active_verifier(
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STATE_V3,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+            hex::encode(
+                iroha_data_model::offline::kagemusha_recursive_spend_state_public_inputs_schema_hash_v3(),
+            ),
+            "88",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+        )
+    }
+
+    fn ready_readiness(asset_definition_id: &AssetDefinitionId) -> OfflineReadiness {
+        OfflineReadiness {
+            required_bridge_abi_version:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            max_hops: u32::from(
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2,
+            ),
             asset_definition_id: asset_definition_id.to_string(),
             asset_scale: Some(9),
             evaluated_block_height: 19,
             evaluated_block_hash: "ab".repeat(32),
             active_transfer_verifier: Some(active_transfer_verifier()),
             active_topup_shield_verifier: Some(active_topup_shield_verifier()),
-            ready: false,
-            blockers: vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-                code: "issuer_key_missing".to_owned(),
-                message: "issuer key is unavailable".to_owned(),
-            }],
-        };
+            active_unshield_verifier: Some(active_unshield_verifier()),
+            active_recursive_transition_verifier: Some(active_recursive_transition_verifier()),
+            active_recursive_state_verifier: Some(active_recursive_state_verifier()),
+            proof_backend_available: true,
+            recursive_lineage_supported: true,
+            ready: true,
+            blockers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn readiness_request_is_typed_negotiated_and_asset_bound() {
+        let asset_definition_id = asset_definition_id("xor");
+        let mut readiness = ready_readiness(&asset_definition_id);
+        readiness.ready = false;
+        readiness.blockers = vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+            code: "issuer_unavailable".to_owned(),
+            message: "issuer is unavailable".to_owned(),
+        }];
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
             .header("content-type", "application/json; charset=utf-8")
@@ -7742,41 +7944,15 @@ mod offline_client_tests {
     fn readiness_rejects_cross_asset_and_inconsistent_states() {
         let requested = asset_definition_id("xor");
         let other_asset = asset_definition_id("rose");
-        for readiness in [
-            OfflineReadiness {
-                asset_definition_id: other_asset.to_string(),
-                asset_scale: Some(9),
-                evaluated_block_height: 1,
-                evaluated_block_hash: "ab".repeat(32),
-                active_transfer_verifier: Some(active_transfer_verifier()),
-                active_topup_shield_verifier: Some(active_topup_shield_verifier()),
-                ready: true,
-                blockers: Vec::new(),
-            },
-            OfflineReadiness {
-                asset_definition_id: requested.to_string(),
-                asset_scale: Some(9),
-                evaluated_block_height: 1,
-                evaluated_block_hash: "ab".repeat(32),
-                active_transfer_verifier: Some(active_transfer_verifier()),
-                active_topup_shield_verifier: Some(active_topup_shield_verifier()),
-                ready: true,
-                blockers: vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-                    code: "forged".to_owned(),
-                    message: "forged".to_owned(),
-                }],
-            },
-            OfflineReadiness {
-                asset_definition_id: requested.to_string(),
-                asset_scale: Some(9),
-                evaluated_block_height: 1,
-                evaluated_block_hash: "AB".repeat(32),
-                active_transfer_verifier: Some(active_transfer_verifier()),
-                active_topup_shield_verifier: Some(active_topup_shield_verifier()),
-                ready: true,
-                blockers: Vec::new(),
-            },
-        ] {
+        let cross_asset = ready_readiness(&other_asset);
+        let mut inconsistent = ready_readiness(&requested);
+        inconsistent.blockers = vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+            code: "forged".to_owned(),
+            message: "forged".to_owned(),
+        }];
+        let mut uppercase_hash = ready_readiness(&requested);
+        uppercase_hash.evaluated_block_hash = "AB".repeat(32);
+        for readiness in [cross_asset, inconsistent, uppercase_hash] {
             let response = HttpResponse::builder()
                 .status(StatusCode::OK)
                 .header("content-type", APPLICATION_NORITO)
@@ -7799,77 +7975,27 @@ mod offline_client_tests {
     fn readiness_rejects_unbound_scale_and_verifier_snapshots() {
         let requested = asset_definition_id("xor");
         let unrelated_blocker = || iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-            code: "proof_backend_unavailable".to_owned(),
-            message: "proof backend is unavailable".to_owned(),
+            code: "issuer_unavailable".to_owned(),
+            message: "issuer is unavailable".to_owned(),
         };
         let mut future_verifier = active_transfer_verifier();
-        future_verifier.activation_height = 2;
-        let mut future_topup_shield_verifier = active_topup_shield_verifier();
-        future_topup_shield_verifier.activation_height = 2;
+        future_verifier.activation_height = 20;
+        let mut missing_scale_blocker = ready_readiness(&requested);
+        missing_scale_blocker.asset_scale = None;
+        missing_scale_blocker.ready = false;
+        missing_scale_blocker.blockers = vec![unrelated_blocker()];
+        let mut missing_transfer_blocker = ready_readiness(&requested);
+        missing_transfer_blocker.active_transfer_verifier = None;
+        missing_transfer_blocker.ready = false;
+        missing_transfer_blocker.blockers = vec![unrelated_blocker()];
+        let mut future_transfer = ready_readiness(&requested);
+        future_transfer.active_transfer_verifier = Some(future_verifier);
+        future_transfer.ready = false;
+        future_transfer.blockers = vec![unrelated_blocker()];
         for readiness in [
-            OfflineReadiness {
-                asset_definition_id: requested.to_string(),
-                asset_scale: None,
-                evaluated_block_height: 1,
-                evaluated_block_hash: "ab".repeat(32),
-                active_transfer_verifier: Some(active_transfer_verifier()),
-                active_topup_shield_verifier: Some(active_topup_shield_verifier()),
-                ready: false,
-                blockers: vec![unrelated_blocker()],
-            },
-            OfflineReadiness {
-                asset_definition_id: requested.to_string(),
-                asset_scale: Some(9),
-                evaluated_block_height: 1,
-                evaluated_block_hash: "ab".repeat(32),
-                active_transfer_verifier: None,
-                active_topup_shield_verifier: Some(active_topup_shield_verifier()),
-                ready: false,
-                blockers: vec![unrelated_blocker()],
-            },
-            OfflineReadiness {
-                asset_definition_id: requested.to_string(),
-                asset_scale: Some(9),
-                evaluated_block_height: 1,
-                evaluated_block_hash: "ab".repeat(32),
-                active_transfer_verifier: Some(future_verifier),
-                active_topup_shield_verifier: Some(active_topup_shield_verifier()),
-                ready: false,
-                blockers: vec![unrelated_blocker()],
-            },
-            OfflineReadiness {
-                asset_definition_id: requested.to_string(),
-                asset_scale: Some(9),
-                evaluated_block_height: 1,
-                evaluated_block_hash: "ab".repeat(32),
-                active_transfer_verifier: Some(active_transfer_verifier()),
-                active_topup_shield_verifier: None,
-                ready: false,
-                blockers: vec![unrelated_blocker()],
-            },
-            OfflineReadiness {
-                asset_definition_id: requested.to_string(),
-                asset_scale: Some(9),
-                evaluated_block_height: 1,
-                evaluated_block_hash: "ab".repeat(32),
-                active_transfer_verifier: Some(active_transfer_verifier()),
-                active_topup_shield_verifier: Some(active_topup_shield_verifier()),
-                ready: false,
-                blockers: vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-                    code: "topup_shield_verifier_unavailable".to_owned(),
-                    message: "top-up shield verifier is unavailable".to_owned(),
-                }],
-            },
-            OfflineReadiness {
-                asset_definition_id: requested.to_string(),
-                asset_scale: Some(9),
-                evaluated_block_height: 1,
-                evaluated_block_hash: "ab".repeat(32),
-                active_transfer_verifier: Some(active_transfer_verifier()),
-                active_topup_shield_verifier: Some(future_topup_shield_verifier),
-                ready: false,
-                blockers: vec![unrelated_blocker()],
-            },
+            missing_scale_blocker,
+            missing_transfer_blocker,
+            future_transfer,
         ] {
             let response = HttpResponse::builder()
                 .status(StatusCode::OK)
@@ -7883,41 +8009,108 @@ mod offline_client_tests {
             .expect_err("unbound readiness metadata must fail closed");
             assert!(
                 error.to_string().contains("asset scale")
-                    || error.to_string().contains("transfer verifier")
-                    || error.to_string().contains("top-up shield verifier"),
+                    || error.to_string().contains("active_transfer_verifier"),
                 "unexpected error: {error:#}"
             );
         }
     }
 
     #[test]
-    fn readiness_accepts_unavailable_topup_shield_with_matching_blocker() {
+    fn readiness_rejects_contract_verifier_and_lineage_substitution() {
         let requested = asset_definition_id("xor");
-        let readiness = OfflineReadiness {
-            asset_definition_id: requested.to_string(),
-            asset_scale: Some(9),
-            evaluated_block_height: 1,
-            evaluated_block_hash: "ab".repeat(32),
-            active_transfer_verifier: Some(active_transfer_verifier()),
-            active_topup_shield_verifier: None,
-            ready: false,
-            blockers: vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-                code: "topup_shield_verifier_unavailable".to_owned(),
-                message: "top-up shield verifier is unavailable".to_owned(),
-            }],
-        };
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&readiness).expect("encode readiness"))
-            .expect("response");
+        let mut wrong_abi = ready_readiness(&requested);
+        wrong_abi.required_bridge_abi_version -= 1;
+        let mut wrong_hops = ready_readiness(&requested);
+        wrong_hops.max_hops -= 1;
+        let mut substituted_topup = ready_readiness(&requested);
+        substituted_topup
+            .active_topup_shield_verifier
+            .as_mut()
+            .expect("fixture top-up verifier")
+            .id
+            .name = iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2.to_owned();
+        let mut substituted_unshield = ready_readiness(&requested);
+        substituted_unshield
+            .active_unshield_verifier
+            .as_mut()
+            .expect("fixture unshield verifier")
+            .circuit_id =
+            "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified".to_owned();
+        let mut substituted_transition_schema = ready_readiness(&requested);
+        substituted_transition_schema
+            .active_recursive_transition_verifier
+            .as_mut()
+            .expect("fixture transition verifier")
+            .public_inputs_schema_hash = "99".repeat(32);
+        let mut oversized_state_proof = ready_readiness(&requested);
+        oversized_state_proof
+            .active_recursive_state_verifier
+            .as_mut()
+            .expect("fixture state verifier")
+            .max_proof_bytes =
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3 + 1;
+        let mut reused_commitment = ready_readiness(&requested);
+        let transfer_commitment = reused_commitment
+            .active_transfer_verifier
+            .as_ref()
+            .expect("fixture transfer verifier")
+            .commitment
+            .clone();
+        reused_commitment
+            .active_topup_shield_verifier
+            .as_mut()
+            .expect("fixture top-up verifier")
+            .commitment = transfer_commitment;
+        let mut reused_schema = ready_readiness(&requested);
+        let transfer_schema = reused_schema
+            .active_transfer_verifier
+            .as_ref()
+            .expect("fixture transfer verifier")
+            .public_inputs_schema_hash
+            .clone();
+        reused_schema
+            .active_topup_shield_verifier
+            .as_mut()
+            .expect("fixture top-up verifier")
+            .public_inputs_schema_hash = transfer_schema;
+        let mut forged_lineage = ready_readiness(&requested);
+        forged_lineage.recursive_lineage_supported = false;
+        let mut duplicate_blockers = ready_readiness(&requested);
+        duplicate_blockers.ready = false;
+        duplicate_blockers.blockers = vec![
+            iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+                code: "issuer_unavailable".to_owned(),
+                message: "first".to_owned(),
+            },
+            iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+                code: "issuer_unavailable".to_owned(),
+                message: "second".to_owned(),
+            },
+        ];
 
-        let actual = with_mock_http(
-            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).get_offline_readiness(&requested),
-        )
-        .expect("matching top-up shield blocker must be accepted");
-        assert!(actual.active_topup_shield_verifier.is_none());
+        for readiness in [
+            wrong_abi,
+            wrong_hops,
+            substituted_topup,
+            substituted_unshield,
+            substituted_transition_schema,
+            oversized_state_proof,
+            reused_commitment,
+            reused_schema,
+            forged_lineage,
+            duplicate_blockers,
+        ] {
+            let response = HttpResponse::builder()
+                .status(StatusCode::OK)
+                .header("content-type", APPLICATION_NORITO)
+                .body(norito::to_bytes(&readiness).expect("encode readiness"))
+                .expect("response");
+            let _ = with_mock_http(
+                respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+                || client_with_base_url(base_url()).get_offline_readiness(&requested),
+            )
+            .expect_err("substituted Kagemusha readiness must fail closed");
+        }
     }
 
     #[test]
@@ -8057,16 +8250,7 @@ mod offline_client_tests {
 
     #[test]
     fn negotiated_decoder_rejects_retired_and_missing_media_types() {
-        let readiness = OfflineReadiness {
-            asset_definition_id: asset_definition_id("xor").to_string(),
-            asset_scale: Some(9),
-            evaluated_block_height: 1,
-            evaluated_block_hash: "ab".repeat(32),
-            active_transfer_verifier: Some(active_transfer_verifier()),
-            active_topup_shield_verifier: Some(active_topup_shield_verifier()),
-            ready: true,
-            blockers: Vec::new(),
-        };
+        let readiness = ready_readiness(&asset_definition_id("xor"));
         let body = norito::json::to_vec(&readiness).expect("encode readiness");
         for content_type in [Some("text/json"), Some("application/octet-stream"), None] {
             let response = mk_response(StatusCode::OK, body.clone(), content_type);
@@ -8751,7 +8935,7 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn post_multisig_proposals_query_builds_request() {
+    fn post_multisig_proposals_list_builds_request() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
@@ -8774,7 +8958,7 @@ mod evidence_http_tests {
         );
 
         with_mock_http(respond_with(&snapshots, response), || {
-            let request = MultisigProposalsQueryRequest {
+            let request = MultisigProposalsListRequest {
                 multisig_account_id: Some(account_id.clone()),
                 multisig_account_alias: None,
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
@@ -8782,8 +8966,8 @@ mod evidence_http_tests {
                 limit: None,
             };
             let resp = client
-                .post_multisig_proposals_query(&request)
-                .expect("post multisig proposals query");
+                .post_multisig_proposals_list(&request)
+                .expect("post multisig proposals list");
             assert_eq!(resp.resolved_multisig_account_id, account_id);
             assert_eq!(resp.proposals.len(), 1);
             assert_eq!(resp.proposals[0].proposal_id, proposal_id);
@@ -8799,7 +8983,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/proposals/query"
+            "http://mock.local/v1/multisig/proposals/list"
         );
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
@@ -8827,14 +9011,14 @@ mod evidence_http_tests {
 
         with_mock_http(respond_with(&snapshots, response), || {
             for request in [
-                MultisigProposalsQueryRequest {
+                MultisigProposalsListRequest {
                     multisig_account_id: None,
                     multisig_account_alias: None,
                     status: Vec::new(),
                     cursor: None,
                     limit: None,
                 },
-                MultisigProposalsQueryRequest {
+                MultisigProposalsListRequest {
                     multisig_account_id: Some(account_id.clone()),
                     multisig_account_alias: Some("cbdc@hbl.sbp".to_owned()),
                     status: Vec::new(),
@@ -8843,31 +9027,31 @@ mod evidence_http_tests {
                 },
             ] {
                 let error = client
-                    .post_multisig_proposals_query(&request)
+                    .post_multisig_proposals_list(&request)
                     .expect_err("authority selector must be exact");
                 assert!(error.to_string().contains("exactly one"));
             }
 
-            let request = MultisigProposalsLookupRequest {
+            let request = MultisigProposalsGetRequest {
                 multisig_account_id: Some(account_id.clone()),
                 multisig_account_alias: None,
                 proposal_id: None,
                 instructions_hash: None,
             };
             let error = client
-                .post_multisig_proposals_lookup(&request)
+                .post_multisig_proposals_get(&request)
                 .expect_err("proposal selector is required");
             assert!(error.to_string().contains("exactly one"));
 
             let hash = "a".repeat(64);
-            let request = MultisigProposalsLookupRequest {
+            let request = MultisigProposalsGetRequest {
                 multisig_account_id: Some(account_id),
                 multisig_account_alias: None,
                 proposal_id: Some(hash.clone()),
                 instructions_hash: Some(hash),
             };
             let error = client
-                .post_multisig_proposals_lookup(&request)
+                .post_multisig_proposals_get(&request)
                 .expect_err("dual proposal selectors must fail");
             assert!(error.to_string().contains("exactly one"));
         });
@@ -8879,7 +9063,7 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn post_multisig_proposals_lookup_builds_selector_explicit_request() {
+    fn post_multisig_proposals_get_builds_selector_explicit_request() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
@@ -8900,7 +9084,7 @@ mod evidence_http_tests {
                 proposal_id = proposal_id,
             ),
         );
-        let request = MultisigProposalsLookupRequest {
+        let request = MultisigProposalsGetRequest {
             multisig_account_id: Some(account_id.clone()),
             multisig_account_alias: None,
             proposal_id: Some(proposal_id.clone()),
@@ -8909,8 +9093,8 @@ mod evidence_http_tests {
 
         with_mock_http(respond_with(&snapshots, response), || {
             let decoded = client
-                .post_multisig_proposals_lookup(&request)
-                .expect("post multisig proposal lookup");
+                .post_multisig_proposals_get(&request)
+                .expect("post multisig proposal get");
             assert_eq!(decoded.resolved_multisig_account_id, account_id);
             assert_eq!(decoded.proposal_id, proposal_id);
         });
@@ -8921,7 +9105,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/proposals/lookup"
+            "http://mock.local/v1/multisig/proposals/get"
         );
         assert!(snapshot.headers.iter().any(|(name, value)| {
             name.eq_ignore_ascii_case("accept") && value == APPLICATION_JSON
@@ -14473,20 +14657,20 @@ impl Client {
             .send()
     }
 
-    /// Convenience: selector-explicit POST `/v1/multisig/proposals/query`.
+    /// Convenience: selector-explicit POST `/v1/multisig/proposals/list`.
     ///
     /// # Errors
     /// Returns an error if request construction, JSON serialization, the HTTP call,
     /// or response decoding fails.
-    pub fn post_multisig_proposals_query(
+    pub fn post_multisig_proposals_list(
         &self,
-        request: &MultisigProposalsQueryRequest,
-    ) -> Result<MultisigProposalsQueryResponse> {
+        request: &MultisigProposalsListRequest,
+    ) -> Result<MultisigProposalsListResponse> {
         validate_multisig_read_selector(
             request.multisig_account_id.as_ref(),
             request.multisig_account_alias.as_deref(),
         )?;
-        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/query");
+        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/list");
         let body = norito::json::to_vec(request)?;
         let resp = self
             .default_request(HttpMethod::POST, url)
@@ -14497,25 +14681,25 @@ impl Client {
             .send()?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to query multisig proposals with HTTP status: {}. {}",
+                "Failed to list multisig proposals with HTTP status: {}. {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
         norito::json::from_slice(resp.body())
-            .map_err(|err| eyre!("failed to decode multisig proposals query response: {err}"))
+            .map_err(|err| eyre!("failed to decode multisig proposals list response: {err}"))
     }
 
-    /// Convenience: selector-explicit POST `/v1/multisig/proposals/lookup`.
+    /// Convenience: selector-explicit POST `/v1/multisig/proposals/get`.
     ///
     /// # Errors
     /// Returns an error if the authority or proposal selector is not exact, request
     /// construction or JSON serialization fails, the HTTP call fails, or the response
     /// cannot be decoded.
-    pub fn post_multisig_proposals_lookup(
+    pub fn post_multisig_proposals_get(
         &self,
-        request: &MultisigProposalsLookupRequest,
-    ) -> Result<MultisigProposalLookupResponse> {
+        request: &MultisigProposalsGetRequest,
+    ) -> Result<MultisigProposalGetResponse> {
         validate_multisig_read_selector(
             request.multisig_account_id.as_ref(),
             request.multisig_account_alias.as_deref(),
@@ -14524,7 +14708,7 @@ impl Client {
             request.proposal_id.as_deref(),
             request.instructions_hash.as_deref(),
         )?;
-        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/lookup");
+        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/get");
         let body = norito::json::to_vec(request)?;
         let resp = self
             .default_request(HttpMethod::POST, url)
@@ -14535,13 +14719,13 @@ impl Client {
             .send()?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to lookup multisig proposal with HTTP status: {}. {}",
+                "Failed to get multisig proposal with HTTP status: {}. {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
         norito::json::from_slice(resp.body())
-            .map_err(|err| eyre!("failed to decode multisig proposal lookup response: {err}"))
+            .map_err(|err| eyre!("failed to decode multisig proposal get response: {err}"))
     }
 
     /// Convenience: POST `/v1/multisig/propose` with a typed instruction batch.
@@ -22386,320 +22570,6 @@ mod tests {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
-    fn sample_sumeragi_status_with_relay() -> (SumeragiStatusWire, LaneRelayEnvelope) {
-        let subject_hash = Hash::prehashed([0xAA; Hash::LENGTH]);
-        let highest = HashOf::<BlockHeader>::from_untyped_unchecked(subject_hash);
-        let settlement = LaneBlockCommitment {
-            block_height: 12,
-            lane_id: LaneId::new(1),
-            dataspace_id: DataSpaceId::new(7),
-            lane_incarnation: Hash::new(b"client-lane-payload-incarnation"),
-            tx_count: 1,
-            total_local_micro: 500_000,
-            total_xor_due_micro: 250_000,
-            total_xor_after_haircut_micro: 240_000,
-            total_xor_variance_micro: 10_000,
-            swap_metadata: Some(LaneSwapMetadata {
-                epsilon_bps: 35,
-                twap_window_seconds: 120,
-                liquidity_profile: LaneLiquidityProfile::Tier2,
-                twap_local_per_xor: "123.456".to_owned(),
-                volatility_class: LaneVolatilityClass::Elevated,
-            }),
-            receipts: vec![LaneSettlementReceipt {
-                source_id: [0x11; 32],
-                local_amount_micro: 500_000,
-                xor_due_micro: 250_000,
-                xor_after_haircut_micro: 240_000,
-                xor_variance_micro: 10_000,
-                timestamp_ms: 1_724_000_000_000,
-            }],
-            nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
-        };
-        let da_hash = Some(HashOf::from_untyped_unchecked(Hash::prehashed(
-            [0xDD; Hash::LENGTH],
-        )));
-        let mut block_header = BlockHeader::new(
-            NonZeroU64::new(12).expect("nonzero height"),
-            None,
-            None,
-            None,
-            1_700_000_000_000,
-            0,
-        );
-        block_header.set_da_commitments_hash(da_hash);
-        let commit_qc = sample_commit_qc(&block_header);
-        let relay_envelope = LaneRelayEnvelope::new(
-            block_header,
-            Some(commit_qc),
-            da_hash,
-            settlement.clone(),
-            256,
-        )
-        .expect("construct lane relay envelope");
-        let mismatch_peer = PeerId::from(checked_random_keypair().public_key().clone());
-        let mismatch_entry = SumeragiRbcMismatchEntry {
-            peer_id: mismatch_peer,
-            chunk_digest_mismatch_total: 3,
-            payload_hash_mismatch_total: 2,
-            chunk_root_mismatch_total: 1,
-            last_timestamp_ms: 1_724_000_000_123,
-        };
-        let status = SumeragiStatusWire {
-            canonical: SumeragiV1StatusWire::default(),
-            safety_halt: Default::default(),
-            mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
-            staged_mode_tag: None,
-            staged_mode_activation_height: None,
-            mode_activation_lag_blocks: None,
-            mode_flip_kill_switch: true,
-            mode_flip_blocked: false,
-            mode_flip_success_total: 0,
-            mode_flip_fail_total: 0,
-            mode_flip_blocked_total: 0,
-            last_mode_flip_timestamp_ms: None,
-            last_mode_flip_error: None,
-            consensus_caps: None,
-            effective_min_finality_ms: 0,
-            effective_block_time_ms: 0,
-            effective_commit_time_ms: 0,
-            effective_pacing_factor_bps: 0,
-            effective_commit_quorum_timeout_ms: 0,
-            effective_availability_timeout_ms: 0,
-            effective_pacemaker_interval_ms: 0,
-            effective_npos_timeouts: None,
-            npos_repair_coverage: None,
-            effective_collectors_k: 0,
-            effective_redundant_send_r: 0,
-            leader_index: 2,
-            highest_qc_height: 12,
-            highest_qc_view: 5,
-            highest_qc_subject: Some(highest),
-            locked_qc_height: 11,
-            locked_qc_view: 4,
-            locked_qc_subject: None,
-            commit_qc: iroha_data_model::block::consensus::SumeragiQcStatus::default(),
-            commit_quorum: iroha_data_model::block::consensus::SumeragiCommitQuorumStatus::default(
-            ),
-            view_change_proof_accepted_total: 5,
-            view_change_proof_stale_total: 6,
-            view_change_proof_rejected_total: 7,
-            view_change_suggest_total: 8,
-            view_change_install_total: 9,
-            view_change_causes: SumeragiViewChangeCauseStatus {
-                commit_failure_total: 1,
-                quorum_timeout_total: 2,
-                stake_quorum_timeout_total: 3,
-                roster_unavailable_total: 4,
-                da_gate_total: 5,
-                censorship_evidence_total: 6,
-                missing_payload_total: 7,
-                missing_qc_total: 8,
-                validation_reject_total: 9,
-                last_cause: Some("missing_qc".to_owned()),
-                last_cause_timestamp_ms: 10,
-                last_commit_failure_timestamp_ms: 11,
-                last_quorum_timeout_timestamp_ms: 12,
-                last_stake_quorum_timeout_timestamp_ms: 13,
-                last_roster_unavailable_timestamp_ms: 14,
-                last_da_gate_timestamp_ms: 15,
-                last_censorship_evidence_timestamp_ms: 16,
-                last_missing_payload_timestamp_ms: 17,
-                last_missing_qc_timestamp_ms: 18,
-                last_validation_reject_timestamp_ms: 19,
-            },
-            gossip_fallback_total: 3,
-            block_created_dropped_by_lock_total: 1,
-            block_created_hint_mismatch_total: 2,
-            block_created_proposal_mismatch_total: 0,
-            consensus_message_handling: SumeragiConsensusMessageHandlingStatus {
-                entries: vec![SumeragiConsensusMessageHandlingEntry {
-                    kind: "block_created".to_owned(),
-                    outcome: "dropped".to_owned(),
-                    reason: "hint_mismatch".to_owned(),
-                    total: 2,
-                }],
-            },
-            vote_validation_drops: SumeragiVoteValidationDropStatus::default(),
-            validation_reject_total: 0,
-            validation_reject_reason: None,
-            validation_rejects: SumeragiValidationRejectStatus::default(),
-            peer_key_policy: SumeragiPeerKeyPolicyStatus::default(),
-            block_sync_roster: SumeragiBlockSyncRosterStatus {
-                commit_qc_hint_total: 0,
-                checkpoint_hint_total: 0,
-                commit_qc_history_total: 0,
-                checkpoint_history_total: 0,
-                roster_sidecar_total: 0,
-                commit_roster_journal_total: 0,
-                drop_missing_total: 0,
-                drop_unsolicited_share_blocks_total: 4,
-            },
-            pacemaker_backpressure_deferrals_total: 6,
-            proposal_gate: SumeragiProposalGateStatus {
-                height: 13,
-                view: 21,
-                queue_len: 5,
-                pending_blocks_total: 2,
-                pending_blocks_blocking: 1,
-                active_pending_for_tip: 0,
-                queue_saturated: false,
-                active_pending: false,
-                rbc_backlog: true,
-                relay_backpressure: false,
-                consensus_queue_backpressure: true,
-                should_defer: true,
-                only_pacing_backpressure: false,
-                commit_inflight_active: false,
-                cached_proposal_present: false,
-                cached_proposal_hint_present: true,
-                round_liveness_present: false,
-                frontier_owner_present: true,
-                missing_qc_liveness_active: true,
-                last_pacemaker_attempt_age_ms: 123,
-                last_successful_proposal_age_ms: 456,
-            },
-            commit_pipeline_tick_total: 0,
-            da_reschedule_total: 0,
-            missing_block_fetch: SumeragiMissingBlockFetchStatus {
-                total: 0,
-                last_targets: 0,
-                last_dwell_ms: 0,
-            },
-            qc_deferred_missing_payload_total: 0,
-            qc_deferred_resolved_total: 0,
-            qc_deferred_expired_total: 0,
-            consensus_missing_qc_reacquire_attempt_total: 0,
-            consensus_missing_qc_reacquire_success_total: 0,
-            consensus_missing_qc_reacquire_exhausted_total: 0,
-            consensus_forced_proposal_attempt_total: 0,
-            consensus_forced_proposal_success_total: 0,
-            blocksync_range_pull_escalation_total: 0,
-            blocksync_range_pull_success_total: 0,
-            blocksync_range_pull_failure_total: 0,
-            blocksync_range_pull_candidate_exhausted_total: 0,
-            committed_edge_conflict_obsolete_total: 0,
-            roster_sidecar_mismatch_obsolete_total: 0,
-            da_gate: SumeragiDaGateStatus {
-                reason: SumeragiDaGateReason::None,
-                last_satisfied: SumeragiDaGateSatisfaction::None,
-                missing_local_data_total: 0,
-                manifest_guard_total: 0,
-            },
-            kura_store: SumeragiKuraStoreStatus {
-                failures_total: 0,
-                abort_total: 0,
-                last_retry_attempt: 0,
-                last_retry_backoff_ms: 0,
-                last_height: 0,
-                last_view: 0,
-                last_hash: None,
-                ..Default::default()
-            },
-            rbc_store: SumeragiRbcStoreStatus {
-                sessions: 0,
-                bytes: 0,
-                pressure_level: 0,
-                backpressure_deferrals_total: 0,
-                persist_drops_total: 0,
-                evictions_total: 0,
-                recent_evictions: Vec::new(),
-            },
-            rbc_mismatch: SumeragiRbcMismatchStatus {
-                entries: vec![mismatch_entry.clone()],
-            },
-            pending_rbc: SumeragiPendingRbcStatus::default(),
-            tx_queue_depth: 7,
-            tx_queue_capacity: 20,
-            tx_queue_retained_bytes: 3_072,
-            tx_queue_max_retained_bytes: 4_096,
-            tx_queue_saturated: true,
-            tx_queue_saturated_by_count: false,
-            tx_queue_saturated_by_bytes: true,
-            tx_queue_saturated_by_age: true,
-            tx_queue_oldest_queued_age_ms: 1_250,
-            epoch_length_blocks: 100,
-            epoch_commit_deadline_offset: 60,
-            epoch_reveal_deadline_offset: 80,
-            prf_epoch_seed: Some([0xBB; 32]),
-            prf_height: 12,
-            prf_view: 5,
-            vrf_penalty_epoch: 3,
-            vrf_committed_no_reveal_total: 1,
-            vrf_no_participation_total: 0,
-            vrf_late_reveals_total: 2,
-            consensus_penalties_applied_total: 0,
-            consensus_penalties_pending: 0,
-            vrf_penalties_applied_total: 0,
-            vrf_penalties_pending: 0,
-            membership: SumeragiMembershipStatus {
-                height: 9,
-                view: 4,
-                epoch: 2,
-                view_hash: Some([0xCC; 32]),
-            },
-            membership_mismatch: SumeragiMembershipMismatchStatus::default(),
-            lane_commitments: vec![iroha_data_model::block::consensus::SumeragiLaneCommitment {
-                block_height: 12,
-                lane_id: LaneId::new(1),
-                tx_count: 4,
-                total_chunks: 2,
-                rbc_bytes_total: 128,
-                teu_total: 42,
-                block_hash: highest,
-            }],
-            dataspace_commitments: vec![
-                iroha_data_model::block::consensus::SumeragiDataspaceCommitment {
-                    block_height: 12,
-                    lane_id: LaneId::new(1),
-                    dataspace_id: DataSpaceId::new(7),
-                    tx_count: 2,
-                    total_chunks: 1,
-                    rbc_bytes_total: 64,
-                    teu_total: 21,
-                    block_hash: highest,
-                },
-            ],
-            lane_settlement_commitments: vec![settlement],
-            lane_relay_envelopes: vec![relay_envelope.clone()],
-            lane_payload_ownerships: Vec::new(),
-            committed_lane_blocks: Vec::new(),
-            lane_block_sessions: Vec::new(),
-            lane_governance_sealed_total: 0,
-            lane_governance_sealed_aliases: Vec::new(),
-            lane_governance: vec![iroha_data_model::block::consensus::SumeragiLaneGovernance {
-                lane_id: LaneId::new(1),
-                alias: "alpha-lane".to_owned(),
-                governance: Some("module.v1".to_owned()),
-                manifest_required: true,
-                manifest_ready: true,
-                manifest_path: Some("/etc/iroha/lanes/alpha.toml".to_owned()),
-                validator_ids: vec![
-                    "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".to_owned(),
-                ],
-                quorum: Some(2),
-                protected_namespaces: vec!["finance".to_owned()],
-                runtime_upgrade: Some(
-                    iroha_data_model::block::consensus::SumeragiRuntimeUpgradeHook {
-                        allow: true,
-                        require_metadata: true,
-                        metadata_key: Some("upgrade_id".to_owned()),
-                        allowed_ids: vec!["alpha-upgrade".to_owned()],
-                    },
-                ),
-            }],
-            worker_loop: iroha_data_model::block::consensus::SumeragiWorkerLoopStatus::default(),
-            commit_inflight:
-                iroha_data_model::block::consensus::SumeragiCommitInflightStatus::default(),
-            commit_pipeline:
-                iroha_data_model::block::consensus::SumeragiCommitPipelineStatus::default(),
-            round_gap: iroha_data_model::block::consensus::SumeragiRoundGapStatus::default(),
-        };
-        (status, relay_envelope)
-    }
-
     fn make_lane_relay_for_status(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -26157,7 +26027,7 @@ mod tests {
         let block_hash = block_header.hash();
         SumeragiStatusWire {
             canonical: SumeragiV1StatusWire::default(),
-            safety_halt: Default::default(),
+            safety_halt: SumeragiSafetyHaltStatus::default(),
             mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
             staged_mode_tag: None,
             staged_mode_activation_height: None,
@@ -26433,7 +26303,7 @@ mod tests {
             committed_lane_blocks: legacy.committed_lane_blocks,
             lane_block_sessions: legacy.lane_block_sessions,
             local_peer_removed: false,
-            safety_halt: Default::default(),
+            safety_halt: SumeragiSafetyHaltStatus::default(),
             operator: iroha_data_model::block::consensus_v2::SumeragiV2OperatorStatus {
                 view_change_install_total: 3,
                 busy_deferral_total: 2,
@@ -26727,42 +26597,42 @@ mod tests {
                 expected
                     .first_block_hash
                     .as_ref()
-                    .map(|hash| canonical_hash_string(*hash)),
+                    .map(canonical_hash_string),
             ),
             (
                 "conflicting_block_hash",
                 expected
                     .conflicting_block_hash
                     .as_ref()
-                    .map(|hash| canonical_hash_string(*hash)),
+                    .map(canonical_hash_string),
             ),
             (
                 "first_parent_state_root",
                 expected
                     .first_parent_state_root
                     .as_ref()
-                    .map(|hash| canonical_hash_string(*hash)),
+                    .map(canonical_hash_string),
             ),
             (
                 "first_post_state_root",
                 expected
                     .first_post_state_root
                     .as_ref()
-                    .map(|hash| canonical_hash_string(*hash)),
+                    .map(canonical_hash_string),
             ),
             (
                 "conflicting_parent_state_root",
                 expected
                     .conflicting_parent_state_root
                     .as_ref()
-                    .map(|hash| canonical_hash_string(*hash)),
+                    .map(canonical_hash_string),
             ),
             (
                 "conflicting_post_state_root",
                 expected
                     .conflicting_post_state_root
                     .as_ref()
-                    .map(|hash| canonical_hash_string(*hash)),
+                    .map(canonical_hash_string),
             ),
         ] {
             assert_eq!(
@@ -26998,7 +26868,7 @@ mod tests {
         };
         let status = SumeragiStatusWire {
             canonical: SumeragiV1StatusWire::default(),
-            safety_halt: Default::default(),
+            safety_halt: SumeragiSafetyHaltStatus::default(),
             mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
             staged_mode_tag: None,
             staged_mode_activation_height: None,
@@ -30880,7 +30750,9 @@ mod tests {
 
     fn manifest_bundle_from_payload(payload: &[u8]) -> DaManifestBundle {
         let mut store = ChunkStore::new();
-        store.ingest_bytes(payload);
+        store
+            .ingest_bytes(payload)
+            .expect("ingest manifest fixture payload");
         let profile = ErasureProfile::default();
         let data_shards = usize::from(profile.data_shards);
         let chunk_commitments = store
@@ -31281,6 +31153,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the exhaustive fixed-limit matrix is clearer as one table-driven test"
+    )]
     fn sccp_capability_resource_limits_fail_closed() {
         let valid = sample_sccp_capabilities();
         validate_sccp_capabilities(&valid).expect("valid SCCP capability limits");
@@ -31305,7 +31181,7 @@ mod tests {
         for mutate in registry_mutations {
             let mut hostile = valid.clone();
             mutate(&mut hostile);
-            validate_sccp_capabilities(&hostile)
+            let _ = validate_sccp_capabilities(&hostile)
                 .expect_err("drifted fixed SCCP registry limit must reject");
         }
 
@@ -31314,7 +31190,7 @@ mod tests {
                 $({
                     let mut hostile = valid.clone();
                     hostile.resource_limits.$field = 0;
-                    validate_sccp_capabilities(&hostile).expect_err(concat!(
+                    let _ = validate_sccp_capabilities(&hostile).expect_err(concat!(
                         "zero SCCP resource limit must reject: ",
                         stringify!($field),
                     ));
@@ -31376,13 +31252,13 @@ mod tests {
         drifted_outbox
             .resource_limits
             .max_outbound_messages_per_block = 511;
-        validate_sccp_capabilities(&drifted_outbox)
+        let _ = validate_sccp_capabilities(&drifted_outbox)
             .expect_err("drifted fixed SCCP outbound message cap must reject");
         let mut drifted_payload = valid.clone();
         drifted_payload
             .resource_limits
             .max_outbound_message_payload_bytes = 4_095;
-        validate_sccp_capabilities(&drifted_payload)
+        let _ = validate_sccp_capabilities(&drifted_payload)
             .expect_err("drifted fixed SCCP outbound payload cap must reject");
 
         let mut per_proof_over_transaction = valid.clone();
@@ -31392,7 +31268,7 @@ mod tests {
             .resource_limits
             .max_proof_bytes_per_transaction
             + 1;
-        validate_sccp_capabilities(&per_proof_over_transaction)
+        let _ = validate_sccp_capabilities(&per_proof_over_transaction)
             .expect_err("per-proof bytes above transaction bytes must reject");
 
         macro_rules! assert_transaction_over_block_rejects {
@@ -31401,7 +31277,7 @@ mod tests {
                     let mut hostile = valid.clone();
                     hostile.resource_limits.$transaction =
                         hostile.resource_limits.$block + 1;
-                    validate_sccp_capabilities(&hostile).expect_err(concat!(
+                    let _ = validate_sccp_capabilities(&hostile).expect_err(concat!(
                         "transaction SCCP resource limit above block limit must reject: ",
                         stringify!($transaction),
                     ));
@@ -31496,7 +31372,7 @@ mod tests {
             StatusCode::OK,
             &norito::json::to_json(&capability).expect("hostile capability JSON"),
         );
-        with_mock_http(
+        let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).get_sccp_capabilities_json(),
         )
@@ -31518,7 +31394,7 @@ mod tests {
             StatusCode::OK,
             &norito::json::to_json(&recent).expect("hostile recent JSON"),
         );
-        with_mock_http(
+        let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).get_sccp_recent_messages_json(),
         )
@@ -31539,7 +31415,7 @@ mod tests {
             StatusCode::OK,
             &norito::json::to_json(&governance).expect("hostile governance JSON"),
         );
-        with_mock_http(
+        let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).post_sccp_route_governance_draft(&request),
         )
@@ -31590,7 +31466,7 @@ mod tests {
             lower: 21,
             upper: 20,
         });
-        with_mock_http(
+        let _ = with_mock_http(
             |_| panic!("invalid governance window must fail before HTTP"),
             || client_with_base_url(base_url()).post_sccp_route_governance_draft(&invalid_window),
         )
@@ -31620,7 +31496,7 @@ mod tests {
             StatusCode::OK,
             &norito::json::to_json(&wrong_id).expect("wrong-id response"),
         );
-        with_mock_http(
+        let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).post_sccp_route_governance_draft(&request),
         )
@@ -31743,6 +31619,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the malformed-message matrix validates one shared fail-closed contract"
+    )]
     fn sccp_recent_messages_reject_bounds_duplicates_aliases_and_malformed_items() {
         let valid = sample_sccp_recent_messages();
         validate_sccp_recent_messages(&valid).expect("valid recent response");
@@ -32058,7 +31938,7 @@ mod tests {
                 .header("content-type", APPLICATION_NORITO)
                 .body(norito::to_bytes(&candidate).expect("encode adversarial SCCP bundle"))
                 .expect("response build");
-            with_mock_http(
+            let _ = with_mock_http(
                 respond_with(&Arc::new(Mutex::new(Vec::new())), response),
                 || client_with_base_url(base_url()).get_sccp_message_bundle(&message_id),
             )
@@ -32074,7 +31954,7 @@ mod tests {
             .header("content-type", APPLICATION_NORITO)
             .body(trailing)
             .expect("response build");
-        with_mock_http(
+        let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).get_sccp_message_bundle(&message_id),
         )
@@ -32263,7 +32143,7 @@ mod tests {
             StatusCode::OK,
             &norito::json::to_json(&wrong_hash).expect("encode hostile hash response"),
         );
-        with_mock_http(
+        let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client.post_sccp_destination_proof(&request),
         )
@@ -32271,6 +32151,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the mutation matrix shares one canonical signed transaction fixture"
+    )]
     fn destination_direct_submit_rejects_payload_mutations_before_http() {
         use base64::Engine as _;
         use iroha_data_model::{
@@ -32288,7 +32172,7 @@ mod tests {
         .expect("decode fixture transaction payload");
         let reject_without_http = |candidate: &SccpDestinationProofSubmitRequest, label: &str| {
             let panic_message = format!("{label} must reject before HTTP");
-            with_mock_http(
+            let _ = with_mock_http(
                 move |_| panic!("{panic_message}"),
                 || client.post_sccp_destination_proof(candidate),
             )
@@ -32404,7 +32288,7 @@ mod tests {
         let (mut client, _key_pair, mut request, _builder, _tx_hash) =
             destination_direct_submit_fixture();
         client.chain = ChainId::from("00000000-0000-0000-0000-000000000000");
-        with_mock_http(
+        let _ = with_mock_http(
             |_| panic!("wrong configured chain must reject before HTTP"),
             || client.post_sccp_destination_proof(&request),
         )
@@ -32412,7 +32296,7 @@ mod tests {
 
         let client = sccp_client_with_base_url(base_url());
         request.transaction_payload_b64 = None;
-        with_mock_http(
+        let _ = with_mock_http(
             |_| panic!("mixed signing state must reject before HTTP"),
             || client.post_sccp_destination_proof(&request),
         )

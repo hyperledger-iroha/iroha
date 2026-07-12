@@ -24976,7 +24976,7 @@ seiyaku AliasPayout {
             commitment,
             [0x42; 32],
             "halo2/ipa",
-            "offline-note-recursive",
+            "kagemusha-recursive-spend-state-ep-v1",
             "core",
             Vec::new(),
         );
@@ -24984,7 +24984,7 @@ seiyaku AliasPayout {
 
         let mut map = BTreeMap::new();
         map.insert(
-            VerifyingKeyId::new("halo2/ipa", "offline-note-recursive"),
+            VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-spend-state-ep-v1"),
             rec,
         );
 
@@ -25001,14 +25001,17 @@ seiyaku AliasPayout {
             commitment,
             [0x42; 32],
             "halo2/ipa",
-            "kagemusha-folded-v1",
+            "kagemusha-recursive-spend-transition-eq-v1",
             "core",
             Vec::new(),
         );
         rec.key = None;
 
         let mut map = BTreeMap::new();
-        map.insert(VerifyingKeyId::new("halo2/ipa", "kagemusha-folded-v1"), rec);
+        map.insert(
+            VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-spend-transition-eq-v1"),
+            rec,
+        );
         host.set_verifying_keys(map)
             .expect("keyless record should be accepted");
 

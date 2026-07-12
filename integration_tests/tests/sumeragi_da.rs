@@ -23,8 +23,7 @@ use iroha::{
         consensus::Qc,
         isi::{Log, SetParameter, Unregister},
         parameter::{
-            Parameter, Parameters, SumeragiParameter, TransactionParameter,
-            system::SumeragiNposParameters,
+            Parameter, SumeragiParameter, TransactionParameter, system::SumeragiNposParameters,
         },
         prelude::{HashOf, QueryBuilderExt},
         query::block::prelude::FindBlocks,
@@ -779,7 +778,6 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
                 P2P_TX_FRAME_BUDGET_BYTES,
             )
             .write(["sumeragi", "da", "enabled"], true)
-            .write(["sumeragi", "consensus_mode"], "permissioned")
             .write(
                 ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                 rbc_chunk_max_bytes,
@@ -806,6 +804,7 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_permissioned_consensus()
         .with_data_availability_enabled(true)
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::DaEnabled(true),
@@ -834,7 +833,6 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
         let status_timeout = da_commit_wait_timeout();
         client.transaction_status_timeout = status_timeout;
         client.transaction_ttl = Some(status_timeout.saturating_add(Duration::from_secs(30)));
-        configure_runtime_da(&client).await?;
 
         let store_roots = peers
             .iter()
@@ -1095,7 +1093,6 @@ async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
             .collect();
 
         let client = primary_peer.client();
-        configure_runtime_da(&client).await?;
         let torii_primary = client.torii_url.clone();
         let status_before = fetch_status(&client).await?;
         let expected_height = status_before.blocks + 1;
@@ -1291,7 +1288,6 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
         let mut client = primary_peer.client();
         client.transaction_status_timeout = status_timeout;
         client.transaction_ttl = Some(transaction_ttl);
-        configure_runtime_da(&client).await?;
         let status_before = fetch_status(&client).await?;
         let expected_height = status_before.blocks + 1;
         let roster_change_height = expected_height.saturating_add(1);
@@ -2060,9 +2056,9 @@ async fn sumeragi_idle_view_change_recovers_after_leader_shutdown() -> Result<()
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::CommitTimeMs(1_000),
         )))
+        .with_permissioned_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(["sumeragi", "consensus_mode"], "permissioned")
                 .write(
                     ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
                     200_i64,
@@ -2702,7 +2698,6 @@ where
                 ["network", "max_frame_bytes_tx_gossip"],
                 P2P_TX_FRAME_BUDGET_BYTES,
             )
-            .write(["sumeragi", "consensus_mode"], "npos")
             .write(
                 ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                 rbc_chunk_max_bytes,
@@ -2804,10 +2799,6 @@ where
     let status_timeout = da_commit_wait_timeout().saturating_add(Duration::from_secs(60));
     client.transaction_status_timeout = status_timeout;
     client.transaction_ttl = Some(status_timeout.saturating_add(Duration::from_secs(30)));
-    // When Torii websockets are blocked by the environment, bail out early as a sandbox skip.
-    if sandbox::handle_result(configure_runtime_da(&client).await, scenario_name)?.is_none() {
-        return Ok(());
-    }
     let status_before = fetch_status(&client).await?;
     let expected_height = status_before.blocks + 1;
 
@@ -3311,34 +3302,6 @@ async fn run_sumeragi_da_scenario(
     .await
 }
 
-async fn configure_runtime_da(client: &Client) -> Result<()> {
-    let parameters = {
-        let client = client.clone();
-        tokio::task::spawn_blocking(move || client.get_parameters())
-            .await
-            .wrap_err("join get_parameters task")?
-            .wrap_err("fetch runtime parameters")?
-    };
-    if !runtime_da_configuration_required(&parameters) {
-        return Ok(());
-    }
-    set_sumeragi_parameter(client, SumeragiParameter::DaEnabled(true)).await
-}
-
-async fn set_sumeragi_parameter(client: &Client, parameter: SumeragiParameter) -> Result<()> {
-    let submit_client = client.clone();
-    tokio::task::spawn_blocking(move || {
-        submit_client.submit_blocking(SetParameter::new(Parameter::Sumeragi(parameter)))
-    })
-    .await
-    .wrap_err("join SetParameter task")??;
-    Ok(())
-}
-
-fn runtime_da_configuration_required(parameters: &Parameters) -> bool {
-    !parameters.sumeragi().da_enabled
-}
-
 async fn fetch_status(client: &Client) -> Result<Status> {
     let deadline = Instant::now() + Duration::from_secs(120);
     let mut delay = Duration::from_millis(200);
@@ -3607,22 +3570,6 @@ fn commit_certificate_required_from_len_matches_bft_quorum() {
     assert_eq!(commit_certificate_required_from_len(1), 1);
     assert_eq!(commit_certificate_required_from_len(4), 3);
     assert_eq!(commit_certificate_required_from_len(6), 5);
-}
-
-#[test]
-fn runtime_da_configuration_required_only_when_da_is_disabled() {
-    let default_parameters = Parameters::default();
-    assert!(
-        !runtime_da_configuration_required(&default_parameters),
-        "default DA scenarios already seed DA/RBC enabled in genesis"
-    );
-
-    let mut disabled_parameters = Parameters::default();
-    disabled_parameters.set_parameter(Parameter::Sumeragi(SumeragiParameter::DaEnabled(false)));
-    assert!(
-        runtime_da_configuration_required(&disabled_parameters),
-        "runtime DA reconfiguration should only be required when DA is disabled"
-    );
 }
 
 #[test]
@@ -5148,7 +5095,6 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
                 torii_max_content_len_for_payload(payload_bytes),
             )
             .write(["sumeragi", "da", "enabled"], true)
-            .write(["sumeragi", "consensus_mode"], "permissioned")
             .write(
                 ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                 rbc_chunk_max_bytes,
@@ -5171,6 +5117,7 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_permissioned_consensus()
         .with_data_availability_enabled(true)
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::DaEnabled(true),
@@ -5203,7 +5150,6 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
         let status_timeout = da_commit_wait_timeout();
         client.transaction_status_timeout = status_timeout;
         client.transaction_ttl = Some(status_timeout.saturating_add(Duration::from_secs(30)));
-        configure_runtime_da(&client).await?;
         let kura_roots = peers
             .iter()
             .map(NetworkPeer::kura_store_dir)

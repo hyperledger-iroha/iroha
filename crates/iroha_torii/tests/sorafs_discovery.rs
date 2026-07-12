@@ -71,7 +71,7 @@ use iroha_torii::{
     test_utils::{AuthorityCreds, drain_queue_and_apply_all, random_authority},
 };
 use mv::storage::StorageReadOnly;
-use norito::{codec::Encode as _, decode_from_bytes, json, to_bytes};
+use norito::{decode_from_bytes, json, to_bytes};
 use sorafs_car::{
     CarBuildPlan, ChunkStore, compute_chunk_plan_digest_sha3, por_json::proof_from_value,
 };
@@ -80,8 +80,8 @@ use sorafs_manifest::{
     AdvertEndpoint, AdvertValidationError, AvailabilityTier, BLAKE3_256_MULTIHASH_CODE,
     CapabilityTlv, CapabilityType, CouncilSignature, DagCodecId, ENDPOINT_ATTESTATION_VERSION_V1,
     EndpointAdmissionV1, EndpointAttestationKind, EndpointAttestationV1, EndpointKind,
-    EndpointMetadata, EndpointMetadataKey, GovernanceProofs, MANIFEST_DAG_CODEC, ManifestBuilder,
-    ManifestV1, PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, PinPolicy, ProfileId,
+    EndpointMetadata, EndpointMetadataKey, MANIFEST_DAG_CODEC, ManifestBuilder, ManifestV1,
+    PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, PinPolicy, ProfileId,
     ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1,
     ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, QosHints, RendezvousTopic,
     SignatureAlgorithm, StakePointer, StorageClass as ManifestStorageClass, StreamBudgetV1,

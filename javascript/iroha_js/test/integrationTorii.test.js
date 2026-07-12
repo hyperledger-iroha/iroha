@@ -2502,39 +2502,7 @@ test(
   },
 );
 
-test(
-  "offline readiness responds (optional)",
-  {
-    skip: !!SKIP_REASON,
-    timeout: 60_000,
-  },
-  async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-
-    const assetDefinitionId = INTEGRATION_ASSET_DEFINITION_IDS[0];
-    const readiness = await client.getOfflineReadiness(assetDefinitionId);
-    assert.equal(readiness.asset_definition_id, assetDefinitionId);
-    assert.equal(Number.isSafeInteger(readiness.evaluated_block_height), true);
-    assert.equal(readiness.evaluated_block_height >= 0, true);
-    assert.match(readiness.evaluated_block_hash, /^[0-9a-f]{64}$/u);
-    assert.equal(typeof readiness.ready, "boolean");
-    assert.equal(Array.isArray(readiness.blockers), true);
-    assert.equal(readiness.ready, readiness.blockers.length === 0);
-    for (const blocker of readiness.blockers) {
-      assert.match(blocker.code, /^[a-z][a-z0-9_]*$/u);
-      assert.equal(typeof blocker.message, "string");
-    }
-  },
-);
-
-test(
+ test(
   "call contract entrypoint via Torii (optional)",
   {
     skip: !!SKIP_REASON,

@@ -956,7 +956,8 @@ pub mod network {
     pub const CONSENSUS_INGRESS_BYTES_BURST: Option<NonZeroU32> = Some(nonzero!(134_217_728_u32)); // 128 MiB
     /// Optional per-peer critical consensus ingress rate (msgs/sec). When None, critical limiting is disabled.
     ///
-    /// Critical traffic is liveness-sensitive (votes/QCs/VRF/RBC signals) and uses a dedicated cap.
+    /// Critical traffic is liveness-sensitive (votes, certificates, and certified body transfer)
+    /// and uses a dedicated cap.
     pub const CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC: Option<NonZeroU32> = Some(nonzero!(300_u32));
     /// Optional burst for critical consensus ingress rate limiting (msgs). Defaults to `rate` when None.
     pub const CONSENSUS_INGRESS_CRITICAL_BURST: Option<NonZeroU32> = Some(nonzero!(300_u32));
@@ -966,8 +967,6 @@ pub mod network {
     /// Optional burst size in bytes for critical consensus ingress limiting. Defaults to `bytes_per_sec` when None.
     pub const CONSENSUS_INGRESS_CRITICAL_BYTES_BURST: Option<NonZeroU32> =
         Some(nonzero!(268_435_456_u32)); // 256 MiB
-    /// Maximum concurrent RBC sessions accepted per peer before throttling (0 disables).
-    pub const CONSENSUS_INGRESS_RBC_SESSION_LIMIT: usize = 64;
     /// Drop threshold (per window) before temporarily suppressing consensus ingress.
     pub const CONSENSUS_INGRESS_PENALTY_THRESHOLD: u32 = 32;
     /// Window size (ms) for consensus ingress penalty tracking.
@@ -1906,13 +1905,8 @@ pub mod torii {
         /// Whether finalized Sumeragi VRF epoch seeds are mixed into faucet challenges when available.
         pub const POW_VRF_SEED_ENABLED: bool = false;
     }
-    /// Offline Notes issuer defaults.
-    pub mod offline_issuer {
-        /// Maximum authorized offline balance per lineage.
-        pub fn max_balance() -> String {
-            "1000000".to_string()
-        }
-
+    /// Kagemusha command-submission defaults.
+    pub mod kagemusha_commands {
         /// Maximum authorized value for one offline transaction.
         pub fn max_tx_value() -> String {
             "100000".to_string()
@@ -1924,13 +1918,6 @@ pub mod torii {
         pub const OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY: usize = 32 + 1 + 32 + 32 + 8 + 8;
         /// Maximum canonical bytes reserved by accepted bindings and in-flight operations.
         pub const OPERATION_REGISTRY_MAX_BYTES: usize = 512 * 1024;
-
-        /// Certificate TTL in milliseconds.
-        pub const CERTIFICATE_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
-        /// Authorization refresh interval in milliseconds.
-        pub const AUTHORIZATION_REFRESH_MS: u64 = 12 * 60 * 60 * 1_000;
-        /// Authorization TTL in milliseconds.
-        pub const AUTHORIZATION_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
     }
     /// Steady-state rate for pre-authorization attempts per IP.
     pub const PREAUTH_RATE_PER_IP_PER_SEC: Option<u32> = Some(20);
@@ -2011,16 +1998,6 @@ pub mod torii {
     }
     /// Emit Torii filter debug traces (developer diagnostics only).
     pub const DEBUG_MATCH_FILTERS: bool = false;
-    /// RBC sampling endpoint disabled by default.
-    pub const RBC_SAMPLING_ENABLED: bool = false;
-    /// Maximum chunks sampled per request.
-    pub const RBC_SAMPLING_MAX_SAMPLES_PER_REQUEST: u32 = 3;
-    /// Maximum total chunk bytes returned per request.
-    pub const RBC_SAMPLING_MAX_BYTES_PER_REQUEST: u64 = 256 * 1024; // 256 KiB
-    /// Daily byte budget per caller for RBC sampling.
-    pub const RBC_SAMPLING_DAILY_BYTE_BUDGET: u64 = 4 * 1024 * 1024; // 4 MiB
-    /// Optional per-caller rate (requests per minute) for RBC sampling.
-    pub const RBC_SAMPLING_RATE_PER_MIN: Option<u32> = Some(12);
     /// Replay cache capacity per `(lane, epoch)` window.
     pub const DA_REPLAY_CACHE_CAPACITY: NonZeroUsize = nonzero!(4096usize);
     /// Replay cache TTL (seconds) applied to observed manifests.
@@ -2912,9 +2889,8 @@ pub mod norito {
     ///
     /// This limit is enforced before allocations to reject decompression bombs
     /// and other adversarial inputs that advertise extreme lengths. The default
-    /// aligns with the RBC store cap to avoid rejecting persisted consensus
-    /// payloads.
-    pub const MAX_ARCHIVE_LEN: u64 = super::sumeragi::RBC_STORE_MAX_BYTES as u64; // 1 GiB
+    /// leaves headroom for the canonical maximum block and chunk-store payloads.
+    pub const MAX_ARCHIVE_LEN: u64 = 1024 * 1024 * 1024; // 1 GiB
 }
 
 /// Hardware acceleration defaults (Metal/CUDA usage in IVM and helpers).
@@ -3120,413 +3096,96 @@ pub mod zk {
 
 /// Sumeragi (consensus) defaults
 pub mod sumeragi {
-    use std::num::{NonZeroU64, NonZeroUsize};
+    use std::num::NonZeroUsize;
 
     use iroha_crypto::Algorithm;
     use nonzero_ext::nonzero;
 
     /// Consensus wire/state-machine protocol version required by this release.
     pub const PROTOCOL_VERSION: u32 = 2;
-    /// Absolute Sumeragi v2 round deadline in milliseconds.
+    /// Fresh-network target block cadence selected by genesis.
+    pub const BLOCK_CADENCE_MS: u64 = 1_000;
+    /// Absolute round deadline in milliseconds.
     pub const ROUND_TIMEOUT_MS: u64 = 10_000;
-    /// Derive the critical-message retransmission interval as `round_timeout / 5`.
+    /// Critical-message retransmission is always `round_timeout / 5`.
     pub const RETRANSMIT_DIVISOR: u32 = 5;
-    /// Smallest serialized reducer FIFO that leaves distinct normal, progress,
-    /// and completion regions under the v2 reserve ratios.
-    pub const V2_MIN_RUNTIME_COMMAND_CAPACITY: usize = 8;
-    /// Aggregate ready-body byte budget as a multiple of the per-body bound.
-    pub const V2_READY_BODY_BYTE_MULTIPLIER: u64 = 2;
 
-    /// Legacy collector count retained while the v1 actor is removed; v2 ignores it.
-    pub const COLLECTORS_K: usize = 1;
-    /// Legacy collector fanout retained for archival/status scaffolding; v2 ignores it.
-    pub const COLLECTORS_REDUNDANT_SEND_R: u8 = 3;
-    /// Extra topology fanout alongside collector routing (0 = disabled).
-    pub const COLLECTORS_PARALLEL_TOPOLOGY_FANOUT: usize = 1;
-    /// Validator-set size threshold where deterministic active-subset fanout engages.
-    pub const FANOUT_LARGE_SET_THRESHOLD: u32 = 256;
-    /// Number of finalized blocks to inspect when scoring validator activity.
-    pub const FANOUT_ACTIVITY_LOOKBACK_BLOCKS: u32 = 128;
-    /// Required v2 cap on transactions per block.
-    pub const V2_BLOCK_MAX_TRANSACTIONS: NonZeroUsize = nonzero!(512_usize);
-    /// Legacy optional view of [`V2_BLOCK_MAX_TRANSACTIONS`].
-    pub const BLOCK_MAX_TRANSACTIONS: Option<NonZeroUsize> = Some(V2_BLOCK_MAX_TRANSACTIONS);
-    /// Optional cap on VM-heavy transactions per block (None = unlimited).
-    pub const BLOCK_MAX_IVM_TRANSACTIONS: Option<NonZeroUsize> = None;
-    /// Commit-time threshold (ms) for applying fast-finality proposal caps.
-    pub const FAST_FINALITY_COMMIT_TIME_MS: u64 = 1_000;
-    /// Optional cap on transactions per block when commit time is <= fast-finality threshold.
-    pub const FAST_FINALITY_MAX_TRANSACTIONS: Option<NonZeroUsize> = None;
-    /// Optional cap on block gas limit when commit time is <= fast-finality threshold.
-    pub const FAST_FINALITY_GAS_LIMIT_PER_BLOCK: Option<NonZeroU64> = None;
-    /// Required v2 canonical body bound.
-    pub const V2_BLOCK_MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(16_usize * 1024 * 1024);
-    /// Legacy optional view of [`V2_BLOCK_MAX_PAYLOAD_BYTES`].
-    pub const BLOCK_MAX_PAYLOAD_BYTES: Option<NonZeroUsize> = Some(V2_BLOCK_MAX_PAYLOAD_BYTES);
-    /// Multiplier applied to the proposal queue scan budget (relative to max tx per block).
+    /// Maximum transactions selected for one candidate block.
+    pub const BLOCK_MAX_TRANSACTIONS: NonZeroUsize = nonzero!(512_usize);
+    /// Maximum canonical block-body size in bytes.
+    pub const BLOCK_MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(16_usize * 1024 * 1024);
+    /// Proposal queue scan budget relative to the transaction limit.
     pub const PROPOSAL_QUEUE_SCAN_MULTIPLIER: NonZeroUsize = nonzero!(4_usize);
-    /// Maximum DA commitments (blobs) permitted in a single block.
-    pub const DA_MAX_COMMITMENTS_PER_BLOCK: usize = 16;
-    /// Maximum DA proof openings permitted in a single block (aggregate cap).
-    pub const DA_MAX_PROOF_OPENINGS_PER_BLOCK: usize = 128;
-    /// Default capacity for the vote message channel.
-    pub const MSG_CHANNEL_CAP_VOTES: usize = 8_192;
-    /// Default capacity for the block payload channel.
-    pub const MSG_CHANNEL_CAP_BLOCK_PAYLOAD: usize = 128;
-    /// Default capacity for the RBC chunk channel.
-    pub const MSG_CHANNEL_CAP_RBC_CHUNKS: usize = 2_048;
-    /// Default capacity for the fast-path block/recovery channel (fetches, body responses, params).
-    pub const MSG_CHANNEL_CAP_BLOCKS: usize = 256;
-    /// Default capacity for Sumeragi control/background/lane channels.
-    pub const CONTROL_MSG_CHANNEL_CAP: usize = 1_024;
-    /// Cap (ms) on the worker loop's per-iteration time budget.
-    pub const WORKER_ITERATION_BUDGET_CAP_MS: u64 = 2_000;
-    /// Cap (ms) on worker mailbox draining per iteration.
-    pub const WORKER_ITERATION_DRAIN_BUDGET_CAP_MS: u64 = 2_000;
-    /// Cap (ms) on per-tick proposal/commit work (0 disables).
-    pub const WORKER_TICK_WORK_BUDGET_CAP_MS: u64 = 500;
-    /// Enable per-queue parallel ingress workers for the Sumeragi loop.
-    pub const WORKER_PARALLEL_INGRESS: bool = true;
-    /// Validation worker threads for pre-vote checks (0 = bounded auto).
-    pub const VALIDATION_WORKER_THREADS: usize = 0;
-    /// Validation worker work-queue capacity per worker (0 = auto).
-    pub const VALIDATION_WORK_QUEUE_CAP: usize = 0;
-    /// Validation worker result-queue capacity (shared, 0 = auto).
-    pub const VALIDATION_RESULT_QUEUE_CAP: usize = 0;
-    /// Divisor used to derive queue-full inline-validation cutover from fast-timeout.
-    pub const VALIDATION_QUEUE_FULL_INLINE_CUTOVER_DIVISOR: u32 = 2;
-    /// Maximum transaction count for inline validation of fast-finality blocks.
-    pub const VALIDATION_FAST_FINALITY_INLINE_MAX_TRANSACTIONS: usize = 16;
-    /// DA-mode per-external-entrypoint validation stall floor (milliseconds).
-    pub const VALIDATION_STALL_DA_PER_ENTRYPOINT_FLOOR_MS: u64 = 16;
-    /// Multiplier applied to inline fallback timeout when deriving worker stall timeout.
-    pub const VALIDATION_STALL_INLINE_FALLBACK_MULTIPLIER: u32 = 6;
-    /// Multiplier applied to validation duration EMA when deriving worker stall timeout.
-    pub const VALIDATION_STALL_EMA_MULTIPLIER: u32 = 3;
-    /// Non-DA cap for validation worker stall timeout (milliseconds).
-    pub const VALIDATION_STALL_NON_DA_CAP_MS: u64 = 15_000;
-    /// DA cap for validation worker stall timeout (milliseconds).
-    pub const VALIDATION_STALL_DA_CAP_MS: u64 = 90_000;
-    /// QC verify worker threads (0 = bounded auto).
-    pub const QC_VERIFY_WORKER_THREADS: usize = 0;
-    /// QC verify work queue capacity per worker (0 = auto).
-    pub const QC_VERIFY_WORK_QUEUE_CAP: usize = 0;
-    /// QC verify result queue capacity (shared, 0 = auto).
-    pub const QC_VERIFY_RESULT_QUEUE_CAP: usize = 0;
-    /// Cap on deferred vote-validation backlog before dropping inbound votes.
-    pub const VALIDATION_PENDING_CAP: usize = 8_192;
-    /// Vote burst cap used when block payload backlog is pending.
-    pub const WORKER_VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG: usize = 8;
-    /// Maximum urgent actor-gate streak before yielding to DA-critical work.
-    pub const WORKER_MAX_URGENT_BEFORE_DA_CRITICAL: u32 = 2;
-    /// Grace period before exact-frontier body repair actively fetches payloads.
-    pub const RECOVERY_AUTHORITATIVE_BODY_INGRESS_FETCH_GRACE_MS: u64 = 100;
-    /// Minimum retry window for exact-frontier body fetches.
-    pub const RECOVERY_EXACT_BODY_FETCH_RETRY_FLOOR_MS: u64 = 25;
-    /// Default runtime consensus mode: "permissioned".
-    pub const CONSENSUS_MODE: &str = "permissioned";
-    /// Runtime mode changes are disabled; mode is fixed by the finalized height context.
-    pub const MODE_FLIP_ENABLED: bool = false;
-    /// Default: data availability (RBC + availability QC gating) disabled.
-    pub const DA_ENABLED: bool = true;
-    /// Multiplier for DA commit-quorum timeout.
-    pub const DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 2;
-    /// Multiplier for availability timeout in DA mode.
-    pub const DA_AVAILABILITY_TIMEOUT_MULTIPLIER: u32 = 2;
-    /// Floor (ms) for availability timeouts to avoid churn on tiny pipelines.
-    pub const DA_AVAILABILITY_TIMEOUT_FLOOR_MS: u64 = 100;
-    /// Default interval between kura persistence retry attempts (milliseconds).
-    pub const KURA_STORE_RETRY_INTERVAL_MS: u64 = 1_000;
-    /// Default maximum kura persistence retry attempts before aborting the block.
-    pub const KURA_STORE_RETRY_MAX_ATTEMPTS: u32 = 5;
-    /// Default timeout for inflight commit jobs before liveness recovery reports a stall (milliseconds).
-    pub const COMMIT_INFLIGHT_TIMEOUT_MS: u64 = 5_000;
-    /// Maximum time finalized rollover waits for its height-local I/O worker
-    /// to report body cleanup before continuing under supervision (milliseconds).
-    pub const POST_FINALITY_CLEANUP_TIMEOUT_MS: u64 = 5_000;
-    /// Commit worker work-queue capacity.
-    pub const COMMIT_WORK_QUEUE_CAP: usize = 1;
-    /// Commit worker result-queue capacity.
-    pub const COMMIT_RESULT_QUEUE_CAP: usize = 1;
-    /// Default number of missing-block fetch attempts before falling back to the full topology.
-    /// A value of 0 disables signer preference.
-    pub const MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: u32 = 1;
-    /// Multiplier applied per retry attempt for missing-block fetch backoff (>=1).
-    pub const RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER: u32 = 2;
-    /// Ceiling for missing-block fetch retry backoff (milliseconds).
-    pub const RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS: u64 = 5_000;
-    /// Backlog-aware multiplier applied to quorum-reschedule grace windows.
-    pub const VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR: f64 = 1.5;
-    /// Maximum additional quorum-reschedule grace window under backlog (milliseconds).
-    pub const VIEW_CHANGE_BACKLOG_EXTENSION_CAP_MS: u64 = 200;
-    /// TTL for deferred QC missing-payload recovery before escalation (milliseconds).
-    pub const DEFERRED_QC_TTL_MS: u64 = 2_000;
-    /// Deterministic per-height missing-block attempt cap before hard escalation.
-    pub const MISSING_BLOCK_HEIGHT_ATTEMPT_CAP: u32 = 48;
-    /// Deterministic per-height missing-block dwell cap before hard escalation (milliseconds).
-    /// Defaults to 2 * commit_time with the default 1s commit timeout.
-    pub const MISSING_BLOCK_HEIGHT_TTL_MS: u64 = 2_000;
-    /// Deterministic per-height attempt cap used by bounded recovery.
-    pub const RECOVERY_HEIGHT_ATTEMPT_CAP: u32 = 48;
-    /// Deterministic per-height dwell window used by bounded recovery.
-    /// Defaults to 2 * commit_time with the default 1s commit timeout.
-    pub const RECOVERY_HEIGHT_WINDOW_MS: u64 = 2_000;
-    /// Hash-miss threshold before escalating dependency recovery to range pull.
-    pub const RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL: u32 = 3;
-    /// Deterministic wait window before rotating after a missing-QC recovery attempt (milliseconds).
-    pub const RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: u64 = 1_200;
-    /// Maximum forced self-proposal attempts allowed for a single (height, view).
-    pub const RECOVERY_MAX_FORCED_PROPOSAL_ATTEMPTS_PER_VIEW: u32 = 1;
-    /// Rotate immediately when the missing-QC reacquire window is exhausted.
-    pub const RECOVERY_ROTATE_AFTER_REACQUIRE_EXHAUSTED: bool = true;
-    /// Sidecar mismatch retries before final-drop and canonical-only rebuild.
-    pub const SIDECAR_MISMATCH_RETRY_CAP: u32 = 8;
-    /// Sidecar mismatch TTL before final-drop (milliseconds).
-    /// Defaults to 2 * commit_time with the default 1s commit timeout.
-    pub const SIDECAR_MISMATCH_TTL_MS: u64 = 2_000;
-    /// Number of hash misses before escalating missing dependencies to range pull.
-    pub const RANGE_PULL_ESCALATION_AFTER_HASH_MISSES: u32 = 3;
-    /// Height margin used to prune stale missing-block requests once head advances.
-    pub const RECOVERY_MISSING_REQUEST_STALE_HEIGHT_MARGIN: u64 = 16;
-    /// Maximum full pending block bodies retained in memory.
-    pub const RECOVERY_PENDING_BLOCK_CAP: usize = 512;
-    /// Maximum deferred block-sync updates retained in memory.
-    pub const RECOVERY_PENDING_BLOCK_SYNC_CAP: usize = 256;
-    /// Maximum cached proposal entries retained in memory.
-    pub const RECOVERY_PENDING_PROPOSAL_CAP: usize = 128;
-    /// Missing-block fetch attempts before switching from signer-preferred to aggressive topology.
-    pub const RECOVERY_MISSING_FETCH_AGGRESSIVE_AFTER_ATTEMPTS: u32 = 2;
-    /// Consecutive membership mismatches required before alerting.
-    pub const MEMBERSHIP_MISMATCH_ALERT_THRESHOLD: u32 = 1;
-    /// Whether to drop consensus messages from peers with repeated membership mismatches.
-    pub const MEMBERSHIP_MISMATCH_FAIL_CLOSED: bool = false;
-    /// Default: real BLS signing/verification enabled.
-    pub const ENABLE_BLS: bool = true;
-    /// Default RBC chunk maximum bytes per chunk.
-    pub const RBC_CHUNK_MAX_BYTES: usize = 256 * 1024; // 256 KiB
-    /// Default RS16 data shards per stripe.
-    pub const RBC_RS16_DATA_SHARDS: u16 = 4;
-    /// Default RS16 parity shards per stripe.
-    pub const RBC_RS16_PARITY_SHARDS: u16 = 2;
-    /// Optional fanout cap for RBC chunk broadcasts (None = auto based on topology).
-    pub const RBC_CHUNK_FANOUT: Option<NonZeroUsize> = None;
-    /// Default RBC session TTL (milliseconds) before pruning inactive sessions.
-    pub const RBC_SESSION_TTL_MS: u64 = 120_000; // 2 minutes
-    /// Maximum RBC sessions rebroadcast per tick to avoid payload storms.
-    pub const RBC_REBROADCAST_SESSIONS_PER_TICK: usize = 8;
-    /// Maximum RBC payload chunks broadcast per tick to avoid bursty floods.
-    pub const RBC_PAYLOAD_CHUNKS_PER_TICK: usize = 64;
-    /// Maximum RBC outbound rebroadcast sessions retained in memory.
-    pub const RBC_OUTBOUND_QUEUE_MAX_SESSIONS: usize = 16;
-    /// Maximum RBC outbound rebroadcast bytes retained in memory.
-    pub const RBC_OUTBOUND_QUEUE_MAX_BYTES: usize = 128 * 1024 * 1024; // 128 MiB
-    /// Default: seed Proposal + RBC backup for inline frontier BlockCreated payloads.
-    pub const RBC_INLINE_BLOCK_CREATED_BACKUP: bool = true;
-    /// Default maximum number of persisted RBC session summaries kept on disk.
-    pub const RBC_STORE_MAX_SESSIONS: usize = 4096;
-    /// Default soft quota for persisted RBC sessions. Back-pressure engages beyond this.
-    pub const RBC_STORE_SOFT_SESSIONS: usize = (RBC_STORE_MAX_SESSIONS * 3) / 4;
-    /// Default maximum total bytes of persisted RBC session payloads on disk.
-    pub const RBC_STORE_MAX_BYTES: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
-    /// Default soft quota for persisted RBC payload bytes. Compaction triggers beyond this.
-    pub const RBC_STORE_SOFT_BYTES: usize = (RBC_STORE_MAX_BYTES * 3) / 4;
-    /// Default disk-backed RBC chunk retention TTL (milliseconds).
-    pub const RBC_DISK_STORE_TTL_MS: u64 = RBC_SESSION_TTL_MS;
-    /// Default maximum bytes allocated for disk-backed RBC chunks.
-    pub const RBC_DISK_STORE_MAX_BYTES: u64 = RBC_STORE_MAX_BYTES as u64;
-    /// Native AMX vote sessions retained while proposer collection is in progress.
-    pub const NATIVE_AMX_SESSION_CACHE_MAX: NonZeroUsize = nonzero!(1024_usize);
-    /// Exact attestation-body buckets retained per native AMX vote session.
-    pub const NATIVE_AMX_SESSION_BODY_BUCKET_MAX: NonZeroUsize = nonzero!(256_usize);
-    /// Default maximum number of RBC chunks stashed before INIT per session.
-    ///
-    /// Keep this aligned with Sumeragi's maximum total chunks per RBC session (currently `1024`)
-    /// so that lowering `rbc.chunk_max_bytes` does not inadvertently reduce the effective pending
-    /// byte budget below [`RBC_PENDING_MAX_BYTES`].
-    pub const RBC_PENDING_MAX_CHUNKS: usize = 1024;
-    /// Default maximum pending RBC chunk bytes per session before INIT.
-    pub const RBC_PENDING_MAX_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
-    /// Default maximum pending RBC sessions stashed before INIT.
-    pub const RBC_PENDING_SESSION_LIMIT: usize = 256;
-    /// Default TTL (milliseconds) for pending RBC stashes awaiting INIT.
-    /// Align with session TTL so partitions don't evict pre-INIT evidence early.
-    pub const RBC_PENDING_TTL_MS: u64 = RBC_SESSION_TTL_MS;
-    /// Default: do not force RBC deliver quorum to 1.
-    pub const DEBUG_RBC_FORCE_DELIVER_QUORUM_ONE: bool = false;
-    /// Maximum height delta accepted for inbound consensus messages (0 disables future gating).
-    pub const CONSENSUS_FUTURE_HEIGHT_WINDOW: u64 = 8;
-    /// Maximum view delta accepted for inbound consensus messages (0 disables future gating).
-    pub const CONSENSUS_FUTURE_VIEW_WINDOW: u64 = 8;
-    /// Invalid signature count before temporarily suppressing a signer (0 disables).
-    pub const INVALID_SIG_PENALTY_THRESHOLD: u32 = 3;
-    /// Window (ms) for invalid signature penalty counting.
-    pub const INVALID_SIG_PENALTY_WINDOW_MS: u64 = 5_000;
-    /// Cooldown (ms) applied after invalid signature penalties trigger.
-    pub const INVALID_SIG_PENALTY_COOLDOWN_MS: u64 = 15_000;
-    /// Default cap for in-memory commit certificate history.
-    pub const COMMIT_CERT_HISTORY_CAP: usize = 512;
-    /// Default epoch length in blocks (NPoS).
-    pub const EPOCH_LENGTH_BLOCKS: u64 = 3600;
-    /// Default VRF commit deadline offset from epoch start (blocks).
-    pub const VRF_COMMIT_DEADLINE_OFFSET: u64 = 100;
-    /// Default VRF reveal deadline offset from epoch start (blocks).
-    pub const VRF_REVEAL_DEADLINE_OFFSET: u64 = 140;
-    /// Use the finalized stake snapshot for the epoch validator roster (mandatory in v2 NPoS).
-    pub const USE_STAKE_SNAPSHOT_ROSTER: bool = true;
-    /// Default proof policy: off (no additional validity gating beyond consensus).
-    pub const PROOF_POLICY: &str = "off";
-    /// Default zk parent-proving depth (0 disables zk finality gate).
-    pub const ZK_FINALITY_K: u8 = 0;
-    /// Default: do not require PrecommitQC unless explicitly enabled.
-    pub const REQUIRE_PRECOMMIT_QC: bool = true;
-    /// Enable adaptive observability/auto-mitigation hooks by default.
-    pub const ADAPTIVE_OBSERVABILITY_ENABLED: bool = false;
-    /// Threshold (ms) for observed QC latency before adaptive mitigation engages.
-    pub const ADAPTIVE_QC_LATENCY_ALERT_MS: u64 = 400;
-    /// Minimum number of DA reschedules observed between checks before mitigation engages.
-    pub const ADAPTIVE_DA_RESCHEDULE_BURST: u64 = 2;
-    /// Additional pacemaker interval (ms) applied when mitigation engages.
-    pub const ADAPTIVE_PACEMAKER_EXTRA_MS: u64 = 100;
-    /// Redundant collector fan-out cap when mitigation engages.
-    pub const ADAPTIVE_COLLECTOR_REDUNDANT_R: u8 = 3;
-    /// Cooldown (ms) before adaptive mitigation may re-apply or reset after a trigger.
-    pub const ADAPTIVE_COOLDOWN_MS: u64 = 5_000;
-    /// Enable volatile Sumeragi resilience tuning by default.
-    pub const RESILIENCE_ENABLED: bool = false;
-    /// Maximum collector redundancy used while resilience mitigation is active.
-    pub const RESILIENCE_MAX_REDUNDANT_SEND_R: u8 = 13;
-    /// Maximum extra topology fan-out used while resilience mitigation is active.
-    pub const RESILIENCE_MAX_PARALLEL_TOPOLOGY_FANOUT: usize = 8;
-    /// Pipeline-status reads reserved while transaction ingress is saturated.
-    pub const RESILIENCE_STATUS_QUERY_RESERVED_CAPACITY: usize = 1024;
-    /// vNext performance-fault EWMA window size.
-    pub const VNEXT_PERFORMANCE_WINDOW_SAMPLES: u16 = 128;
-    /// vNext hard suspicion timeout for overdue asynchronous validation.
-    pub const VNEXT_SUSPICION_TIMEOUT_MS: u64 = 750;
-    /// vNext performance threshold over the EWMA baseline, in basis points.
-    pub const VNEXT_PERFORMANCE_THRESHOLD_BPS: u16 = 1_100;
-    /// Maximum tainted validators accepted in one vNext view before view change is required.
-    pub const VNEXT_MAX_TAINTED_PER_VIEW: u16 = 2;
-    /// Minimum delay between accepted vNext re-chainings in one view.
-    pub const VNEXT_RECHAIN_COOLDOWN_MS: u64 = 250;
-    /// Number of recent blocks to sample for the pacing governor window.
-    pub const PACING_GOVERNOR_WINDOW_BLOCKS: usize = 20;
-    /// View-change pressure threshold (permille of view-change increments per block).
-    pub const PACING_GOVERNOR_VIEW_CHANGE_PRESSURE_PERMILLE: u32 = 200;
-    /// View-change pressure clear threshold (permille of view-change increments per block).
-    pub const PACING_GOVERNOR_VIEW_CHANGE_CLEAR_PERMILLE: u32 = 50;
-    /// Commit spacing pressure threshold (permille of target block time).
-    pub const PACING_GOVERNOR_COMMIT_SPACING_PRESSURE_PERMILLE: u32 = 1_300;
-    /// Commit spacing clear threshold (permille of target block time).
-    pub const PACING_GOVERNOR_COMMIT_SPACING_CLEAR_PERMILLE: u32 = 1_100;
-    /// Pacing factor step-up (basis points).
-    pub const PACING_GOVERNOR_STEP_UP_BPS: u32 = 1_000;
-    /// Pacing factor step-down (basis points).
-    pub const PACING_GOVERNOR_STEP_DOWN_BPS: u32 = 100;
-    /// Minimum pacing factor (basis points).
-    pub const PACING_GOVERNOR_MIN_FACTOR_BPS: u32 = 10_000;
-    /// Maximum pacing factor (basis points).
-    pub const PACING_GOVERNOR_MAX_FACTOR_BPS: u32 = 20_000;
-    /// Pacemaker backoff multiplier for view-change time increments (>=1).
-    pub const PACEMAKER_BACKOFF_MULTIPLIER: u32 = 1;
-    /// Pacemaker RTT floor multiplier applied to avg RTT (>=1).
-    pub const PACEMAKER_RTT_FLOOR_MULTIPLIER: u32 = 2;
-    /// Pacemaker maximum backoff cap in milliseconds.
-    pub const PACEMAKER_MAX_BACKOFF_MS: u64 = 10_000; // 10 seconds to keep localnet responsive
-    /// Pacemaker jitter band size as permille of the backoff window (0..=1000). 0 disables jitter.
-    pub const PACEMAKER_JITTER_FRAC_PERMILLE: u32 = 0;
-    /// Grace period (ms) before a pending block counts as stalled for pacemaker backpressure.
-    pub const PACEMAKER_PENDING_STALL_GRACE_MS: u64 = 250;
-    /// Allow fast quorum reschedules in DA mode when payloads are locally available.
-    pub const PACEMAKER_DA_FAST_RESCHEDULE: bool = false;
-    /// Soft limit for blocking pending blocks before pacemaker backpressure defers proposals.
-    /// 0 keeps strict gating (any pending block defers).
-    pub const PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT: usize = 1;
-    /// Soft limit for unresolved RBC backlog sessions before pacemaker backpressure defers proposals.
-    /// 0 keeps strict gating (any backlog session defers).
-    pub const PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT: usize = 8;
-    /// Soft limit for missing RBC chunks before pacemaker backpressure defers proposals.
-    /// 0 keeps strict gating (any missing chunks defers).
-    pub const PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT: usize = 256;
-    /// Permissioned default block time (ms); keep aligned with on-chain defaults.
-    pub const BLOCK_TIME_MS: u64 = 100;
-    /// Base pacing factor for adaptive timing (basis points, 10_000 = 1.0x).
-    pub const PACING_FACTOR_BPS: u32 = 10_000;
-    /// Minimum lead time (blocks) between publishing a new consensus key and its activation.
+
+    /// Serialized reducer command FIFO capacity.
+    pub const QUEUE_COMMAND_CAPACITY: NonZeroUsize = nonzero!(1024_usize);
+    /// Certified-body and block-sync ingress capacity.
+    pub const QUEUE_BODY_CAPACITY: NonZeroUsize = nonzero!(256_usize);
+    /// Payload-chunk ingress and orphan-buffer capacity.
+    pub const QUEUE_CHUNK_CAPACITY: NonZeroUsize = nonzero!(2048_usize);
+    /// Reconstructed bodies waiting for reducer delivery.
+    pub const QUEUE_READY_BODY_CAPACITY: NonZeroUsize = nonzero!(128_usize);
+    /// Smallest reducer FIFO admitting normal, progress, and completion regions.
+    pub const MIN_RUNTIME_COMMAND_CAPACITY: usize = 8;
+    /// Ready-body byte budget relative to the per-body bound.
+    pub const READY_BODY_BYTE_MULTIPLIER: u64 = 2;
+
+    /// Minimum lead time between publishing and activating a consensus key.
     pub const KEY_ACTIVATION_LEAD_BLOCKS: u64 = 1;
-    /// Grace/overlap window (blocks) during which both old and new keys remain valid.
+    /// Dual-key overlap window during rotation.
     pub const KEY_OVERLAP_GRACE_BLOCKS: u64 = 8;
-    /// Expiry grace window (blocks) after the declared expiry height.
+    /// Grace window after declared consensus-key expiry.
     pub const KEY_EXPIRY_GRACE_BLOCKS: u64 = 0;
-    /// Require HSM binding for consensus/committee keys by default.
+    /// Whether consensus keys must be bound to an admitted HSM provider.
     pub const KEY_REQUIRE_HSM: bool = false;
-    /// Allowed consensus key algorithms (validator signatures use BLS-Normal).
+    /// Allowed consensus signing algorithms.
     pub const KEY_ALLOWED_ALGOS: &[Algorithm] = &[Algorithm::BlsNormal];
-    /// Allowed HSM providers for consensus keys.
+    /// Admitted HSM provider identifiers.
     pub const KEY_ALLOWED_HSM_PROVIDERS: &[&str] = &["pkcs11", "softkey", "yubihsm"];
-    /// Default list of allowed consensus key algorithms.
+
+    /// Default list of allowed consensus signing algorithms.
     pub fn key_allowed_algorithms() -> Vec<Algorithm> {
         KEY_ALLOWED_ALGOS.to_vec()
     }
-    /// Default list of allowed HSM providers for consensus keys.
+
+    /// Default list of admitted consensus-key HSM providers.
     pub fn key_allowed_hsm_providers() -> Vec<String> {
         KEY_ALLOWED_HSM_PROVIDERS
             .iter()
-            .map(|s: &&str| (*s).to_string())
+            .map(|provider| (*provider).to_owned())
             .collect()
     }
 
-    /// NPoS-specific defaults.
+    /// NPoS epoch, randomness, election, and reconfiguration defaults.
     pub mod npos {
-        /// Target block time in milliseconds (1s).
-        pub const BLOCK_TIME_MS: u64 = 1_000;
-        /// Timeout for proposal broadcast/gather (ms).
-        pub const TIMEOUT_PROPOSE_MS: u64 = 350;
-        /// Timeout for prevote aggregation (ms).
-        pub const TIMEOUT_PREVOTE_MS: u64 = 450;
-        /// Timeout for precommit aggregation (ms).
-        pub const TIMEOUT_PRECOMMIT_MS: u64 = 550;
-        /// Timeout for execution QC aggregation (ms).
-        pub const TIMEOUT_EXEC_MS: u64 = 150;
-        /// Timeout for witness availability QC aggregation (ms).
-        pub const TIMEOUT_WITNESS_MS: u64 = 150;
-        /// Timeout for final commit confirmation (ms).
-        pub const TIMEOUT_COMMIT_MS: u64 = 850;
-        /// Timeout for data-availability quorum formation (ms).
-        pub const TIMEOUT_DA_MS: u64 = 750;
-        /// Timeout before gossip fanout to non-designated aggregators (ms).
-        pub const TIMEOUT_AGG_MS: u64 = 120;
-        /// Default number of aggregators (K) used in NPoS mode.
-        pub const K_AGGREGATORS: usize = 3;
-        /// Default redundant send fanout (r) for NPoS validators (2f+1 for 4 peers).
-        pub const REDUNDANT_SEND_R: u8 = 3;
-        /// VRF commitment window size in blocks from epoch start.
+        /// Epoch length in blocks.
+        pub const EPOCH_LENGTH_BLOCKS: u64 = 3_600;
+        /// VRF commitment window size from epoch start.
         pub const VRF_COMMIT_WINDOW_BLOCKS: u64 = 100;
-        /// VRF reveal window size in blocks after the commit window closes.
+        /// VRF reveal window size after the commitment window.
         pub const VRF_REVEAL_WINDOW_BLOCKS: u64 = 40;
-        /// Maximum validators to elect for a given epoch (0 = unlimited).
+        /// Maximum validators elected for an epoch (`0` means no configured cap).
         pub const MAX_VALIDATORS: u32 = 128;
-        /// Minimum self-bond required for validator eligibility (stake units).
+        /// Minimum validator self-bond.
         pub const MIN_SELF_BOND: u64 = 1_000;
-        /// Minimum nomination bond required for delegators (stake units).
+        /// Minimum nomination bond.
         pub const MIN_NOMINATION_BOND: u64 = 1;
-        /// Maximum share of nominations from a single nominator (percentage 0-100).
+        /// Maximum contribution from one nominator, in percent.
         pub const MAX_NOMINATOR_CONCENTRATION_PCT: u8 = 25;
-        /// Acceptable band for seat allocation variance (percentage 0-100).
+        /// Permitted seat-allocation variance, in percent.
         pub const SEAT_BAND_PCT: u8 = 5;
-        /// Maximum correlated ownership across validators (percentage 0-100).
+        /// Maximum correlated ownership, in percent.
         pub const MAX_ENTITY_CORRELATION_PCT: u8 = 25;
-        /// Number of blocks to retain evidence for governance actions.
+        /// Evidence-retention horizon for epoch reconfiguration.
         pub const RECONFIG_EVIDENCE_HORIZON_BLOCKS: u64 = 7_200;
-        /// Activation lag in blocks for newly scheduled validator sets.
+        /// Delay between finalized election and roster activation.
         pub const RECONFIG_ACTIVATION_LAG_BLOCKS: u64 = 1;
-        /// Slashing delay in blocks before evidence penalties apply (3 days at 1s block time).
+        /// Delay before finalized slashing evidence is applied.
         pub const SLASHING_DELAY_BLOCKS: u64 = 259_200;
-        /// Finality margin (blocks) required before activating a newly elected set.
+        /// Finality margin before a new epoch roster activates.
         pub const FINALITY_MARGIN_BLOCKS: u64 = 8;
     }
 }
-
 /// Governance defaults (voting & parliament).
 pub mod governance {
     use super::*;
@@ -4099,14 +3758,6 @@ pub mod settlement {
     }
     /// Offline settlement defaults.
     pub mod offline {
-        /// Minimum number of blocks to retain Offline note records in hot storage.
-        pub const HOT_RETENTION_BLOCKS: u64 = 86_400;
-        /// Maximum number of note records to archive in a single retention pass.
-        pub const ARCHIVE_BATCH_SIZE: usize = 128;
-        /// Minimum number of blocks archived note records remain available before pruning. Zero disables pruning.
-        pub const COLD_RETENTION_BLOCKS: u64 = 0;
-        /// Maximum number of archived note records removed in a single prune pass.
-        pub const PRUNE_BATCH_SIZE: usize = 128;
         /// Kagemusha shielded offline-offline payments are enabled by default.
         pub const KAGEMUSHA_ENABLED: bool = true;
     }

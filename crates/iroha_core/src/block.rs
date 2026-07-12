@@ -60,7 +60,6 @@ use std::{
     time::Duration,
 };
 
-use iroha_config::parameters::actual::ConsensusMode;
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
 #[cfg(test)]
 use iroha_data_model::block::consensus::NativeAmxAttestationBodyV2;
@@ -77,6 +76,7 @@ use iroha_data_model::{
             LaneBlockCommitment, LaneBlockProposalV1, LaneSettlementReceipt,
             NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
         },
+        consensus_v2::ConsensusMode,
         *,
     },
     confidential::ConfidentialFeatureDigest,
@@ -4071,6 +4071,7 @@ pub(crate) mod valid {
 
     impl ValidationTimings {
         /// Create an empty timing snapshot.
+        #[cfg(test)]
         pub(crate) fn new() -> Self {
             Self::default()
         }
@@ -4081,6 +4082,7 @@ pub(crate) mod valid {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum SccpRootValidation {
         Enforce,
+        #[cfg(test)]
         Defer,
     }
 
@@ -5638,6 +5640,7 @@ pub(crate) mod valid {
             Ok(())
         }
 
+        #[cfg(any(test, feature = "iroha-core-tests"))]
         fn verify_signatures_against_topology_with_pops(
             block: &SignedBlock,
             topology: &Topology,
@@ -5690,6 +5693,7 @@ pub(crate) mod valid {
         /// Unlike [`Self::is_commit`], this accepts partial signature sets and only enforces that
         /// each present signature is unique, maps to a known validator role, and uses a live
         /// consensus key.
+        #[cfg(any(test, feature = "iroha-core-tests"))]
         pub(crate) fn validate_signatures_subset_world(
             block: &SignedBlock,
             topology: &Topology,
@@ -5726,6 +5730,7 @@ pub(crate) mod valid {
             Self::validate_signatures_subset_world(block, topology, state.world())
         }
 
+        #[cfg(any(test, feature = "iroha-core-tests"))]
         fn collect_validator_pops(
             world: &impl WorldReadOnly,
             height: u64,
@@ -6099,37 +6104,6 @@ pub(crate) mod valid {
             )
         }
 
-        /// Same as [`Self::validate_keep_voting_block`], but records timing breakdowns.
-        #[allow(clippy::too_many_arguments)]
-        pub(crate) fn validate_keep_voting_block_with_timing<'state>(
-            block: SignedBlock,
-            topology: &Topology,
-            expected_chain_id: &ChainId,
-            genesis_account: &AccountId,
-            time_source: &TimeSource,
-            state: &'state State,
-            voting_block: &mut Option<VotingBlock>,
-            soft_fork: bool,
-            timings: &mut ValidationTimings,
-        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
-            Self::validate_keep_voting_block_inner(
-                block,
-                topology,
-                expected_chain_id,
-                genesis_account,
-                time_source,
-                state,
-                voting_block,
-                soft_fork,
-                Some(timings),
-                false,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-                false,
-                None,
-            )
-        }
-
         /// Execute a previously validated commit candidate while preserving current-tip checks.
         ///
         /// Callers must only use this after independently verifying that local validation roots
@@ -6137,6 +6111,7 @@ pub(crate) mod valid {
         /// state-dependent block invariants, transaction limits, duplicate detection, and
         /// execution-context alignment, but trusts the already validated block and transaction
         /// signatures so commit does not repeat that cryptographic work.
+        #[cfg(test)]
         #[allow(clippy::too_many_arguments)]
         pub(crate) fn validate_prevalidated_commit_keep_voting_block_with_events_and_timing<
             'state,
@@ -6212,6 +6187,7 @@ pub(crate) mod valid {
             })
         }
 
+        #[cfg(test)]
         pub(crate) fn sccp_commitment_root_after_execution(
             mut block: SignedBlock,
             state_block: &mut StateBlock<'_>,
@@ -6644,6 +6620,7 @@ pub(crate) mod valid {
         }
 
         /// Like [`Self::validate_keep_voting_block_with_events`], but records timing breakdowns.
+        #[cfg(test)]
         #[allow(clippy::too_many_arguments)]
         pub(crate) fn validate_keep_voting_block_with_events_and_timing<
             'state,
@@ -9761,15 +9738,6 @@ pub(crate) mod valid {
                     routed_transactions.push((tx.hash(), *decision));
                 }
             }
-            let chunk_size =
-                (iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_MAX_BYTES.max(1)) as u64;
-            for summary in lane_summaries.values_mut() {
-                summary.rbc_chunks = if summary.rbc_bytes_total == 0 {
-                    0
-                } else {
-                    summary.rbc_bytes_total.div_ceil(chunk_size)
-                };
-            }
             Self::finalize_lane_settlement_evidence(
                 block,
                 state_block,
@@ -11650,9 +11618,6 @@ pub(crate) mod valid {
             // Telemetry: update DAG, component, lane, and dataspace metrics for this block
             #[allow(unused_variables)]
             {
-                let chunk_size = (iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_MAX_BYTES
-                    .max(1)) as u64;
-
                 for (idx, decision) in routing_decisions.iter().enumerate() {
                     let summary = lane_summaries.entry(decision.lane_id).or_default();
                     summary.tx_vertices = summary.tx_vertices.saturating_add(1);
@@ -11700,14 +11665,6 @@ pub(crate) mod valid {
                                 .saturating_add(overlay.byte_size() as u64);
                         }
                     }
-                }
-
-                for summary in lane_summaries.values_mut() {
-                    summary.rbc_chunks = if summary.rbc_bytes_total == 0 {
-                        0
-                    } else {
-                        summary.rbc_bytes_total.div_ceil(chunk_size)
-                    };
                 }
 
                 let vertices_total: u64 = lane_summaries

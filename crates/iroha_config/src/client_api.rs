@@ -817,22 +817,29 @@ pub struct ConfigGetDTO {
 /// Consensus configuration summary exposed via the client API.
 #[derive(Debug, Clone)]
 pub struct Consensus {
-    /// Currently configured consensus mode.
-    pub mode: String,
-    /// Whether runtime mode flips are enabled.
-    pub mode_flip_enabled: bool,
+    /// Fixed live consensus protocol revision.
+    pub protocol_version: u32,
+    /// Node-local participation role.
+    pub role: String,
+    /// Absolute, non-adaptive round timeout in milliseconds.
+    pub round_timeout_ms: u64,
+    /// Derived critical-message retransmission interval in milliseconds.
+    pub retransmit_interval_ms: u64,
 }
 
 impl From<&base::Sumeragi> for Consensus {
     fn from(value: &base::Sumeragi) -> Self {
-        let mode = match value.consensus_mode {
-            base::ConsensusMode::Permissioned => "permissioned",
-            base::ConsensusMode::Npos => "npos",
-        }
-        .to_string();
+        let role = match value.role {
+            base::NodeRole::Validator => "validator",
+            base::NodeRole::Observer => "observer",
+        };
         Self {
-            mode,
-            mode_flip_enabled: value.mode_flip.enabled,
+            protocol_version: u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION),
+            role: role.to_owned(),
+            round_timeout_ms: u64::try_from(value.round_timeout.as_millis())
+                .expect("parsed round timeout originated as u64 milliseconds"),
+            retransmit_interval_ms: u64::try_from(value.retransmit_interval().as_millis())
+                .expect("derived retransmission interval fits u64 milliseconds"),
         }
     }
 }
@@ -1049,16 +1056,18 @@ impl FastJsonWrite for ConfigGetDTO {
 impl FastJsonWrite for Consensus {
     fn write_json(&self, out: &mut String) {
         out.push('{');
-        out.push_str("\"mode\":\"");
-        out.push_str(&self.mode);
+        out.push_str("\"protocol_version\":");
+        out.push_str(&self.protocol_version.to_string());
+        out.push(',');
+        out.push_str("\"role\":\"");
+        out.push_str(&self.role);
         out.push('"');
         out.push(',');
-        out.push_str("\"mode_flip_enabled\":");
-        out.push_str(if self.mode_flip_enabled {
-            "true"
-        } else {
-            "false"
-        });
+        out.push_str("\"round_timeout_ms\":");
+        out.push_str(&self.round_timeout_ms.to_string());
+        out.push(',');
+        out.push_str("\"retransmit_interval_ms\":");
+        out.push_str(&self.retransmit_interval_ms.to_string());
         out.push('}');
     }
 }
@@ -2250,20 +2259,33 @@ impl JsonDeserialize for ConfigGetDTO {
 impl<'a> FastFromJson<'a> for Consensus {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
-        let mut mode: Option<String> = None;
-        let mut mode_flip_enabled: Option<bool> = None;
-        let kh_mode = norito::json::key_hash_const("mode");
-        let kh_flip = norito::json::key_hash_const("mode_flip_enabled");
+        let mut protocol_version: Option<u32> = None;
+        let mut role: Option<String> = None;
+        let mut round_timeout_ms: Option<u64> = None;
+        let mut retransmit_interval_ms: Option<u64> = None;
+        let kh_protocol = norito::json::key_hash_const("protocol_version");
+        let kh_role = norito::json::key_hash_const("role");
+        let kh_round = norito::json::key_hash_const("round_timeout_ms");
+        let kh_retransmit = norito::json::key_hash_const("retransmit_interval_ms");
         while !w.peek_object_end()? {
             let kh = w.read_key_hash()?;
             w.expect_colon_resync()?;
             match kh {
-                x if x == kh_mode && w.last_key() == "mode" => {
-                    let sref = w.parse_string_ref_inline(arena)?;
-                    mode = Some(sref.to_string());
+                x if x == kh_protocol && w.last_key() == "protocol_version" => {
+                    protocol_version =
+                        Some(u32::try_from(w.parse_u64_inline()?).map_err(|_| {
+                            NoritoError::Message("protocol_version too large".into())
+                        })?);
                 }
-                x if x == kh_flip && w.last_key() == "mode_flip_enabled" => {
-                    mode_flip_enabled = Some(w.parse_bool_inline()?);
+                x if x == kh_role && w.last_key() == "role" => {
+                    let sref = w.parse_string_ref_inline(arena)?;
+                    role = Some(sref.to_string());
+                }
+                x if x == kh_round && w.last_key() == "round_timeout_ms" => {
+                    round_timeout_ms = Some(w.parse_u64_inline()?);
+                }
+                x if x == kh_retransmit && w.last_key() == "retransmit_interval_ms" => {
+                    retransmit_interval_ms = Some(w.parse_u64_inline()?);
                 }
                 _ => w.skip_value()?,
             }
@@ -2271,8 +2293,13 @@ impl<'a> FastFromJson<'a> for Consensus {
         }
         w.expect_object_end()?;
         Ok(Self {
-            mode: mode.ok_or_else(|| NoritoError::Message("missing mode".into()))?,
-            mode_flip_enabled: mode_flip_enabled.unwrap_or(defaults::sumeragi::MODE_FLIP_ENABLED),
+            protocol_version: protocol_version
+                .ok_or_else(|| NoritoError::Message("missing protocol_version".into()))?,
+            role: role.ok_or_else(|| NoritoError::Message("missing role".into()))?,
+            round_timeout_ms: round_timeout_ms
+                .ok_or_else(|| NoritoError::Message("missing round_timeout_ms".into()))?,
+            retransmit_interval_ms: retransmit_interval_ms
+                .ok_or_else(|| NoritoError::Message("missing retransmit_interval_ms".into()))?,
         })
     }
 }
@@ -3559,8 +3586,10 @@ mod test {
                 max_retained_bytes: nonzero!(123_456_789_u64),
             },
             consensus: Consensus {
-                mode: "permissioned".to_string(),
-                mode_flip_enabled: defaults::sumeragi::MODE_FLIP_ENABLED,
+                protocol_version: 2,
+                role: "validator".to_string(),
+                round_timeout_ms: 10_000,
+                retransmit_interval_ms: 2_000,
             },
             confidential_gas: ConfidentialGas {
                 proof_base: 777_777,
@@ -3681,8 +3710,10 @@ mod test {
                 "max_retained_bytes": 123456789
               },
               "consensus": {
-                "mode": "permissioned",
-                "mode_flip_enabled": false
+                "protocol_version": 2,
+                "role": "validator",
+                "round_timeout_ms": 10000,
+                "retransmit_interval_ms": 2000
               },
               "confidential_gas": {
                 "proof_base": 777777,

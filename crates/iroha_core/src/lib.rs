@@ -212,7 +212,7 @@ use crate::{
     block_sync::message::Message as BlockSyncMessage,
     merge_sidecar::{CertifiedMergeSidecarMessage, MergeCandidateMessage},
     peers_gossiper::{PeerTrustGossip, PeersGossip},
-    sumeragi::message::{BlockMessage, BlockMessageWire, CertifiedBlockFetch, ControlFlow},
+    sumeragi::message::{BlockMessage, BlockMessageWire, ControlFlow},
 };
 
 /// The interval at which sumeragi checks if there are tx in the `queue`.
@@ -242,9 +242,12 @@ pub type EventsSender = broadcast::Sender<EventBox>;
 /// Network message envelope exchanged between peers.
 #[derive(Clone, Debug, Decode, Encode)]
 pub enum NetworkMessage {
-    /// Blockchain consensus data message.
+    /// Live Sumeragi v2 or lane-local consensus data message.
+    ///
+    /// The nested enum retains global v1 variants for archive decoding, but
+    /// [`BlockMessageWire`] rejects those variants during serialization.
     SumeragiBlock(Box<BlockMessageWire>),
-    /// Consensus control-flow frames: `NEW_VIEW`, evidence, and view-change proofs.
+    /// Archived v1 consensus control-flow frame; live serialization and ingress reject it.
     SumeragiControlFlow(Box<ControlFlow>),
     /// Lane settlement relay envelope (NX-4).
     LaneRelay(Box<LaneRelayEnvelope>),
@@ -258,7 +261,7 @@ pub enum NetworkMessage {
     MergeCandidate(Box<MergeCandidateMessage>),
     /// Native AMX participant attestation control-plane message.
     NativeAmx(Box<native_amx::NativeAmxMessage>),
-    /// Block sync message.
+    /// Archived v1 block-sync frame; live serialization rejects it and v2 uses certified bodies.
     BlockSync(Box<BlockSyncMessage>),
     /// Transaction gossiper message.
     TransactionGossiper(Arc<TransactionGossip>),
@@ -338,69 +341,48 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
         use iroha_p2p::network::message::Topic as T;
         match self {
             NetworkMessage::SumeragiBlock(msg) => match msg.as_ref().as_ref() {
-                BlockMessage::V2(message) => match &message.payload {
-                    iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::PayloadChunk(
-                        _,
-                    ) => T::ConsensusChunk,
-                    iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::PayloadManifest(
-                        _,
-                    )
-                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::CertifiedBodyResponse(
-                        _,
-                    ) => T::ConsensusPayload,
-                    iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::Proposal(_)
-                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::Vote(_)
-                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::QuorumCertificate(
-                        _,
-                    )
-                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::TimeoutVote(
-                        _,
-                    )
-                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::TimeoutCertificate(
-                        _,
-                    )
-                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::CommitCertificateResponse(
-                        _,
-                    ) => T::ConsensusSafety,
-                    iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::CertifiedBodyRequest(
-                        _,
-                    )
-                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::CommitCertificateRequest(
-                        _,
-                    ) => T::Consensus,
-                },
-                BlockMessage::FetchBlockBody(_)
-                | BlockMessage::FetchPendingBlock(_)
-                | BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Request(_))
-                | BlockMessage::RbcInitRequest(_)
-                | BlockMessage::RbcChunkRequest(_)
-                | BlockMessage::ConsensusParams(_)
-                | BlockMessage::KuraReplicaAdvert(_)
-                | BlockMessage::ExecWitness(_)
-                | BlockMessage::ProposalHint(_)
-                | BlockMessage::Proposal(_)
-                | BlockMessage::LaneBlockProposal(_)
+                BlockMessage::V2(message) => {
+                    use iroha_data_model::block::consensus_v2::{
+                        ConsensusMessageV2Payload, PROTOCOL_VERSION,
+                    };
+
+                    if message.protocol_version != PROTOCOL_VERSION {
+                        T::Other
+                    } else {
+                        match &message.payload {
+                            ConsensusMessageV2Payload::PayloadChunk(_) => T::ConsensusChunk,
+                            ConsensusMessageV2Payload::PayloadManifest(_)
+                            | ConsensusMessageV2Payload::CertifiedBodyResponse(_) => {
+                                T::ConsensusPayload
+                            }
+                            ConsensusMessageV2Payload::Proposal(_)
+                            | ConsensusMessageV2Payload::Vote(_)
+                            | ConsensusMessageV2Payload::QuorumCertificate(_)
+                            | ConsensusMessageV2Payload::TimeoutVote(_)
+                            | ConsensusMessageV2Payload::TimeoutCertificate(_)
+                            | ConsensusMessageV2Payload::CommitCertificateResponse(_) => {
+                                T::ConsensusSafety
+                            }
+                            ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+                            | ConsensusMessageV2Payload::CommitCertificateRequest(_) => {
+                                T::Consensus
+                            }
+                        }
+                    }
+                }
+                BlockMessage::LaneBlockProposal(_)
                 | BlockMessage::LaneBlockNewViewVote(_)
                 | BlockMessage::LaneBlockNewViewCertificate(_)
-                | BlockMessage::Qc(_)
-                | BlockMessage::QcVote(_)
                 | BlockMessage::LaneBlockVote(_)
-                | BlockMessage::LaneBlockQc(_)
-                | BlockMessage::VrfCommit(_)
-                | BlockMessage::VrfReveal(_) => T::Consensus,
-                BlockMessage::BlockCreated(_)
-                | BlockMessage::BlockSyncUpdate(_)
-                | BlockMessage::BlockBodyResponse(_)
-                | BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Response(_))
-                | BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Proof(_))
-                | BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Body(_))
-                | BlockMessage::LaneExecutablePayload(_)
-                | BlockMessage::LaneExecutablePayloadHandoff(_)
-                | BlockMessage::RbcInit(_) => T::ConsensusPayload,
-                BlockMessage::RbcReady(_)
-                | BlockMessage::RbcDeliver(_)
-                | BlockMessage::RbcChunk(_)
-                | BlockMessage::RbcChunkCompact(_) => T::ConsensusChunk,
+                | BlockMessage::LaneBlockQc(_) => T::Consensus,
+                BlockMessage::VrfCommit(_) | BlockMessage::VrfReveal(_) => T::ConsensusSafety,
+                BlockMessage::LaneExecutablePayload(_)
+                | BlockMessage::LaneExecutablePayloadHandoff(_) => T::ConsensusPayload,
+                // Every remaining `BlockMessage` variant belongs to the retired
+                // global v1 protocol.  Keep those variants decodable for archive
+                // tooling, but never schedule them on correctness-critical live
+                // consensus queues.
+                _ => T::Other,
             },
             NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
                 CertifiedMergeSidecarMessage::Request(_) => T::Consensus,
@@ -412,8 +394,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 }
                 MergeCandidateMessage::Chunk(_) => T::ConsensusChunk,
             },
-            NetworkMessage::SumeragiControlFlow(_)
-            | NetworkMessage::LaneRelay(_)
+            NetworkMessage::LaneRelay(_)
             | NetworkMessage::MergeCommitteeSignature(_)
             | NetworkMessage::LaneDrainVote(_)
             | NetworkMessage::NativeAmx(_) => T::Consensus,
@@ -424,7 +405,10 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             | NetworkMessage::StreamingControl(_)
             | NetworkMessage::GenesisRequest(_)
             | NetworkMessage::GenesisResponse(_) => T::Control,
-            NetworkMessage::BlockSync(_) => T::BlockSync,
+            // The global v1 control-flow and block-sync envelopes are likewise
+            // decode-only. Send admission, serialization, and daemon ingress
+            // all reject them.
+            NetworkMessage::SumeragiControlFlow(_) | NetworkMessage::BlockSync(_) => T::Other,
             NetworkMessage::TransactionGossiper(gossip) => match gossip.plane {
                 gossiper::GossipPlane::Public => T::TxGossip,
                 gossiper::GossipPlane::Restricted => T::TxGossipRestricted,
@@ -467,6 +451,16 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             MAX_LANE_DRAIN_VOTE_DECODE_ALLOCATED_BYTES,
             MAX_LANE_DRAIN_VOTE_DECODE_DEPTH,
         )))
+    }
+
+    fn is_outbound_allowed(&self) -> bool {
+        match self {
+            Self::SumeragiBlock(message) => {
+                message.as_ref().as_message().ensure_live_outbound().is_ok()
+            }
+            Self::SumeragiControlFlow(_) | Self::BlockSync(_) => false,
+            _ => true,
+        }
     }
 }
 
@@ -658,10 +652,7 @@ mod tests {
     use iroha_p2p::{ClassifyTopic, network::message::Topic as NetworkTopic};
     use iroha_test_samples::gen_account_in;
     use norito::json;
-    use norito::{
-        codec::{Decode, Encode},
-        core as ncore,
-    };
+    use norito::{codec::Encode, core as ncore};
 
     use crate::{
         MAX_LANE_DRAIN_VOTE_WIRE_BYTES, NetworkMessage, PeerTrustGossip, SoranetPowConfigBroadcast,
@@ -1322,6 +1313,17 @@ mod tests {
             ))));
         assert_eq!(message.topic(), NetworkTopic::ConsensusSafety);
 
+        let vrf = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+            BlockMessage::VrfCommit(crate::sumeragi::consensus::VrfCommit {
+                epoch: 3,
+                commitment: [0xA5; 32],
+                signer: 0,
+                bls_sig: vec![0x5A],
+            }),
+        )));
+        assert_eq!(vrf.topic(), NetworkTopic::ConsensusSafety);
+        assert!(vrf.is_outbound_allowed());
+
         let retired_auxiliary = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::ConsensusParams(ConsensusParamsAdvert {
                 collectors_k: 1,
@@ -1329,11 +1331,48 @@ mod tests {
                 membership: None,
             }),
         )));
-        assert_eq!(retired_auxiliary.topic(), NetworkTopic::Consensus);
+        assert_eq!(retired_auxiliary.topic(), NetworkTopic::Other);
+        assert!(!retired_auxiliary.is_outbound_allowed());
     }
 
     #[test]
-    fn sumeragi_block_classifies_topics() {
+    fn sumeragi_block_classifies_only_v2_as_global_consensus() {
+        use iroha_data_model::block::consensus_v2::{
+            ConsensusMessageV2, ConsensusMessageV2Payload, PayloadChunk, PayloadManifest,
+        };
+
+        let canonical_chunk =
+            ConsensusMessageV2::new(ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
+                manifest_hash: iroha_crypto::HashOf::<PayloadManifest>::from_untyped_unchecked(
+                    Hash::new(b"v2-topic-manifest"),
+                ),
+                index: 0,
+                bytes: vec![1, 2, 3],
+                sender: 0,
+                signature: vec![4],
+            }));
+        let v2_chunk = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+            BlockMessage::V2(canonical_chunk.clone()),
+        )));
+        assert_eq!(v2_chunk.topic(), NetworkTopic::ConsensusChunk);
+        assert!(v2_chunk.is_outbound_allowed());
+        assert!(
+            ncore::to_bytes(&v2_chunk).is_ok(),
+            "canonical v2 traffic must remain live-encodable"
+        );
+
+        let mut wrong_version_chunk = canonical_chunk;
+        wrong_version_chunk.protocol_version = 1;
+        let wrong_version_chunk = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+            BlockMessage::V2(wrong_version_chunk),
+        )));
+        assert_eq!(wrong_version_chunk.topic(), NetworkTopic::Other);
+        assert!(!wrong_version_chunk.is_outbound_allowed());
+        assert!(
+            ncore::to_bytes(&wrong_version_chunk).is_err(),
+            "a non-canonical protocol version must fail the wire boundary"
+        );
+
         let params = ConsensusParamsAdvert {
             collectors_k: 1,
             redundant_send_r: 1,
@@ -1342,7 +1381,12 @@ mod tests {
         let msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::ConsensusParams(params),
         )));
-        assert_eq!(msg.topic(), NetworkTopic::Consensus);
+        assert_eq!(msg.topic(), NetworkTopic::Other);
+        assert!(!msg.is_outbound_allowed());
+        assert!(
+            ncore::to_bytes(&msg).is_err(),
+            "retired global v1 traffic must fail the wire boundary"
+        );
 
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero block height"),
@@ -1360,7 +1404,7 @@ mod tests {
                 frontier: None,
             }),
         )));
-        assert_eq!(created.topic(), NetworkTopic::ConsensusPayload);
+        assert_eq!(created.topic(), NetworkTopic::Other);
 
         let fetch = FetchPendingBlock {
             requester: PeerId::from(checked_topic_keypair().public_key().clone()),
@@ -1374,7 +1418,7 @@ mod tests {
         let fetch_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::FetchPendingBlock(fetch),
         )));
-        assert_eq!(fetch_msg.topic(), NetworkTopic::Consensus);
+        assert_eq!(fetch_msg.topic(), NetworkTopic::Other);
 
         let roster_hash = Hash::prehashed([1; 32]);
         let chunk_root = Hash::prehashed([2; 32]);
@@ -1407,7 +1451,7 @@ mod tests {
         let init_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::RbcInit(init),
         )));
-        assert_eq!(init_msg.topic(), NetworkTopic::ConsensusPayload);
+        assert_eq!(init_msg.topic(), NetworkTopic::Other);
 
         let chunk = RbcChunk {
             block_hash,
@@ -1420,7 +1464,7 @@ mod tests {
         let payload = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::RbcChunk(chunk),
         )));
-        assert_eq!(payload.topic(), NetworkTopic::ConsensusChunk);
+        assert_eq!(payload.topic(), NetworkTopic::Other);
 
         let proposal = Proposal {
             header: ConsensusBlockHeader {
@@ -1444,13 +1488,13 @@ mod tests {
         let proposal_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::Proposal(proposal),
         )));
-        assert_eq!(proposal_msg.topic(), NetworkTopic::Consensus);
+        assert_eq!(proposal_msg.topic(), NetworkTopic::Other);
 
         let sync = BlockSyncUpdate::from(&block);
         let sync_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::BlockSyncUpdate(sync),
         )));
-        assert_eq!(sync_msg.topic(), NetworkTopic::ConsensusPayload);
+        assert_eq!(sync_msg.topic(), NetworkTopic::Other);
 
         let ready = RbcReady {
             block_hash,
@@ -1465,7 +1509,7 @@ mod tests {
         let ready_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::RbcReady(ready),
         )));
-        assert_eq!(ready_msg.topic(), NetworkTopic::ConsensusChunk);
+        assert_eq!(ready_msg.topic(), NetworkTopic::Other);
 
         let deliver = RbcDeliver {
             block_hash,
@@ -1481,27 +1525,25 @@ mod tests {
         let deliver_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::RbcDeliver(deliver),
         )));
-        assert_eq!(deliver_msg.topic(), NetworkTopic::ConsensusChunk);
+        assert_eq!(deliver_msg.topic(), NetworkTopic::Other);
     }
 
     #[test]
-    fn network_message_roundtrip_cached_block_message() {
+    fn network_message_refuses_decoded_archival_block_message() {
         let params = ConsensusParamsAdvert {
             collectors_k: 1,
             redundant_send_r: 1,
             membership: None,
         };
         let msg = BlockMessage::ConsensusParams(params);
-        let encoded = BlockMessageWire::encode_message(&msg);
+        let encoded = ncore::to_bytes(&msg).expect("encode archival block-message fixture");
         assert!(encoded.starts_with(&norito::core::MAGIC));
-        let wire = BlockMessageWire::with_encoded(Arc::new(msg), Arc::new(encoded));
+        let wire = <BlockMessageWire as ncore::DecodeFromSlice>::decode_from_slice(&encoded)
+            .expect("decode archival block-message fixture")
+            .0;
         let network = NetworkMessage::SumeragiBlock(Box::new(wire));
 
-        let bytes = network.encode();
-        let decoded: NetworkMessage =
-            Decode::decode(&mut bytes.as_slice()).expect("decode network");
-
-        match decoded {
+        match &network {
             NetworkMessage::SumeragiBlock(wire) => match wire.as_ref().as_ref() {
                 BlockMessage::ConsensusParams(advert) => {
                     assert_eq!(advert.collectors_k, 1);
@@ -1512,6 +1554,10 @@ mod tests {
             },
             other => panic!("expected sumeragi block message, got {other:?}"),
         }
+        assert!(
+            ncore::to_bytes(&network).is_err(),
+            "retired global v1 message must fail at the network serialization boundary"
+        );
     }
 
     #[test]

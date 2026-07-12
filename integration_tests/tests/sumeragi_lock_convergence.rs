@@ -38,11 +38,11 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::CommitTimeMs(1_000),
         )))
+        .with_permissioned_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "consensus_mode"], "permissioned")
                 .write(
                     ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
                     200_i64,

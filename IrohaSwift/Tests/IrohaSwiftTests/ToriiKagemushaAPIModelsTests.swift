@@ -14,19 +14,19 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
     }
 
     func testEndpointConstantsUseSharpFirstReleaseRoutes() throws {
-        XCTAssertEqual(OfflineAPI.Endpoint.readiness.path, "/v1/offline/readiness")
-        XCTAssertEqual(OfflineAPI.Endpoint.topUp.path, "/v1/offline/top-up")
-        XCTAssertEqual(OfflineAPI.Endpoint.redeem.path, "/v1/offline/redeem")
-        XCTAssertEqual(OfflineAPI.Endpoint.operations.path, "/v1/offline/operations")
+        XCTAssertEqual(KagemushaToriiAPI.Endpoint.readiness.path, "/v1/offline/readiness")
+        XCTAssertEqual(KagemushaToriiAPI.Endpoint.topUp.path, "/v1/offline/top-up")
+        XCTAssertEqual(KagemushaToriiAPI.Endpoint.redeem.path, "/v1/offline/redeem")
+        XCTAssertEqual(KagemushaToriiAPI.Endpoint.operations.path, "/v1/offline/operations")
         XCTAssertEqual(
-            try OfflineAPI.operationPath(Self.operationId),
+            try KagemushaToriiAPI.operationPath(Self.operationId),
             "/v1/offline/operations/\(Self.operationId)"
         )
     }
 
     func testOperationReferenceNoritoRoundTrips() throws {
-        for kind in [OfflineOperationKind.topUp, .redeem] {
-            let expected = try OfflineOperationReference(
+        for kind in [KagemushaOperationKind.topUp, .redeem] {
+            let expected = try KagemushaOperationReference(
                 operationId: Self.operationId,
                 kind: kind,
                 state: .pending,
@@ -36,8 +36,8 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             )
 
             XCTAssertEqual(
-                try OfflineOperationCodec.decodeReference(
-                    OfflineOperationCodec.encodeReference(expected)
+                try KagemushaOperationCodec.decodeReference(
+                    KagemushaOperationCodec.encodeReference(expected)
                 ),
                 expected
             )
@@ -46,7 +46,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
 
     func testOperationReferenceMatchesRustNoritoGoldenVector() throws {
         let archive = try XCTUnwrap(Data(hexString: Self.rustOperationReferenceArchiveHex))
-        let expected = try OfflineOperationReference(
+        let expected = try KagemushaOperationReference(
             operationId: Self.operationId,
             kind: .topUp,
             state: .pending,
@@ -55,15 +55,15 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             submittedAtMs: UInt64.max
         )
 
-        XCTAssertEqual(try OfflineOperationCodec.decodeReference(archive), expected)
-        XCTAssertEqual(OfflineOperationCodec.encodeReference(expected), archive)
+        XCTAssertEqual(try KagemushaOperationCodec.decodeReference(archive), expected)
+        XCTAssertEqual(KagemushaOperationCodec.encodeReference(expected), archive)
     }
 
     func testPendingOperationStatusMatchesRustNoritoGoldenVector() throws {
         let archive = try XCTUnwrap(Data(hexString: Self.rustPendingStatusArchiveHex))
 
         XCTAssertEqual(
-            try OfflineOperationCodec.decodeStatus(archive),
+            try KagemushaOperationCodec.decodeStatus(archive),
             .pending(try .init(
                 operationId: Self.operationId,
                 kind: .topUp,
@@ -77,12 +77,12 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         let archive = try XCTUnwrap(Data(hexString: Self.rustRejectedStatusArchiveHex))
 
         XCTAssertEqual(
-            try OfflineOperationCodec.decodeStatus(archive),
+            try KagemushaOperationCodec.decodeStatus(archive),
             .rejected(try .init(
                 operationId: Self.operationId,
                 kind: .redeem,
                 transactionHash: Self.transactionHash,
-                error: try OfflineOperationErrorEnvelope(
+                error: try KagemushaOperationErrorEnvelope(
                     code: "offline_operation_rejected",
                     message: "rejected"
                 )
@@ -94,10 +94,10 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         let archive = try XCTUnwrap(Data(hexString: Self.rustAppliedRedeemStatusArchiveHex))
 
         XCTAssertEqual(
-            try OfflineOperationCodec.decodeStatus(archive),
+            try KagemushaOperationCodec.decodeStatus(archive),
             .applied(try .init(
                 operationId: Self.operationId,
-                result: .redeem(try OfflineRedeemResult(
+                result: .redeem(try KagemushaRedeemResult(
                     transactionHash: Self.transactionHash,
                     finalizedBlockHeight: UInt64.max,
                     serverTimeMs: 42
@@ -110,26 +110,32 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         let referenceArchive = try XCTUnwrap(
             Data(hexString: Self.rustOperationReferenceArchiveHex)
         )
-        XCTAssertThrowsError(try OfflineOperationCodec.decodeStatus(referenceArchive))
+        XCTAssertThrowsError(try KagemushaOperationCodec.decodeStatus(referenceArchive))
     }
 
     func testOfflineTopUpAnchorUsesCurrentPublicNameAndRetainsCanonicalWire() throws {
         let archive = try canonicalTopUpAnchorArchive()
-        let anchor = try OfflineTopUpAnchor(noritoArchive: archive)
-        let finalityProof = try OfflineTopUpFinalityProof(
+        let anchor = try KagemushaTopUpAnchor(noritoArchive: archive)
+        let finalityProof = try KagemushaTopUpFinalityProof(
             noritoArchive: canonicalTopUpFinalityProofArchive()
         )
         XCTAssertEqual(anchor.noritoArchive(), archive)
         XCTAssertEqual(anchor.digest, Data(repeating: 0xd8, count: 32))
+        XCTAssertEqual(anchor.operationId, String(repeating: "d5", count: 32))
+        XCTAssertEqual(
+            anchor.finalizedTransactionHash,
+            String(repeating: "d7", count: 32)
+        )
+        XCTAssertEqual(anchor.finalizedBlockHeight, 1)
         XCTAssertEqual(
             anchor.digest,
             try KagemushaRecursiveSpendCodecs.decodeTopUpAnchor(archive).anchorDigest
         )
-        XCTAssertEqual(anchor, try OfflineTopUpAnchor(noritoArchive: archive))
+        XCTAssertEqual(anchor, try KagemushaTopUpAnchor(noritoArchive: archive))
 
-        let result = try OfflineTopUpResult(
-            transactionHash: Self.transactionHash,
-            finalizedBlockHeight: 7,
+        let result = try KagemushaTopUpResult(
+            transactionHash: String(repeating: "d7", count: 32),
+            finalizedBlockHeight: 1,
             serverTimeMs: 8,
             anchor: anchor,
             finalityProof: finalityProof
@@ -139,9 +145,31 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             result.finalityProof.noritoArchive,
             canonicalTopUpFinalityProofArchive()
         )
+        XCTAssertNoThrow(try KagemushaOperationStatus.Applied(
+            operationId: String(repeating: "d5", count: 32),
+            result: .topUp(result)
+        ))
+        XCTAssertThrowsError(try KagemushaOperationStatus.Applied(
+            operationId: Self.operationId,
+            result: .topUp(result)
+        ))
+        XCTAssertThrowsError(try KagemushaTopUpResult(
+            transactionHash: Self.transactionHash,
+            finalizedBlockHeight: 1,
+            serverTimeMs: 8,
+            anchor: anchor,
+            finalityProof: finalityProof
+        ))
+        XCTAssertThrowsError(try KagemushaTopUpResult(
+            transactionHash: String(repeating: "d7", count: 32),
+            finalizedBlockHeight: 7,
+            serverTimeMs: 8,
+            anchor: anchor,
+            finalityProof: finalityProof
+        ))
 
-        XCTAssertThrowsError(try OfflineTopUpAnchor(noritoArchive: Data()))
-        XCTAssertThrowsError(try OfflineTopUpAnchor(noritoArchive: noritoEncode(
+        XCTAssertThrowsError(try KagemushaTopUpAnchor(noritoArchive: Data()))
+        XCTAssertThrowsError(try KagemushaTopUpAnchor(noritoArchive: noritoEncode(
             typeName: KagemushaRecursiveSpend.topUpAnchorWireName,
             payload: Data(
                 repeating: 0xa4,
@@ -149,7 +177,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             ),
             flags: NoritoHeader.compactLen
         )))
-        XCTAssertThrowsError(try OfflineTopUpAnchor(noritoArchive: noritoEncode(
+        XCTAssertThrowsError(try KagemushaTopUpAnchor(noritoArchive: noritoEncode(
             typeName: "wrong.anchor.schema",
             payload: try XCTUnwrap(noritoDecodeFrame(archive)).payload,
             flags: NoritoHeader.compactLen
@@ -157,7 +185,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
 
         var corrupted = archive
         corrupted[corrupted.index(before: corrupted.endIndex)] ^= 0xff
-        XCTAssertThrowsError(try OfflineTopUpAnchor(noritoArchive: corrupted))
+        XCTAssertThrowsError(try KagemushaTopUpAnchor(noritoArchive: corrupted))
     }
 
     func testOperationReferencesRequireCanonicalHashAndBoundStatusUri() throws {
@@ -167,9 +195,10 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             String(repeating: "2", count: 65),
             String(repeating: "A", count: 64),
             String(repeating: "g", count: 64),
+            String(repeating: "0", count: 64),
             " \(Self.transactionHash)",
         ] {
-            XCTAssertThrowsError(try OfflineOperationReference(
+            XCTAssertThrowsError(try KagemushaOperationReference(
                 operationId: Self.operationId,
                 kind: .topUp,
                 state: .pending,
@@ -177,7 +206,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
                 statusUri: "/v1/offline/operations/\(Self.operationId)",
                 submittedAtMs: 1
             )) { error in
-                XCTAssertEqual(error as? OfflineOperationError, .invalidField("transaction_hash"))
+                XCTAssertEqual(error as? KagemushaOperationError, .invalidField("transaction_hash"))
             }
         }
 
@@ -187,7 +216,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             "/v1/offline/operations/\(Self.operationId)/",
             " /v1/offline/operations/\(Self.operationId)",
         ] {
-            XCTAssertThrowsError(try OfflineOperationReference(
+            XCTAssertThrowsError(try KagemushaOperationReference(
                 operationId: Self.operationId,
                 kind: .topUp,
                 state: .pending,
@@ -195,71 +224,71 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
                 statusUri: invalidUri,
                 submittedAtMs: 1
             )) { error in
-                XCTAssertEqual(error as? OfflineOperationError, .invalidField("status_uri"))
+                XCTAssertEqual(error as? KagemushaOperationError, .invalidField("status_uri"))
             }
         }
     }
 
     func testTaggedOperationStatePayloadsCannotBypassValidation() throws {
-        XCTAssertThrowsError(try OfflineOperationStatus.Pending(
+        XCTAssertThrowsError(try KagemushaOperationStatus.Pending(
             operationId: String(repeating: "0", count: 64),
             kind: .topUp,
             transactionHash: Self.transactionHash,
             submittedAtMs: 1
         )) { error in
-            XCTAssertEqual(error as? OfflineOperationError, .invalidField("operation_id"))
+            XCTAssertEqual(error as? KagemushaOperationError, .invalidField("operation_id"))
         }
 
-        XCTAssertThrowsError(try OfflineOperationStatus.Pending(
+        XCTAssertThrowsError(try KagemushaOperationStatus.Pending(
             operationId: Self.operationId,
             kind: .topUp,
             transactionHash: String(repeating: "F", count: 64),
             submittedAtMs: 1
         )) { error in
-            XCTAssertEqual(error as? OfflineOperationError, .invalidField("transaction_hash"))
+            XCTAssertEqual(error as? KagemushaOperationError, .invalidField("transaction_hash"))
         }
 
-        XCTAssertThrowsError(try OfflineRedeemResult(
+        XCTAssertThrowsError(try KagemushaRedeemResult(
             transactionHash: "not-a-hash",
             finalizedBlockHeight: 1,
             serverTimeMs: 2
         )) { error in
-            XCTAssertEqual(error as? OfflineOperationError, .invalidField("transaction_hash"))
+            XCTAssertEqual(error as? KagemushaOperationError, .invalidField("transaction_hash"))
         }
 
-        let anchor = try OfflineTopUpAnchor(noritoArchive: canonicalTopUpAnchorArchive())
-        let finalityProof = try OfflineTopUpFinalityProof(
+        let anchor = try KagemushaTopUpAnchor(noritoArchive: canonicalTopUpAnchorArchive())
+        let finalityProof = try KagemushaTopUpFinalityProof(
             noritoArchive: canonicalTopUpFinalityProofArchive()
         )
         for (finalizedBlockHeight, serverTimeMs, field) in [
             (UInt64(0), UInt64(1), "finalized_block_height"),
             (UInt64(1), UInt64(0), "server_time_ms"),
         ] {
-            XCTAssertThrowsError(try OfflineTopUpResult(
+            XCTAssertThrowsError(try KagemushaTopUpResult(
                 transactionHash: Self.transactionHash,
                 finalizedBlockHeight: finalizedBlockHeight,
                 serverTimeMs: serverTimeMs,
                 anchor: anchor,
                 finalityProof: finalityProof
             )) { error in
-                XCTAssertEqual(error as? OfflineOperationError, .invalidField(field))
+                XCTAssertEqual(error as? KagemushaOperationError, .invalidField(field))
             }
-            XCTAssertThrowsError(try OfflineRedeemResult(
+            XCTAssertThrowsError(try KagemushaRedeemResult(
                 transactionHash: Self.transactionHash,
                 finalizedBlockHeight: finalizedBlockHeight,
                 serverTimeMs: serverTimeMs
             )) { error in
-                XCTAssertEqual(error as? OfflineOperationError, .invalidField(field))
+                XCTAssertEqual(error as? KagemushaOperationError, .invalidField(field))
             }
         }
 
-        let valid = try OfflineOperationStatus.Pending(
+        let valid = try KagemushaOperationStatus.Pending(
             operationId: Self.operationId,
             kind: .redeem,
             transactionHash: Self.transactionHash,
             submittedAtMs: UInt64.max
         )
-        XCTAssertEqual(OfflineOperationStatus.pending(valid).operationId, Self.operationId)
+        XCTAssertEqual(KagemushaOperationStatus.pending(valid).operationId, Self.operationId)
     }
 
     func testTypedErrorsRequireStableCodesAndExactText() throws {
@@ -271,40 +300,40 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             "has space",
             String(repeating: "a", count: 65),
         ] {
-            XCTAssertThrowsError(try OfflineOperationErrorEnvelope(
+            XCTAssertThrowsError(try KagemushaOperationErrorEnvelope(
                 code: invalidCode,
                 message: "rejected"
             )) { error in
-                XCTAssertEqual(error as? OfflineOperationError, .invalidField("error.code"))
+                XCTAssertEqual(error as? KagemushaOperationError, .invalidField("error.code"))
             }
         }
 
         for invalidMessage in ["", " rejected", "rejected ", "bad\nmessage", "bad\0message"] {
-            XCTAssertThrowsError(try OfflineOperationErrorEnvelope(
+            XCTAssertThrowsError(try KagemushaOperationErrorEnvelope(
                 code: "offline_operation_rejected",
                 message: invalidMessage
             )) { error in
-                XCTAssertEqual(error as? OfflineOperationError, .invalidField("error.message"))
+                XCTAssertEqual(error as? KagemushaOperationError, .invalidField("error.message"))
             }
         }
 
-        XCTAssertNoThrow(try OfflineOperationErrorEnvelope(
+        XCTAssertNoThrow(try KagemushaOperationErrorEnvelope(
             code: "1_valid_code_",
             message: "Human-readable detail."
         ))
-        XCTAssertNoThrow(try OfflineOperationErrorDetails(
+        XCTAssertNoThrow(try KagemushaOperationErrorDetails(
             rejectCode: "TX_QUEUE_FULL",
             transactionHash: Self.transactionHash
         ))
-        XCTAssertThrowsError(try OfflineOperationErrorDetails(
+        XCTAssertThrowsError(try KagemushaOperationErrorDetails(
             rejectCode: " TX_QUEUE_FULL",
             transactionHash: Self.transactionHash
         ))
-        XCTAssertThrowsError(try OfflineOperationErrorDetails(
+        XCTAssertThrowsError(try KagemushaOperationErrorDetails(
             rejectCode: "valid_code",
             transactionHash: String(repeating: "A", count: 64)
         ))
-        XCTAssertThrowsError(try OfflineQueueErrorSnapshot(
+        XCTAssertThrowsError(try KagemushaQueueErrorSnapshot(
             state: "queue full",
             queued: 1,
             capacity: 1,
@@ -327,15 +356,15 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         )
         payload.writeField(CompactNorito.encodeUInt64(1))
 
-        XCTAssertThrowsError(try OfflineOperationCodec.decodeReference(noritoEncode(
+        XCTAssertThrowsError(try KagemushaOperationCodec.decodeReference(noritoEncode(
             typeName: "iroha_torii_shared::offline_api::OfflineOperationReference",
             payload: payload.data,
             flags: NoritoHeader.compactLen
         ))) { error in
-            XCTAssertEqual(error as? OfflineOperationError, .invalidField("string"))
+            XCTAssertEqual(error as? KagemushaOperationError, .invalidField("string"))
         }
 
-        let valid = try OfflineOperationReference(
+        let valid = try KagemushaOperationReference(
             operationId: Self.operationId,
             kind: .topUp,
             state: .pending,
@@ -344,17 +373,17 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             submittedAtMs: 1
         )
         let compactPayload = try XCTUnwrap(
-            noritoDecodeFrame(OfflineOperationCodec.encodeReference(valid))
+            noritoDecodeFrame(KagemushaOperationCodec.encodeReference(valid))
         ).payload
-        XCTAssertThrowsError(try OfflineOperationCodec.decodeReference(noritoEncode(
+        XCTAssertThrowsError(try KagemushaOperationCodec.decodeReference(noritoEncode(
             typeName: "iroha_torii_shared::offline_api::OfflineOperationReference",
             payload: compactPayload,
             flags: 0
         )))
 
-        var padded = OfflineOperationCodec.encodeReference(valid)
+        var padded = KagemushaOperationCodec.encodeReference(valid)
         padded.insert(0, at: NoritoHeader.encodedLength)
-        XCTAssertThrowsError(try OfflineOperationCodec.decodeReference(padded))
+        XCTAssertThrowsError(try KagemushaOperationCodec.decodeReference(padded))
     }
 
     func testRequestsDeriveLowercaseOperationIdsFromCanonicalArchives() throws {
@@ -373,8 +402,8 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             operationId: operationId
         )
 
-        let topUp = try OfflineTopUpRequest(noritoArchive: topUpArchive)
-        let redeem = try OfflineRedeemRequest(noritoArchive: redeemArchive)
+        let topUp = try KagemushaTopUpRequest(noritoArchive: topUpArchive)
+        let redeem = try KagemushaRedeemRequest(noritoArchive: redeemArchive)
 
         XCTAssertEqual(topUp.operationId, expectedOperationId)
         XCTAssertEqual(topUp.noritoArchive(), topUpArchive)
@@ -397,10 +426,10 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             operationId: operationId
         )
 
-        XCTAssertThrowsError(try OfflineTopUpRequest(noritoArchive: redeemArchive))
-        XCTAssertThrowsError(try OfflineRedeemRequest(noritoArchive: topUpArchive))
+        XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: redeemArchive))
+        XCTAssertThrowsError(try KagemushaRedeemRequest(noritoArchive: topUpArchive))
         XCTAssertThrowsError(
-            try OfflineTopUpRequest(noritoArchive: requestArchive(
+            try KagemushaTopUpRequest(noritoArchive: requestArchive(
                 schema: KagemushaRecursiveSpend.topUpRequestWireName,
                 fieldCount: 7,
                 operationIdFieldIndex: 4,
@@ -408,7 +437,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             ))
         )
         XCTAssertThrowsError(
-            try OfflineRedeemRequest(noritoArchive: requestArchive(
+            try KagemushaRedeemRequest(noritoArchive: requestArchive(
                 schema: KagemushaRecursiveSpend.redeemRequestWireName,
                 fieldCount: 11,
                 operationIdFieldIndex: 8,
@@ -423,21 +452,21 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             Data(repeating: 0x11, count: 31),
             Data(repeating: 0x11, count: 33),
         ] {
-            XCTAssertThrowsError(try OfflineTopUpRequest(noritoArchive: requestArchive(
+            XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: requestArchive(
                 schema: KagemushaRecursiveSpend.topUpRequestWireName,
                 fieldCount: 7,
                 operationIdFieldIndex: 5,
                 operationId: operationId
             ))) { error in
-                XCTAssertEqual(error as? OfflineOperationError, .invalidField("operation_id"))
+                XCTAssertEqual(error as? KagemushaOperationError, .invalidField("operation_id"))
             }
-            XCTAssertThrowsError(try OfflineRedeemRequest(noritoArchive: requestArchive(
+            XCTAssertThrowsError(try KagemushaRedeemRequest(noritoArchive: requestArchive(
                 schema: KagemushaRecursiveSpend.redeemRequestWireName,
                 fieldCount: 11,
                 operationIdFieldIndex: 9,
                 operationId: operationId
             ))) { error in
-                XCTAssertEqual(error as? OfflineOperationError, .invalidField("operation_id"))
+                XCTAssertEqual(error as? KagemushaOperationError, .invalidField("operation_id"))
             }
         }
     }
@@ -453,13 +482,13 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
 
         var trailingBytePayload = canonicalPayload
         trailingBytePayload.append(0xff)
-        XCTAssertThrowsError(try OfflineTopUpRequest(noritoArchive: noritoEncode(
+        XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: noritoEncode(
             typeName: schema,
             payload: trailingBytePayload,
             flags: NoritoHeader.compactLen
         )))
 
-        XCTAssertThrowsError(try OfflineTopUpRequest(noritoArchive: requestArchive(
+        XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: requestArchive(
             schema: schema,
             fieldCount: 8,
             operationIdFieldIndex: 5,
@@ -468,13 +497,13 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
 
         var nonCanonicalPayload = Data([0x81, 0x00, 0x01])
         nonCanonicalPayload.append(canonicalPayload.dropFirst(2))
-        XCTAssertThrowsError(try OfflineTopUpRequest(noritoArchive: noritoEncode(
+        XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: noritoEncode(
             typeName: schema,
             payload: nonCanonicalPayload,
             flags: NoritoHeader.compactLen
         )))
 
-        XCTAssertThrowsError(try OfflineTopUpRequest(noritoArchive: noritoEncode(
+        XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: noritoEncode(
             typeName: schema,
             payload: canonicalPayload,
             flags: 0
@@ -487,9 +516,9 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         )
         paddedArchive.insert(0, at: NoritoHeader.encodedLength)
         XCTAssertThrowsError(
-            try OfflineTopUpRequest(noritoArchive: paddedArchive)
+            try KagemushaTopUpRequest(noritoArchive: paddedArchive)
         )
-        XCTAssertThrowsError(try OfflineTopUpRequest(noritoArchive: Data()))
+        XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: Data()))
     }
 
     private func requestArchive(
@@ -556,7 +585,10 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             topUpOperationID: fixed32(0xd5),
             shieldVerifierID: "halo2/ipa:fixture-topup-shield",
             shieldVerifierCommitment: fixed32(0xd6),
-            artifactGeneration: "generation-v2-test",
+            artifactBinding: try KagemushaRecursiveSpendArtifactBinding(
+                generation: "generation-v3-test",
+                manifestSHA256: fixed32(0xd9)
+            ),
             finalizedHeight: 1,
             finalizedTransactionHash: fixed32(0xd7),
             anchorDigest: fixed32(0xd8),

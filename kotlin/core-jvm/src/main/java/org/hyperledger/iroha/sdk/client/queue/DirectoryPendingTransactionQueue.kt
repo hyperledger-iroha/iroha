@@ -8,8 +8,6 @@ import java.util.regex.Pattern
 import java.util.stream.Collectors
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.norito.NoritoException
-import org.hyperledger.iroha.sdk.tx.offline.OfflineSigningEnvelope
-import org.hyperledger.iroha.sdk.tx.offline.OfflineSigningEnvelopeCodec
 
 /**
  * Directory-backed pending queue that persists each transaction as a discrete envelope file.
@@ -32,12 +30,11 @@ class DirectoryPendingTransactionQueue @Throws(IOException::class) constructor(
 
     @Throws(IOException::class)
     override fun enqueue(transaction: SignedTransaction) {
-        val envelope = buildEnvelope(transaction)
         val encoded: ByteArray
         try {
-            encoded = ENVELOPE_CODEC.encode(envelope)
+            encoded = PendingTransactionRecordCodec.encode(transaction)
         } catch (ex: NoritoException) {
-            throw IOException("Failed to encode offline signing envelope", ex)
+            throw IOException("Failed to encode pending transaction record", ex)
         }
         synchronized(lock) {
             val path = rootDir.resolve(formatEntryName(nextId++))
@@ -77,9 +74,7 @@ class DirectoryPendingTransactionQueue @Throws(IOException::class) constructor(
     }
 
     companion object {
-        private val ENVELOPE_CODEC = OfflineSigningEnvelopeCodec()
         private val ENTRY_PATTERN = Pattern.compile("^pending-(\\d+)\\.bin$")
-        private const val DEFAULT_KEY_ALIAS = "pending.queue"
 
         @Throws(IOException::class)
         private fun initialiseNextId(rootDir: Path): Long {
@@ -109,31 +104,12 @@ class DirectoryPendingTransactionQueue @Throws(IOException::class) constructor(
             }
         }
 
-        private fun buildEnvelope(transaction: SignedTransaction): OfflineSigningEnvelope =
-            OfflineSigningEnvelope(
-                encodedPayload = transaction.encodedPayload(),
-                signature = transaction.signature(),
-                publicKey = transaction.publicKey(),
-                schemaName = transaction.schemaName(),
-                keyAlias = transaction.keyAlias().orElse(DEFAULT_KEY_ALIAS),
-                issuedAtMs = System.currentTimeMillis(),
-                exportedKeyBundle = transaction.exportedKeyBundle().orElse(null),
-            )
-
         @Throws(IOException::class)
         private fun decodeEnvelope(payload: ByteArray): SignedTransaction {
             try {
-                val envelope = ENVELOPE_CODEC.decode(payload)
-                return SignedTransaction(
-                    envelope.encodedPayload,
-                    envelope.signature,
-                    envelope.publicKey,
-                    envelope.schemaName,
-                    envelope.keyAlias,
-                    envelope.exportedKeyBundle
-                )
+                return PendingTransactionRecordCodec.decode(payload)
             } catch (ex: NoritoException) {
-                throw IOException("Failed to decode offline signing envelope", ex)
+                throw IOException("Failed to decode pending transaction record", ex)
             }
         }
 

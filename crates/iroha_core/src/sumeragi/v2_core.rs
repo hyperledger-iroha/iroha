@@ -38,7 +38,17 @@ pub(crate) use types::{
     SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate, TimeoutSignatureGroup, TimeoutVote,
     Validator, ValidatorId, Vote, VotingMode, VotingPower,
 };
-pub(crate) use wal::{DurableState, PersistenceId, ReplayError, WalEntry, WalRecord};
+pub(crate) use wal::{
+    DurableState, PersistenceId, ReplayError, SAFETY_WAL_HASH_LEN, WalAppendError, WalAppendIo,
+    WalAppendState, WalCodecError, WalEntry, WalFileIdentity, WalFrameCorruption,
+    WalHeaderCorruption, WalIdentityField, WalIoStage, WalRecord, WalRetirementAuthorization,
+    encode_wal_file_header, recover_wal_file,
+};
+#[cfg(test)]
+pub(crate) use wal::{
+    SAFETY_WAL_FILE_HEADER_LEN, SAFETY_WAL_FILE_MAGIC, SAFETY_WAL_FORMAT_VERSION,
+    SAFETY_WAL_FRAME_HEADER_LEN, SAFETY_WAL_FRAME_MAGIC,
+};
 
 #[cfg(test)]
 mod tests;

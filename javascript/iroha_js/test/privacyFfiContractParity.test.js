@@ -6643,7 +6643,7 @@ test("privacy native availability proof probes use shared Norito request archive
     sliceBetween(
       swiftNativeBridge,
       "static func isValidPrivacyNativeProbeResult",
-      "private func probeKagemushaNativeAvailability",
+      "private func probePrivacyNativeAvailability",
       "Swift privacy native probe result",
     ),
     /outLen\s*<=\s*CUnsignedLong\(Self\.privacyNativeArchiveMaxBytes\)/,
@@ -6653,7 +6653,7 @@ test("privacy native availability proof probes use shared Norito request archive
     sliceBetween(
       swiftNativeBridge,
       "static func isValidPrivacyNativeProbeResult",
-      "private func probeKagemushaNativeAvailability",
+      "private func probePrivacyNativeAvailability",
       "Swift privacy native probe result",
     ),
     /(?:let|var)\s+archive\s*=\s*Data\(bytes:\s*outPtr,\s*count:\s*Int\(outLen\)\)[\s\S]*Self\.isValidPrivacyNoritoArchive\(archive\)[\s\S]*Self\.hasNonEmptyPrivacyNoritoPayload\(archive\)[\s\S]*Self\.hasPrivacyNoritoSchema\(archive,\s*expectedSchemaByte:\s*expectedSchemaByte\)/,
@@ -6663,7 +6663,7 @@ test("privacy native availability proof probes use shared Norito request archive
     sliceBetween(
       swiftNativeBridge,
       "static func isValidPrivacyNativeProbeResult",
-      "private func probeKagemushaNativeAvailability",
+      "private func probePrivacyNativeAvailability",
       "Swift privacy native probe result",
     ),
     /expectedSchemaByte:\s*UInt8\b/,
@@ -6673,7 +6673,7 @@ test("privacy native availability proof probes use shared Norito request archive
     sliceBetween(
       swiftNativeBridge,
       "static func isValidPrivacyNativeProbeResult",
-      "private func probeKagemushaNativeAvailability",
+      "private func probePrivacyNativeAvailability",
       "Swift privacy native probe result",
     ),
     /expectedSchemaByte:\s*UInt8\?\s*=\s*nil/,
@@ -6728,7 +6728,7 @@ test("privacy native availability proof probes use shared Norito request archive
     sliceBetween(
       swiftNativeBridge,
       "static func isValidPrivacyNativeProbeResult",
-      "private func probeKagemushaNativeAvailability",
+      "private func probePrivacyNativeAvailability",
       "Swift privacy native probe result",
     ),
     /var\s+archive\s*=\s*Data\(bytes:\s*outPtr,\s*count:\s*Int\(outLen\)\)[\s\S]*defer\s*\{[\s\S]*archive\.resetBytes\(in:\s*0\.\.<archive\.count\)/,

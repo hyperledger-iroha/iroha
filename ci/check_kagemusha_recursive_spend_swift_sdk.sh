@@ -16,29 +16,7 @@ cd "${ROOT_DIR}"
 "${SWIFTC_BIN}" --version
 "${SWIFT_BIN}" --version
 "${SWIFTC_BIN}" -parse -parse-as-library \
-  IrohaSwift/Sources/IrohaSwift/AccountAddress.swift \
-  IrohaSwift/Sources/IrohaSwift/AssetDefinitionAddress.swift \
-  IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift \
-  IrohaSwift/Sources/IrohaSwift/Crypto.swift \
   IrohaSwift/Sources/IrohaSwift/NativeBridge.swift \
-  IrohaSwift/Sources/IrohaSwift/Norito.swift \
-  IrohaSwift/Sources/IrohaSwift/ConnectAsyncSequence.swift \
-  IrohaSwift/Sources/IrohaSwift/ConnectClient.swift \
-  IrohaSwift/Sources/IrohaSwift/ConnectCodec.swift \
-  IrohaSwift/Sources/IrohaSwift/ConnectCrypto.swift \
-  IrohaSwift/Sources/IrohaSwift/ConnectEnvelope.swift \
-  IrohaSwift/Sources/IrohaSwift/ConnectEnvelopeCodec.swift \
-  IrohaSwift/Sources/IrohaSwift/ConnectError.swift \
-  IrohaSwift/Sources/IrohaSwift/ConnectEvents.swift \
-  IrohaSwift/Sources/IrohaSwift/ConnectFlowControl.swift \
-  IrohaSwift/Sources/IrohaSwift/ConnectFrames.swift \
-  IrohaSwift/Sources/IrohaSwift/ConnectKeyStore.swift \
-  IrohaSwift/Sources/IrohaSwift/ConnectQueueDiagnostics.swift \
-  IrohaSwift/Sources/IrohaSwift/ConnectQueueJournal.swift \
-  IrohaSwift/Sources/IrohaSwift/ConnectReplayRecorder.swift \
-  IrohaSwift/Sources/IrohaSwift/ConnectRetryPolicy.swift \
-  IrohaSwift/Sources/IrohaSwift/ConnectSession.swift \
-  IrohaSwift/Sources/IrohaSwift/NexusAppClient.swift \
   IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift \
   IrohaSwift/Sources/IrohaSwift/PrivacyConfidentialWitness.swift \
   IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift \
@@ -81,9 +59,17 @@ cd "${ROOT_DIR}"
   IrohaSwift/Tests/IrohaSwiftTests/ConnectTestUtilities.swift \
   IrohaSwift/Tests/IrohaSwiftTests/NexusAppClientTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift \
+  IrohaSwift/Sources/IrohaSwift/KagemushaPeerTransport.swift \
+  IrohaSwift/Sources/IrohaSwift/KagemushaQRStream.swift \
+  IrohaSwift/Sources/IrohaSwift/KagemushaNFC.swift \
+  IrohaSwift/Sources/IrohaSwift/KagemushaNearby.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/KagemushaPeerTransportTestFixtures.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/KagemushaPeerTransportTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/KagemushaQRStreamTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/KagemushaNFCTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/KagemushaNearbyTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/PrivacyConfidentialWitnessTests.swift \
-  IrohaSwift/Tests/IrohaSwiftTests/NoritoTests.swift \
-  IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/NativeBridgeLoaderTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/ToriiCanonicalRequestTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/ToriiKagemushaAPIModelsTests.swift \
@@ -102,6 +88,12 @@ cd "${ROOT_DIR}"
 (
   cd IrohaSwift
   "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter ToriiKagemushaAPIModelsTests
+)
+
+(
+  cd IrohaSwift
+  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" \
+    --filter 'ToriiClientTests/testGetOfflineReadinessParsesExactContract|ToriiClientTests/testGetOfflineReadinessRejectsProtocolSubstitutionAndContradictoryClaims'
 )
 
 (
@@ -127,4 +119,15 @@ cd "${ROOT_DIR}"
 (
   cd IrohaSwift
   "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter NoritoTests
+)
+
+(
+  cd IrohaSwift
+  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" \
+    --filter 'KagemushaPeerTransportTests|KagemushaQRStreamTests|KagemushaNFCTests|KagemushaNearbyTests'
+)
+
+(
+  cd IrohaSwift
+  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter ToriiKagemushaAPIModelsTests
 )

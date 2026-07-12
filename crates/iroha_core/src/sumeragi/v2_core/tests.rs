@@ -2305,10 +2305,43 @@ fn height_closes_only_after_apply_and_a_matching_durable_receipt() {
     assert_eq!(finalized.decision(), &decision);
     let retirement = super::wal::WalRetirementAuthorization::from_finalized_height(&finalized);
     assert!(retirement.matches_finalized_height(&finalized));
+    assert_retirement_is_bound_to_finality(&retirement, &context, subject, &decision);
+}
+
+fn assert_retirement_is_bound_to_finality(
+    retirement: &WalRetirementAuthorization,
+    context: &HeightContext,
+    subject: Subject,
+    decision: &QuorumCertificate,
+) {
     assert_eq!(retirement.context_id(), context.id());
     assert_eq!(retirement.height(), context.height());
     assert_eq!(retirement.subject(), subject);
     assert_eq!(retirement.certificate(), decision.reference());
+    assert!(!retirement.matches_durable_decision(
+        ContextId::repeat(0x99),
+        context.height(),
+        subject,
+        decision.reference(),
+    ));
+    assert!(!retirement.matches_durable_decision(
+        context.id(),
+        context.height() + 1,
+        subject,
+        decision.reference(),
+    ));
+    assert!(!retirement.matches_durable_decision(
+        context.id(),
+        context.height(),
+        Subject::repeat(0x99),
+        decision.reference(),
+    ));
+    assert!(!retirement.matches_durable_decision(
+        context.id(),
+        context.height(),
+        subject,
+        CertificateRef::new(context.id(), decision.round(), Phase::Prepare, subject),
+    ));
 }
 
 #[test]

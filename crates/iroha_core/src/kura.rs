@@ -1061,16 +1061,10 @@ pub(crate) struct CommitManifest {
     post_state_root: Option<Hash>,
     wsv_checkpoint_hash: Hash,
     commit_qc_hash: Option<Hash>,
-    /// Digest of the exact authenticated QC, checkpoint, and parent-state stake authority.
-    ///
-    /// Older manifests legitimately omit this field. Such manifests can still verify replayed
-    /// execution roots, but they cannot restore NPoS finality authority without replaying the
-    /// parent WSV.
-    #[norito(default)]
-    commit_authority_hash: Option<Hash>,
 }
 
 /// Relationship between a durable manifest and the digest slot in its WSV checkpoint.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CommitManifestBindingState {
     /// The checkpoint exists but the post-manifest digest was not published yet.
@@ -1079,30 +1073,6 @@ pub(crate) enum CommitManifestBindingState {
     Bound,
     /// The checkpoint names a different manifest digest and must fail closed.
     Mismatched,
-}
-
-#[derive(Encode)]
-struct CommitAuthoritySeal {
-    domain: String,
-    commit_qc: Qc,
-    validator_checkpoint: ValidatorSetCheckpoint,
-    stake_snapshot: Option<CommitStakeSnapshot>,
-}
-
-fn commit_authority_hash(
-    commit_qc: &Qc,
-    validator_checkpoint: &ValidatorSetCheckpoint,
-    stake_snapshot: Option<&CommitStakeSnapshot>,
-) -> Hash {
-    Hash::new(
-        CommitAuthoritySeal {
-            domain: "iroha.commit-authority-seal.v1".to_owned(),
-            commit_qc: commit_qc.clone(),
-            validator_checkpoint: validator_checkpoint.clone(),
-            stake_snapshot: stake_snapshot.cloned(),
-        }
-        .encode(),
-    )
 }
 
 /// Known immutable Kagemusha top-up finality sidecar formats.
@@ -1202,25 +1172,11 @@ impl CommitManifest {
             post_state_root,
             wsv_checkpoint_hash,
             commit_qc_hash,
-            commit_authority_hash: None,
         }
     }
 
-    /// Bind the complete authenticated parent-state authority into this manifest.
-    #[must_use]
-    pub(crate) fn with_authenticated_commit_authority(
-        mut self,
-        authority: &crate::sumeragi::AuthenticatedCommitRoster,
-    ) -> Self {
-        self.commit_authority_hash = Some(commit_authority_hash(
-            authority.commit_qc(),
-            authority.validator_checkpoint(),
-            authority.stake_snapshot(),
-        ));
-        self
-    }
-
     /// Return the execution roots bound to the canonical committed block, when retained.
+    #[cfg(test)]
     pub(crate) fn state_roots(&self) -> Option<(Hash, Hash)> {
         self.parent_state_root.zip(self.post_state_root)
     }
@@ -1230,6 +1186,7 @@ impl CommitManifest {
     }
 
     /// Return roots only when the complete manifest is bound to this authenticated certificate.
+    #[cfg(test)]
     pub(crate) fn state_roots_bound_to_commit_qc(&self, qc: &Qc) -> Option<(Hash, Hash)> {
         if self.height != qc.height
             || self.block_hash != qc.subject_block_hash
@@ -1240,22 +1197,6 @@ impl CommitManifest {
         self.state_roots()
             .filter(|(parent, post)| *parent == qc.parent_state_root && *post == qc.post_state_root)
     }
-
-    /// Return whether the WSV-bound manifest seals this exact authenticated authority tuple.
-    pub(crate) fn binds_commit_authority(
-        &self,
-        commit_qc: &Qc,
-        validator_checkpoint: &ValidatorSetCheckpoint,
-        stake_snapshot: Option<&CommitStakeSnapshot>,
-    ) -> bool {
-        self.state_roots_bound_to_commit_qc(commit_qc).is_some()
-            && self.commit_authority_hash
-                == Some(commit_authority_hash(
-                    commit_qc,
-                    validator_checkpoint,
-                    stake_snapshot,
-                ))
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1265,6 +1206,7 @@ struct BlockReplicaAdvert {
 }
 
 /// Local body availability for a canonical block known to Kura.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BlockBodyStatus {
     /// Body is cached in memory.
@@ -2479,6 +2421,7 @@ impl Kura {
 
     /// Return `true` when the block payload is available locally (in memory, `blocks.data`, or the
     /// local sidecar cache).
+    #[cfg(test)]
     pub(crate) fn block_payload_available_by_hash(&self, hash: HashOf<BlockHeader>) -> bool {
         if self.canonical_storage_poisoned.load(Ordering::Acquire) {
             return false;
@@ -2489,6 +2432,7 @@ impl Kura {
         self.block_payload_available_by_height(height)
     }
 
+    #[cfg(test)]
     fn block_payload_available_by_height(&self, block_height: NonZeroUsize) -> bool {
         matches!(
             self.block_body_status_by_height(block_height),
@@ -2497,6 +2441,7 @@ impl Kura {
     }
 
     /// Record that a remote peer advertised a canonical block body replica.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn record_block_replica_advert(
         &self,
         peer: PeerId,
@@ -2526,6 +2471,7 @@ impl Kura {
     }
 
     /// Return local/remote body status for a canonical block hash known to Kura.
+    #[cfg(test)]
     pub(crate) fn block_body_status_by_hash(
         &self,
         hash: HashOf<BlockHeader>,
@@ -2537,6 +2483,7 @@ impl Kura {
         self.block_body_status_by_height(height)
     }
 
+    #[cfg(test)]
     fn block_body_status_by_height(&self, block_height: NonZeroUsize) -> Option<BlockBodyStatus> {
         if self.prune_recovery_is_required()
             || self.canonical_storage_poisoned.load(Ordering::Acquire)
@@ -8289,6 +8236,7 @@ impl Kura {
     }
 
     /// Return the durable height and encoded payload length for a known canonical block hash.
+    #[cfg(test)]
     pub(crate) fn durable_block_payload_len_by_hash(
         &self,
         hash: HashOf<BlockHeader>,
@@ -8317,6 +8265,7 @@ impl Kura {
     ///
     /// The body must match Kura's durable height/hash metadata. Inline blocks are already local and
     /// are left untouched.
+    #[cfg(test)]
     pub(crate) fn cache_block_body(&self, block: &SignedBlock) -> Result<()> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
@@ -11193,6 +11142,7 @@ impl Kura {
     }
 
     /// Return whether the WSV checkpoint independently binds every byte of `manifest`.
+    #[cfg(test)]
     pub(crate) fn commit_manifest_has_wsv_binding(
         &self,
         manifest: &CommitManifest,
@@ -11202,6 +11152,7 @@ impl Kura {
 
     /// Classify the checkpoint-to-manifest digest without conflating an interrupted publication
     /// (`None`) with an already published, different digest.
+    #[cfg(test)]
     pub(crate) fn commit_manifest_binding_state(
         &self,
         manifest: &CommitManifest,
@@ -15483,24 +15434,6 @@ impl Kura {
             .store(true, Ordering::Relaxed);
     }
 
-    /// Replace manifest bytes without updating the checkpoint digest, for corruption tests.
-    #[cfg(test)]
-    pub(crate) fn overwrite_commit_manifest_without_binding_for_tests(
-        &self,
-        manifest: &CommitManifest,
-    ) -> Result<()> {
-        self.ensure_durable_block_at_height(manifest.height, manifest.block_hash)?;
-        let path = self.commit_manifest_path(manifest.height);
-        let dir = path.parent().ok_or_else(|| {
-            Error::IO(
-                std::io::Error::other("manifest path has no parent"),
-                path.clone(),
-            )
-        })?;
-        std::fs::create_dir_all(dir).map_err(|err| Error::IO(err, dir.to_path_buf()))?;
-        std::fs::write(&path, manifest.encode()).map_err(|err| Error::IO(err, path))
-    }
-
     /// Remove manifest bytes without updating the checkpoint digest, for corruption tests.
     #[cfg(test)]
     pub(crate) fn remove_commit_manifest_without_binding_for_tests(
@@ -15515,15 +15448,6 @@ impl Kura {
     pub(crate) fn fail_next_roster_sidecar_writes_for_tests(&self, count: usize) {
         self.fail_next_roster_sidecar_writes
             .store(count, Ordering::Relaxed);
-    }
-
-    pub(crate) fn block_file_lengths_for_tests(&self) -> (u64, u64, u64) {
-        let mut store = self.block_store.lock();
-        (
-            store.index_file_len().expect("index len"),
-            store.data_file_len().expect("data len"),
-            store.hashes_file_len().expect("hashes len"),
-        )
     }
 }
 
@@ -19090,6 +19014,7 @@ impl Kura {
     ///
     /// Recovery and merge-readiness paths use this to find the next admissible
     /// block without allocating every historical sidecar.
+    #[cfg(test)]
     pub(crate) fn first_certified_lane_block_artifact_matching_from<F>(
         &self,
         lane_id: LaneId,
@@ -20003,6 +19928,7 @@ impl Kura {
 
     /// Return whether an exact immutable origin proposal has a
     /// restart-verifiable payload availability DELIVER certificate.
+    #[cfg(test)]
     pub(crate) fn autonomous_lane_payload_availability_delivered(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -20029,39 +19955,6 @@ impl Kura {
                             expected_epoch,
                         )
                         .is_ok()
-                })
-        })
-    }
-
-    /// Return whether one durable autonomous payload owns an exact queue
-    /// reservation identity.
-    ///
-    /// This is the restart reconciliation predicate: coordinates and an
-    /// entrypoint hash alone are insufficient because a stale routing plan,
-    /// recreated incarnation, or different provisional owner must be released.
-    pub(crate) fn autonomous_lane_payload_matches_reservation(
-        &self,
-        key: &crate::queue::LaneQueueReservationKeyV1,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-    ) -> bool {
-        self.read_autonomous_lane_block_artifact(
-            key.lane_id,
-            key.lane_block_height,
-            expected_chain_id_hash,
-            expected_epoch,
-        )
-        .is_some_and(|artifact| {
-            let payload = artifact.executable_payload;
-            payload
-                .reservation_keys
-                .iter()
-                .zip(&payload.routing_plans)
-                .zip(&payload.entrypoint_hashes)
-                .any(|((bound_key, plan), entrypoint_hash)| {
-                    bound_key == key
-                        && plan.digest() == key.routing_plan_digest
-                        && Hash::from(key.entrypoint_hash) == *entrypoint_hash
                 })
         })
     }
@@ -20215,30 +20108,6 @@ impl Kura {
             expected_epoch,
             true,
         )
-    }
-
-    /// Return whether the supplied proposal is the current certified view of a
-    /// durable lane-owned executable payload.
-    pub(crate) fn autonomous_lane_payload_available(
-        &self,
-        proposal: &LaneBlockProposalV1,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-    ) -> bool {
-        let Some(artifact) = self.read_autonomous_lane_block_artifact(
-            proposal.descriptor.lane_id,
-            proposal.descriptor.lane_block_height,
-            expected_chain_id_hash,
-            expected_epoch,
-        ) else {
-            return false;
-        };
-        Self::validate_autonomous_lane_block_artifact(
-            &artifact,
-            expected_chain_id_hash,
-            expected_epoch,
-        )
-        .is_ok_and(|current| current.same_consensus_identity(proposal))
     }
 
     /// Return the validated executable payload and current synthetic NewView cursor.
@@ -24341,34 +24210,6 @@ impl Kura {
             Some(sidecar)
         }
     }
-    /// Read only the embedded commit QC from the durable roster-sidecar slot.
-    ///
-    /// Restart conflict scans authenticate this candidate against the
-    /// independently sealed canonical authority instead of trusting ancillary
-    /// checkpoint metadata from the same sidecar.
-    pub(crate) fn read_roster_commit_qc_candidate(&self, height: u64) -> Option<Qc> {
-        let _guard = self.sidecar_lock.lock();
-        let mut dir = self.store_dir()?;
-        dir.push(PIPELINE_DIR_NAME);
-        let data_path = dir.join(ROSTER_SIDECARS_DATA_FILE);
-        let index_path = dir.join(ROSTER_SIDECARS_INDEX_FILE);
-        let sidecar = Self::read_indexed_sidecar_from_paths(
-            height,
-            &data_path,
-            &index_path,
-            norito::decode_from_bytes::<RosterSidecar>,
-            "roster sidecar conflict candidate",
-        )?;
-        if !Self::sync_indexed_sidecar_barriers(
-            &data_path,
-            &index_path,
-            "roster sidecar conflict candidate",
-        ) {
-            return None;
-        }
-        sidecar.commit_qc
-    }
-
     #[must_use]
     fn recover_indexed_sidecar_artifacts(data_path: &Path, index_path: &Path, kind: &str) -> bool {
         let temp_data_path = data_path.with_extension("norito.tmp");
@@ -29989,9 +29830,9 @@ mod tests {
             LaneVisibility,
         },
         offline::{
-            KagemushaRecursiveSpendTopUpRequestV2, KagemushaRequestAuthorizationV2,
-            KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
-            KagemushaTopUpShieldEvidenceV2,
+            KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendTopUpRequestV2,
+            KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
+            KagemushaSpendableNoteDescriptorV2, KagemushaTopUpShieldEvidenceV2,
         },
         peer::PeerId,
         prelude::{Executor, IvmBytecode},
@@ -30254,7 +30095,10 @@ mod tests {
                     attachment
                 },
             },
-            artifact_generation: "kura-operation-index-fixture".to_owned(),
+            artifact_binding: KagemushaRecursiveSpendArtifactBindingV3 {
+                generation: "kura-operation-index-fixture".to_owned(),
+                manifest_sha256: [0x39; 32],
+            },
             operation_id: request_operation_id,
             authorization: KagemushaRequestAuthorizationV2 {
                 authority: SAMPLE_GENESIS_ACCOUNT_ID.clone(),

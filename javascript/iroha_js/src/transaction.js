@@ -173,210 +173,6 @@ function normalizeMetadataPayload(metadata, context) {
   );
 }
 
-const KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES = new Map([
-  ["KagemushaTransfer", "iroha_data_model::isi::offline::KagemushaTransfer"],
-  [
-    "RedeemKagemushaRecursive",
-    "iroha_data_model::isi::offline::RedeemKagemushaRecursive",
-  ],
-  [
-    "TopUpKagemushaRecursive",
-    "iroha_data_model::isi::offline::TopUpKagemushaRecursive",
-  ],
-]);
-const KAGEMUSHA_INSTRUCTION_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024;
-const NORITO_HEADER_BYTES = 40;
-const NORITO_MAX_HEADER_PADDING_BYTES = 64;
-const NORITO_MAGIC = Buffer.from("NRT0", "ascii");
-const NORITO_SUPPORTED_FLAGS_MASK = 0x27;
-const NORITO_FIELD_BITSET_FLAG = 0x20;
-const NORITO_FIELD_BITSET_REQUIRED_FLAGS = 0x06;
-const NORITO_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
-const NORITO_CRC64_REFLECTED_POLY = 0xc96c_5795_d787_0f42n;
-const NORITO_CRC64_TABLE = (() => {
-  const table = new Array(256);
-  for (let index = 0; index < table.length; index += 1) {
-    let crc = BigInt(index);
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc =
-        (crc & 1n) !== 0n
-          ? (crc >> 1n) ^ NORITO_CRC64_REFLECTED_POLY
-          : crc >> 1n;
-    }
-    table[index] = crc;
-  }
-  return table;
-})();
-
-function normalizeKagemushaInstructionArchiveType(type, context) {
-  if (
-    typeof type !== "string" ||
-    !KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES.has(type)
-  ) {
-    throw new TypeError(
-      `${context}.type must be KagemushaTransfer, RedeemKagemushaRecursive, or TopUpKagemushaRecursive`,
-    );
-  }
-  return type;
-}
-
-function kagemushaArchiveBuffer(source, context) {
-  const selected =
-    source.instructionArchive ??
-    source.instruction_archive ??
-    source.archive ??
-    source.bytes;
-  if (selected !== undefined && selected !== null) {
-    const buffer = toBuffer(selected, `${context}.instructionArchive`);
-    if (buffer.length === 0) {
-      throw new TypeError(`${context}.instructionArchive must not be empty`);
-    }
-    return Buffer.from(buffer);
-  }
-  const encoded = source.bytesBase64 ?? source.bytes_base64;
-  if (typeof encoded !== "string" || encoded.trim().length === 0) {
-    throw new TypeError(
-      `${context}.instructionArchive or ${context}.bytesBase64 is required`,
-    );
-  }
-  const normalized = encoded.trim();
-  const canonicalBase64Pattern =
-    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
-  if (encoded !== normalized || !canonicalBase64Pattern.test(normalized)) {
-    throw new TypeError(
-      `${context}.bytesBase64 must be canonical standard base64`,
-    );
-  }
-  const buffer = Buffer.from(normalized, "base64");
-  if (buffer.toString("base64") !== normalized) {
-    throw new TypeError(
-      `${context}.bytesBase64 must be canonical standard base64`,
-    );
-  }
-  if (buffer.length === 0) {
-    throw new TypeError(
-      `${context}.bytesBase64 must decode to non-empty bytes`,
-    );
-  }
-  return buffer;
-}
-
-function noritoSchemaHash(typeName) {
-  return createHash("sha256")
-    .update("norito:v1:type-name\0", "utf8")
-    .update(typeName, "utf8")
-    .digest()
-    .subarray(0, 16);
-}
-
-function noritoCrc64(payload) {
-  let crc = NORITO_CRC64_MASK;
-  for (const byte of payload) {
-    const index = Number((crc ^ BigInt(byte)) & 0xffn);
-    crc = NORITO_CRC64_TABLE[index] ^ (crc >> 8n);
-  }
-  return BigInt.asUintN(64, crc ^ NORITO_CRC64_MASK);
-}
-
-function validateKagemushaInstructionArchive(type, archive, context) {
-  const invalidMessage = `${context}.instructionArchive must be a valid ${type} Norito archive`;
-  const fail = () => {
-    throw new TypeError(invalidMessage);
-  };
-  if (archive.length > KAGEMUSHA_INSTRUCTION_ARCHIVE_MAX_BYTES) {
-    throw new TypeError(
-      `${context}.instructionArchive must not exceed ${KAGEMUSHA_INSTRUCTION_ARCHIVE_MAX_BYTES} bytes`,
-    );
-  }
-  if (archive.length < NORITO_HEADER_BYTES) {
-    fail();
-  }
-  if (!archive.subarray(0, 4).equals(NORITO_MAGIC)) {
-    fail();
-  }
-  if (archive[4] !== 0 || archive[5] !== 0) {
-    fail();
-  }
-  const wireName = KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES.get(type);
-  const expectedSchema = noritoSchemaHash(wireName);
-  if (!archive.subarray(6, 22).equals(expectedSchema)) {
-    throw new TypeError(
-      `${context}.instructionArchive schema must match ${type}`,
-    );
-  }
-  if (archive[22] !== 0) {
-    throw new TypeError(`${context}.instructionArchive must not be compressed`);
-  }
-  const flags = archive[39];
-  if (
-    (flags & ~NORITO_SUPPORTED_FLAGS_MASK) !== 0 ||
-    ((flags & NORITO_FIELD_BITSET_FLAG) !== 0 &&
-      (flags & NORITO_FIELD_BITSET_REQUIRED_FLAGS) !==
-        NORITO_FIELD_BITSET_REQUIRED_FLAGS)
-  ) {
-    fail();
-  }
-  const payloadLengthBig = archive.readBigUInt64LE(23);
-  if (payloadLengthBig > BigInt(Number.MAX_SAFE_INTEGER)) {
-    fail();
-  }
-  const payloadLength = Number(payloadLengthBig);
-  if (payloadLength === 0) {
-    throw new TypeError(
-      `${context}.instructionArchive must contain a non-empty Norito payload`,
-    );
-  }
-  const minimumLength = NORITO_HEADER_BYTES + payloadLength;
-  if (archive.length < minimumLength) {
-    fail();
-  }
-  const paddingLength = archive.length - minimumLength;
-  if (paddingLength > NORITO_MAX_HEADER_PADDING_BYTES) {
-    fail();
-  }
-  const padding = archive.subarray(
-    NORITO_HEADER_BYTES,
-    NORITO_HEADER_BYTES + paddingLength,
-  );
-  if (padding.some((byte) => byte !== 0)) {
-    fail();
-  }
-  const payload = archive.subarray(NORITO_HEADER_BYTES + paddingLength);
-  if (noritoCrc64(payload) !== archive.readBigUInt64LE(31)) {
-    throw new TypeError(`${context}.instructionArchive checksum is invalid`);
-  }
-}
-
-/**
- * Build a typed Kagemusha instruction archive payload accepted by
- * {@link buildTransaction}. The archive must be canonical Norito bytes for the
- * selected Kagemusha instruction type; native translation re-decodes the bytes
- * before signing.
- */
-export function buildKagemushaInstructionArchiveInstruction(input) {
-  if (!input || typeof input !== "object") {
-    throw new TypeError(
-      "Kagemusha instruction archive input must be an object",
-    );
-  }
-  const type = normalizeKagemushaInstructionArchiveType(
-    input.type ?? input.instructionType ?? input.instruction_type,
-    "kagemushaInstructionArchive",
-  );
-  const archive = kagemushaArchiveBuffer(input, "kagemushaInstructionArchive");
-  validateKagemushaInstructionArchive(
-    type,
-    archive,
-    "kagemushaInstructionArchive",
-  );
-  return {
-    KagemushaInstructionArchive: {
-      type,
-      bytes_base64: archive.toString("base64"),
-    },
-  };
-}
-
 function normalizeJsonObjectPayload(value, context) {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -484,6 +280,59 @@ export function hashSignedTransactionPayload(signedTransaction, options = {}) {
   }
   const encoding = options.encoding ?? "hex";
   return hashBuffer.toString(encoding);
+}
+
+/**
+ * Decode a canonical Norito signed transaction into its JSON representation.
+ * This is intended for wallet policy checks before signing an untrusted
+ * transaction scaffold.
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
+ * @returns {Record<string, unknown>}
+ */
+export function decodeSignedTransaction(signedTransaction) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.decodeSignedTransactionJson !== "function") {
+    throw new Error(
+      "native binding 'decodeSignedTransactionJson' is unavailable",
+    );
+  }
+  const decoded = JSON.parse(
+    native.decodeSignedTransactionJson(toBuffer(signedTransaction)),
+  );
+  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+    throw new Error("decoded signed transaction must be an object");
+  }
+  return decoded;
+}
+
+/**
+ * Encode an entrypoint payload with the exact Kotodama ABI schema into the
+ * canonical argument bytes that must be present in a signed contract call.
+ * @param {Record<string, unknown>} argumentSchema
+ * @param {Record<string, unknown>} payload
+ * @returns {Buffer}
+ */
+export function encodeContractArgumentRecord(argumentSchema, payload) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.encodeContractArgumentRecordJson !== "function") {
+    throw new Error(
+      "native binding 'encodeContractArgumentRecordJson' is unavailable",
+    );
+  }
+  let schemaJson;
+  let payloadJson;
+  try {
+    schemaJson = JSON.stringify(argumentSchema);
+    payloadJson = JSON.stringify(payload);
+  } catch (error) {
+    throw new TypeError(`contract argument input is not JSON serializable: ${error}`);
+  }
+  if (typeof schemaJson !== "string" || typeof payloadJson !== "string") {
+    throw new TypeError("contract argument schema and payload must be JSON values");
+  }
+  return Buffer.from(
+    native.encodeContractArgumentRecordJson(schemaJson, payloadJson),
+  );
 }
 
 /**
@@ -2348,144 +2197,6 @@ export function submitValidationFeeIvmProvedContractCall(
     );
   }
   return submitIvmProvedContractCall(client, record, options);
-}
-
-/**
- * Build and sign a transaction containing one archived Kagemusha instruction.
- */
-export function buildKagemushaInstructionTransaction({
-  chainId,
-  authority,
-  type,
-  instructionType,
-  instruction_type,
-  instructionArchive,
-  instruction_archive,
-  archive,
-  bytes,
-  bytesBase64,
-  bytes_base64,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
-  const instruction = buildKagemushaInstructionArchiveInstruction({
-    type: instructionType ?? type ?? instruction_type,
-    instructionArchive,
-    instruction_archive,
-    archive,
-    bytes,
-    bytesBase64,
-    bytes_base64,
-  });
-  return buildTransaction({
-    chainId,
-    authority,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-    privateKeyAlgorithm,
-  });
-}
-
-/**
- * Build the native recursive-redeem instruction from a redeem request archive
- * and sign it in a single-instruction transaction.
- */
-export function buildKagemushaRecursiveRedeemTransaction({
-  chainId,
-  authority,
-  redeemRequestArchive,
-  redeem_request_archive,
-  requestArchive,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
-  const native = resolveNativeBinding();
-  if (!native || typeof native.kagemushaRecursiveSpendRedeem !== "function") {
-    throw new Error(
-      "native binding 'kagemushaRecursiveSpendRedeem' is unavailable",
-    );
-  }
-  const selectedArchive =
-    redeemRequestArchive ?? redeem_request_archive ?? requestArchive;
-  const instructionArchive = Buffer.from(
-    native.kagemushaRecursiveSpendRedeem(
-      toBuffer(
-        selectedArchive,
-        "kagemushaRecursiveRedeem.redeemRequestArchive",
-      ),
-    ),
-  );
-  return buildKagemushaInstructionTransaction({
-    chainId,
-    authority,
-    type: "RedeemKagemushaRecursive",
-    instructionArchive,
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-    privateKeyAlgorithm,
-  });
-}
-
-/**
- * Build the native online-to-offline top-up instruction from a top-up request
- * archive and sign it in a single-instruction transaction.
- */
-export function buildKagemushaRecursiveTopUpTransaction({
-  chainId,
-  authority,
-  topUpRequestArchive,
-  top_up_request_archive,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
-  const native = resolveNativeBinding();
-  if (!native || typeof native.kagemushaRecursiveSpendTopUp !== "function") {
-    throw new Error(
-      "native binding 'kagemushaRecursiveSpendTopUp' is unavailable",
-    );
-  }
-  const selectedArchive =
-    topUpRequestArchive
-    ?? top_up_request_archive;
-  const instructionArchive = Buffer.from(
-    native.kagemushaRecursiveSpendTopUp(
-      toBuffer(
-        selectedArchive,
-        "kagemushaRecursiveTopUp.topUpRequestArchive",
-      ),
-    ),
-  );
-  return buildKagemushaInstructionTransaction({
-    chainId,
-    authority,
-    type: "TopUpKagemushaRecursive",
-    instructionArchive,
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-    privateKeyAlgorithm,
-  });
 }
 
 export function buildTimeTriggerAction(options) {

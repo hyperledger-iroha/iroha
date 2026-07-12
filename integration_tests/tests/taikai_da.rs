@@ -63,9 +63,11 @@ async fn taikai_video_segments_require_resolution_metadata() -> Result<()> {
     let replay_dir = tempdir()?;
     let manifest_path = manifest_dir.path().to_owned();
     let replay_path = replay_dir.path().to_owned();
-    let builder = NetworkBuilder::new().with_config_layer(move |layer| {
-        configure_da_spool(layer, &manifest_path, &replay_path);
-    });
+    let builder = NetworkBuilder::new()
+        .with_npos_consensus()
+        .with_config_layer(move |layer| {
+            configure_da_spool(layer, &manifest_path, &replay_path);
+        });
     let Some(network) = start_network_async_or_skip(builder, "taikai_missing_resolution").await?
     else {
         return Ok(());
@@ -94,9 +96,11 @@ async fn taikai_segments_require_signing_manifest_metadata() -> Result<()> {
     let replay_dir = tempdir()?;
     let manifest_path = manifest_dir.path().to_owned();
     let replay_path = replay_dir.path().to_owned();
-    let builder = NetworkBuilder::new().with_config_layer(move |layer| {
-        configure_da_spool(layer, &manifest_path, &replay_path);
-    });
+    let builder = NetworkBuilder::new()
+        .with_npos_consensus()
+        .with_config_layer(move |layer| {
+            configure_da_spool(layer, &manifest_path, &replay_path);
+        });
     let Some(network) = start_network_async_or_skip(builder, "taikai_missing_ssm").await? else {
         return Ok(());
     };
@@ -123,9 +127,11 @@ async fn taikai_audio_segments_require_audio_layout_metadata() -> Result<()> {
     let replay_dir = tempdir()?;
     let manifest_path = manifest_dir.path().to_owned();
     let replay_path = replay_dir.path().to_owned();
-    let builder = NetworkBuilder::new().with_config_layer(move |layer| {
-        configure_da_spool(layer, &manifest_path, &replay_path);
-    });
+    let builder = NetworkBuilder::new()
+        .with_npos_consensus()
+        .with_config_layer(move |layer| {
+            configure_da_spool(layer, &manifest_path, &replay_path);
+        });
     let Some(network) = start_network_async_or_skip(builder, "taikai_missing_audio_layout").await?
     else {
         return Ok(());
@@ -155,9 +161,11 @@ async fn taikai_ingest_latency_metadata_requires_integer() -> Result<()> {
     let replay_dir = tempdir()?;
     let manifest_path = manifest_dir.path().to_owned();
     let replay_path = replay_dir.path().to_owned();
-    let builder = NetworkBuilder::new().with_config_layer(move |layer| {
-        configure_da_spool(layer, &manifest_path, &replay_path);
-    });
+    let builder = NetworkBuilder::new()
+        .with_npos_consensus()
+        .with_config_layer(move |layer| {
+            configure_da_spool(layer, &manifest_path, &replay_path);
+        });
     let Some(network) = start_network_async_or_skip(builder, "taikai_latency_metadata").await?
     else {
         return Ok(());
@@ -186,9 +194,11 @@ async fn taikai_live_edge_drift_metadata_requires_integer() -> Result<()> {
     let replay_dir = tempdir()?;
     let manifest_path = manifest_dir.path().to_owned();
     let replay_path = replay_dir.path().to_owned();
-    let builder = NetworkBuilder::new().with_config_layer(move |layer| {
-        configure_da_spool(layer, &manifest_path, &replay_path);
-    });
+    let builder = NetworkBuilder::new()
+        .with_npos_consensus()
+        .with_config_layer(move |layer| {
+            configure_da_spool(layer, &manifest_path, &replay_path);
+        });
     let Some(network) = start_network_async_or_skip(builder, "taikai_drift_metadata").await? else {
         return Ok(());
     };
@@ -216,9 +226,11 @@ async fn taikai_ingest_node_id_metadata_requires_utf8() -> Result<()> {
     let replay_dir = tempdir()?;
     let manifest_path = manifest_dir.path().to_owned();
     let replay_path = replay_dir.path().to_owned();
-    let builder = NetworkBuilder::new().with_config_layer(move |layer| {
-        configure_da_spool(layer, &manifest_path, &replay_path);
-    });
+    let builder = NetworkBuilder::new()
+        .with_npos_consensus()
+        .with_config_layer(move |layer| {
+            configure_da_spool(layer, &manifest_path, &replay_path);
+        });
     let Some(network) = start_network_async_or_skip(builder, "taikai_node_id_metadata").await?
     else {
         return Ok(());
@@ -247,9 +259,11 @@ async fn taikai_ssm_payload_must_decode_into_manifest() -> Result<()> {
     let replay_dir = tempdir()?;
     let manifest_path = manifest_dir.path().to_owned();
     let replay_path = replay_dir.path().to_owned();
-    let builder = NetworkBuilder::new().with_config_layer(move |layer| {
-        configure_da_spool(layer, &manifest_path, &replay_path);
-    });
+    let builder = NetworkBuilder::new()
+        .with_npos_consensus()
+        .with_config_layer(move |layer| {
+            configure_da_spool(layer, &manifest_path, &replay_path);
+        });
     let Some(network) = start_network_async_or_skip(builder, "taikai_ssm_decode").await? else {
         return Ok(());
     };
@@ -488,7 +502,6 @@ fn metadata_bytes(key: &str, value: Vec<u8>) -> MetadataEntry {
 fn configure_da_spool<'a>(layer: &'a mut Writer<'a>, manifest_dir: &Path, replay_dir: &Path) {
     layer
         .write(["nexus", "enabled"], true)
-        .write(["sumeragi", "consensus_mode"], "npos")
         .write(
             ["torii", "da_ingest", "manifest_store_dir"],
             manifest_dir.display().to_string(),

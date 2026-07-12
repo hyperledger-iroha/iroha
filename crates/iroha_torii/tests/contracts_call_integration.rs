@@ -20,6 +20,7 @@ use iroha_data_model::{
     DomainId, asset::AssetDefinitionId, name::Name, smart_contract::ContractAddress,
     transaction::SignedTransaction,
 };
+use iroha_version::codec::DecodeVersioned as _;
 use ivm::kotodama::session::{CompileRequest, CompilerSession};
 use mv::storage::StorageReadOnly;
 use norito::json;
@@ -805,11 +806,8 @@ async fn contracts_call_enqueues_transaction() {
     let transaction_scaffold_bytes = base64::engine::general_purpose::STANDARD
         .decode(transaction_scaffold_b64)
         .expect("decode transaction scaffold");
-    let transaction_scaffold: SignedTransaction = {
-        let _guard = norito::core::PayloadCtxGuard::enter(&transaction_scaffold_bytes);
-        let mut cursor = std::io::Cursor::new(transaction_scaffold_bytes.as_slice());
-        norito::codec::Decode::decode(&mut cursor).expect("decode transaction scaffold")
-    };
+    let transaction_scaffold = SignedTransaction::decode_all_versioned(&transaction_scaffold_bytes)
+        .expect("decode exact versioned transaction scaffold");
     assert_eq!(
         transaction_scaffold.time_to_live(),
         Some(Duration::from_millis(transaction_ttl_ms))

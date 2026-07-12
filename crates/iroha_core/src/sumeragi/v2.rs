@@ -1416,8 +1416,16 @@ impl SumeragiV2Adapter {
             core_decision.subject(),
             core_decision.reference(),
         );
-        let _closed = self.reducer.finish_height(reducer_receipt)?;
-        let wal_retirement_warning = self.wal.retire().err().map(|error| error.to_string());
+        let closed = self.reducer.finish_height(reducer_receipt)?;
+        let retirement = reducer::WalRetirementAuthorization::from_finalized_height(&closed);
+        if !retirement.matches_finalized_height(&closed) {
+            return Err(AdapterError::DurableCommitMismatch);
+        }
+        let wal_retirement_warning = self
+            .wal
+            .retire(retirement)
+            .err()
+            .map(|error| error.to_string());
         Ok(FinalizedV2Height {
             wal_retirement_warning,
         })

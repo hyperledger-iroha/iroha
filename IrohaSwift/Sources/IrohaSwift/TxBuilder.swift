@@ -936,7 +936,7 @@ public struct KagemushaTopUpShieldVerifierBinding: Equatable, Sendable {
         self.withdrawalHeight = withdrawalHeight
     }
 
-    public init(_ verifier: ToriiOfflineActiveTopUpShieldVerifier) throws {
+    public init(_ verifier: ToriiKagemushaActiveTopUpShieldVerifier) throws {
         try self.init(
             backend: verifier.id.backend,
             name: verifier.id.name,
@@ -950,7 +950,7 @@ public struct KagemushaTopUpShieldVerifierBinding: Equatable, Sendable {
         )
     }
 
-    fileprivate func matches(_ verifier: ToriiOfflineActiveTopUpShieldVerifier) -> Bool {
+    fileprivate func matches(_ verifier: ToriiKagemushaActiveTopUpShieldVerifier) -> Bool {
         backend == verifier.id.backend
             && name == verifier.id.name
             && version == verifier.version
@@ -1007,6 +1007,9 @@ public struct KagemushaTopUpShieldSnapshotBinding: Equatable, Sendable {
 public struct KagemushaTopUpShieldPreparation: Equatable, Sendable {
     public let unsigned: KagemushaRecursiveSpendTopUpUnsigned
     public let opening: KagemushaNoteOpening
+    /// Exact post-top-up membership and dummy-zero paths retained in encrypted
+    /// local state. This witness never enters the Torii top-up request.
+    public let membershipWitness: KagemushaNoteMembershipWitness
     public let binding: KagemushaTopUpShieldSnapshotBinding
 }
 
@@ -1121,7 +1124,7 @@ public final class IrohaSDK: @unchecked Sendable {
         payer: String,
         operationId: Data,
         opening: KagemushaNoteOpening,
-        artifactGeneration: String,
+        artifactBinding: KagemushaRecursiveSpendArtifactBinding,
         expectedReadiness: KagemushaTopUpShieldReadinessExpectation
     ) async throws -> KagemushaTopUpShieldPreparation {
         guard let toriiRestClient else {
@@ -1136,7 +1139,7 @@ public final class IrohaSDK: @unchecked Sendable {
             throw KagemushaRecursiveSpendError.invalidField("assetId")
         }
         let assetDefinitionId = String(assetParts[0])
-        let readiness = try await toriiRestClient.getOfflineReadiness(
+        let readiness = try await toriiRestClient.getKagemushaReadiness(
             assetDefinitionId: assetDefinitionId
         )
         guard readiness.ready,
@@ -1156,7 +1159,7 @@ public final class IrohaSDK: @unchecked Sendable {
             asset: assetDefinitionId,
             commitments: []
         )
-        guard snapshot.frontierLen
+        guard snapshot.frontierLen + 1
                 < ToriiZkMerklePathResponse.confidentialTreeCapacityV2 else {
             throw KagemushaRecursiveSpendError.invalidField("topUp.zeroPath.capacity")
         }
@@ -1175,9 +1178,29 @@ public final class IrohaSDK: @unchecked Sendable {
             zeroPath: zeroPath,
             shieldVerifierID: "\(verifier.id.backend):\(verifier.id.name)",
             shieldVerifierCommitment: verifierCommitment,
-            artifactGeneration: artifactGeneration
+            artifactBinding: artifactBinding
         ).buildUnsigned()
-        let currentReadiness = try await toriiRestClient.getOfflineReadiness(
+        guard try zeroPath.root(
+            replacingLeafWith: unsigned.currentNote.noteCommitment
+        ) == unsigned.shieldEvidence.finalizedRoot,
+              unsigned.shieldEvidence.initialRoot == zeroPath.rootAtHeight,
+              unsigned.shieldEvidence.leafIndex == UInt32(zeroPath.leafIndex) else {
+            throw KagemushaRecursiveSpendError.invalidField("topUp.membershipWitness")
+        }
+        let dummyZeroPath = try zeroPath.nextZeroPathAfterInsertion(
+            commitment: unsigned.currentNote.noteCommitment,
+            expectedRoot: unsigned.shieldEvidence.finalizedRoot
+        )
+        let membershipWitness = try KagemushaNoteMembershipWitness(
+            leafIndex: UInt32(zeroPath.leafIndex),
+            inputPath: PrivacyConfidentialMerklePathWitnessV2(
+                siblings: zeroPath.siblings,
+                directions: zeroPath.directions,
+                root: unsigned.shieldEvidence.finalizedRoot
+            ),
+            dummyInputPath: PrivacyConfidentialMerklePathWitnessV2(path: dummyZeroPath)
+        )
+        let currentReadiness = try await toriiRestClient.getKagemushaReadiness(
             assetDefinitionId: assetDefinitionId
         )
         guard currentReadiness.ready,
@@ -1192,6 +1215,7 @@ public final class IrohaSDK: @unchecked Sendable {
         return KagemushaTopUpShieldPreparation(
             unsigned: unsigned,
             opening: opening,
+            membershipWitness: membershipWitness,
             binding: KagemushaTopUpShieldSnapshotBinding(
                 assetDefinitionID: assetDefinitionId,
                 assetScale: amount.scale,
@@ -2802,6 +2826,60 @@ public extension IrohaSDK {
             throw Self.restUnavailableError()
         }
         return try await toriiRestClient.getAssets(accountId: accountId, limit: limit, asset: asset, scope: scope)
+    }
+
+    func prepareDetachedAssetTransfer(
+        _ request: ToriiAssetTransferRequest
+    ) async throws -> ToriiAssetTransferDraft {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        return try await toriiRestClient.prepareDetachedAssetTransfer(request)
+    }
+
+    func submitDetachedAssetTransfer(
+        _ draft: ToriiAssetTransferDraft,
+        publicKeyHex: String,
+        signatureBase64: String
+    ) async throws -> ToriiAssetTransferResponse {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        return try await toriiRestClient.submitDetachedAssetTransfer(
+            draft,
+            publicKeyHex: publicKeyHex,
+            signatureBase64: signatureBase64
+        )
+    }
+
+    func submitDetachedAssetTransfer(
+        _ draft: ToriiAssetTransferDraft,
+        signingKey: SigningKey
+    ) async throws -> ToriiAssetTransferResponse {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        return try await toriiRestClient.submitDetachedAssetTransfer(
+            draft,
+            signingKey: signingKey
+        )
+    }
+
+    func waitForDetachedAssetTransferFinality(
+        _ draft: ToriiAssetTransferDraft,
+        submittedResponse: ToriiAssetTransferResponse,
+        pollOptions: PipelineStatusPollOptions? = nil,
+        mode: PipelineEndpointMode? = nil
+    ) async throws -> ToriiPipelineTransactionStatus {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        return try await toriiRestClient.waitForDetachedAssetTransferFinality(
+            draft,
+            submittedResponse: submittedResponse,
+            pollOptions: pollOptions ?? pipelinePollOptions,
+            mode: mode ?? pipelineEndpointMode
+        )
     }
 
     func iterateAccountTransferHistory(accountId: String,

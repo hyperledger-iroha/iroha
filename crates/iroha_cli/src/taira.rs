@@ -1659,6 +1659,10 @@ mod tests {
     }
 
     fn write_canary_mock_response(request: &MockRequest, onboarding_status: u16) -> MockResponse {
+        // Account formatting is guarded per thread.  The mock responder runs
+        // on its own thread, so mirror the Taira discriminant used by the
+        // canary client before deriving the response account identifier.
+        let _guard = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
         match (request.method.as_str(), path_only(&request.path)) {
             ("POST", "/v1/accounts/onboard") => {
                 if onboarding_status == 400 {

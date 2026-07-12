@@ -760,6 +760,7 @@ pub struct Queue {
     /// Maximum number of entries scanned per expired-transaction sweep.
     expired_cull_batch: NonZeroUsize,
     /// Last time (unix ms) we swept expired transactions.
+    #[cfg(test)]
     last_expired_cull_ms: AtomicU64,
     /// Round-robin ring of queued transaction hashes used for TTL sweeps.
     expiry_ring: parking_lot::Mutex<VecDeque<SignedTxHash>>,
@@ -1146,6 +1147,7 @@ pub struct TransactionGuard {
 /// metadata remain live while the guard is in flight. The counters below make every terminal or
 /// idempotent disposition explicit so callers never have to infer ownership from a failed push.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct TransactionGuardReturnReport {
     /// Guards whose hashes were appended to the scheduling queue.
     pub(crate) returned: usize,
@@ -1166,6 +1168,7 @@ pub(crate) struct TransactionGuardReturnReport {
 /// guards for retry or quarantine; panicking or otherwise dropping them removes their queue
 /// entries through the guard's removal-on-drop behavior.
 #[derive(Debug, Error, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) enum TransactionGuardReturnError {
     /// A guard was created by a different queue instance.
     #[error("transaction guard belongs to a different queue")]
@@ -1191,6 +1194,7 @@ pub(crate) enum TransactionGuardReturnError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 enum TransactionGuardReturnPlan {
     Return {
         enqueued_at_ms: u64,
@@ -3283,6 +3287,7 @@ impl Queue {
                 tx_time_to_live: transaction_time_to_live,
                 expired_cull_interval,
                 expired_cull_batch,
+                #[cfg(test)]
                 last_expired_cull_ms: AtomicU64::new(0),
                 expiry_ring: parking_lot::Mutex::new(VecDeque::new()),
                 expiry_ring_members: DashMap::new(),
@@ -3610,19 +3615,6 @@ impl Queue {
         batch
     }
 
-    fn resolve_queue_routing_plan(
-        &self,
-        plan: RoutingPlan,
-    ) -> Result<RoutingPlan, RoutingResolveError> {
-        let lane_catalog = self.lane_catalog.read();
-        let dataspace_catalog = self.dataspace_catalog.read();
-        resolve_routing_plan_against_catalogs(
-            plan,
-            lane_catalog.as_ref(),
-            dataspace_catalog.as_ref(),
-        )
-    }
-
     fn resolve_view_routing_plan(
         plan: RoutingPlan,
         state_view: &StateView<'_>,
@@ -3669,16 +3661,6 @@ impl Queue {
         if !self.nexus_routing_matches(nexus) {
             self.reconfigure_nexus(nexus, state_view, self.lane_compliance_engine());
         }
-    }
-
-    /// Resolve a full routing plan without a [`StateView`] when the active router supports it.
-    pub(crate) fn route_plan_for_gossip_without_state(
-        &self,
-        tx: &AcceptedTransaction<'_>,
-    ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
-        let plan = self.router.read().try_route_plan_without_state(tx)?;
-        plan.map(|plan| self.resolve_queue_routing_plan(plan))
-            .transpose()
     }
 
     /// Resolve a full routing plan for an inbound gossip transaction with the current state.
@@ -4957,6 +4939,7 @@ impl Queue {
     ///
     /// # Errors
     /// Propagates [`Failure`] when queue limits reject the transaction.
+    #[cfg(test)]
     pub(crate) fn push_requeued_with_routing_plan(
         &self,
         tx: AcceptedTransaction<'static>,
@@ -5276,7 +5259,7 @@ impl Queue {
     /// Pop single transaction from the queue. Removes all transactions that fail the `tx_check`.
     ///
     /// This is part of Sumeragi's single-consumer path and must be serialized with every other pop
-    /// and [`Self::return_transaction_guards`] call for this queue.
+    /// and transaction-guard return for this queue.
     fn pop_from_queue(
         self: &Arc<Self>,
         state_view: &StateView,
@@ -5460,7 +5443,7 @@ impl Queue {
     ///
     /// Removes all transactions that are already committed or expired.
     /// This is part of Sumeragi's single-consumer path and must be serialized with every other pop
-    /// and [`Self::return_transaction_guards`] call for this queue.
+    /// and transaction-guard return for this queue.
     fn pop_from_queue_with_state(
         self: &Arc<Self>,
         state: &State,
@@ -5827,6 +5810,7 @@ impl Queue {
     }
 
     /// Remove expired transactions if the configured sweep interval has elapsed.
+    #[cfg(test)]
     pub(crate) fn cull_expired_entries_if_due(&self) -> usize {
         let interval_ms = Self::duration_to_millis(self.expired_cull_interval);
         if interval_ms == 0 {
@@ -6648,6 +6632,7 @@ impl Queue {
     /// or cannot fit the queue hash index despite its retained reservations. On error, the caller
     /// must keep the guards alive for retry or quarantine; unwinding or dropping the vector would
     /// invoke their removal-on-drop behavior.
+    #[cfg(test)]
     pub(crate) fn return_transaction_guards(
         &self,
         guards: &mut Vec<TransactionGuard>,
@@ -7003,6 +6988,7 @@ impl Queue {
     }
 
     /// Check that the user adhered to the maximum transaction per user limit and increment their transaction count.
+    #[cfg(test)]
     fn check_and_increase_per_user_tx_count(&self, account_id: &AccountId) -> Result<(), Error> {
         match self.txs_per_user.entry(account_id.clone()) {
             Entry::Vacant(vacant) => {
@@ -7616,10 +7602,6 @@ impl Queue {
         self.pressure_snapshot()
     }
 
-    pub(crate) fn estimate_teu(tx: &AcceptedTransaction<'static>) -> u64 {
-        Self::compute_teu_weight(tx)
-    }
-
     fn nexus_uses_config_router(nexus: &Nexus) -> bool {
         nexus.enabled && nexus.uses_multilane_catalogs()
     }
@@ -7842,7 +7824,7 @@ pub mod tests {
     use iroha_data_model::{
         block::SignedBlock,
         events::pipeline::PipelineEventBox,
-        isi::{offline::KagemushaTransfer, runtime_upgrade::ProposeRuntimeUpgrade},
+        isi::runtime_upgrade::ProposeRuntimeUpgrade,
         metadata::Metadata,
         name::Name,
         nexus::{
@@ -7855,7 +7837,7 @@ pub mod tests {
         },
         parameter::TransactionParameters,
         prelude::*,
-        proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
+        proof::{ProofAttachment, ProofAttachmentList, ProofBox},
         runtime::RuntimeUpgradeManifest,
         transaction::signed::{
             SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
@@ -14662,60 +14644,6 @@ pub mod tests {
                 "reserved marker {marker} must disable the legacy routing exception"
             );
         }
-    }
-
-    #[test]
-    fn state_backed_queue_routes_allow_disabled_nexus_default_universal_lane() {
-        let mut state = State::new(
-            world_with_test_domains(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let mut nexus = state.nexus_snapshot();
-        nexus.enabled = false;
-        state
-            .set_nexus(nexus)
-            .expect("apply disabled Nexus state for default route test");
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Queue::test(config_factory(), &time_source);
-        let (authority, key_pair) = gen_account_in("wonderland");
-        let asset = AssetDefinitionId::new(
-            DomainId::try_new("cash", "universal").expect("Kagemusha asset domain"),
-            "unit".parse().expect("Kagemusha asset name"),
-        );
-        let transfer = KagemushaTransfer::new(
-            asset,
-            vec![[0x11; 32]],
-            vec![[0x22; 32]],
-            ProofAttachment::new_ref(
-                "halo2/ipa".into(),
-                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
-                VerifyingKeyId::new("halo2/ipa", "offline-kagemusha-transfer"),
-            ),
-            Some([0x33; 32]),
-        );
-        let tx = accepted_tx_with(
-            authority,
-            &key_pair,
-            &time_source,
-            vec![InstructionBox::from(transfer)],
-            Metadata::default(),
-        );
-        let expected =
-            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
-
-        assert_eq!(
-            queue
-                .route_plan_with_state(&tx, &state)
-                .expect("disabled Nexus should keep default universal route admissible"),
-            expected
-        );
-        assert_eq!(
-            queue
-                .route_plan_for_gossip_with_state(&tx, &state)
-                .expect("disabled Nexus gossip route should keep default route admissible"),
-            expected
-        );
     }
 
     #[test]

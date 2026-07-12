@@ -1323,37 +1323,19 @@ async fn mcp_jsonrpc_tools_call_openapi_healthcheck_requires_token_when_enabled(
 }
 
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_openapi_healthcheck_ignores_retired_version_header() {
+async fn retired_transaction_status_alias_is_not_mounted() {
     let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
+    let app = build_router(test_utils::mk_minimal_root_cfg());
+    let response = call_app(
         &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 102,
-            "method": "tools/call",
-            "params": {
-                "name": "torii.get_health",
-                "arguments": {
-                    "headers": {
-                        "x-iroha-api-version": "2.0"
-                    }
-                }
-            }
-        }),
+        Request::builder()
+            .uri("/v1/transactions/status")
+            .body(Body::empty())
+            .expect("retired status request"),
     )
     .await;
 
-    assert_eq!(status, StatusCode::OK);
-    let structured = call
-        .get("result")
-        .and_then(|value| value.get("structuredContent"))
-        .and_then(Value::as_object)
-        .expect("structured content");
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -1500,7 +1482,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_endpoints_dispatch() {
                 "block_height": 1
             }),
         ),
-        (1041, "iroha.sumeragi.rbc", norito::json!({})),
         (1042, "iroha.sumeragi.pacemaker", norito::json!({})),
         (1043, "iroha.sumeragi.phases", norito::json!({})),
         (1044, "iroha.sumeragi.params", norito::json!({})),
@@ -1512,7 +1493,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_endpoints_dispatch() {
         (1050, "iroha.sumeragi.bls_keys", norito::json!({})),
         (1051, "iroha.sumeragi.key_lifecycle", norito::json!({})),
         (1052, "iroha.sumeragi.telemetry", norito::json!({})),
-        (1053, "iroha.sumeragi.rbc.sessions", norito::json!({})),
         (
             1054,
             "iroha.sumeragi.commit_qc.get",
@@ -1520,7 +1500,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_endpoints_dispatch() {
                 "hash": "0xabc123"
             }),
         ),
-        (1055, "iroha.sumeragi.collectors", norito::json!({})),
         (1056, "iroha.sumeragi.evidence.count", norito::json!({})),
         (1057, "iroha.sumeragi.evidence.list", norito::json!({})),
         (
@@ -1531,14 +1510,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_endpoints_dispatch() {
             }),
         ),
         (1058, "iroha.sumeragi.new_view", norito::json!({})),
-        (
-            1059,
-            "iroha.sumeragi.rbc.delivered",
-            norito::json!({
-                "height": 1,
-                "view": 0
-            }),
-        ),
         (
             1060,
             "iroha.sumeragi.vrf.penalties",
@@ -1555,7 +1526,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_endpoints_dispatch() {
         ),
         (1062, "iroha.sumeragi.vrf.commit", norito::json!({})),
         (1063, "iroha.sumeragi.vrf.reveal", norito::json!({})),
-        (1064, "iroha.sumeragi.rbc.sample", norito::json!({})),
     ] {
         let (status, call) = post_mcp(
             &app,
@@ -2571,10 +2541,6 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected agent-friendly sumeragi validator-set detail MCP tool"
     );
     assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.rbc"),
-        "expected agent-friendly sumeragi RBC MCP tool"
-    );
-    assert!(
         names.iter().any(|name| name == "iroha.sumeragi.pacemaker"),
         "expected agent-friendly sumeragi pacemaker MCP tool"
     );
@@ -2627,18 +2593,8 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
     assert!(
         names
             .iter()
-            .any(|name| name == "iroha.sumeragi.rbc.sessions"),
-        "expected agent-friendly sumeragi RBC sessions MCP tool"
-    );
-    assert!(
-        names
-            .iter()
             .any(|name| name == "iroha.sumeragi.commit_qc.get"),
         "expected agent-friendly sumeragi commit-qc-by-hash MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.collectors"),
-        "expected agent-friendly sumeragi collectors MCP tool"
     );
     assert!(
         names
@@ -2665,12 +2621,6 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
     assert!(
         names
             .iter()
-            .any(|name| name == "iroha.sumeragi.rbc.delivered"),
-        "expected agent-friendly sumeragi RBC delivered MCP tool"
-    );
-    assert!(
-        names
-            .iter()
             .any(|name| name == "iroha.sumeragi.vrf.penalties"),
         "expected agent-friendly sumeragi VRF penalties MCP tool"
     );
@@ -2685,10 +2635,6 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
     assert!(
         names.iter().any(|name| name == "iroha.sumeragi.vrf.reveal"),
         "expected agent-friendly sumeragi VRF reveal MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.rbc.sample"),
-        "expected agent-friendly sumeragi RBC sample MCP tool"
     );
     assert!(
         !names.iter().any(|name| name == "iroha.ledger.headers"),
@@ -3115,18 +3061,6 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected agent-friendly rwa query MCP tool"
     );
     assert!(
-        !names
-            .iter()
-            .any(|name| name.starts_with("iroha.offline.transfers.")),
-        "legacy offline transfer MCP compatibility tools should not be advertised"
-    );
-    assert!(
-        !names
-            .iter()
-            .any(|name| name.starts_with("iroha.offline.revocations.")),
-        "legacy offline revocation MCP compatibility tools should not be advertised"
-    );
-    assert!(
         names
             .iter()
             .any(|name| name == "iroha.iso20022.pacs008.submit"),
@@ -3164,6 +3098,18 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         names.iter().any(|name| name == "iroha.transactions.status"),
         "expected agent-friendly transaction status MCP tool"
     );
+    for retired in [
+        "iroha.sumeragi.rbc",
+        "iroha.sumeragi.rbc.sessions",
+        "iroha.sumeragi.rbc.delivered",
+        "iroha.sumeragi.rbc.sample",
+        "iroha.sumeragi.collectors",
+    ] {
+        assert!(
+            names.iter().all(|name| name != retired),
+            "retired Sumeragi MCP tool {retired} must not be advertised"
+        );
+    }
     assert!(
         names.iter().any(|name| name == "iroha.transactions.list"),
         "expected agent-friendly transaction list MCP tool"

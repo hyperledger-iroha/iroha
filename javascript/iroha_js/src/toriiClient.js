@@ -69,21 +69,6 @@ import {
   parseSccpBridgeSubmitResponseJson,
 } from "./sccp.js";
 import { snapshotValidationFeePolicyVerificationContext } from "./validationFeePolicy.js";
-import {
-  OFFLINE_OPERATIONS_PATH,
-  OFFLINE_READINESS_PATH,
-  OFFLINE_REDEEM_PATH,
-  OFFLINE_TOP_UP_PATH,
-  normalizeOfflineOperationReference,
-  normalizeOfflineOperationStatus,
-  normalizeOfflineReadinessResponse,
-  normalizeOfflineRedeemRequest,
-  normalizeOfflineTopUpRequest,
-  parseOfflineJson,
-  requireOfflineAssetDefinitionId,
-  requireOfflineJsonContentType,
-  requireOfflineOperationId,
-} from "./offlineApi.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "./ivmArtifact.js";
 
 const DEFAULT_PAGE_SIZE = 100;
@@ -304,10 +289,6 @@ const TX_STATUS_POLL_OPTION_KEYS = new Set([
   "successStatuses",
   "failureStatuses",
   "onStatus",
-]);
-const OFFLINE_SETTLEMENT_AND_WAIT_OPTION_KEYS = new Set([
-  "signal",
-  ...TX_STATUS_POLL_OPTION_KEYS,
 ]);
 const GET_METRICS_OPTION_KEYS = new Set(["asText", "signal"]);
 const CONNECT_APP_LIST_OPTION_KEYS = new Set(["limit", "cursor", "signal"]);
@@ -1063,6 +1044,20 @@ export class TransactionTimeoutError extends Error {
     this.hashHex = hashHex;
     this.attempts = attempts;
     this.payload = payload;
+  }
+}
+
+export class TransactionBatchAdmissionAmbiguousError extends Error {
+  constructor(message, expectedCount, acceptedCount = null, cause) {
+    super(message);
+    this.name = "TransactionBatchAdmissionAmbiguousError";
+    this.expectedCount = expectedCount;
+    this.acceptedCount = acceptedCount;
+    this.ambiguous = true;
+    this.retryable = false;
+    if (cause !== undefined) {
+      this.cause = cause;
+    }
   }
 }
 
@@ -4842,28 +4837,61 @@ export class ToriiClient {
     throwIfAborted(signal);
     await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
     throwIfAborted(signal);
-    const response = await this._request(
-      "POST",
-      "/v1/pipeline/transactions/batch",
-      {
-        headers: {
-          "Content-Type": "application/x-norito",
-          Accept: APPLICATION_JSON,
-        },
-        body: encodeTransactionPayloadBatch(versionedPayloads, this._nativeBinding),
-        retryProfile: "pipeline",
-        signal,
-      },
+    const batchPayload = encodeTransactionPayloadBatch(
+      versionedPayloads,
+      this._nativeBinding,
     );
+    let response;
+    try {
+      response = await this._request(
+        "POST",
+        "/v1/pipeline/transactions/batch",
+        {
+          headers: {
+            "Content-Type": "application/x-norito",
+            Accept: APPLICATION_JSON,
+          },
+          body: batchPayload,
+          retryProfile: "pipeline",
+          disableRetries: true,
+          signal,
+        },
+      );
+    } catch (cause) {
+      throw new TransactionBatchAdmissionAmbiguousError(
+        `Torii transaction batch admission response was not received for ${versionedPayloads.length} prepared transaction(s); do not resubmit until every prepared transaction hash has been reconciled.`,
+        versionedPayloads.length,
+        null,
+        cause,
+      );
+    }
     await this._expectStatus(response, [202], { signal });
     const acceptedHeader = this._getHeader(response, "x-iroha-transactions-accepted");
-    const acceptedCount =
-      acceptedHeader == null || String(acceptedHeader).trim() === ""
-        ? versionedPayloads.length
-        : ToriiClient._normalizeUnsignedInteger(
-            acceptedHeader,
-            "submitTransactionBatch.acceptedCount",
-          );
+    const acceptedText = acceptedHeader == null ? "" : String(acceptedHeader);
+    let acceptedCount = null;
+    try {
+      if (!/^(?:0|[1-9][0-9]*)$/u.test(acceptedText)) {
+        throw new TypeError(
+          "submitTransactionBatch.acceptedCount must be a canonical non-negative decimal integer",
+        );
+      }
+      acceptedCount = ToriiClient._normalizeUnsignedInteger(
+        acceptedText,
+        "submitTransactionBatch.acceptedCount",
+        { allowZero: true, max: versionedPayloads.length },
+      );
+    } catch (cause) {
+      cancelResponseBodyBestEffort(
+        response,
+        "discarding transaction batch response with ambiguous admission header",
+      );
+      throw new TransactionBatchAdmissionAmbiguousError(
+        `Torii transaction batch admission returned a missing, malformed, or out-of-range x-iroha-transactions-accepted header (submitTransactionBatch.acceptedCount) for ${versionedPayloads.length} prepared transaction(s); do not resubmit until every prepared transaction hash has been reconciled.`,
+        versionedPayloads.length,
+        null,
+        cause,
+      );
+    }
     const route = this._extractSubmissionRoute(response);
     cancelResponseBodyBestEffort(
       response,
@@ -8784,18 +8812,18 @@ export class ToriiClient {
   }
 
   /**
-   * Query multisig proposals for a selector, optionally filtered by lifecycle status (`POST /v1/multisig/proposals/query`).
+   * List multisig proposals for a selector, optionally filtered by lifecycle status (`POST /v1/multisig/proposals/list`).
    * @param {object} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
    */
-  async queryMultisigProposals(request = {}, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "queryMultisigProposals");
-    const payload = normalizeMultisigProposalsQueryRequest(
+  async listMultisigProposals(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "listMultisigProposals");
+    const payload = normalizeMultisigProposalsListRequest(
       request,
-      "queryMultisigProposals request",
+      "listMultisigProposals request",
     );
-    const response = await this._request("POST", "/v1/multisig/proposals/query", {
+    const response = await this._request("POST", "/v1/multisig/proposals/list", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
@@ -8803,21 +8831,21 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("multisig proposals query endpoint returned no payload");
+      throw new Error("multisig proposals list endpoint returned no payload");
     }
-    return normalizeMultisigProposalsQueryResponse(body);
+    return normalizeMultisigProposalsListResponse(body);
   }
 
   /**
-   * Look up one multisig proposal by proposal id or instructions hash (`POST /v1/multisig/proposals/lookup`).
+   * Fetch one multisig proposal by proposal id or instructions hash (`POST /v1/multisig/proposals/get`).
    * @param {object} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
    */
-  async lookupMultisigProposal(request = {}, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "lookupMultisigProposal");
-    const payload = normalizeMultisigProposalLookupRequest(request);
-    const response = await this._request("POST", "/v1/multisig/proposals/lookup", {
+  async getMultisigProposal(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getMultisigProposal");
+    const payload = normalizeMultisigProposalGetRequest(request);
+    const response = await this._request("POST", "/v1/multisig/proposals/get", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
@@ -8825,9 +8853,9 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("multisig proposal lookup endpoint returned no payload");
+      throw new Error("multisig proposal get endpoint returned no payload");
     }
-    return normalizeMultisigProposalLookupResponse(body);
+    return normalizeMultisigProposalGetResponse(body);
   }
 
   /**
@@ -9368,87 +9396,6 @@ export class ToriiClient {
       throw new Error("subscription usage endpoint returned no payload");
     }
     return normalizeSubscriptionActionResponse(body, "recordSubscriptionUsage response");
-  }
-
-  /** Fetch the readiness snapshot for one asset definition. */
-  async getOfflineReadiness(assetDefinitionId, options = {}) {
-    const asset = requireOfflineAssetDefinitionId(assetDefinitionId);
-    const { signal } = normalizeSignalOnlyOption(options, "getOfflineReadiness");
-    const response = await this._request("GET", OFFLINE_READINESS_PATH, {
-      params: { asset_definition_id: asset },
-      headers: JSON_ACCEPT_HEADERS,
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    requireOfflineJsonContentType(
-      this._getHeader(response, "content-type"),
-      "offline readiness response",
-    );
-    const body = await this._offlineJson(response, "offline readiness response");
-    if (!body) {
-      throw new Error("offline readiness response missing JSON body");
-    }
-    return normalizeOfflineReadinessResponse(body, asset);
-  }
-
-  /** Submit one directly structured JSON top-up command. */
-  async submitOfflineTopUp(request, options = {}) {
-    const command = normalizeOfflineTopUpRequest(request);
-    return this._submitOfflineCommand(OFFLINE_TOP_UP_PATH, "top_up", command, options);
-  }
-
-  /** Submit one directly structured JSON redemption command. */
-  async submitOfflineRedeem(request, options = {}) {
-    const command = normalizeOfflineRedeemRequest(request);
-    return this._submitOfflineCommand(OFFLINE_REDEEM_PATH, "redeem", command, options);
-  }
-
-  /** Fetch the typed state of one offline operation. */
-  async getOfflineOperationStatus(operationId, options = {}) {
-    const canonicalId = requireOfflineOperationId(operationId);
-    const { signal } = normalizeSignalOnlyOption(options, "getOfflineOperationStatus");
-    const response = await this._request(
-      "GET",
-      `${OFFLINE_OPERATIONS_PATH}/${canonicalId}`,
-      { headers: { Accept: "application/json" }, signal },
-    );
-    await this._expectStatus(response, [200]);
-    requireOfflineJsonContentType(
-      this._getHeader(response, "content-type"),
-      "offline operation status response",
-    );
-    const body = await this._offlineJson(response, "offline operation status response");
-    if (!body) {
-      throw new Error("offline operation status response missing JSON body");
-    }
-    return normalizeOfflineOperationStatus(body, canonicalId);
-  }
-
-  async _submitOfflineCommand(path, expectedKind, command, options) {
-    const { signal } = normalizeSignalOnlyOption(options, `submitOffline${expectedKind === "top_up" ? "TopUp" : "Redeem"}`);
-    const response = await this._request("POST", path, {
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "Idempotency-Key": command.operationId,
-      },
-      body: command.body,
-      signal,
-    });
-    await this._expectStatus(response, [202]);
-    requireOfflineJsonContentType(
-      this._getHeader(response, "content-type"),
-      "offline operation reference response",
-    );
-    const body = await this._offlineJson(response, "offline operation reference response");
-    if (!body) {
-      throw new Error("offline operation reference response missing JSON body");
-    }
-    return normalizeOfflineOperationReference(body, {
-      expectedOperationId: command.operationId,
-      expectedKind,
-      location: this._getHeader(response, "location"),
-    });
   }
 
   /**
@@ -10021,7 +9968,9 @@ export class ToriiClient {
       retryPolicy && typeof retryPolicy.maxBackoffMs === "number"
         ? retryPolicy.maxBackoffMs
         : this._config.maxBackoffMs;
-    const maxRetries = Math.max(0, Number(policyMaxRetries) || 0);
+    const maxRetries = options.disableRetries === true
+      ? 0
+      : Math.max(0, Number(policyMaxRetries) || 0);
     let attempt = 0;
     let backoffMs = Math.max(0, policyBackoffInitial || 0);
     let lastError;
@@ -10952,21 +10901,6 @@ export class ToriiClient {
     } catch {
       return null;
     }
-  }
-
-  async _offlineJson(response, context) {
-    const contentType = this._getHeader(response, "content-type");
-    if (!contentType || !contentType.toLowerCase().includes("application/json")) {
-      return null;
-    }
-    if (typeof response.text === "function") {
-      const text = await response.text();
-      return text ? parseOfflineJson(text, context) : null;
-    }
-    if (typeof response.json === "function") {
-      return response.json();
-    }
-    return null;
   }
 
   async _maybeBoundedJson(response, maxBytes, context, { signal } = {}) {
@@ -20547,6 +20481,45 @@ function requireExactNonEmptyString(value, name) {
   return value;
 }
 
+function requireExactBoolean(value, name) {
+  if (typeof value !== "boolean") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be a boolean`,
+      name,
+    );
+  }
+  return value;
+}
+
+function requireExactJsonUnsignedInteger(value, name, options = {}) {
+  const minimum = options.allowZero === false ? 1 : 0;
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < minimum
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a ${minimum === 0 ? "non-negative" : "positive"} JSON safe integer`,
+      name,
+    );
+  }
+  return value;
+}
+
+function requireExactLowerHex32String(value, name) {
+  const literal = requireExactNonEmptyString(value, name);
+  if (!/^[0-9a-f]{64}$/.test(literal)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must be an exact lowercase 32-byte hex string`,
+      name,
+    );
+  }
+  return literal;
+}
+
 function requireHexString(value, name) {
   if (typeof value !== "string") {
     throw createValidationError(
@@ -23647,6 +23620,21 @@ function normalizeContractCallRequest(input) {
   if (record.payload !== undefined) {
     normalized.payload = cloneJsonValue(record.payload, "contractCall.payload");
   }
+  const creationTimeMs = record.creation_time_ms ?? record.creationTimeMs;
+  if (creationTimeMs !== undefined && creationTimeMs !== null) {
+    normalized.creation_time_ms = ToriiClient._normalizeUnsignedInteger(
+      creationTimeMs,
+      "contractCall.creationTimeMs",
+    );
+  }
+  const transactionTtlMs =
+    record.transaction_ttl_ms ?? record.transactionTtlMs;
+  if (transactionTtlMs !== undefined && transactionTtlMs !== null) {
+    normalized.transaction_ttl_ms = ToriiClient._normalizeUnsignedInteger(
+      transactionTtlMs,
+      "contractCall.transactionTtlMs",
+    );
+  }
   const gasAsset = record.gas_asset_id ?? record.gasAssetId;
   if (gasAsset !== undefined && gasAsset !== null) {
     normalized.gas_asset_id = ToriiClient._normalizeAssetId(
@@ -23671,15 +23659,44 @@ function normalizeContractCallRequest(input) {
 
 function normalizeContractOperationReceipt(payload, context) {
   const receipt = ensureRecord(payload, context);
+  assertSupportedOptionKeys(
+    receipt,
+    new Set([
+      "operation_kind",
+      "status",
+      "transport",
+      "dataspace",
+      "contract_alias",
+      "contract_address",
+      "code_hash_hex",
+      "abi_hash_hex",
+      "tx_hash_hex",
+      "entrypoint",
+      "entrypoint_hash_hex",
+      "gas_limit",
+      "gas_used",
+      "gas_asset_id",
+      "fee_sponsor",
+      "payload_digest_hex",
+    ]),
+    context,
+  );
   const optionalString = (value, field) =>
-    value === undefined || value === null ? null : requireNonEmptyString(value, field);
+    value === undefined || value === null
+      ? null
+      : requireExactNonEmptyString(value, field);
   const optionalHash = (value, field) =>
-    value === undefined || value === null ? null : normalizeHex32String(value, field);
+    value === undefined || value === null
+      ? null
+      : requireExactLowerHex32String(value, field);
   return {
-    operation_kind: requireNonEmptyString(receipt.operation_kind, `${context}.operation_kind`),
-    status: requireNonEmptyString(receipt.status, `${context}.status`),
-    transport: requireNonEmptyString(receipt.transport, `${context}.transport`),
-    dataspace: requireNonEmptyString(receipt.dataspace, `${context}.dataspace`),
+    operation_kind: requireExactNonEmptyString(
+      receipt.operation_kind,
+      `${context}.operation_kind`,
+    ),
+    status: requireExactNonEmptyString(receipt.status, `${context}.status`),
+    transport: requireExactNonEmptyString(receipt.transport, `${context}.transport`),
+    dataspace: requireExactNonEmptyString(receipt.dataspace, `${context}.dataspace`),
     contract_alias: optionalString(receipt.contract_alias, `${context}.contract_alias`),
     contract_address: optionalString(receipt.contract_address, `${context}.contract_address`),
     code_hash_hex: optionalHash(receipt.code_hash_hex, `${context}.code_hash_hex`),
@@ -23693,16 +23710,18 @@ function normalizeContractOperationReceipt(payload, context) {
     gas_limit:
       receipt.gas_limit === undefined || receipt.gas_limit === null
         ? null
-        : ToriiClient._normalizeUnsignedInteger(receipt.gas_limit, `${context}.gas_limit`),
+        : requireExactJsonUnsignedInteger(receipt.gas_limit, `${context}.gas_limit`, {
+            allowZero: false,
+          }),
     gas_used:
       receipt.gas_used === undefined || receipt.gas_used === null
         ? null
-        : ToriiClient._normalizeUnsignedInteger(receipt.gas_used, `${context}.gas_used`, {
+        : requireExactJsonUnsignedInteger(receipt.gas_used, `${context}.gas_used`, {
             allowZero: true,
           }),
     gas_asset_id: optionalString(receipt.gas_asset_id, `${context}.gas_asset_id`),
     fee_sponsor: optionalString(receipt.fee_sponsor, `${context}.fee_sponsor`),
-    payload_digest_hex: normalizeHex32String(
+    payload_digest_hex: requireExactLowerHex32String(
       receipt.payload_digest_hex,
       `${context}.payload_digest_hex`,
     ),
@@ -23711,22 +23730,47 @@ function normalizeContractOperationReceipt(payload, context) {
 
 function normalizeContractCallResponse(payload) {
   const record = ensureRecord(payload, "contractCall response");
+  assertSupportedOptionKeys(
+    record,
+    new Set([
+      "ok",
+      "submitted",
+      "dataspace",
+      "contract_address",
+      "code_hash_hex",
+      "abi_hash_hex",
+      "creation_time_ms",
+      "transaction_ttl_ms",
+      "tx_hash_hex",
+      "pipeline_status",
+      "entrypoint_hash_hex",
+      "transaction_scaffold_b64",
+      "signed_transaction_b64",
+      "signing_message_b64",
+      "entrypoint",
+      "operation_receipt",
+    ]),
+    "contractCall response",
+  );
   const normalized = {
-    ok: Boolean(record.ok),
-    submitted: Boolean(record.submitted),
-    dataspace: requireNonEmptyString(
+    ok: requireExactBoolean(record.ok, "contractCall response.ok"),
+    submitted: requireExactBoolean(
+      record.submitted,
+      "contractCall response.submitted",
+    ),
+    dataspace: requireExactNonEmptyString(
       record.dataspace,
       "contractCall response.dataspace",
     ),
-    code_hash_hex: normalizeHex32String(
+    code_hash_hex: requireExactLowerHex32String(
       record.code_hash_hex,
       "contractCall response.code_hash_hex",
     ),
-    abi_hash_hex: normalizeHex32String(
+    abi_hash_hex: requireExactLowerHex32String(
       record.abi_hash_hex,
       "contractCall response.abi_hash_hex",
     ),
-    creation_time_ms: ToriiClient._normalizeUnsignedInteger(
+    creation_time_ms: requireExactJsonUnsignedInteger(
       record.creation_time_ms,
       "contractCall response.creation_time_ms",
       { allowZero: true },
@@ -23734,19 +23778,20 @@ function normalizeContractCallResponse(payload) {
     transaction_ttl_ms:
       record.transaction_ttl_ms === undefined || record.transaction_ttl_ms === null
         ? null
-        : ToriiClient._normalizeUnsignedInteger(
+        : requireExactJsonUnsignedInteger(
             record.transaction_ttl_ms,
             "contractCall response.transaction_ttl_ms",
+            { allowZero: false },
           ),
   };
   if (record.contract_address !== undefined && record.contract_address !== null) {
-    normalized.contract_address = requireNonEmptyString(
+    normalized.contract_address = requireExactNonEmptyString(
       record.contract_address,
       "contractCall response.contract_address",
     );
   }
   if (record.tx_hash_hex !== undefined && record.tx_hash_hex !== null) {
-    normalized.tx_hash_hex = normalizeHex32String(
+    normalized.tx_hash_hex = requireExactLowerHex32String(
       record.tx_hash_hex,
       "contractCall response.tx_hash_hex",
     );
@@ -23756,35 +23801,35 @@ function normalizeContractCallResponse(payload) {
   normalized.entrypoint_hash_hex =
     record.entrypoint_hash_hex === undefined || record.entrypoint_hash_hex === null
       ? null
-      : normalizeHex32String(
+      : requireExactLowerHex32String(
           record.entrypoint_hash_hex,
           "contractCall response.entrypoint_hash_hex",
         );
   normalized.entrypoint =
     record.entrypoint === undefined || record.entrypoint === null
       ? null
-      : requireNonEmptyString(
+      : requireExactNonEmptyString(
           record.entrypoint,
           "contractCall response.entrypoint",
         );
   normalized.transaction_scaffold_b64 =
     record.transaction_scaffold_b64 === undefined || record.transaction_scaffold_b64 === null
       ? null
-      : normalizeRequiredBase64Payload(
+      : normalizeRequiredExactBase64Payload(
           record.transaction_scaffold_b64,
           "contractCall response.transaction_scaffold_b64",
         );
   normalized.signed_transaction_b64 =
     record.signed_transaction_b64 === undefined || record.signed_transaction_b64 === null
       ? null
-      : normalizeRequiredBase64Payload(
+      : normalizeRequiredExactBase64Payload(
           record.signed_transaction_b64,
           "contractCall response.signed_transaction_b64",
         );
   normalized.signing_message_b64 =
     record.signing_message_b64 === undefined || record.signing_message_b64 === null
       ? null
-      : normalizeRequiredBase64Payload(
+      : normalizeRequiredExactBase64Payload(
           record.signing_message_b64,
           "contractCall response.signing_message_b64",
         );
@@ -24428,7 +24473,7 @@ function normalizeMultisigProposalStatus(value, context) {
   return status;
 }
 
-function normalizeMultisigProposalsQueryRequest(input, context) {
+function normalizeMultisigProposalsListRequest(input, context) {
   const record = ensureRecord(input, context);
   const payload = normalizeMultisigAccountSelector(record, context);
   if (record.status !== undefined) {
@@ -24852,9 +24897,9 @@ function normalizeMultisigProposalEntry(payload, context) {
   };
 }
 
-function normalizeMultisigProposalsQueryResponse(
+function normalizeMultisigProposalsListResponse(
   payload,
-  context = "multisig proposals query response",
+  context = "multisig proposals list response",
 ) {
   const record = ensureRecord(payload, context);
   const proposalsValue = record.proposals;
@@ -24876,14 +24921,14 @@ function normalizeMultisigProposalsQueryResponse(
   };
 }
 
-function normalizeMultisigProposalLookupRequest(input) {
-  const record = ensureRecord(input, "lookupMultisigProposal request");
-  const payload = normalizeMultisigAccountSelector(record, "lookupMultisigProposal request");
+function normalizeMultisigProposalGetRequest(input) {
+  const record = ensureRecord(input, "getMultisigProposal request");
+  const payload = normalizeMultisigAccountSelector(record, "getMultisigProposal request");
   const proposalId = pickOverride(record, "proposal_id", "proposalId");
   if (proposalId !== undefined && proposalId !== null) {
     payload.proposal_id = requireNonEmptyString(
       proposalId,
-      "lookupMultisigProposal request.proposal_id",
+      "getMultisigProposal request.proposal_id",
     );
   }
   const instructionsHash = pickOverride(
@@ -24894,7 +24939,7 @@ function normalizeMultisigProposalLookupRequest(input) {
   if (instructionsHash !== undefined && instructionsHash !== null) {
     payload.instructions_hash = normalizeHex32String(
       instructionsHash,
-      "lookupMultisigProposal request.instructions_hash",
+      "getMultisigProposal request.instructions_hash",
     );
   }
   const hasProposalId = payload.proposal_id !== undefined;
@@ -24902,16 +24947,16 @@ function normalizeMultisigProposalLookupRequest(input) {
   if (hasProposalId === hasInstructionsHash) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
-      "lookupMultisigProposal request requires exactly one of proposal_id or instructions_hash",
-      "lookupMultisigProposal.request",
+      "getMultisigProposal request requires exactly one of proposal_id or instructions_hash",
+      "getMultisigProposal.request",
     );
   }
   return payload;
 }
 
-function normalizeMultisigProposalLookupResponse(
+function normalizeMultisigProposalGetResponse(
   payload,
-  context = "multisig proposal lookup response",
+  context = "multisig proposal get response",
 ) {
   const record = ensureRecord(payload, context);
   return {
@@ -25184,20 +25229,28 @@ function canonicalManifestEntrypointKind(value, name) {
 
 function normalizeGovernanceContractResponse(payload) {
   const record = ensureRecord(payload ?? {}, "governance contract response");
+  assertSupportedOptionKeys(
+    record,
+    new Set(["found", "contract_address", "dataspace", "code_hash_hex"]),
+    "governance contract response",
+  );
   return {
-    found: Boolean(record.found),
-    contract_address: requireNonEmptyString(
+    found: requireExactBoolean(record.found, "governanceContract.found"),
+    contract_address: requireExactNonEmptyString(
       record.contract_address,
       "governanceContract.contract_address",
     ),
     dataspace:
       record.dataspace == null
         ? null
-        : requireNonEmptyString(record.dataspace, "governanceContract.dataspace"),
+        : requireExactNonEmptyString(
+            record.dataspace,
+            "governanceContract.dataspace",
+          ),
     code_hash_hex:
       record.code_hash_hex == null
         ? null
-        : normalizeHex32String(
+        : requireExactLowerHex32String(
             record.code_hash_hex,
             "governanceContract.code_hash_hex",
           ),
@@ -25209,10 +25262,22 @@ function normalizeAliasResolutionResponse(
   context = "alias resolution response",
 ) {
   const record = ensureRecord(payload ?? {}, context);
+  assertSupportedOptionKeys(
+    record,
+    new Set(["alias", "account_id", "index", "source"]),
+    context,
+  );
   const alias = requireExactNonEmptyString(record.alias, `${context}.alias`);
   const normalizedAlias = looksLikeIban(alias)
     ? normalizeIban(alias, `${context}.alias`)
     : alias;
+  if (normalizedAlias !== alias) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.alias must be canonical`,
+      `${context}.alias`,
+    );
+  }
   const rawAccountId = requireExactNonEmptyString(
     record.account_id,
     `${context}.account_id`,
@@ -25221,14 +25286,23 @@ function normalizeAliasResolutionResponse(
     rawAccountId,
     `${context}.account_id`,
   );
+  if (accountId !== rawAccountId) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_ACCOUNT_ID,
+      `${context}.account_id must be canonical`,
+      `${context}.account_id`,
+    );
+  }
   const result = {
     alias: normalizedAlias,
     account_id: accountId,
   };
   if (record.index !== undefined && record.index !== null) {
-    result.index = ToriiClient._normalizeUnsignedInteger(record.index, `${context}.index`, {
-      allowZero: true,
-    });
+    result.index = requireExactJsonUnsignedInteger(
+      record.index,
+      `${context}.index`,
+      { allowZero: true },
+    );
   }
   const sourceValue = record.source;
   if (sourceValue !== undefined && sourceValue !== null) {
@@ -26402,6 +26476,19 @@ function normalizeIdentifierResolutionPayload(
   context = "identifier resolution payload",
 ) {
   const record = ensureRecord(payload ?? {}, context);
+  assertSupportedOptionKeys(
+    record,
+    new Set([
+      "policy_id",
+      "execution",
+      "opening",
+      "opaque_id",
+      "receipt_hash",
+      "uaid",
+      "account_id",
+    ]),
+    context,
+  );
   return {
     policy_id: requireIdentifierPolicyId(record.policy_id, `${context}.policy_id`),
     execution: normalizeIdentifierResolutionExecutionPayload(
@@ -26417,13 +26504,19 @@ function normalizeIdentifierResolutionPayload(
 }
 
 function requireExactReceiptHash(value, name) {
-  return identifierHashBytes(value, name).toString("hex");
+  return requireExactLowerHex32String(value, name);
 }
 
 function requireExactReceiptPrefixedHash(value, prefix, name) {
   const literal = requireExactNonEmptyString(value, name);
-  const body = literal.toLowerCase().startsWith(prefix) ? literal.slice(prefix.length) : literal;
-  return `${prefix}${identifierHashBytes(body, name).toString("hex")}`;
+  if (!literal.startsWith(prefix)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must start with ${prefix}`,
+      name,
+    );
+  }
+  return `${prefix}${requireExactLowerHex32String(literal.slice(prefix.length), name)}`;
 }
 
 function requireExactReceiptUaid(value, name) {
@@ -26479,21 +26572,29 @@ function requireIdentifierPolicyId(value, name) {
 }
 
 function requireExactReceiptUnsignedInteger(value, name) {
-  if (typeof value === "string") {
-    const literal = requireExactNonEmptyString(value, name);
-    if (!/^[0-9]+$/.test(literal)) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_NUMERIC,
-        `${name} must be a non-negative integer`,
-        name,
-      );
-    }
-  }
-  return ToriiClient._normalizeUnsignedInteger(value, name, { allowZero: true });
+  return requireExactJsonUnsignedInteger(value, name, { allowZero: true });
 }
 
 function normalizeIdentifierResolutionExecutionPayload(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
+  assertSupportedOptionKeys(
+    record,
+    new Set([
+      "program_id",
+      "program_digest",
+      "backend",
+      "verification_mode",
+      "input_ciphertext_hash",
+      "output_ciphertext_hash",
+      "parameter_digest",
+      "evaluation_key_digest",
+      "output_hash",
+      "associated_data_hash",
+      "executed_at_ms",
+      "expires_at_ms",
+    ]),
+    context,
+  );
   const backend = requireExactNonEmptyString(record.backend, `${context}.backend`);
   if (backend !== backend.toLowerCase()) {
     throw createValidationError(
@@ -26556,6 +26657,29 @@ function normalizeIdentifierResolutionExecutionPayload(payload, context) {
 function normalizeRamLfeOutputOpening(opening, context) {
   const record = ensureRecord(opening ?? {}, context);
   const payload = ensureRecord(record.payload ?? {}, `${context}.payload`);
+  assertSupportedOptionKeys(record, new Set(["payload", "signature"]), context);
+  assertSupportedOptionKeys(
+    payload,
+    new Set([
+      "program_id",
+      "input_ciphertext_hash",
+      "output_ciphertext_hash",
+      "parameter_digest",
+      "evaluation_key_digest",
+      "opened_output_hash",
+      "opened_at_ms",
+      "expires_at_ms",
+    ]),
+    `${context}.payload`,
+  );
+  const signature = requireExactHexString(record.signature, `${context}.signature`);
+  if (signature !== signature.toLowerCase()) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context}.signature must be exact lowercase hex`,
+      `${context}.signature`,
+    );
+  }
   return {
     payload: {
       program_id: requireExactNonEmptyString(payload.program_id, `${context}.payload.program_id`),
@@ -26591,7 +26715,7 @@ function normalizeRamLfeOutputOpening(opening, context) {
             `${context}.payload.expires_at_ms`,
           ),
     },
-    signature: requireExactHexString(record.signature, `${context}.signature`).toLowerCase(),
+    signature,
   };
 }
 
@@ -26599,30 +26723,33 @@ function normalizeIdentifierReceiptAttestation(attestation, context) {
   const record = ensureRecord(attestation ?? {}, context);
   const kind = requireExactNonEmptyString(record.kind, `${context}.kind`);
   if (kind === "signed") {
-    if (record.proof_backend !== undefined || record.proof_b64 !== undefined) {
+    assertSupportedOptionKeys(record, new Set(["kind", "signature"]), context);
+    const signature = requireExactHexString(record.signature, `${context}.signature`);
+    if (signature !== signature.toUpperCase()) {
       throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context} signed attestation must not include proof fields`,
-        context,
+        ValidationErrorCode.INVALID_HEX,
+        `${context}.signature must be exact uppercase hex`,
+        `${context}.signature`,
       );
     }
     return {
       kind,
-      signature: requireExactHexString(record.signature, `${context}.signature`).toUpperCase(),
+      signature,
     };
   }
   if (kind === "proof") {
-    if (record.signature !== undefined && record.signature !== null) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context} proof attestation must not include signature`,
-        context,
-      );
-    }
+    assertSupportedOptionKeys(
+      record,
+      new Set(["kind", "proof_backend", "proof_b64"]),
+      context,
+    );
     return {
       kind,
       proof_backend: requireExactNonEmptyString(record.proof_backend, `${context}.proof_backend`),
-      proof_b64: requireExactNonEmptyString(record.proof_b64, `${context}.proof_b64`),
+      proof_b64: normalizeRequiredExactBase64Payload(
+        record.proof_b64,
+        `${context}.proof_b64`,
+      ),
     };
   }
   throw createValidationError(
@@ -26637,6 +26764,7 @@ function normalizeIdentifierResolveResponse(
   context = "identifier resolve response",
 ) {
   const record = ensureRecord(payload ?? {}, context);
+  assertSupportedOptionKeys(record, new Set(["payload", "attestation"]), context);
   return {
     payload: normalizeIdentifierResolutionPayload(record.payload, `${context}.payload`),
     attestation: normalizeIdentifierReceiptAttestation(
@@ -26678,6 +26806,24 @@ function normalizeRamLfeExecuteResponse(
   context = "ram-lfe execute response",
 ) {
   const record = ensureRecord(payload ?? {}, context);
+  assertSupportedOptionKeys(
+    record,
+    new Set([
+      "program_id",
+      "opaque_hash",
+      "receipt_hash",
+      "output_ciphertext",
+      "output_hash",
+      "associated_data_hash",
+      "executed_at_ms",
+      "expires_at_ms",
+      "backend",
+      "verification_mode",
+      "receipt",
+      "output_opening",
+    ]),
+    context,
+  );
   const backend = requireExactNonEmptyString(record.backend, `${context}.backend`);
   if (backend !== backend.toLowerCase()) {
     throw createValidationError(
@@ -26697,7 +26843,13 @@ function normalizeRamLfeExecuteResponse(
       `${context}.verification_mode`,
     );
   }
-  return {
+  const receiptRecord = ensureRecord(record.receipt ?? {}, `${context}.receipt`);
+  assertSupportedOptionKeys(
+    receiptRecord,
+    new Set(["payload", "attestation"]),
+    `${context}.receipt`,
+  );
+  const normalized = {
     program_id: requireExactNonEmptyString(record.program_id, `${context}.program_id`),
     opaque_hash: requireExactReceiptHash(record.opaque_hash, `${context}.opaque_hash`),
     receipt_hash: requireExactReceiptHash(record.receipt_hash, `${context}.receipt_hash`),
@@ -26710,7 +26862,7 @@ function normalizeRamLfeExecuteResponse(
       record.associated_data_hash,
       `${context}.associated_data_hash`,
     ),
-    executed_at_ms: ToriiClient._normalizeUnsignedInteger(
+    executed_at_ms: requireExactJsonUnsignedInteger(
       record.executed_at_ms,
       `${context}.executed_at_ms`,
       { allowZero: true },
@@ -26718,19 +26870,72 @@ function normalizeRamLfeExecuteResponse(
     expires_at_ms:
       record.expires_at_ms === undefined || record.expires_at_ms === null
         ? null
-        : ToriiClient._normalizeUnsignedInteger(
+        : requireExactJsonUnsignedInteger(
           record.expires_at_ms,
           `${context}.expires_at_ms`,
           { allowZero: true },
         ),
     backend,
     verification_mode: verificationMode,
-    receipt: ensureRecord(record.receipt ?? {}, `${context}.receipt`),
+    receipt: {
+      payload: normalizeIdentifierResolutionExecutionPayload(
+        receiptRecord.payload,
+        `${context}.receipt.payload`,
+      ),
+      attestation: normalizeIdentifierReceiptAttestation(
+        receiptRecord.attestation,
+        `${context}.receipt.attestation`,
+      ),
+    },
     output_opening: normalizeRamLfeOutputOpening(
       record.output_opening,
       `${context}.output_opening`,
     ),
   };
+  const receiptPayload = normalized.receipt.payload;
+  const matchingTopLevelFields = [
+    "program_id",
+    "output_hash",
+    "associated_data_hash",
+    "executed_at_ms",
+    "expires_at_ms",
+    "backend",
+    "verification_mode",
+  ];
+  for (const field of matchingTopLevelFields) {
+    if (normalized[field] !== receiptPayload[field]) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.${field} does not match ${context}.receipt.payload.${field}`,
+        `${context}.${field}`,
+      );
+    }
+  }
+  const openingPayload = normalized.output_opening.payload;
+  const matchingOpeningFields = [
+    "program_id",
+    "input_ciphertext_hash",
+    "output_ciphertext_hash",
+    "parameter_digest",
+    "evaluation_key_digest",
+  ];
+  for (const field of matchingOpeningFields) {
+    if (openingPayload[field] !== receiptPayload[field]) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.output_opening.payload.${field} does not match ${context}.receipt.payload.${field}`,
+        `${context}.output_opening.payload.${field}`,
+      );
+    }
+  }
+  if (openingPayload.opened_output_hash !== receiptPayload.output_hash) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.output_opening.payload.opened_output_hash does not match ${context}.receipt.payload.output_hash`,
+      `${context}.output_opening.payload.opened_output_hash`,
+    );
+  }
+  return normalized;
 }
 
 function normalizeRamLfeReceiptVerifyResponse(
@@ -31534,12 +31739,7 @@ const PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS = new Set([
   "halo2/pasta/kaigi-usage-v1",
   "halo2/pasta/ivm-overlay-bind",
   "halo2/pasta/ivm-execution-v1",
-  "halo2/pasta/offline-note-recursive",
-  "halo2/pasta/kagemusha-folded-v1",
-  "halo2/pasta/kagemusha-recursive-aggregation-v1",
-  "halo2/pasta/kagemusha-recursive-compact-v1",
-  "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
-  "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
+  "halo2/ipa-pasta-cycle-v1",
   "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
   "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
   "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",
@@ -34890,6 +35090,21 @@ export function encryptIdentifierInputForPolicy(policySummary, input, options = 
     ciphertext,
     params.noritoLengthEncoding === "compact-v1",
   ).toString("hex");
+}
+
+export function hashIdentifierEncryptedInput(encryptedInput) {
+  const literal = requireExactNonEmptyString(
+    encryptedInput,
+    "hashIdentifierEncryptedInput.encryptedInput",
+  );
+  if (!/^(?:[0-9a-f]{2})+$/u.test(literal)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      "hashIdentifierEncryptedInput.encryptedInput must be exact lowercase byte-aligned hex",
+      "hashIdentifierEncryptedInput.encryptedInput",
+    );
+  }
+  return irohaHashBytes([Buffer.from(literal, "hex")]).toString("hex");
 }
 
 export function buildIdentifierRequestForPolicy(policySummary, options = {}) {

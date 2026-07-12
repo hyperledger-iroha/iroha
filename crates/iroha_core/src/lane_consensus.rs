@@ -307,7 +307,6 @@ pub(crate) struct LaneDrainVoteState {
     remote_signers: BTreeMap<LaneDrainRemoteSignerContext, LaneDrainRemoteSignerDecision>,
     remote_equivocators: BTreeMap<LaneDrainRemoteSignerContext, Instant>,
     certificate: Option<LaneDrainCertificateV1>,
-    last_local_vote_broadcast: Option<Instant>,
 }
 
 /// Return the canonical, duplicate-free union of lane and global recipients.
@@ -340,7 +339,6 @@ impl LaneDrainVoteState {
             remote_signers: BTreeMap::new(),
             remote_equivocators: BTreeMap::new(),
             certificate: None,
-            last_local_vote_broadcast: None,
         }
     }
 
@@ -362,16 +360,6 @@ impl LaneDrainVoteState {
     /// Install the aggregate certificate for the active body.
     pub(crate) fn set_certificate(&mut self, certificate: LaneDrainCertificateV1) {
         self.certificate = Some(certificate);
-    }
-
-    /// Return when the local vote was last broadcast for the active body.
-    pub(crate) fn last_local_vote_broadcast(&self) -> Option<Instant> {
-        self.last_local_vote_broadcast
-    }
-
-    /// Record a completed local-vote broadcast for retransmission throttling.
-    pub(crate) fn mark_local_vote_broadcast(&mut self, now: Instant) {
-        self.last_local_vote_broadcast = Some(now);
     }
 
     fn body_digest(body: &LaneDrainCertificateBodyV1) -> Hash {
@@ -404,7 +392,6 @@ impl LaneDrainVoteState {
             self.remote_equivocators.clear();
         }
         self.certificate = None;
-        self.last_local_vote_broadcast = None;
     }
 
     /// Insert a vote for the active canonical body.
@@ -2709,6 +2696,7 @@ pub(crate) struct LaneBlockCommitVoteRequest {
 }
 
 /// Bounded periodic transport work for one unresolved lane-block session.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LaneBlockRebroadcastBundle {
     /// Stable session key used by the actor's round-robin cursor.
@@ -2821,11 +2809,13 @@ impl LaneBlockSessionCache {
     }
 
     /// Get a cached session by key.
+    #[cfg(test)]
     pub(crate) fn get(&self, key: &LaneBlockSessionKey) -> Option<&LaneBlockSession> {
         self.sessions.get(key)
     }
 
     /// Check whether a standalone lane-block proposal can be accepted without mutating the cache.
+    #[cfg(test)]
     pub(crate) fn can_accept_proposal(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -2851,6 +2841,7 @@ impl LaneBlockSessionCache {
     }
 
     /// Check whether a standalone lane-block vote can be accepted without mutating the cache.
+    #[cfg(test)]
     pub(crate) fn can_accept_vote(
         &self,
         vote: &LaneBlockVoteV1,
@@ -2887,6 +2878,7 @@ impl LaneBlockSessionCache {
     }
 
     /// Return whether the exact proposal artifact is already cached.
+    #[cfg(test)]
     pub(crate) fn contains_proposal(&self, proposal: &LaneBlockProposalV1) -> bool {
         let key = LaneBlockSessionKey::from_proposal(proposal);
         self.sessions
@@ -2897,6 +2889,7 @@ impl LaneBlockSessionCache {
 
     /// Return whether the proposal's consensus identity is cached, ignoring its
     /// advisory global-block recovery hint.
+    #[cfg(test)]
     pub(crate) fn contains_proposal_identity(&self, proposal: &LaneBlockProposalV1) -> bool {
         let key = LaneBlockSessionKey::from_proposal(proposal);
         self.sessions
@@ -2906,6 +2899,7 @@ impl LaneBlockSessionCache {
     }
 
     /// Return whether the exact vote artifact is already cached.
+    #[cfg(test)]
     pub(crate) fn contains_vote(&self, vote: &LaneBlockVoteV1) -> bool {
         let key = LaneBlockSessionKey::from_vote_body(&vote.body);
         self.sessions
@@ -2983,15 +2977,8 @@ impl LaneBlockSessionCache {
         Ok(())
     }
 
-    /// Return the cached proposal validator set for a session, if the proposal is known.
-    pub(crate) fn proposal_validator_set(&self, key: &LaneBlockSessionKey) -> Option<Vec<PeerId>> {
-        self.sessions
-            .get(key)
-            .and_then(|session| session.proposal.as_ref())
-            .map(|proposal| proposal.descriptor.validator_set.clone())
-    }
-
     /// Return whether this validator still needs to synthesize a prepare vote for a proposal.
+    #[cfg(test)]
     pub(crate) fn local_prepare_vote_needed_for(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -3063,14 +3050,6 @@ impl LaneBlockSessionCache {
             .collect()
     }
 
-    /// Return every cached proposal, including already certified sessions.
-    pub(crate) fn cached_proposals(&self) -> Vec<LaneBlockProposalV1> {
-        self.sessions
-            .values()
-            .filter_map(|session| session.proposal.clone())
-            .collect()
-    }
-
     /// Return this validator's cached votes and matching proposals that may still need fanout.
     pub(crate) fn local_vote_rebroadcast_artifacts_for(
         &self,
@@ -3122,6 +3101,7 @@ impl LaneBlockSessionCache {
     }
 
     /// Return whether an admissible unresolved session has periodic transport work.
+    #[cfg(test)]
     pub(crate) fn has_periodic_rebroadcast_work(
         &self,
         _signer: &PeerId,
@@ -3140,6 +3120,7 @@ impl LaneBlockSessionCache {
     ///
     /// The cursor is a stable session key instead of a vector index so concurrent
     /// insertion and pruning cannot repeatedly select the first cached sibling.
+    #[cfg(test)]
     pub(crate) fn periodic_rebroadcast_bundles_after(
         &self,
         signer: &PeerId,
@@ -3276,6 +3257,7 @@ impl LaneBlockSessionCache {
     }
 
     /// Remove cached sessions whose lane/dataspace/height no longer belongs to the active topology.
+    #[cfg(test)]
     pub(crate) fn retain_sessions_for_admissible_lanes(
         &mut self,
         admissible_lane: impl Fn(LaneId, DataSpaceId, Hash, u64, u64) -> bool,
@@ -3543,6 +3525,7 @@ impl LaneBlockSessionCache {
     /// Session pruning and capacity eviction intentionally never call this method:
     /// locks must outlive transient replay state. The actor supplies an applied or
     /// snapshot-anchored Kura boundary (or an explicit lane reset watermark).
+    #[cfg(test)]
     pub(crate) fn prune_commit_vote_locks_for_finalized_slots(
         &mut self,
         finalized: impl Fn(LaneId, DataSpaceId, Hash, u64) -> bool,
@@ -3560,6 +3543,7 @@ impl LaneBlockSessionCache {
     }
 
     /// Retire signer locks whose exact lane incarnation is no longer active.
+    #[cfg(test)]
     pub(crate) fn prune_commit_vote_locks_for_inactive_incarnations(
         &mut self,
         active: impl Fn(LaneId, DataSpaceId, Hash) -> bool,
@@ -3571,6 +3555,7 @@ impl LaneBlockSessionCache {
     }
 
     /// Atomically retire replay sessions and signer locks at a durable slot boundary.
+    #[cfg(test)]
     pub(crate) fn prune_sessions_and_commit_vote_locks_for_finalized_slots(
         &mut self,
         finalized: impl Fn(LaneId, DataSpaceId, Hash, u64) -> bool,
@@ -3590,6 +3575,7 @@ impl LaneBlockSessionCache {
     }
 
     /// Snapshot unique slots currently retaining signer commit locks.
+    #[cfg(test)]
     pub(crate) fn commit_vote_lock_slots(&self) -> BTreeSet<(LaneId, DataSpaceId, Hash, u64)> {
         self.commit_vote_locks
             .keys()
@@ -3614,6 +3600,7 @@ impl LaneBlockSessionCache {
     /// Undrained sessions carrying commit votes or a commit QC are retained as safety evidence.
     /// Honest nodes do not create that evidence for noncanonical siblings, while retaining it
     /// prevents canonical discovery from concealing a conflicting commit lock or certificate.
+    #[cfg(test)]
     pub(crate) fn prune_uncommitted_sessions_conflicting_with_canonical_proposal(
         &mut self,
         canonical: &LaneBlockProposalV1,
@@ -3639,6 +3626,7 @@ impl LaneBlockSessionCache {
     /// global-view pruning coupling must be removed. Exact canonical sessions and
     /// every undrained session carrying commit evidence are protected; signer
     /// commit locks deliberately outlive the removed replay state.
+    #[cfg(test)]
     pub(crate) fn prune_uncommitted_sessions_below_proposal_view(
         &mut self,
         proposal_height: u64,
@@ -3661,6 +3649,7 @@ impl LaneBlockSessionCache {
     /// can differ between heights. Canonical sessions and undrained commit
     /// evidence are exempt from the bound; among the remaining siblings the
     /// newest views win, with proposal hash providing deterministic tie-breaking.
+    #[cfg(test)]
     pub(crate) fn prune_excess_speculative_siblings(
         &mut self,
         retained_per_group: usize,
@@ -3705,6 +3694,7 @@ impl LaneBlockSessionCache {
         before.saturating_sub(self.sessions.len())
     }
 
+    #[cfg(test)]
     fn rebuild_indices_after_session_retain(&mut self) {
         let retained_slot_proposals = self
             .sessions
@@ -3763,6 +3753,7 @@ impl LaneBlockSessionCache {
     /// from committee-certified in-flight work. Drained committed sessions are
     /// excluded because the committed lane-block queue owns application
     /// ordering after that point.
+    #[cfg(test)]
     pub(crate) fn inflight_lane_ids_for_admissible_lanes(
         &self,
         admissible_lane: impl Fn(LaneId, DataSpaceId, Hash, u64, u64, bool) -> bool,
@@ -4419,6 +4410,7 @@ fn qc_signers(qc: &LaneBlockQcV1) -> Vec<PeerId> {
     signers
 }
 
+#[cfg(test)]
 fn session_proposal_height(session: &LaneBlockSession) -> Option<u64> {
     session
         .proposal
@@ -4447,6 +4439,7 @@ fn session_proposal_height(session: &LaneBlockSession) -> Option<u64> {
         .or_else(|| session.commit_qc.as_ref().map(|qc| qc.body.proposal_height))
 }
 
+#[cfg(test)]
 fn rebroadcast_bundle_for_session(
     key: LaneBlockSessionKey,
     session: &LaneBlockSession,
@@ -4693,6 +4686,7 @@ fn session_is_eviction_protected(session: &LaneBlockSession) -> bool {
     session_has_live_commit_evidence(session)
 }
 
+#[cfg(test)]
 fn session_has_consensus_evidence(session: &LaneBlockSession) -> bool {
     !session.prepare_votes.is_empty()
         || !session.commit_votes.is_empty()

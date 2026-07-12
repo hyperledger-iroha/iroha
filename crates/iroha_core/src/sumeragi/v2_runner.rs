@@ -15,9 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use iroha_config::parameters::actual::{
-    ConsensusMode as ConfigConsensusMode, NodeRole, SumeragiV2Config,
-};
+use iroha_config::parameters::actual::{NodeRole, SumeragiV2Config};
 use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     Encode as _,
@@ -26,7 +24,7 @@ use iroha_data_model::{
     events::{EventBox, pipeline::PipelineEventBox},
     peer::PeerId,
 };
-use iroha_p2p::{Post, Priority, UpdateTopology};
+use iroha_p2p::{Post, Priority};
 use thiserror::Error;
 
 use super::{
@@ -55,15 +53,9 @@ use super::{
     v2_npos::{V2NposVrfLifecycle, V2VrfReconcileOutcome},
     v2_recovery::{build_verified_successor, recover_active_height},
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
-    v2_worker::{ProductionV2Services, V2CleanupSupervisor, is_v2_lane_block_message},
+    v2_worker::{ProductionV2Services, V2CleanupSupervisor},
 };
-use crate::{
-    NetworkMessage,
-    block::BlockBuilder,
-    kura::Kura,
-    queue::Queue,
-    state::{State, WorldReadOnly},
-};
+use crate::{NetworkMessage, block::BlockBuilder, kura::Kura, queue::Queue, state::State};
 
 const IDLE_POLL: Duration = Duration::from_millis(10);
 const CANDIDATE_WORK_RECHECK: Duration = Duration::from_millis(100);
@@ -112,9 +104,6 @@ impl Drop for V2StatusClearGuard {
 fn clear_v2_operator_status() {
     super::status::clear_v2_status();
     super::status::clear_v2_operator_queue_status();
-    super::status::clear_lane_payload_ownerships();
-    super::status::set_committed_lane_blocks(Vec::new());
-    super::status::set_lane_block_sessions(Vec::new());
 }
 
 fn publish_v2_tx_queue_status(queue: &Queue) -> Result<(), std::num::TryFromIntError> {
@@ -137,124 +126,6 @@ fn close_ingress_for_rollover(ingress_ready: &AtomicBool) {
     ingress_ready.store(false, Ordering::Release);
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum V2TopologyRefreshAction {
-    NoPeers,
-    Unchanged,
-    Advertise,
-    RemoveLocal,
-}
-
-#[derive(Debug)]
-struct V2TopologyRefreshState {
-    last_advertised_network: BTreeSet<PeerId>,
-    local_peer_seen: bool,
-}
-
-impl V2TopologyRefreshState {
-    fn new(state: &State, local_peer: &PeerId, active_roster: &[wire::ValidatorPower]) -> Self {
-        let world = state.world_view();
-        Self {
-            last_advertised_network: BTreeSet::new(),
-            local_peer_seen: world.peers().contains(local_peer)
-                || active_roster
-                    .iter()
-                    .any(|entry| entry.validator == *local_peer),
-        }
-    }
-
-    fn plan(
-        &mut self,
-        expected_network: &BTreeSet<PeerId>,
-        online: &[PeerId],
-        local_peer: &PeerId,
-    ) -> V2TopologyRefreshAction {
-        let local_authorized = expected_network.contains(local_peer);
-        self.local_peer_seen |= local_authorized;
-        if self.local_peer_seen && !local_authorized {
-            self.last_advertised_network.clear();
-            return V2TopologyRefreshAction::RemoveLocal;
-        }
-        if expected_network.is_empty() {
-            return V2TopologyRefreshAction::NoPeers;
-        }
-        let has_stray = online.iter().any(|peer| !expected_network.contains(peer));
-        if expected_network == &self.last_advertised_network && !has_stray {
-            V2TopologyRefreshAction::Unchanged
-        } else {
-            self.last_advertised_network.clone_from(expected_network);
-            V2TopologyRefreshAction::Advertise
-        }
-    }
-}
-
-fn refresh_v2_p2p_topology(
-    refresh: &mut V2TopologyRefreshState,
-    state: &State,
-    queue: &Queue,
-    network: &crate::IrohaNetwork,
-    peers_gossiper: &crate::peers_gossiper::PeersGossiperHandle,
-    common_config: &iroha_config::parameters::actual::Common,
-    active_roster: &[wire::ValidatorPower],
-) {
-    let world = state.world_view();
-    let current = world.peers().iter().cloned().collect::<BTreeSet<_>>();
-    drop(world);
-    // Static trusted peers are bootstrap seeds only. Finalized WSV membership
-    // owns ordinary connections, while the immutable epoch roster remains
-    // protected until its boundary so a mid-epoch unregister cannot disconnect
-    // voting power still required by the frozen quorum.
-    let mut expected_network = current.clone();
-    expected_network.extend(active_roster.iter().map(|entry| entry.validator.clone()));
-    let online = network.online_peers(|peers| {
-        peers
-            .iter()
-            .map(|peer| peer.id().clone())
-            .collect::<Vec<_>>()
-    });
-    let action = refresh.plan(&expected_network, &online, common_config.peer.id());
-    super::status::set_local_removed_from_world(matches!(
-        action,
-        V2TopologyRefreshAction::RemoveLocal
-    ));
-    match action {
-        V2TopologyRefreshAction::NoPeers | V2TopologyRefreshAction::Unchanged => {}
-        V2TopologyRefreshAction::RemoveLocal => {
-            iroha_logger::warn!(
-                local = %common_config.peer.id(),
-                finalized_world_len = current.len(),
-                protected_roster_len = active_roster.len(),
-                "local peer removed from finalized world state; disconnecting live-v2 topology"
-            );
-            queue.clear_all();
-            network.update_topology(UpdateTopology(BTreeSet::new().into_iter().collect()));
-            peers_gossiper.update_topology(UpdateTopology(BTreeSet::new().into_iter().collect()));
-        }
-        V2TopologyRefreshAction::Advertise => {
-            let stray_count = online
-                .iter()
-                .filter(|peer| !expected_network.contains(*peer))
-                .count();
-            iroha_logger::info!(
-                finalized_world_len = current.len(),
-                network_topology_len = expected_network.len(),
-                protected_roster_len = active_roster.len(),
-                stray_count,
-                "advertising finalized live-v2 peer topology"
-            );
-            network.update_topology(UpdateTopology(expected_network.into_iter().collect()));
-            peers_gossiper.update_topology(UpdateTopology(
-                current
-                    .into_iter()
-                    .chain(active_roster.iter().map(|entry| entry.validator.clone()))
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect(),
-            ));
-        }
-    }
-}
-
 #[allow(clippy::too_many_lines)]
 fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     let SumeragiWorker {
@@ -269,31 +140,10 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         block_rx,
         vote_rx,
         block_payload_rx,
-        rbc_chunk_rx,
-        consensus_rx,
         lane_relay_rx,
-        background_rx,
         wake_rx,
         shutdown_signal,
-        // The following fields belong to retained ingress/block-sync/lane
-        // adapters or retired configuration inputs and are deliberately not
-        // consulted by global v2.
-        consensus_frame_cap: _,
-        consensus_payload_frame_cap: _,
-        peers_gossiper,
-        block_count: _,
-        block_sync_gossip_limit: _,
-        #[cfg(feature = "telemetry")]
-            telemetry: _,
-        epoch_roster_provider: _,
-        rbc_store: _,
-        background_post_tx: _,
-        da_spool_dir: _,
-        vote_dedup: _,
-        block_payload_dedup: _,
-        frontier_block_sync_hint: _,
         ingress_ready,
-        wake_tx: _,
     } = worker;
 
     let GenesisWithPubKey {
@@ -311,25 +161,18 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     let mut pending_kura_apply = recovered.pending_kura_apply();
     let (mut verified_context, context_store, mut signature_policy) = recovered.into_parts();
     let local_peer = common_config.peer.id().clone();
-    let mut topology_refresh = V2TopologyRefreshState::new(
-        state.as_ref(),
-        &local_peer,
-        &verified_context.context().roster,
-    );
-    refresh_v2_p2p_topology(
-        &mut topology_refresh,
-        state.as_ref(),
-        queue.as_ref(),
-        &network,
-        &peers_gossiper,
-        &common_config,
-        &verified_context.context().roster,
-    );
     let genesis_account = AccountId::new(genesis_public_key);
     let mut first_height_genesis = genesis_body;
-    let mut lane_rollover: Option<V2LaneWorkRollover> = None;
-    let post_finality_cleanup_timeout = config.persistence.post_finality_cleanup_timeout;
+    let mut block_sync_server = None;
+    let post_finality_cleanup_timeout = config.round_timeout;
+    // The first-release cadence is selected by the signed startup state and
+    // remains immutable for the lifetime of this consensus process. Reading
+    // mutable world parameters again at each height would let an unrelated
+    // parameter update change the handshake/config fingerprint mid-chain.
+    let block_cadence = state.sumeragi_block_cadence();
     let mut cleanup_supervisor = V2CleanupSupervisor::default();
+    let mut lane_rollover: Option<V2LaneWorkRollover> = None;
+
     loop {
         cleanup_supervisor.reap_finished();
         if shutdown_signal.is_sent() {
@@ -338,7 +181,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         let context = verified_context.context().clone();
         publish_v2_tx_queue_status(queue.as_ref())?;
         let validator_set_pops = verified_context.proofs_of_possession().to_vec();
-        let block_cadence = state.sumeragi_effective_block_time();
         let shared_config = config.v2_config(block_cadence, context.mode)?;
         let fingerprints = adapter_fingerprints(&local_peer, &shared_config);
         let control_queue_capacity = usize::try_from(shared_config.limits.control_queue_capacity)?;
@@ -348,12 +190,12 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             usize::try_from(shared_config.limits.certified_request_capacity)?;
         let round_timeout = Duration::from_millis(shared_config.round_timeout_ms);
         let retransmit_interval = Duration::from_millis(shared_config.retransmit_interval_ms);
-        // Rebuild the responder for every verified height. Runtime limits are
-        // read at the height boundary, so retaining the previous instance
-        // would silently keep a stale request budget after configuration
-        // changes or a chain-context transition.
-        let mut block_sync_server =
-            V2BlockSyncServer::new(context.chain_id.clone(), certified_request_capacity)?;
+        if block_sync_server.is_none() {
+            block_sync_server = Some(V2BlockSyncServer::new(
+                context.chain_id.clone(),
+                certified_request_capacity,
+            )?);
+        }
         let local_validator = local_validator_index(&context, &local_peer, config.role)?;
         let consensus_key_hash: [u8; 32] =
             Hash::new(common_config.key_pair.public_key().encode()).into();
@@ -474,7 +316,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             if shutdown_signal.is_sent() {
                 return Ok(());
             }
-
             publish_v2_tx_queue_status(queue.as_ref())?;
 
             services.drain_completions(&mut executor)?;
@@ -518,23 +359,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 &common_config.key_pair,
                 &services,
             )?;
-            // Drain safety-critical control before bounded request/body/chunk
-            // lanes. Each class has its own outer queue, so a legacy or bulk
-            // flood cannot sit in front of votes and certificates.
-            drain_v2_ingress(
-                &vote_rx,
-                &mut executor,
-                &mut services,
-                &mut lane_work,
-                &mut npos_vrf,
-                kura.as_ref(),
-                &context_store,
-                &common_config.key_pair,
-                &mut block_sync_server,
-                &mut block_sync,
-                &mut block_sync_request,
-                control_queue_capacity,
-            )?;
             drain_v2_ingress(
                 &block_rx,
                 &mut executor,
@@ -544,48 +368,22 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 kura.as_ref(),
                 &context_store,
                 &common_config.key_pair,
-                &mut block_sync_server,
+                block_sync_server
+                    .as_mut()
+                    .expect("block-sync server initialized before ingress"),
                 &mut block_sync,
                 &mut block_sync_request,
                 body_queue_capacity,
             )?;
-            drain_v2_ingress(
+            drain_lane_work_ingress(
+                &vote_rx,
                 &block_payload_rx,
-                &mut executor,
-                &mut services,
-                &mut lane_work,
-                &mut npos_vrf,
-                kura.as_ref(),
-                &context_store,
-                &common_config.key_pair,
-                &mut block_sync_server,
-                &mut block_sync,
-                &mut block_sync_request,
-                body_queue_capacity,
-            )?;
-            drain_v2_ingress(
-                &rbc_chunk_rx,
-                &mut executor,
-                &mut services,
-                &mut lane_work,
-                &mut npos_vrf,
-                kura.as_ref(),
-                &context_store,
-                &common_config.key_pair,
-                &mut block_sync_server,
-                &mut block_sync,
-                &mut block_sync_request,
-                chunk_queue_capacity,
-            )?;
-            drain_lane_relay_ingress(
                 &lane_relay_rx,
                 &mut lane_work,
                 executor.current_tag().view(),
                 control_queue_capacity,
             );
             drive_merge_sidecar_recovery(&mut executor, &mut services, &mut lane_work)?;
-            drain_retired_v1_queues(&consensus_rx, &background_rx, control_queue_capacity);
-
             let now = Instant::now();
             if now >= next_lane_retransmit {
                 lane_work.schedule_retransmission(executor.current_tag().view());
@@ -634,11 +432,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             services
                 .replay_buffered_chunks(&mut executor)
                 .map_err(V2RunnerError::Service)?;
-            // Lane CommitQCs may arrive before the globally anchoring block's
-            // WSV transaction. The adapter retains that exact work while Kura
-            // is ahead, then this loop-time retry publishes the certificate and
-            // application receipt immediately after State catches up.
-            lane_work.persist_anchored_sessions()?;
 
             if executor.ready_to_finish() {
                 close_ingress_for_rollover(&ingress_ready);
@@ -670,30 +463,13 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     V2VrfReconcileOutcome::NoPending | V2VrfReconcileOutcome::Committed => {}
                     V2VrfReconcileOutcome::Deferred => iroha_logger::debug!(
                         height = context.height,
-                        "winning v2 block omitted compatible local VRF observations; successor lifecycle will reconcile and re-emit when its frozen window permits"
+                        "winning v2 block omitted compatible local VRF observations"
                     ),
                     V2VrfReconcileOutcome::ConflictDiscarded => iroha_logger::warn!(
                         height = context.height,
-                        "winning v2 block committed a conflicting signed VRF observation; discarded height-local observation"
+                        "winning v2 block committed a conflicting signed VRF observation"
                     ),
                 }
-                lane_work.publish_operator_status();
-                let successor_roster = artifact
-                    .height_context
-                    .next_epoch_snapshot
-                    .as_ref()
-                    .map_or(context.roster.as_slice(), |snapshot| {
-                        snapshot.roster.as_slice()
-                    });
-                refresh_v2_p2p_topology(
-                    &mut topology_refresh,
-                    state.as_ref(),
-                    queue.as_ref(),
-                    &network,
-                    &peers_gossiper,
-                    &common_config,
-                    successor_roster,
-                );
                 let rollover = lane_work.take_rollover()?;
                 break (receipt, artifact, rollover);
             }
@@ -977,11 +753,8 @@ fn broadcast_npos_vrf(
             message,
             BlockMessage::VrfCommit(_) | BlockMessage::VrfReveal(_)
         ));
-        let message = Arc::new(message);
-        let encoded = Arc::new(BlockMessageWire::encode_message(message.as_ref()));
-        let network_message = NetworkMessage::SumeragiBlock(Box::new(
-            BlockMessageWire::with_encoded(Arc::clone(&message), encoded),
-        ));
+        let network_message =
+            NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(message)));
         for entry in &context.roster {
             if &entry.validator == local_peer {
                 continue;
@@ -1047,7 +820,12 @@ fn drain_v2_ingress(
             break;
         };
         let (message, sender) = inbound.into_message_and_sender();
-        if is_v2_lane_block_message(&message) {
+        if matches!(
+            message,
+            BlockMessage::LaneBlockProposal(_)
+                | BlockMessage::LaneBlockVote(_)
+                | BlockMessage::LaneBlockQc(_)
+        ) {
             let _ = lane_work.accept_lane_message(
                 InboundBlockMessage::new(message, sender),
                 executor.current_tag().view(),
@@ -1364,13 +1142,9 @@ fn candidate_attachments(
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
         .map(|(_, entry, _)| entry);
 
-    let mode = match context.mode {
-        wire::ConsensusMode::Permissioned => ConfigConsensusMode::Permissioned,
-        wire::ConsensusMode::Npos => ConfigConsensusMode::Npos,
-    };
     let applier = super::penalties::PenaltyApplier::from_committed_state(
         state,
-        mode,
+        context.mode,
         #[cfg(feature = "telemetry")]
         Some(state.metrics()),
         #[cfg(not(feature = "telemetry"))]
@@ -1510,29 +1284,28 @@ fn drive_merge_sidecar_recovery(
     Ok(())
 }
 
-fn drain_lane_relay_ingress(
+fn drain_lane_work_ingress(
+    vote_rx: &std::sync::mpsc::Receiver<InboundBlockMessage>,
+    block_payload_rx: &std::sync::mpsc::Receiver<InboundBlockMessage>,
     lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
     lane_work: &mut V2LaneWorkAdapter,
     active_view: wire::View,
     limit: usize,
 ) {
     for _ in 0..limit.max(1) {
-        let Ok(message) = lane_relay_rx.try_recv() else {
-            break;
-        };
-        let _ = lane_work.accept_relay_message(message, active_view);
-    }
-}
-
-fn drain_retired_v1_queues(
-    consensus_rx: &std::sync::mpsc::Receiver<super::ControlFlow>,
-    background_rx: &std::sync::mpsc::Receiver<super::BackgroundRequest>,
-    limit: usize,
-) {
-    for _ in 0..limit.max(1) {
         let mut drained = false;
-        drained |= consensus_rx.try_recv().is_ok();
-        drained |= background_rx.try_recv().is_ok();
+        if let Ok(message) = vote_rx.try_recv() {
+            let _ = lane_work.accept_lane_message(message, active_view);
+            drained = true;
+        }
+        if let Ok(message) = block_payload_rx.try_recv() {
+            let _ = lane_work.accept_lane_message(message, active_view);
+            drained = true;
+        }
+        if let Ok(message) = lane_relay_rx.try_recv() {
+            let _ = lane_work.accept_relay_message(message, active_view);
+            drained = true;
+        }
         if !drained {
             break;
         }
@@ -1754,119 +1527,5 @@ mod tests {
         });
         assert!(unwind.is_err());
         assert!(!ready.load(Ordering::Acquire));
-    }
-
-    #[test]
-    fn topology_refresh_reconnects_changes_evicts_strays_and_fails_local_removal() {
-        let peer = |seed| {
-            PeerId::new(
-                KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-                    .expect("deterministic topology key")
-                    .public_key()
-                    .clone(),
-            )
-        };
-        let local = peer(0x31);
-        let member = peer(0x32);
-        let retired_trusted = peer(0x33);
-        let current = BTreeSet::from([local.clone(), member.clone()]);
-        let expected = current.clone();
-        let mut refresh = V2TopologyRefreshState {
-            last_advertised_network: BTreeSet::new(),
-            local_peer_seen: true,
-        };
-
-        assert_eq!(
-            refresh.plan(&expected, &[], &local),
-            V2TopologyRefreshAction::Advertise
-        );
-        assert_eq!(
-            refresh.plan(&expected, &[], &local),
-            V2TopologyRefreshAction::Unchanged
-        );
-        assert_eq!(
-            refresh.plan(&expected, &[retired_trusted], &local),
-            V2TopologyRefreshAction::Advertise,
-            "a connected bootstrap/trusted peer absent from finalized membership must be evicted"
-        );
-
-        let removed = BTreeSet::from([member]);
-        assert_eq!(
-            refresh.plan(&removed, &[], &local),
-            V2TopologyRefreshAction::RemoveLocal
-        );
-        assert_eq!(
-            refresh.plan(&BTreeSet::new(), &[], &local),
-            V2TopologyRefreshAction::RemoveLocal,
-            "an empty finalized peer set must not preserve connections after local admission"
-        );
-    }
-
-    #[test]
-    fn topology_refresh_does_not_remove_a_never_admitted_observer() {
-        let local = PeerId::new(
-            KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519)
-                .expect("deterministic observer key")
-                .public_key()
-                .clone(),
-        );
-        let member = PeerId::new(
-            KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519)
-                .expect("deterministic member key")
-                .public_key()
-                .clone(),
-        );
-        let current = BTreeSet::from([member]);
-        let mut refresh = V2TopologyRefreshState {
-            last_advertised_network: BTreeSet::new(),
-            local_peer_seen: false,
-        };
-
-        assert_eq!(
-            refresh.plan(&current, &[], &local),
-            V2TopologyRefreshAction::Advertise
-        );
-        assert!(!refresh.local_peer_seen);
-        assert_eq!(
-            refresh.plan(&BTreeSet::new(), &[], &local),
-            V2TopologyRefreshAction::NoPeers,
-            "an observer that was never admitted may bootstrap from an empty world"
-        );
-    }
-
-    #[test]
-    fn topology_refresh_protects_frozen_voters_until_epoch_boundary() {
-        let peer = |seed| {
-            PeerId::new(
-                KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-                    .expect("deterministic topology key")
-                    .public_key()
-                    .clone(),
-            )
-        };
-        let local = peer(0x51);
-        let removed_mid_epoch = peer(0x52);
-        let protected = BTreeSet::from([local.clone(), removed_mid_epoch.clone()]);
-        let mut refresh = V2TopologyRefreshState {
-            last_advertised_network: BTreeSet::new(),
-            local_peer_seen: true,
-        };
-
-        assert_eq!(
-            refresh.plan(&protected, &[removed_mid_epoch.clone()], &local),
-            V2TopologyRefreshAction::Advertise,
-            "a WSV-removed frozen voter remains authorized until the epoch boundary"
-        );
-        assert_eq!(
-            refresh.plan(&protected, &[removed_mid_epoch.clone()], &local),
-            V2TopologyRefreshAction::Unchanged
-        );
-
-        let boundary = BTreeSet::from([local.clone()]);
-        assert_eq!(
-            refresh.plan(&boundary, &[removed_mid_epoch], &local),
-            V2TopologyRefreshAction::Advertise,
-            "the successor epoch roster must evict the retired voter"
-        );
     }
 }

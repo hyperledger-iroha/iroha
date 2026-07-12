@@ -149,9 +149,9 @@ fn autoscale_localnet_builder() -> NetworkBuilder {
     NetworkBuilder::new()
         .with_peers(TOTAL_PEERS)
         .with_pipeline_time(Duration::from_millis(300))
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
                 .write(["nexus", "autoscale", "enabled"], true)
                 .write(["nexus", "autoscale", "min_lanes"], 1_i64)
@@ -181,9 +181,9 @@ fn autoscale_public_profile_localnet_builder() -> NetworkBuilder {
     NetworkBuilder::new()
         .with_peers(TOTAL_PEERS)
         .with_pipeline_time(Duration::from_millis(300))
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
                 .write(["nexus", "lane_count"], 3_i64)
                 .write(["nexus", "lane_catalog"], public_profile_lane_catalog())

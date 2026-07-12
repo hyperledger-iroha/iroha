@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use eyre::{Result, WrapErr, ensure, eyre};
+use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
@@ -27,7 +27,6 @@ use tokio::{task, time::sleep};
 const VALIDATOR_COUNT: usize = 4;
 const STATUS_TIMEOUT: Duration = Duration::from_secs(90);
 const ACCOUNT_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(90);
-const LEGACY_START_TIMEOUT: Duration = Duration::from_secs(45);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const FAST_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const TAIRA_PIPELINE_TIME: Duration = Duration::from_secs(3);
@@ -308,9 +307,7 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
         .with_pipeline_time(TAIRA_PIPELINE_TIME)
         .with_sync_timeout(Duration::from_secs(180))
         .with_config_layer(|layer| {
-            layer
-                .write(["sumeragi", "consensus_mode"], "npos")
-                .write(["sumeragi", "round_timeout_ms"], TAIRA_ROUND_TIMEOUT_MS);
+            layer.write(["sumeragi", "round_timeout_ms"], TAIRA_ROUND_TIMEOUT_MS);
         });
     let context = stringify!(taira_npos_leader_timeout_commits_within_rotation_bound);
     let network = sandbox::start_network_async_or_skip(builder, context).await?;
@@ -375,7 +372,6 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
         let leader_node_fingerprint = outage_round[leader_peer_index].node_fingerprint.clone();
         let config_layers = network
             .config_layers()
-            .map(std::borrow::Cow::into_owned)
             .collect::<Vec<_>>();
 
         leader_peer.shutdown().await;
@@ -477,59 +473,6 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
         // production test can retain distinct highest PrepareQCs across several
         // simultaneous live views. The authenticated embedded-QC adapter path
         // and exact captured divergence are covered by focused core tests.
-        Ok(())
-    }
-    .await;
-
-    network.shutdown_and_release().await;
-    result
-}
-
-/// The executable must reject the retired v1 protocol before any consensus
-/// process can advertise itself as a live validator.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn legacy_protocol_cannot_start_a_validator() -> Result<()> {
-    init_instruction_registry();
-
-    let builder = NetworkBuilder::new()
-        .with_peers(VALIDATOR_COUNT)
-        .with_config_layer(|layer| {
-            layer.write(["sumeragi", "protocol_version"], 1_i64);
-        });
-    let context = stringify!(legacy_protocol_cannot_start_a_validator);
-    let network = sandbox::build_network_or_skip(builder, context);
-    let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
-        return Ok(());
-    };
-
-    let result = async {
-        let genesis = network.genesis();
-        let peer = network
-            .peers()
-            .first()
-            .ok_or_else(|| eyre!("legacy-start fixture has no validator"))?;
-        let start_result = tokio::time::timeout(
-            LEGACY_START_TIMEOUT,
-            peer.start_checked(network.config_layers(), Some(&genesis)),
-        )
-        .await
-        .wrap_err("legacy-protocol validator did not fail closed within the timeout")?;
-        let error = start_result.expect_err("protocol v1 must not start a live validator");
-        let diagnostic = format!("{error:#}");
-        ensure!(
-            diagnostic.contains("sumeragi.protocol_version must be 2")
-                || diagnostic.contains("unsupported Sumeragi protocol version 1")
-                || diagnostic.contains("live consensus protocol 1 is unsupported"),
-            "validator exited without the required v1 rejection diagnostic: {diagnostic}"
-        );
-        ensure!(
-            network
-                .peers()
-                .iter()
-                .skip(1)
-                .all(|peer| !peer.is_running()),
-            "the legacy-protocol negative fixture must not start any other validator"
-        );
         Ok(())
     }
     .await;

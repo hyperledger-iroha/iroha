@@ -26,7 +26,7 @@ class PosManifestParserTest {
         assertEquals(2, manifest.backendRoots.size)
         val admission = manifest.backendRoots.first()
         assertEquals("torii-admission", admission.label)
-        assertEquals("offline_admission_signer", admission.role)
+        assertEquals("kagemusha_release_signer", admission.role)
         assertEquals(
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             admission.publicKey

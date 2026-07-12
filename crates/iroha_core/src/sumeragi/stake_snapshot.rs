@@ -9,7 +9,9 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use iroha_logger::prelude::*;
-use iroha_primitives::numeric::{Numeric, NumericSpec};
+use iroha_primitives::numeric::Numeric;
+#[cfg(test)]
+use iroha_primitives::numeric::NumericSpec;
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 
@@ -37,6 +39,7 @@ pub struct CommitStakeSnapshot {
 
 /// Errors returned when checking stake quorum for a roster.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub enum StakeQuorumError {
     MissingStake,
     SignerOutOfRoster,
@@ -89,6 +92,7 @@ pub fn stake_quorum_reached_for_world(
 }
 
 /// Determine whether strict >2/3 stake quorum is reached using only active Nexus lanes.
+#[cfg(test)]
 pub fn stake_quorum_reached_for_world_with_active_lanes(
     world: &impl WorldReadOnly,
     roster: &[PeerId],
@@ -122,6 +126,7 @@ pub fn stake_coverage_bps_for_world(
 }
 
 /// Return selected signer stake coverage using only active Nexus lanes.
+#[cfg(test)]
 pub fn stake_coverage_bps_for_world_with_active_lanes(
     world: &impl WorldReadOnly,
     roster: &[PeerId],
@@ -146,6 +151,7 @@ pub fn stake_coverage_bps_for_world_with_active_lanes(
 }
 
 /// Return the selected signer stake for a roster using only active Nexus lanes.
+#[cfg(test)]
 pub(super) fn signed_stake_for_world_with_active_lanes(
     world: &impl WorldReadOnly,
     roster: &[PeerId],
@@ -156,6 +162,7 @@ pub(super) fn signed_stake_for_world_with_active_lanes(
     selected_stake_for_roster(roster, signers, &stake_map)
 }
 
+#[cfg(test)]
 fn stake_map_for_roster(
     world: &impl WorldReadOnly,
     roster: &[PeerId],
@@ -186,6 +193,7 @@ fn stake_map_for_roster(
     stake_map
 }
 
+#[cfg(test)]
 fn total_stake_for_roster(
     roster: &[PeerId],
     stake_map: &BTreeMap<PeerId, Numeric>,
@@ -202,6 +210,7 @@ fn total_stake_for_roster(
     Ok(total)
 }
 
+#[cfg(test)]
 fn selected_stake_for_roster(
     roster: &[PeerId],
     signers: &BTreeSet<PeerId>,
@@ -234,6 +243,7 @@ pub fn stake_quorum_reached_for_peers(
 }
 
 /// Determine whether strict >2/3 stake quorum is reached for the provided signers and snapshot.
+#[cfg(test)]
 pub fn stake_quorum_reached_for_snapshot(
     snapshot: &CommitStakeSnapshot,
     roster: &[PeerId],

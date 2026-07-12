@@ -2149,14 +2149,6 @@ pub mod telemetry {
         .with_cors_options(true)
     }
 
-    /// Read Reed-Solomon broadcast status.
-    pub const RBC_STATUS: RouteDescriptor =
-        telemetry_operator_get("operator.sumeragi.rbc_status", "/v1/sumeragi/rbc");
-    /// Read complete-delivery status for one consensus height and view.
-    pub const RBC_DELIVERED: RouteDescriptor = telemetry_operator_get(
-        "operator.sumeragi.rbc_delivered",
-        "/v1/sumeragi/rbc/delivered/{height}/{view}",
-    );
     /// Read pacemaker status.
     pub const PACEMAKER: RouteDescriptor =
         telemetry_operator_get("operator.sumeragi.pacemaker", "/v1/sumeragi/pacemaker");
@@ -2188,8 +2180,6 @@ pub mod telemetry {
 
     /// Complete route family registered by `add_telemetry_routes`.
     pub const ROUTES: &[RouteDescriptor] = &[
-        RBC_STATUS,
-        RBC_DELIVERED,
         PACEMAKER,
         PHASES,
         DEBUG_AXT_CACHE,
@@ -2348,17 +2338,11 @@ pub mod sumeragi {
     /// Read effective Sumeragi parameters.
     pub const PARAMETERS: RouteDescriptor =
         telemetry_get("sumeragi.parameter.read", "/v1/sumeragi/params");
-    /// List retained Reed-Solomon broadcast sessions.
-    pub const RBC_SESSIONS: RouteDescriptor =
-        telemetry_get("sumeragi.rbc_session.list", "/v1/sumeragi/rbc/sessions");
     /// Read one commit quorum certificate by block hash.
     pub const COMMIT_QC: RouteDescriptor = telemetry_get(
         "sumeragi.commit_qc.read",
         "/v1/sumeragi/commit-qcs/{block_hash}",
     );
-    /// Read current Sumeragi collector assignments.
-    pub const COLLECTORS: RouteDescriptor =
-        telemetry_get("sumeragi.collector.read", "/v1/sumeragi/collectors");
 
     /// Submit authenticated consensus evidence.
     pub const EVIDENCE_SUBMIT: RouteDescriptor =
@@ -2369,9 +2353,6 @@ pub mod sumeragi {
     /// Submit an authenticated VRF reveal.
     pub const VRF_REVEAL: RouteDescriptor =
         operator_post("operator.sumeragi.vrf.reveal", "/v1/sumeragi/vrf/reveal");
-    /// Request an authenticated Reed-Solomon broadcast sample.
-    pub const RBC_SAMPLE: RouteDescriptor =
-        operator_post("operator.sumeragi.rbc.sample", "/v1/sumeragi/rbc/sample");
 
     /// Complete route family registered by `add_sumeragi_routes`.
     pub const ROUTES: &[RouteDescriptor] = &[
@@ -2401,13 +2382,10 @@ pub mod sumeragi {
         KEY_LIFECYCLE,
         TELEMETRY,
         PARAMETERS,
-        RBC_SESSIONS,
         COMMIT_QC,
-        COLLECTORS,
         EVIDENCE_SUBMIT,
         VRF_COMMIT,
         VRF_REVEAL,
-        RBC_SAMPLE,
     ];
 }
 
@@ -4083,8 +4061,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     connect::SESSION_DELETE,
     connect::WEBSOCKET,
     connect::STATUS,
-    telemetry::RBC_STATUS,
-    telemetry::RBC_DELIVERED,
     telemetry::PACEMAKER,
     telemetry::PHASES,
     telemetry::DEBUG_AXT_CACHE,
@@ -4119,13 +4095,10 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sumeragi::KEY_LIFECYCLE,
     sumeragi::TELEMETRY,
     sumeragi::PARAMETERS,
-    sumeragi::RBC_SESSIONS,
     sumeragi::COMMIT_QC,
-    sumeragi::COLLECTORS,
     sumeragi::EVIDENCE_SUBMIT,
     sumeragi::VRF_COMMIT,
     sumeragi::VRF_REVEAL,
-    sumeragi::RBC_SAMPLE,
     runtime_governance::ZK_ROOTS,
     runtime_governance::ZK_MERKLE_PATH,
     runtime_governance::ZK_VERIFY,
@@ -4648,6 +4621,27 @@ mod tests {
     }
 
     #[test]
+    fn canonical_catalog_retires_global_sumeragi_rbc_and_collectors() {
+        assert!(
+            CATALOGED_ROUTES
+                .iter()
+                .any(|route| route.path() == "/v1/sumeragi/status")
+        );
+        for retired in [
+            "/v1/sumeragi/rbc",
+            "/v1/sumeragi/rbc/delivered/{height}/{view}",
+            "/v1/sumeragi/rbc/sessions",
+            "/v1/sumeragi/rbc/sample",
+            "/v1/sumeragi/collectors",
+        ] {
+            assert!(
+                CATALOGED_ROUTES.iter().all(|route| route.path() != retired),
+                "retired route {retired} leaked into the canonical catalog"
+            );
+        }
+    }
+
+    #[test]
     fn sccp_governance_descriptor_uses_the_canonical_uri() {
         assert_eq!(
             runtime_governance::GOV_PROPOSE_SCCP.path(),
@@ -4861,6 +4855,7 @@ mod tests {
         }
 
         for unsupported_path in [
+            "/v1/assets/transfer",
             "/v1/multisig/proposals/list",
             "/v1/multisig/proposals/get",
             "/v1/multisig/approvals/list",
@@ -5210,14 +5205,13 @@ mod tests {
     #[test]
     fn canonical_path_grammar_rejects_ambiguous_shapes() {
         let invalid_paths = [
-            "/offline/readiness",
-            "/v1/offline/note_issue",
-            "/v1/offline/list",
-            "/v1/offline/{operationId}",
-            "/v1/offline/{operation_id}/{operation_id}",
-            "/v1/offline//readiness",
-            "/v1/offline/readiness/",
-            "/v1/offline/%72edeem",
+            "/tests/readiness",
+            "/v1/tests/snake_case",
+            "/v1/tests/{itemId}",
+            "/v1/tests/{item_id}/{item_id}",
+            "/v1/tests//readiness",
+            "/v1/tests/readiness/",
+            "/v1/tests/%72eadiness",
         ];
 
         for path in invalid_paths {

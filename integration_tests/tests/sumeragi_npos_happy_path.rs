@@ -75,6 +75,7 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
@@ -100,7 +101,6 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
                     ["network", "max_frame_bytes_tx_gossip"],
                     NETWORK_FRAME_BUDGET_BYTES,
                 )
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["sumeragi", "collectors", "k"], 2_i64)
                 .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
                 .write(
@@ -188,6 +188,7 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
@@ -217,7 +218,6 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
                     ["network", "max_frame_bytes_tx_gossip"],
                     NETWORK_FRAME_BUDGET_BYTES,
                 )
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["sumeragi", "collectors", "k"], 2_i64)
                 .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
                 .write(
@@ -496,6 +496,7 @@ fn large_payload_npos_builder() -> NetworkBuilder {
     NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
@@ -525,7 +526,6 @@ fn large_payload_npos_builder() -> NetworkBuilder {
                     ["network", "max_frame_bytes_tx_gossip"],
                     NETWORK_FRAME_BUDGET_BYTES,
                 )
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["sumeragi", "collectors", "k"], 2_i64)
                 .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
                 .write(

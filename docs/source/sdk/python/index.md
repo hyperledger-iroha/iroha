@@ -97,16 +97,21 @@ not perform the evaluation.
 from iroha_python import ToriiClient
 
 client = ToriiClient("https://torii.sora.example")
-readiness = client.get_offline_readiness(asset_definition_id="xor#wonderland")
+readiness = client.get_kagemusha_readiness(asset_definition_id="xor#wonderland")
 print(
     "offline ready",
     readiness.ready,
+    readiness.required_bridge_abi_version,
     readiness.active_transfer_verifier,
     readiness.active_topup_shield_verifier,
+    readiness.active_unshield_verifier,
+    readiness.active_recursive_transition_verifier,
+    readiness.active_recursive_state_verifier,
     readiness.blockers,
 )
 ```
 
-The two verifier fields are required nullable snapshots for distinct roles.
-Each is null exactly with its matching unavailable blocker, and `ready=True`
-requires both to be active at the evaluated block.
+All five verifier fields are required nullable snapshots for distinct roles.
+Each is null exactly with its matching unavailable blocker. `ready=True`
+requires bridge ABI 19, all five active
+verifiers, the production proof backend, and recursive lineage support.

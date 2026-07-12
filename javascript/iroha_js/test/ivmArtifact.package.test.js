@@ -32,20 +32,21 @@ const ARTIFACT = Uint8Array.from([
   0x01, 0x01, 0x01, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x01,
+  ...Array(32).fill(0),
 ]);
 
 test("packed entrypoints expose identical browser-safe IVM artifact identities", () => {
-  assert.equal(mainHeaderLength, 17);
-  assert.equal(browserHeaderLength, 17);
-  assert.equal(subpathHeaderLength, 17);
+  assert.equal(mainHeaderLength, 49);
+  assert.equal(browserHeaderLength, 49);
+  assert.equal(subpathHeaderLength, 49);
   assert.equal(mainMaxBytes, 4 * 1024 * 1024);
   assert.equal(browserMaxBytes, mainMaxBytes);
   assert.equal(subpathMaxBytes, mainMaxBytes);
   const expected = {
     codeHashHex:
-      "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a9",
+      "b5d6d7f7abf5989ca07b4fbee75560ab7a3dbceaafd442da66a6918e3cb147d1",
     artifactSha256Hex:
-      "2c35100f8b2b58efb195d158d462a0a3943b1cc24d63eae188674a1d476a8fca",
+      "b004dd0c3eddd8e1c729e18ce88a2c6ab225fc21f3be1ccf55bac71d403826e6",
   };
   assert.deepEqual(computeFromMain(ARTIFACT), expected);
   assert.deepEqual(computeFromBrowser(ARTIFACT), expected);
@@ -146,9 +147,9 @@ test("packed ivm-artifact subpath bundles and compiles without ambient Node type
     assert.equal(packedModule.IVM_ARTIFACT_MAX_BYTES, mainMaxBytes);
     assert.deepEqual(packedModule.computeIvmArtifactHashes(ARTIFACT), {
       codeHashHex:
-        "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a9",
+        "b5d6d7f7abf5989ca07b4fbee75560ab7a3dbceaafd442da66a6918e3cb147d1",
       artifactSha256Hex:
-        "2c35100f8b2b58efb195d158d462a0a3943b1cc24d63eae188674a1d476a8fca",
+        "b004dd0c3eddd8e1c729e18ce88a2c6ab225fc21f3be1ccf55bac71d403826e6",
     });
     const offsetBytes = new Uint8Array(ARTIFACT.byteLength + 9);
     offsetBytes.set(ARTIFACT, 5);
@@ -162,7 +163,7 @@ test("packed ivm-artifact subpath bundles and compiles without ambient Node type
     const changedHeader = ARTIFACT.slice();
     changedHeader[16] ^= 0x80;
     const headerHashes = packedModule.computeIvmArtifactHashes(changedHeader);
-    assert.equal(headerHashes.codeHashHex, original.codeHashHex);
+    assert.notEqual(headerHashes.codeHashHex, original.codeHashHex);
     assert.notEqual(
       headerHashes.artifactSha256Hex,
       original.artifactSha256Hex,

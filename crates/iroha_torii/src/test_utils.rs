@@ -4,7 +4,7 @@
 //! queue-drain and state-apply boilerplate when exercising app API endpoints.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     num::NonZeroU64,
     path::{Path, PathBuf},
     sync::{
@@ -508,8 +508,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
             consensus_ingress_critical_bytes_burst:
                 defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_rbc_session_limit:
-                defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
                 defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
             consensus_ingress_penalty_window: Duration::from_millis(
@@ -578,7 +576,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             cors: A::ToriiCors::default(),
             ram_lfe: None,
             faucet: None,
-            offline_issuer: None,
+            kagemusha_commands: None,
             tx_history: None,
             recipient_lookup: Default::default(),
             webhooks_enabled: defaults::torii::WEBHOOKS_ENABLED,
@@ -740,7 +738,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             zk_ivm_prove_job_max_entries: defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
             zk_ivm_prove_job_max_retained_bytes:
                 defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES,
-            rbc_sampling: Default::default(),
             da_ingest: A::DaIngest::default(),
             connect: A::Connect {
                 enabled: false,
@@ -808,268 +805,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             eviction_required_replicas:
                 iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         },
-        sumeragi: A::Sumeragi {
-            protocol_version: defaults::sumeragi::PROTOCOL_VERSION,
-            round_timeout: std::time::Duration::from_millis(
-                defaults::sumeragi::ROUND_TIMEOUT_MS,
-            ),
-            role: A::NodeRole::Validator,
-            consensus_mode: A::ConsensusMode::Permissioned,
-            mode_flip: A::SumeragiModeFlip {
-                enabled: defaults::sumeragi::MODE_FLIP_ENABLED,
-            },
-            collectors: A::SumeragiCollectors {
-                k: 1,
-                redundant_send_r: defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
-                parallel_topology_fanout: defaults::sumeragi::COLLECTORS_PARALLEL_TOPOLOGY_FANOUT,
-            },
-            block: A::SumeragiBlock {
-                max_transactions: defaults::sumeragi::BLOCK_MAX_TRANSACTIONS,
-                max_ivm_transactions: defaults::sumeragi::BLOCK_MAX_IVM_TRANSACTIONS,
-                fast_finality_max_transactions: defaults::sumeragi::FAST_FINALITY_MAX_TRANSACTIONS,
-                fast_gas_limit_per_block: defaults::sumeragi::FAST_FINALITY_GAS_LIMIT_PER_BLOCK,
-                max_payload_bytes: defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES,
-                proposal_queue_scan_multiplier: defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            },
-            queues: A::SumeragiQueues {
-                votes: defaults::sumeragi::MSG_CHANNEL_CAP_VOTES,
-                block_payload: defaults::sumeragi::MSG_CHANNEL_CAP_BLOCK_PAYLOAD,
-                rbc_chunks: defaults::sumeragi::MSG_CHANNEL_CAP_RBC_CHUNKS,
-                blocks: defaults::sumeragi::MSG_CHANNEL_CAP_BLOCKS,
-                control: defaults::sumeragi::CONTROL_MSG_CHANNEL_CAP,
-            },
-            worker: A::SumeragiWorker {
-                iteration_budget_cap: Duration::from_millis(
-                    defaults::sumeragi::WORKER_ITERATION_BUDGET_CAP_MS,
-                ),
-                iteration_drain_budget_cap: Duration::from_millis(
-                    defaults::sumeragi::WORKER_ITERATION_DRAIN_BUDGET_CAP_MS,
-                ),
-                tick_work_budget_cap: Duration::from_millis(
-                    defaults::sumeragi::WORKER_TICK_WORK_BUDGET_CAP_MS,
-                ),
-                parallel_ingress: defaults::sumeragi::WORKER_PARALLEL_INGRESS,
-                validation_worker_threads: defaults::sumeragi::VALIDATION_WORKER_THREADS,
-                validation_work_queue_cap: defaults::sumeragi::VALIDATION_WORK_QUEUE_CAP,
-                validation_result_queue_cap: defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP,
-                validation_queue_full_inline_cutover_divisor:
-                    defaults::sumeragi::VALIDATION_QUEUE_FULL_INLINE_CUTOVER_DIVISOR,
-                fast_finality_inline_validation_max_transactions:
-                    defaults::sumeragi::VALIDATION_FAST_FINALITY_INLINE_MAX_TRANSACTIONS,
-                validation_stall_da_per_entrypoint_floor: Duration::from_millis(
-                    defaults::sumeragi::VALIDATION_STALL_DA_PER_ENTRYPOINT_FLOOR_MS,
-                ),
-                validation_stall_inline_fallback_multiplier:
-                    defaults::sumeragi::VALIDATION_STALL_INLINE_FALLBACK_MULTIPLIER,
-                validation_stall_ema_multiplier: defaults::sumeragi::VALIDATION_STALL_EMA_MULTIPLIER,
-                validation_stall_non_da_cap: Duration::from_millis(
-                    defaults::sumeragi::VALIDATION_STALL_NON_DA_CAP_MS,
-                ),
-                validation_stall_da_cap: Duration::from_millis(
-                    defaults::sumeragi::VALIDATION_STALL_DA_CAP_MS,
-                ),
-                qc_verify_worker_threads: defaults::sumeragi::QC_VERIFY_WORKER_THREADS,
-                qc_verify_work_queue_cap: defaults::sumeragi::QC_VERIFY_WORK_QUEUE_CAP,
-                qc_verify_result_queue_cap: defaults::sumeragi::QC_VERIFY_RESULT_QUEUE_CAP,
-                validation_pending_cap: defaults::sumeragi::VALIDATION_PENDING_CAP,
-                vote_burst_cap_with_payload_backlog:
-                    defaults::sumeragi::WORKER_VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
-                max_urgent_before_da_critical:
-                    defaults::sumeragi::WORKER_MAX_URGENT_BEFORE_DA_CRITICAL,
-            },
-            pacemaker: A::SumeragiPacemaker {
-                backoff_multiplier: 1,
-                rtt_floor_multiplier: 1,
-                max_backoff: core::time::Duration::from_secs(1),
-                jitter_frac_permille: 0,
-                pending_stall_grace: Duration::from_millis(
-                    defaults::sumeragi::PACEMAKER_PENDING_STALL_GRACE_MS,
-                ),
-                da_fast_reschedule: defaults::sumeragi::PACEMAKER_DA_FAST_RESCHEDULE,
-                active_pending_soft_limit: defaults::sumeragi::PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT,
-                rbc_backlog_session_soft_limit:
-                    defaults::sumeragi::PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT,
-                rbc_backlog_chunk_soft_limit:
-                    defaults::sumeragi::PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT,
-            },
-            pacing_governor: A::SumeragiPacingGovernor::default(),
-            da: A::SumeragiDa {
-                enabled: false,
-                quorum_timeout_multiplier: defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
-                availability_timeout_multiplier:
-                    defaults::sumeragi::DA_AVAILABILITY_TIMEOUT_MULTIPLIER,
-                availability_timeout_floor: Duration::from_millis(
-                    defaults::sumeragi::DA_AVAILABILITY_TIMEOUT_FLOOR_MS,
-                ),
-                max_commitments_per_block: defaults::sumeragi::DA_MAX_COMMITMENTS_PER_BLOCK,
-                max_proof_openings_per_block: defaults::sumeragi::DA_MAX_PROOF_OPENINGS_PER_BLOCK,
-            },
-            persistence: A::SumeragiPersistence {
-                kura_retry_interval: std::time::Duration::from_millis(
-                    defaults::sumeragi::KURA_STORE_RETRY_INTERVAL_MS,
-                ),
-                kura_retry_max_attempts: defaults::sumeragi::KURA_STORE_RETRY_MAX_ATTEMPTS,
-                commit_inflight_timeout: std::time::Duration::from_millis(
-                    defaults::sumeragi::COMMIT_INFLIGHT_TIMEOUT_MS,
-                ),
-                post_finality_cleanup_timeout: std::time::Duration::from_millis(
-                    defaults::sumeragi::POST_FINALITY_CLEANUP_TIMEOUT_MS,
-                ),
-                commit_work_queue_cap: defaults::sumeragi::COMMIT_WORK_QUEUE_CAP,
-                commit_result_queue_cap: defaults::sumeragi::COMMIT_RESULT_QUEUE_CAP,
-            },
-            recovery: A::SumeragiRecovery {
-                height_attempt_cap: defaults::sumeragi::RECOVERY_HEIGHT_ATTEMPT_CAP,
-                height_window: Duration::from_millis(defaults::sumeragi::RECOVERY_HEIGHT_WINDOW_MS),
-                hash_miss_cap_before_range_pull:
-                    defaults::sumeragi::RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL,
-                missing_qc_reacquire_window: Duration::from_millis(
-                    defaults::sumeragi::RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS,
-                ),
-                max_forced_proposal_attempts_per_view:
-                    defaults::sumeragi::RECOVERY_MAX_FORCED_PROPOSAL_ATTEMPTS_PER_VIEW,
-                rotate_after_reacquire_exhausted:
-                    defaults::sumeragi::RECOVERY_ROTATE_AFTER_REACQUIRE_EXHAUSTED,
-                missing_block_signer_fallback_attempts:
-                    defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
-                missing_block_retry_backoff_multiplier:
-                    defaults::sumeragi::RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER,
-                missing_block_retry_backoff_cap: Duration::from_millis(
-                    defaults::sumeragi::RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS,
-                ),
-                view_change_backlog_extension_factor:
-                    defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_FACTOR,
-                view_change_backlog_extension_cap: Duration::from_millis(
-                    defaults::sumeragi::VIEW_CHANGE_BACKLOG_EXTENSION_CAP_MS,
-                ),
-                deferred_qc_ttl: Duration::from_millis(defaults::sumeragi::DEFERRED_QC_TTL_MS),
-                missing_block_height_attempt_cap:
-                    defaults::sumeragi::MISSING_BLOCK_HEIGHT_ATTEMPT_CAP,
-                missing_block_height_ttl: Duration::from_millis(
-                    defaults::sumeragi::MISSING_BLOCK_HEIGHT_TTL_MS,
-                ),
-                sidecar_mismatch_retry_cap: defaults::sumeragi::SIDECAR_MISMATCH_RETRY_CAP,
-                sidecar_mismatch_ttl: Duration::from_millis(
-                    defaults::sumeragi::SIDECAR_MISMATCH_TTL_MS,
-                ),
-                range_pull_escalation_after_hash_misses:
-                    defaults::sumeragi::RANGE_PULL_ESCALATION_AFTER_HASH_MISSES,
-                missing_request_stale_height_margin:
-                    defaults::sumeragi::RECOVERY_MISSING_REQUEST_STALE_HEIGHT_MARGIN,
-                pending_block_cap: defaults::sumeragi::RECOVERY_PENDING_BLOCK_CAP,
-                pending_block_sync_cap: defaults::sumeragi::RECOVERY_PENDING_BLOCK_SYNC_CAP,
-                pending_proposal_cap: defaults::sumeragi::RECOVERY_PENDING_PROPOSAL_CAP,
-                missing_fetch_aggressive_after_attempts:
-                    defaults::sumeragi::RECOVERY_MISSING_FETCH_AGGRESSIVE_AFTER_ATTEMPTS,
-                authoritative_body_ingress_fetch_grace: Duration::from_millis(
-                    defaults::sumeragi::RECOVERY_AUTHORITATIVE_BODY_INGRESS_FETCH_GRACE_MS,
-                ),
-                exact_body_fetch_retry_floor: Duration::from_millis(
-                    defaults::sumeragi::RECOVERY_EXACT_BODY_FETCH_RETRY_FLOOR_MS,
-                ),
-            },
-            fanout: A::SumeragiFanout {
-                large_set_threshold: defaults::sumeragi::FANOUT_LARGE_SET_THRESHOLD,
-                activity_lookback_blocks: defaults::sumeragi::FANOUT_ACTIVITY_LOOKBACK_BLOCKS,
-            },
-            gating: A::SumeragiGating {
-                future_height_window: defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW,
-                future_view_window: defaults::sumeragi::CONSENSUS_FUTURE_VIEW_WINDOW,
-                invalid_sig_penalty_threshold: defaults::sumeragi::INVALID_SIG_PENALTY_THRESHOLD,
-                invalid_sig_penalty_window: Duration::from_millis(
-                    defaults::sumeragi::INVALID_SIG_PENALTY_WINDOW_MS,
-                ),
-                invalid_sig_penalty_cooldown: Duration::from_millis(
-                    defaults::sumeragi::INVALID_SIG_PENALTY_COOLDOWN_MS,
-                ),
-                membership_mismatch_alert_threshold:
-                    defaults::sumeragi::MEMBERSHIP_MISMATCH_ALERT_THRESHOLD,
-                membership_mismatch_fail_closed:
-                    defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED,
-            },
-            rbc: A::SumeragiRbc {
-                chunk_max_bytes: 32 * 1024,
-                encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
-                data_shards: 0,
-                parity_shards: 0,
-                chunk_fanout: defaults::sumeragi::RBC_CHUNK_FANOUT,
-                rs16_initial_fanout: A::RbcRs16InitialFanout::Full,
-                pending_max_chunks: defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
-                pending_max_bytes: defaults::sumeragi::RBC_PENDING_MAX_BYTES,
-                pending_session_limit: defaults::sumeragi::RBC_PENDING_SESSION_LIMIT,
-                pending_ttl: Duration::from_millis(defaults::sumeragi::RBC_PENDING_TTL_MS),
-                session_ttl: core::time::Duration::from_secs(10),
-                rebroadcast_sessions_per_tick:
-                    defaults::sumeragi::RBC_REBROADCAST_SESSIONS_PER_TICK,
-                payload_chunks_per_tick: defaults::sumeragi::RBC_PAYLOAD_CHUNKS_PER_TICK,
-                outbound_queue_max_sessions: defaults::sumeragi::RBC_OUTBOUND_QUEUE_MAX_SESSIONS,
-                outbound_queue_max_bytes: defaults::sumeragi::RBC_OUTBOUND_QUEUE_MAX_BYTES,
-                inline_block_created_backup: iroha_config::parameters::defaults::sumeragi::RBC_INLINE_BLOCK_CREATED_BACKUP,
-                store_max_sessions: defaults::sumeragi::RBC_STORE_MAX_SESSIONS,
-                store_soft_sessions: defaults::sumeragi::RBC_STORE_SOFT_SESSIONS,
-                store_max_bytes: defaults::sumeragi::RBC_STORE_MAX_BYTES,
-                store_soft_bytes: defaults::sumeragi::RBC_STORE_SOFT_BYTES,
-                disk_store_ttl: core::time::Duration::from_millis(
-                    defaults::sumeragi::RBC_DISK_STORE_TTL_MS,
-                ),
-                disk_store_max_bytes: defaults::sumeragi::RBC_DISK_STORE_MAX_BYTES,
-            },
-            native_amx: A::SumeragiNativeAmx {
-                session_cache_max: defaults::sumeragi::NATIVE_AMX_SESSION_CACHE_MAX,
-                session_body_bucket_max: defaults::sumeragi::NATIVE_AMX_SESSION_BODY_BUCKET_MAX,
-            },
-            finality: A::SumeragiFinality {
-                proof_policy: A::ProofPolicy::Off,
-                commit_cert_history_cap: defaults::sumeragi::COMMIT_CERT_HISTORY_CAP,
-                zk_finality_k: defaults::sumeragi::ZK_FINALITY_K,
-                require_precommit_qc: defaults::sumeragi::REQUIRE_PRECOMMIT_QC,
-            },
-            keys: A::SumeragiKeys {
-                activation_lead_blocks: defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
-                overlap_grace_blocks: defaults::sumeragi::KEY_OVERLAP_GRACE_BLOCKS,
-                expiry_grace_blocks: defaults::sumeragi::KEY_EXPIRY_GRACE_BLOCKS,
-                require_hsm: defaults::sumeragi::KEY_REQUIRE_HSM,
-                allowed_algorithms: defaults::sumeragi::key_allowed_algorithms()
-                    .into_iter()
-                    .collect::<BTreeSet<Algorithm>>(),
-                allowed_hsm_providers: defaults::sumeragi::key_allowed_hsm_providers()
-                    .into_iter()
-                    .collect(),
-            },
-            npos: A::SumeragiNpos {
-                timeouts_overrides: A::SumeragiNposTimeoutOverrides::default(),
-                vrf: A::SumeragiNposVrf {
-                    commit_window_blocks: defaults::sumeragi::npos::VRF_COMMIT_WINDOW_BLOCKS,
-                    reveal_window_blocks: defaults::sumeragi::npos::VRF_REVEAL_WINDOW_BLOCKS,
-                    commit_deadline_offset_blocks: 0,
-                    reveal_deadline_offset_blocks: 0,
-                },
-                election: A::SumeragiNposElection::default(),
-                reconfig: A::SumeragiNposReconfig::default(),
-                epoch_length_blocks: 0,
-                use_stake_snapshot_roster: false,
-            },
-            resilience: A::SumeragiResilience::default(),
-            vnext: A::SumeragiVNext::default(),
-            adaptive_observability: A::AdaptiveObservability::default(),
-            debug: A::SumeragiDebug {
-                force_soft_fork: false,
-                disable_background_worker: false,
-                rbc: A::SumeragiDebugRbc {
-                    drop_every_nth_chunk: None,
-                    shuffle_chunks: false,
-                    duplicate_inits: false,
-                    force_deliver_quorum_one: false,
-                    corrupt_witness_ack: false,
-                    corrupt_ready_signature: false,
-                    drop_validator_mask: 0,
-                    equivocate_chunk_mask: 0,
-                    equivocate_validator_mask: 0,
-                    conflicting_ready_mask: 0,
-                    partial_chunk_mask: 0,
-                },
-            },
-        },
+        sumeragi: A::Sumeragi::default(),
         block_sync: A::BlockSync {
             gossip_period: core::time::Duration::from_millis(200),
             gossip_max_period: core::time::Duration::from_millis(200),

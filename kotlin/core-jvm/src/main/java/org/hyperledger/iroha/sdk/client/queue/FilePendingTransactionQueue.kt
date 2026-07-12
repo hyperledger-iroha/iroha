@@ -9,13 +9,11 @@ import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.norito.NoritoException
-import org.hyperledger.iroha.sdk.tx.offline.OfflineSigningEnvelope
-import org.hyperledger.iroha.sdk.tx.offline.OfflineSigningEnvelopeCodec
 
 /**
  * File-backed queue that persists transactions as Base64-encoded records separated by newlines.
  *
- * Each line contains a Base64-encoded [OfflineSigningEnvelope].
+ * Each line contains a Base64-encoded canonical pending-transaction record.
  *
  * The queue preserves insertion order and deletes the underlying file when drained.
  */
@@ -41,20 +39,11 @@ class FilePendingTransactionQueue @Throws(IOException::class) constructor(
 
     @Throws(IOException::class)
     override fun enqueue(transaction: SignedTransaction) {
-        val envelope = OfflineSigningEnvelope(
-            encodedPayload = transaction.encodedPayload(),
-            signature = transaction.signature(),
-            publicKey = transaction.publicKey(),
-            schemaName = transaction.schemaName(),
-            keyAlias = transaction.keyAlias().orElse(DEFAULT_KEY_ALIAS),
-            issuedAtMs = System.currentTimeMillis(),
-            exportedKeyBundle = transaction.exportedKeyBundle().orElse(null),
-        )
         val line: String
         try {
-            line = Base64.encode(ENVELOPE_CODEC.encode(envelope))
+            line = Base64.encode(PendingTransactionRecordCodec.encode(transaction))
         } catch (ex: NoritoException) {
-            throw IOException("Failed to encode offline signing envelope", ex)
+            throw IOException("Failed to encode pending transaction record", ex)
         }
         synchronized(lock) {
             Files.write(
@@ -116,22 +105,10 @@ class FilePendingTransactionQueue @Throws(IOException::class) constructor(
             throw IOException("Failed to decode queue entry", ex)
         }
         try {
-            val envelope = ENVELOPE_CODEC.decode(envelopeBytes)
-            return SignedTransaction(
-                envelope.encodedPayload,
-                envelope.signature,
-                envelope.publicKey,
-                envelope.schemaName,
-                envelope.keyAlias,
-                envelope.exportedKeyBundle
-            )
+            return PendingTransactionRecordCodec.decode(envelopeBytes)
         } catch (ex: NoritoException) {
             throw IOException("Failed to decode queue entry", ex)
         }
     }
 
-    companion object {
-        private val ENVELOPE_CODEC = OfflineSigningEnvelopeCodec()
-        private const val DEFAULT_KEY_ALIAS = "pending.queue"
-    }
 }

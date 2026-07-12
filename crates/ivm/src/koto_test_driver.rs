@@ -43,8 +43,7 @@ use ivm_abi::state_value::{
 use norito::codec::Encode;
 use norito::json::{self, Value};
 
-const DEFAULT_CALLER: &str =
-    "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const DEFAULT_CALLER: &str = "sorauﾛ1PzEcｸZkfGﾊ1ﾚ9ﾐﾂRﾕDAuXﾋyﾔヰヰ3VgAｸ4ﾇｹWL6iXCEYDCW";
 const ENTRYPOINT_IMPL_PREFIX: &str = "__entrypoint_impl__";
 const TEST_SYSCALL_ACTOR_ACCOUNT: u32 = crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT;
 const TEST_SYSCALL_ACTOR_PUBLIC_KEY: u32 = crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY;
@@ -1407,7 +1406,20 @@ impl KotoTestHost {
             let trigger_name: Name = "trigger_event_json"
                 .parse()
                 .map_err(|_| crate::VMError::DecodeError)?;
-            let encoded_payload = crate::encode_argument_record_from_json(schema, &payload)?;
+            let encoded_payload = match crate::encode_argument_record_from_json(schema, &payload) {
+                Ok(encoded_payload) => encoded_payload,
+                Err(crate::VMError::DecodeError | crate::VMError::NoritoInvalid)
+                    if expect_reject =>
+                {
+                    vm.set_register(10, 0);
+                    return Ok(0);
+                }
+                Err(err) => {
+                    return self.fail_test(format!(
+                        "actor `{actor_alias}` calling `{entrypoint}` supplied arguments that do not match the entrypoint schema: {err:?}"
+                    ));
+                }
+            };
             nested_inputs.insert(
                 trigger_name,
                 make_tlv(PointerType::NoritoBytes, &encoded_payload),
@@ -1468,7 +1480,7 @@ impl KotoTestHost {
                 }
                 Ok(0)
             }
-            Err(err) if expect_reject => {
+            Err(_err) if expect_reject => {
                 let _ = self.inner.restore(rollback.as_ref());
                 vm.set_register(10, 0);
                 Ok(0)
@@ -2988,6 +3000,7 @@ mod tests {
                 kotoage fn reject_me() authorize("Test") {
                     require(false, DemoError::Rejected);
                 }
+
             }
             "#,
         );
@@ -3202,6 +3215,10 @@ mod tests {
                 kotoage fn reject_me() authorize("Test") {
                     require(false, DemoError::Rejected);
                 }
+
+                kotoage fn set_counter(int value) authorize("Test") {
+                    counter = value;
+                }
             }
             "#,
         );
@@ -3244,6 +3261,15 @@ mod tests {
                 #[test(fixture="actors")]
                 fn expect_reject_as_captures_contract_rejection() {{
                     test::expect_reject_as(actor: "issuer", entrypoint: "reject_me", arguments: Json::parse("{{}}"));
+                }}
+
+                #[test(fixture="actors")]
+                fn expect_reject_as_captures_argument_schema_rejection() {{
+                    test::invoke_entrypoint_as(actor: "issuer", entrypoint: "hajimari", arguments: Json::parse("{{}}"));
+                    test::expect_reject_as(actor: "issuer", entrypoint: "set_counter", arguments: Json::parse("{{\"value\":\"not-an-int\"}}"));
+                    test::expect_reject_as(actor: "issuer", entrypoint: "set_counter", arguments: Json::parse("{{}}"));
+                    test::expect_reject_as(actor: "issuer", entrypoint: "set_counter", arguments: Json::parse("{{\"value\":7,\"unexpected\":true}}"));
+                    test::assert(counter == 1);
                 }}
                 }}
                 "#,
@@ -3355,7 +3381,7 @@ mod tests {
     }
 
     #[test]
-    fn compile_suite_excludes_test_functions_from_coverage() {
+    fn contract_backed_suite_preserves_runtime_coverage_and_suite_hash() {
         let source = r#"
             seiyaku Demo {
                 view fn run(int count) -> int { return count + 1; }
@@ -3386,6 +3412,19 @@ mod tests {
 
         let compiled = compile_suite(&suite, false).expect("compile suite");
         assert_eq!(compiled.tests.len(), 1);
+        let runtime = compiled
+            .runtime
+            .as_ref()
+            .expect("contract-backed suite runtime artifact");
+        assert_ne!(
+            compiled.suite.report.artifact_hash, runtime.report.artifact_hash,
+            "the test-suite and deployable runtime artifacts must retain distinct identities"
+        );
+        compiled
+            .suite
+            .program
+            .entrypoint_pc(crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
+            .expect("contract-backed suite must expose its validated return entrypoint");
         let names = compiled
             .coverage_functions
             .iter()

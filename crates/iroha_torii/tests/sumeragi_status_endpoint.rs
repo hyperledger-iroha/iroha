@@ -1,3 +1,5 @@
+//! Router-level coverage for the authoritative Sumeragi v2 status endpoint.
+
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level tests for the authoritative Sumeragi v2 status endpoint.
 #![cfg(feature = "telemetry")]
@@ -9,8 +11,11 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use http_body_util::BodyExt;
-use iroha_config::parameters::actual::Queue;
+
+use axum::{body::Body, http::Request};
+use http::{StatusCode, header};
+use http_body_util::BodyExt as _;
+use iroha_config::parameters::actual::TelemetryProfile;
 use iroha_core::{
     kiso::KisoHandle,
     kura::Kura,
@@ -31,13 +36,55 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId},
     peer::PeerId,
 };
-use iroha_primitives::time::TimeSource;
+use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii};
 use tower::ServiceExt as _;
 
-#[path = "fixtures.rs"]
-mod fixtures;
+static STATUS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-fn build_status_router() -> Router {
+struct PublishedStatus {
+    _guard: MutexGuard<'static, ()>,
+}
+
+impl PublishedStatus {
+    fn install(value: SumeragiV2Status) -> Self {
+        let guard = STATUS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        status::set_v2_status(value);
+        Self { _guard: guard }
+    }
+}
+
+impl Drop for PublishedStatus {
+    fn drop(&mut self) {
+        status::clear_v2_status();
+    }
+}
+
+fn status_fixture() -> SumeragiV2Status {
+    SumeragiV2Status {
+        protocol_version: PROTOCOL_VERSION,
+        node_fingerprint: Hash::new(b"node"),
+        build_fingerprint: Hash::new(b"build"),
+        config_fingerprint: Hash::new(b"config"),
+        height_context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
+            Hash::new(b"height-context"),
+        )),
+        height: 42,
+        view: 3,
+        phase: SumeragiV2StatusPhase::Prepare,
+        leader: 2,
+        locked_prepare_qc: None,
+        highest_prepare_qc: None,
+        last_timeout_certificate: None,
+        body_state: SumeragiV2BodyState::Validated,
+        pending_persistence_id: Some(17),
+        last_committed_height: 41,
+        last_committed_subject: None,
+    }
+}
+
+fn build_status_router() -> axum::Router {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
@@ -73,18 +120,16 @@ fn build_status_router() -> Router {
     let torii = iroha_torii::Torii::new(
         ChainId::from("test-chain"),
         kiso,
-        cfg.torii.clone(),
+        cfg.torii,
         queue,
         tokio::sync::broadcast::channel(1).0,
-        query,
+        LiveQueryStore::start_test(),
         kura,
         state,
         cfg.common.key_pair.clone(),
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         telemetry,
-        true,
     );
-
     torii.api_router_for_tests()
 }
 

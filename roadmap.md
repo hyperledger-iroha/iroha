@@ -3,25 +3,18 @@
 Last updated: 2026-07-12
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
-The detailed engineering backlog lives in
-[`docs/source/engineering_backlog.md`](./docs/source/engineering_backlog.md),
-and completed history lives in [`status.md`](./status.md).
+Completed history lives in [`status.md`](./status.md).
 
-Kagemusha V2 transport and proof admission are fail-closed for the first release.
-The only public product selector is `recursive_spend_v1`; it requires exact
-bridge ABI 18 and the governed
-`kagemusha.offline.recursive_spend.artifact_manifest.v3` manifest with the V3
-atomic artifact lifecycle. ABI-6/ABI-7 fixtures and unsuffixed recursive-spend
-helpers are not first-release compatibility surfaces. The typed V2 native
-capability and artifact manifest retain the internal `recursive_spend_v2` mode;
-that value is not accepted as a product selector.
-`KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE = false` is the
+Kagemusha transport and proof admission are fail-closed for the first release.
+It is one mode-free protocol with exact bridge ABI 19 and the governed
+`kagemusha.offline.recursive_spend.artifact_manifest.v3` manifest using the V3
+atomic artifact lifecycle. Typed V2/V3 names are internal wire versions, not
+runtime product selectors.
+`KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE = false` is the
 authoritative release state: Core top-up execution and every proof-gated
-init/append/redeem-change/verify/redeem path remain unavailable. Record-backed
-lineage and semantic aggregation are validation and fixture-convergence
-scaffolding, not funded alternatives. The 64-depth branch bound and eight-hop
-semantic limit are protocol bounds, not availability signals.
-The remaining release work is the ABI-18 two-layer Pasta IPA/Poseidon backend:
+init/append/verify/redeem path remain unavailable. The 64-depth branch bound is
+a protocol bound, not an availability signal.
+The remaining release work is the ABI-19 two-layer Pasta IPA/Poseidon backend:
 an EqAffine/Vesta transition proof and EpAffine/Pallas state wrapper must
 authenticate the previous recursive proof and current transition proof under
 fixed verifier keys, bind their exact public instances to the Kagemusha
@@ -39,16 +32,15 @@ runtime crates no longer publish `sccp-test-fixtures` feature aliases, and
 transparent message admission requires configured production source material
 instead of accepting the local TAIRA/TRON diagnostic proof.
 
-IVM ABI-v1 hardening now uses one provenance-aware TLV decoder across ledger
-and codec hosts, canonical `QuantityValueV1` frames for every asset mutation
-caller with authenticated indexed fixture literals, INPUT-first/owned-HEAP
-spill for every public host result, heap-capable JSON getter input/output
-quotes, exact first-release carrier types, canonical `Blob` atoms for typed
-durable `bytes`, explicit byte-carrier normalization before strict VRF
-verification, and optional runtime artifacts for pure Kotodama unit-test
-suites. Remaining ABI work stays limited to release validation and the
-outstanding items tracked in the engineering backlog; no retired carrier
-compatibility work is planned.
+Remaining IVM/Kotodama/Torii release work is validation only: run the
+non-skipped four-peer typed-query pagination exercise, controlled 5%
+performance gates, strict Clippy, and the full workspace suite against the
+canonical type-first authorized Kotodama grammar, 49-byte ABI-hash header,
+separate suite/runtime artifact identities, and multisig query/lookup routes.
+Future ABI descriptor changes must regenerate the header documentation, every
+mapped `.to` golden, and the compiler manifests together. No retired grammar,
+17-byte deployable header, CRUD route, carrier, or compatibility migration is
+planned.
 
 ## SORA Economic Constitution
 
@@ -75,15 +67,6 @@ compatibility work is planned.
 **Next checkpoints:** normative schemas and parameter bounds for the XOR balance
 sheet and Phoenix series, followed by the smallest useful producer-credit pilot
 and adversarial simulation harness.
-
-Sumeragi restart safety now keeps authenticated local Prepare/Commit vote locks
-in a durable Kura-adjacent journal before any vote can be broadcast. Conflicting
-authenticated commit certificates for the same height and epoch activate a
-process-wide fail-closed halt that is exposed through the detailed consensus
-status endpoint and observed by actor, block-sync, and worker-result paths.
-Rollout remains gated on a coordinated four-validator restart exercise that
-demonstrates recovered same-height locks, consistent frontier continuation, and
-operator alerting for the safety-halt payload before these changes reach Taira.
 
 SoraNet handshake admission for the first release now has a single production
 policy: PoW is mandatory, the Argon2 puzzle gate stays enabled, and SM helper /
@@ -908,22 +891,6 @@ from the first release and must not appear as launch blockers or evidence rows.
 ## Release and Stabilization
 
 **Status:** active.
-
-- Keep the first-release IVM/Kotodama contract settlement surface scoped and
-  evidence-forward after the scoped transfer refresh: standalone
-  `transfer_asset` uses scoped syscall `0x2C` with `DataSpaceId` and the
-  five-argument dataspace form for balance movement, `transfer_batch` stays on
-  the `0x24` batch syscall path, the ledger host queues scoped private-IS
-  transfers, and the checked syscall spec/generator now documents
-  `TRANSFER_V1`/`TRANSFER_ASSET_SCOPED` without the retired
-  `SYSCALL_TRANSFER_ASSET` alias. Host validation now pins scoped `r14`
-  `DataSpaceId` admission plus the adjacent legacy `TRANSFER_V1` and FASTPQ
-  batch paths, and Kotodama compiler validation now pins standalone
-  `TRANSFER_ASSET_SCOPED` emission plus FASTPQ batch apply/boundary/lowering
-  coverage. V1 ABI hash/docs/goldens must continue to be regenerated together,
-  and Torii/CLI contract operation validation now pins normalized public
-  `operation_receipt` objects without private keys, raw payloads, or root
-  compatibility fields.
 
 - Continue the crypto-boundary audit after the completed signature decoder
   hardening: `Signature` JSON and Norito admission now rejects empty/all-zero
@@ -4734,7 +4701,7 @@ from the first release and must not appear as launch blockers or evidence rows.
   including missing transition-profile, append-boundary, lineage-witness,
   verify, and redeem helpers, and must reject broken ABI-version probes or
   permissive native helpers that accept malformed probe archives, so published
-  consumers cannot select `recursive_spend_v1` from an incomplete or
+  consumers cannot report Kagemusha availability from an incomplete or
   insufficiently validating native binding. The package-dist
   wrappers must keep dispatching valid archives through the expected native
   method, returning copied `Buffer` outputs and passing owned archive copies to
@@ -23839,7 +23806,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   a verified record-backed lineage witness and a verifying final recursive proof
   serialize instructions. Witnessless Reserved-lineage requests return no
   instruction bytes for every circuit and hop while
-  `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = false`.
+  the retired lineage-transition gate disabled.
   Active lineage verifier records, chain/asset, root, final commitment, proof,
   and nullifier checks remain mandatory on the record-backed path.
   Ledger recursive redeem execution now checks the final unshield/redeem proof
@@ -23907,7 +23874,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   probes now require the complete ABI-6 native surface - init, append, both
   transition-profile helpers, append-boundary derivation, both lineage-witness
   helpers, verify, and redeem - so old native libraries cannot claim
-  `recursive_spend_v1` support without the witness path and append-boundary
+  retired recursive-spend support without the witness path and append-boundary
   surface needed for safe redemption. Python direct helper calls and the
   optional C# P/Invoke wrapper now apply the same complete-surface guard before
   producing recursive spend output, and Python/Kotlin/JVM/Java Android
@@ -23930,10 +23897,10 @@ digest-bound pending-XSD source probe summaries for reviewed
   bridge-loader tests pin packaged artifacts to at least ABI 6, the Node NAPI
   host exports `connectNoritoBridgeAbiVersion`, and the Python PyO3 extension
   exports `kagemusha_recursive_spend_native_bridge_abi_version`. The SDK surfaces also
-  expose one common preferred offline spend-mode selector: `recursive_spend_v1`
-  only when the exact ABI-18 recursive backend is available, and no preferred
-  production mode otherwise. `recursive_compact_v1` remains an
-  admission-neutral projection and never wins product selection;
+  historically exposed a preferred offline spend-mode selector only when the
+  exact pre-release recursive backend was available. That selector and the
+  admission-neutral compact projection are retired; the first release is
+  mode-free and exposes only Kagemusha readiness.
   Kotlin/JVM and Java
   Android probe the native bridge ABI version plus verify and both lineage
   witness JNI symbols, C# probes the matching P/Invoke symbols, and
@@ -28986,6 +28953,20 @@ signed ancestor-linked solid-block header proof,
   presence is byte-neutral. Keep the normative grammar, CST recovery, formatter,
   LSP data, and generated editor tables synchronized as this final test-linking
   cleanup lands.
+- Preserve single-evaluation aggregate lowering: synthetic struct fields,
+  tuple/nested destructuring, and aggregate `Option` joins must project one
+  captured source value, while virtual pointer-backed fields must materialize
+  their exact typed literals before durable-state encoding. Keep mixed
+  pointer/scalar `StateMap` requests, present/absent/nested fallback side
+  effects, and malformed dynamic-pointer cases in the release regression set.
+- Keep local test suites immutable after compilation. Their return sentinel is
+  part of the compiler-produced CNTR artifact, is authenticated as a terminal
+  return descriptor by a crate-private validation profile, and remains distinct
+  from any separately prepared, ordinarily admitted runtime artifact. The
+  runner checks both compiler report hashes before loading; nested runtime calls
+  terminate through compiler-emitted entrypoint wrappers rather than post-build
+  byte mutation. Test-only selectors and syscalls must never enter production
+  admission or the ABI-v1 hash.
 - Preserve the corrected ABI-v1 artifact contract: `code_hash` covers the
   complete canonical `.to` image, debug data is a hash-keyed sidecar, CNTR is
   validated rather than trusted, and transitive bytecode effects/access drive
@@ -29012,12 +28993,13 @@ signed ancestor-linked solid-block header proof,
   effect, syscall, access, gas, and lowering policy. Every new privileged
   operation must update bytecode-derived admission, ABI-v1 hashes/goldens,
   deterministic host behavior, docs, and adversarial tests in the same change.
-- Finish and validate the bounded-List, exact-decimal/quantity, native-JSON, and typed
-  core-query-page corridor. The implementation and source migration are under
-  final audit; regenerate every mapped golden, manifest, syscall/pointer table,
-  and ABI hash only after frontend and ABI hardening are green. Then prove one
-  host query and one projection decode per typed request, run the non-skipped
-  four-peer pagination lane, and capture the real-base 5% performance gates.
+- Finish release validation for the bounded-List, exact-decimal/quantity,
+  native-JSON, and typed core-query-page corridor. The implementation, source
+  migration, canonical header refresh, mapped goldens, compiler manifests, and
+  Torii query/lookup OpenAPI synchronization are complete. Remaining work is to
+  prove one host query and one projection decode per typed request, run the
+  non-skipped four-peer pagination lane, and capture the real-base 5%
+  performance gates.
 - Hold the performance contract: sub-1% assembler padding, compact indexed
   literals/near control flow, SSA optimization and call-aware allocation,
   authenticated no-op builds with zero rewrites, and warm prepared execution
@@ -29040,17 +29022,14 @@ signed ancestor-linked solid-block header proof,
   use a checked prefix reader so malformed SIMD headers fail before cursor
   advancement or lane slicing.
 
-**Next checkpoints:** close the remaining frontend and ABI hardening
-regressions; run the focused Kotodama, IVM, ABI, and core suites; regenerate and
-independently verify every mapped artifact, manifest, syscall/pointer table,
-and ABI hash; then run the non-skipped four-peer typed-query pagination lane,
+**Next checkpoints:** run the non-skipped four-peer typed-query pagination lane,
 the controlled-runner 5% benchmark gates, strict Clippy, and the final
 full-workspace test. Complete the independent runtime-manifest parser
 cross-check and run the pending Kotlin shared-fixture test on a host with Java
 before declaring V1 ready. Continue the separate hidden/dynamic-access
 scheduler and remaining Norito wire-format evidence. Future syscall or opcode
 changes remain ABI version 1 until this first release and must refresh every
-golden and table together.
+golden, manifest, document, and table together.
 
 ## Privacy, ZK, and FHE
 

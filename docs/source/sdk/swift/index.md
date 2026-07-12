@@ -214,13 +214,13 @@ When Torii rejects a replayed transaction the SDK surfaces `IrohaSDKError.toriiR
 and leaves the remaining entries untouched, allowing wallets to present the failure and
 decide whether to discard or resubmit the affected envelope.
 
-### Offline circulation modes
+### Kagemusha offline cash
 
-Classic Offline Note issuance, redemption, and audit transaction paths are retired.
 Production offline value flows use Kagemusha top-up, transfer, and recursive redeem.
 Torii HTTP discovery is limited to the Offline readiness endpoint.
 
-Offline uses note challenges, payment tokens, and receipt acks carried over Fountain QR frames.
+Peer transfers exchange a nonce-bound payment request, one constant-size recursive
+spend bundle, and a signed durable acknowledgement over QR or NFC with networking disabled.
 
 ### Offline APIs
 

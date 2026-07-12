@@ -36,6 +36,8 @@ This crate hosts cross-component tests for Iroha.
 
 ## Notes
 - Pipeline block rejection scaffold lives at `tests/pipeline_block_rejected.rs` inside the `core_api` harness and is `#[ignore]` until a deterministic trigger is available.
-- Offline Note four-peer issue/audit/redeem coverage lives at `tests/extra_functional/offline_note.rs` inside the `network_functional` harness and enables Halo2 verification through test-network config.
+- Kagemusha lifecycle coverage lives in the dedicated four-wallet driver and
+  exercises top-up, offline multihop split/change, restart recovery, and exact
+  redemption under Halo2 verification.
 - SoraNet web deploy + public DNS ALIAS/CNAME + NS/DS delegation placeholders coverage lives at `tests/soranet_web_deploy.rs`.
 - SoraFS reconciliation divergence reports are exercised in `tests/sorafs_reconciliation.rs`.

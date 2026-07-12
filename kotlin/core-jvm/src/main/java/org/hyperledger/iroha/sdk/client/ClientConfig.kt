@@ -10,11 +10,7 @@ import java.util.Optional
 import org.hyperledger.iroha.sdk.crypto.KeyProvider
 import org.hyperledger.iroha.sdk.client.queue.DirectoryPendingTransactionQueue
 import org.hyperledger.iroha.sdk.client.queue.FilePendingTransactionQueue
-import org.hyperledger.iroha.sdk.client.queue.OfflineJournalPendingTransactionQueue
 import org.hyperledger.iroha.sdk.client.queue.PendingTransactionQueue
-import org.hyperledger.iroha.sdk.offline.OfflineJournal
-import org.hyperledger.iroha.sdk.offline.OfflineJournalException
-import org.hyperledger.iroha.sdk.offline.OfflineJournalKey
 import org.hyperledger.iroha.sdk.telemetry.*
 
 /** Configuration options for [IrohaClient] implementations. */
@@ -104,9 +100,6 @@ class ClientConfig private constructor(builder: Builder) {
             .setNetworkContextProvider(networkContextProvider).setDeviceProfileProvider(deviceProfileProvider)
             .setFlowController(noritoRpcFlowController).setWireFormatPreference(wireFormatPreference)
 
-    fun toOfflineToriiClient(executor: HttpTransportExecutor): OfflineToriiClient =
-        OfflineToriiClient.builder().executor(executor).baseUri(baseUri).timeout(requestTimeout).defaultHeaders(defaultHeaders).observers(observers).build()
-
     fun toConfidentialAssetToriiClient(executor: HttpTransportExecutor): ConfidentialAssetToriiClient =
         ConfidentialAssetToriiClient.builder().executor(executor).baseUri(baseUri).timeout(requestTimeout).defaultHeaders(defaultHeaders).observers(observers).build()
 
@@ -152,14 +145,6 @@ class ClientConfig private constructor(builder: Builder) {
         fun setObservers(observers: List<ClientObserver>?): Builder { clearObservers(); observers?.forEach { addObserver(it) }; return this }
         fun setRetryPolicy(retryPolicy: RetryPolicy): Builder { this.retryPolicy = retryPolicy; return this }
         fun setPendingQueue(pendingQueue: PendingTransactionQueue?): Builder { this.pendingQueue = pendingQueue; return this }
-
-        fun enableOfflineJournalQueue(journalPath: Path, key: OfflineJournalKey): Builder {
-            try { pendingQueue = OfflineJournalPendingTransactionQueue(OfflineJournal(journalPath, key)) }
-            catch (ex: OfflineJournalException) { throw IllegalStateException("Failed to initialize offline journal queue", ex) }
-            return this
-        }
-        fun enableOfflineJournalQueue(journalPath: Path, seed: ByteArray): Builder = enableOfflineJournalQueue(journalPath, OfflineJournalKey.derive(seed))
-        fun enableOfflineJournalQueue(journalPath: Path, passphrase: CharArray): Builder = enableOfflineJournalQueue(journalPath, OfflineJournalKey.deriveFromPassphrase(passphrase))
 
         fun enableDirectoryPendingQueue(rootDir: Path): Builder {
             try { pendingQueue = DirectoryPendingTransactionQueue(rootDir) }

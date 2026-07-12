@@ -28,7 +28,7 @@ mod soracloud_runtime;
 use std::os::windows::ffi::OsStrExt;
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     convert::TryFrom,
     env,
     ffi::OsString,
@@ -66,7 +66,6 @@ use iroha_core::telemetry::{StateTelemetry, StreamingTelemetry};
 use iroha_core::{
     IrohaNetwork,
     block::ValidBlock,
-    block_sync::{BlockSynchronizer, BlockSynchronizerHandle},
     compliance::LaneComplianceEngine,
     gossiper::{TransactionGossiper, TransactionGossiperHandle},
     governance::manifest::LaneManifestRegistry,
@@ -78,14 +77,14 @@ use iroha_core::{
     queue::{ConfigLaneRouter, LaneRouter, Queue, SingleLaneRouter},
     smartcontracts::isi::Registrable as _,
     snapshot::{SnapshotMaker, TryReadError as TryReadSnapshotError, try_read_snapshot},
-    state::{State, World, WorldReadOnly},
+    state::{State, World},
     streaming::{FilesystemSoranetProvisioner, ManifestPublisher, run_ticket_event_listener},
     sumeragi::{
-        GenesisWithPubKey, RbcStoreConfig, SumeragiHandle, SumeragiStartArgs, VotingBlock,
+        GenesisWithPubKey, SumeragiHandle, SumeragiStartArgs, VotingBlock,
         filter_validators_from_trusted, network_topology::Topology,
     },
 };
-use iroha_crypto::{Algorithm, Hash, HashOf};
+use iroha_crypto::Algorithm;
 use iroha_data_model::query::{self as dm_query, ErasedIterQuery};
 use iroha_data_model::{block::decode_framed_signed_block, prelude::*, transaction::Executable};
 use iroha_data_model::{
@@ -219,524 +218,69 @@ fn decode_consensus_handshake_meta(
     })
 }
 
-type SharedSoraFsProviderCache = Arc<tokio::sync::RwLock<iroha_torii::sorafs::ProviderAdvertCache>>;
-
-#[derive(Debug)]
-enum SharedSoraFsProviderCacheError {
-    AdmissionPolicyRequired,
-    MalformedCouncilKey {
-        index: usize,
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-    UnsupportedCouncilKeyAlgorithm {
-        index: usize,
-        algorithm: iroha_crypto::Algorithm,
-    },
-    InvalidCouncilKeyLength {
-        index: usize,
-        actual: usize,
-    },
-    InvalidCouncilPolicy(sorafs_manifest::ProviderAdmissionCouncilPolicyError),
-    AdmissionRegistry(iroha_torii::sorafs::AdmissionRegistryError),
-    UnknownCapability(String),
-    DuplicateCapability(String),
-    EmptyCapabilities,
-    ReplayCheckpoint {
-        path: PathBuf,
-        source: iroha_torii::sorafs::ReplayCheckpointError,
-    },
-}
-
-impl core::fmt::Display for SharedSoraFsProviderCacheError {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::AdmissionPolicyRequired => formatter.write_str(
-                "SoraFS discovery requires sorafs.discovery.admission.envelopes_dir, trusted_council_keys, and signature_threshold",
-            ),
-            Self::MalformedCouncilKey { index, source } => write!(
-                formatter,
-                "SoraFS admission council key at index {index} is malformed: {source}"
-            ),
-            Self::UnsupportedCouncilKeyAlgorithm { index, algorithm } => write!(
-                formatter,
-                "SoraFS admission council key at index {index} uses {algorithm:?}; Ed25519 is required"
-            ),
-            Self::InvalidCouncilKeyLength { index, actual } => write!(
-                formatter,
-                "SoraFS admission council key at index {index} has {actual} bytes; 32 are required"
-            ),
-            Self::InvalidCouncilPolicy(source) => {
-                write!(formatter, "invalid SoraFS admission council policy: {source}")
-            }
-            Self::AdmissionRegistry(source) => {
-                write!(formatter, "failed to load SoraFS provider admission registry: {source}")
-            }
-            Self::UnknownCapability(name) => write!(
-                formatter,
-                "unknown SoraFS capability `{name}` in torii.sorafs.known_capabilities"
-            ),
-            Self::DuplicateCapability(name) => write!(
-                formatter,
-                "duplicate SoraFS capability `{name}` in torii.sorafs.known_capabilities"
-            ),
-            Self::EmptyCapabilities => formatter.write_str(
-                "torii.sorafs.known_capabilities must include at least one capability",
-            ),
-            Self::ReplayCheckpoint { path, source } => write!(
-                formatter,
-                "failed to load SoraFS provider replay checkpoint {}: {source}",
-                path.display()
-            ),
-        }
-    }
-}
-
-impl std::error::Error for SharedSoraFsProviderCacheError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::MalformedCouncilKey { source, .. } => Some(source.as_ref()),
-            Self::InvalidCouncilPolicy(source) => Some(source),
-            Self::AdmissionRegistry(source) => Some(source),
-            Self::ReplayCheckpoint { source, .. } => Some(source),
-            Self::AdmissionPolicyRequired
-            | Self::UnsupportedCouncilKeyAlgorithm { .. }
-            | Self::InvalidCouncilKeyLength { .. }
-            | Self::UnknownCapability(_)
-            | Self::DuplicateCapability(_)
-            | Self::EmptyCapabilities => None,
-        }
-    }
-}
-
 fn build_shared_sorafs_provider_cache(
     config: &Config,
-) -> Result<Option<SharedSoraFsProviderCache>, SharedSoraFsProviderCacheError> {
+) -> Option<Arc<tokio::sync::RwLock<iroha_torii::sorafs::ProviderAdvertCache>>> {
     let discovery = &config.torii.sorafs_discovery;
     if !discovery.discovery_enabled {
-        return Ok(None);
+        return None;
     }
 
-    let admission_cfg = discovery
-        .admission
-        .as_ref()
-        .ok_or(SharedSoraFsProviderCacheError::AdmissionPolicyRequired)?;
+    let Some(admission_cfg) = discovery.admission.as_ref() else {
+        panic!(
+            "SoraFS discovery requires sorafs.discovery.admission.envelopes_dir, trusted_council_keys, and signature_threshold"
+        );
+    };
 
     let trusted_council_keys = admission_cfg
         .trusted_council_keys
         .iter()
-        .enumerate()
-        .map(|(index, key)| {
-            let (algorithm, payload) = key.try_to_bytes().map_err(|source| {
-                SharedSoraFsProviderCacheError::MalformedCouncilKey {
-                    index,
-                    source: Box::new(source),
-                }
-            })?;
-            if algorithm != iroha_crypto::Algorithm::Ed25519 {
-                return Err(
-                    SharedSoraFsProviderCacheError::UnsupportedCouncilKeyAlgorithm {
-                        index,
-                        algorithm,
-                    },
-                );
-            }
-            <[u8; 32]>::try_from(payload).map_err(|_| {
-                SharedSoraFsProviderCacheError::InvalidCouncilKeyLength {
-                    index,
-                    actual: payload.len(),
-                }
-            })
+        .map(|key| {
+            let (algorithm, payload) = key
+                .try_to_bytes()
+                .unwrap_or_else(|err| panic!("invalid SoraFS admission council key: {err}"));
+            assert_eq!(
+                algorithm,
+                iroha_crypto::Algorithm::Ed25519,
+                "SoraFS admission council keys must use Ed25519"
+            );
+            <[u8; 32]>::try_from(payload)
+                .unwrap_or_else(|_| panic!("SoraFS admission council keys must be 32 bytes"))
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Vec<_>>();
     let policy = sorafs_manifest::ProviderAdmissionCouncilPolicy::new(
         trusted_council_keys,
         admission_cfg.signature_threshold.get(),
     )
-    .map_err(SharedSoraFsProviderCacheError::InvalidCouncilPolicy)?;
+    .unwrap_or_else(|err| panic!("invalid SoraFS admission council policy: {err}"));
+    let admission = Arc::new(
+        iroha_torii::sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir, policy)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to load shared SoraFS provider admission registry {}: {err}",
+                    admission_cfg.envelopes_dir.display()
+                )
+            }),
+    );
 
     let mut capabilities = Vec::new();
     for name in &discovery.known_capabilities {
-        let capability = iroha_torii::sorafs::parse_capability_name(name)
-            .ok_or_else(|| SharedSoraFsProviderCacheError::UnknownCapability(name.clone()))?;
-        if capabilities.contains(&capability) {
-            return Err(SharedSoraFsProviderCacheError::DuplicateCapability(
-                name.clone(),
-            ));
+        match iroha_torii::sorafs::parse_capability_name(name) {
+            Some(capability) => capabilities.push(capability),
+            None => {
+                panic!("unknown SoraFS capability `{name}` in torii.sorafs.known_capabilities");
+            }
         }
-        capabilities.push(capability);
     }
 
-    if capabilities.is_empty() {
-        return Err(SharedSoraFsProviderCacheError::EmptyCapabilities);
-    }
-
-    let admission = Arc::new(
-        iroha_torii::sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir, policy)
-            .map_err(SharedSoraFsProviderCacheError::AdmissionRegistry)?,
+    assert!(
+        !capabilities.is_empty(),
+        "torii.sorafs.known_capabilities must include at least one capability"
     );
 
-    let replay_checkpoint_path = if discovery.replay_checkpoint_path.is_absolute() {
-        discovery.replay_checkpoint_path.clone()
-    } else {
-        config
-            .torii
-            .data_dir
-            .join(&discovery.replay_checkpoint_path)
-    };
-    let cache = iroha_torii::sorafs::ProviderAdvertCache::new_persistent(
-        capabilities,
-        admission,
-        replay_checkpoint_path.clone(),
-        discovery.replay_checkpoint_max_entries,
-    )
-    .map_err(|source| SharedSoraFsProviderCacheError::ReplayCheckpoint {
-        path: replay_checkpoint_path,
-        source,
-    })?;
-
-    Ok(Some(Arc::new(tokio::sync::RwLock::new(cache))))
-}
-
-#[cfg(test)]
-mod shared_sorafs_provider_cache_tests {
-    use std::{fs, num::NonZeroUsize, path::PathBuf};
-
-    use iroha_config::{
-        base::read::ConfigReader,
-        parameters::{actual::SorafsAdmission, user::Root as UserConfig},
-    };
-    use iroha_config_base::toml::TomlSource;
-    use iroha_crypto::{Algorithm, PrivateKey, PublicKey, Signature};
-    use iroha_torii::sorafs::{ReplayCheckpointError, discovery::AdvertError};
-    use sorafs_manifest::{ProviderAdmissionCouncilPolicyError, ProviderAdvertV1};
-    use tempfile::TempDir;
-
-    use super::*;
-
-    fn base_config() -> Config {
-        let table = toml::toml! {
-            chain = "00000000-0000-0000-0000-000000000000"
-            public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-            private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
-
-            [network]
-            address = "addr:127.0.0.1:1337#8F78"
-            public_address = "addr:127.0.0.1:1337#8F78"
-
-            [torii]
-            address = "addr:127.0.0.1:8080#8942"
-
-            [genesis]
-            public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-
-            [streaming]
-            identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
-            identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
-        };
-
-        ConfigReader::new()
-            .with_toml_source(TomlSource::inline(table))
-            .read_and_complete::<UserConfig>()
-            .expect("shared provider-cache test config must be readable")
-            .parse()
-            .expect("shared provider-cache test config must parse")
-    }
-
-    fn ed25519_public_key(seed: u8) -> PublicKey {
-        let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
-            .expect("fixture Ed25519 seed must be valid");
-        PublicKey::from(private)
-    }
-
-    fn configure_discovery(config: &mut Config, temp: &TempDir) -> PathBuf {
-        let root = temp
-            .path()
-            .canonicalize()
-            .expect("canonical temporary provider-cache root");
-        let admission_dir = root.join("admission");
-        fs::create_dir_all(&admission_dir).expect("create fixture admission directory");
-        config.torii.data_dir = root.join("torii-data");
-        config.torii.sorafs_discovery.discovery_enabled = true;
-        config.torii.sorafs_discovery.known_capabilities =
-            vec!["torii_gateway".to_owned(), "chunk_range_fetch".to_owned()];
-        config.torii.sorafs_discovery.replay_checkpoint_path =
-            PathBuf::from("discovery/provider-advert-replay.to");
-        config.torii.sorafs_discovery.replay_checkpoint_max_entries =
-            NonZeroUsize::new(8).expect("non-zero bound");
-        config.torii.sorafs_discovery.admission = Some(SorafsAdmission {
-            envelopes_dir: admission_dir.clone(),
-            trusted_council_keys: vec![ed25519_public_key(0x45)],
-            signature_threshold: NonZeroUsize::new(1).expect("non-zero threshold"),
-        });
-        admission_dir
-    }
-
-    fn fixture_path(name: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../fixtures/sorafs_manifest/provider_admission")
-            .join(name)
-    }
-
-    fn install_admission_fixture(admission_dir: &PathBuf) {
-        fs::copy(
-            fixture_path("envelope_v1.to"),
-            admission_dir.join("envelope_v1.to"),
-        )
-        .expect("copy canonical provider admission fixture");
-    }
-
-    fn load_advert_fixture() -> ProviderAdvertV1 {
-        let bytes =
-            fs::read(fixture_path("advert_v1.to")).expect("read canonical provider advert fixture");
-        norito::decode_from_bytes(&bytes).expect("decode canonical provider advert fixture")
-    }
-
-    fn resign_advert(advert: &mut ProviderAdvertV1) {
-        let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[0x21; 32])
-            .expect("fixture provider Ed25519 seed must be valid");
-        let public = PublicKey::from(private.clone());
-        let (_, public_payload) = public
-            .try_to_bytes()
-            .expect("fixture provider public key must be well formed");
-        advert.signature.public_key = public_payload.to_vec();
-        advert.signature.signature = vec![0; 64];
-        let payload = advert
-            .signature_payload_bytes()
-            .expect("encode advert signature payload");
-        advert.signature.signature = Signature::try_new(&private, &payload)
-            .expect("sign provider advert fixture")
-            .payload()
-            .to_vec();
-    }
-
-    #[test]
-    fn disabled_discovery_is_side_effect_free_even_with_poisonous_config() {
-        let temp = tempfile::tempdir().expect("temporary provider-cache root");
-        let mut config = base_config();
-        config.torii.data_dir = temp.path().join("must-not-exist");
-        config.torii.sorafs_discovery.discovery_enabled = false;
-        config.torii.sorafs_discovery.known_capabilities = vec!["unknown".to_owned()];
-        config.torii.sorafs_discovery.admission = None;
-
-        let cache = build_shared_sorafs_provider_cache(&config)
-            .expect("disabled discovery must not validate unused configuration");
-
-        assert!(cache.is_none());
-        assert!(!config.torii.data_dir.exists());
-    }
-
-    #[test]
-    fn enabled_discovery_requires_admission_without_panicking() {
-        let mut config = base_config();
-        config.torii.sorafs_discovery.discovery_enabled = true;
-        config.torii.sorafs_discovery.admission = None;
-
-        let error = build_shared_sorafs_provider_cache(&config)
-            .expect_err("enabled discovery without admission must fail closed");
-
-        assert!(matches!(
-            error,
-            SharedSoraFsProviderCacheError::AdmissionPolicyRequired
-        ));
-    }
-
-    #[test]
-    fn malformed_capability_lists_are_typed_startup_errors() {
-        let temp = tempfile::tempdir().expect("temporary provider-cache root");
-        let mut config = base_config();
-        configure_discovery(&mut config, &temp);
-        config.torii.sorafs_discovery.known_capabilities = vec!["not-a-capability".to_owned()];
-
-        let error = build_shared_sorafs_provider_cache(&config)
-            .expect_err("unknown capability must fail closed");
-        assert!(matches!(
-            error,
-            SharedSoraFsProviderCacheError::UnknownCapability(name)
-                if name == "not-a-capability"
-        ));
-
-        config.torii.sorafs_discovery.known_capabilities =
-            vec!["torii".to_owned(), "torii_gateway".to_owned()];
-        let error = build_shared_sorafs_provider_cache(&config)
-            .expect_err("duplicate capability aliases must fail closed");
-        assert!(matches!(
-            error,
-            SharedSoraFsProviderCacheError::DuplicateCapability(name)
-                if name == "torii_gateway"
-        ));
-
-        config.torii.sorafs_discovery.known_capabilities.clear();
-        let error = build_shared_sorafs_provider_cache(&config)
-            .expect_err("empty capability list must fail closed");
-        assert!(matches!(
-            error,
-            SharedSoraFsProviderCacheError::EmptyCapabilities
-        ));
-    }
-
-    #[test]
-    fn malformed_admission_policies_are_typed_startup_errors() {
-        let temp = tempfile::tempdir().expect("temporary provider-cache root");
-        let mut config = base_config();
-        configure_discovery(&mut config, &temp);
-        let duplicate = ed25519_public_key(0x45);
-        config
-            .torii
-            .sorafs_discovery
-            .admission
-            .as_mut()
-            .expect("admission policy")
-            .trusted_council_keys = vec![duplicate.clone(), duplicate];
-
-        let error = build_shared_sorafs_provider_cache(&config)
-            .expect_err("duplicate council key must fail closed");
-        assert!(matches!(
-            error,
-            SharedSoraFsProviderCacheError::InvalidCouncilPolicy(
-                ProviderAdmissionCouncilPolicyError::DuplicateSigner { .. }
-            )
-        ));
-
-        let secp_private = PrivateKey::from_bytes(Algorithm::Secp256k1, &[0x31; 32])
-            .expect("fixture secp256k1 seed must be valid");
-        config
-            .torii
-            .sorafs_discovery
-            .admission
-            .as_mut()
-            .expect("admission policy")
-            .trusted_council_keys = vec![PublicKey::from(secp_private)];
-        let error = build_shared_sorafs_provider_cache(&config)
-            .expect_err("non-Ed25519 council key must fail closed");
-        assert!(matches!(
-            error,
-            SharedSoraFsProviderCacheError::UnsupportedCouncilKeyAlgorithm {
-                algorithm: Algorithm::Secp256k1,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn malformed_replay_checkpoint_is_a_typed_startup_error() {
-        let temp = tempfile::tempdir().expect("temporary provider-cache root");
-        let mut config = base_config();
-        configure_discovery(&mut config, &temp);
-        let checkpoint = config
-            .torii
-            .data_dir
-            .join(&config.torii.sorafs_discovery.replay_checkpoint_path);
-        fs::create_dir_all(checkpoint.parent().expect("checkpoint parent"))
-            .expect("create checkpoint parent");
-        fs::write(&checkpoint, b"not canonical Norito").expect("write corrupt checkpoint");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(&checkpoint, fs::Permissions::from_mode(0o600))
-                .expect("set private checkpoint permissions");
-        }
-
-        let error = build_shared_sorafs_provider_cache(&config)
-            .expect_err("corrupt checkpoint must fail startup");
-        assert!(matches!(
-            error,
-            SharedSoraFsProviderCacheError::ReplayCheckpoint {
-                path,
-                source: ReplayCheckpointError::Codec(_),
-            } if path == checkpoint
-        ));
-    }
-
-    #[test]
-    fn configured_replay_bound_is_enforced_by_shared_cache_startup() {
-        let temp = tempfile::tempdir().expect("temporary provider-cache root");
-        let mut config = base_config();
-        configure_discovery(&mut config, &temp);
-        config.torii.sorafs_discovery.replay_checkpoint_max_entries =
-            NonZeroUsize::new(usize::MAX).expect("maximum usize is non-zero");
-
-        let error = build_shared_sorafs_provider_cache(&config)
-            .expect_err("unsafe replay checkpoint bound must fail startup");
-        assert!(matches!(
-            error,
-            SharedSoraFsProviderCacheError::ReplayCheckpoint {
-                source: ReplayCheckpointError::ConfiguredLimitTooLarge {
-                    configured: usize::MAX,
-                    ..
-                },
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn shared_cache_persists_replay_rejection_across_irohad_restart() {
-        let temp = tempfile::tempdir().expect("temporary provider-cache root");
-        let mut config = base_config();
-        let admission_dir = configure_discovery(&mut config, &temp);
-        install_admission_fixture(&admission_dir);
-        let checkpoint = config
-            .torii
-            .data_dir
-            .join(&config.torii.sorafs_discovery.replay_checkpoint_path);
-
-        let original = load_advert_fixture();
-        let mut latest = original.clone();
-        latest.issued_at = latest.issued_at.saturating_add(1);
-        resign_advert(&mut latest);
-
-        let cache = build_shared_sorafs_provider_cache(&config)
-            .expect("initialize persistent shared cache")
-            .expect("enabled discovery cache");
-        {
-            let mut cache = cache.try_write().expect("exclusive cache guard");
-            cache
-                .ingest(original.clone(), original.issued_at.saturating_add(1))
-                .expect("persist original provider advert");
-            cache
-                .ingest(latest.clone(), latest.issued_at.saturating_add(1))
-                .expect("persist latest provider advert high-water mark");
-        }
-        drop(cache);
-
-        assert!(
-            checkpoint.exists(),
-            "relative replay path must resolve beneath Torii data_dir"
-        );
-
-        let restarted = build_shared_sorafs_provider_cache(&config)
-            .expect("restart with canonical replay checkpoint")
-            .expect("enabled discovery cache after restart");
-        let mut restarted = restarted.try_write().expect("exclusive restarted guard");
-        let stale_error = restarted
-            .ingest(original, latest.issued_at.saturating_add(1))
-            .expect_err("restart must preserve stale-advert rejection");
-        assert!(matches!(
-            stale_error,
-            AdvertError::NonMonotonicIssuedAt {
-                current_issued_at,
-                incoming_issued_at,
-                ..
-            } if current_issued_at == latest.issued_at
-                && incoming_issued_at < current_issued_at
-        ));
-
-        let mut conflicting = latest.clone();
-        conflicting.allow_unknown_capabilities = !conflicting.allow_unknown_capabilities;
-        resign_advert(&mut conflicting);
-        let conflict_error = restarted
-            .ingest(conflicting, latest.issued_at.saturating_add(1))
-            .expect_err("restart must preserve conflicting same-timestamp rejection");
-        assert!(matches!(
-            conflict_error,
-            AdvertError::NonMonotonicIssuedAt {
-                current_issued_at,
-                incoming_issued_at,
-                ..
-            } if current_issued_at == latest.issued_at
-                && incoming_issued_at == current_issued_at
-        ));
-    }
+    Some(Arc::new(tokio::sync::RwLock::new(
+        iroha_torii::sorafs::ProviderAdvertCache::new(capabilities, admission),
+    )))
 }
 
 #[cfg(test)]
@@ -1275,7 +819,6 @@ impl std::error::Error for StartError {}
 
 struct NetworkRelay {
     sumeragi: SumeragiHandle,
-    block_sync: BlockSynchronizerHandle,
     tx_gossiper: TransactionGossiperHandle,
     peers_gossiper: PeersGossiperHandle,
     network: IrohaNetwork,
@@ -1290,7 +833,6 @@ struct NetworkRelay {
 
 struct NetworkRelayShared {
     sumeragi: SumeragiHandle,
-    block_sync: BlockSynchronizerHandle,
     tx_gossiper: TransactionGossiperHandle,
     peers_gossiper: PeersGossiperHandle,
     network: IrohaNetwork,
@@ -1306,287 +848,11 @@ type RelayWorkItem = iroha_p2p::peer::message::PeerMessage<iroha_core::NetworkMe
 
 /// Maximum number of consecutive high-priority messages before yielding to low-priority work.
 const RELAY_HIGH_BURST: usize = 32;
-/// Maximum number of consecutive safety messages before another relay class gets a turn.
-const RELAY_SAFETY_BURST: usize = 8;
-/// Maximum number of exact live-control artifacts remembered at relay ingress.
-const RELAY_CONTROL_REPLAY_CAP: usize = 4_096;
-/// Replay horizon for exact live-control artifacts at relay ingress.
-const RELAY_CONTROL_REPLAY_TTL: Duration = Duration::from_secs(120);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RelayControlDropReason {
-    UnsupportedVersion,
-    WrongHeight,
-    WrongContext,
-    Replay,
-    Saturated,
-}
-
-impl RelayControlDropReason {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::UnsupportedVersion => "unsupported_version",
-            Self::WrongHeight => "wrong_height",
-            Self::WrongContext => "wrong_context",
-            Self::Replay => "replay",
-            Self::Saturated => "saturated",
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct RelayControlReplayToken {
-    artifact_hash: Hash,
-    inserted_at: Instant,
-    class: RelayControlClass,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RelayControlClass {
-    GlobalV2,
-    Auxiliary,
-}
-
-type RelayControlAdmission = Result<Option<RelayControlReplayToken>, RelayControlDropReason>;
-
-struct ReservedRelayControlInspection<'a> {
-    message: &'a iroha_core::sumeragi::message::BlockMessage,
-    round: Option<iroha_data_model::block::consensus_v2::ConsensusRound>,
-    class: RelayControlClass,
-}
-
-#[derive(Default)]
-struct RelayControlReplayCache {
-    entries: HashMap<Hash, Instant>,
-    order: VecDeque<(Hash, Instant)>,
-}
-
-impl RelayControlReplayCache {
-    fn prune(&mut self, now: Instant, ttl: Duration) {
-        while let Some((artifact_hash, inserted_at)) = self.order.front().copied() {
-            if now.saturating_duration_since(inserted_at) < ttl {
-                break;
-            }
-            self.order.pop_front();
-            if self.entries.get(&artifact_hash) == Some(&inserted_at) {
-                self.entries.remove(&artifact_hash);
-            }
-        }
-    }
-
-    fn insert(
-        &mut self,
-        artifact_hash: Hash,
-        now: Instant,
-        capacity: usize,
-        class: RelayControlClass,
-    ) -> Result<RelayControlReplayToken, RelayControlDropReason> {
-        if self.entries.contains_key(&artifact_hash) {
-            return Err(RelayControlDropReason::Replay);
-        }
-        // Every entry represents queued or in-flight control work. Never evict
-        // one merely to admit a newcomer: doing so would let a flood disable
-        // deduplication for an artifact already awaiting downstream handling.
-        if self.entries.len() >= capacity {
-            return Err(RelayControlDropReason::Saturated);
-        }
-        self.entries.insert(artifact_hash, now);
-        self.order.push_back((artifact_hash, now));
-        Ok(RelayControlReplayToken {
-            artifact_hash,
-            inserted_at: now,
-            class,
-        })
-    }
-
-    fn rollback(&mut self, token: &RelayControlReplayToken) {
-        if self.entries.get(&token.artifact_hash) == Some(&token.inserted_at) {
-            self.entries.remove(&token.artifact_hash);
-        }
-        if self.order.back() == Some(&(token.artifact_hash, token.inserted_at)) {
-            self.order.pop_back();
-        } else {
-            self.order
-                .retain(|entry| *entry != (token.artifact_hash, token.inserted_at));
-        }
-    }
-}
-
-struct RelayControlIngressGate {
-    capacity: usize,
-    ttl: Duration,
-    replay: Mutex<RelayControlReplayCache>,
-}
-
-impl RelayControlIngressGate {
-    fn new(capacity: usize, ttl: Duration) -> Self {
-        Self {
-            capacity: capacity.max(1),
-            ttl,
-            replay: Mutex::new(RelayControlReplayCache::default()),
-        }
-    }
-
-    fn production() -> Self {
-        Self::new(RELAY_CONTROL_REPLAY_CAP, RELAY_CONTROL_REPLAY_TTL)
-    }
-
-    fn inspect(
-        msg: &iroha_core::NetworkMessage,
-    ) -> Result<Option<ReservedRelayControlInspection<'_>>, RelayControlDropReason> {
-        use iroha_core::sumeragi::message::{BlockMessage, V2IngressClass};
-        use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload as Payload;
-
-        let iroha_core::NetworkMessage::SumeragiBlock(wire) = msg else {
-            return Ok(None);
-        };
-        let message = wire.as_ref().as_ref();
-        match message {
-            BlockMessage::V2(envelope)
-                if matches!(
-                    V2IngressClass::for_payload(&envelope.payload),
-                    V2IngressClass::ConsensusControl | V2IngressClass::CommitCertificateResponse
-                ) =>
-            {
-                if envelope.validate_version().is_err() {
-                    return Err(RelayControlDropReason::UnsupportedVersion);
-                }
-                let round = match &envelope.payload {
-                    Payload::Proposal(proposal) => proposal.round,
-                    Payload::Vote(vote) => vote.round,
-                    Payload::QuorumCertificate(certificate) => certificate.round,
-                    Payload::TimeoutVote(vote) => vote.round,
-                    Payload::TimeoutCertificate(certificate) => certificate.round,
-                    Payload::CommitCertificateResponse(response) => response.certificate.round,
-                    Payload::PayloadManifest(_)
-                    | Payload::PayloadChunk(_)
-                    | Payload::CertifiedBodyRequest(_)
-                    | Payload::CertifiedBodyResponse(_)
-                    | Payload::CommitCertificateRequest(_) => {
-                        return Ok(None);
-                    }
-                };
-                Ok(Some(ReservedRelayControlInspection {
-                    message,
-                    round: Some(round),
-                    class: RelayControlClass::GlobalV2,
-                }))
-            }
-            BlockMessage::VrfCommit(_)
-            | BlockMessage::VrfReveal(_)
-            | BlockMessage::LaneBlockProposal(_)
-            | BlockMessage::LaneBlockNewViewVote(_)
-            | BlockMessage::LaneBlockNewViewCertificate(_)
-            | BlockMessage::LaneBlockVote(_)
-            | BlockMessage::LaneBlockQc(_) => Ok(Some(ReservedRelayControlInspection {
-                message,
-                round: None,
-                class: RelayControlClass::Auxiliary,
-            })),
-            _ => Ok(None),
-        }
-    }
-
-    fn admit_with_status<F>(
-        &self,
-        msg: &iroha_core::NetworkMessage,
-        now: Instant,
-        status: F,
-    ) -> RelayControlAdmission
-    where
-        F: FnOnce() -> Option<iroha_data_model::block::consensus_v2::SumeragiV2Status>,
-    {
-        let ReservedRelayControlInspection {
-            message,
-            round,
-            class,
-        } = match Self::inspect(msg) {
-            Ok(Some(inspection)) => inspection,
-            Err(reason) => return Err(reason),
-            Ok(None) => return Ok(None),
-        };
-        if let Some(round) = round
-            && let Some(status) = status()
-        {
-            if round.height != status.height {
-                return Err(RelayControlDropReason::WrongHeight);
-            }
-            if round.context_id != status.height_context_id {
-                return Err(RelayControlDropReason::WrongContext);
-            }
-        }
-        let artifact_hash = Hash::new(message.encode());
-        let mut replay = self
-            .replay
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        replay.prune(now, self.ttl);
-        replay
-            .insert(artifact_hash, now, self.capacity, class)
-            .map(Some)
-    }
-
-    fn admit(&self, msg: &iroha_core::NetworkMessage, now: Instant) -> RelayControlAdmission {
-        self.admit_with_status(msg, now, iroha_core::sumeragi::status::v2_status)
-    }
-
-    fn rollback(&self, token: &RelayControlReplayToken) {
-        self.replay
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .rollback(token);
-    }
-}
-
-struct RelayControlReplayLease {
-    gate: Arc<RelayControlIngressGate>,
-    token: Option<RelayControlReplayToken>,
-}
-
-impl RelayControlReplayLease {
-    fn new(gate: Arc<RelayControlIngressGate>, token: Option<RelayControlReplayToken>) -> Self {
-        Self { gate, token }
-    }
-}
-
-impl Drop for RelayControlReplayLease {
-    fn drop(&mut self) {
-        if let Some(token) = self.token.as_ref() {
-            self.gate.rollback(token);
-        }
-    }
-}
-
-struct RelayQueuedWork {
-    item: RelayWorkItem,
-    replay_lease: Option<RelayControlReplayLease>,
-}
-
-impl RelayQueuedWork {
-    fn general(item: RelayWorkItem) -> Self {
-        Self {
-            item,
-            replay_lease: None,
-        }
-    }
-
-    fn reserved(
-        item: RelayWorkItem,
-        gate: Arc<RelayControlIngressGate>,
-        token: RelayControlReplayToken,
-    ) -> Self {
-        Self {
-            item,
-            replay_lease: Some(RelayControlReplayLease::new(gate, Some(token))),
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConsensusIngressDropReason {
     Rate,
     Bytes,
-    RbcSessionLimit,
     Penalty,
 }
 
@@ -1595,7 +861,6 @@ impl ConsensusIngressDropReason {
         match self {
             Self::Rate => "rate",
             Self::Bytes => "bytes",
-            Self::RbcSessionLimit => "rbc_session_limit",
             Self::Penalty => "penalty",
         }
     }
@@ -1636,8 +901,6 @@ struct ConsensusIngressLimiter {
     bulk_bytes_rate: Option<BucketConfig>,
     critical_msg_rate: Option<BucketConfig>,
     critical_bytes_rate: Option<BucketConfig>,
-    rbc_session_limit: usize,
-    rbc_session_ttl: Duration,
     penalty: PenaltyConfig,
     peers: HashMap<PeerId, PeerIngressState>,
 }
@@ -1649,14 +912,7 @@ struct PeerIngressState {
     bulk_bytes_bucket: Option<TokenBucket>,
     critical_msg_bucket: Option<TokenBucket>,
     critical_bytes_bucket: Option<TokenBucket>,
-    rbc_sessions: HashMap<ConsensusPayloadSessionKey, Instant>,
     penalty: PenaltyTracker,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum ConsensusPayloadSessionKey {
-    V1(iroha_core::sumeragi::rbc_store::SessionKey),
-    V2(HashOf<iroha_data_model::block::consensus_v2::PayloadManifest>),
 }
 
 struct LowPriorityIngressLimiter {
@@ -1699,7 +955,6 @@ enum IngressRateClass {
 struct IngressPolicy {
     rate_class: Option<IngressRateClass>,
     apply_penalty: bool,
-    apply_rbc_session_limit: bool,
 }
 
 impl IngressPolicy {
@@ -1707,7 +962,6 @@ impl IngressPolicy {
         Self {
             rate_class: Some(IngressRateClass::Limited),
             apply_penalty: true,
-            apply_rbc_session_limit: true,
         }
     }
 
@@ -1715,7 +969,6 @@ impl IngressPolicy {
         Self {
             rate_class: Some(IngressRateClass::Bulk),
             apply_penalty: false,
-            apply_rbc_session_limit: true,
         }
     }
 
@@ -1723,7 +976,6 @@ impl IngressPolicy {
         Self {
             rate_class: Some(IngressRateClass::Critical),
             apply_penalty: false,
-            apply_rbc_session_limit: false,
         }
     }
 }
@@ -1746,61 +998,44 @@ impl ConsensusIngressLimiter {
 
         match msg {
             iroha_core::NetworkMessage::SumeragiBlock(block) => match block.as_ref().as_ref() {
-                BlockMessage::VrfCommit(_)
-                | BlockMessage::VrfReveal(_)
-                | BlockMessage::LaneBlockProposal(_)
+                BlockMessage::LaneBlockProposal(_)
+                | BlockMessage::LaneExecutablePayload(_)
+                | BlockMessage::LaneExecutablePayloadHandoff(_)
                 | BlockMessage::LaneBlockNewViewVote(_)
                 | BlockMessage::LaneBlockNewViewCertificate(_)
                 | BlockMessage::LaneBlockVote(_)
-                | BlockMessage::LaneBlockQc(_) => IngressPolicy::critical(),
-                BlockMessage::LaneExecutablePayload(_)
-                | BlockMessage::LaneExecutablePayloadHandoff(_) => IngressPolicy::bulk(),
+                | BlockMessage::LaneBlockQc(_)
+                | BlockMessage::VrfCommit(_)
+                | BlockMessage::VrfReveal(_) => IngressPolicy::critical(),
                 BlockMessage::V2(message) => {
-                    use iroha_core::sumeragi::message::V2IngressClass;
+                    use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
 
-                    match V2IngressClass::for_payload(&message.payload) {
-                        V2IngressClass::ConsensusControl
-                        | V2IngressClass::CommitCertificateResponse => IngressPolicy::critical(),
-                        // Payload chunks are retransmittable bulk. Sharing the
-                        // critical token bucket with votes/certificates would
-                        // let a Byzantine peer exhaust control admission before
-                        // the isolated Sumeragi queues can provide any fairness.
-                        V2IngressClass::PayloadChunk => IngressPolicy::bulk(),
-                        V2IngressClass::CertifiedBodyResponse => IngressPolicy::bulk(),
-                        V2IngressClass::PayloadManifest
-                        | V2IngressClass::CertifiedBodyRequest
-                        | V2IngressClass::CommitCertificateRequest => IngressPolicy::limited(),
+                    match &message.payload {
+                        ConsensusMessageV2Payload::PayloadChunk(_)
+                        | ConsensusMessageV2Payload::CertifiedBodyResponse(_) => {
+                            IngressPolicy::bulk()
+                        }
+                        ConsensusMessageV2Payload::Proposal(_)
+                        | ConsensusMessageV2Payload::Vote(_)
+                        | ConsensusMessageV2Payload::QuorumCertificate(_)
+                        | ConsensusMessageV2Payload::TimeoutVote(_)
+                        | ConsensusMessageV2Payload::TimeoutCertificate(_)
+                        | ConsensusMessageV2Payload::CommitCertificateResponse(_) => {
+                            IngressPolicy::critical()
+                        }
+                        ConsensusMessageV2Payload::PayloadManifest(_)
+                        | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+                        | ConsensusMessageV2Payload::CommitCertificateRequest(_) => {
+                            IngressPolicy::limited()
+                        }
                     }
                 }
-                // These global-v1 envelopes are retired by the authoritative
-                // v2 worker. Keep them bounded and penalized before they reach
-                // the fail-closed protocol gate; they must never consume the
-                // live-v2 control budget.
-                BlockMessage::QcVote(_)
-                | BlockMessage::Qc(_)
-                | BlockMessage::FetchBlockBody(_)
-                | BlockMessage::FetchPendingBlock(_)
-                | BlockMessage::CertifiedBlockFetch(_)
-                | BlockMessage::ProposalHint(_)
-                | BlockMessage::Proposal(_)
-                | BlockMessage::BlockCreated(_)
-                | BlockMessage::RbcInit(_)
-                | BlockMessage::RbcInitRequest(_)
-                | BlockMessage::RbcChunkRequest(_)
-                | BlockMessage::RbcChunk(_)
-                | BlockMessage::RbcChunkCompact(_)
-                | BlockMessage::RbcReady(_)
-                | BlockMessage::RbcDeliver(_) => IngressPolicy::limited(),
-                BlockMessage::BlockBodyResponse(_) => IngressPolicy::bulk(),
-                BlockMessage::ConsensusParams(_) | BlockMessage::KuraReplicaAdvert(_) => {
-                    IngressPolicy::limited()
-                }
-                BlockMessage::BlockSyncUpdate(_) | BlockMessage::ExecWitness(_) => {
-                    IngressPolicy::bulk()
-                }
+                // All other block messages are decode-only v1 artifacts. The relay
+                // rejects them before ingress accounting; keeping this fallback
+                // separate prevents archival types from shaping live v2 limits.
+                _ => IngressPolicy::limited(),
             },
             iroha_core::NetworkMessage::SumeragiControlFlow(_) => IngressPolicy::critical(),
-            iroha_core::NetworkMessage::LaneDrainVote(_) => IngressPolicy::critical(),
             iroha_core::NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
                 iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_) => {
                     IngressPolicy::limited()
@@ -1817,6 +1052,7 @@ impl ConsensusIngressLimiter {
                 iroha_core::merge_sidecar::MergeCandidateMessage::Chunk(_) => IngressPolicy::bulk(),
             },
             iroha_core::NetworkMessage::NativeAmx(_) => IngressPolicy::critical(),
+            iroha_core::NetworkMessage::LaneDrainVote(_) => IngressPolicy::critical(),
             iroha_core::NetworkMessage::BlockSync(_) => IngressPolicy::bulk(),
             _ => IngressPolicy::limited(),
         }
@@ -1824,7 +1060,7 @@ impl ConsensusIngressLimiter {
 
     fn from_config(
         network: &iroha_config::parameters::actual::Network,
-        sumeragi: &iroha_config::parameters::actual::Sumeragi,
+        signed_block_cadence: Duration,
     ) -> Self {
         let msg_rate = network
             .consensus_ingress_rate_per_sec
@@ -1838,9 +1074,7 @@ impl ConsensusIngressLimiter {
                 rate_per_sec: rate,
                 burst: network.consensus_ingress_bytes_burst.unwrap_or(rate),
             });
-        let bulk_scale = Self::bulk_scale_factor(Duration::from_millis(
-            iroha_config::parameters::defaults::sumeragi::BLOCK_TIME_MS,
-        ));
+        let bulk_scale = Self::bulk_scale_factor(signed_block_cadence);
         let bulk_msg_rate = msg_rate.map(|cfg| cfg.scaled(bulk_scale));
         let bulk_bytes_rate = bytes_rate.map(|cfg| cfg.scaled(bulk_scale));
         let critical_msg_rate =
@@ -1863,8 +1097,6 @@ impl ConsensusIngressLimiter {
             window: network.consensus_ingress_penalty_window,
             cooldown: network.consensus_ingress_penalty_cooldown,
         };
-        let rbc_session_limit =
-            Self::resolve_rbc_session_limit(network.consensus_ingress_rbc_session_limit, sumeragi);
         Self::new(
             msg_rate,
             bytes_rate,
@@ -1872,43 +1104,16 @@ impl ConsensusIngressLimiter {
             bulk_bytes_rate,
             critical_msg_rate,
             critical_bytes_rate,
-            rbc_session_limit,
-            sumeragi.rbc.session_ttl,
             penalty,
         )
     }
 
     fn bulk_scale_factor(block_time: Duration) -> u32 {
         let base_ms =
-            u128::from(iroha_config::parameters::defaults::sumeragi::BLOCK_TIME_MS).max(1);
+            u128::from(iroha_config::parameters::defaults::sumeragi::BLOCK_CADENCE_MS).max(1);
         let block_ms = block_time.as_millis().max(1);
         let scale = base_ms.div_ceil(block_ms);
         u32::try_from(scale).unwrap_or(u32::MAX).max(1)
-    }
-
-    fn resolve_rbc_session_limit(
-        configured: usize,
-        sumeragi: &iroha_config::parameters::actual::Sumeragi,
-    ) -> usize {
-        if configured == 0 || sumeragi.rbc.session_ttl.is_zero() {
-            return configured;
-        }
-        let block_time = std::time::Duration::from_millis(
-            iroha_config::parameters::defaults::sumeragi::BLOCK_TIME_MS,
-        );
-        Self::rbc_session_limit_from_ttl(configured, sumeragi.rbc.session_ttl, block_time)
-    }
-
-    fn rbc_session_limit_from_ttl(configured: usize, ttl: Duration, block_time: Duration) -> usize {
-        // Scale the cap to cover fast pipelines without dropping in-flight RBC sessions.
-        if configured == 0 || ttl.is_zero() {
-            return configured;
-        }
-        let block_ms = block_time.as_millis().max(1);
-        let ttl_ms = ttl.as_millis().max(1);
-        let expected = usize::try_from(ttl_ms / block_ms).unwrap_or(usize::MAX);
-        let padded = expected.saturating_add(1).saturating_mul(2).max(1);
-        configured.max(padded)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1919,8 +1124,6 @@ impl ConsensusIngressLimiter {
         bulk_bytes_rate: Option<BucketConfig>,
         critical_msg_rate: Option<BucketConfig>,
         critical_bytes_rate: Option<BucketConfig>,
-        rbc_session_limit: usize,
-        rbc_session_ttl: Duration,
         penalty: PenaltyConfig,
     ) -> Self {
         Self {
@@ -1930,8 +1133,6 @@ impl ConsensusIngressLimiter {
             bulk_bytes_rate,
             critical_msg_rate,
             critical_bytes_rate,
-            rbc_session_limit,
-            rbc_session_ttl,
             penalty,
             peers: HashMap::new(),
         }
@@ -1943,11 +1144,6 @@ impl ConsensusIngressLimiter {
         msg: &iroha_core::NetworkMessage,
         size_bytes: usize,
     ) -> Option<ConsensusIngressDropReason> {
-        if matches!(msg, iroha_core::NetworkMessage::LaneDrainVote(_))
-            && size_bytes > iroha_core::MAX_LANE_DRAIN_VOTE_WIRE_BYTES
-        {
-            return Some(ConsensusIngressDropReason::Bytes);
-        }
         let policy = Self::ingress_policy(msg);
         let apply_penalty = policy.apply_penalty
             || (policy.rate_class == Some(IngressRateClass::Critical)
@@ -1988,75 +1184,7 @@ impl ConsensusIngressLimiter {
                 return Some(ConsensusIngressDropReason::Bytes);
             }
         }
-        if policy.apply_rbc_session_limit
-            && let Some(key) = Self::rbc_session_key(msg)
-            && self.rbc_session_limit > 0
-        {
-            entry.prune_rbc_sessions(now, self.rbc_session_ttl);
-            if !entry.rbc_sessions.contains_key(&key)
-                && entry.rbc_sessions.len() >= self.rbc_session_limit
-            {
-                if apply_penalty {
-                    entry.penalty.note_violation(now);
-                }
-                return Some(ConsensusIngressDropReason::RbcSessionLimit);
-            }
-            entry.rbc_sessions.insert(key, now);
-        }
         None
-    }
-
-    fn rbc_session_key(msg: &iroha_core::NetworkMessage) -> Option<ConsensusPayloadSessionKey> {
-        use iroha_core::sumeragi::message::BlockMessage::*;
-        use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
-
-        let iroha_core::NetworkMessage::SumeragiBlock(block) = msg else {
-            return None;
-        };
-        match block.as_ref().as_ref() {
-            RbcInit(init) => Some(ConsensusPayloadSessionKey::V1((
-                init.block_hash,
-                init.height,
-                init.view,
-            ))),
-            RbcInitRequest(request) => Some(ConsensusPayloadSessionKey::V1((
-                request.block_hash,
-                request.height,
-                request.view,
-            ))),
-            RbcChunk(chunk) => Some(ConsensusPayloadSessionKey::V1((
-                chunk.block_hash,
-                chunk.height,
-                chunk.view,
-            ))),
-            RbcChunkCompact(chunk) => Some(ConsensusPayloadSessionKey::V1((
-                chunk.block_hash,
-                u64::from(chunk.height),
-                u64::from(chunk.view),
-            ))),
-            RbcChunkRequest(request) => Some(ConsensusPayloadSessionKey::V1((
-                request.block_hash,
-                request.height,
-                request.view,
-            ))),
-            RbcReady(ready) => Some(ConsensusPayloadSessionKey::V1((
-                ready.block_hash,
-                ready.height,
-                ready.view,
-            ))),
-            RbcDeliver(deliver) => Some(ConsensusPayloadSessionKey::V1((
-                deliver.block_hash,
-                deliver.height,
-                deliver.view,
-            ))),
-            V2(message) => match &message.payload {
-                ConsensusMessageV2Payload::PayloadChunk(chunk) => {
-                    Some(ConsensusPayloadSessionKey::V2(chunk.manifest_hash))
-                }
-                _ => None,
-            },
-            _ => None,
-        }
     }
 }
 
@@ -2079,7 +1207,6 @@ impl PeerIngressState {
             bulk_bytes_bucket: bulk_bytes_rate.map(|cfg| TokenBucket::new(cfg, now)),
             critical_msg_bucket: critical_msg_rate.map(|cfg| TokenBucket::new(cfg, now)),
             critical_bytes_bucket: critical_bytes_rate.map(|cfg| TokenBucket::new(cfg, now)),
-            rbc_sessions: HashMap::new(),
             penalty: PenaltyTracker::new(penalty),
         }
     }
@@ -2110,15 +1237,6 @@ impl PeerIngressState {
                 }
             }
         }
-    }
-
-    fn prune_rbc_sessions(&mut self, now: Instant, ttl: Duration) {
-        if ttl.is_zero() {
-            self.rbc_sessions.clear();
-            return;
-        }
-        self.rbc_sessions
-            .retain(|_, seen| now.saturating_duration_since(*seen) <= ttl);
     }
 }
 
@@ -2267,9 +1385,6 @@ impl TokenBucket {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RelayReceiverKind {
-    SafetyIngress,
-    Control,
-    AuxiliaryControl,
     High,
     Payload,
     Chunk,
@@ -2279,9 +1394,6 @@ enum RelayReceiverKind {
 impl RelayReceiverKind {
     const fn label(self) -> &'static str {
         match self {
-            Self::SafetyIngress => "safety_ingress",
-            Self::Control => "control",
-            Self::AuxiliaryControl => "aux_control",
             Self::High => "high",
             Self::Payload => "payload",
             Self::Chunk => "chunk",
@@ -2319,212 +1431,39 @@ fn try_recv_after_burst<T>(
     }
 }
 
-fn relay_safety_turn_available(safety_budget: &mut usize, non_safety_pending: bool) -> bool {
-    if *safety_budget == 0 && !non_safety_pending {
-        // No competing work exists, so reopen one safety slot and check the
-        // other queues again after it. This preserves progress without turning
-        // an empty repair queue into a safety deadlock.
-        *safety_budget = 1;
-    }
-    *safety_budget > 0
-}
-
-const RELAY_WORKER_BACKGROUND_QUEUE_COUNT: usize = 3;
-
-fn advance_relay_worker_background_rr(background_rr: &mut u8, served_index: usize) {
-    *background_rr = u8::try_from((served_index + 1) % RELAY_WORKER_BACKGROUND_QUEUE_COUNT)
-        .expect("relay worker background queue count fits in u8");
-}
-
-fn try_recv_relay_worker_background(
-    background_rr: &mut u8,
-    work_payload_rx: &mut mpsc::Receiver<RelayQueuedWork>,
-    work_chunk_rx: &mut mpsc::Receiver<RelayQueuedWork>,
-    work_low_rx: &mut mpsc::Receiver<RelayQueuedWork>,
-) -> Option<RelayQueuedWork> {
-    for offset in 0..RELAY_WORKER_BACKGROUND_QUEUE_COUNT {
-        let index = (usize::from(*background_rr) + offset) % RELAY_WORKER_BACKGROUND_QUEUE_COUNT;
-        let received = match index {
-            0 => work_payload_rx.try_recv(),
-            1 => work_chunk_rx.try_recv(),
-            _ => work_low_rx.try_recv(),
-        };
-        if let Ok(work) = received {
-            advance_relay_worker_background_rr(background_rr, index);
-            return Some(work);
-        }
-    }
-    None
-}
-
-fn try_recv_relay_worker_background_after_high_burst(
-    high_budget: &mut usize,
-    background_rr: &mut u8,
-    work_payload_rx: &mut mpsc::Receiver<RelayQueuedWork>,
-    work_chunk_rx: &mut mpsc::Receiver<RelayQueuedWork>,
-    work_low_rx: &mut mpsc::Receiver<RelayQueuedWork>,
-) -> Option<RelayQueuedWork> {
-    if *high_budget != 0 {
-        return None;
-    }
-    if let Some(work) =
-        try_recv_relay_worker_background(background_rr, work_payload_rx, work_chunk_rx, work_low_rx)
-    {
-        *high_budget = RELAY_HIGH_BURST;
-        return Some(work);
-    }
-    *high_budget = 1;
-    None
-}
-
-async fn recv_relay_worker_background(
-    background_rr: &mut u8,
-    work_payload_rx: &mut mpsc::Receiver<RelayQueuedWork>,
-    work_chunk_rx: &mut mpsc::Receiver<RelayQueuedWork>,
-    work_low_rx: &mut mpsc::Receiver<RelayQueuedWork>,
-) -> Option<RelayQueuedWork> {
-    std::future::poll_fn(|cx| {
-        let mut closed = 0usize;
-        for offset in 0..RELAY_WORKER_BACKGROUND_QUEUE_COUNT {
-            let index =
-                (usize::from(*background_rr) + offset) % RELAY_WORKER_BACKGROUND_QUEUE_COUNT;
-            let polled = match index {
-                0 => work_payload_rx.poll_recv(cx),
-                1 => work_chunk_rx.poll_recv(cx),
-                _ => work_low_rx.poll_recv(cx),
-            };
-            match polled {
-                std::task::Poll::Ready(Some(work)) => {
-                    advance_relay_worker_background_rr(background_rr, index);
-                    return std::task::Poll::Ready(Some(work));
-                }
-                std::task::Poll::Ready(None) => closed = closed.saturating_add(1),
-                std::task::Poll::Pending => {}
-            }
-        }
-        if closed == RELAY_WORKER_BACKGROUND_QUEUE_COUNT {
-            std::task::Poll::Ready(None)
-        } else {
-            std::task::Poll::Pending
-        }
-    })
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
 fn spawn_network_relay_worker(
     shared: Arc<NetworkRelayShared>,
     worker_limit: usize,
-    control_worker_limit: usize,
-    work_control_cap: usize,
-    work_aux_control_cap: usize,
     work_high_cap: usize,
     work_payload_cap: usize,
     work_chunk_cap: usize,
     work_low_cap: usize,
 ) -> (
-    mpsc::Sender<RelayQueuedWork>,
-    mpsc::Sender<RelayQueuedWork>,
-    mpsc::Sender<RelayQueuedWork>,
-    mpsc::Sender<RelayQueuedWork>,
-    mpsc::Sender<RelayQueuedWork>,
-    mpsc::Sender<RelayQueuedWork>,
+    mpsc::Sender<RelayWorkItem>,
+    mpsc::Sender<RelayWorkItem>,
+    mpsc::Sender<RelayWorkItem>,
+    mpsc::Sender<RelayWorkItem>,
 ) {
-    let (work_control_tx, mut work_control_rx) = mpsc::channel::<RelayQueuedWork>(work_control_cap);
-    let (work_aux_control_tx, mut work_aux_control_rx) =
-        mpsc::channel::<RelayQueuedWork>(work_aux_control_cap);
-    let (work_high_tx, mut work_high_rx) = mpsc::channel::<RelayQueuedWork>(work_high_cap);
-    let (work_payload_tx, mut work_payload_rx) = mpsc::channel::<RelayQueuedWork>(work_payload_cap);
-    let (work_chunk_tx, mut work_chunk_rx) = mpsc::channel::<RelayQueuedWork>(work_chunk_cap);
-    let (work_low_tx, mut work_low_rx) = mpsc::channel::<RelayQueuedWork>(work_low_cap);
-    // Global v2 safety control has a separate bounded worker budget. Lane/VRF
-    // traffic has a single-worker auxiliary lane, so it cannot occupy every
-    // sender waiting on the isolated global Sumeragi vote queue.
-    let control_worker_sem = Arc::new(tokio::sync::Semaphore::new(control_worker_limit.max(1)));
-    let shared_for_control_workers = Arc::clone(&shared);
-    tokio::spawn(async move {
-        while let Some(work) = work_control_rx.recv().await {
-            let RelayQueuedWork {
-                item: msg,
-                replay_lease,
-            } = work;
-            let permit = match control_worker_sem.clone().acquire_owned().await {
-                Ok(permit) => permit,
-                Err(_) => break,
-            };
-            let shared = Arc::clone(&shared_for_control_workers);
-            tokio::spawn(async move {
-                let _replay_lease = replay_lease;
-                shared
-                    .handle_message(msg.peer, msg.payload, msg.payload_bytes)
-                    .await;
-                drop(permit);
-            });
-        }
-    });
-
-    let aux_control_worker_sem = Arc::new(tokio::sync::Semaphore::new(1));
-    let shared_for_aux_control_workers = Arc::clone(&shared);
-    tokio::spawn(async move {
-        while let Some(work) = work_aux_control_rx.recv().await {
-            let RelayQueuedWork {
-                item: msg,
-                replay_lease,
-            } = work;
-            let permit = match aux_control_worker_sem.clone().acquire_owned().await {
-                Ok(permit) => permit,
-                Err(_) => break,
-            };
-            let shared = Arc::clone(&shared_for_aux_control_workers);
-            tokio::spawn(async move {
-                let _replay_lease = replay_lease;
-                shared
-                    .handle_message(msg.peer, msg.payload, msg.payload_bytes)
-                    .await;
-                drop(permit);
-            });
-        }
-    });
-
+    let (work_high_tx, mut work_high_rx) = mpsc::channel::<RelayWorkItem>(work_high_cap);
+    let (work_payload_tx, mut work_payload_rx) = mpsc::channel::<RelayWorkItem>(work_payload_cap);
+    let (work_chunk_tx, mut work_chunk_rx) = mpsc::channel::<RelayWorkItem>(work_chunk_cap);
+    let (work_low_tx, mut work_low_rx) = mpsc::channel::<RelayWorkItem>(work_low_cap);
     let worker_sem = Arc::new(tokio::sync::Semaphore::new(worker_limit));
     let shared_for_workers = Arc::clone(&shared);
     let worker_sem_for_workers = Arc::clone(&worker_sem);
     tokio::spawn(async move {
-        let mut high_budget = RELAY_HIGH_BURST;
-        let mut background_rr = 0u8;
         loop {
-            let forced_background = try_recv_relay_worker_background_after_high_burst(
-                &mut high_budget,
-                &mut background_rr,
-                &mut work_payload_rx,
-                &mut work_chunk_rx,
-                &mut work_low_rx,
-            );
-            let msg = if forced_background.is_some() {
-                forced_background
-            } else {
-                tokio::select! {
-                    biased;
-                    Some(msg) = work_high_rx.recv(), if high_budget > 0 => {
-                        high_budget = high_budget.saturating_sub(1);
-                        Some(msg)
-                    },
-                    Some(msg) = recv_relay_worker_background(
-                        &mut background_rr,
-                        &mut work_payload_rx,
-                        &mut work_chunk_rx,
-                        &mut work_low_rx,
-                    ) => {
-                        high_budget = RELAY_HIGH_BURST;
-                        Some(msg)
-                    },
-                    else => None,
-                }
+            let msg = tokio::select! {
+                biased;
+                Some(msg) = work_high_rx.recv() => Some(msg),
+                Some(msg) = work_payload_rx.recv() => Some(msg),
+                Some(msg) = work_chunk_rx.recv() => Some(msg),
+                Some(msg) = work_low_rx.recv() => Some(msg),
+                else => None,
             };
             let Some(msg) = msg else {
                 break;
             };
-            let RelayQueuedWork { item: msg, .. } = msg;
             let permit = match worker_sem_for_workers.clone().acquire_owned().await {
                 Ok(permit) => permit,
                 Err(_) => break,
@@ -2539,210 +1478,71 @@ fn spawn_network_relay_worker(
         }
     });
 
-    (
-        work_control_tx,
-        work_aux_control_tx,
-        work_high_tx,
-        work_payload_tx,
-        work_chunk_tx,
-        work_low_tx,
-    )
+    (work_high_tx, work_payload_tx, work_chunk_tx, work_low_tx)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn try_enqueue_relay_work(
-    work_control_tx: &mpsc::Sender<RelayQueuedWork>,
-    work_aux_control_tx: &mpsc::Sender<RelayQueuedWork>,
-    tx: &mpsc::Sender<RelayQueuedWork>,
+    tx: &mpsc::Sender<RelayWorkItem>,
     msg: RelayWorkItem,
     kind: RelayReceiverKind,
     drops: &mut u64,
-    control_gate: &Arc<RelayControlIngressGate>,
-    shared: Option<&NetworkRelayShared>,
 ) -> Result<(), RelayIngressLoopExit> {
-    let admission = control_gate.admit(&msg.payload, Instant::now());
-    if let Ok(Some(_)) = &admission
-        && shared.is_some_and(|shared| {
-            shared.should_drop_consensus_ingress(&msg.peer, &msg.payload, msg.payload_bytes)
-        })
+    if let Some((message_kind, height, view)) =
+        NetworkRelayShared::retired_sumeragi_message_meta(&msg.payload)
     {
-        rollback_relay_control_admission(control_gate, &admission);
-        *drops = drops.saturating_add(1);
+        iroha_logger::debug!(
+            peer = %msg.peer,
+            ?height,
+            ?view,
+            message_kind,
+            "rejecting retired Sumeragi v1 message before relay preprocessing"
+        );
         return Ok(());
     }
-    try_enqueue_relay_work_with_admission(
-        work_control_tx,
-        work_aux_control_tx,
-        tx,
-        msg,
-        kind,
-        drops,
-        control_gate,
-        admission,
-    )
-}
-
-fn rollback_relay_control_admission(
-    control_gate: &RelayControlIngressGate,
-    admission: &RelayControlAdmission,
-) {
-    if let Ok(Some(token)) = admission {
-        control_gate.rollback(token);
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn try_enqueue_relay_work_with_admission(
-    work_control_tx: &mpsc::Sender<RelayQueuedWork>,
-    work_aux_control_tx: &mpsc::Sender<RelayQueuedWork>,
-    tx: &mpsc::Sender<RelayQueuedWork>,
-    msg: RelayWorkItem,
-    kind: RelayReceiverKind,
-    drops: &mut u64,
-    control_gate: &Arc<RelayControlIngressGate>,
-    admission: RelayControlAdmission,
-) -> Result<(), RelayIngressLoopExit> {
-    let (target, target_kind, work) = match admission {
-        Ok(None) => (tx, kind, RelayQueuedWork::general(msg)),
-        Ok(Some(token)) => match token.class {
-            RelayControlClass::GlobalV2 => (
-                work_control_tx,
-                RelayReceiverKind::Control,
-                RelayQueuedWork::reserved(msg, Arc::clone(control_gate), token),
-            ),
-            RelayControlClass::Auxiliary => (
-                work_aux_control_tx,
-                RelayReceiverKind::AuxiliaryControl,
-                RelayQueuedWork::reserved(msg, Arc::clone(control_gate), token),
-            ),
-        },
-        Err(reason) => {
-            *drops = drops.saturating_add(1);
-            if *drops == 1 || (*drops).is_multiple_of(1024) {
-                iroha_logger::debug!(
-                    peer = %msg.peer,
-                    topic = ?msg.payload.topic(),
-                    drops = *drops,
-                    reason = reason.label(),
-                    "relay rejected live control before worker admission"
-                );
-            }
-            return Ok(());
-        }
-    };
-    match target.try_send(work) {
+    match tx.try_send(msg) {
         Ok(()) => Ok(()),
-        Err(mpsc::error::TrySendError::Full(work)) => {
+        Err(mpsc::error::TrySendError::Full(msg)) => {
             *drops = drops.saturating_add(1);
             if *drops == 1 || (*drops).is_multiple_of(1024) {
                 iroha_logger::warn!(
-                    peer = %work.item.peer,
-                    topic = ?work.item.payload.topic(),
+                    peer = %msg.peer,
+                    topic = ?msg.payload.topic(),
                     drops = *drops,
-                    queue = target_kind.label(),
+                    queue = kind.label(),
                     "relay work queue full; dropping message"
                 );
             }
             Ok(())
         }
-        Err(mpsc::error::TrySendError::Closed(_)) => {
-            Err(RelayIngressLoopExit::WorkerClosed(target_kind))
-        }
+        Err(mpsc::error::TrySendError::Closed(_)) => Err(RelayIngressLoopExit::WorkerClosed(kind)),
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn drive_network_relay_ingress(
-    mut safety_receiver: mpsc::Receiver<RelayWorkItem>,
     mut high_receiver: mpsc::Receiver<RelayWorkItem>,
     mut payload_receiver: mpsc::Receiver<RelayWorkItem>,
     mut chunk_receiver: mpsc::Receiver<RelayWorkItem>,
     mut low_receiver: mpsc::Receiver<RelayWorkItem>,
-    work_control_tx: &mpsc::Sender<RelayQueuedWork>,
-    work_aux_control_tx: &mpsc::Sender<RelayQueuedWork>,
-    work_high_tx: &mpsc::Sender<RelayQueuedWork>,
-    work_payload_tx: &mpsc::Sender<RelayQueuedWork>,
-    work_chunk_tx: &mpsc::Sender<RelayQueuedWork>,
-    work_low_tx: &mpsc::Sender<RelayQueuedWork>,
-    control_gate: &Arc<RelayControlIngressGate>,
-    shared: Option<&NetworkRelayShared>,
+    work_high_tx: &mpsc::Sender<RelayWorkItem>,
+    work_payload_tx: &mpsc::Sender<RelayWorkItem>,
+    work_chunk_tx: &mpsc::Sender<RelayWorkItem>,
+    work_low_tx: &mpsc::Sender<RelayWorkItem>,
 ) -> RelayIngressLoopExit {
     let mut high_budget = RELAY_HIGH_BURST;
-    let mut safety_budget = RELAY_SAFETY_BURST;
-    let mut safety_drops: u64 = 0;
     let mut high_drops: u64 = 0;
     let mut payload_drops: u64 = 0;
     let mut chunk_drops: u64 = 0;
     let mut low_drops: u64 = 0;
 
     loop {
-        for (closed, kind) in [
-            (
-                safety_receiver.is_closed() && safety_receiver.is_empty(),
-                RelayReceiverKind::SafetyIngress,
-            ),
-            (
-                high_receiver.is_closed() && high_receiver.is_empty(),
-                RelayReceiverKind::High,
-            ),
-            (
-                payload_receiver.is_closed() && payload_receiver.is_empty(),
-                RelayReceiverKind::Payload,
-            ),
-            (
-                chunk_receiver.is_closed() && chunk_receiver.is_empty(),
-                RelayReceiverKind::Chunk,
-            ),
-            (
-                low_receiver.is_closed() && low_receiver.is_empty(),
-                RelayReceiverKind::Low,
-            ),
-        ] {
-            if closed {
-                return RelayIngressLoopExit::ReceiverClosed(kind);
-            }
-        }
-
-        let non_safety_pending = !high_receiver.is_empty()
-            || !payload_receiver.is_empty()
-            || !chunk_receiver.is_empty()
-            || !low_receiver.is_empty();
-        if relay_safety_turn_available(&mut safety_budget, non_safety_pending) {
-            match safety_receiver.try_recv() {
-                Ok(msg) => {
-                    safety_budget = safety_budget.saturating_sub(1);
-                    if let Err(exit) = try_enqueue_relay_work(
-                        work_control_tx,
-                        work_aux_control_tx,
-                        work_high_tx,
-                        msg,
-                        RelayReceiverKind::SafetyIngress,
-                        &mut safety_drops,
-                        control_gate,
-                        shared,
-                    ) {
-                        return exit;
-                    }
-                    continue;
-                }
-                Err(mpsc::error::TryRecvError::Disconnected) => {
-                    return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::SafetyIngress);
-                }
-                Err(mpsc::error::TryRecvError::Empty) => {}
-            }
-        }
         match try_recv_after_burst(&mut payload_receiver, &mut high_budget, RELAY_HIGH_BURST) {
             RelayBurstRecv::Message(msg) => {
-                safety_budget = RELAY_SAFETY_BURST;
                 if let Err(exit) = try_enqueue_relay_work(
-                    work_control_tx,
-                    work_aux_control_tx,
                     work_payload_tx,
                     msg,
                     RelayReceiverKind::Payload,
                     &mut payload_drops,
-                    control_gate,
-                    shared,
                 ) {
                     return exit;
                 }
@@ -2755,16 +1555,11 @@ async fn drive_network_relay_ingress(
         }
         match try_recv_after_burst(&mut chunk_receiver, &mut high_budget, RELAY_HIGH_BURST) {
             RelayBurstRecv::Message(msg) => {
-                safety_budget = RELAY_SAFETY_BURST;
                 if let Err(exit) = try_enqueue_relay_work(
-                    work_control_tx,
-                    work_aux_control_tx,
                     work_chunk_tx,
                     msg,
                     RelayReceiverKind::Chunk,
                     &mut chunk_drops,
-                    control_gate,
-                    shared,
                 ) {
                     return exit;
                 }
@@ -2777,17 +1572,9 @@ async fn drive_network_relay_ingress(
         }
         match try_recv_after_burst(&mut low_receiver, &mut high_budget, RELAY_HIGH_BURST) {
             RelayBurstRecv::Message(msg) => {
-                safety_budget = RELAY_SAFETY_BURST;
-                if let Err(exit) = try_enqueue_relay_work(
-                    work_control_tx,
-                    work_aux_control_tx,
-                    work_low_tx,
-                    msg,
-                    RelayReceiverKind::Low,
-                    &mut low_drops,
-                    control_gate,
-                    shared,
-                ) {
+                if let Err(exit) =
+                    try_enqueue_relay_work(work_low_tx, msg, RelayReceiverKind::Low, &mut low_drops)
+                {
                     return exit;
                 }
                 continue;
@@ -2799,39 +1586,16 @@ async fn drive_network_relay_ingress(
         }
         tokio::select! {
             biased;
-            msg = safety_receiver.recv(), if safety_budget > 0 => {
-                let Some(msg) = msg else {
-                    return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::SafetyIngress);
-                };
-                safety_budget = safety_budget.saturating_sub(1);
-                if let Err(exit) = try_enqueue_relay_work(
-                    work_control_tx,
-                    work_aux_control_tx,
-                    work_high_tx,
-                    msg,
-                    RelayReceiverKind::SafetyIngress,
-                    &mut safety_drops,
-                    control_gate,
-                    shared,
-                ) {
-                    return exit;
-                }
-            }
             msg = high_receiver.recv() => {
                 let Some(msg) = msg else {
                     return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::High);
                 };
-                safety_budget = RELAY_SAFETY_BURST;
                 high_budget = high_budget.saturating_sub(1);
                 if let Err(exit) = try_enqueue_relay_work(
-                    work_control_tx,
-                    work_aux_control_tx,
                     work_high_tx,
                     msg,
                     RelayReceiverKind::High,
                     &mut high_drops,
-                    control_gate,
-                    shared,
                 ) {
                     return exit;
                 }
@@ -2840,17 +1604,12 @@ async fn drive_network_relay_ingress(
                 let Some(msg) = msg else {
                     return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::Payload);
                 };
-                safety_budget = RELAY_SAFETY_BURST;
                 high_budget = RELAY_HIGH_BURST;
                 if let Err(exit) = try_enqueue_relay_work(
-                    work_control_tx,
-                    work_aux_control_tx,
                     work_payload_tx,
                     msg,
                     RelayReceiverKind::Payload,
                     &mut payload_drops,
-                    control_gate,
-                    shared,
                 ) {
                     return exit;
                 }
@@ -2859,17 +1618,12 @@ async fn drive_network_relay_ingress(
                 let Some(msg) = msg else {
                     return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::Chunk);
                 };
-                safety_budget = RELAY_SAFETY_BURST;
                 high_budget = RELAY_HIGH_BURST;
                 if let Err(exit) = try_enqueue_relay_work(
-                    work_control_tx,
-                    work_aux_control_tx,
                     work_chunk_tx,
                     msg,
                     RelayReceiverKind::Chunk,
                     &mut chunk_drops,
-                    control_gate,
-                    shared,
                 ) {
                     return exit;
                 }
@@ -2878,17 +1632,12 @@ async fn drive_network_relay_ingress(
                 let Some(msg) = msg else {
                     return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::Low);
                 };
-                safety_budget = RELAY_SAFETY_BURST;
                 high_budget = RELAY_HIGH_BURST;
                 if let Err(exit) = try_enqueue_relay_work(
-                    work_control_tx,
-                    work_aux_control_tx,
                     work_low_tx,
                     msg,
                     RelayReceiverKind::Low,
                     &mut low_drops,
-                    control_gate,
-                    shared,
                 ) {
                     return exit;
                 }
@@ -2901,7 +1650,6 @@ impl NetworkRelay {
     fn into_shared(self) -> NetworkRelayShared {
         NetworkRelayShared {
             sumeragi: self.sumeragi,
-            block_sync: self.block_sync,
             tx_gossiper: self.tx_gossiper,
             peers_gossiper: self.peers_gossiper,
             network: self.network,
@@ -2920,7 +1668,6 @@ impl NetworkRelay {
 
         let shared = Arc::new(self.into_shared());
         let base_cap = shared.network.subscriber_queue_cap().get();
-        let safety_cap = base_cap.saturating_mul(4).max(base_cap);
         let high_cap = base_cap.saturating_mul(4).max(base_cap);
         let payload_cap = base_cap.saturating_mul(2).max(base_cap);
         let chunk_cap = base_cap;
@@ -2933,29 +1680,9 @@ impl NetworkRelay {
             .map(std::num::NonZeroUsize::get)
             .unwrap_or(1)
             .clamp(1, 8);
-        let control_worker_limit = worker_limit.clamp(1, 2);
-        // Split the replay budget so every queued, waiting, or active reserved
-        // item retains a generation token until its downstream attempt ends.
-        let replay_budget_per_class = RELAY_CONTROL_REPLAY_CAP / 2;
-        let work_control_cap = high_cap
-            .min(
-                replay_budget_per_class
-                    .saturating_sub(control_worker_limit.saturating_add(1))
-                    .max(1),
-            )
-            .max(control_worker_limit);
-        let work_aux_control_cap = base_cap
-            .min(replay_budget_per_class.saturating_sub(2).max(1))
-            .max(1);
-        let control_gate = Arc::new(RelayControlIngressGate::production());
 
-        // Authoritative v2 proposal/vote/QC/timeout traffic is classified as
-        // `ConsensusSafety` and receives a distinct P2P plus relay subscriber
-        // queue before admission. Lane/VRF and retired consensus floods remain
-        // on the auxiliary queue; proxy/genesis/streaming traffic remains tagged
-        // `Control` and continues through its existing consumers.
-        let safety_filter = SubscriberFilter::topics([Topic::ConsensusSafety]);
-        let high_filter = SubscriberFilter::topics([Topic::Consensus, Topic::Control]);
+        let high_filter =
+            SubscriberFilter::topics([Topic::ConsensusSafety, Topic::Consensus, Topic::Control]);
         let payload_filter = SubscriberFilter::topics([Topic::ConsensusPayload, Topic::BlockSync]);
         let chunk_filter = SubscriberFilter::topics([Topic::ConsensusChunk]);
         let low_filter = SubscriberFilter::topics([
@@ -2968,52 +1695,24 @@ impl NetworkRelay {
         ]);
 
         loop {
-            let (safety_sender, safety_receiver) = mpsc::channel(safety_cap);
             let (high_sender, high_receiver) = mpsc::channel(high_cap);
             let (payload_sender, payload_receiver) = mpsc::channel(payload_cap);
             let (chunk_sender, chunk_receiver) = mpsc::channel(chunk_cap);
             let (low_sender, low_receiver) = mpsc::channel(low_cap);
-            let (
-                work_control_tx,
-                work_aux_control_tx,
-                work_high_tx,
-                work_payload_tx,
-                work_chunk_tx,
-                work_low_tx,
-            ) = spawn_network_relay_worker(
-                Arc::clone(&shared),
-                worker_limit,
-                control_worker_limit,
-                work_control_cap,
-                work_aux_control_cap,
-                work_high_cap,
-                work_payload_cap,
-                work_chunk_cap,
-                work_low_cap,
-            );
+            let (work_high_tx, work_payload_tx, work_chunk_tx, work_low_tx) =
+                spawn_network_relay_worker(
+                    Arc::clone(&shared),
+                    worker_limit,
+                    work_high_cap,
+                    work_payload_cap,
+                    work_chunk_cap,
+                    work_low_cap,
+                );
 
-            let mut safety_sender = Some(safety_sender);
             let mut high_sender = Some(high_sender);
             let mut payload_sender = Some(payload_sender);
             let mut chunk_sender = Some(chunk_sender);
             let mut low_sender = Some(low_sender);
-            if let Some(sender) = safety_sender.take() {
-                match shared
-                    .network
-                    .subscribe_to_peers_messages_with_filter(sender, safety_filter.clone())
-                {
-                    Ok(()) => {
-                        iroha_logger::info!("registered authoritative-v2 safety relay subscriber");
-                    }
-                    Err(returned) => {
-                        iroha_logger::warn!(
-                            "retrying authoritative-v2 safety P2P subscriber registration"
-                        );
-                        safety_sender = Some(returned);
-                    }
-                }
-            }
-
             if let Some(sender) = high_sender.take() {
                 match shared
                     .network
@@ -3074,26 +1773,20 @@ impl NetworkRelay {
                 }
             }
 
-            if safety_sender.is_none()
-                && high_sender.is_none()
+            if high_sender.is_none()
                 && payload_sender.is_none()
                 && chunk_sender.is_none()
                 && low_sender.is_none()
             {
                 let exit = drive_network_relay_ingress(
-                    safety_receiver,
                     high_receiver,
                     payload_receiver,
                     chunk_receiver,
                     low_receiver,
-                    &work_control_tx,
-                    &work_aux_control_tx,
                     &work_high_tx,
                     &work_payload_tx,
                     &work_chunk_tx,
                     &work_low_tx,
-                    &control_gate,
-                    Some(shared.as_ref()),
                 )
                 .await;
                 match exit {
@@ -3119,101 +1812,81 @@ impl NetworkRelay {
 }
 
 impl NetworkRelayShared {
-    fn should_drop_consensus_ingress(
-        &self,
-        peer: &Peer,
-        msg: &iroha_core::NetworkMessage,
-        size_bytes: usize,
-    ) -> bool {
-        use iroha_core::NetworkMessage::*;
-
-        if !matches!(
-            msg,
-            SumeragiBlock(_)
-                | SumeragiControlFlow(_)
-                | LaneDrainVote(_)
-                | CertifiedMergeSidecar(_)
-                | MergeCandidate(_)
-                | BlockSync(_)
-        ) {
-            return false;
-        }
-        let reason = {
-            let mut limiter = self
-                .consensus_ingress
-                .lock()
-                .expect("consensus ingress mutex poisoned");
-            limiter.should_drop(peer, msg, size_bytes)
-        };
-        let Some(reason) = reason else {
-            return false;
-        };
-        #[cfg(feature = "telemetry")]
-        if let Some(metrics) = iroha_telemetry::metrics::global()
-            && let Some(topic) = Self::consensus_ingress_topic_label(msg)
-        {
-            metrics
-                .consensus_ingress_drop_total
-                .with_label_values(&[topic, reason.label()])
-                .inc();
-        }
-        let (kind, height, view) = match msg {
-            SumeragiBlock(data) => Self::block_message_meta(data.as_ref().as_ref()),
-            SumeragiControlFlow(data) => Self::control_flow_meta(data.as_ref()),
-            LaneDrainVote(vote) => (
-                "LaneDrainVote",
-                Some(vote.body.intent.close_global_height),
-                None,
-            ),
-            CertifiedMergeSidecar(data) => match data.as_ref() {
-                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_) => {
-                    ("CertifiedMergeSidecarRequest", None, None)
-                }
-                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => {
-                    ("CertifiedMergeSidecarChunk", None, None)
-                }
-            },
-            MergeCandidate(data) => match data.as_ref() {
-                iroha_core::merge_sidecar::MergeCandidateMessage::Advert(_) => {
-                    ("MergeCandidateAdvert", None, None)
-                }
-                iroha_core::merge_sidecar::MergeCandidateMessage::Request(_) => {
-                    ("MergeCandidateRequest", None, None)
-                }
-                iroha_core::merge_sidecar::MergeCandidateMessage::Chunk(_) => {
-                    ("MergeCandidateChunk", None, None)
-                }
-            },
-            BlockSync(data) => {
-                let label = match data.as_ref() {
-                    iroha_core::block_sync::message::Message::GetBlocksAfter(_) => {
-                        "BlockSyncRequest"
-                    }
-                    iroha_core::block_sync::message::Message::ShareBlocks(_) => "BlockSyncResponse",
-                };
-                (label, None, None)
-            }
-            _ => ("Other", None, None),
-        };
-        iroha_logger::debug!(
-            %peer,
-            ?height,
-            ?view,
-            size_bytes,
-            kind,
-            reason = reason.label(),
-            "dropping inbound consensus message due to ingress limits"
-        );
-        true
-    }
-
     #[allow(clippy::too_many_lines)]
     async fn handle_message(&self, peer: Peer, msg: iroha_core::NetworkMessage, size_bytes: usize) {
         use iroha_core::NetworkMessage::*;
 
-        let reserved_control = matches!(RelayControlIngressGate::inspect(&msg), Ok(Some(_)));
-        if !reserved_control && self.should_drop_consensus_ingress(&peer, &msg, size_bytes) {
+        if let Some((kind, height, view)) = Self::retired_sumeragi_message_meta(&msg) {
+            iroha_logger::debug!(
+                %peer,
+                ?height,
+                ?view,
+                kind,
+                "rejecting retired Sumeragi v1 message before ingress accounting"
+            );
             return;
+        }
+
+        if matches!(
+            &msg,
+            SumeragiBlock(_)
+                | SumeragiControlFlow(_)
+                | CertifiedMergeSidecar(_)
+                | MergeCandidate(_)
+                | LaneDrainVote(_)
+        ) {
+            let reason = {
+                let mut limiter = self
+                    .consensus_ingress
+                    .lock()
+                    .expect("consensus ingress mutex poisoned");
+                limiter.should_drop(&peer, &msg, size_bytes)
+            };
+            if let Some(reason) = reason {
+                #[cfg(feature = "telemetry")]
+                if let Some(metrics) = iroha_telemetry::metrics::global()
+                    && let Some(topic) = Self::consensus_ingress_topic_label(&msg)
+                {
+                    metrics
+                        .consensus_ingress_drop_total
+                        .with_label_values(&[topic, reason.label()])
+                        .inc();
+                }
+                let (kind, height, view) = match &msg {
+                    SumeragiBlock(data) => Self::block_message_meta(data.as_ref().as_ref()),
+                    SumeragiControlFlow(data) => Self::control_flow_meta(data.as_ref()),
+                    CertifiedMergeSidecar(data) => match data.as_ref() {
+                        iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_) => {
+                            ("CertifiedMergeSidecarRequest", None, None)
+                        }
+                        iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => {
+                            ("CertifiedMergeSidecarChunk", None, None)
+                        }
+                    },
+                    MergeCandidate(data) => match data.as_ref() {
+                        iroha_core::merge_sidecar::MergeCandidateMessage::Advert(_) => {
+                            ("MergeCandidateAdvert", None, None)
+                        }
+                        iroha_core::merge_sidecar::MergeCandidateMessage::Request(_) => {
+                            ("MergeCandidateRequest", None, None)
+                        }
+                        iroha_core::merge_sidecar::MergeCandidateMessage::Chunk(_) => {
+                            ("MergeCandidateChunk", None, None)
+                        }
+                    },
+                    _ => ("Other", None, None),
+                };
+                iroha_logger::debug!(
+                    %peer,
+                    ?height,
+                    ?view,
+                    size_bytes,
+                    kind,
+                    reason = reason.label(),
+                    "dropping inbound consensus message due to ingress limits"
+                );
+                return;
+            }
         }
 
         if Self::should_apply_low_priority_ingress(&msg) {
@@ -3280,11 +1953,6 @@ impl NetworkRelayShared {
             MergeCommitteeSignature(signature) => {
                 let _ = self.sumeragi.try_incoming_merge_signature(*signature);
             }
-            LaneDrainVote(vote) => {
-                let _ = self
-                    .sumeragi
-                    .try_incoming_lane_drain_vote(peer.id().clone(), *vote);
-            }
             CertifiedMergeSidecar(message) => {
                 let _ = self
                     .sumeragi
@@ -3300,39 +1968,17 @@ impl NetworkRelayShared {
                     .sumeragi
                     .try_incoming_native_amx(peer.id().clone(), *message);
             }
+            LaneDrainVote(vote) => {
+                let _ = self
+                    .sumeragi
+                    .try_incoming_lane_drain_vote(peer.id().clone(), *vote);
+            }
             StreamingControl(frame) => {
                 if let Err(err) = self.streaming.process_control_frame(&peer, frame.as_ref()) {
                     iroha_logger::warn!(%peer, ?err, "Failed to process streaming control frame");
                 }
             }
-            BlockSync(data) => {
-                let Some(block_sync) = Self::sanitize_block_sync_message(&peer, *data) else {
-                    return;
-                };
-                match &block_sync {
-                    iroha_core::block_sync::message::Message::GetBlocksAfter(get) => {
-                        iroha_logger::debug!(
-                            %peer,
-                            from = %get.peer_id,
-                            prev = ?get.prev_hash,
-                            latest = ?get.latest_hash,
-                            seen = get.seen_blocks.len(),
-                            "relay received block sync request"
-                        );
-                    }
-                    iroha_core::block_sync::message::Message::ShareBlocks(share) => {
-                        iroha_logger::debug!(
-                            %peer,
-                            from = %share.peer_id,
-                            count = share.blocks.len(),
-                            first_height = share.blocks.first().map(|b| b.header().height().get()),
-                            last_height = share.blocks.last().map(|b| b.header().height().get()),
-                            "relay received block sync response"
-                        );
-                    }
-                }
-                self.block_sync.message(block_sync);
-            }
+            BlockSync(_) => unreachable!("retired v1 block sync is rejected before dispatch"),
             TransactionGossiper(data) => {
                 iroha_logger::debug!(
                     %peer,
@@ -3404,53 +2050,31 @@ impl NetworkRelayShared {
         ) || matches!(msg, iroha_core::NetworkMessage::StreamingControl(_))
     }
 
-    #[cfg(feature = "telemetry")]
-    fn consensus_ingress_topic_label(msg: &iroha_core::NetworkMessage) -> Option<&'static str> {
-        use iroha_p2p::network::message::Topic;
-
-        if matches!(msg, iroha_core::NetworkMessage::LaneDrainVote(_)) {
-            return Some("LaneDrainVote");
-        }
-        match msg.topic() {
-            Topic::ConsensusSafety => Some("ConsensusSafety"),
-            Topic::ConsensusPayload => Some("ConsensusPayload"),
-            Topic::ConsensusChunk => Some("ConsensusChunk"),
-            Topic::BlockSync => Some("BlockSync"),
+    fn retired_sumeragi_message_meta(
+        msg: &iroha_core::NetworkMessage,
+    ) -> Option<(&'static str, Option<u64>, Option<u64>)> {
+        match msg {
+            iroha_core::NetworkMessage::SumeragiBlock(block)
+                if !block.as_ref().as_ref().is_authoritative_v2_ingress() =>
+            {
+                Some(Self::block_message_meta(block.as_ref().as_ref()))
+            }
+            iroha_core::NetworkMessage::SumeragiControlFlow(message) => {
+                Some(Self::control_flow_meta(message.as_ref()))
+            }
+            iroha_core::NetworkMessage::BlockSync(_) => Some(("BlockSyncV1", None, None)),
             _ => None,
         }
     }
 
-    fn sanitize_block_sync_message(
-        peer: &Peer,
-        msg: iroha_core::block_sync::message::Message,
-    ) -> Option<iroha_core::block_sync::message::Message> {
-        use iroha_core::block_sync::message::Message::{GetBlocksAfter, ShareBlocks};
+    #[cfg(feature = "telemetry")]
+    fn consensus_ingress_topic_label(msg: &iroha_core::NetworkMessage) -> Option<&'static str> {
+        use iroha_p2p::network::message::Topic;
 
-        match msg {
-            GetBlocksAfter(mut get) => {
-                if get.peer_id != *peer.id() {
-                    iroha_logger::warn!(
-                        %peer,
-                        declared = %get.peer_id,
-                        "dropping block sync request with mismatched peer_id"
-                    );
-                    return None;
-                }
-                get.peer_id = peer.id().clone();
-                Some(GetBlocksAfter(get))
-            }
-            ShareBlocks(mut share) => {
-                if share.peer_id != *peer.id() {
-                    iroha_logger::warn!(
-                        %peer,
-                        declared = %share.peer_id,
-                        "dropping block sync response with mismatched peer_id"
-                    );
-                    return None;
-                }
-                share.peer_id = peer.id().clone();
-                Some(ShareBlocks(share))
-            }
+        match msg.topic() {
+            Topic::ConsensusPayload => Some("ConsensusPayload"),
+            Topic::ConsensusChunk => Some("ConsensusChunk"),
+            _ => None,
         }
     }
 
@@ -3846,35 +2470,17 @@ where
 
 #[cfg(test)]
 mod network_relay_tests {
-    use std::{
-        borrow::Cow,
-        collections::BTreeSet,
-        sync::Arc,
-        time::{Duration, Instant},
-    };
+    use std::time::Duration;
 
     use iroha_config::{
         client_api::{SoranetHandshakePowSummary, SoranetHandshakePuzzleSummary},
         parameters::actual::{SoranetPow, SoranetPuzzle},
     };
     use iroha_core::{
-        MAX_LANE_DRAIN_VOTE_WIRE_BYTES, SoranetPowConfigBroadcast, SoranetPuzzleConfigBroadcast,
-        block::BlockBuilder,
-        block_sync::message::{GetBlocksAfter, Message as BlockSyncMessage, ShareBlocks},
-        lane_consensus::{
-            LaneBlockNewViewBodyV1, LaneBlockNewViewCertificateV1, LaneBlockNewViewVoteV1,
-            LaneDrainVoteV1, LaneExecutablePayloadHandoffV1, LaneExecutablePayloadV1,
-        },
+        SoranetPowConfigBroadcast, SoranetPuzzleConfigBroadcast,
         sumeragi::{
-            consensus::{
-                ConsensusBlockHeader, Evidence, EvidenceKind, EvidencePayload, ExecWitness,
-                ExecWitnessMsg, LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1, Phase,
-                Proposal, QcHeaderRef, RbcInit,
-            },
-            message::{
-                BlockMessage, BlockMessageWire, BlockSyncUpdate, ConsensusParamsAdvert,
-                ControlFlow, FetchPendingBlock, FetchPendingBlockPriority,
-            },
+            consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1, Phase},
+            message::{BlockMessage, BlockMessageWire, ConsensusParamsAdvert},
         },
         torii_proxy::{
             TORII_PROXY_REQUEST_VERSION_V2, TORII_PROXY_RESPONSE_VERSION_V1,
@@ -3882,56 +2488,31 @@ mod network_relay_tests {
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         },
-        tx::AcceptedTransaction,
     };
-    use iroha_crypto::{Hash, HashOf, KeyPair, SignatureOf};
+    use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        AccountId, ChainId, Level,
-        block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire},
+        block::{
+            BlockHeader,
+            consensus_v2::{
+                self, CommitCertificateRequest, ConsensusMessageV2, ConsensusMessageV2Payload,
+                HeightContextId, PROTOCOL_VERSION,
+            },
+        },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        isi::Log,
-        merge::{LaneDrainCertificateBodyV1, LaneDrainIntentV1},
         nexus::{DataSpaceId, LaneId},
         peer::{Peer, PeerId},
-        transaction::TransactionBuilder,
     };
-    use norito::codec::Encode as _;
 
     use super::{
         BucketConfig, ConsensusIngressDropReason, ConsensusIngressLimiter, IngressRateClass,
         LowPriorityIngressDropReason, LowPriorityIngressLimiter, NetworkRelayShared, PenaltyConfig,
-        RELAY_SAFETY_BURST, RelayControlDropReason, RelayControlIngressGate, RelayIngressLoopExit,
-        RelayQueuedWork, RelayReceiverKind, RelayWorkItem, drive_network_relay_ingress,
-        enqueue_sumeragi_block_message, pow_update_payload, relay_safety_turn_available,
-        rollback_relay_control_admission, try_enqueue_relay_work_with_admission,
-        try_recv_relay_worker_background_after_high_burst,
+        enqueue_sumeragi_block_message, pow_update_payload,
     };
-
-    fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
-        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
-            .parse()
-            .expect("valid chain id");
-        let keypair = KeyPair::random();
-        let authority = AccountId::new(keypair.public_key().clone());
-        let mut builder = TransactionBuilder::new(chain_id, authority);
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
-            .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
-            .sign(keypair.private_key());
-        AcceptedTransaction::new_unchecked(Cow::Owned(tx))
-    }
 
     #[test]
     fn relay_enqueue_drops_when_queue_is_full() {
         let (tx, rx) = std::sync::mpsc::sync_channel(0);
-        let keypair = KeyPair::random();
-        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
-            .chain(0, None)
-            .sign(keypair.private_key())
-            .unpack(|_| {});
-        let signed = iroha_data_model::block::SignedBlock::from(new_block);
-        let update = BlockSyncUpdate::from(&signed);
-        let msg = BlockMessage::BlockSyncUpdate(update);
+        let msg = v2_vote_block_message();
 
         enqueue_sumeragi_block_message(msg, move |msg| {
             let _ = tx.try_send(msg);
@@ -3944,30 +2525,9 @@ mod network_relay_tests {
     }
 
     #[test]
-    fn block_message_blocking_ingress_policy_admits_only_authoritative_v2() {
-        let signed = signed_block_for_test();
-        let created =
-            BlockMessage::BlockCreated(iroha_core::sumeragi::message::BlockCreated::from(&signed));
-        assert!(!created.requires_blocking_ingress());
-
+    fn block_message_blocking_ingress_policy_separates_safety_from_bulk() {
         assert!(
             BlockMessage::LaneBlockProposal(sample_lane_block_proposal())
-                .requires_blocking_ingress()
-        );
-        assert!(
-            BlockMessage::LaneExecutablePayload(sample_lane_executable_payload())
-                .requires_blocking_ingress()
-        );
-        assert!(
-            BlockMessage::LaneExecutablePayloadHandoff(sample_lane_executable_payload_handoff())
-                .requires_blocking_ingress()
-        );
-        assert!(
-            BlockMessage::LaneBlockNewViewVote(sample_lane_block_new_view_vote())
-                .requires_blocking_ingress()
-        );
-        assert!(
-            BlockMessage::LaneBlockNewViewCertificate(sample_lane_block_new_view_certificate())
                 .requires_blocking_ingress()
         );
         assert!(
@@ -3978,656 +2538,22 @@ mod network_relay_tests {
             BlockMessage::LaneBlockQc(sample_lane_block_qc(Phase::Commit))
                 .requires_blocking_ingress()
         );
+        assert!(!v2_payload_chunk_block_message().requires_blocking_ingress());
+        assert!(!sumeragi_v2_commit_certificate_request().requires_blocking_ingress());
         assert!(
             BlockMessage::VrfCommit(iroha_core::sumeragi::consensus::VrfCommit {
-                epoch: 1,
-                commitment: [0xA1; 32],
+                epoch: 3,
+                commitment: [0xA5; 32],
                 signer: 0,
-                bls_sig: vec![0xA2],
-            })
-            .requires_blocking_ingress()
-        );
-        assert!(
-            BlockMessage::VrfReveal(iroha_core::sumeragi::consensus::VrfReveal {
-                epoch: 1,
-                reveal: [0xB1; 32],
-                signer: 0,
-                bls_sig: vec![0xB2],
+                bls_sig: vec![0x5A],
             })
             .requires_blocking_ingress()
         );
 
-        let init = BlockMessage::RbcInit(RbcInit {
-            block_hash: signed.hash(),
-            height: signed.header().height().get(),
-            view: signed.header().view_change_index(),
-            epoch: 0,
-            roster: vec![PeerId::new(KeyPair::random().public_key().clone())],
-            roster_hash: Hash::prehashed([0x11; 32]),
-            total_chunks: 1,
-            encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
-            chunk_size_bytes: 0,
-            payload_size_bytes: 0,
-            data_shards: 0,
-            parity_shards: 0,
-            chunk_digests: vec![[0x22; 32]],
-            payload_hash: Hash::prehashed([0x33; 32]),
-            chunk_root: Hash::prehashed([0x44; 32]),
-            block_header: signed.header().clone(),
-            leader_signature: signed
-                .signatures()
-                .next()
-                .expect("signed block has signature")
-                .clone(),
-        });
-        assert!(!init.requires_blocking_ingress());
-
-        let chunk = iroha_core::sumeragi::consensus::RbcChunk {
-            block_hash: signed.hash(),
-            height: signed.header().height().get(),
-            view: signed.header().view_change_index(),
-            epoch: 0,
-            idx: 0,
-            bytes: vec![0x55],
-        };
-        assert!(!BlockMessage::RbcChunk(chunk.clone()).requires_blocking_ingress());
-        assert!(!BlockMessage::from_rbc_chunk(chunk).requires_blocking_ingress());
-
-        let requester = PeerId::new(KeyPair::random().public_key().clone());
-        let fetch = FetchPendingBlock {
-            requester,
-            block_hash: signed.hash(),
-            height: signed.header().height().get(),
-            view: signed.header().view_change_index(),
-            priority: Some(FetchPendingBlockPriority::Consensus),
-            requester_roster_proof_known: None,
-            commit_qc_only: Some(true),
-        };
-        assert!(!BlockMessage::FetchPendingBlock(fetch).requires_blocking_ingress());
-
-        let background_fetch = FetchPendingBlock {
-            requester: PeerId::new(KeyPair::random().public_key().clone()),
-            block_hash: signed.hash(),
-            height: signed.header().height().get(),
-            view: signed.header().view_change_index(),
-            priority: None,
-            requester_roster_proof_known: None,
-            commit_qc_only: None,
-        };
-        assert!(!BlockMessage::FetchPendingBlock(background_fetch).requires_blocking_ingress());
-
-        let advert = ConsensusParamsAdvert {
-            collectors_k: 1,
-            redundant_send_r: 1,
-            membership: None,
-        };
-        let params = BlockMessage::ConsensusParams(advert);
-        assert!(!params.requires_blocking_ingress());
-
-        let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-            b"irohad-v2-ingress-context",
-        )));
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"irohad-v2-ingress-block")),
-            payload_hash: Hash::new(b"irohad-v2-ingress-payload"),
-        };
-        let control = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::Vote(wire::Vote {
-                round: wire::ConsensusRound {
-                    context_id,
-                    height: 1,
-                    view: 0,
-                },
-                phase: wire::GlobalPhase::Prepare,
-                subject,
-                signer: 0,
-                signature: vec![1],
-            }),
-        ));
-        let chunk = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
-                manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
-                    b"irohad-v2-ingress-manifest",
-                )),
-                index: 0,
-                bytes: vec![0xA5; 4096],
-                sender: 0,
-                signature: vec![2],
-            }),
-        ));
-        assert!(control.requires_blocking_ingress());
-        assert!(!chunk.requires_blocking_ingress());
-        let control_message = sumeragi_msg(control);
-        let control_policy = ConsensusIngressLimiter::ingress_policy(&control_message);
-        assert_eq!(control_policy.rate_class, Some(IngressRateClass::Critical));
-        assert!(!control_policy.apply_rbc_session_limit);
-        let chunk_message = sumeragi_msg(chunk);
-        let chunk_policy = ConsensusIngressLimiter::ingress_policy(&chunk_message);
-        assert_eq!(chunk_policy.rate_class, Some(IngressRateClass::Bulk));
-        assert!(chunk_policy.apply_rbc_session_limit);
-        assert!(matches!(
-            ConsensusIngressLimiter::rbc_session_key(&chunk_message),
-            Some(super::ConsensusPayloadSessionKey::V2(_))
-        ));
-
-        let peer = sample_peer();
-        let mut limiter = ConsensusIngressLimiter::new(
-            None,
-            None,
-            Some(BucketConfig {
-                rate_per_sec: nz_u32(1),
-                burst: nz_u32(1),
-            }),
-            None,
-            Some(BucketConfig {
-                rate_per_sec: nz_u32(1),
-                burst: nz_u32(1),
-            }),
-            None,
-            8,
-            Duration::from_secs(1),
-            PenaltyConfig {
-                threshold: 0,
-                window: Duration::from_secs(1),
-                cooldown: Duration::from_secs(1),
-            },
-        );
-        assert_eq!(limiter.should_drop(&peer, &chunk_message, 4096), None);
-        assert_eq!(
-            limiter.should_drop(&peer, &chunk_message, 4096),
-            Some(ConsensusIngressDropReason::Rate)
-        );
-        assert_eq!(
-            limiter.should_drop(&peer, &control_message, 1),
-            None,
-            "bulk chunks must not exhaust the safety-control token bucket"
-        );
-    }
-
-    #[test]
-    fn reserved_v2_control_queue_survives_retired_and_auxiliary_floods() {
-        let gate = Arc::new(RelayControlIngressGate::new(16, Duration::from_secs(60)));
-        let (control_tx, mut control_rx) = tokio::sync::mpsc::channel(1);
-        let (aux_control_tx, mut aux_control_rx) = tokio::sync::mpsc::channel(1);
-        let (general_tx, mut general_rx) = tokio::sync::mpsc::channel(1);
-        let peer = sample_peer();
-        let retired_work = RelayQueuedWork::general(relay_work(&peer, consensus_params_msg()));
         assert!(
-            general_tx.try_send(retired_work).is_ok(),
-            "fill general relay work queue with retired traffic"
+            NetworkRelayShared::retired_sumeragi_message_meta(&consensus_params_msg()).is_some()
         );
-        let mut drops = 0;
-        enqueue_relay_work_with_status(
-            &gate,
-            &control_tx,
-            &aux_control_tx,
-            &general_tx,
-            &peer,
-            vrf_commit_msg(),
-            None,
-            &mut drops,
-        );
-
-        let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-            b"irohad-reserved-control-context",
-        )));
-        let status = v2_status_fixture(context_id, 9, 3);
-        enqueue_relay_work_with_status(
-            &gate,
-            &control_tx,
-            &aux_control_tx,
-            &general_tx,
-            &peer,
-            v2_vote_msg(context_id, 9, 3, 0, 0x41),
-            Some(&status),
-            &mut drops,
-        );
-        assert_eq!(drops, 0);
-
-        enqueue_relay_work_with_status(
-            &gate,
-            &control_tx,
-            &aux_control_tx,
-            &general_tx,
-            &peer,
-            v2_vote_msg(context_id, 9, 3, 0, 0x41),
-            Some(&status),
-            &mut drops,
-        );
-        assert_eq!(drops, 1, "exact control replay must be rejected early");
-
-        enqueue_relay_work_with_status(
-            &gate,
-            &control_tx,
-            &aux_control_tx,
-            &general_tx,
-            &peer,
-            v2_vote_msg(context_id, 9, 3, 1, 0x42),
-            Some(&status),
-            &mut drops,
-        );
-        assert_eq!(drops, 2, "fresh flood must be bounded by the full queue");
-
-        let first = control_rx
-            .try_recv()
-            .expect("reserved control must bypass the full general queue");
-        assert!(matches!(
-            first.item.payload,
-            iroha_core::NetworkMessage::SumeragiBlock(ref wire)
-                if matches!(wire.as_ref().as_ref(), BlockMessage::V2(_))
-        ));
-        assert!(matches!(
-            control_rx.try_recv(),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-        ));
-
-        enqueue_relay_work_with_status(
-            &gate,
-            &control_tx,
-            &aux_control_tx,
-            &general_tx,
-            &peer,
-            v2_vote_msg(context_id, 9, 3, 1, 0x42),
-            Some(&status),
-            &mut drops,
-        );
-        let retry = control_rx
-            .try_recv()
-            .expect("full-queue rejection must roll back dedup for retransmission");
-        assert!(matches!(
-            retry.item.payload,
-            iroha_core::NetworkMessage::SumeragiBlock(ref wire)
-                if matches!(wire.as_ref().as_ref(), BlockMessage::V2(_))
-        ));
-        let retired = general_rx
-            .try_recv()
-            .expect("retired flood remains isolated on the general queue");
-        assert!(matches!(
-            retired.item.payload,
-            iroha_core::NetworkMessage::SumeragiBlock(_)
-        ));
-        let auxiliary = aux_control_rx
-            .try_recv()
-            .expect("VRF flood remains isolated on the auxiliary queue");
-        assert!(matches!(
-            auxiliary.item.payload,
-            iroha_core::NetworkMessage::SumeragiBlock(ref wire)
-                if matches!(wire.as_ref().as_ref(), BlockMessage::VrfCommit(_))
-        ));
-    }
-
-    #[tokio::test]
-    async fn safety_subscriber_queue_bypasses_auxiliary_consensus_flood() {
-        let gate = Arc::new(RelayControlIngressGate::new(16, Duration::from_secs(60)));
-        let peer = sample_peer();
-        let (safety_tx, safety_rx) = tokio::sync::mpsc::channel(1);
-        let (high_tx, high_rx) = tokio::sync::mpsc::channel(1);
-        let (payload_tx, payload_rx) = tokio::sync::mpsc::channel(1);
-        let (chunk_tx, chunk_rx) = tokio::sync::mpsc::channel(1);
-        let (low_tx, low_rx) = tokio::sync::mpsc::channel(1);
-        let (work_control_tx, mut work_control_rx) = tokio::sync::mpsc::channel(1);
-        let (work_aux_control_tx, _work_aux_control_rx) = tokio::sync::mpsc::channel(1);
-        let (work_high_tx, _work_high_rx) = tokio::sync::mpsc::channel(1);
-        let (work_payload_tx, _work_payload_rx) = tokio::sync::mpsc::channel(1);
-        let (work_chunk_tx, _work_chunk_rx) = tokio::sync::mpsc::channel(1);
-        let (work_low_tx, _work_low_rx) = tokio::sync::mpsc::channel(1);
-
-        high_tx
-            .try_send(relay_work(&peer, vrf_commit_msg()))
-            .expect("fill auxiliary consensus subscriber queue");
-        let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-            b"irohad-safety-subscriber-context",
-        )));
-        safety_tx
-            .try_send(relay_work(&peer, v2_vote_msg(context_id, 7, 0, 0, 0x70)))
-            .expect("enqueue independent safety subscriber traffic");
-
-        let drive = drive_network_relay_ingress(
-            safety_rx,
-            high_rx,
-            payload_rx,
-            chunk_rx,
-            low_rx,
-            &work_control_tx,
-            &work_aux_control_tx,
-            &work_high_tx,
-            &work_payload_tx,
-            &work_chunk_tx,
-            &work_low_tx,
-            &gate,
-            None,
-        );
-        let observe = async move {
-            let work = tokio::time::timeout(Duration::from_millis(100), work_control_rx.recv())
-                .await
-                .expect("safety work should not wait behind auxiliary consensus")
-                .expect("safety work queue remains connected");
-            assert!(matches!(
-                work.item.payload,
-                iroha_core::NetworkMessage::SumeragiBlock(ref block_wire)
-                    if matches!(
-                        block_wire.as_ref().as_ref(),
-                        BlockMessage::V2(message)
-                            if matches!(&message.payload, wire::ConsensusMessageV2Payload::Vote(_))
-                    )
-            ));
-            drop(safety_tx);
-            drop(high_tx);
-            drop(payload_tx);
-            drop(chunk_tx);
-            drop(low_tx);
-        };
-        let (exit, ()) = tokio::join!(drive, observe);
-        assert_eq!(
-            exit,
-            RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::SafetyIngress)
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn sustained_invalid_safety_flood_yields_to_high_repair_work() {
-        let gate = Arc::new(RelayControlIngressGate::new(16, Duration::from_secs(60)));
-        let peer = sample_peer();
-        let (safety_tx, safety_rx) =
-            tokio::sync::mpsc::channel(RELAY_SAFETY_BURST.saturating_mul(2));
-        let (high_tx, high_rx) = tokio::sync::mpsc::channel(1);
-        let (payload_tx, payload_rx) = tokio::sync::mpsc::channel(1);
-        let (chunk_tx, chunk_rx) = tokio::sync::mpsc::channel(1);
-        let (low_tx, low_rx) = tokio::sync::mpsc::channel(1);
-        let (work_control_tx, _work_control_rx) = tokio::sync::mpsc::channel(1);
-        let (work_aux_control_tx, _work_aux_control_rx) = tokio::sync::mpsc::channel(1);
-        let (work_high_tx, mut work_high_rx) = tokio::sync::mpsc::channel(1);
-        let (work_payload_tx, _work_payload_rx) = tokio::sync::mpsc::channel(1);
-        let (work_chunk_tx, _work_chunk_rx) = tokio::sync::mpsc::channel(1);
-        let (work_low_tx, _work_low_rx) = tokio::sync::mpsc::channel(1);
-
-        high_tx
-            .try_send(relay_work(&peer, consensus_params_msg()))
-            .expect("queue repair work outside the safety lane");
-
-        let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-            b"irohad-sustained-safety-flood-context",
-        )));
-        let mut invalid_safety = v2_vote_msg(context_id, 7, 0, 0, 0x71);
-        let iroha_core::NetworkMessage::SumeragiBlock(message) = &mut invalid_safety else {
-            panic!("v2 vote fixture must be a Sumeragi block message");
-        };
-        let BlockMessage::V2(envelope) = message.make_mut() else {
-            panic!("v2 vote fixture must carry a v2 envelope");
-        };
-        envelope.protocol_version = wire::PROTOCOL_VERSION.saturating_add(1);
-        let invalid_work = relay_work(&peer, invalid_safety);
-        for _ in 0..RELAY_SAFETY_BURST.saturating_mul(2) {
-            safety_tx
-                .try_send(invalid_work.clone())
-                .expect("prefill sustained safety flood");
-        }
-        let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
-        let producer = tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    biased;
-                    changed = stop_rx.changed() => {
-                        if changed.is_err() || *stop_rx.borrow() {
-                            break;
-                        }
-                    }
-                    result = safety_tx.send(invalid_work.clone()) => {
-                        if result.is_err() {
-                            break;
-                        }
-                    }
-                }
-            }
-        });
-
-        let drive = drive_network_relay_ingress(
-            safety_rx,
-            high_rx,
-            payload_rx,
-            chunk_rx,
-            low_rx,
-            &work_control_tx,
-            &work_aux_control_tx,
-            &work_high_tx,
-            &work_payload_tx,
-            &work_chunk_tx,
-            &work_low_tx,
-            &gate,
-            None,
-        );
-        let observe = async move {
-            let work = tokio::time::timeout(Duration::from_millis(250), work_high_rx.recv())
-                .await
-                .expect("bounded safety burst must yield to repair traffic")
-                .expect("high repair queue remains connected");
-            assert!(matches!(
-                work.item.payload,
-                iroha_core::NetworkMessage::SumeragiBlock(ref block_wire)
-                    if matches!(block_wire.as_ref().as_ref(), BlockMessage::ConsensusParams(_))
-            ));
-            stop_tx.send(true).expect("stop safety flood producer");
-            producer.await.expect("safety flood producer exits cleanly");
-            drop(high_tx);
-            drop(payload_tx);
-            drop(chunk_tx);
-            drop(low_tx);
-        };
-        let (_exit, ()) = tokio::join!(drive, observe);
-    }
-
-    #[test]
-    fn v2_control_gate_rejects_wrong_height_context_and_exact_replay() {
-        let gate = RelayControlIngressGate::new(8, Duration::from_secs(60));
-        let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-            b"irohad-control-gate-context",
-        )));
-        let other_context = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-            b"irohad-control-gate-other-context",
-        )));
-        let status = v2_status_fixture(context_id, 12, 4);
-        let mut unsupported = v2_vote_msg(context_id, 12, 4, 0, 0x50);
-        let iroha_core::NetworkMessage::SumeragiBlock(message) = &mut unsupported else {
-            panic!("v2 vote fixture must be a Sumeragi block message");
-        };
-        let BlockMessage::V2(envelope) = message.make_mut() else {
-            panic!("v2 vote fixture must carry a v2 envelope");
-        };
-        envelope.protocol_version = wire::PROTOCOL_VERSION.saturating_add(1);
-
-        assert!(matches!(
-            gate.admit_with_status(&unsupported, Instant::now(), || Some(status.clone())),
-            Err(RelayControlDropReason::UnsupportedVersion)
-        ));
-        assert!(matches!(
-            gate.admit_with_status(
-                &v2_vote_msg(context_id, 11, 4, 0, 0x51),
-                Instant::now(),
-                || Some(status.clone()),
-            ),
-            Err(RelayControlDropReason::WrongHeight)
-        ));
-        assert!(matches!(
-            gate.admit_with_status(
-                &v2_vote_msg(other_context, 12, 4, 0, 0x52),
-                Instant::now(),
-                || Some(status.clone()),
-            ),
-            Err(RelayControlDropReason::WrongContext)
-        ));
-
-        let current = v2_vote_msg(context_id, 12, 4, 0, 0x53);
-        assert!(matches!(
-            gate.admit_with_status(&current, Instant::now(), || Some(status.clone())),
-            Ok(Some(_))
-        ));
-        assert!(matches!(
-            gate.admit_with_status(&current, Instant::now(), || Some(status)),
-            Err(RelayControlDropReason::Replay)
-        ));
-    }
-
-    #[test]
-    fn downstream_control_rejection_never_poisons_retransmission() {
-        let gate = RelayControlIngressGate::new(8, Duration::from_secs(60));
-        let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-            b"irohad-control-rejection-context",
-        )));
-        let status = v2_status_fixture(context_id, 14, 2);
-        let control = v2_vote_msg(context_id, 14, 2, 0, 0x54);
-
-        let limited = gate.admit_with_status(&control, Instant::now(), || Some(status.clone()));
-        assert!(matches!(&limited, Ok(Some(_))));
-        rollback_relay_control_admission(&gate, &limited);
-        let queued = gate.admit_with_status(&control, Instant::now(), || Some(status.clone()));
-        assert!(matches!(&queued, Ok(Some(_))));
-        rollback_relay_control_admission(&gate, &queued);
-        assert!(matches!(
-            gate.admit_with_status(&control, Instant::now(), || Some(status)),
-            Ok(Some(_))
-        ));
-    }
-
-    #[test]
-    fn saturated_replay_gate_preserves_existing_control_token() {
-        let gate = RelayControlIngressGate::new(1, Duration::from_secs(60));
-        let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-            b"irohad-control-saturation-context",
-        )));
-        let status = v2_status_fixture(context_id, 15, 1);
-        let first = v2_vote_msg(context_id, 15, 1, 0, 0x55);
-        let newcomer = v2_vote_msg(context_id, 15, 1, 1, 0x56);
-
-        let first_admission =
-            gate.admit_with_status(&first, Instant::now(), || Some(status.clone()));
-        assert!(matches!(&first_admission, Ok(Some(_))));
-        assert!(matches!(
-            gate.admit_with_status(&newcomer, Instant::now(), || Some(status.clone())),
-            Err(RelayControlDropReason::Saturated)
-        ));
-        assert!(matches!(
-            gate.admit_with_status(&first, Instant::now(), || Some(status.clone())),
-            Err(RelayControlDropReason::Replay)
-        ));
-
-        rollback_relay_control_admission(&gate, &first_admission);
-        assert!(matches!(
-            gate.admit_with_status(&newcomer, Instant::now(), || Some(status)),
-            Ok(Some(_))
-        ));
-    }
-
-    #[test]
-    fn stale_replay_lease_cannot_release_new_generation() {
-        let ttl = Duration::from_secs(1);
-        let gate = Arc::new(RelayControlIngressGate::new(1, ttl));
-        let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-            b"irohad-control-generation-context",
-        )));
-        let status = v2_status_fixture(context_id, 16, 1);
-        let peer = sample_peer();
-        let now = Instant::now();
-        let first_message = v2_vote_msg(context_id, 16, 1, 0, 0x57);
-        let first_admission = gate.admit_with_status(&first_message, now, || Some(status.clone()));
-        let Ok(Some(first_token)) = first_admission else {
-            panic!("first control generation must be admitted");
-        };
-        let first_work = RelayQueuedWork::reserved(
-            relay_work(&peer, first_message),
-            Arc::clone(&gate),
-            first_token,
-        );
-
-        let later = now + ttl + Duration::from_millis(1);
-        let retry_message = v2_vote_msg(context_id, 16, 1, 0, 0x57);
-        let second_admission =
-            gate.admit_with_status(&retry_message, later, || Some(status.clone()));
-        assert!(matches!(&second_admission, Ok(Some(_))));
-
-        drop(first_work);
-        assert!(matches!(
-            gate.admit_with_status(&retry_message, later, || Some(status)),
-            Err(RelayControlDropReason::Replay)
-        ));
-        rollback_relay_control_admission(&gate, &second_admission);
-    }
-
-    #[test]
-    fn full_reserved_queue_bounds_vrf_replay_and_allows_retry() {
-        let gate = Arc::new(RelayControlIngressGate::new(8, Duration::from_secs(60)));
-        let (control_tx, mut control_rx) = tokio::sync::mpsc::channel(1);
-        let (aux_control_tx, mut aux_control_rx) = tokio::sync::mpsc::channel(1);
-        let (general_tx, mut general_rx) = tokio::sync::mpsc::channel(1);
-        let peer = sample_peer();
-        let mut drops = 0;
-
-        enqueue_relay_work_with_status(
-            &gate,
-            &control_tx,
-            &aux_control_tx,
-            &general_tx,
-            &peer,
-            vrf_commit_msg(),
-            None,
-            &mut drops,
-        );
-        enqueue_relay_work_with_status(
-            &gate,
-            &control_tx,
-            &aux_control_tx,
-            &general_tx,
-            &peer,
-            vrf_commit_msg(),
-            None,
-            &mut drops,
-        );
-        assert_eq!(drops, 1, "exact VRF replay must not consume another slot");
-
-        enqueue_relay_work_with_status(
-            &gate,
-            &control_tx,
-            &aux_control_tx,
-            &general_tx,
-            &peer,
-            vrf_reveal_msg(),
-            None,
-            &mut drops,
-        );
-        assert_eq!(drops, 2, "full reserved queue must bound fresh VRF flood");
-        let first = aux_control_rx.try_recv().expect("queued VRF commit");
-        assert!(matches!(
-            first.item.payload,
-            iroha_core::NetworkMessage::SumeragiBlock(ref wire)
-                if matches!(wire.as_ref().as_ref(), BlockMessage::VrfCommit(_))
-        ));
-
-        enqueue_relay_work_with_status(
-            &gate,
-            &control_tx,
-            &aux_control_tx,
-            &general_tx,
-            &peer,
-            vrf_reveal_msg(),
-            None,
-            &mut drops,
-        );
-        let retry = aux_control_rx
-            .try_recv()
-            .expect("retransmitted VRF reveal after capacity frees");
-        assert!(matches!(
-            retry.item.payload,
-            iroha_core::NetworkMessage::SumeragiBlock(ref wire)
-                if matches!(wire.as_ref().as_ref(), BlockMessage::VrfReveal(_))
-        ));
-        assert!(matches!(
-            control_rx.try_recv(),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-        ));
-        assert!(matches!(
-            general_rx.try_recv(),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-        ));
+        assert!(NetworkRelayShared::retired_sumeragi_message_meta(&v2_vote_msg()).is_none());
     }
 
     #[test]
@@ -4641,7 +2567,6 @@ mod network_relay_tests {
         );
 
         let request = sumeragi_v2_commit_certificate_request();
-        assert!(!request.requires_blocking_ingress());
         let request_policy =
             ConsensusIngressLimiter::ingress_policy(&sumeragi_msg(request.clone()));
         assert_eq!(request_policy.rate_class, Some(IngressRateClass::Limited));
@@ -4747,7 +2672,7 @@ mod network_relay_tests {
         assert_eq!(puzzle.lanes, 2);
     }
 
-    pub(super) fn sample_peer() -> Peer {
+    fn sample_peer() -> Peer {
         let keypair = KeyPair::random();
         Peer::new(
             "127.0.0.1:0".parse().expect("socket address"),
@@ -4763,154 +2688,18 @@ mod network_relay_tests {
         iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(msg)))
     }
 
-    fn v2_vote_msg(
-        context_id: wire::HeightContextId,
-        height: u64,
-        view: u64,
-        signer: u32,
-        tag: u8,
-    ) -> iroha_core::NetworkMessage {
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([tag; Hash::LENGTH])),
-            payload_hash: Hash::prehashed([tag.wrapping_add(1); Hash::LENGTH]),
-        };
-        sumeragi_msg(BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::Vote(wire::Vote {
-                round: wire::ConsensusRound {
-                    context_id,
-                    height,
-                    view,
-                },
-                phase: wire::GlobalPhase::Prepare,
-                subject,
-                signer,
-                signature: vec![tag],
-            }),
-        )))
-    }
-
-    fn v2_status_fixture(
-        context_id: wire::HeightContextId,
-        height: u64,
-        view: u64,
-    ) -> wire::SumeragiV2Status {
-        wire::SumeragiV2Status {
-            protocol_version: wire::PROTOCOL_VERSION,
-            node_fingerprint: Hash::new(b"irohad-relay-status-node"),
-            build_fingerprint: Hash::new(b"irohad-relay-status-build"),
-            config_fingerprint: Hash::new(b"irohad-relay-status-config"),
-            height_context_id: context_id,
-            height,
-            view,
-            phase: wire::SumeragiV2StatusPhase::Prepare,
-            leader: 0,
-            locked_prepare_qc: None,
-            highest_prepare_qc: None,
-            last_timeout_certificate: None,
-            body_state: wire::SumeragiV2BodyState::Missing,
-            pending_persistence_id: None,
-            last_committed_height: 0,
-            last_committed_subject: None,
-            height_context: wire::SumeragiV2HeightContextStatus {
-                epoch: 0,
-                epoch_end_height: height.saturating_add(100),
-                mode: wire::ConsensusMode::Permissioned,
-                epoch_seed: [0xA5; 32],
-                validator_count: 4,
-                quorum: wire::DualQuorum {
-                    min_signers: 3,
-                    total_power: 4,
-                },
-            },
-            last_commit_qc: None,
-        }
-    }
-
-    pub(super) fn relay_work(peer: &Peer, payload: iroha_core::NetworkMessage) -> RelayWorkItem {
-        RelayWorkItem {
-            peer: peer.clone(),
-            payload_bytes: payload.encode().len(),
-            payload,
-        }
-    }
-
-    fn enqueue_relay_work_with_status(
-        gate: &Arc<RelayControlIngressGate>,
-        control_tx: &tokio::sync::mpsc::Sender<RelayQueuedWork>,
-        aux_control_tx: &tokio::sync::mpsc::Sender<RelayQueuedWork>,
-        general_tx: &tokio::sync::mpsc::Sender<RelayQueuedWork>,
-        peer: &Peer,
-        payload: iroha_core::NetworkMessage,
-        status: Option<&wire::SumeragiV2Status>,
-        drops: &mut u64,
-    ) {
-        let admission = gate.admit_with_status(&payload, Instant::now(), || status.cloned());
-        try_enqueue_relay_work_with_admission(
-            control_tx,
-            aux_control_tx,
-            general_tx,
-            relay_work(peer, payload),
-            RelayReceiverKind::High,
-            drops,
-            gate,
-            admission,
-        )
-        .expect("test relay worker queues remain connected");
-    }
-
-    fn lane_drain_vote_msg() -> iroha_core::NetworkMessage {
-        let keypair = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
-            .expect("generate lane-drain ingress fixture keypair");
-        let signer = PeerId::new(keypair.public_key().clone());
-        let validator_set = vec![signer.clone()];
-        let body = LaneDrainCertificateBodyV1 {
-            version: 1,
-            intent: LaneDrainIntentV1 {
-                version: 1,
-                chain_id_digest: Hash::new(b"irohad-lane-drain-chain"),
-                lane_id: LaneId::new(3),
-                dataspace_id: DataSpaceId::new(7),
-                lane_incarnation: Hash::new(b"irohad-lane-drain-incarnation"),
-                close_global_height: 12,
-                initial_merged_lane_height: 4,
-                initial_merged_descriptor_hash: Some(Hash::new(b"irohad-lane-drain-initial")),
-                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-                validator_set_hash: HashOf::new(&validator_set),
-                validator_set,
-                validator_count: 1,
-                min_quorum: 1,
-            },
-            final_lane_block_height: 5,
-            final_lane_block_descriptor_hash: Some(Hash::new(b"irohad-lane-drain-final")),
-        };
-        let proof_of_possession = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
-            .expect("derive lane-drain fixture proof of possession");
-        let bls_signature =
-            iroha_crypto::Signature::try_new(keypair.private_key(), &body.signature_preimage())
-                .expect("sign lane-drain ingress fixture")
-                .payload()
-                .to_vec();
-        iroha_core::NetworkMessage::LaneDrainVote(Box::new(LaneDrainVoteV1 {
-            body,
-            signer,
-            proof_of_possession,
-            bls_signature,
-        }))
-    }
-
-    fn sample_v2_round(height: u64, view: u64) -> wire::ConsensusRound {
-        wire::ConsensusRound {
-            context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed(
-                [0x61; 32],
-            ))),
+    fn sample_v2_round(height: u64, view: u64) -> consensus_v2::ConsensusRound {
+        consensus_v2::ConsensusRound {
+            context_id: consensus_v2::HeightContextId(HashOf::from_untyped_unchecked(
+                Hash::prehashed([0x61; 32]),
+            )),
             height,
             view,
         }
     }
 
-    fn sample_v2_subject() -> wire::BlockSubject {
-        wire::BlockSubject {
+    fn sample_v2_subject() -> consensus_v2::BlockSubject {
+        consensus_v2::BlockSubject {
             parent_block_hash: None,
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x62; 32])),
             payload_hash: Hash::prehashed([0x63; 32]),
@@ -4918,10 +2707,10 @@ mod network_relay_tests {
     }
 
     fn v2_vote_block_message() -> BlockMessage {
-        BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::Vote(wire::Vote {
+        BlockMessage::V2(consensus_v2::ConsensusMessageV2::new(
+            consensus_v2::ConsensusMessageV2Payload::Vote(consensus_v2::Vote {
                 round: sample_v2_round(5, 7),
-                phase: wire::GlobalPhase::Prepare,
+                phase: consensus_v2::GlobalPhase::Prepare,
                 subject: sample_v2_subject(),
                 execution_commitment: consensus_v2::ExecutionCommitment::without_topups(
                     Hash::prehashed([0x64; 32]),
@@ -4935,9 +2724,9 @@ mod network_relay_tests {
     }
 
     fn v2_payload_chunk_block_message() -> BlockMessage {
-        BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
-                manifest_hash: HashOf::<wire::PayloadManifest>::from_untyped_unchecked(
+        BlockMessage::V2(consensus_v2::ConsensusMessageV2::new(
+            consensus_v2::ConsensusMessageV2Payload::PayloadChunk(consensus_v2::PayloadChunk {
+                manifest_hash: HashOf::<consensus_v2::PayloadManifest>::from_untyped_unchecked(
                     Hash::prehashed([0x65; 32]),
                 ),
                 index: 0,
@@ -4948,24 +2737,71 @@ mod network_relay_tests {
         ))
     }
 
+    fn sample_v2_manifest() -> consensus_v2::PayloadManifest {
+        consensus_v2::PayloadManifest {
+            round: sample_v2_round(5, 7),
+            subject: sample_v2_subject(),
+            payload_size_bytes: 4,
+            layout: consensus_v2::SumeragiV2GenesisContextParameters::recommended().da_layout,
+            chunk_hashes: vec![Hash::new(b"body")],
+            chunk_root: Hash::new(b"chunk-root"),
+        }
+    }
+
+    fn v2_proposal_msg() -> iroha_core::NetworkMessage {
+        let manifest = sample_v2_manifest();
+        sumeragi_msg(BlockMessage::V2(ConsensusMessageV2::new(
+            ConsensusMessageV2Payload::Proposal(consensus_v2::Proposal {
+                round: manifest.round,
+                proposer: 0,
+                subject: manifest.subject,
+                manifest,
+                justification: consensus_v2::ProposalJustification::ParentCommit(
+                    consensus_v2::ParentCommitJustification { certificate: None },
+                ),
+                signature: vec![0x68],
+            }),
+        )))
+    }
+
+    fn v2_certified_body_response_msg() -> iroha_core::NetworkMessage {
+        sumeragi_msg(BlockMessage::V2(ConsensusMessageV2::new(
+            ConsensusMessageV2Payload::CertifiedBodyResponse(consensus_v2::CertifiedBodyResponse {
+                request_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"irohad-certified-body-request",
+                )),
+                manifest: sample_v2_manifest(),
+                body: b"body".to_vec(),
+                responder: 0,
+                signature: vec![0x69],
+            }),
+        )))
+    }
+
+    fn limited_msg() -> iroha_core::NetworkMessage {
+        iroha_core::NetworkMessage::Health
+    }
+
     fn sumeragi_v2_commit_certificate_request() -> BlockMessage {
         let requester = PeerId::new(KeyPair::random().public_key().clone());
-        BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::CommitCertificateRequest(
-                wire::CommitCertificateRequest {
-                    protocol_version: wire::PROTOCOL_VERSION,
-                    chain_id: "00000000-0000-0000-0000-000000000000"
-                        .parse()
-                        .expect("valid chain id"),
-                    context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-                        b"irohad-v2-context",
-                    ))),
-                    height: 9,
-                    requester,
-                    signature: vec![0xCC],
-                },
-            ),
+        BlockMessage::V2(ConsensusMessageV2::new(
+            ConsensusMessageV2Payload::CommitCertificateRequest(CommitCertificateRequest {
+                protocol_version: PROTOCOL_VERSION,
+                chain_id: "00000000-0000-0000-0000-000000000000"
+                    .parse()
+                    .expect("valid chain id"),
+                context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                    b"irohad-v2-context",
+                ))),
+                height: 9,
+                requester,
+                signature: vec![0xCC],
+            }),
         ))
+    }
+
+    fn v2_vote_msg() -> iroha_core::NetworkMessage {
+        sumeragi_msg(v2_vote_block_message())
     }
 
     fn consensus_params_msg() -> iroha_core::NetworkMessage {
@@ -4975,70 +2811,6 @@ mod network_relay_tests {
             membership: None,
         };
         sumeragi_msg(BlockMessage::ConsensusParams(advert))
-    }
-
-    fn signed_block_for_test() -> SignedBlock {
-        let keypair = KeyPair::random();
-        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
-            .chain(0, None)
-            .sign(keypair.private_key())
-            .unpack(|_| {});
-        SignedBlock::from(new_block)
-    }
-
-    fn block_created_msg() -> iroha_core::NetworkMessage {
-        let signed = signed_block_for_test();
-        let created =
-            BlockMessage::BlockCreated(iroha_core::sumeragi::message::BlockCreated::from(&signed));
-        sumeragi_msg(created)
-    }
-
-    fn proposal_hint_msg() -> iroha_core::NetworkMessage {
-        let parent_hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x20; 32]));
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x21; 32]));
-        let hint = iroha_core::sumeragi::message::ProposalHint {
-            block_hash,
-            height: 2,
-            view: 0,
-            highest_qc: QcHeaderRef {
-                height: 1,
-                view: 0,
-                epoch: 0,
-                subject_block_hash: parent_hash,
-                phase: Phase::Commit,
-            },
-        };
-        sumeragi_msg(BlockMessage::ProposalHint(hint))
-    }
-
-    fn sample_proposal() -> Proposal {
-        let parent_hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; 32]));
-        Proposal {
-            header: ConsensusBlockHeader {
-                parent_hash,
-                tx_root: Hash::new(b"tx"),
-                state_root: Hash::new(b"state"),
-                proposer: 0,
-                height: 2,
-                view: 0,
-                epoch: 0,
-                highest_qc: QcHeaderRef {
-                    height: 1,
-                    view: 0,
-                    epoch: 0,
-                    subject_block_hash: parent_hash,
-                    phase: Phase::Commit,
-                },
-            },
-            payload_hash: Hash::new(b"payload"),
-        }
-    }
-
-    fn proposal_msg() -> iroha_core::NetworkMessage {
-        let proposal = sample_proposal();
-        sumeragi_msg(BlockMessage::Proposal(proposal))
     }
 
     fn sample_lane_block_proposal() -> LaneBlockProposalV1 {
@@ -5073,83 +2845,6 @@ mod network_relay_tests {
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
         proposal
-    }
-
-    fn sample_lane_executable_payload() -> LaneExecutablePayloadV1 {
-        let origin_proposal = sample_lane_block_proposal();
-        let producer = origin_proposal.descriptor.validator_set[0].clone();
-        LaneExecutablePayloadV1 {
-            version: 1,
-            chain_id_hash: Hash::new(b"irohad-lane-payload-chain"),
-            epoch: 3,
-            origin_proposal,
-            entrypoint_hashes: Vec::new(),
-            entrypoints: Vec::new(),
-            reservation_keys: Vec::new(),
-            routing_plans: Vec::new(),
-            native_amx_receipts: Vec::new(),
-            payload_hash: Hash::new(b"irohad-lane-payload"),
-            producer,
-            producer_signature: vec![0xAA],
-        }
-    }
-
-    fn sample_lane_executable_payload_handoff() -> LaneExecutablePayloadHandoffV1 {
-        let origin_proposal = sample_lane_block_proposal();
-        let proposer = origin_proposal.descriptor.validator_set[0].clone();
-        LaneExecutablePayloadHandoffV1 {
-            version: 1,
-            chain_id_hash: Hash::new(b"irohad-lane-handoff-chain"),
-            epoch: 3,
-            origin_proposal,
-            entrypoint_hashes: Vec::new(),
-            entrypoints: Vec::new(),
-            payload_hash: Hash::new(b"irohad-lane-handoff"),
-            proposer,
-            proposer_signature: vec![0xBB],
-        }
-    }
-
-    fn sample_lane_block_new_view_body() -> LaneBlockNewViewBodyV1 {
-        let proposal = sample_lane_block_proposal();
-        let descriptor = &proposal.descriptor;
-        LaneBlockNewViewBodyV1 {
-            version: 1,
-            chain_id_hash: Hash::new(b"irohad-lane-new-view-chain"),
-            epoch: 3,
-            lane_id: descriptor.lane_id,
-            dataspace_id: descriptor.dataspace_id,
-            lane_incarnation: descriptor.lane_incarnation,
-            proposal_height: descriptor.proposal_height,
-            lane_block_height: descriptor.lane_block_height,
-            from_view: descriptor.lane_block_view,
-            target_view: descriptor.lane_block_view + 1,
-            locked_proposal_hash: proposal.proposal_hash,
-            locked_descriptor_hash: descriptor.descriptor_hash,
-            executable_payload_hash: Hash::new(b"irohad-lane-new-view-payload"),
-            validator_set_hash_version: descriptor.validator_set_hash_version,
-            validator_set_hash: descriptor.validator_set_hash.clone(),
-            validator_count: descriptor.validator_count,
-            min_quorum: descriptor.min_quorum,
-            qc_mode_tag: descriptor.qc_mode_tag.clone(),
-        }
-    }
-
-    fn sample_lane_block_new_view_vote() -> LaneBlockNewViewVoteV1 {
-        LaneBlockNewViewVoteV1 {
-            body: sample_lane_block_new_view_body(),
-            signer: PeerId::new(KeyPair::random().public_key().clone()),
-            bls_signature: vec![0xCC],
-        }
-    }
-
-    fn sample_lane_block_new_view_certificate() -> LaneBlockNewViewCertificateV1 {
-        LaneBlockNewViewCertificateV1 {
-            body: sample_lane_block_new_view_body(),
-            validator_set: vec![PeerId::new(KeyPair::random().public_key().clone())],
-            signers_bitmap: vec![0b1],
-            bls_aggregate_signature: vec![0xDD],
-        }
     }
 
     fn sample_lane_block_vote(phase: Phase) -> iroha_core::lane_consensus::LaneBlockVoteV1 {
@@ -5187,45 +2882,6 @@ mod network_relay_tests {
         sumeragi_msg(BlockMessage::LaneBlockQc(sample_lane_block_qc(phase)))
     }
 
-    fn exec_witness_msg() -> iroha_core::NetworkMessage {
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x23; 32]));
-        let msg = ExecWitnessMsg {
-            block_hash,
-            height: 2,
-            view: 0,
-            epoch: 0,
-            witness: ExecWitness::default(),
-        };
-        sumeragi_msg(BlockMessage::ExecWitness(msg))
-    }
-
-    fn control_flow_msg() -> iroha_core::NetworkMessage {
-        let evidence = Evidence {
-            kind: EvidenceKind::InvalidProposal,
-            payload: EvidencePayload::InvalidProposal {
-                proposal: sample_proposal(),
-                reason: "invalid proposal".to_owned(),
-            },
-        };
-        iroha_core::NetworkMessage::SumeragiControlFlow(Box::new(ControlFlow::Evidence(evidence)))
-    }
-
-    pub(super) fn block_sync_update_msg() -> iroha_core::NetworkMessage {
-        let signed = signed_block_for_test();
-        let update = BlockSyncUpdate::from(&signed);
-        sumeragi_msg(BlockMessage::BlockSyncUpdate(update))
-    }
-
-    fn block_sync_msg(peer: &Peer) -> iroha_core::NetworkMessage {
-        let msg = BlockSyncMessage::GetBlocksAfter(GetBlocksAfter::new(
-            peer.id().clone(),
-            None,
-            None,
-            BTreeSet::new(),
-        ));
-        iroha_core::NetworkMessage::BlockSync(Box::new(msg))
-    }
-
     fn torii_proxy_request_msg() -> iroha_core::NetworkMessage {
         iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV2 {
             schema_version: TORII_PROXY_REQUEST_VERSION_V2,
@@ -5259,225 +2915,10 @@ mod network_relay_tests {
         }))
     }
 
-    fn qc_vote_msg() -> iroha_core::NetworkMessage {
-        use iroha_core::sumeragi::consensus::{Phase, Vote, default_chain_order_hash};
-
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([2; 32]));
-        let vote = Vote {
-            phase: Phase::Commit,
-            block_hash,
-            height: 1,
-            view: 0,
-            epoch: 0,
-            chain_order_hash: default_chain_order_hash(),
-            rechain_seq: 0,
-            highest_qc: None,
-            signer: 0,
-            bls_sig: Vec::new(),
-            parent_state_root: Hash::prehashed([0; 32]),
-            post_state_root: Hash::prehashed([0; 32]),
-        };
-        sumeragi_msg(BlockMessage::QcVote(vote))
-    }
-
-    fn qc_msg() -> iroha_core::NetworkMessage {
-        use iroha_core::sumeragi::consensus::{Phase, Qc, QcAggregate, default_chain_order_hash};
-
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([3; 32]));
-        let validator = PeerId::new(KeyPair::random().public_key().clone());
-        let qc = Qc {
-            phase: Phase::Commit,
-            subject_block_hash: block_hash,
-            parent_state_root: Hash::prehashed([0x10; 32]),
-            post_state_root: Hash::prehashed([0x11; 32]),
-            height: 1,
-            view: 0,
-            epoch: 0,
-            chain_order_hash: default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: iroha_core::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
-            highest_qc: None,
-            validator_set_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x12; 32])),
-            validator_set_hash_version: 1,
-            validator_set: vec![validator],
-            aggregate: QcAggregate {
-                signers_bitmap: vec![0b1],
-                bls_aggregate_signature: vec![0xAA],
-            },
-        };
-        sumeragi_msg(BlockMessage::Qc(qc))
-    }
-
-    fn vrf_commit_msg() -> iroha_core::NetworkMessage {
-        let commit = iroha_core::sumeragi::consensus::VrfCommit {
-            epoch: 1,
-            commitment: [0x13; 32],
-            signer: 0,
-            bls_sig: Vec::new(),
-        };
-        sumeragi_msg(BlockMessage::VrfCommit(commit))
-    }
-
-    fn vrf_reveal_msg() -> iroha_core::NetworkMessage {
-        let reveal = iroha_core::sumeragi::consensus::VrfReveal {
-            epoch: 1,
-            reveal: [0x14; 32],
-            signer: 0,
-            bls_sig: Vec::new(),
-        };
-        sumeragi_msg(BlockMessage::VrfReveal(reveal))
-    }
-
-    fn rbc_init_msg(tag: u8, height: u64, view: u64) -> iroha_core::NetworkMessage {
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([tag; 32]));
-        let block_header = BlockHeader::new(
-            std::num::NonZeroU64::new(height).expect("block height must be non-zero"),
-            None,
-            None,
-            None,
-            0,
-            view,
-        );
-        let leader_key = KeyPair::random();
-        let (_, leader_private) = leader_key.into_parts();
-        let leader_signature = BlockSignature::new(
-            0,
-            SignatureOf::try_from_hash(&leader_private, block_header.hash())
-                .expect("test block signing should succeed"),
-        );
-        let init = iroha_core::sumeragi::consensus::RbcInit {
-            block_hash,
-            height,
-            view,
-            epoch: 0,
-            roster: Vec::new(),
-            roster_hash: Hash::prehashed([0x11; 32]),
-            total_chunks: 1,
-            encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
-            chunk_size_bytes: 0,
-            payload_size_bytes: 0,
-            data_shards: 0,
-            parity_shards: 0,
-            chunk_digests: vec![[0x22; 32]],
-            payload_hash: Hash::prehashed([0x33; 32]),
-            chunk_root: Hash::prehashed([0x44; 32]),
-            block_header,
-            leader_signature,
-        };
-        sumeragi_msg(BlockMessage::RbcInit(init))
-    }
-
-    fn rbc_ready_msg(tag: u8, height: u64, view: u64) -> iroha_core::NetworkMessage {
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([tag; 32]));
-        let ready = iroha_core::sumeragi::consensus::RbcReady {
-            block_hash,
-            height,
-            view,
-            epoch: 0,
-            roster_hash: Hash::prehashed([0x21; 32]),
-            chunk_root: Hash::prehashed([0x22; 32]),
-            sender: 0,
-            signature: vec![0x23],
-        };
-        sumeragi_msg(BlockMessage::RbcReady(ready))
-    }
-
-    fn rbc_deliver_msg(tag: u8, height: u64, view: u64) -> iroha_core::NetworkMessage {
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([tag; 32]));
-        let deliver = iroha_core::sumeragi::consensus::RbcDeliver {
-            block_hash,
-            height,
-            view,
-            epoch: 0,
-            roster_hash: Hash::prehashed([0x31; 32]),
-            chunk_root: Hash::prehashed([0x32; 32]),
-            sender: 0,
-            signature: vec![0x33],
-            ready_signatures: Vec::new(),
-        };
-        sumeragi_msg(BlockMessage::RbcDeliver(deliver))
-    }
-
-    pub(super) fn rbc_chunk_msg(tag: u8, height: u64, view: u64) -> iroha_core::NetworkMessage {
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([tag; 32]));
-        let chunk = iroha_core::sumeragi::consensus::RbcChunk {
-            block_hash,
-            height,
-            view,
-            epoch: 0,
-            idx: 0,
-            bytes: vec![0xCD; 4],
-        };
-        sumeragi_msg(BlockMessage::RbcChunk(chunk))
-    }
-
-    fn rbc_chunk_compact_msg(tag: u8, height: u64, view: u64) -> iroha_core::NetworkMessage {
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([tag; 32]));
-        let chunk = iroha_core::sumeragi::consensus::RbcChunk {
-            block_hash,
-            height,
-            view,
-            epoch: 0,
-            idx: 0,
-            bytes: vec![0xCE; 4],
-        };
-        sumeragi_msg(BlockMessage::from_rbc_chunk(chunk))
-    }
-
-    #[test]
-    fn block_sync_request_drops_mismatched_peer_id() {
-        let peer = sample_peer();
-        let other = PeerId::new(KeyPair::random().public_key().clone());
-        assert_ne!(peer.id(), &other);
-
-        let msg = BlockSyncMessage::GetBlocksAfter(GetBlocksAfter::new(
-            other,
-            None,
-            None,
-            BTreeSet::new(),
-        ));
-
-        assert!(NetworkRelayShared::sanitize_block_sync_message(&peer, msg).is_none());
-    }
-
-    #[test]
-    fn block_sync_response_drops_mismatched_peer_id() {
-        let peer = sample_peer();
-        let other = PeerId::new(KeyPair::random().public_key().clone());
-        assert_ne!(peer.id(), &other);
-
-        let msg = BlockSyncMessage::ShareBlocks(ShareBlocks::new(
-            Vec::new(),
-            other,
-            Vec::new(),
-            Vec::new(),
-        ));
-
-        assert!(NetworkRelayShared::sanitize_block_sync_message(&peer, msg).is_none());
-    }
-
-    #[test]
-    fn block_sync_message_keeps_matching_peer_id() {
-        let peer = sample_peer();
-        let msg = BlockSyncMessage::GetBlocksAfter(GetBlocksAfter::new(
-            peer.id().clone(),
-            None,
-            None,
-            BTreeSet::new(),
-        ));
-
-        let sanitized =
-            NetworkRelayShared::sanitize_block_sync_message(&peer, msg).expect("expected message");
-        let BlockSyncMessage::GetBlocksAfter(get) = sanitized else {
-            panic!("unexpected block sync variant");
-        };
-        assert_eq!(get.peer_id, *peer.id());
-    }
-
     #[test]
     fn consensus_ingress_rate_limit_drops_burst() {
         let peer = sample_peer();
-        let msg = consensus_params_msg();
+        let msg = limited_msg();
         let mut limiter = ConsensusIngressLimiter::new(
             Some(BucketConfig {
                 rate_per_sec: nz_u32(1),
@@ -5488,8 +2929,6 @@ mod network_relay_tests {
             None,
             None,
             None,
-            0,
-            Duration::from_secs(1),
             PenaltyConfig {
                 threshold: 0,
                 window: Duration::from_secs(1),
@@ -5507,21 +2946,12 @@ mod network_relay_tests {
     #[test]
     fn consensus_ingress_critical_bypasses_limited_bucket() {
         let peer = sample_peer();
-        let msg = consensus_params_msg();
-        let vote = qc_vote_msg();
-        let qc = qc_msg();
-        let commit = vrf_commit_msg();
-        let reveal = vrf_reveal_msg();
-        let hint = proposal_hint_msg();
-        let proposal = proposal_msg();
+        let msg = limited_msg();
+        let vote = v2_vote_msg();
+        let proposal = v2_proposal_msg();
         let lane_proposal = lane_block_proposal_msg();
         let lane_vote = lane_block_vote_msg(Phase::Prepare);
         let lane_qc = lane_block_qc_msg(Phase::Commit);
-        let control_flow = control_flow_msg();
-        let init = rbc_init_msg(0x01, 2, 0);
-        let chunk = rbc_chunk_msg(0x01, 2, 0);
-        let ready = rbc_ready_msg(0x01, 2, 0);
-        let deliver = rbc_deliver_msg(0x01, 2, 0);
         let mut limiter = ConsensusIngressLimiter::new(
             Some(BucketConfig {
                 rate_per_sec: nz_u32(1),
@@ -5535,8 +2965,6 @@ mod network_relay_tests {
                 burst: nz_u32(32),
             }),
             None,
-            0,
-            Duration::from_secs(1),
             PenaltyConfig {
                 threshold: 1,
                 window: Duration::from_secs(1),
@@ -5550,28 +2978,17 @@ mod network_relay_tests {
             Some(ConsensusIngressDropReason::Rate)
         );
         assert_eq!(limiter.should_drop(&peer, &vote, 1), None);
-        assert_eq!(limiter.should_drop(&peer, &qc, 1), None);
-        assert_eq!(limiter.should_drop(&peer, &commit, 1), None);
-        assert_eq!(limiter.should_drop(&peer, &reveal, 1), None);
-        assert_eq!(limiter.should_drop(&peer, &hint, 1), None);
         assert_eq!(limiter.should_drop(&peer, &proposal, 1), None);
         assert_eq!(limiter.should_drop(&peer, &lane_proposal, 1), None);
         assert_eq!(limiter.should_drop(&peer, &lane_vote, 1), None);
         assert_eq!(limiter.should_drop(&peer, &lane_qc, 1), None);
-        assert_eq!(limiter.should_drop(&peer, &control_flow, 1), None);
-        assert_eq!(limiter.should_drop(&peer, &init, 1), None);
-        assert_eq!(limiter.should_drop(&peer, &chunk, 1), None);
-        assert_eq!(limiter.should_drop(&peer, &ready, 1), None);
-        assert_eq!(limiter.should_drop(&peer, &deliver, 1), None);
     }
 
     #[test]
     fn consensus_ingress_proposal_uses_critical_bucket() {
         let peer = sample_peer();
-        let msg = consensus_params_msg();
-        let hint = proposal_hint_msg();
-        let proposal = proposal_msg();
-        let created = block_created_msg();
+        let msg = limited_msg();
+        let proposal = v2_proposal_msg();
         let lane_proposal = lane_block_proposal_msg();
         let mut limiter = ConsensusIngressLimiter::new(
             Some(BucketConfig {
@@ -5586,8 +3003,6 @@ mod network_relay_tests {
                 burst: nz_u32(20),
             }),
             None,
-            0,
-            Duration::from_secs(1),
             PenaltyConfig {
                 threshold: 0,
                 window: Duration::from_secs(1),
@@ -5600,20 +3015,16 @@ mod network_relay_tests {
             limiter.should_drop(&peer, &msg, 1),
             Some(ConsensusIngressDropReason::Rate)
         );
-        assert_eq!(limiter.should_drop(&peer, &hint, 1), None);
         assert_eq!(limiter.should_drop(&peer, &proposal, 1), None);
-        assert_eq!(limiter.should_drop(&peer, &created, 1), None);
         assert_eq!(limiter.should_drop(&peer, &lane_proposal, 1), None);
     }
 
     #[test]
-    fn consensus_ingress_v2_vote_uses_critical_bucket() {
-        let policy =
-            ConsensusIngressLimiter::ingress_policy(&sumeragi_msg(v2_vote_block_message()));
+    fn consensus_ingress_v2_uses_critical_bucket() {
+        let policy = ConsensusIngressLimiter::ingress_policy(&v2_vote_msg());
 
         assert_eq!(policy.rate_class, Some(IngressRateClass::Critical));
         assert!(!policy.apply_penalty);
-        assert!(!policy.apply_rbc_session_limit);
     }
 
     #[test]
@@ -5623,30 +3034,6 @@ mod network_relay_tests {
                 sample_lane_block_proposal()
             )),
             ("LaneBlockProposal", Some(5), Some(7))
-        );
-        assert_eq!(
-            NetworkRelayShared::block_message_meta(&BlockMessage::LaneExecutablePayload(
-                sample_lane_executable_payload()
-            )),
-            ("LaneExecutablePayload", Some(5), Some(7))
-        );
-        assert_eq!(
-            NetworkRelayShared::block_message_meta(&BlockMessage::LaneExecutablePayloadHandoff(
-                sample_lane_executable_payload_handoff()
-            )),
-            ("LaneExecutablePayloadHandoff", Some(5), Some(7))
-        );
-        assert_eq!(
-            NetworkRelayShared::block_message_meta(&BlockMessage::LaneBlockNewViewVote(
-                sample_lane_block_new_view_vote()
-            )),
-            ("LaneBlockNewViewVote", Some(5), Some(8))
-        );
-        assert_eq!(
-            NetworkRelayShared::block_message_meta(&BlockMessage::LaneBlockNewViewCertificate(
-                sample_lane_block_new_view_certificate()
-            )),
-            ("LaneBlockNewViewCertificate", Some(5), Some(8))
         );
         assert_eq!(
             NetworkRelayShared::block_message_meta(&BlockMessage::LaneBlockVote(
@@ -5675,99 +3062,6 @@ mod network_relay_tests {
     }
 
     #[test]
-    fn autonomous_lane_messages_use_expected_ingress_buckets() {
-        let payload = sumeragi_msg(BlockMessage::LaneExecutablePayload(
-            sample_lane_executable_payload(),
-        ));
-        let handoff = sumeragi_msg(BlockMessage::LaneExecutablePayloadHandoff(
-            sample_lane_executable_payload_handoff(),
-        ));
-        let new_view_vote = sumeragi_msg(BlockMessage::LaneBlockNewViewVote(
-            sample_lane_block_new_view_vote(),
-        ));
-        let new_view_certificate = sumeragi_msg(BlockMessage::LaneBlockNewViewCertificate(
-            sample_lane_block_new_view_certificate(),
-        ));
-        let drain_vote = lane_drain_vote_msg();
-
-        assert_eq!(
-            ConsensusIngressLimiter::ingress_policy(&payload).rate_class,
-            Some(IngressRateClass::Bulk)
-        );
-        assert_eq!(
-            ConsensusIngressLimiter::ingress_policy(&handoff).rate_class,
-            Some(IngressRateClass::Bulk)
-        );
-        assert_eq!(
-            ConsensusIngressLimiter::ingress_policy(&new_view_vote).rate_class,
-            Some(IngressRateClass::Critical)
-        );
-        assert_eq!(
-            ConsensusIngressLimiter::ingress_policy(&new_view_certificate).rate_class,
-            Some(IngressRateClass::Critical)
-        );
-        assert_eq!(
-            ConsensusIngressLimiter::ingress_policy(&drain_vote).rate_class,
-            Some(IngressRateClass::Critical)
-        );
-    }
-
-    #[test]
-    fn lane_drain_vote_cannot_bypass_critical_rate_or_wire_size_limits() {
-        let peer = sample_peer();
-        let vote = lane_drain_vote_msg();
-        let encoded_len = norito::to_bytes(&vote)
-            .expect("encode lane-drain vote")
-            .len();
-        assert!(encoded_len <= MAX_LANE_DRAIN_VOTE_WIRE_BYTES);
-
-        let mut unconfigured = ConsensusIngressLimiter::new(
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            0,
-            Duration::from_secs(1),
-            PenaltyConfig {
-                threshold: 0,
-                window: Duration::from_secs(1),
-                cooldown: Duration::from_secs(1),
-            },
-        );
-        assert_eq!(
-            unconfigured.should_drop(&peer, &vote, MAX_LANE_DRAIN_VOTE_WIRE_BYTES + 1),
-            Some(ConsensusIngressDropReason::Bytes),
-            "the hard cap must apply even when configurable byte buckets are disabled"
-        );
-
-        let mut rate_limited = ConsensusIngressLimiter::new(
-            None,
-            None,
-            None,
-            None,
-            Some(BucketConfig {
-                rate_per_sec: nz_u32(1),
-                burst: nz_u32(1),
-            }),
-            None,
-            0,
-            Duration::from_secs(1),
-            PenaltyConfig {
-                threshold: 0,
-                window: Duration::from_secs(1),
-                cooldown: Duration::from_secs(1),
-            },
-        );
-        assert_eq!(rate_limited.should_drop(&peer, &vote, encoded_len), None);
-        assert_eq!(
-            rate_limited.should_drop(&peer, &vote, encoded_len),
-            Some(ConsensusIngressDropReason::Rate)
-        );
-    }
-
-    #[test]
     fn block_message_meta_reports_v2_round_when_available() {
         assert_eq!(
             NetworkRelayShared::block_message_meta(&v2_vote_block_message()),
@@ -5782,7 +3076,7 @@ mod network_relay_tests {
     #[test]
     fn consensus_ingress_critical_rate_limit_drops_burst() {
         let peer = sample_peer();
-        let vote = qc_vote_msg();
+        let vote = v2_vote_msg();
         let mut limiter = ConsensusIngressLimiter::new(
             None,
             None,
@@ -5793,8 +3087,6 @@ mod network_relay_tests {
                 burst: nz_u32(1),
             }),
             None,
-            0,
-            Duration::from_secs(1),
             PenaltyConfig {
                 threshold: 1,
                 window: Duration::from_secs(1),
@@ -5814,49 +3106,9 @@ mod network_relay_tests {
     }
 
     #[test]
-    fn consensus_ingress_block_sync_uses_bulk_bucket() {
-        let peer = sample_peer();
-        let msg = consensus_params_msg();
-        let sync = block_sync_msg(&peer);
-        let mut limiter = ConsensusIngressLimiter::new(
-            Some(BucketConfig {
-                rate_per_sec: nz_u32(1),
-                burst: nz_u32(1),
-            }),
-            None,
-            Some(BucketConfig {
-                rate_per_sec: nz_u32(2),
-                burst: nz_u32(2),
-            }),
-            None,
-            None,
-            None,
-            0,
-            Duration::from_secs(1),
-            PenaltyConfig {
-                threshold: 0,
-                window: Duration::from_secs(1),
-                cooldown: Duration::from_secs(1),
-            },
-        );
-
-        assert_eq!(limiter.should_drop(&peer, &msg, 1), None);
-        assert_eq!(
-            limiter.should_drop(&peer, &msg, 1),
-            Some(ConsensusIngressDropReason::Rate)
-        );
-        assert_eq!(limiter.should_drop(&peer, &sync, 1), None);
-        assert_eq!(limiter.should_drop(&peer, &sync, 1), None);
-        assert_eq!(
-            limiter.should_drop(&peer, &sync, 1),
-            Some(ConsensusIngressDropReason::Rate)
-        );
-    }
-
-    #[test]
     fn consensus_ingress_bulk_messages_use_bulk_bucket() {
         fn assert_bulk(peer: &Peer, msg: &iroha_core::NetworkMessage) {
-            let standard = consensus_params_msg();
+            let standard = limited_msg();
             let mut limiter = ConsensusIngressLimiter::new(
                 Some(BucketConfig {
                     rate_per_sec: nz_u32(1),
@@ -5870,8 +3122,6 @@ mod network_relay_tests {
                 None,
                 None,
                 None,
-                0,
-                Duration::from_secs(1),
                 PenaltyConfig {
                     threshold: 0,
                     window: Duration::from_secs(1),
@@ -5893,54 +3143,13 @@ mod network_relay_tests {
         }
 
         let peer = sample_peer();
-        assert_bulk(&peer, &block_sync_update_msg());
-        assert_bulk(&peer, &exec_witness_msg());
-    }
-
-    #[test]
-    fn retired_rbc_chunk_uses_limited_bucket_without_starving_live_control() {
-        let peer = sample_peer();
-        let chunk = rbc_chunk_msg(0x01, 2, 0);
-        let compact_chunk = rbc_chunk_compact_msg(0x02, 3, 0);
-        let live_control = lane_drain_vote_msg();
-        let mut limiter = ConsensusIngressLimiter::new(
-            Some(BucketConfig {
-                rate_per_sec: nz_u32(1),
-                burst: nz_u32(1),
-            }),
-            None,
-            None,
-            None,
-            Some(BucketConfig {
-                rate_per_sec: nz_u32(1),
-                burst: nz_u32(1),
-            }),
-            None,
-            8,
-            Duration::from_secs(1),
-            PenaltyConfig {
-                threshold: 0,
-                window: Duration::from_secs(1),
-                cooldown: Duration::from_secs(1),
-            },
-        );
-
-        assert_eq!(limiter.should_drop(&peer, &chunk, 1), None);
-        assert_eq!(
-            limiter.should_drop(&peer, &compact_chunk, 1),
-            Some(ConsensusIngressDropReason::Rate)
-        );
-        assert_eq!(
-            limiter.should_drop(&peer, &live_control, 1),
-            None,
-            "retired global traffic must not consume the live-v2 control bucket"
-        );
+        assert_bulk(&peer, &v2_certified_body_response_msg());
     }
 
     #[test]
     fn consensus_ingress_bytes_limit_drops_oversize() {
         let peer = sample_peer();
-        let msg = consensus_params_msg();
+        let msg = limited_msg();
         let mut limiter = ConsensusIngressLimiter::new(
             None,
             Some(BucketConfig {
@@ -5951,8 +3160,6 @@ mod network_relay_tests {
             None,
             None,
             None,
-            0,
-            Duration::from_secs(1),
             PenaltyConfig {
                 threshold: 0,
                 window: Duration::from_secs(1),
@@ -6015,60 +3222,17 @@ mod network_relay_tests {
             &response
         ));
         assert!(!NetworkRelayShared::is_handled_by_dedicated_subscriber(
-            &consensus_params_msg()
+            &v2_vote_msg()
         ));
-    }
-
-    #[test]
-    fn consensus_ingress_rbc_session_limit_counts_unique_sessions() {
-        let peer = sample_peer();
-        let mut limiter = ConsensusIngressLimiter::new(
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            1,
-            Duration::from_secs(60),
-            PenaltyConfig {
-                threshold: 0,
-                window: Duration::from_secs(1),
-                cooldown: Duration::from_secs(1),
-            },
-        );
-
-        let first = rbc_init_msg(0x01, 2, 0);
-        let same_session = rbc_chunk_msg(0x01, 2, 0);
-        let second = rbc_init_msg(0x02, 3, 0);
-        let ready_new = rbc_ready_msg(0x03, 4, 0);
-
-        assert_eq!(limiter.should_drop(&peer, &first, 128), None);
-        assert_eq!(limiter.should_drop(&peer, &same_session, 64), None);
-        assert_eq!(
-            limiter.should_drop(&peer, &second, 128),
-            Some(ConsensusIngressDropReason::RbcSessionLimit)
-        );
-        assert_eq!(
-            limiter.should_drop(&peer, &ready_new, 64),
-            Some(ConsensusIngressDropReason::RbcSessionLimit)
-        );
     }
 
     #[test]
     fn consensus_ingress_penalty_skips_critical_messages() {
         let peer = sample_peer();
-        let msg = consensus_params_msg();
-        let vote = qc_vote_msg();
-        let qc = qc_msg();
-        let commit = vrf_commit_msg();
-        let reveal = vrf_reveal_msg();
-        let hint = proposal_hint_msg();
-        let proposal = proposal_msg();
-        let control_flow = control_flow_msg();
-        let chunk = rbc_chunk_msg(0x01, 2, 0);
-        let ready = rbc_ready_msg(0x01, 2, 0);
-        let deliver = rbc_deliver_msg(0x01, 2, 0);
+        let msg = limited_msg();
+        let vote = v2_vote_msg();
+        let proposal = v2_proposal_msg();
+        let chunk = sumeragi_msg(v2_payload_chunk_block_message());
         let mut limiter = ConsensusIngressLimiter::new(
             Some(BucketConfig {
                 rate_per_sec: nz_u32(1),
@@ -6082,8 +3246,6 @@ mod network_relay_tests {
                 burst: nz_u32(10),
             }),
             None,
-            0,
-            Duration::from_secs(1),
             PenaltyConfig {
                 threshold: 1,
                 window: Duration::from_secs(5),
@@ -6097,22 +3259,15 @@ mod network_relay_tests {
             Some(ConsensusIngressDropReason::Rate)
         );
         assert_eq!(limiter.should_drop(&peer, &vote, 8), None);
-        assert_eq!(limiter.should_drop(&peer, &qc, 8), None);
-        assert_eq!(limiter.should_drop(&peer, &commit, 8), None);
-        assert_eq!(limiter.should_drop(&peer, &reveal, 8), None);
-        assert_eq!(limiter.should_drop(&peer, &hint, 8), None);
         assert_eq!(limiter.should_drop(&peer, &proposal, 8), None);
-        assert_eq!(limiter.should_drop(&peer, &control_flow, 8), None);
         assert_eq!(limiter.should_drop(&peer, &chunk, 8), None);
-        assert_eq!(limiter.should_drop(&peer, &ready, 8), None);
-        assert_eq!(limiter.should_drop(&peer, &deliver, 8), None);
     }
 
     #[test]
     fn consensus_ingress_penalty_skips_bulk_messages() {
         let peer = sample_peer();
-        let bulk = block_sync_update_msg();
-        let standard = consensus_params_msg();
+        let bulk = v2_certified_body_response_msg();
+        let standard = limited_msg();
         let mut limiter = ConsensusIngressLimiter::new(
             Some(BucketConfig {
                 rate_per_sec: nz_u32(1),
@@ -6129,8 +3284,6 @@ mod network_relay_tests {
                 burst: nz_u32(10),
             }),
             None,
-            0,
-            Duration::from_secs(1),
             PenaltyConfig {
                 threshold: 1,
                 window: Duration::from_secs(5),
@@ -6149,7 +3302,7 @@ mod network_relay_tests {
     #[test]
     fn consensus_ingress_critical_fallback_applies_penalty_when_unset() {
         let peer = sample_peer();
-        let vote = qc_vote_msg();
+        let vote = v2_vote_msg();
         let mut limiter = ConsensusIngressLimiter::new(
             Some(BucketConfig {
                 rate_per_sec: nz_u32(1),
@@ -6160,8 +3313,6 @@ mod network_relay_tests {
             None,
             None,
             None,
-            0,
-            Duration::from_secs(1),
             PenaltyConfig {
                 threshold: 1,
                 window: Duration::from_secs(5),
@@ -6183,51 +3334,29 @@ mod network_relay_tests {
     #[cfg(feature = "telemetry")]
     #[test]
     fn consensus_ingress_topic_label_tracks_payload_topics() {
-        let payload = block_sync_update_msg();
+        let payload = v2_certified_body_response_msg();
         assert_eq!(
             NetworkRelayShared::consensus_ingress_topic_label(&payload),
             Some("ConsensusPayload")
         );
 
-        let chunk = rbc_chunk_msg(0x01, 1, 0);
+        let chunk = sumeragi_msg(v2_payload_chunk_block_message());
         assert_eq!(
             NetworkRelayShared::consensus_ingress_topic_label(&chunk),
             Some("ConsensusChunk")
         );
 
-        let peer = sample_peer();
-        let block_sync = block_sync_msg(&peer);
-        assert_eq!(
-            NetworkRelayShared::consensus_ingress_topic_label(&block_sync),
-            Some("BlockSync")
-        );
-
-        let vote = qc_vote_msg();
+        let vote = v2_vote_msg();
         assert_eq!(
             NetworkRelayShared::consensus_ingress_topic_label(&vote),
             None
-        );
-
-        let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-            b"irohad-safety-ingress-metric-context",
-        )));
-        let authoritative_vote = v2_vote_msg(context_id, 1, 0, 0, 0xA5);
-        assert_eq!(
-            NetworkRelayShared::consensus_ingress_topic_label(&authoritative_vote),
-            Some("ConsensusSafety")
-        );
-
-        let drain_vote = lane_drain_vote_msg();
-        assert_eq!(
-            NetworkRelayShared::consensus_ingress_topic_label(&drain_vote),
-            Some("LaneDrainVote")
         );
     }
 
     #[test]
     fn consensus_ingress_penalty_suppresses_after_threshold() {
         let peer = sample_peer();
-        let msg = consensus_params_msg();
+        let msg = limited_msg();
         let mut limiter = ConsensusIngressLimiter::new(
             Some(BucketConfig {
                 rate_per_sec: nz_u32(1),
@@ -6238,8 +3367,6 @@ mod network_relay_tests {
             None,
             None,
             None,
-            0,
-            Duration::from_secs(1),
             PenaltyConfig {
                 threshold: 2,
                 window: Duration::from_secs(5),
@@ -6301,12 +3428,9 @@ fn apply_state_config_before_kura_replay(
     state: &mut State,
     config: &Config,
 ) -> ReportResult<(), StartError> {
-    // Apply runtime knobs that affect deterministic replay before Kura catch-up.
-    // In particular, the pacing governor can update on-chain Sumeragi parameters
-    // from block metadata during `apply_without_execution`.
+    // Apply deterministic execution and lane-topology policy before Kura catch-up.
     state.set_crypto(config.crypto.clone());
     state.set_pipeline(config.pipeline.clone());
-    state.set_sumeragi_pacing_governor(config.sumeragi.pacing_governor);
     let restored_runtime = state
         .nexus_runtime_restored_from_snapshot()
         .then(|| state.nexus_snapshot());
@@ -6552,12 +3676,6 @@ mod snapshot_read_error_tests {
         ));
 
         assert!(snapshot_read_error_is_recoverable(
-            &TryReadSnapshotError::MissingOfflineNoteReplayKeys {
-                snapshot_height: 608
-            }
-        ));
-
-        assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::MismatchedHash {
                 height: 1,
                 snapshot_block_hash: dummy_block_hash(1),
@@ -6745,7 +3863,7 @@ impl Iroha {
     /// # Errors
     /// - Reading telemetry configs
     /// - Telemetry setup
-    /// - Initialization of [`Sumeragi`](iroha_core::sumeragi::main_loop::Sumeragi) and [`Kura`]
+    /// - Initialization of the Sumeragi v2 reducer via [`SumeragiStartArgs`] and [`Kura`]
     #[allow(clippy::too_many_lines)]
     #[iroha_logger::log(name = "start", skip_all)] // This is actually easier to understand as a linear sequence of init statements.
     pub async fn start(
@@ -6854,6 +3972,28 @@ impl Iroha {
 
         let stored_genesis_block = read_stored_genesis_block(kura.as_ref(), block_count)?;
         let stored_genesis_hash = stored_genesis_block.as_ref().map(|block| block.0.hash());
+        if block_count.0 == 0 && stored_genesis_block.is_none() && genesis.is_none() {
+            return Err(Report::new(StartError::InitKura).attach(
+                "fresh Sumeragi v2 startup requires a local signed genesis; peer bootstrap cannot authenticate the genesis-selected handshake context",
+            ));
+        }
+        let effective_genesis = stored_genesis_block
+            .as_ref()
+            .or(genesis.as_ref())
+            .ok_or_else(|| {
+                Report::new(StartError::InitKura).attach(
+                    "Sumeragi v2 requires signed genesis metadata before opening network ingress",
+                )
+            })?;
+        let (signed_consensus_mode, signed_v2_genesis_context) =
+            signed_v2_genesis_context_metadata(effective_genesis)
+                .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
+        if config.nexus.enabled
+            && signed_consensus_mode != iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+        {
+            return Err(Report::new(StartError::InitKura)
+                .attach("Nexus requires the signed genesis Sumeragi v2 mode to be NPoS"));
+        }
 
         let effective_genesis_public_key = if let Some(stored_genesis) =
             stored_genesis_block.as_ref()
@@ -6882,6 +4022,40 @@ impl Iroha {
         } else {
             config.genesis.public_key.clone()
         };
+
+        if block_count.0 > 0 {
+            match kura
+                .v2_finality_artifact(1)
+                .map_err(|error| Report::new(StartError::InitKura).attach(error))?
+            {
+                Some(artifact) => {
+                    let context = &artifact.height_context;
+                    if context.chain_id != config.common.chain
+                        || context.height != 1
+                        || context.mode != signed_consensus_mode
+                        || context.da_layout != signed_v2_genesis_context.da_layout
+                        || context.nexus_amx_context_hash
+                            != iroha_crypto::Hash::prehashed(
+                                signed_v2_genesis_context.nexus_amx_context_hash,
+                            )
+                    {
+                        return Err(Report::new(StartError::InitKura).attach(
+                            "stored Sumeragi v2 genesis finality context differs from signed genesis metadata",
+                        ));
+                    }
+                }
+                None if block_count.0 == 1 => {
+                    iroha_logger::warn!(
+                        "genesis block is durable without its v2 finality sidecar; safety-WAL recovery must complete it before ingress"
+                    );
+                }
+                None => {
+                    return Err(Report::new(StartError::InitKura).attach(
+                        "stored Sumeragi v2 chain is missing its genesis finality artifact",
+                    ));
+                }
+            }
+        }
 
         let mut loaded_state_from_snapshot = false;
         let mut state = match try_read_snapshot(
@@ -7060,7 +4234,7 @@ impl Iroha {
                 &topology,
                 start_height,
                 block_count.0,
-                config.sumeragi.consensus_mode,
+                signed_consensus_mode,
             )
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
         }
@@ -7254,29 +4428,21 @@ impl Iroha {
         let lane_manifest_policy_digest =
             Some(state.lane_manifests.read().consensus_policy_digest());
         let config_caps = build_consensus_config_caps(
-            &config.sumeragi,
             &state.nexus_snapshot(),
             compliance_policy_digest,
             lane_manifest_policy_digest,
         )?;
-        iroha_core::sumeragi::status::set_consensus_caps(&config_caps);
-        let consensus_caps_override =
-            stored_genesis_block
-                .as_ref()
-                .or(genesis.as_ref())
-                .and_then(|block| {
-                    consensus_caps_from_genesis(
-                        block,
-                        &config.common.chain,
-                        &config_caps,
-                        &config.sumeragi,
-                    )
-                });
         let proto = iroha_core::sumeragi::consensus::PROTO_VERSION;
 
-        // Compute consensus handshake caps for gating peers
-        // Use WSV Sumeragi parameters (canonical JSON) so fingerprint is stable across peers
-        let (computed_mode_tag, computed_bls_domain, consensus_caps, confidential_features) = {
+        // Peer admission is frozen by the signed genesis. There is no runtime
+        // fallback: a node must validate this context before opening ingress.
+        let (
+            computed_mode_tag,
+            computed_bls_domain,
+            consensus_caps,
+            signed_block_cadence_ms,
+            confidential_features,
+        ) = {
             let view = state.view();
             let height = u64::try_from(view.block_hashes().len()).expect("height fits into u64");
             let confidential_features = iroha_core::state::compute_confidential_feature_digest(
@@ -7285,14 +4451,24 @@ impl Iroha {
                 view.sccp_registry.as_ref(),
                 height,
             );
-            let (mode_tag, bls_domain, caps) = compute_consensus_handshake_caps(
-                view.world(),
-                height,
-                &config,
+            let (mode_tag, bls_domain, caps, block_cadence_ms) = consensus_caps_from_genesis(
+                effective_genesis,
+                &config.common.chain,
                 &config_caps,
-                consensus_caps_override.clone(),
-            )?;
-            (mode_tag, bls_domain, caps, confidential_features)
+                &config.sumeragi,
+            )
+            .ok_or_else(|| {
+                Report::new(StartError::InitKura).attach(
+                    "signed genesis does not contain one canonical Sumeragi v2 handshake context",
+                )
+            })?;
+            (
+                mode_tag,
+                bls_domain,
+                caps,
+                block_cadence_ms,
+                confidential_features,
+            )
         };
         iroha_logger::info!(
             mode=%consensus_caps.mode_tag,
@@ -7300,28 +4476,16 @@ impl Iroha {
             fingerprint=%format!("0x{}", hex::encode(consensus_caps.consensus_fingerprint)),
             "Consensus handshake caps"
         );
-
         let mut staged_v2_genesis = None;
-        if let Some(genesis_block) = genesis.as_ref() {
-            let metadata_genesis = stored_genesis_block.as_ref().unwrap_or(genesis_block);
-            if let Err(err) = verify_genesis_metadata(
-                metadata_genesis,
-                &config,
-                &consensus_caps,
-                &computed_mode_tag,
-                &computed_bls_domain,
-                proto,
-            ) {
-                if stored_genesis_block.is_none() && block_count.0 == 0 {
-                    iroha_logger::error!(?err, "genesis consensus metadata validation failed");
-                    return Err(Report::new(StartError::InitKura).attach(err));
-                }
-                iroha_logger::warn!(
-                    ?err,
-                    "stored genesis consensus metadata does not match runtime consensus caps; continuing with existing Kura state"
-                );
-            }
-        }
+        verify_genesis_metadata(
+            effective_genesis,
+            &config,
+            &consensus_caps,
+            &computed_mode_tag,
+            &computed_bls_domain,
+            proto,
+        )
+        .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
 
         // If a genesis manifest JSON is provided via CLI, validate consensus fields.
         let cfg_manifest = config
@@ -7340,11 +4504,11 @@ impl Iroha {
             }
 
             if let Some(mode) = manifest.consensus_mode() {
-                let expected = match config.sumeragi.consensus_mode {
-                    iroha_config::parameters::actual::ConsensusMode::Permissioned => {
+                let expected = match signed_consensus_mode {
+                    iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned => {
                         iroha_core::sumeragi::consensus::PERMISSIONED_TAG
                     }
-                    iroha_config::parameters::actual::ConsensusMode::Npos => {
+                    iroha_data_model::block::consensus_v2::ConsensusMode::Npos => {
                         iroha_core::sumeragi::consensus::NPOS_TAG
                     }
                 };
@@ -7553,17 +4717,23 @@ impl Iroha {
                     "non-empty block store detected; using stored genesis for restart",
                 );
             } else {
-                let (fresh_mode_tag, fresh_bls_domain, fresh_caps) = consensus_caps_from_genesis(
-                    genesis_block,
-                    &config.common.chain,
-                    &config_caps,
-                    &config.sumeragi,
-                )
-                .ok_or_else(|| {
-                    Report::new(StartError::InitKura).attach(
+                let (fresh_mode_tag, fresh_bls_domain, fresh_caps, fresh_block_cadence_ms) =
+                    consensus_caps_from_genesis(
+                        genesis_block,
+                        &config.common.chain,
+                        &config_caps,
+                        &config.sumeragi,
+                    )
+                    .ok_or_else(|| {
+                        Report::new(StartError::InitKura).attach(
                         "fresh genesis is missing required signed Sumeragi v2 consensus metadata",
                     )
-                })?;
+                    })?;
+                if fresh_block_cadence_ms != signed_block_cadence_ms {
+                    return Err(Report::new(StartError::InitKura).attach(
+                        "fresh signed genesis cadence differs from the handshake opened for bootstrap",
+                    ));
+                }
                 verify_genesis_metadata(
                     genesis_block,
                     &config,
@@ -7754,7 +4924,6 @@ impl Iroha {
             })?;
         state.set_pipeline(pipeline_cfg);
         state.set_sumeragi_parameters(&sumeragi_cfg);
-        state.set_sumeragi_pacing_governor(sumeragi_cfg.pacing_governor);
         state.set_oracle(oracle_cfg);
         state.set_streaming(streaming_cfg);
         state.set_fraud_monitoring(fraud_cfg);
@@ -7934,7 +5103,7 @@ impl Iroha {
             config.common.key_pair.clone(),
             config.network.peer_gossip_period,
             config.network.peer_gossip_max_period,
-            config.sumeragi.consensus_mode,
+            signed_consensus_mode,
             config.network.trust_decay_half_life,
             config.network.trust_penalty_bad_gossip,
             config.network.trust_penalty_unknown_peer,
@@ -7945,182 +5114,11 @@ impl Iroha {
         supervisor.monitor(child);
         log_startup_trace("irohad.peers_gossiper.ready", startup_trace_started_at);
 
-        // Background poster worker for Sumeragi frames; overflow falls back to inline posts.
-        let background_post_tx = if config.sumeragi.debug.disable_background_worker {
-            None
-        } else {
-            let bg_cap = config.sumeragi.queues.control.max(1);
-            let (bg_tx, bg_rx) =
-                std::sync::mpsc::sync_channel::<iroha_core::sumeragi::BackgroundPost>(bg_cap);
-            {
-                let network_for_worker = network.clone();
-                #[cfg(feature = "telemetry")]
-                let telemetry_for_worker = telemetry.clone();
-                std::thread::Builder::new()
-                    .name("sumeragi-post".to_string())
-                    .spawn(move || {
-                        let mut safety_halt_logged = false;
-                        while let Ok(task) = bg_rx.recv() {
-                            if iroha_core::sumeragi::consensus_safety_halt_active() {
-                                if !safety_halt_logged {
-                                    iroha_logger::error!(
-                                        "consensus safety halt active; dropping queued background consensus transmissions"
-                                    );
-                                    safety_halt_logged = true;
-                                }
-                                continue;
-                            }
-                            match task {
-                                iroha_core::sumeragi::BackgroundPost::Post {
-                                    peer,
-                                    msg,
-                                    enqueued_at,
-                                } => {
-                                    #[cfg(feature = "telemetry")]
-                                    telemetry_for_worker.note_consensus_message_sent(&msg);
-                                    let priority = msg.priority();
-                                    let post = iroha_p2p::Post {
-                                        data: iroha_core::NetworkMessage::SumeragiBlock(Box::new(
-                                            msg,
-                                        )),
-                                        peer_id: peer.clone(),
-                                        priority,
-                                    };
-                                    network_for_worker.post(post);
-                                    #[cfg(feature = "telemetry")]
-                                    {
-                                        telemetry_for_worker.dec_bg_post_queue_depth();
-                                        telemetry_for_worker
-                                            .dec_bg_post_queue_depth_for_peer(&peer);
-                                        let age_ms = enqueued_at.elapsed().as_secs_f64() * 1000.0;
-                                        telemetry_for_worker.observe_bg_post_age_ms("Post", age_ms);
-                                    }
-                                }
-                                iroha_core::sumeragi::BackgroundPost::PostControlFlow {
-                                    peer,
-                                    frame,
-                                    enqueued_at,
-                                } => {
-                                    let post = iroha_p2p::Post {
-                                        data: iroha_core::NetworkMessage::SumeragiControlFlow(
-                                            Box::new(frame),
-                                        ),
-                                        peer_id: peer.clone(),
-                                        priority: iroha_p2p::Priority::High,
-                                    };
-                                    network_for_worker.post(post);
-                                    #[cfg(feature = "telemetry")]
-                                    {
-                                        telemetry_for_worker.dec_bg_post_queue_depth();
-                                        telemetry_for_worker
-                                            .dec_bg_post_queue_depth_for_peer(&peer);
-                                        let age_ms = enqueued_at.elapsed().as_secs_f64() * 1000.0;
-                                        telemetry_for_worker
-                                            .observe_bg_post_age_ms("PostControlFlow", age_ms);
-                                    }
-                                }
-                                iroha_core::sumeragi::BackgroundPost::Broadcast {
-                                    msg,
-                                    enqueued_at,
-                                } => {
-                                    #[cfg(feature = "telemetry")]
-                                    telemetry_for_worker.note_consensus_message_sent(&msg);
-                                    let priority = msg.priority();
-                                    let b = iroha_p2p::Broadcast {
-                                        data: iroha_core::NetworkMessage::SumeragiBlock(Box::new(
-                                            msg,
-                                        )),
-                                        priority,
-                                    };
-                                    network_for_worker.broadcast(b);
-                                    #[cfg(feature = "telemetry")]
-                                    {
-                                        telemetry_for_worker.dec_bg_post_queue_depth();
-                                        let age_ms = enqueued_at.elapsed().as_secs_f64() * 1000.0;
-                                        telemetry_for_worker
-                                            .observe_bg_post_age_ms("Broadcast", age_ms);
-                                    }
-                                }
-                                iroha_core::sumeragi::BackgroundPost::BroadcastControlFlow {
-                                    frame,
-                                    enqueued_at,
-                                } => {
-                                    let b = iroha_p2p::Broadcast {
-                                        data: iroha_core::NetworkMessage::SumeragiControlFlow(
-                                            Box::new(frame),
-                                        ),
-                                        priority: iroha_p2p::Priority::High,
-                                    };
-                                    network_for_worker.broadcast(b);
-                                    #[cfg(feature = "telemetry")]
-                                    {
-                                        telemetry_for_worker.dec_bg_post_queue_depth();
-                                        let age_ms = enqueued_at.elapsed().as_secs_f64() * 1000.0;
-                                        telemetry_for_worker
-                                            .observe_bg_post_age_ms("BroadcastControlFlow", age_ms);
-                                    }
-                                }
-                                iroha_core::sumeragi::BackgroundPost::PostNativeAmx {
-                                    peer,
-                                    message,
-                                    enqueued_at,
-                                } => {
-                                    let post = iroha_p2p::Post {
-                                        data: iroha_core::NetworkMessage::NativeAmx(Box::new(
-                                            message,
-                                        )),
-                                        peer_id: peer.clone(),
-                                        priority: iroha_p2p::Priority::High,
-                                    };
-                                    network_for_worker.post(post);
-                                    #[cfg(feature = "telemetry")]
-                                    {
-                                        telemetry_for_worker.dec_bg_post_queue_depth();
-                                        telemetry_for_worker
-                                            .dec_bg_post_queue_depth_for_peer(&peer);
-                                        let age_ms = enqueued_at.elapsed().as_secs_f64() * 1000.0;
-                                        telemetry_for_worker
-                                            .observe_bg_post_age_ms("PostNativeAmx", age_ms);
-                                    }
-                                }
-                                iroha_core::sumeragi::BackgroundPost::BroadcastNativeAmx {
-                                    message,
-                                    enqueued_at,
-                                } => {
-                                    let b = iroha_p2p::Broadcast {
-                                        data: iroha_core::NetworkMessage::NativeAmx(Box::new(
-                                            message,
-                                        )),
-                                        priority: iroha_p2p::Priority::High,
-                                    };
-                                    network_for_worker.broadcast(b);
-                                    #[cfg(feature = "telemetry")]
-                                    {
-                                        telemetry_for_worker.dec_bg_post_queue_depth();
-                                        let age_ms = enqueued_at.elapsed().as_secs_f64() * 1000.0;
-                                        telemetry_for_worker
-                                            .observe_bg_post_age_ms("BroadcastNativeAmx", age_ms);
-                                    }
-                                }
-                            }
-                        }
-                    })
-                    .expect("spawn sumeragi-post worker");
-            }
-            Some(bg_tx)
-        };
-
         #[cfg(feature = "telemetry")]
         let torii_telemetry =
             iroha_torii::MaybeTelemetry::from_profile(Some(telemetry.clone()), telemetry_profile);
         #[cfg(not(feature = "telemetry"))]
         let torii_telemetry = iroha_torii::MaybeTelemetry::from_profile(None, telemetry_profile);
-
-        let rbc_store_dir = config
-            .kura
-            .store_dir
-            .resolve_relative_path()
-            .join("rbc_sessions");
 
         let genesis_for_consensus = if stored_genesis_block.is_some() {
             None
@@ -8132,73 +5130,25 @@ impl Iroha {
         let (sumeragi, child) = SumeragiStartArgs {
             config: sumeragi_cfg.clone(),
             common_config: config.common.clone(),
-            consensus_frame_cap: config.network.max_frame_bytes_consensus,
-            consensus_payload_frame_cap: config.network.max_frame_bytes_block_sync,
             events_sender: events_sender.clone(),
             state: state.clone(),
             queue: queue.clone(),
             kura: kura.clone(),
             network: network.clone(),
-            peers_gossiper: peers_gossiper.clone(),
             genesis_network: GenesisWithPubKey {
                 genesis: genesis_for_consensus,
                 public_key: effective_genesis_public_key.clone(),
                 v2_bootstrap: staged_v2_genesis,
             },
-            block_count,
-            block_sync_gossip_limit: usize::try_from(config.block_sync.gossip_size.get())
-                .unwrap_or(usize::MAX),
-            #[cfg(feature = "telemetry")]
-            telemetry: telemetry.clone(),
-            epoch_roster_provider: if matches!(
-                sumeragi_cfg.consensus_mode,
-                iroha_config::parameters::actual::ConsensusMode::Npos
-            ) && sumeragi_cfg.npos.use_stake_snapshot_roster
-            {
-                // Placeholder: map current WSV peers to contiguous indices.
-                let world = state.world_view();
-                let peers: Vec<PeerId> = world.peers().to_vec();
-                Some(std::sync::Arc::new(
-                    iroha_core::sumeragi::WsvEpochRosterAdapter::new(peers),
-                ))
-            } else {
-                None
-            },
-            rbc_store: Some({
-                let disk_max_bytes =
-                    usize::try_from(sumeragi_cfg.rbc.disk_store_max_bytes).unwrap_or(usize::MAX);
-                let max_bytes = sumeragi_cfg.rbc.store_max_bytes.min(disk_max_bytes);
-                RbcStoreConfig {
-                    dir: rbc_store_dir.clone(),
-                    max_sessions: sumeragi_cfg.rbc.store_max_sessions,
-                    soft_sessions: sumeragi_cfg.rbc.store_soft_sessions,
-                    max_bytes,
-                    soft_bytes: sumeragi_cfg.rbc.store_soft_bytes,
-                    ttl: sumeragi_cfg.rbc.disk_store_ttl,
-                }
-            }),
-            background_post_tx,
-            da_spool_dir: config.torii.da_ingest.manifest_store_dir.clone(),
         }
         .start(supervisor.shutdown_signal())
         .map_err(|error| {
-            Report::new(StartError::InitKura)
-                .attach(format!("failed to initialize Sumeragi consensus: {error}"))
+            Report::new(StartError::StartP2p)
+                .attach(format!("failed to start Sumeragi v2 reducer: {error:#}"))
         })?;
         supervisor.monitor(child);
         log_startup_trace("irohad.sumeragi.started", startup_trace_started_at);
 
-        let block_sync_frame_cap = {
-            let global_plaintext = iroha_p2p::frame_plaintext_cap(config.network.max_frame_bytes);
-            config
-                .network
-                .max_frame_bytes_block_sync
-                .min(global_plaintext)
-        };
-        #[cfg(feature = "telemetry")]
-        let block_sync_telemetry = Some(telemetry.clone());
-        #[cfg(not(feature = "telemetry"))]
-        let block_sync_telemetry = None;
         let trusted = config.common.trusted_peers.value();
         let self_peer_id = trusted.myself.id().clone();
         let trusted_peers: BTreeSet<_> = std::iter::once(self_peer_id.clone())
@@ -8209,22 +5159,6 @@ impl Iroha {
             .max_by_key(|peer_id| peer_id.encoded_len())
             .cloned()
             .unwrap_or_else(|| self_peer_id.clone());
-        let (block_sync, child) = BlockSynchronizer::from_config(
-            &config.block_sync,
-            sumeragi.clone(),
-            kura.clone(),
-            config.common.peer.clone(),
-            trusted_peers,
-            trusted.pops.clone(),
-            network.clone(),
-            Arc::clone(&state),
-            block_sync_telemetry,
-            config.sumeragi.consensus_mode,
-            config.network.relay_ttl,
-            block_sync_frame_cap,
-        )
-        .start(supervisor.shutdown_signal());
-        supervisor.monitor(child);
 
         let (tx_gossiper, child) = TransactionGossiper::from_config(
             config.common.chain.clone(),
@@ -8258,9 +5192,7 @@ impl Iroha {
                 "failed to initialise embedded SoraFS runtime: {err}"
             ))
         })?;
-        let shared_sorafs_cache = build_shared_sorafs_provider_cache(&config)
-            .map_err(Report::new)
-            .change_context(StartError::StartTorii)?;
+        let shared_sorafs_cache = build_shared_sorafs_provider_cache(&config);
 
         let chain_id = Arc::new(config.common.chain.clone());
         if config.nexus.relay_worker.enabled {
@@ -8365,7 +5297,6 @@ impl Iroha {
             Some(sumeragi.clone()),
             runtime_deps,
         );
-        let torii = torii.with_rbc_store_dir(rbc_store_dir.clone());
         let torii = torii.with_p2p(network.clone());
         let torii = torii.with_local_peer_id(config.common.peer.id.clone());
         let torii_run = torii.start(supervisor.shutdown_signal());
@@ -8388,7 +5319,6 @@ impl Iroha {
         supervisor.monitor(task::spawn(
             NetworkRelay {
                 sumeragi,
-                block_sync,
                 tx_gossiper,
                 peers_gossiper,
                 network: network.clone(),
@@ -8398,7 +5328,7 @@ impl Iroha {
                 pow_update_version: Arc::clone(&pow_update_version),
                 consensus_ingress: ConsensusIngressLimiter::from_config(
                     &config.network,
-                    &config.sumeragi,
+                    Duration::from_millis(signed_block_cadence_ms),
                 ),
                 low_priority_ingress: LowPriorityIngressLimiter::from_config(&config.network),
             }
@@ -10261,66 +7191,6 @@ metadata = {}
     }
 
     #[test]
-    fn iroha2_preserves_da_flag() {
-        let mut enabled_config =
-            Config::from_toml_source(TomlSource::inline(minimal_config_table()))
-                .expect("default config");
-        enabled_config.sumeragi.da.enabled = true;
-
-        enforce_build_line(BuildLine::Iroha2, &mut enabled_config)
-            .expect("iroha2 should keep DA configurable");
-
-        assert!(enabled_config.sumeragi.da.enabled);
-
-        let mut disabled_config =
-            Config::from_toml_source(TomlSource::inline(minimal_config_table()))
-                .expect("default config");
-        disabled_config.sumeragi.da.enabled = false;
-
-        enforce_build_line(BuildLine::Iroha2, &mut disabled_config)
-            .expect("iroha2 should keep DA configurable");
-
-        assert!(!disabled_config.sumeragi.da.enabled);
-    }
-
-    #[test]
-    fn iroha3_rejects_da_disabled() {
-        let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
-            .expect("default config");
-        config.sumeragi.da.enabled = false;
-
-        let err = enforce_build_line(BuildLine::Iroha3, &mut config)
-            .expect_err("iroha3 should reject DA-disabled config");
-        let rendered = format!("{err:?}");
-        assert!(
-            rendered.contains("sumeragi.da.enabled"),
-            "error should point at sumeragi.da.enabled: {rendered}"
-        );
-        assert!(
-            !config.sumeragi.da.enabled,
-            "DA override should not mutate the config"
-        );
-    }
-
-    #[test]
-    fn iroha3_rejects_permissioned_consensus_with_nexus_enabled() {
-        let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
-            .expect("default config");
-        config.sumeragi.da.enabled = true;
-        config.nexus.enabled = true;
-        config.sumeragi.consensus_mode =
-            iroha_config::parameters::actual::ConsensusMode::Permissioned;
-
-        let err = enforce_build_line(BuildLine::Iroha3, &mut config)
-            .expect_err("iroha3 should reject permissioned consensus with nexus");
-        let rendered = format!("{err:?}");
-        assert!(
-            rendered.contains("NPoS"),
-            "error should mention NPoS requirement: {rendered}"
-        );
-    }
-
-    #[test]
     fn iroha2_rejects_multilane_catalog() {
         let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
             .expect("default config");
@@ -10833,18 +7703,16 @@ fn read_genesis_unlocked(path: &Path) -> ReportResult<GenesisBlock, ConfigError>
 
 fn resolve_norito_max_archive_len(cfg: &Config) -> u64 {
     let requested = cfg.norito.max_archive_len;
-    let rbc_store_max = u64::try_from(cfg.sumeragi.rbc.store_max_bytes).unwrap_or(u64::MAX);
     let max_frame_bytes = u64::try_from(cfg.network.max_frame_bytes).unwrap_or(u64::MAX);
-    let resolved = requested.max(rbc_store_max).max(max_frame_bytes);
+    let resolved = requested.max(max_frame_bytes);
 
     if resolved != requested {
         iroha_logger::warn!(
             target: "config",
             requested,
-            rbc_store_max,
             max_frame_bytes,
             resolved,
-            "Norito max_archive_len too small for configured RBC store or network frame; increasing to keep consensus payloads decodable"
+            "Norito max_archive_len too small for the configured network frame; increasing it so accepted frames remain decodable"
         );
     }
 
@@ -10856,17 +7724,6 @@ fn apply_norito_config(cfg: &Config) {
     let max_archive_len = resolve_norito_max_archive_len(cfg);
     norito::core::set_max_archive_len(max_archive_len);
     norito::core::hw::set_gpu_compression_allowed(cfg.norito.allow_gpu_compression);
-}
-
-/// Enforce build-line specific Sumeragi DA/RBC policy:
-/// - Iroha 2 honours the configured flags (defaults keep DA/RBC off).
-/// - Iroha 3 always requires DA with RBC.
-fn enforce_da_rbc_policy(build_line: BuildLine, config: &Config) -> ReportResult<(), MainError> {
-    if build_line.is_iroha3() && !config.sumeragi.da.enabled {
-        return Err(Report::new(MainError::Config)
-            .attach("Iroha 3 requires DA/RBC; set sumeragi.da.enabled=true in the configuration"));
-    }
-    Ok(())
 }
 
 fn validate_config(config: &Config) -> ReportResult<(), ConfigError> {
@@ -11357,8 +8214,8 @@ fn run_main(build_line: BuildLine) -> ReportResult<(), MainError> {
     iroha_logger::info!(
         target: "config",
         build_line = %build_line,
-        da_enabled = config.sumeragi.da.enabled,
-        "Resolved build line and consensus DA policy"
+        protocol_version = u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION),
+        "Resolved build line; Sumeragi v2 data availability is mandatory"
     );
 
     #[cfg(feature = "telemetry")]
@@ -11387,7 +8244,7 @@ fn run_main(build_line: BuildLine) -> ReportResult<(), MainError> {
     };
     // Build Tokio runtime with a conservative number of worker threads to avoid
     // oversubscription with the IVM scheduler. Keep a slightly higher minimum
-    // to prevent HTTP/p2p tasks from starving under RBC/DA load, and use the
+    // to prevent HTTP/p2p tasks from starving under consensus body/chunk load, and use the
     // available parallelism as the auto baseline instead of a fixed floor.
     let auto_budget = std::thread::available_parallelism()
         .map(std::num::NonZeroUsize::get)
@@ -11413,17 +8270,7 @@ fn run_main(build_line: BuildLine) -> ReportResult<(), MainError> {
 }
 
 fn enforce_build_line(build_line: BuildLine, config: &mut Config) -> ReportResult<(), MainError> {
-    enforce_da_rbc_policy(build_line, config)?;
-
     if build_line.is_iroha3() {
-        if config.nexus.enabled
-            && config.sumeragi.consensus_mode
-                != iroha_config::parameters::actual::ConsensusMode::Npos
-        {
-            return Err(Report::new(MainError::Config).attach(
-                "Nexus requires the global NPoS validator set; set sumeragi.consensus_mode = \"npos\" or disable nexus.enabled",
-            ));
-        }
         return Ok(());
     }
 
@@ -11499,48 +8346,10 @@ fn parse_confidential_registry_hash(payload: &Json) -> ReportResult<Option<[u8; 
 }
 
 fn build_consensus_config_caps(
-    sumeragi: &iroha_config::parameters::actual::Sumeragi,
     nexus: &iroha_config::parameters::actual::Nexus,
     compliance_policy_digest: Option<[u8; 32]>,
     lane_manifest_policy_digest: Option<[u8; 32]>,
 ) -> ReportResult<iroha_p2p::ConsensusConfigCaps, StartError> {
-    let collectors_k = u16::try_from(sumeragi.collectors.k).map_err(|_| {
-        Report::new(StartError::StartP2p)
-            .attach("sumeragi.collectors.k exceeds handshake limits (must fit into u16)")
-    })?;
-    let rbc_chunk_max_bytes = u64::try_from(sumeragi.rbc.chunk_max_bytes).map_err(|_| {
-        Report::new(StartError::StartP2p).attach(
-            "sumeragi.advanced.rbc.chunk_max_bytes exceeds handshake limits (must fit into u64)",
-        )
-    })?;
-    let rbc_store_max_bytes = u64::try_from(sumeragi.rbc.store_max_bytes).map_err(|_| {
-        Report::new(StartError::StartP2p).attach(
-            "sumeragi.advanced.rbc.store_max_bytes exceeds handshake limits (must fit into u64)",
-        )
-    })?;
-    let rbc_store_soft_bytes = u64::try_from(sumeragi.rbc.store_soft_bytes).map_err(|_| {
-        Report::new(StartError::StartP2p).attach(
-            "sumeragi.advanced.rbc.store_soft_bytes exceeds handshake limits (must fit into u64)",
-        )
-    })?;
-    let rbc_store_max_sessions = u32::try_from(sumeragi.rbc.store_max_sessions).map_err(|_| {
-        Report::new(StartError::StartP2p).attach(
-            "sumeragi.advanced.rbc.store_max_sessions exceeds handshake limits (must fit into u32)",
-        )
-    })?;
-    let rbc_store_soft_sessions =
-        u32::try_from(sumeragi.rbc.store_soft_sessions).map_err(|_| {
-            Report::new(StartError::StartP2p).attach(
-                "sumeragi.advanced.rbc.store_soft_sessions exceeds handshake limits (must fit into u32)",
-            )
-        })?;
-    let rbc_session_ttl_ms = u64::try_from(sumeragi.rbc.session_ttl.as_millis()).map_err(|_| {
-        Report::new(StartError::StartP2p).attach(
-            "sumeragi.advanced.rbc.session_ttl exceeds handshake limits (must fit into u64 milliseconds)",
-        )
-    })?;
-    let rbc_data_shards = sumeragi.rbc.effective_data_shards();
-    let rbc_parity_shards = sumeragi.rbc.effective_parity_shards();
     let nexus_policy_digest =
         iroha_config::parameters::actual::nexus_consensus_policy_digest_with_runtime_policies(
             nexus,
@@ -11554,20 +8363,10 @@ fn build_consensus_config_caps(
         })?;
 
     Ok(iroha_p2p::ConsensusConfigCaps {
-        nexus_policy_digest,
+        // The signed genesis/world projection replaces this bootstrap value
+        // before the handshake is exposed to peers.
         v2_config_fingerprint: [0; 32],
-        collectors_k,
-        redundant_send_r: sumeragi.collectors.redundant_send_r,
-        da_enabled: sumeragi.da.enabled,
-        rbc_chunk_max_bytes,
-        rbc_encoding: sumeragi.rbc.encoding,
-        rbc_rs16_data_shards: rbc_data_shards,
-        rbc_rs16_parity_shards: rbc_parity_shards,
-        rbc_session_ttl_ms,
-        rbc_store_max_sessions,
-        rbc_store_soft_sessions,
-        rbc_store_max_bytes,
-        rbc_store_soft_bytes,
+        nexus_policy_digest,
     })
 }
 
@@ -11576,7 +8375,7 @@ fn consensus_caps_from_genesis(
     chain_id: &ChainId,
     config_caps: &iroha_p2p::ConsensusConfigCaps,
     sumeragi: &iroha_config::parameters::actual::Sumeragi,
-) -> Option<(String, String, iroha_p2p::ConsensusHandshakeCaps)> {
+) -> Option<(String, String, iroha_p2p::ConsensusHandshakeCaps, u64)> {
     let mut params = iroha_data_model::parameter::Parameters::default();
     let mut handshake_entries = Vec::new();
 
@@ -11597,38 +8396,44 @@ fn consensus_caps_from_genesis(
         }
     }
 
-    let entry = handshake_entries
-        .iter()
-        .filter(|entry| {
-            entry
-                .wire_proto_versions
-                .contains(&iroha_core::sumeragi::consensus::PROTO_VERSION)
-        })
-        .find_map(|entry| {
-            let advertised = parse_consensus_handshake_fingerprint(&entry.consensus_fingerprint)?;
-            let (_, _, fingerprint) = consensus_entry_caps(chain_id, entry, &params, sumeragi);
-            (advertised == fingerprint).then_some(entry)
-        })
-        .or_else(|| {
-            handshake_entries.iter().find(|entry| {
-                entry
-                    .wire_proto_versions
-                    .contains(&iroha_core::sumeragi::consensus::PROTO_VERSION)
-            })
-        })
-        .or_else(|| handshake_entries.first())?;
+    let [entry] = handshake_entries.as_slice() else {
+        return None;
+    };
+    if entry.wire_proto_versions
+        != [u32::from(
+            iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
+        )]
+    {
+        return None;
+    }
+    entry.sumeragi_v2.validate().ok()?;
+    let (expected_mode, expected_domain) = match entry.mode.as_str() {
+        "Permissioned" => (
+            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+            iroha_data_model::block::consensus_v2::PERMISSIONED_BLS_DOMAIN,
+        ),
+        "Npos" => (
+            iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
+            iroha_data_model::block::consensus_v2::NPOS_BLS_DOMAIN,
+        ),
+        _ => return None,
+    };
+    if entry.bls_domain != expected_domain {
+        return None;
+    }
 
     let (mode_tag, consensus_params, computed_fingerprint) =
         consensus_entry_caps(chain_id, entry, &params, sumeragi);
-    let mode = match mode_tag.as_str() {
-        iroha_core::sumeragi::consensus::NPOS_TAG => {
-            iroha_data_model::block::consensus_v2::ConsensusMode::Npos
-        }
-        _ => iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
-    };
+    if parse_consensus_handshake_fingerprint(&entry.consensus_fingerprint)? != computed_fingerprint
+    {
+        return None;
+    }
     let mut config_caps = *config_caps;
     config_caps.v2_config_fingerprint = sumeragi
-        .v2_config(Duration::from_millis(consensus_params.block_time_ms), mode)
+        .v2_config(
+            Duration::from_millis(consensus_params.block_time_ms),
+            expected_mode,
+        )
         .ok()?
         .fingerprint()
         .into();
@@ -11642,19 +8447,20 @@ fn consensus_caps_from_genesis(
             consensus_fingerprint: computed_fingerprint,
             config: config_caps,
         },
+        consensus_params.block_time_ms,
     ))
 }
 
 fn signed_v2_genesis_context_metadata(
     genesis: &GenesisBlock,
-) -> Result<
+) -> core::result::Result<
     (
         iroha_data_model::block::consensus_v2::ConsensusMode,
         iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
     ),
     String,
 > {
-    let mut matches = Vec::new();
+    let mut metadata_entries = Vec::new();
     for transaction in genesis.0.external_transactions() {
         let Executable::Instructions(instructions) = transaction.instructions() else {
             return Err(
@@ -11668,34 +8474,48 @@ fn signed_v2_genesis_context_metadata(
             let Parameter::Custom(custom) = set_parameter.inner() else {
                 continue;
             };
-            if custom.id() != &consensus_metadata::handshake_meta_id() {
-                continue;
-            }
-            let metadata = decode_consensus_handshake_meta(custom.payload())
-                .map_err(|error| error.to_string())?;
-            if metadata.wire_proto_versions.contains(&u32::from(
-                iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
-            )) {
-                matches.push(metadata);
+            if custom.id() == &consensus_metadata::handshake_meta_id() {
+                metadata_entries.push(
+                    decode_consensus_handshake_meta(custom.payload())
+                        .map_err(|error| error.to_string())?,
+                );
             }
         }
     }
-    if matches.len() != 1 {
+    let [metadata] = metadata_entries.as_slice() else {
         return Err(format!(
-            "Sumeragi v2 genesis requires exactly one signed v2 handshake metadata entry, found {}",
-            matches.len()
+            "Sumeragi v2 genesis requires exactly one signed handshake metadata entry, found {}",
+            metadata_entries.len()
+        ));
+    };
+    let expected_protocol = u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION);
+    if metadata.wire_proto_versions != [expected_protocol] {
+        return Err(format!(
+            "Sumeragi v2 genesis requires exactly wire_proto_versions = [{expected_protocol}], got {:?}",
+            metadata.wire_proto_versions
         ));
     }
-    let metadata = matches.pop().expect("length checked");
     metadata
         .sumeragi_v2
         .validate()
         .map_err(|error| error.to_string())?;
-    let mode = match metadata.mode.as_str() {
-        "Permissioned" => iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
-        "Npos" => iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
+    let (mode, expected_domain) = match metadata.mode.as_str() {
+        "Permissioned" => (
+            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+            iroha_data_model::block::consensus_v2::PERMISSIONED_BLS_DOMAIN,
+        ),
+        "Npos" => (
+            iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
+            iroha_data_model::block::consensus_v2::NPOS_BLS_DOMAIN,
+        ),
         other => return Err(format!("unsupported signed consensus mode `{other}`")),
     };
+    if metadata.bls_domain != expected_domain {
+        return Err(format!(
+            "signed Sumeragi v2 BLS domain `{}` does not match canonical `{expected_domain}`",
+            metadata.bls_domain
+        ));
+    }
     Ok((mode, metadata.sumeragi_v2))
 }
 
@@ -11739,11 +8559,13 @@ fn consensus_entry_caps(
     (mode_tag.to_string(), consensus_params, fingerprint)
 }
 
+#[cfg(test)]
 fn compute_consensus_handshake_caps(
-    world: &impl WorldReadOnly,
+    world: &impl iroha_core::state::WorldReadOnly,
     height: u64,
     config: &Config,
     config_caps: &iroha_p2p::ConsensusConfigCaps,
+    frozen_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
     override_caps: Option<(String, String, iroha_p2p::ConsensusHandshakeCaps)>,
 ) -> ReportResult<(String, String, iroha_p2p::ConsensusHandshakeCaps), StartError> {
     if let Some((mode_tag, bls_domain, caps)) = override_caps {
@@ -11756,6 +8578,7 @@ fn compute_consensus_handshake_caps(
         &config.common,
         &config.sumeragi,
         config_caps,
+        frozen_mode,
     )
     .map_err(|error| {
         Report::new(StartError::StartP2p)
@@ -11861,7 +8684,7 @@ fn verify_genesis_metadata(
             .collect::<Vec<_>>()
             .join("; ");
         return Err(Report::new(MainError::Config).attach(format!(
-            "none of the consensus_handshake_meta entries match runtime settings (expected consensus_mode `{expected_mode}`, bls_domain `{bls_domain}`, proto v{proto_version}, fingerprint 0x{expected_fp_hex}`); entries observed: {entries_summary}"
+            "none of the consensus_handshake_meta entries match the authenticated startup context (expected consensus_mode `{expected_mode}`, bls_domain `{bls_domain}`, proto v{proto_version}, fingerprint 0x{expected_fp_hex}`); entries observed: {entries_summary}"
         )));
     };
 
@@ -12179,59 +9002,6 @@ mod tests {
         use super::*;
 
         #[test]
-        fn applies_pacing_governor_before_kura_replay() {
-            let config_table = toml::toml! {
-                chain = "00000000-0000-0000-0000-000000000000"
-                public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-                private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
-
-                [network]
-                address = "addr:127.0.0.1:1337#8F78"
-                public_address = "addr:127.0.0.1:1337#8F78"
-
-                [genesis]
-                public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
-                file = "./genesis.signed.nrt"
-
-                [streaming]
-                identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
-                identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
-
-                [torii]
-                address = "addr:127.0.0.1:8080#8942"
-            };
-            let mut config = ConfigReader::new()
-                .with_toml_source(TomlSource::inline(config_table))
-                .read_and_complete::<UserConfig>()
-                .expect("sample config should be readable")
-                .parse()
-                .expect("sample config should parse");
-            config.sumeragi.pacing_governor =
-                iroha_config::parameters::actual::SumeragiPacingGovernor {
-                    window_blocks: 7,
-                    step_up_bps: 1_234,
-                    ..Default::default()
-                };
-
-            let temp = tempfile::tempdir().expect("temporary authenticated Kura root");
-            config.kura.store_dir = WithOrigin::inline(temp.path().join("kura"));
-            let (kura, _) = Kura::new_with_configured_lane_catalog(
-                &config.kura,
-                &config.nexus.lane_config,
-                &config.nexus.configured_lane_catalog,
-            )
-            .expect("authenticated configured Kura should open");
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-
-            apply_state_config_before_kura_replay(&mut state, &config)
-                .expect("pre-replay config should apply");
-
-            assert_eq!(state.pacing_governor.window_blocks, 7);
-            assert_eq!(state.pacing_governor.step_up_bps, 1_234);
-        }
-
-        #[test]
         fn installs_actual_zk_config_for_fresh_state_before_kura_replay() {
             let config_table = toml::toml! {
                 chain = "00000000-0000-0000-0000-000000000000"
@@ -12454,11 +9224,10 @@ mod tests {
         }
 
         #[test]
-        fn resolves_to_rbc_store_max_when_larger() {
+        fn resolves_to_network_frame_when_larger() {
             let mut config = base_config();
             config.norito.max_archive_len = 32 * 1024 * 1024;
-            config.sumeragi.rbc.store_max_bytes = 128 * 1024 * 1024;
-            config.network.max_frame_bytes = 64 * 1024 * 1024;
+            config.network.max_frame_bytes = 128 * 1024 * 1024;
 
             let resolved = resolve_norito_max_archive_len(&config);
 
@@ -12469,7 +9238,6 @@ mod tests {
         fn preserves_requested_when_already_largest() {
             let mut config = base_config();
             config.norito.max_archive_len = 256 * 1024 * 1024;
-            config.sumeragi.rbc.store_max_bytes = 128 * 1024 * 1024;
             config.network.max_frame_bytes = 64 * 1024 * 1024;
 
             let resolved = resolve_norito_max_archive_len(&config);
@@ -12481,36 +9249,6 @@ mod tests {
     mod consensus_ingress_limits {
         use super::*;
         use std::num::NonZeroU32;
-
-        #[test]
-        fn rbc_session_limit_scales_with_ttl_and_block_time() {
-            let limit = ConsensusIngressLimiter::rbc_session_limit_from_ttl(
-                64,
-                Duration::from_secs(120),
-                Duration::from_secs(1),
-            );
-            assert_eq!(limit, 242);
-        }
-
-        #[test]
-        fn rbc_session_limit_respects_explicit_upper_bound() {
-            let limit = ConsensusIngressLimiter::rbc_session_limit_from_ttl(
-                512,
-                Duration::from_secs(120),
-                Duration::from_secs(1),
-            );
-            assert_eq!(limit, 512);
-        }
-
-        #[test]
-        fn rbc_session_limit_disables_when_configured_zero() {
-            let limit = ConsensusIngressLimiter::rbc_session_limit_from_ttl(
-                0,
-                Duration::from_secs(120),
-                Duration::from_secs(1),
-            );
-            assert_eq!(limit, 0);
-        }
 
         #[test]
         fn bulk_scale_factor_scales_for_faster_block_time() {
@@ -12537,94 +9275,9 @@ mod tests {
     }
 
     mod relay_fairness {
-        use super::super::network_relay_tests::{
-            block_sync_update_msg, rbc_chunk_msg, relay_work, sample_peer,
-        };
         use super::*;
         use tokio::sync::mpsc;
         use tokio::sync::mpsc::error::TryRecvError;
-
-        #[test]
-        fn safety_budget_forces_a_competing_turn_but_never_self_deadlocks() {
-            let mut budget = RELAY_SAFETY_BURST;
-            for _ in 0..RELAY_SAFETY_BURST {
-                assert!(relay_safety_turn_available(&mut budget, true));
-                budget = budget.saturating_sub(1);
-            }
-            assert_eq!(budget, 0);
-            assert!(
-                !relay_safety_turn_available(&mut budget, true),
-                "a pending competing queue must get the next turn"
-            );
-            assert!(
-                relay_safety_turn_available(&mut budget, false),
-                "an empty competing queue must not deadlock safety-only traffic"
-            );
-            assert_eq!(budget, 1);
-        }
-
-        #[test]
-        fn relay_worker_background_queues_round_robin_after_high_bursts() {
-            use iroha_p2p::network::message::Topic;
-
-            let peer = sample_peer();
-            let (payload_tx, mut payload_rx) = mpsc::channel(1);
-            let (chunk_tx, mut chunk_rx) = mpsc::channel(1);
-            let (low_tx, mut low_rx) = mpsc::channel(1);
-            payload_tx
-                .try_send(RelayQueuedWork::general(relay_work(
-                    &peer,
-                    block_sync_update_msg(),
-                )))
-                .expect("queue payload work");
-            chunk_tx
-                .try_send(RelayQueuedWork::general(relay_work(
-                    &peer,
-                    rbc_chunk_msg(0x91, 1, 0),
-                )))
-                .expect("queue chunk work");
-            low_tx
-                .try_send(RelayQueuedWork::general(relay_work(
-                    &peer,
-                    iroha_core::NetworkMessage::Health,
-                )))
-                .expect("queue low work");
-
-            let mut high_budget = 0;
-            let mut background_rr = 0;
-            let first = try_recv_relay_worker_background_after_high_burst(
-                &mut high_budget,
-                &mut background_rr,
-                &mut payload_rx,
-                &mut chunk_rx,
-                &mut low_rx,
-            )
-            .expect("payload gets first background turn");
-            assert_eq!(first.item.payload.topic(), Topic::ConsensusPayload);
-            assert_eq!(high_budget, RELAY_HIGH_BURST);
-
-            high_budget = 0;
-            let second = try_recv_relay_worker_background_after_high_burst(
-                &mut high_budget,
-                &mut background_rr,
-                &mut payload_rx,
-                &mut chunk_rx,
-                &mut low_rx,
-            )
-            .expect("chunk gets second background turn");
-            assert_eq!(second.item.payload.topic(), Topic::ConsensusChunk);
-
-            high_budget = 0;
-            let third = try_recv_relay_worker_background_after_high_burst(
-                &mut high_budget,
-                &mut background_rr,
-                &mut payload_rx,
-                &mut chunk_rx,
-                &mut low_rx,
-            )
-            .expect("low gets third background turn");
-            assert_eq!(third.item.payload.topic(), Topic::Health);
-        }
 
         #[test]
         fn try_recv_after_burst_skips_when_budget_remaining() {
@@ -12677,36 +9330,27 @@ mod tests {
 
         #[tokio::test]
         async fn relay_ingress_requests_restart_when_receiver_closes() {
-            let (_safety_tx, safety_rx) = mpsc::channel(1);
             let (_high_tx, high_rx) = mpsc::channel(1);
             let (payload_tx, payload_rx) = mpsc::channel(1);
             let (chunk_tx, chunk_rx) = mpsc::channel(1);
             let (low_tx, low_rx) = mpsc::channel(1);
-            let (work_control_tx, _work_control_rx) = mpsc::channel(1);
-            let (work_aux_control_tx, _work_aux_control_rx) = mpsc::channel(1);
             let (work_high_tx, _work_high_rx) = mpsc::channel(1);
             let (work_payload_tx, _work_payload_rx) = mpsc::channel(1);
             let (work_chunk_tx, _work_chunk_rx) = mpsc::channel(1);
             let (work_low_tx, _work_low_rx) = mpsc::channel(1);
-            let control_gate = Arc::new(RelayControlIngressGate::new(8, Duration::from_secs(1)));
 
             drop(payload_tx);
             let exit = tokio::time::timeout(
                 Duration::from_millis(100),
                 drive_network_relay_ingress(
-                    safety_rx,
                     high_rx,
                     payload_rx,
                     chunk_rx,
                     low_rx,
-                    &work_control_tx,
-                    &work_aux_control_tx,
                     &work_high_tx,
                     &work_payload_tx,
                     &work_chunk_tx,
                     &work_low_tx,
-                    &control_gate,
-                    None,
                 ),
             )
             .await
@@ -12723,18 +9367,14 @@ mod tests {
 
         #[tokio::test]
         async fn relay_ingress_requests_restart_when_worker_queue_closes() {
-            let (_safety_tx, safety_rx) = mpsc::channel(1);
             let (_high_tx, high_rx) = mpsc::channel(1);
             let (payload_tx, payload_rx) = mpsc::channel(1);
             let (chunk_tx, chunk_rx) = mpsc::channel(1);
             let (low_tx, low_rx) = mpsc::channel(1);
-            let (work_control_tx, _work_control_rx) = mpsc::channel(1);
-            let (work_aux_control_tx, _work_aux_control_rx) = mpsc::channel(1);
             let (work_high_tx, _work_high_rx) = mpsc::channel(1);
             let (work_payload_tx, work_payload_rx) = mpsc::channel(1);
             let (work_chunk_tx, _work_chunk_rx) = mpsc::channel(1);
             let (work_low_tx, _work_low_rx) = mpsc::channel(1);
-            let control_gate = Arc::new(RelayControlIngressGate::new(8, Duration::from_secs(1)));
 
             drop(work_payload_rx);
             let keypair = KeyPair::random();
@@ -12752,19 +9392,14 @@ mod tests {
             let exit = tokio::time::timeout(
                 Duration::from_millis(100),
                 drive_network_relay_ingress(
-                    safety_rx,
                     high_rx,
                     payload_rx,
                     chunk_rx,
                     low_rx,
-                    &work_control_tx,
-                    &work_aux_control_tx,
                     &work_high_tx,
                     &work_payload_tx,
                     &work_chunk_tx,
                     &work_low_tx,
-                    &control_gate,
-                    None,
                 ),
             )
             .await
@@ -12989,9 +9624,8 @@ mod tests {
             assert_eq!(fp_bytes.len(), 32, "fingerprint must be 32 bytes");
             let mut consensus_fingerprint = [0u8; 32];
             consensus_fingerprint.copy_from_slice(&fp_bytes);
-            let config_caps =
-                build_consensus_config_caps(&config.sumeragi, &config.nexus, None, None)
-                    .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
+            let config_caps = build_consensus_config_caps(&config.nexus, None, None)
+                .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let consensus_caps = iroha_p2p::ConsensusHandshakeCaps {
                 mode_tag: mode_tag.clone(),
                 proto_version: proto,
@@ -13214,32 +9848,37 @@ mod tests {
         }
 
         #[test]
-        fn consensus_caps_follow_activation_height() {
+        fn consensus_caps_use_frozen_height_context_mode() {
             use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
             let config = sample_config();
-
-            // Before activation: next_mode staged but height below the cutover keeps permissioned caps.
             let world = World::new();
             {
                 let mut block = world.block();
+                // Retired mode-staging parameters may still exist in archived
+                // world state. They cannot select the live v2 mode.
                 let params = block.parameters.get_mut();
                 params.sumeragi.next_mode =
                     Some(iroha_data_model::parameter::system::SumeragiConsensusMode::Npos);
-                params.sumeragi.mode_activation_height = Some(5);
+                params.sumeragi.mode_activation_height = Some(0);
                 block.commit();
             }
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let state = State::new_for_testing(world, kura, query);
             let world = state.world_view();
             let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
-            let config_caps =
-                build_consensus_config_caps(&config.sumeragi, &config.nexus, None, None)
-                    .expect("config caps should build");
-            let (mode_tag_perm, bls_perm, caps_perm) =
-                compute_consensus_handshake_caps(&world, height, &config, &config_caps, None)
-                    .expect("valid permissioned v2 handshake config");
+            let config_caps = build_consensus_config_caps(&config.nexus, None, None)
+                .expect("config caps should build");
+            let (mode_tag_perm, bls_perm, caps_perm) = compute_consensus_handshake_caps(
+                &world,
+                height,
+                &config,
+                &config_caps,
+                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+                None,
+            )
+            .expect("valid permissioned v2 handshake config");
             assert_eq!(
                 mode_tag_perm,
                 iroha_core::sumeragi::consensus::PERMISSIONED_TAG
@@ -13256,22 +9895,15 @@ mod tests {
             let permissioned_fp = caps_perm.consensus_fingerprint;
             let permissioned_v2_config_fp = caps_perm.config.v2_config_fingerprint;
 
-            // After activation: height at or beyond the cutover switches to the staged NPoS mode.
-            let world = World::new();
-            {
-                let mut block = world.block();
-                let params = block.parameters.get_mut();
-                params.sumeragi.next_mode =
-                    Some(iroha_data_model::parameter::system::SumeragiConsensusMode::Npos);
-                params.sumeragi.mode_activation_height = Some(0);
-                block.commit();
-            }
-            let state = State::new_for_testing(world, kura, LiveQueryStore::start_test());
-            let world = state.world_view();
-            let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
-            let (mode_tag_npos, bls_npos, caps_npos) =
-                compute_consensus_handshake_caps(&world, height, &config, &config_caps, None)
-                    .expect("valid NPoS v2 handshake config");
+            let (mode_tag_npos, bls_npos, caps_npos) = compute_consensus_handshake_caps(
+                &world,
+                height,
+                &config,
+                &config_caps,
+                iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
+                None,
+            )
+            .expect("valid NPoS v2 handshake config");
             assert_eq!(mode_tag_npos, iroha_core::sumeragi::consensus::NPOS_TAG);
             assert_eq!(bls_npos, "bls-iroha2:npos-sumeragi:v2");
             assert_eq!(
@@ -13284,67 +9916,51 @@ mod tests {
             );
             assert_ne!(
                 permissioned_fp, caps_npos.consensus_fingerprint,
-                "mode cutover should change consensus fingerprint"
+                "the frozen height-context mode must change the consensus fingerprint"
             );
-        }
-
-        #[test]
-        fn build_consensus_config_caps_zero_plain_rbc_erasure_profile() {
-            let mut config = sample_config();
-            config.sumeragi.rbc.encoding = iroha_data_model::block::consensus::RbcEncoding::Plain;
-            config.sumeragi.rbc.data_shards = 4;
-            config.sumeragi.rbc.parity_shards = 2;
-
-            let caps = build_consensus_config_caps(&config.sumeragi, &config.nexus, None, None)
-                .expect("config caps should build");
-            assert_eq!(
-                caps.rbc_encoding,
-                iroha_data_model::block::consensus::RbcEncoding::Plain
-            );
-            assert_eq!(caps.rbc_rs16_data_shards, 0);
-            assert_eq!(caps.rbc_rs16_parity_shards, 0);
         }
 
         #[test]
         fn verify_genesis_metadata_rejects_consensus_mode_mismatch() -> eyre::Result<()> {
-            use iroha_core::{kura::Kura, query::store::LiveQueryStore};
             use iroha_data_model::parameter::system::SumeragiConsensusMode;
 
             let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
-            let mut config = sample_config();
-            config.sumeragi.consensus_mode =
-                iroha_config::parameters::actual::ConsensusMode::Permissioned;
+            let config = sample_config();
             let genesis_keys = config.common.key_pair.clone();
             let chain = config.common.chain.clone();
-            let manifest = GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from("."))
-                .build_raw()
-                .with_consensus_mode(SumeragiConsensusMode::Npos)
-                .with_consensus_meta();
-            let genesis_block = manifest.build_and_sign(&genesis_keys)?;
+            let permissioned_genesis =
+                GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from("."))
+                    .build_raw()
+                    .with_consensus_meta()
+                    .build_and_sign(&genesis_keys)?;
+            let npos_genesis =
+                GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from("."))
+                    .build_raw()
+                    .with_consensus_mode(SumeragiConsensusMode::Npos)
+                    .with_consensus_meta()
+                    .build_and_sign(&genesis_keys)?;
 
-            let config_caps =
-                build_consensus_config_caps(&config.sumeragi, &config.nexus, None, None)
-                    .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::new(), kura, query);
-            let world = state.world_view();
-            let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
-            let (mode_tag, bls_domain, consensus_caps) =
-                compute_consensus_handshake_caps(&world, height, &config, &config_caps, None)
-                    .expect("valid v2 handshake config");
+            let config_caps = build_consensus_config_caps(&config.nexus, None, None)
+                .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
+            let (mode_tag, bls_domain, consensus_caps, _) = consensus_caps_from_genesis(
+                &permissioned_genesis,
+                &chain,
+                &config_caps,
+                &config.sumeragi,
+            )
+            .expect("permissioned signed genesis must produce canonical v2 caps");
 
             let proto = iroha_core::sumeragi::consensus::PROTO_VERSION;
             let err = verify_genesis_metadata(
-                &genesis_block,
+                &npos_genesis,
                 &config,
                 &consensus_caps,
                 &mode_tag,
                 &bls_domain,
                 proto,
             )
-            .expect_err("consensus mode mismatch should be detected");
+            .expect_err("signed genesis mode mismatch should be detected");
             assert!(
                 format!("{err:?}").contains("consensus_mode"),
                 "error should mention consensus_mode mismatch: {err:?}"
@@ -13385,17 +10001,22 @@ mod tests {
                 norito::json::value::from_value(manifest_value).expect("decode tampered manifest");
             let genesis_block = tampered.build_and_sign(&genesis_keys)?;
 
-            let config_caps =
-                build_consensus_config_caps(&config.sumeragi, &config.nexus, None, None)
-                    .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
+            let config_caps = build_consensus_config_caps(&config.nexus, None, None)
+                .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let state = State::new_for_testing(World::new(), kura, query);
             let world = state.world_view();
             let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
-            let (mode_tag, bls_domain, consensus_caps) =
-                compute_consensus_handshake_caps(&world, height, &config, &config_caps, None)
-                    .expect("valid v2 handshake config");
+            let (mode_tag, bls_domain, consensus_caps) = compute_consensus_handshake_caps(
+                &world,
+                height,
+                &config,
+                &config_caps,
+                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+                None,
+            )
+            .expect("valid v2 handshake config");
 
             // Diverge the runtime chain after computing consensus caps to force a
             // fingerprint mismatch without altering the embedded handshake metadata.

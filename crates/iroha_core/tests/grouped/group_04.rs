@@ -36,8 +36,6 @@ mod signature_batch_determinism;
 mod social_viral_incentives;
 #[path = "../sparse_block_bytes.rs"]
 mod sparse_block_bytes;
-#[path = "../sumeragi_collectors.rs"]
-mod sumeragi_collectors;
 #[path = "../sumeragi_doc_sync.rs"]
 mod sumeragi_doc_sync;
 #[path = "../validation_fee_admission.rs"]

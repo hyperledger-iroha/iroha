@@ -3,7 +3,7 @@
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use eyre::{Result, bail, ensure};
@@ -15,7 +15,7 @@ use iroha::{
         isi::{Log, SetParameter},
         parameter::{
             Parameter,
-            system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
+            system::{SumeragiNposParameters, SumeragiParameter},
         },
         prelude::TransactionBuilder,
     },
@@ -38,7 +38,6 @@ use norito::{json::Value, to_bytes};
 use tokio::runtime::Runtime;
 
 static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
-const CLIENT_HEIGHT_TIMEOUT: Duration = Duration::from_secs(300);
 
 fn commit_quorum_size(validator_count: usize) -> usize {
     let tolerated_faults = validator_count.saturating_sub(1) / 3;
@@ -314,58 +313,6 @@ fn advance_to_height(
     Ok(())
 }
 
-fn advance_client_to_height(
-    network: &Network,
-    client: &Client,
-    target: u64,
-    label: &str,
-) -> Result<()> {
-    let deadline = Instant::now() + CLIENT_HEIGHT_TIMEOUT;
-    let quorum = commit_quorum_size(network.peers().len()).max(1);
-    let mut attempt = 0usize;
-    let mut last_observed = Vec::new();
-    loop {
-        let mut heights = Vec::new();
-        last_observed.clear();
-        for (idx, peer) in network.peers().iter().enumerate() {
-            match peer.best_effort_block_height() {
-                Some(height) => {
-                    heights.push(Some(height.total));
-                    last_observed.push(format!("#{idx}:{}", height.total));
-                }
-                None => {
-                    heights.push(None);
-                    last_observed.push(format!("#{idx}:unavailable"));
-                }
-            }
-        }
-        if count_reached(&heights, target) >= quorum {
-            return Ok(());
-        }
-
-        let status = client.get_status()?;
-        let highest = heights
-            .iter()
-            .flatten()
-            .copied()
-            .chain(core::iter::once(status.blocks))
-            .max()
-            .unwrap_or_default();
-        let submit_client = submit_client_for_network(network, client);
-        submit_client.submit_blocking(Log::new(
-            Level::INFO,
-            format!("{label} tick {highest} attempt {attempt}"),
-        ))?;
-
-        ensure!(
-            Instant::now() < deadline,
-            "network did not reach target height {target} on quorum {quorum} within {CLIENT_HEIGHT_TIMEOUT:?}; last observed {last_observed:?}"
-        );
-        attempt = attempt.saturating_add(1);
-        thread::sleep(Duration::from_millis(200));
-    }
-}
-
 #[test]
 fn posting_structurally_invalid_evidence_is_rejected() -> Result<()> {
     init_instruction_registry();
@@ -597,131 +544,32 @@ fn posting_evidence_with_missing_signature_is_rejected() -> Result<()> {
 }
 
 #[test]
-fn mode_activation_height_requires_next_mode_and_future_height() -> Result<()> {
+fn runtime_consensus_mode_staging_is_rejected() -> Result<()> {
     init_instruction_registry();
 
-    let Some((network, runtime)) = start_network(stringify!(
-        mode_activation_height_requires_next_mode_and_future_height
-    ))?
+    let Some((network, _runtime)) =
+        start_network(stringify!(runtime_consensus_mode_staging_is_rejected))?
     else {
         return Ok(());
     };
     let client = network.client();
 
-    let err = client
-        .submit_blocking(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::ModeActivationHeight(5),
-        )))
-        .expect_err("mode_activation_height without next_mode must fail");
-    ensure!(
-        err.to_string()
-            .contains("mode_activation_height requires next_mode"),
-        "expected missing-next-mode error, got {err:?}"
-    );
-
-    let current_height = client.get_status()?.blocks;
-    let invalid_height_tx = TransactionBuilder::new(network.chain_id(), ALICE_ID.clone())
-        .with_instructions([
-            SetParameter::new(Parameter::Sumeragi(SumeragiParameter::NextMode(
-                SumeragiConsensusMode::Permissioned,
-            ))),
-            SetParameter::new(Parameter::Sumeragi(
-                SumeragiParameter::ModeActivationHeight(current_height),
-            )),
-        ])
-        .sign(ALICE_KEYPAIR.private_key());
-    let err = submit_client_for_network(&network, &client)
-        .submit_transaction_blocking(&invalid_height_tx)
-        .expect_err("mode_activation_height equal to current height must fail");
-    ensure!(
-        err.to_string().contains("mode_activation_height")
-            && err
+    for parameter in [
+        SumeragiParameter::NextMode(
+            iroha_data_model::parameter::system::SumeragiConsensusMode::Npos,
+        ),
+        SumeragiParameter::ModeActivationHeight(5),
+    ] {
+        let error = client
+            .submit_blocking(SetParameter::new(Parameter::Sumeragi(parameter)))
+            .expect_err("first-release v2 must reject runtime mode staging");
+        ensure!(
+            error
                 .to_string()
-                .contains("greater than current block height"),
-        "expected height validation error, got {err:?}"
-    );
-
-    let desired_height = client.get_status()?.blocks.saturating_add(5);
-    let staged_tx = TransactionBuilder::new(network.chain_id(), ALICE_ID.clone())
-        .with_instructions([
-            SetParameter::new(Parameter::Sumeragi(SumeragiParameter::NextMode(
-                SumeragiConsensusMode::Npos,
-            ))),
-            SetParameter::new(Parameter::Sumeragi(
-                SumeragiParameter::ModeActivationHeight(desired_height),
-            )),
-        ])
-        .sign(ALICE_KEYPAIR.private_key());
-    submit_client_for_network(&network, &client).submit_transaction_blocking(&staged_tx)?;
-
-    advance_to_height(
-        &runtime,
-        &network,
-        &client,
-        desired_height,
-        "mode activation staged",
-    )?;
-    let params = client.get_parameters()?;
-    let sp = params.sumeragi();
-    ensure!(
-        sp.next_mode == Some(SumeragiConsensusMode::Npos),
-        "next_mode should be staged as Npos, params={sp:?}"
-    );
-    ensure!(
-        sp.mode_activation_height == Some(desired_height),
-        "mode_activation_height should equal {desired_height}, params={sp:?}"
-    );
-
-    Ok(())
-}
-
-#[test]
-fn joint_consensus_switches_mode_at_activation_height() -> Result<()> {
-    init_instruction_registry();
-
-    let Some((network, _runtime)) = start_network(stringify!(
-        joint_consensus_switches_mode_at_activation_height
-    ))?
-    else {
-        return Ok(());
-    };
-    let client = network.client();
-
-    let initial = client.get_sumeragi_collectors_json()?;
-    ensure!(
-        collectors_consensus_mode(&initial)
-            .is_some_and(|mode| mode.eq_ignore_ascii_case("permissioned")),
-        "collectors endpoint should report Permissioned before activation, payload={initial:?}"
-    );
-
-    let status = client.get_status()?;
-    let activation_height = status.blocks + 5;
-    let switch_tx = TransactionBuilder::new(network.chain_id(), ALICE_ID.clone())
-        .with_instructions([
-            SetParameter::new(Parameter::Sumeragi(SumeragiParameter::NextMode(
-                SumeragiConsensusMode::Npos,
-            ))),
-            SetParameter::new(Parameter::Sumeragi(
-                SumeragiParameter::ModeActivationHeight(activation_height),
-            )),
-        ])
-        .sign(ALICE_KEYPAIR.private_key());
-    submit_client_for_network(&network, &client).submit_transaction_blocking(&switch_tx)?;
-
-    advance_client_to_height(
-        &network,
-        &client,
-        activation_height.saturating_add(1),
-        "joint consensus activation",
-    )?;
-    wait_for_collectors_mode_quorum(&network, "npos", 80, Duration::from_millis(200))?;
-
-    let final_snapshot = client.get_sumeragi_collectors_json()?;
-    ensure!(
-        collectors_consensus_mode(&final_snapshot)
-            .is_some_and(|mode| mode.eq_ignore_ascii_case("npos")),
-        "collectors endpoint should report Npos after activation, payload={final_snapshot:?}"
-    );
+                .contains("does not support runtime consensus-mode staging"),
+            "unexpected runtime staging error: {error:?}"
+        );
+    }
 
     Ok(())
 }
@@ -978,45 +826,6 @@ fn pick_submit_peer_index_prefers_connected_leader() {
     assert_eq!(pick_submit_peer_index(Some(3), true, &totals, 0), 3);
     assert_eq!(pick_submit_peer_index(Some(3), false, &totals, 0), 1);
     assert_eq!(pick_submit_peer_index(None, true, &totals, 1), 2);
-}
-
-fn collectors_consensus_mode(value: &Value) -> Option<&str> {
-    value.get("consensus_mode").and_then(Value::as_str)
-}
-
-fn wait_for_collectors_mode_quorum(
-    network: &Network,
-    expected: &str,
-    attempts: usize,
-    delay: Duration,
-) -> Result<()> {
-    let quorum = commit_quorum_size(network.peers().len()).max(1);
-    let mut last_observed = Vec::new();
-    for attempt in 0..attempts {
-        last_observed.clear();
-        let mut matching = 0usize;
-        for (idx, peer) in network.peers().iter().enumerate() {
-            match peer.client().get_sumeragi_collectors_json() {
-                Ok(snapshot) => {
-                    let mode = collectors_consensus_mode(&snapshot).unwrap_or("<missing>");
-                    if mode.eq_ignore_ascii_case(expected) {
-                        matching = matching.saturating_add(1);
-                    }
-                    last_observed.push(format!("#{idx}:{mode}"));
-                }
-                Err(err) => last_observed.push(format!("#{idx}:err:{err}")),
-            }
-        }
-        if matching >= quorum {
-            return Ok(());
-        }
-        if attempt + 1 < attempts {
-            thread::sleep(delay);
-        }
-    }
-    bail!(
-        "collectors mode did not switch to {expected} on quorum {quorum} within {attempts} attempts; last observed {last_observed:?}"
-    );
 }
 
 fn wait_for_evidence_count_at_least(

@@ -16,7 +16,6 @@ use crate::{
         ConsensusPolicy, build_line_from_env, ensure_npos_parameters,
         validate_consensus_mode_for_line,
     },
-    localnet::ConsensusModeArg,
     tui,
 };
 
@@ -102,15 +101,6 @@ pub struct Args {
     /// The banner includes the seed to help with reproducibility.
     #[arg(long)]
     no_banner: bool,
-    /// Consensus mode to stamp into the generated genesis (optional).
-    #[arg(long, value_enum, value_name = "MODE")]
-    consensus_mode: Option<ConsensusModeArg>,
-    /// Optional staged consensus mode to activate at `mode_activation_height`.
-    #[arg(long, value_enum, value_name = "MODE")]
-    next_consensus_mode: Option<ConsensusModeArg>,
-    /// Optional activation height for switching to `next_consensus_mode` (requires `--next-consensus-mode`).
-    #[arg(long, value_name = "HEIGHT")]
-    mode_activation_height: Option<u64>,
 }
 
 impl Args {
@@ -141,68 +131,29 @@ impl<T: Write> RunArgs<T> for Args {
         }
 
         let build_line = build_line_from_env();
-        match (args.next_consensus_mode, args.mode_activation_height) {
-            (Some(_), None) => {
-                return Err(eyre!(
-                    "`--next-consensus-mode` requires `--mode-activation-height`"
-                ));
-            }
-            (None, Some(_)) => {
-                return Err(eyre!(
-                    "`--mode-activation-height` requires `--next-consensus-mode`"
-                ));
-            }
-            _ => {}
-        }
-        if let Some(height) = args.mode_activation_height
-            && height == 0
-        {
-            return Err(eyre!(
-                "`--mode-activation-height` must be greater than zero"
-            ));
-        }
-
-        let consensus_mode_override = args.consensus_mode.map(SumeragiConsensusMode::from);
-        let next_consensus_mode = args.next_consensus_mode.map(SumeragiConsensusMode::from);
-        let wants_npos = matches!(consensus_mode_override, Some(SumeragiConsensusMode::Npos))
-            || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
-        let manifest = if wants_npos {
-            ensure_npos_genesis(&args.config_dir)?
-        } else {
-            let genesis_path = args.config_dir.join("genesis.json");
-            RawGenesisTransaction::from_path(&genesis_path).wrap_err_with(|| {
-                eyre!(
-                    "failed to parse genesis manifest at {}",
-                    genesis_path.display()
-                )
-            })?
-        };
+        let genesis_path = args.config_dir.join("genesis.json");
+        let manifest = RawGenesisTransaction::from_path(&genesis_path).wrap_err_with(|| {
+            eyre!(
+                "failed to parse genesis manifest at {}",
+                genesis_path.display()
+            )
+        })?;
         let manifest_mode = manifest.consensus_mode().ok_or_else(|| {
             eyre!(
                 "genesis manifest missing consensus_mode; regenerate with `kagami genesis generate --consensus-mode <mode>`"
             )
         })?;
-        let effective_mode = consensus_mode_override.unwrap_or(manifest_mode);
-        validate_consensus_mode_for_line(
-            build_line,
-            effective_mode,
-            next_consensus_mode,
-            ConsensusPolicy::Any,
-        )?;
-        if matches!(effective_mode, SumeragiConsensusMode::Npos)
-            || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos))
-        {
+        validate_consensus_mode_for_line(build_line, manifest_mode, None, ConsensusPolicy::Any)?;
+        if matches!(manifest_mode, SumeragiConsensusMode::Npos) {
             ensure_npos_parameters(&manifest)?;
         }
-        if build_line.is_iroha3() {
-            let params = manifest.effective_parameters();
-            if params.sumeragi().next_mode().is_some()
-                || params.sumeragi().mode_activation_height().is_some()
-            {
-                return Err(eyre!(
-                    "Iroha3 does not support staged consensus cutovers; drop `next_mode` and `mode_activation_height` from genesis"
-                ));
-            }
+        let params = manifest.effective_parameters();
+        if params.sumeragi().next_mode().is_some()
+            || params.sumeragi().mode_activation_height().is_some()
+        {
+            return Err(eyre!(
+                "staged consensus cutovers are not supported; create a fresh genesis with one consensus mode"
+            ));
         }
 
         let peer_overrides = match &args.peer_config {
@@ -221,19 +172,9 @@ impl<T: Write> RunArgs<T> for Args {
             args.no_cache,
             &args.out_file,
             peer_overrides,
-            args.consensus_mode.as_ref().map(|m| {
-                m.to_possible_value()
-                    .expect("value enum")
-                    .get_name()
-                    .to_owned()
-            }),
-            args.next_consensus_mode.as_ref().map(|m| {
-                m.to_possible_value()
-                    .expect("value enum")
-                    .get_name()
-                    .to_owned()
-            }),
-            args.mode_activation_height,
+            None,
+            None,
+            None,
         )?;
         let schema = swarm.build();
 
@@ -281,15 +222,8 @@ impl<T: Write> RunArgs<T> for Args {
             writeln!(
                 writer,
                 "consensus_mode: {}",
-                crate::localnet::consensus_mode_label(effective_mode)
+                crate::localnet::consensus_mode_label(manifest_mode)
             )?;
-            if let Some(next_mode) = next_consensus_mode {
-                writeln!(
-                    writer,
-                    "next_consensus_mode: {}",
-                    crate::localnet::consensus_mode_label(next_mode)
-                )?;
-            }
             writeln!(
                 writer,
                 "next: docker compose -f {} up",
@@ -369,7 +303,7 @@ fn ensure_npos_genesis(config_dir: &Path) -> color_eyre::Result<RawGenesisTransa
     let genesis_path = config_dir.join("genesis.json");
     ensure!(
         genesis_path.exists(),
-        "NPoS swarm generation requires {} to exist; generate one with `kagami genesis generate --consensus-mode npos` (or stage with `--next-consensus-mode npos --mode-activation-height <H>` on Iroha2)",
+        "NPoS swarm generation requires {} to exist; generate one with `kagami genesis generate --consensus-mode npos`",
         genesis_path.display()
     );
     let manifest = RawGenesisTransaction::from_path(&genesis_path).wrap_err_with(|| {

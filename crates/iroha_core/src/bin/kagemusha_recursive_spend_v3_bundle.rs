@@ -1,4 +1,4 @@
-//! Package externally generated Pasta-cycle material into the ABI-18/V3 release format.
+//! Package externally generated Pasta-cycle material into the ABI-19/V3 release format.
 //!
 //! This command does not generate cryptographic keys or validator rosters. It
 //! frames six reviewed Pasta inputs, validates one canonical finality-roster
@@ -31,7 +31,7 @@ use iroha_data_model::{
     offline::{
         KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3,
         KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
-        KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3, KAGEMUSHA_RECURSIVE_SPEND_MODE_V2,
+        KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3,
         KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
@@ -58,7 +58,7 @@ use iroha_data_model::{
 use sha2::{Digest, Sha256};
 
 const HELP: &str = "\
-Package reviewed Pasta-cycle material into one Kagemusha ABI-18/V3 bundle.
+Package reviewed Pasta-cycle material into one Kagemusha ABI-19/V3 bundle.
 
 Usage:
   cargo run -p iroha_core --bin kagemusha_recursive_spend_v3_bundle -- \\
@@ -568,7 +568,6 @@ fn write_bundle(
         schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
         version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
         bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-        mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V2.to_owned(),
         proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
         transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
         generation: metadata.generation,
@@ -1582,7 +1581,6 @@ mod tests {
         let manifest: KagemushaRecursiveSpendArtifactManifestV3 =
             norito::json::from_str(&manifest_text).expect("decode generated manifest");
         manifest.validate().expect("validate generated manifest");
-        assert_eq!(manifest.mode, KAGEMUSHA_RECURSIVE_SPEND_MODE_V2);
         let manifest_norito =
             fs::read(out_dir.join(MANIFEST_NORITO_FILE_NAME)).expect("read Norito manifest");
         let manifest_from_norito: KagemushaRecursiveSpendArtifactManifestV3 =

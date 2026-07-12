@@ -17114,97 +17114,49 @@ pub mod isi {
                     }
                 }
             }
-            // Handle scheduling parameters specially since they are optional in WSV
-            // and are not listed by `Parameters::parameters()` iterator.
-            match self.inner().clone() {
-                Parameter::Sumeragi(iroha_data_model::parameter::SumeragiParameter::NextMode(
-                    next_mode,
-                )) => {
-                    if state_transaction.nexus.enabled {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "Nexus networks do not support staged consensus cutovers; remove sumeragi.next_mode/mode_activation_height"
-                                    .to_owned(),
-                            ),
-                        ));
-                    }
-                    let params_view = state_transaction.world.parameters.get();
-                    // Avoid redundant updates when the requested mode is already staged.
-                    if params_view.sumeragi().next_mode() == Some(next_mode) {
-                        return Ok(());
-                    }
-
-                    let params = state_transaction.world.parameters.get_mut();
-                    params.set_parameter(Parameter::Sumeragi(
-                        iroha_data_model::parameter::SumeragiParameter::NextMode(next_mode),
-                    ));
-                    state_transaction.mark_mode_cutover_next_set();
-                    state_transaction
-                        .world
-                        .emit_events(Some(ConfigurationEvent::Changed(ParameterChanged {
-                            old_value: Parameter::Sumeragi(
-                                iroha_data_model::parameter::SumeragiParameter::NextMode(next_mode),
-                            ),
-                            new_value: Parameter::Sumeragi(
-                                iroha_data_model::parameter::SumeragiParameter::NextMode(next_mode),
-                            ),
-                        })));
-                    return Ok(());
-                }
+            if matches!(
+                self.inner(),
                 Parameter::Sumeragi(
-                    iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(height),
-                ) => {
-                    if state_transaction.nexus.enabled {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "Nexus networks do not support staged consensus cutovers; remove sumeragi.next_mode/mode_activation_height"
-                                    .to_owned(),
-                            ),
-                        ));
-                    }
-                    let params_view = state_transaction.world.parameters.get();
-                    if params_view.sumeragi().next_mode().is_none() {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "mode_activation_height requires next_mode to be set in the same block"
-                                    .to_owned(),
-                            ),
-                        ));
-                    }
-
-                    let current_height = state_transaction._curr_block.height().get();
-                    if height <= current_height {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(format!(
-                                "mode_activation_height {height} must be greater than current block height {current_height} to enforce joint-consensus activation"
-                            )),
-                        ));
-                    }
-
-                    let params = state_transaction.world.parameters.get_mut();
-                    params.set_parameter(Parameter::Sumeragi(
-                        iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(
-                            height,
-                        ),
-                    ));
-                    state_transaction.mark_mode_cutover_activation_set();
-                    state_transaction
-                        .world
-                        .emit_events(Some(ConfigurationEvent::Changed(ParameterChanged {
-                        old_value: Parameter::Sumeragi(
-                            iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(
-                                height,
-                            ),
-                        ),
-                        new_value: Parameter::Sumeragi(
-                            iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(
-                                height,
-                            ),
-                        ),
-                    })));
-                    return Ok(());
-                }
-                _ => {}
+                    iroha_data_model::parameter::SumeragiParameter::NextMode(_)
+                        | iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(_)
+                )
+            ) {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "Sumeragi v2 does not support runtime consensus-mode staging".to_owned(),
+                    ),
+                ));
+            }
+            if matches!(
+                self.inner(),
+                Parameter::Sumeragi(SumeragiParameter::DaEnabled(false))
+            ) {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "Sumeragi v2 requires data availability at every height".to_owned(),
+                    ),
+                ));
+            }
+            if state_transaction._curr_block.height().get() > 1
+                && matches!(
+                    self.inner(),
+                    Parameter::Sumeragi(
+                        SumeragiParameter::MinFinalityMs(_)
+                            | SumeragiParameter::BlockTimeMs(_)
+                            | SumeragiParameter::CommitTimeMs(_)
+                            | SumeragiParameter::PacingFactorBps(_)
+                            | SumeragiParameter::CollectorsK(_)
+                            | SumeragiParameter::RedundantSendR(_)
+                            | SumeragiParameter::DaEnabled(_)
+                    )
+                )
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "Sumeragi v2 consensus timing, DA, and quorum-routing parameters are genesis-frozen"
+                            .to_owned(),
+                    ),
+                ));
             }
             let validate_timing = |min_finality_ms: u64,
                                    block_time_ms: u64,
@@ -18181,10 +18133,7 @@ pub mod isi {
             kura::Kura,
             nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
             query::store::LiveQueryStore,
-            state::{
-                State, StateTransaction, SumeragiPolicyConfig, SumeragiPolicyFlags, World,
-                storage_transactions::TransactionsBlockError,
-            },
+            state::{State, StateTransaction, SumeragiPolicyConfig, World},
             zk::hash_vk,
         };
 
@@ -20815,11 +20764,6 @@ seiyaku GovernanceLifecycle {
                 "halo2/pasta/ipa/zk-vote",
                 "halo2/ipa:other"
             ));
-            assert!(circuit_id_matches(
-                "halo2/pasta/kagemusha-recursive-compact-v1",
-                "halo2/pasta/ipa/kagemusha-recursive-compact-v1",
-                "halo2/ipa:kagemusha-recursive-compact-v1"
-            ));
             assert!(!circuit_id_matches(
                 "halo2/pasta/tiny-add",
                 "halo2/pasta/ipa/zk-vote",
@@ -20907,9 +20851,6 @@ seiyaku GovernanceLifecycle {
                 );
             }
             assert!(is_no_trusted_setup_halo2_backend_id("halo2/ipa"));
-            assert!(is_no_trusted_setup_halo2_backend_id(
-                "halo2/pasta/kagemusha-recursive-compact-v1"
-            ));
             assert!(voting_circuit_matches(
                 "stark/fri/sha256-goldilocks",
                 "stark/fri/sha256-goldilocks:vote-ballot",
@@ -21404,9 +21345,6 @@ seiyaku GovernanceLifecycle {
                 BackendTag::Halo2IpaPasta
             ));
             assert!(backend_requires_open_verify_envelope("halo2/ipa"));
-            assert!(backend_requires_open_verify_envelope(
-                "halo2/pasta/kagemusha-recursive-compact-v1"
-            ));
             assert!(!open_verify_backend_tag_matches(
                 "halo2/ipa",
                 BackendTag::Halo2Bn254
@@ -30463,8 +30401,10 @@ seiyaku GovernanceLifecycle {
                     "unexpected error: {msg}"
                 );
                 assert!(stx.world.peers().iter().all(|p| p != &peer_id_missing));
-                let snapshot = crate::sumeragi::status::snapshot().peer_key_policy;
-                assert_eq!(snapshot.missing_hsm_total, 1);
+                let (total, last_reason) =
+                    crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests();
+                assert_eq!(total, 1);
+                assert_eq!(last_reason, Some("missing_hsm"));
             }
 
             let bls_bound = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -30520,8 +30460,10 @@ seiyaku GovernanceLifecycle {
             let msg = smart_contract_instruction_error_message(err);
             assert!(msg.contains("lead-time policy"), "unexpected error: {msg}");
             assert!(stx.world.peers().iter().all(|p| p != &peer_id));
-            let snapshot = crate::sumeragi::status::snapshot().peer_key_policy;
-            assert!(snapshot.lead_time_violation_total > 0);
+            let (total, last_reason) =
+                crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests();
+            assert!(total > 0);
+            assert_eq!(last_reason, Some("lead_time_violation"));
         }
 
         #[test]
@@ -30573,8 +30515,10 @@ seiyaku GovernanceLifecycle {
                 .expect_err("identifier collisions must be rejected");
             let msg = smart_contract_instruction_error_message(err);
             assert!(msg.contains("collision"), "unexpected error: {msg}");
-            let snapshot = crate::sumeragi::status::snapshot().peer_key_policy;
-            assert_eq!(snapshot.identifier_collision_total, 1);
+            let (total, last_reason) =
+                crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests();
+            assert_eq!(total, 1);
+            assert_eq!(last_reason, Some("identifier_collision"));
         }
 
         #[test]
@@ -32086,15 +32030,7 @@ seiyaku GovernanceLifecycle {
             let mut state = State::new(World::default(), kura, query_handle);
 
             let sumeragi_cfg = SumeragiPolicyConfig {
-                collectors_k: iroha_config::parameters::defaults::sumeragi::COLLECTORS_K,
-                collectors_redundant_send_r:
-                    iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
-                policy_flags: SumeragiPolicyFlags::new(
-                    iroha_config::parameters::defaults::sumeragi::DA_ENABLED,
-                    false,
-                ),
-                da_quorum_timeout_multiplier:
-                    iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
+                key_require_hsm: false,
                 key_activation_lead_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
                 key_overlap_grace_blocks:
@@ -32330,15 +32266,7 @@ seiyaku GovernanceLifecycle {
             let mut state = State::new(World::default(), kura, query_handle);
 
             let sumeragi_cfg = SumeragiPolicyConfig {
-                collectors_k: iroha_config::parameters::defaults::sumeragi::COLLECTORS_K,
-                collectors_redundant_send_r:
-                    iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
-                policy_flags: SumeragiPolicyFlags::new(
-                    iroha_config::parameters::defaults::sumeragi::DA_ENABLED,
-                    false,
-                ),
-                da_quorum_timeout_multiplier:
-                    iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
+                key_require_hsm: false,
                 key_activation_lead_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
                 key_overlap_grace_blocks:
@@ -32448,15 +32376,7 @@ seiyaku GovernanceLifecycle {
             let mut state = State::new(World::default(), kura, query_handle);
 
             let mut sumeragi_cfg = SumeragiPolicyConfig {
-                collectors_k: iroha_config::parameters::defaults::sumeragi::COLLECTORS_K,
-                collectors_redundant_send_r:
-                    iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
-                policy_flags: SumeragiPolicyFlags::new(
-                    iroha_config::parameters::defaults::sumeragi::DA_ENABLED,
-                    true,
-                ),
-                da_quorum_timeout_multiplier:
-                    iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
+                key_require_hsm: true,
                 key_activation_lead_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
                 key_overlap_grace_blocks:
@@ -32583,7 +32503,7 @@ seiyaku GovernanceLifecycle {
 
             // Optional HSM policy still enforces the provider allowlist when a binding is supplied.
             {
-                sumeragi_cfg.policy_flags.set_key_require_hsm(false);
+                sumeragi_cfg.key_require_hsm = false;
                 sumeragi_cfg.key_allowed_algorithms =
                     [Algorithm::Ed25519].into_iter().collect::<BTreeSet<_>>();
                 sumeragi_cfg.key_allowed_hsm_providers.clear();
@@ -32738,7 +32658,7 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
-        fn mode_activation_height_requires_next_mode_in_same_block() {
+        fn runtime_consensus_mode_staging_is_always_rejected() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let mut state = State::new(World::default(), kura, query_handle);
@@ -32748,45 +32668,44 @@ seiyaku GovernanceLifecycle {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let activation = SetParameter(Parameter::Sumeragi(
+            for parameter in [
+                SumeragiParameter::NextMode(SumeragiConsensusMode::Npos),
                 SumeragiParameter::ModeActivationHeight(5),
-            ));
-            let err = activation
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("mode_activation_height without next_mode must fail");
-            drop(stx);
-
-            match err {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => assert!(
-                    msg.contains("mode_activation_height requires next_mode"),
-                    "unexpected error message: {msg}"
-                ),
-                other => panic!("unexpected error type: {other:?}"),
+            ] {
+                let error = SetParameter(Parameter::Sumeragi(parameter))
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("first-release v2 must reject runtime mode staging");
+                match error {
+                    Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
+                        assert_eq!(
+                            message,
+                            "Sumeragi v2 does not support runtime consensus-mode staging"
+                        );
+                    }
+                    other => panic!("unexpected error type: {other:?}"),
+                }
             }
         }
 
         #[test]
-        fn next_mode_rejected_when_nexus_enabled() {
+        fn set_parameter_rejects_disabling_mandatory_da_at_genesis() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
-            state.nexus.get_mut().enabled = true;
-
+            let state = State::new(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            let mut transaction = state_block.transaction();
 
-            let next_mode = SetParameter(Parameter::Sumeragi(SumeragiParameter::NextMode(
-                SumeragiConsensusMode::Npos,
-            )));
-            let err = next_mode
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("nexus should reject staged consensus cutovers");
-            match err {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => assert!(
-                    msg.contains("Nexus networks do not support staged consensus cutovers"),
-                    "unexpected error message: {msg}"
-                ),
+            let error = SetParameter(Parameter::Sumeragi(SumeragiParameter::DaEnabled(false)))
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err("Sumeragi v2 must never disable DA");
+            match error {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
+                    assert_eq!(
+                        message,
+                        "Sumeragi v2 requires data availability at every height"
+                    );
+                }
                 other => panic!("unexpected error type: {other:?}"),
             }
         }
@@ -33140,141 +33059,6 @@ seiyaku GovernanceLifecycle {
                     other => panic!("unexpected error type: {other:?}"),
                 }
             }
-        }
-
-        #[test]
-        fn next_mode_without_activation_height_rejected_at_commit() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
-            state.nexus.get_mut().enabled = false;
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            let next_mode = SetParameter(Parameter::Sumeragi(SumeragiParameter::NextMode(
-                SumeragiConsensusMode::Npos,
-            )));
-            next_mode
-                .execute(&ALICE_ID, &mut stx)
-                .expect("set next_mode should succeed");
-            stx.apply();
-
-            let err = state_block
-                .commit()
-                .expect_err("commit must fail when activation height is missing");
-            assert!(
-                matches!(err, TransactionsBlockError::ModeStagingInvariant),
-                "unexpected commit error: {err:?}"
-            );
-        }
-
-        #[test]
-        fn next_mode_and_activation_height_commit_in_same_block() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
-            state.nexus.get_mut().enabled = false;
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-
-            {
-                let mut stx = state_block.transaction();
-                let next_mode = SetParameter(Parameter::Sumeragi(SumeragiParameter::NextMode(
-                    SumeragiConsensusMode::Npos,
-                )));
-                next_mode
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect("set next_mode should succeed");
-                stx.apply();
-            }
-
-            {
-                let mut stx = state_block.transaction();
-                let activation = SetParameter(Parameter::Sumeragi(
-                    SumeragiParameter::ModeActivationHeight(5),
-                ));
-                activation
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect("activation height should be accepted");
-                stx.apply();
-            }
-
-            state_block
-                .commit()
-                .expect("commit should succeed when both staging parameters are present");
-        }
-
-        #[test]
-        fn mode_activation_height_requires_future_block() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
-            state.nexus.get_mut().enabled = false;
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-
-            // Schedule a mode transition to NPoS.
-            let mut stx = state_block.transaction();
-            let next_mode = SetParameter(Parameter::Sumeragi(SumeragiParameter::NextMode(
-                SumeragiConsensusMode::Npos,
-            )));
-            next_mode
-                .execute(&ALICE_ID, &mut stx)
-                .expect("set next_mode should succeed");
-            stx.apply();
-
-            {
-                // Activation height equal to the current block height must be rejected.
-                let mut stx = state_block.transaction();
-                let invalid_activation = SetParameter(Parameter::Sumeragi(
-                    SumeragiParameter::ModeActivationHeight(1),
-                ));
-                let err = invalid_activation
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect_err("mode_activation_height equal to current height must fail");
-                drop(stx);
-                match err {
-                    Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => assert!(
-                        msg.contains("mode_activation_height")
-                            && msg.contains("must be greater than current block height"),
-                        "unexpected error message: {msg}"
-                    ),
-                    other => panic!("unexpected error type: {other:?}"),
-                }
-            }
-
-            {
-                // Activation height behind the current block must also be rejected.
-                let mut stx = state_block.transaction();
-                let invalid_activation = SetParameter(Parameter::Sumeragi(
-                    SumeragiParameter::ModeActivationHeight(0),
-                ));
-                let err = invalid_activation
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect_err("mode_activation_height below current height must fail");
-                drop(stx);
-                match err {
-                    Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => assert!(
-                        msg.contains("mode_activation_height")
-                            && msg.contains("must be greater than current block height"),
-                        "unexpected error message: {msg}"
-                    ),
-                    other => panic!("unexpected error type: {other:?}"),
-                }
-            }
-
-            // Activation height one block ahead is accepted.
-            let mut stx = state_block.transaction();
-            let valid_activation = SetParameter(Parameter::Sumeragi(
-                SumeragiParameter::ModeActivationHeight(2),
-            ));
-            valid_activation
-                .execute(&ALICE_ID, &mut stx)
-                .expect("mode_activation_height greater than current height must succeed");
         }
 
         #[test]

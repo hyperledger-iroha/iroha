@@ -134,7 +134,7 @@ impl V2ApplyService {
             .ok_or_else(|| {
                 V2ApplyError::Validation("Sumeragi v2 leader index is out of range".to_owned())
             })?;
-        let expected = super::main_loop::lane_scheduler::prepare_v2_lane_payload_plan(
+        let expected = super::lane_planner::prepare_v2_lane_payload_plan(
             self.state.as_ref(),
             context,
             view,
@@ -502,13 +502,11 @@ impl V2ApplyService {
             .iter()
             .map(|entry| entry.validator.clone())
             .collect();
-        // Sumeragi v2 finality is carried by the exact Kura-owned v2 artifact,
-        // not by the legacy commit-roster journal. Kura has already crossed
-        // the first irreversible boundary above, so publish only the block's
-        // remaining WSV effects here without fabricating legacy QC authority.
-        let state_events = state_block
-            .apply_without_execution_with_commit_roster(&committed_block, commit_topology, None)
-            .map_err(|error| V2ApplyError::StateApply(error.to_owned()))?;
+        let state_events = state_block.apply_without_execution_with_commit_qc(
+            &committed_block,
+            commit_topology,
+            None,
+        );
         state_block
             .commit()
             .map_err(|error| V2ApplyError::StateCommit(error.to_string()))?;
@@ -634,9 +632,6 @@ pub(crate) enum V2ApplyError {
     /// Certificate-aware block commit conversion failed.
     #[error("Sumeragi v2 block commit conversion failed: {0}")]
     Commit(String),
-    /// Post-execution WSV effects could not be applied.
-    #[error("Sumeragi v2 post-execution state application failed: {0}")]
-    StateApply(String),
     /// WSV transaction could not commit.
     #[error("Sumeragi v2 state commit failed: {0}")]
     StateCommit(String),
@@ -874,17 +869,15 @@ mod tests {
                     .expect("resolve canonical fixture route");
                 let route = routing_plan.coordinator_route();
                 let entrypoint_hash = Hash::from(accepted.hash_as_entrypoint());
-                let lane_plan =
-                    super::super::main_loop::lane_scheduler::prepare_v2_lane_payload_plan(
-                        state.as_ref(),
-                        &context,
-                        0,
-                        &context.roster[usize::try_from(leader_index).expect("leader index")]
-                            .validator,
-                        std::slice::from_ref(&route),
-                        std::slice::from_ref(&entrypoint_hash),
-                    )
-                    .expect("derive canonical fixture lane plan");
+                let lane_plan = super::super::lane_planner::prepare_v2_lane_payload_plan(
+                    state.as_ref(),
+                    &context,
+                    0,
+                    &context.roster[usize::try_from(leader_index).expect("leader index")].validator,
+                    std::slice::from_ref(&route),
+                    std::slice::from_ref(&entrypoint_hash),
+                )
+                .expect("derive canonical fixture lane plan");
                 assert!(lane_plan.unavailable_indices.is_empty());
                 assert_eq!(lane_plan.ownerships.len(), 1);
                 let execution_context =

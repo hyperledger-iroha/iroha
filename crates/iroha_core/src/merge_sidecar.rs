@@ -1502,6 +1502,7 @@ impl MergeSidecarTransport {
     }
 
     /// Rotate stalled holders and emit the legacy actor's bounded batch.
+    #[cfg(test)]
     pub(crate) fn tick(&mut self, requester: &PeerId, now: Instant) -> Vec<MergeSidecarPost> {
         self.tick_bounded(requester, now, MAX_INBOUND_SESSIONS + 8)
     }
@@ -2105,6 +2106,7 @@ impl MergeCandidateTransport {
     }
 
     /// Retry timed-out requests and expire stale non-current transport bytes.
+    #[cfg(test)]
     pub(crate) fn tick(&mut self, now: Instant) -> Vec<MergeCandidatePost> {
         self.tick_bounded(now, usize::MAX)
     }
@@ -2471,6 +2473,7 @@ impl MergeSigningGuard {
 
     /// Advance the durable globally committed merge-epoch high-water and only
     /// then garbage-collect signing decisions that can no longer be requested.
+    #[cfg(test)]
     pub(crate) fn advance_committed_epoch(
         &mut self,
         committed_epoch: u64,

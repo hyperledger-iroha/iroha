@@ -10,9 +10,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[cfg(feature = "bls")]
-use iroha_crypto::Algorithm;
-use iroha_crypto::{HashOf, Signature};
+use iroha_crypto::{Algorithm, HashOf, Signature};
 use iroha_data_model::{
     block::{
         BlockHeader,
@@ -25,7 +23,10 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly;
 
-use super::consensus::{Evidence, EvidenceKind, EvidencePayload, Phase, Proposal, Qc, Vote};
+use super::consensus::{
+    Evidence, EvidenceKind, EvidencePayload, LEGACY_NPOS_TAG, LEGACY_PERMISSIONED_TAG, NPOS_TAG,
+    PERMISSIONED_TAG, Phase, Proposal, Qc, Vote, vote_preimage,
+};
 use crate::state::{State, WorldReadOnly};
 
 /// Minimum expected length for BLS signatures attached to consensus votes.
@@ -55,6 +56,67 @@ pub struct EvidenceValidationContext<'a> {
     pub mode_tag: &'a str,
     /// Optional PRF seed for `NPoS` topology rotation.
     pub prf_seed: Option<[u8; 32]>,
+}
+
+/// Reconstruct the legacy signature roster for archival evidence validation.
+///
+/// Live Sumeragi v2 never calls this path: v2 votes carry the frozen
+/// [`iroha_data_model::block::consensus_v2::HeightContext`] identity and are
+/// authenticated before entering the reducer. Keeping the rotation beside the
+/// archival validator prevents the retired actor from remaining a compiled
+/// dependency merely to inspect historical evidence.
+fn archival_topology_for_view(
+    topology: &super::network_topology::Topology,
+    height: u64,
+    view: u64,
+    mode_tag: &str,
+    prf_seed: Option<[u8; 32]>,
+) -> super::network_topology::Topology {
+    let mut rotated = topology.clone();
+    rotated.canonicalize_order();
+    match mode_tag {
+        tag if tag == PERMISSIONED_TAG || tag == LEGACY_PERMISSIONED_TAG => {
+            if let Some(seed) = prf_seed {
+                rotated.shuffle_prf(seed, height);
+            }
+            rotated.nth_rotation(view);
+        }
+        tag if tag == NPOS_TAG || tag == LEGACY_NPOS_TAG => {
+            if let Some(seed) = prf_seed {
+                let leader = rotated.leader_index_prf(seed, height, view);
+                rotated.rotate_preserve_view_to_front(leader);
+            }
+        }
+        _ => {}
+    }
+    rotated
+}
+
+fn archival_vote_signature_check(
+    vote: &Vote,
+    topology: &super::network_topology::Topology,
+    chain_id: &ChainId,
+    mode_tag: &str,
+) -> Result<(), EvidenceValidationError> {
+    let index =
+        usize::try_from(vote.signer).map_err(|_| EvidenceValidationError::SignatureInvalid)?;
+    let peer = topology
+        .as_ref()
+        .get(index)
+        .ok_or(EvidenceValidationError::SignatureInvalid)?;
+    if vote.bls_sig.is_empty() {
+        return Err(EvidenceValidationError::SignatureInvalid);
+    }
+    let signature = match peer.public_key().try_algorithm() {
+        Ok(Algorithm::Ed25519) => iroha_crypto::ed25519_parse_signature(&vote.bls_sig),
+        Ok(Algorithm::MlDsa) => iroha_crypto::mldsa65_parse_signature(&vote.bls_sig),
+        Ok(_) => Signature::try_from_bytes(&vote.bls_sig).map_err(iroha_crypto::Error::from),
+        Err(_) => return Err(EvidenceValidationError::SignatureInvalid),
+    }
+    .map_err(|_| EvidenceValidationError::SignatureInvalid)?;
+    signature
+        .verify(peer.public_key(), &vote_preimage(chain_id, mode_tag, vote))
+        .map_err(|_| EvidenceValidationError::SignatureInvalid)
 }
 
 /// Derive a deterministic deduplication key for an evidence entry.
@@ -437,7 +499,7 @@ fn signer_peer_for_vote(
     vote: &Vote,
     context: &EvidenceValidationContext<'_>,
 ) -> Result<PeerId, EvidenceValidationError> {
-    let signature_topology = super::main_loop::topology_for_view(
+    let signature_topology = archival_topology_for_view(
         context.topology,
         vote.height,
         vote.view,
@@ -450,6 +512,7 @@ fn signer_peer_for_vote(
         .ok_or(EvidenceValidationError::SignerMismatch)
 }
 
+#[cfg(test)]
 fn check_double_vote_with_context(
     v1: &Vote,
     v2: &Vote,
@@ -501,6 +564,7 @@ pub fn check_invalid_commit_qc_shape(qc: &Qc) -> Option<Evidence> {
 
 /// Simple in-memory evidence store to deduplicate by a deterministic key.
 #[derive(Default)]
+#[cfg(test)]
 pub struct EvidenceStore {
     // Deterministic key set of evidence entries (for quick membership and count)
     seen: BTreeSet<Vec<u8>>, // keys are hashed payloads
@@ -508,6 +572,7 @@ pub struct EvidenceStore {
     entries: BTreeMap<Vec<u8>, Evidence>,
 }
 
+#[cfg(test)]
 impl EvidenceStore {
     pub fn new() -> Self {
         Self {
@@ -617,6 +682,7 @@ fn persist_validated_record(state: &State, canonical: Evidence) -> bool {
 /// Detect and persist a double-vote if present, deduplicating via the in-memory store.
 ///
 /// Returns `true` when evidence was newly recorded (store + WSV), `false` otherwise.
+#[cfg(test)]
 pub fn record_double_vote(
     store: &mut EvidenceStore,
     state: &State,
@@ -938,28 +1004,28 @@ fn validate_vote_signatures(
     v2: &Vote,
     context: &EvidenceValidationContext<'_>,
 ) -> Result<(), EvidenceValidationError> {
-    let signature_topology_v1 = super::main_loop::topology_for_view(
+    let signature_topology_v1 = archival_topology_for_view(
         context.topology,
         v1.height,
         v1.view,
         context.mode_tag,
         context.prf_seed,
     );
-    let signature_topology_v2 = super::main_loop::topology_for_view(
+    let signature_topology_v2 = archival_topology_for_view(
         context.topology,
         v2.height,
         v2.view,
         context.mode_tag,
         context.prf_seed,
     );
-    super::main_loop::vote_signature_check(
+    archival_vote_signature_check(
         v1,
         &signature_topology_v1,
         context.chain_id,
         context.mode_tag,
     )
     .map_err(|_| EvidenceValidationError::SignatureInvalid)?;
-    super::main_loop::vote_signature_check(
+    archival_vote_signature_check(
         v2,
         &signature_topology_v2,
         context.chain_id,
@@ -1408,7 +1474,7 @@ mod tests {
 
         fn signer_keypair_for_view(&self, signer: u32, height: u64, view: u64) -> &KeyPair {
             let idx = usize::try_from(signer).expect("signer index fits usize");
-            let rotated = super::super::main_loop::topology_for_view(
+            let rotated = super::archival_topology_for_view(
                 &self.topology,
                 height,
                 view,
@@ -1431,7 +1497,7 @@ mod tests {
             height: u64,
             view: u64,
         ) -> u32 {
-            let rotated = super::super::main_loop::topology_for_view(
+            let rotated = super::archival_topology_for_view(
                 &self.topology,
                 height,
                 view,
@@ -2187,7 +2253,7 @@ mod tests {
 
         let proposer_precommit = super::super::penalties::PenaltyApplier::from_committed_state(
             &proposer,
-            iroha_config::parameters::actual::ConsensusMode::Permissioned,
+            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
@@ -2197,7 +2263,7 @@ mod tests {
         .expect("derive proposer pre-admission effects");
         let follower_precommit = super::super::penalties::PenaltyApplier::from_committed_state(
             &follower,
-            iroha_config::parameters::actual::ConsensusMode::Permissioned,
+            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
@@ -2239,7 +2305,7 @@ mod tests {
 
         let proposer_same_block = super::super::penalties::PenaltyApplier::from_committed_state(
             &proposer,
-            iroha_config::parameters::actual::ConsensusMode::Permissioned,
+            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
@@ -2251,7 +2317,7 @@ mod tests {
 
         let proposer_effects = super::super::penalties::PenaltyApplier::from_committed_state(
             &proposer,
-            iroha_config::parameters::actual::ConsensusMode::Permissioned,
+            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
@@ -2261,7 +2327,7 @@ mod tests {
         .expect("derive proposer post-admission effects");
         let follower_effects = super::super::penalties::PenaltyApplier::from_committed_state(
             &follower,
-            iroha_config::parameters::actual::ConsensusMode::Permissioned,
+            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
@@ -2752,7 +2818,7 @@ mod tests {
     }
 
     fn rotated_peer_at(ctx: &EvidenceTestContext, height: u64, view: u64, signer: u32) -> PeerId {
-        let rotated = super::super::main_loop::topology_for_view(
+        let rotated = super::archival_topology_for_view(
             &ctx.topology,
             height,
             view,

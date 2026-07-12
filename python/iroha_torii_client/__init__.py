@@ -1,4 +1,4 @@
-"""Typed Torii HTTP client with Offline and exact first-release SCCP helpers."""
+"""Typed Torii HTTP client with exact first-release Kagemusha and SCCP helpers."""
 
 from . import client as _client
 from . import sccp as _sccp

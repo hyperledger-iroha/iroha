@@ -14,11 +14,7 @@ import java.util.Optional;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.client.queue.DirectoryPendingTransactionQueue;
 import org.hyperledger.iroha.android.client.queue.FilePendingTransactionQueue;
-import org.hyperledger.iroha.android.client.queue.OfflineJournalPendingTransactionQueue;
 import org.hyperledger.iroha.android.client.queue.PendingTransactionQueue;
-import org.hyperledger.iroha.android.offline.OfflineJournal;
-import org.hyperledger.iroha.android.offline.OfflineJournalException;
-import org.hyperledger.iroha.android.offline.OfflineJournalKey;
 import org.hyperledger.iroha.android.telemetry.AndroidDeviceProfileProvider;
 import org.hyperledger.iroha.android.telemetry.AndroidNetworkContextProvider;
 import org.hyperledger.iroha.android.telemetry.CrashTelemetryHandler;
@@ -242,21 +238,6 @@ public final class ClientConfig {
   }
 
   /**
-   * Creates an {@link OfflineToriiClient} that reuses this config's base URI, timeout, headers, and
-   * observers. Callers must provide the executor so transports can share the same HTTP stack.
-   */
-  public OfflineToriiClient toOfflineToriiClient(final HttpTransportExecutor executor) {
-    Objects.requireNonNull(executor, "executor");
-    return OfflineToriiClient.builder()
-        .executor(executor)
-        .baseUri(baseUri)
-        .timeout(requestTimeout)
-        .defaultHeaders(defaultHeaders)
-        .observers(observers)
-        .build();
-  }
-
-  /**
    * Creates a {@link ConfidentialAssetToriiClient} that reuses this config's base URI, timeout,
    * headers, and observers. Callers must provide the executor so transports can share the same HTTP
    * stack.
@@ -394,28 +375,6 @@ public final class ClientConfig {
     public Builder setPendingQueue(final PendingTransactionQueue pendingQueue) {
       this.pendingQueue = pendingQueue;
       return this;
-    }
-
-    public Builder enableOfflineJournalQueue(
-        final Path journalPath, final OfflineJournalKey key) {
-      Objects.requireNonNull(journalPath, "journalPath");
-      Objects.requireNonNull(key, "key");
-      try {
-        final OfflineJournal journal = new OfflineJournal(journalPath, key);
-        this.pendingQueue = new OfflineJournalPendingTransactionQueue(journal);
-      } catch (final OfflineJournalException ex) {
-        throw new IllegalStateException("Failed to initialize offline journal queue", ex);
-      }
-      return this;
-    }
-
-    public Builder enableOfflineJournalQueue(final Path journalPath, final byte[] seed) {
-      return enableOfflineJournalQueue(journalPath, OfflineJournalKey.derive(seed));
-    }
-
-    public Builder enableOfflineJournalQueue(final Path journalPath, final char[] passphrase) {
-      return enableOfflineJournalQueue(
-          journalPath, OfflineJournalKey.deriveFromPassphrase(passphrase));
     }
 
     /**

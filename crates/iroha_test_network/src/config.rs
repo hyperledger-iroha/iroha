@@ -124,23 +124,6 @@ pub fn base_iroha_config() -> Table {
         .write(["confidential", "enabled"], true)
         .write(["logger", "level"], "INFO")
         .write(["logger", "format"], "pretty")
-        // Keep debug RBC toggles explicitly present so config deserialization never fails when
-        // layers only override a subset (e.g., adversarial shuffle/duplicate/drop settings).
-        .write(["sumeragi", "debug", "rbc", "shuffle_chunks"], false)
-        .write(["sumeragi", "debug", "rbc", "duplicate_inits"], false)
-        .write(["sumeragi", "debug", "rbc", "corrupt_witness_ack"], false)
-        .write(
-            ["sumeragi", "debug", "rbc", "corrupt_ready_signature"],
-            false,
-        )
-        .write(["sumeragi", "debug", "rbc", "drop_validator_mask"], 0i64)
-        .write(["sumeragi", "debug", "rbc", "equivocate_chunk_mask"], 0i64)
-        .write(
-            ["sumeragi", "debug", "rbc", "equivocate_validator_mask"],
-            0i64,
-        )
-        .write(["sumeragi", "debug", "rbc", "conflicting_ready_mask"], 0i64)
-        .write(["sumeragi", "debug", "rbc", "partial_chunk_mask"], 0i64)
 }
 
 #[must_use]
@@ -1215,73 +1198,6 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("extended"),
             "test networks should expose expensive telemetry metrics"
-        );
-    }
-
-    #[test]
-    fn base_config_includes_debug_rbc_defaults() {
-        let table = super::base_iroha_config();
-        let debug_rbc = table
-            .get("sumeragi")
-            .and_then(toml::Value::as_table)
-            .and_then(|value| value.get("debug"))
-            .and_then(toml::Value::as_table)
-            .and_then(|value| value.get("rbc"))
-            .and_then(toml::Value::as_table)
-            .expect("sumeragi.debug.rbc section present");
-        assert_eq!(
-            debug_rbc
-                .get("shuffle_chunks")
-                .and_then(toml::Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            debug_rbc
-                .get("duplicate_inits")
-                .and_then(toml::Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            debug_rbc
-                .get("corrupt_witness_ack")
-                .and_then(toml::Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            debug_rbc
-                .get("corrupt_ready_signature")
-                .and_then(toml::Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            debug_rbc
-                .get("drop_validator_mask")
-                .and_then(toml::Value::as_integer),
-            Some(0)
-        );
-        assert_eq!(
-            debug_rbc
-                .get("equivocate_chunk_mask")
-                .and_then(toml::Value::as_integer),
-            Some(0)
-        );
-        assert_eq!(
-            debug_rbc
-                .get("equivocate_validator_mask")
-                .and_then(toml::Value::as_integer),
-            Some(0)
-        );
-        assert_eq!(
-            debug_rbc
-                .get("conflicting_ready_mask")
-                .and_then(toml::Value::as_integer),
-            Some(0)
-        );
-        assert_eq!(
-            debug_rbc
-                .get("partial_chunk_mask")
-                .and_then(toml::Value::as_integer),
-            Some(0)
         );
     }
 
