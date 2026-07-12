@@ -15133,15 +15133,16 @@ def test_pop_credentials_runtime_services_stay_open_in_docs() -> None:
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "SFM-4b1 now has canonical PoP credential payloads and a production cryptographic membership-proof backend, but it is not yet shipped as a complete SoraFS proof-of-personhood credential service.",
-        "The repository still does not contain the enrollment portal, credential issuer daemon, credential registry service, juror wallet, or deployed SoraFS verifier service described by the original plan.",
-        "This checker is a rollout gate; it does not replace the missing runtime services or deployed verifier integration.",
+        "SFM-4b1 now has canonical PoP credential payloads, a production cryptographic membership-proof backend, and a consensus-owned issuer/registry foundation, but it is not yet shipped as a complete SoraFS proof-of-personhood credential service.",
+        "The repository still does not contain the enrollment portal, credential issuer daemon, juror wallet, dedicated credential-registry service facade, or deployed SoraFS verifier service described by the original plan.",
+        "This checker is a rollout gate; it does not replace the missing issuer/client runtime services, dedicated registry facade, or deployed verifier integration.",
         "Enrollment portal | Captures candidate attestations and issuer approvals. | Not shipped.",
-        "Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | Payload signatures and a local issued-credential bundle helper are shipped; service is not shipped.",
-        "Credential registry | Stores commitment roots, revocation updates, and event digests. | Payload schemas and local bundle validation are shipped; service is not shipped.",
+        "Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | Payload signatures, a local issued-credential bundle helper, bounded issuer policy, and authorised native publication ISIs are shipped; daemon and production key management are not shipped.",
+        "Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned commitment/root/revocation/audit state and typed queries are shipped; a dedicated service facade and deployed multi-peer evidence are not shipped.",
         "Juror client | Stores credentials, syncs revocations, and generates proofs. | Not shipped.",
         "Verification service | Validates juror proofs for sortition, voting, and appeal panels. | Local Halo2/IPA prover and production verifier, `sorafs-validate pop`, and SDK/bridge reference gate shipped; deployed service integration is not shipped.",
-        "Build the issuer and registry services, including key management, revocation updates, commitment-root publication, and audit digests.",
+        "Build the credential issuer daemon and enrollment approval workflow around the native registry, including HSM/threshold key management, retry-safe transaction submission, operator observability, and disaster recovery.",
+        "Deploy the native registry on a reviewed multi-validator environment and collect restart, reconciliation, rollback-rejection, and audit-head evidence; add a dedicated Torii registry facade only if the operator/client contract requires one.",
         "Build juror client storage, revocation sync, proof generation, and local credential rotation.",
         "Publish operator and juror docs only after the service CLI/API and verifier paths exist.",
     )
@@ -16593,13 +16594,13 @@ def test_moderation_panel_parent_services_stay_open_in_docs() -> None:
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "It does not yet ship the full moderation appeal service, SoraFS juror panel engine, secure evidence viewer, durable voting orchestrator, or portal workflow described in the original plan.",
-        "The production service still needs durable state that binds:",
+        "The consensus path now ships authoritative appeal intake and deterministic PoP-gated panel formation.",
+        "It does not yet ship the deployed moderation service facade, production panel orchestrator, secure evidence viewer, juror portal workflow, or reviewed deployment evidence described in the original plan.",
+        "The production service still needs deployed integrations that bind:",
         "evidence access attestation",
         "decision publication and appeal cache updates.",
         "Do not document `sorafs moderation jury-accept`, `sorafs moderation open-case`, or similar portal commands as shipped until the corresponding service and CLI handlers exist.",
-        "Implement the moderation appeal intake API and persisted case lifecycle state.",
-        "Adapt policy-jury sortition to SoraFS moderation cases, PoP snapshots, juror eligibility, no-show failover, and roster privacy requirements.",
+        "Build and deploy the production appeal/panel transaction submitter, retry and reconciliation worker, ballot orchestrator, challenge monitor, juror notification/portal workflow, and scheduled no-show settlement handoff around the authoritative intake, sortition, and commit/reveal ledger described by `docs/source/sorafs_commit_reveal_plan.md`.",
         "Connect panel outcomes to gateway compliance caches, transparency publication, settlement reconciliation, and reputation scoring.",
         "Promote local Governance DAG moderation event publication into the durable contract-backed and public IPFS/IPNS decision trail.",
         "Capture reviewed, payload-free deployed evidence for appeal intake, sortition roster, evidence viewer, operator workflow, juror notification, commit/reveal, decision publication, settlement integration, transparency/reputation handoff, panel metrics, end-to-end panel simulation, and governance approval that passes the SFM-4b rollout evidence gate.",
@@ -22766,7 +22767,7 @@ def test_commit_reveal_production_services_stay_unshipped_in_docs() -> None:
         "`NodeHandle` now also derives deterministic payload-free no-show penalty plans for closed ballots, separates missing commits from committed no-shows, and binds the plan to a stable digest without mutating ballot state. Torii exposes that plan through the payload-free local `GET /v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan` readback route, using server-side network time and returning only counts, juror identifiers, and the digest.",
         "repository now ships local ballot CLI/client readback, signed commit/reveal/challenge-resolution/tally submission, and payload-free executor automation for the local Torii API. It does not yet ship the contract-backed ballot orchestrator, production challenge monitor/dispute service, public juror portal, or deployed production service needed to run appeal-panel ballots end to end.",
         "`iroha_data_model::sorafs::moderation_ledger` defines the first-release `ModerationLedgerPolicyV1`, immutable case specifications and policy snapshots, canonical commitment/reveal records, payload-free challenge and resolution records, terminal decision/contested/quorum-failure/challenged outcomes, distinct missing-commit and unrevealed-commit no-show records, and constant-time ledger counters.",
-        "Typed `FindSorafsModeration*` queries expose the active policy, case, commitment, reveal, challenge, outcome, no-show, and ledger status through Iroha's existing generic Torii query API.",
+            "Typed `FindSorafsModeration*` queries expose the active policy, appeal, permissioned juror-eligibility summary, case, commitment, reveal, challenge, outcome, no-show, and ledger status through Iroha's existing generic Torii query API.",
         "ballot lifecycle and challenge submit/resolve events can also be materialized into the SoraFS Governance DAG filesystem publisher and optional signed runtime DAG",
         "persists successful local ballot transitions, challenge submissions/resolutions, and the sequenced local event backlog to `moderation-ballots/ballots-snapshot.to` as a validated Norito checkpoint and rejects duplicate, mismatched, out-of-window, missing-commit, unresolved or accepted-challenge-with-reveal/tally, bad-tally, insufficient-quorum, non-contiguous-event, missing/duplicated/mutated challenge-event, or event/state-mismatch snapshots",
         "`moderation_ballot_no_show_plan`, which refuses open reveal windows and unresolved or accepted challenges, separates missing-commit and unrevealed-commit jurors, and emits a stable payload-free penalty-plan digest without mutating state or publishing events.",
@@ -23432,6 +23433,12 @@ def test_commit_reveal_authoritative_ledger_foundation_is_pinned() -> None:
 
     for marker in (
         "pub struct ModerationLedgerPolicyV1",
+        "pub struct ModerationAppealIntakeV1",
+        "pub struct ModerationPoPRegistrySnapshotV1",
+        "pub struct ModerationJurorEligibilityRecordV1",
+        "pub struct ModerationPanelSelectionV1",
+        "pub struct ModerationAppealRecordV1",
+        "pub enum ModerationAppealStatusV1",
         "pub struct ModerationCaseRecordV1",
         "pub struct ModerationCommitRecordV1",
         "pub struct ModerationRevealRecordV1",
@@ -23440,13 +23447,18 @@ def test_commit_reveal_authoritative_ledger_foundation_is_pinned() -> None:
         "pub struct ModerationNoShowRecordV1",
         "pub enum ModerationNoShowKindV1",
         "pub enum ModerationOutcomeKindV1",
+        "pub fn sorafs_moderation_select_panel_v1",
         "pub fn sorafs_moderation_panel_roster_hash_v1",
     ):
         assert marker in model
 
     for instruction in (
         "SetSorafsModerationPolicy",
-        "OpenSorafsModerationCase",
+        "SubmitSorafsModerationAppeal",
+        "RegisterSorafsModerationJurorEligibility",
+        "FinalizeSorafsModerationSortition",
+        "AcceptSorafsModerationJurorAssignment",
+        "ActivateSorafsModerationCase",
         "SubmitSorafsModerationCommit",
         "RaiseSorafsModerationChallenge",
         "ResolveSorafsModerationChallenge",
@@ -23456,8 +23468,13 @@ def test_commit_reveal_authoritative_ledger_foundation_is_pinned() -> None:
         assert f"pub struct {instruction}" in instructions
         assert f"impl Execute for {instruction}" in core
 
+    assert "pub struct OpenSorafsModerationCase" not in instructions
+    assert "impl Execute for OpenSorafsModerationCase" not in core
+
     for query in (
         "FindSorafsModerationPolicy",
+        "FindSorafsModerationAppeal",
+        "FindSorafsModerationJurorEligibility",
         "FindSorafsModerationCase",
         "FindSorafsModerationCommit",
         "FindSorafsModerationReveal",
@@ -23476,6 +23493,11 @@ def test_commit_reveal_authoritative_ledger_foundation_is_pinned() -> None:
         "rejected_challenge_unblocks_reveals_and_tied_quorum_is_contested",
         "missed_quorum_persists_distinct_no_show_penalties",
         "bounds_permissions_and_counter_overflow_reject_without_partial_case",
+        "appeal_intake_is_authority_bound_replay_safe_and_transaction_atomic",
+        "private_pop_proof_sortition_and_activation_reject_adversarial_inputs",
+        "insufficient_pool_and_no_show_failover_exhaustion_are_terminal",
+        "primary_no_show_uses_next_unique_waitlist_juror_atomically",
+        "active_pop_root_rotation_invalidates_pending_appeal_snapshot",
     ):
         assert f"fn {adversarial_test}" in core
 

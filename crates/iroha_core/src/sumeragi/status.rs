@@ -522,6 +522,8 @@ static DEDUP_FETCH_PENDING_BLOCK_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::ne
 static DEDUP_FETCH_PENDING_BLOCK_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DEDUP_RBC_CHUNK_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DEDUP_RBC_CHUNK_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_LANE_BLOCK_ARTIFACT_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_LANE_BLOCK_ARTIFACT_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BG_POST_DROP_POST_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BG_POST_DROP_BROADCAST_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -809,9 +811,16 @@ static QC_REBUILD_SUCCESSES_TOTAL: AtomicU64 = AtomicU64::new(0);
 static QC_MISSING_VOTES_ACCEPTED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static QC_QUORUM_WITHOUT_QC_TOTAL: AtomicU64 = AtomicU64::new(0);
 static PREVOTE_TIMEOUT_TOTAL: AtomicU64 = AtomicU64::new(0);
-const LANE_RELAY_ENVELOPES_CAP: usize = 64;
-const LANE_PAYLOAD_OWNERSHIPS_CAP: usize = 128;
-const COMMITTED_LANE_BLOCKS_CAP: usize = 128;
+const LANE_SETTLEMENT_COMMITMENTS_CAP: usize =
+    iroha_data_model::block::consensus_v2::MAX_STATUS_LANE_SETTLEMENT_COMMITMENTS;
+const LANE_RELAY_ENVELOPES_CAP: usize =
+    iroha_data_model::block::consensus_v2::MAX_STATUS_LANE_RELAY_ENVELOPES;
+const LANE_PAYLOAD_OWNERSHIPS_CAP: usize =
+    iroha_data_model::block::consensus_v2::MAX_STATUS_LANE_PAYLOAD_OWNERSHIPS;
+const COMMITTED_LANE_BLOCKS_CAP: usize =
+    iroha_data_model::block::consensus_v2::MAX_STATUS_COMMITTED_LANE_BLOCKS;
+const LANE_BLOCK_SESSIONS_CAP: usize =
+    iroha_data_model::block::consensus_v2::MAX_STATUS_LANE_BLOCK_SESSIONS;
 const VALIDATOR_CHECKPOINT_HISTORY_CAP: usize = 64;
 const KEY_LIFECYCLE_HISTORY_CAP: usize = 128;
 static VALIDATOR_CHECKPOINT_HISTORY: OnceLock<Mutex<VecDeque<ValidatorSetCheckpoint>>> =
@@ -4126,6 +4135,10 @@ pub struct DedupEvictionSnapshot {
     pub rbc_chunk_capacity_total: u64,
     /// RBC chunk dedup evictions due to TTL expiry.
     pub rbc_chunk_expired_total: u64,
+    /// Lane-block proposal/vote/QC dedup evictions due to capacity.
+    pub lane_block_artifact_capacity_total: u64,
+    /// Lane-block proposal/vote/QC dedup evictions due to TTL expiry.
+    pub lane_block_artifact_expired_total: u64,
 }
 
 /// Compact snapshot of consensus status for operator APIs.
@@ -5068,6 +5081,10 @@ fn dedup_evictions_snapshot() -> DedupEvictionSnapshot {
         rbc_deliver_expired_total: DEDUP_RBC_DELIVER_EVICT_EXPIRED_TOTAL.load(Ordering::Relaxed),
         rbc_chunk_capacity_total: DEDUP_RBC_CHUNK_EVICT_CAPACITY_TOTAL.load(Ordering::Relaxed),
         rbc_chunk_expired_total: DEDUP_RBC_CHUNK_EVICT_EXPIRED_TOTAL.load(Ordering::Relaxed),
+        lane_block_artifact_capacity_total: DEDUP_LANE_BLOCK_ARTIFACT_EVICT_CAPACITY_TOTAL
+            .load(Ordering::Relaxed),
+        lane_block_artifact_expired_total: DEDUP_LANE_BLOCK_ARTIFACT_EVICT_EXPIRED_TOTAL
+            .load(Ordering::Relaxed),
     }
 }
 
@@ -5648,6 +5665,8 @@ pub(crate) enum DedupEvictionKind {
     RbcDeliver,
     /// RBC chunk payload cache evictions.
     RbcChunk,
+    /// Standalone lane-block proposal/vote/QC cache evictions.
+    LaneBlockArtifact,
 }
 
 /// Record dedup evictions for the given cache kind.
@@ -5746,6 +5765,15 @@ pub(crate) fn record_dedup_evictions(kind: DedupEvictionKind, capacity: usize, e
             }
             if expired > 0 {
                 DEDUP_RBC_CHUNK_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
+            }
+        }
+        DedupEvictionKind::LaneBlockArtifact => {
+            if capacity > 0 {
+                DEDUP_LANE_BLOCK_ARTIFACT_EVICT_CAPACITY_TOTAL
+                    .fetch_add(capacity, Ordering::Relaxed);
+            }
+            if expired > 0 {
+                DEDUP_LANE_BLOCK_ARTIFACT_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
             }
         }
     }
@@ -7362,7 +7390,19 @@ pub fn set_lane_commitments(
 }
 
 /// Replace the aggregated lane settlement commitments used by `/v1/sumeragi/status`.
-pub fn set_lane_settlement_commitments(entries: Vec<LaneBlockCommitment>) {
+pub fn set_lane_settlement_commitments(mut entries: Vec<LaneBlockCommitment>) {
+    if entries.len() > LANE_SETTLEMENT_COMMITMENTS_CAP {
+        entries.sort_by_key(|entry| {
+            (
+                entry.block_height,
+                entry.lane_id.as_u32(),
+                entry.dataspace_id.as_u64(),
+                entry.lane_incarnation,
+            )
+        });
+        let drain = entries.len() - LANE_SETTLEMENT_COMMITMENTS_CAP;
+        entries.drain(0..drain);
+    }
     let mut guard = lock_operator_status_slot(
         lane_settlement_commitments_slot(),
         "lane settlement commitments snapshot",
@@ -7609,7 +7649,20 @@ pub fn committed_lane_blocks_snapshot() -> Vec<CommittedLaneBlockSnapshot> {
 }
 
 /// Replace the cached standalone lane-block session snapshot used by `/v1/sumeragi/status`.
-pub fn set_lane_block_sessions(entries: Vec<SumeragiLaneBlockSessionStatus>) {
+pub fn set_lane_block_sessions(mut entries: Vec<SumeragiLaneBlockSessionStatus>) {
+    if entries.len() > LANE_BLOCK_SESSIONS_CAP {
+        entries.sort_by_key(|entry| {
+            (
+                entry.lane_block_height,
+                entry.lane_block_view,
+                entry.lane_id.as_u32(),
+                entry.dataspace_id.as_u64(),
+                entry.lane_incarnation,
+            )
+        });
+        let drain = entries.len() - LANE_BLOCK_SESSIONS_CAP;
+        entries.drain(0..drain);
+    }
     *lock_operator_status_slot(lane_block_sessions_slot(), "lane block sessions snapshot") =
         entries;
 }
@@ -9187,6 +9240,8 @@ pub(crate) fn reset_dedup_evictions_for_tests() {
     DEDUP_RBC_DELIVER_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
     DEDUP_RBC_CHUNK_EVICT_CAPACITY_TOTAL.store(0, Ordering::Relaxed);
     DEDUP_RBC_CHUNK_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
+    DEDUP_LANE_BLOCK_ARTIFACT_EVICT_CAPACITY_TOTAL.store(0, Ordering::Relaxed);
+    DEDUP_LANE_BLOCK_ARTIFACT_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
 }
 
 /// Simple struct for phase-latencies snapshot.
@@ -12768,10 +12823,19 @@ mod tests {
         super::reset_dedup_evictions_for_tests();
         super::record_dedup_evictions(super::DedupEvictionKind::Vote, 2, 1);
         super::record_dedup_evictions(super::DedupEvictionKind::Proposal, 0, 3);
+        super::record_dedup_evictions(super::DedupEvictionKind::LaneBlockArtifact, 4, 5);
         let snapshot = super::snapshot();
         assert_eq!(snapshot.dedup_evictions.vote_capacity_total, 2);
         assert_eq!(snapshot.dedup_evictions.vote_expired_total, 1);
         assert_eq!(snapshot.dedup_evictions.proposal_expired_total, 3);
+        assert_eq!(
+            snapshot.dedup_evictions.lane_block_artifact_capacity_total,
+            4
+        );
+        assert_eq!(
+            snapshot.dedup_evictions.lane_block_artifact_expired_total,
+            5
+        );
     }
 
     #[test]
@@ -13909,6 +13973,75 @@ mod tests {
         assert!(stripped.lane_payload_ownerships.is_empty());
 
         super::clear_lane_payload_ownerships();
+    }
+
+    #[test]
+    fn lane_settlement_commitments_are_bounded_and_retain_newest_entries() {
+        let _guard = super::lane_relay_test_guard();
+        let entries = (0..(super::LANE_SETTLEMENT_COMMITMENTS_CAP + 5))
+            .map(|index| {
+                let height = u64::try_from(index + 1).expect("height fits u64");
+                let lane_id = u32::try_from(index + 1).expect("lane fits u32");
+                sample_lane_commitment(height, lane_id, height + 10)
+            })
+            .collect();
+
+        super::set_lane_settlement_commitments(entries);
+
+        let snapshot = super::lane_settlement_commitments_snapshot();
+        assert_eq!(snapshot.len(), super::LANE_SETTLEMENT_COMMITMENTS_CAP);
+        assert_eq!(snapshot.first().map(|entry| entry.block_height), Some(6));
+        assert_eq!(
+            snapshot.last().map(|entry| entry.block_height),
+            Some((super::LANE_SETTLEMENT_COMMITMENTS_CAP + 5) as u64)
+        );
+        super::set_lane_settlement_commitments(Vec::new());
+    }
+
+    #[test]
+    fn lane_block_sessions_are_bounded_and_retain_newest_entries() {
+        let _guard = super::lane_relay_test_guard();
+        let entries = (0..(super::LANE_BLOCK_SESSIONS_CAP + 5))
+            .map(|index| {
+                let height = u64::try_from(index + 1).expect("height fits u64");
+                SumeragiLaneBlockSessionStatus {
+                    lane_id: LaneId::new(u32::try_from(index + 1).expect("lane id fits u32")),
+                    dataspace_id: DataSpaceId::new(height + 10),
+                    lane_incarnation: iroha_crypto::Hash::new(format!(
+                        "bounded-lane-session:{height}"
+                    )),
+                    lane_block_height: height,
+                    lane_block_view: 0,
+                    proposal_hash: iroha_crypto::Hash::new(format!(
+                        "bounded-lane-session-proposal:{height}"
+                    )),
+                    has_proposal: true,
+                    prepare_vote_count: 0,
+                    commit_vote_count: 0,
+                    has_prepare_qc: false,
+                    has_commit_qc: false,
+                    pending_commit_vote_request: false,
+                    pending_committed_session_drain: false,
+                    committed_session_drained: false,
+                    validator_count: 4,
+                    min_quorum: 3,
+                }
+            })
+            .collect();
+
+        super::set_lane_block_sessions(entries);
+
+        let snapshot = super::lane_block_sessions_snapshot();
+        assert_eq!(snapshot.len(), super::LANE_BLOCK_SESSIONS_CAP);
+        assert_eq!(
+            snapshot.first().map(|entry| entry.lane_block_height),
+            Some(6)
+        );
+        assert_eq!(
+            snapshot.last().map(|entry| entry.lane_block_height),
+            Some((super::LANE_BLOCK_SESSIONS_CAP + 5) as u64)
+        );
+        super::set_lane_block_sessions(Vec::new());
     }
 
     #[test]

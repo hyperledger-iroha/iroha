@@ -90,7 +90,6 @@ const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
 const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const LANE_PROGRESS_WAIT_TIMEOUT: Duration = Duration::from_secs(180);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
-const ROUTE_PROBE_APPROVAL_WAIT_TIMEOUT: Duration = Duration::from_millis(100);
 const ROUTE_PROBE_SSE_HANDSHAKE_DELAY: Duration = Duration::from_millis(100);
 const SETUP_BARRIER_TICK_EVERY_POLLS: u64 = 5;
 const LANE_PROGRESS_RECOVERY_TICK_EVERY_POLLS: u64 = 25;
@@ -1079,9 +1078,9 @@ fn expect_local_or_proxy_fanout_headers(
 
 #[derive(Clone, Copy, Debug)]
 struct DataspaceCommitmentObservation {
-    height: u64,
+    entrypoint_hash: Hash,
+    approved_height: Option<u64>,
     elapsed: Duration,
-    approval_observed: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1124,7 +1123,7 @@ struct LanePayloadOwnershipProgress {
     lane_block_descriptor_hash: Hash,
     payload_ownership_hash: Hash,
     rbc_instance_hash: Hash,
-    accepted_transaction_count: usize,
+    accepted_transaction_hashes: Vec<Hash>,
     validator_count: u32,
     min_quorum: u32,
 }
@@ -1371,7 +1370,7 @@ fn latest_lane_payload_ownership_progress(
                 .expect("validated ownership has descriptor hash"),
             payload_ownership_hash: ownership.payload_ownership_hash,
             rbc_instance_hash: ownership.rbc_instance_hash,
-            accepted_transaction_count: ownership.accepted_transaction_hashes.len(),
+            accepted_transaction_hashes: ownership.accepted_transaction_hashes.clone(),
             validator_count: ownership.lane_block_descriptor_validator_count,
             min_quorum: ownership.lane_block_descriptor_min_quorum,
         })
@@ -1441,7 +1440,9 @@ fn lane_payload_ownership_progress_matches_candidate(
                         && observed.lane_block_descriptor_hash
                             == candidate.lane_block_descriptor_hash
                         && observed.payload_ownership_hash == candidate.payload_ownership_hash
-                        && observed.rbc_instance_hash == candidate.rbc_instance_hash))))
+                        && observed.rbc_instance_hash == candidate.rbc_instance_hash
+                        && observed.accepted_transaction_hashes
+                            == candidate.accepted_transaction_hashes))))
 }
 
 fn lane_payload_ownership_progress_same_tip_identity(
@@ -1459,6 +1460,16 @@ fn lane_payload_ownership_progress_same_tip_identity(
         && left.lane_block_descriptor_hash == right.lane_block_descriptor_hash
         && left.payload_ownership_hash == right.payload_ownership_hash
         && left.rbc_instance_hash == right.rbc_instance_hash
+        && left.accepted_transaction_hashes == right.accepted_transaction_hashes
+}
+
+fn lane_payload_ownership_contains_transaction(
+    progress: &LanePayloadOwnershipProgress,
+    transaction_hash: Hash,
+) -> bool {
+    progress
+        .accepted_transaction_hashes
+        .contains(&transaction_hash)
 }
 
 fn quorum_lane_domain_progress(
@@ -2025,6 +2036,8 @@ fn wait_for_independent_lane_payload_ownership_progress(
     trailing_tick_submitters: &[Client],
     leading_lane: (LaneId, DataSpaceId),
     trailing_lane: (LaneId, DataSpaceId),
+    leading_expected_hash: Hash,
+    trailing_expected_hash: Hash,
     context: &str,
 ) -> Result<(LanePayloadOwnershipProgress, LanePayloadOwnershipProgress)> {
     // `lane_payload_ownerships` is a proposer-local operator diagnostic emitted
@@ -2057,8 +2070,8 @@ fn wait_for_independent_lane_payload_ownership_progress(
         let trailing_progress =
             quorum_lane_payload_ownership_progress(&last_trailing, quorum_required);
         if let (Some(leading), Some(trailing)) = (leading_progress, trailing_progress)
-            && leading.accepted_transaction_count > 0
-            && trailing.accepted_transaction_count > 0
+            && lane_payload_ownership_contains_transaction(&leading, leading_expected_hash)
+            && lane_payload_ownership_contains_transaction(&trailing, trailing_expected_hash)
         {
             return Ok((leading, trailing));
         }
@@ -2088,15 +2101,17 @@ fn wait_for_independent_lane_payload_ownership_progress(
         .map(|err| format!("; last status query/tick error: {err}"))
         .unwrap_or_default();
     Err(eyre!(
-        "{context}: timed out waiting for observable independent lane-payload ownership progress; expected lane {} dataspace {} and lane {} dataspace {} to publish non-empty lane-local ownership; last leading observations {last_leading:?}; last trailing observations {last_trailing:?}{suffix}",
+        "{context}: timed out waiting for exact lane-payload ownership; expected lane {} dataspace {} to own transaction {} and lane {} dataspace {} to own transaction {}; last leading observations {last_leading:?}; last trailing observations {last_trailing:?}{suffix}",
         leading_lane.0.as_u32(),
         leading_lane.1.as_u64(),
+        leading_expected_hash,
         trailing_lane.0.as_u32(),
         trailing_lane.1.as_u64(),
+        trailing_expected_hash,
     ))
 }
 
-async fn wait_for_route_probe_approval(
+async fn submit_route_probe_with_route_observation(
     submitter: &Client,
     instruction: InstructionBox,
     expected_lane_id: LaneId,
@@ -2105,12 +2120,8 @@ async fn wait_for_route_probe_approval(
 ) -> Result<DataspaceCommitmentObservation> {
     let transaction = submitter.build_transaction([instruction], Metadata::default());
     let hash = transaction.hash();
+    let entrypoint_hash = Hash::from(transaction.hash_as_entrypoint());
     let started = Instant::now();
-    let submit_height = submitter
-        .get_sumeragi_v2_status()
-        .map_err(|err| eyre!(err))?
-        .authoritative
-        .last_committed_height;
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
         submitter.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
@@ -2123,14 +2134,20 @@ async fn wait_for_route_probe_approval(
     sleep(ROUTE_PROBE_SSE_HANDSHAKE_DELAY).await;
 
     let submitter_for_submit = submitter.clone();
-    spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction))
-        .await
-        .map_err(|err| eyre!("{context}: route probe submit task join error: {err}"))?
-        .map_err(|err| eyre!("{context}: failed to submit route probe transaction: {err}"))?;
+    let submitted_hash =
+        spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction))
+            .await
+            .map_err(|err| eyre!("{context}: route probe submit task join error: {err}"))?
+            .map_err(|err| eyre!("{context}: failed to submit route probe transaction: {err}"))?;
+    ensure!(
+        submitted_hash == hash,
+        "{context}: Torii returned another route-probe transaction hash"
+    );
 
     let mut first_seen_elapsed: Option<Duration> = None;
     let mut approved_height = None;
-    let event_poll_deadline = Instant::now() + ROUTE_PROBE_APPROVAL_WAIT_TIMEOUT;
+    let mut route_observed = false;
+    let event_poll_deadline = Instant::now() + BLOCKING_CONFIRMATION_TIMEOUT;
     while Instant::now() <= event_poll_deadline {
         let Some(next) = timeout(STATUS_POLL_INTERVAL, events.next())
             .await
@@ -2139,61 +2156,78 @@ async fn wait_for_route_probe_approval(
         else {
             continue;
         };
-        let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = next? else {
-            continue;
+        let pipeline_events = match next? {
+            EventBox::Pipeline(event) => vec![event],
+            EventBox::PipelineBatch(events) => events,
+            _ => Vec::new(),
         };
-        match event.status() {
-            TransactionStatus::Queued => {
-                ensure!(
-                    event.lane_id() == expected_lane_id,
-                    "{context}: expected queued lane {}, observed {}",
-                    expected_lane_id.as_u32(),
-                    event.lane_id().as_u32()
-                );
-                ensure!(
-                    event.dataspace_id() == expected_dataspace_id,
-                    "{context}: expected queued dataspace {}, observed {}",
-                    expected_dataspace_id.as_u64(),
-                    event.dataspace_id().as_u64()
-                );
-                first_seen_elapsed.get_or_insert_with(|| started.elapsed());
+        for pipeline_event in pipeline_events {
+            let PipelineEventBox::Transaction(event) = pipeline_event else {
+                continue;
+            };
+            match event.status() {
+                TransactionStatus::Queued => {
+                    ensure!(
+                        event.lane_id() == expected_lane_id,
+                        "{context}: expected queued lane {}, observed {}",
+                        expected_lane_id.as_u32(),
+                        event.lane_id().as_u32()
+                    );
+                    ensure!(
+                        event.dataspace_id() == expected_dataspace_id,
+                        "{context}: expected queued dataspace {}, observed {}",
+                        expected_dataspace_id.as_u64(),
+                        event.dataspace_id().as_u64()
+                    );
+                    first_seen_elapsed.get_or_insert_with(|| started.elapsed());
+                    route_observed = true;
+                    break;
+                }
+                TransactionStatus::Approved => {
+                    ensure!(
+                        event.lane_id() == expected_lane_id,
+                        "{context}: expected approved lane {}, observed {}",
+                        expected_lane_id.as_u32(),
+                        event.lane_id().as_u32()
+                    );
+                    ensure!(
+                        event.dataspace_id() == expected_dataspace_id,
+                        "{context}: expected approved dataspace {}, observed {}",
+                        expected_dataspace_id.as_u64(),
+                        event.dataspace_id().as_u64()
+                    );
+                    first_seen_elapsed.get_or_insert_with(|| started.elapsed());
+                    approved_height =
+                        Some(event.block_height().map(NonZeroU64::get).ok_or_else(|| {
+                            eyre!("{context}: approved transaction event missing block height")
+                        })?);
+                    route_observed = true;
+                    break;
+                }
+                TransactionStatus::Rejected(reason) => {
+                    return Err(eyre!(
+                        "{context}: route probe transaction rejected: {reason}"
+                    ));
+                }
+                TransactionStatus::Expired => {
+                    return Err(eyre!("{context}: route probe transaction expired"));
+                }
             }
-            TransactionStatus::Approved => {
-                first_seen_elapsed.get_or_insert_with(|| started.elapsed());
-                approved_height =
-                    Some(event.block_height().map(NonZeroU64::get).ok_or_else(|| {
-                        eyre!("{context}: approved transaction event missing block height")
-                    })?);
-                break;
-            }
-            TransactionStatus::Rejected(reason) => {
-                return Err(eyre!(
-                    "{context}: route probe transaction rejected: {reason}"
-                ));
-            }
-            TransactionStatus::Expired => {
-                return Err(eyre!("{context}: route probe transaction expired"));
-            }
+        }
+        if route_observed {
+            break;
         }
     }
 
     events.close().await;
-    let (height, approval_observed) = if let Some(height) = approved_height {
-        (height, true)
-    } else {
-        let fallback_height = submitter
-            .get_sumeragi_v2_status()
-            .map_err(|err| eyre!(err))?
-            .authoritative
-            .last_committed_height
-            .max(submit_height)
-            .saturating_add(1);
-        (fallback_height, false)
-    };
+    ensure!(
+        route_observed,
+        "{context}: no queued or approved route event was observed for probe {entrypoint_hash}"
+    );
     Ok(DataspaceCommitmentObservation {
-        height,
+        entrypoint_hash,
+        approved_height,
         elapsed: first_seen_elapsed.unwrap_or_else(|| started.elapsed()),
-        approval_observed,
     })
 }
 
@@ -3359,14 +3393,14 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
         let _phase = phase_timings.phase("route probes ds1+ds2: tx submit + route wait");
         rt.block_on(async {
             tokio::try_join!(
-                wait_for_route_probe_approval(
+                submit_route_probe_with_route_observation(
                     &nexus_alice_submitter,
                     InstructionBox::from(Log::new(Level::INFO, "route probe ds1".to_string())),
                     LaneId::new(DS1_LANE_INDEX),
                     DataSpaceId::new(DS1_ID_U64),
                     "route probe ds1",
                 ),
-                wait_for_route_probe_approval(
+                submit_route_probe_with_route_observation(
                     &nexus_bob_submitter,
                     InstructionBox::from(Log::new(Level::INFO, "route probe ds2".to_string())),
                     LaneId::new(DS2_LANE_INDEX),
@@ -3376,47 +3410,22 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
             )
         })?
     };
-    let ds1_height = ds1_observation.height;
-    let ds2_height = ds2_observation.height;
-    let ds1_followup_observation = {
-        let _phase = phase_timings.phase("route probe ds1 follow-up: tx submit + route wait");
-        rt.block_on(wait_for_route_probe_approval(
-            &nexus_alice_submitter,
-            InstructionBox::from(Log::new(
-                Level::INFO,
-                "route probe ds1 follow-up".to_string(),
-            )),
-            LaneId::new(DS1_LANE_INDEX),
-            DataSpaceId::new(DS1_ID_U64),
-            "route probe ds1 follow-up",
-        ))?
-    };
     {
         let _phase = phase_timings.phase("route probe ds1: query/assert");
-        let ds1_source = if ds1_observation.approval_observed {
-            "approved"
-        } else {
-            "fallback+1"
-        };
         eprintln!(
-            "[route-probe] ds1 first_seen={}s height={} source={}",
+            "[route-probe] ds1 first_seen={}s approved_height={:?} entrypoint={}",
             ds1_observation.elapsed.as_secs_f64(),
-            ds1_height,
-            ds1_source
+            ds1_observation.approved_height,
+            ds1_observation.entrypoint_hash,
         );
     }
     {
         let _phase = phase_timings.phase("route probe ds2: query/assert");
-        let ds2_source = if ds2_observation.approval_observed {
-            "approved"
-        } else {
-            "fallback+1"
-        };
         eprintln!(
-            "[route-probe] ds2 first_seen={}s height={} source={}",
+            "[route-probe] ds2 first_seen={}s approved_height={:?} entrypoint={}",
             ds2_observation.elapsed.as_secs_f64(),
-            ds2_height,
-            ds2_source
+            ds2_observation.approved_height,
+            ds2_observation.entrypoint_hash,
         );
         if ds1_observation.elapsed >= ds2_observation.elapsed {
             eprintln!(
@@ -3436,31 +3445,82 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
             );
         }
     }
-    {
-        let _phase = phase_timings.phase("route probes: independent lane-payload ownership");
-        let (ds1_progress, ds2_progress) = wait_for_independent_lane_payload_ownership_progress(
+    let (initial_ds1_progress, initial_ds2_progress) = {
+        let _phase = phase_timings.phase("route probes: exact lane-payload ownership");
+        let progress = wait_for_independent_lane_payload_ownership_progress(
             &network,
             &alice,
-            &ds1_tick_submitters,
-            &ds2_tick_submitters,
+            std::slice::from_ref(&neutral_tick_submitter_a),
+            std::slice::from_ref(&neutral_tick_submitter_b),
             (LaneId::new(DS1_LANE_INDEX), DataSpaceId::new(DS1_ID_U64)),
             (LaneId::new(DS2_LANE_INDEX), DataSpaceId::new(DS2_ID_U64)),
-            "route probes independent lane-payload ownership progress",
+            ds1_observation.entrypoint_hash,
+            ds2_observation.entrypoint_hash,
+            "route probes exact lane-payload ownership progress",
         )?;
         eprintln!(
-            "[route-probe] ds1 follow-up height={} approval_observed={} lane_block={}/{} ds2_lane_block={}/{} ds1_committee={}/{} ds2_committee={}/{} accepted={}/{}",
-            ds1_followup_observation.height,
-            ds1_followup_observation.approval_observed,
-            ds1_progress.lane_block_height,
-            ds1_progress.lane_block_view,
-            ds2_progress.lane_block_height,
-            ds2_progress.lane_block_view,
-            ds1_progress.min_quorum,
-            ds1_progress.validator_count,
-            ds2_progress.min_quorum,
-            ds2_progress.validator_count,
-            ds1_progress.accepted_transaction_count,
-            ds2_progress.accepted_transaction_count,
+            "[route-probe] exact ownership ds1={}/{} ds2={}/{} ds1_committee={}/{} ds2_committee={}/{} accepted={}/{}",
+            progress.0.lane_block_height,
+            progress.0.lane_block_view,
+            progress.1.lane_block_height,
+            progress.1.lane_block_view,
+            progress.0.min_quorum,
+            progress.0.validator_count,
+            progress.1.min_quorum,
+            progress.1.validator_count,
+            progress.0.accepted_transaction_hashes.len(),
+            progress.1.accepted_transaction_hashes.len(),
+        );
+        progress
+    };
+    let ds1_followup_observation = {
+        let _phase = phase_timings.phase("route probe ds1 follow-up: tx submit + route wait");
+        rt.block_on(submit_route_probe_with_route_observation(
+            &nexus_alice_submitter,
+            InstructionBox::from(Log::new(
+                Level::INFO,
+                "route probe ds1 follow-up".to_string(),
+            )),
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            "route probe ds1 follow-up",
+        ))?
+    };
+    {
+        let _phase = phase_timings.phase("route probe ds1: independent lane-height advance");
+        let (advanced_ds1, stable_ds2) = wait_for_independent_lane_payload_ownership_progress(
+            &network,
+            &alice,
+            std::slice::from_ref(&neutral_tick_submitter_a),
+            std::slice::from_ref(&neutral_tick_submitter_b),
+            (LaneId::new(DS1_LANE_INDEX), DataSpaceId::new(DS1_ID_U64)),
+            (LaneId::new(DS2_LANE_INDEX), DataSpaceId::new(DS2_ID_U64)),
+            ds1_followup_observation.entrypoint_hash,
+            ds2_observation.entrypoint_hash,
+            "route probe ds1 exact follow-up ownership",
+        )?;
+        ensure!(
+            advanced_ds1.lane_incarnation == initial_ds1_progress.lane_incarnation
+                && (advanced_ds1.lane_block_height, advanced_ds1.lane_block_view)
+                    > (
+                        initial_ds1_progress.lane_block_height,
+                        initial_ds1_progress.lane_block_view,
+                    ),
+            "DS1 follow-up did not advance its exact lane-local tip: initial {initial_ds1_progress:?}; follow-up {advanced_ds1:?}"
+        );
+        ensure!(
+            lane_payload_ownership_progress_same_tip_identity(&stable_ds2, &initial_ds2_progress,),
+            "idle DS2 ownership changed while only DS1 advanced: initial {initial_ds2_progress:?}; observed {stable_ds2:?}"
+        );
+        eprintln!(
+            "[route-probe] independent DS1 advance initial={}/{} follow-up={}/{} approved_height={:?}; DS2 stable={}/{}",
+            initial_ds1_progress.lane_block_height,
+            initial_ds1_progress.lane_block_view,
+            advanced_ds1.lane_block_height,
+            advanced_ds1.lane_block_view,
+            ds1_followup_observation.approved_height,
+            stable_ds2.lane_block_height,
+            stable_ds2.lane_block_view,
         );
     }
     {
@@ -4739,15 +4799,16 @@ mod tests {
         expect_local_or_proxy_fanout_headers, expected_lane_binding_for_peer,
         is_expected_rollback_failure_text, is_inconclusive_blocking_submit_error,
         is_inconclusive_committed_outcome_error, lane_domain_progress_is_after_baseline,
-        lane_validator_snapshot, latest_lane_domain_application_progress,
-        latest_lane_domain_progress, latest_lane_payload_ownership_progress,
-        multilane_da_proof_policy_bundle, nexus_fee_asset_definition_id,
-        npos_multilane_genesis_post_topology_transactions, parse_positive_usize_override,
-        peer_indices_for_committed_lane_evidence, quorum_lane_domain_progress,
-        quorum_lane_payload_ownership_progress, rank_peer_indices_by_committed_height,
-        render_error_with_debug, render_rejection_reason, routed_header_string, should_submit_tick,
-        stake_asset_definition_id, stake_asset_id_literal, total_balance_observer_request_slots,
-        validate_soak_gate, validator_authority_account_for_peer, validator_authority_seed,
+        lane_payload_ownership_contains_transaction, lane_validator_snapshot,
+        latest_lane_domain_application_progress, latest_lane_domain_progress,
+        latest_lane_payload_ownership_progress, multilane_da_proof_policy_bundle,
+        nexus_fee_asset_definition_id, npos_multilane_genesis_post_topology_transactions,
+        parse_positive_usize_override, peer_indices_for_committed_lane_evidence,
+        quorum_lane_domain_progress, quorum_lane_payload_ownership_progress,
+        rank_peer_indices_by_committed_height, render_error_with_debug, render_rejection_reason,
+        routed_header_string, should_submit_tick, stake_asset_definition_id,
+        stake_asset_id_literal, total_balance_observer_request_slots, validate_soak_gate,
+        validator_authority_account_for_peer, validator_authority_seed,
     };
     use iroha::crypto::{Hash, HashOf};
     use iroha::data_model::{
@@ -5285,7 +5346,7 @@ mod tests {
             lane_block_descriptor_hash: test_hash(0xB1),
             payload_ownership_hash: test_hash(0xB2),
             rbc_instance_hash: test_hash(0xB3),
-            accepted_transaction_count: 1,
+            accepted_transaction_hashes: vec![test_hash(0xB4)],
             validator_count: VALIDATORS_PER_LANE as u32,
             min_quorum: 3,
         }
@@ -5868,7 +5929,19 @@ mod tests {
         .expect("valid exact-dataspace lane payload ownership progress");
 
         assert_eq!(progress.lane_block_height, 3);
-        assert_eq!(progress.accepted_transaction_count, 2);
+        assert_eq!(progress.accepted_transaction_hashes.len(), 2);
+        assert!(lane_payload_ownership_contains_transaction(
+            &progress,
+            test_hash(0x40)
+        ));
+        assert!(lane_payload_ownership_contains_transaction(
+            &progress,
+            test_hash(0x41)
+        ));
+        assert!(
+            !lane_payload_ownership_contains_transaction(&progress, test_hash(0x42)),
+            "unrelated work must not satisfy exact route-probe ownership"
+        );
         assert_eq!(progress.min_quorum, quorum);
         assert_eq!(progress.validator_count, VALIDATORS_PER_LANE as u32);
         assert!(

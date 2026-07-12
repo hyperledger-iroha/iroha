@@ -78,8 +78,9 @@ settlement routing, XOR conversion, telemetry, and audit evidence. Refer to
 `settlement_router_haircut_total` accumulates XOR units (not raw micro
 amounts), letting Treasury reconcile the haircut ledger directly from
 Prometheus.
-- `lane_settlement_commitments[*].swap_metadata.volatility_class` shows whether
-  the router applied the `stable`, `elevated`, or `dislocated` margin bucket.
+- `lane_settlement_commitments[*].swap_metadata.volatility_class` is a Norito
+  tagged object such as `{"bucket":"Stable","state":null}` and shows whether
+  the router applied the `Stable`, `Elevated`, or `Dislocated` margin bucket.
   Elevated/dislocated entries must link to the incident log or governance note.
 - Dashboards: `dashboards/grafana/nexus_settlement.json` plus the
   `nexus_lanes.json` overview. Tie alerts to `dashboards/alerts/nexus_audit_rules.yml`.

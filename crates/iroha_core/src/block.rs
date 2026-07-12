@@ -375,25 +375,31 @@ fn validate_block_transaction_admission(
 fn commit_stateful_admission_sequence(
     state_tx: &mut crate::state::StateTransaction<'_, '_>,
     admission: &crate::tx::StatefulAdmission,
-) {
+) -> Result<(), TransactionRejectionReason> {
+    crate::validation_fee::commit_validation_fee_credit(
+        state_tx,
+        admission.validation_fee_credit.as_ref(),
+    )?;
     if let Some(seq) = admission.sequence_to_commit {
         state_tx
             .world
             .tx_sequences
             .insert(admission.authority.clone(), seq);
     }
+    Ok(())
 }
 
 fn commit_stateful_admission_sequence_to_block(
     state_block: &mut StateBlock<'_>,
     admission: &crate::tx::StatefulAdmission,
-) {
-    if admission.sequence_to_commit.is_none() {
-        return;
+) -> Result<(), TransactionRejectionReason> {
+    if admission.sequence_to_commit.is_none() && admission.validation_fee_credit.is_none() {
+        return Ok(());
     }
     let mut state_tx = state_block.transaction();
-    commit_stateful_admission_sequence(&mut state_tx, admission);
+    commit_stateful_admission_sequence(&mut state_tx, admission)?;
     state_tx.apply();
+    Ok(())
 }
 
 #[cfg(test)]
@@ -853,7 +859,7 @@ pub(crate) fn validate_native_amx_receipt_against_plan(
     let crate::queue::RoutingPlan::NativeAmx(native_plan) = plan else {
         return Err("native AMX receipt attached to single-route plan".to_owned());
     };
-    if receipt.legs.len() > crate::native_amx::MAX_NATIVE_AMX_PLAN_LEGS {
+    if !crate::native_amx::native_amx_participant_leg_count_within_limit(receipt.legs.len()) {
         return Err("native AMX receipt exceeds the participant-leg cap".to_owned());
     }
     crate::lane_consensus::validate_lane_block_proposal(coordinator_proposal)
@@ -12123,7 +12129,7 @@ pub(crate) mod valid {
                                                 commit_stateful_admission_sequence(
                                                     &mut state_tx,
                                                     &admission,
-                                                );
+                                                )?;
                                                 state_tx.apply();
                                                 Ok(trigger_sequence)
                                             }
@@ -12166,6 +12172,9 @@ pub(crate) mod valid {
                             let precheck_tx = state_block.transaction();
                             prepared.iter().all(|p| {
                                 !fee_postprocessing_required[p.idx]
+                                    && !crate::validation_fee::transaction_has_validation_fee_metadata(
+                                        txs[p.idx],
+                                    )
                                     && matches!(
                                         deltas.get(p.idx),
                                         Some(Some(Ok(delta)))
@@ -12279,10 +12288,14 @@ pub(crate) mod valid {
 
                                 match result {
                                     Ok(trigger_sequence) => {
-                                        commit_stateful_admission_sequence(
+                                        if let Err(reason) = commit_stateful_admission_sequence(
                                             &mut state_tx,
                                             &admission,
-                                        );
+                                        ) {
+                                            aborts.push((p.idx, "commit"));
+                                            record_result(p.idx, Err(reason));
+                                            continue;
+                                        }
                                         batch_successes = batch_successes.saturating_add(1);
                                         record_result(p.idx, Ok(trigger_sequence));
                                         let lane_id = routing_decisions[p.idx].lane_id;
@@ -12435,10 +12448,17 @@ pub(crate) mod valid {
                                     if let Some(result) = single_transfer_result {
                                         match result {
                                             Ok(trigger_sequence) => {
-                                                commit_stateful_admission_sequence(
-                                                    &mut state_tx,
-                                                    &admission,
-                                                );
+                                                if let Err(reason) =
+                                                    commit_stateful_admission_sequence(
+                                                        &mut state_tx,
+                                                        &admission,
+                                                    )
+                                                {
+                                                    drop(state_tx);
+                                                    record_amx_abort(state_block, p.idx, "commit");
+                                                    record_result(p.idx, Err(reason));
+                                                    continue;
+                                                }
                                                 state_tx.apply();
                                                 record_result(p.idx, Ok(trigger_sequence));
                                                 let lane_id = routing_decisions[p.idx].lane_id;
@@ -12474,6 +12494,25 @@ pub(crate) mod valid {
                                         }
                                         continue;
                                     }
+                                    if admission.validation_fee_credit.is_some() {
+                                        // Validation-fee credits are consensus state that must be
+                                        // committed in the same rollback scope as the signed
+                                        // transfers and all data triggers. The direct detached
+                                        // merge applies its delta before admission facts, so use
+                                        // the ordinary transactional path for fee-bearing work.
+                                        drop(state_tx);
+                                        let result = apply_overlay_sequential(
+                                            state_block,
+                                            &mut lane_summaries,
+                                            p.idx,
+                                        );
+                                        let result_is_err = result.is_err();
+                                        record_result(p.idx, result);
+                                        if result_is_err {
+                                            record_amx_abort(state_block, p.idx, "commit");
+                                        }
+                                        continue;
+                                    }
                                     drop(state_tx);
                                     let merge_context = DetachedMergeContext {
                                         tx_call_hash: Some(iroha_crypto::Hash::from(hash)),
@@ -12491,10 +12530,16 @@ pub(crate) mod valid {
                                         merge_context,
                                     ) {
                                         Ok(trigger_sequence) => {
-                                            commit_stateful_admission_sequence_to_block(
-                                                state_block,
-                                                &admission,
-                                            );
+                                            let admission_commit =
+                                                commit_stateful_admission_sequence_to_block(
+                                                    state_block,
+                                                    &admission,
+                                                );
+                                            if let Err(reason) = admission_commit {
+                                                record_amx_abort(state_block, p.idx, "commit");
+                                                record_result(p.idx, Err(reason));
+                                                continue;
+                                            }
                                             record_result(p.idx, Ok(trigger_sequence));
                                             let lane_id = routing_decisions[p.idx].lane_id;
                                             let summary =
@@ -12750,12 +12795,16 @@ pub(crate) mod valid {
                                                             }
                                                         }
                                                         Ok(trigger_sequence) => {
-                                                            commit_stateful_admission_sequence(
+                                                            match commit_stateful_admission_sequence(
                                                                 &mut state_tx,
                                                                 &admission,
-                                                            );
-                                                            state_tx.apply();
-                                                            Ok(trigger_sequence)
+                                                            ) {
+                                                                Ok(()) => {
+                                                                    state_tx.apply();
+                                                                    Ok(trigger_sequence)
+                                                                }
+                                                                Err(reason) => Err(reason),
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -12950,12 +12999,16 @@ pub(crate) mod valid {
                                                         }
                                                     }
                                                     Ok(trigger_sequence) => {
-                                                        commit_stateful_admission_sequence(
+                                                        match commit_stateful_admission_sequence(
                                                             &mut state_tx,
                                                             &admission,
-                                                        );
-                                                        state_tx.apply();
-                                                        Ok(trigger_sequence)
+                                                        ) {
+                                                            Ok(()) => {
+                                                                state_tx.apply();
+                                                                Ok(trigger_sequence)
+                                                            }
+                                                            Err(reason) => Err(reason),
+                                                        }
                                                     }
                                                 }
                                             }
@@ -24943,6 +24996,15 @@ mod tests {
             validate(&wrong_digest)
                 .expect_err("wrong digest must fail")
                 .contains("plan digest mismatch")
+        );
+
+        let mut excessive_participants = receipt.clone();
+        excessive_participants.legs =
+            vec![receipt.legs[0].clone(); crate::native_amx::MAX_NATIVE_AMX_PLAN_LEGS];
+        assert!(
+            validate(&excessive_participants)
+                .expect_err("coordinator-inclusive leg cap must reject 256 participants")
+                .contains("participant-leg cap")
         );
 
         let mut bad_bitmap = receipt;

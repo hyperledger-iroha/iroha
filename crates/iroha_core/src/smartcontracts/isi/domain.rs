@@ -42,7 +42,7 @@ pub mod isi {
 
     use super::*;
     use crate::{
-        alias::authority_can_manage_account_alias,
+        alias::{authority_can_manage_account_alias, authority_can_manage_account_alias_scope},
         state::{
             WorldReadOnly as _, account_label_is_pii, public_lane_reward_record_matches_key,
             public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
@@ -404,7 +404,7 @@ pub mod isi {
         }
     }
 
-    fn resolve_contract_alias_components(
+    pub(super) fn resolve_contract_alias_components(
         state_transaction: &StateTransaction<'_, '_>,
         alias: &ContractAlias,
     ) -> Result<(Name, Option<AccountAliasDomain>, DataSpaceId), InstructionExecutionError> {
@@ -440,6 +440,61 @@ pub mod isi {
                     )
                 })?;
         Ok((label_name, domain, dataspace))
+    }
+
+    fn ensure_authority_can_manage_contract_alias(
+        state_transaction: &StateTransaction<'_, '_>,
+        authority: &AccountId,
+        alias: &ContractAlias,
+    ) -> Result<(), InstructionExecutionError> {
+        if state_transaction.replay_compatibility {
+            return Ok(());
+        }
+        let (label, domain, dataspace) =
+            resolve_contract_alias_components(state_transaction, alias)?;
+        let account_alias = AccountAlias::new_in_dataspace(label, domain, dataspace);
+        if authority_can_manage_account_alias(&state_transaction.world, authority, &account_alias) {
+            return Ok(());
+        }
+        Err(InstructionExecutionError::InvariantViolation(
+            format!("authority is not permitted to manage contract alias `{alias}`").into(),
+        ))
+    }
+
+    fn ensure_authority_can_manage_stale_contract_alias(
+        state_transaction: &StateTransaction<'_, '_>,
+        authority: &AccountId,
+        contract_address: &ContractAddress,
+        alias: &ContractAlias,
+    ) -> Result<(), InstructionExecutionError> {
+        if state_transaction.replay_compatibility {
+            return Ok(());
+        }
+        let dataspace = contract_address.dataspace_id().map_err(|err| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                err.to_string().into(),
+            ))
+        })?;
+        let domain = alias
+            .domain_segment()
+            .map(|name| DomainId::try_new(name, alias.dataspace_segment()))
+            .transpose()
+            .map_err(|err| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    err.to_string().into(),
+                ))
+            })?;
+        if authority_can_manage_account_alias_scope(
+            &state_transaction.world,
+            authority,
+            dataspace,
+            domain.as_ref(),
+        ) {
+            return Ok(());
+        }
+        Err(InstructionExecutionError::InvariantViolation(
+            format!("authority is not permitted to manage contract alias `{alias}`").into(),
+        ))
     }
 
     fn account_alias_selector_for_contract_alias(
@@ -2645,7 +2700,7 @@ pub mod isi {
     impl Execute for SetContractAlias {
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let SetContractAlias {
@@ -2704,6 +2759,8 @@ pub mod isi {
                     .into());
                 }
 
+                ensure_authority_can_manage_contract_alias(state_transaction, authority, &alias)?;
+
                 ensure_account_alias_namespace_available_for_contract_alias(
                     state_transaction,
                     &alias,
@@ -2728,6 +2785,26 @@ pub mod isi {
                     bound_at_ms,
                 )?;
             } else {
+                if let Some(binding) = state_transaction
+                    .world
+                    .contract_alias_bindings()
+                    .get(&contract_address)
+                {
+                    if ensure_authority_can_manage_contract_alias(
+                        state_transaction,
+                        authority,
+                        &binding.alias,
+                    )
+                    .is_err()
+                    {
+                        ensure_authority_can_manage_stale_contract_alias(
+                            state_transaction,
+                            authority,
+                            &contract_address,
+                            &binding.alias,
+                        )?;
+                    }
+                }
                 state_transaction
                     .world
                     .clear_contract_alias(&contract_address);
@@ -3999,6 +4076,17 @@ mod tests {
         authority: &AccountId,
         alias: &AccountAlias,
     ) {
+        if tx.world.account(authority).is_err() {
+            let account = Account {
+                id: authority.clone(),
+                metadata: Metadata::default(),
+                label: None,
+                uaid: None,
+                opaque_ids: Vec::new(),
+            };
+            let (account_id, account_value) = account.into_key_value();
+            tx.world.accounts.insert(account_id, account_value);
+        }
         tx.world.add_account_permission(
             authority,
             Permission::from(CanManageAccountAlias {
@@ -4016,6 +4104,32 @@ mod tests {
                 }),
             );
         }
+    }
+
+    fn seed_contract_alias_manage_permissions(
+        tx: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        alias: &ContractAlias,
+    ) {
+        let (label, domain, dataspace) = super::isi::resolve_contract_alias_components(tx, alias)
+            .expect("contract alias components");
+        seed_contract_alias_manage_permissions_in_dataspace(
+            tx, authority, label, domain, dataspace,
+        );
+    }
+
+    fn seed_contract_alias_manage_permissions_in_dataspace(
+        tx: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        label: Name,
+        domain: Option<AccountAliasDomain>,
+        dataspace: DataSpaceId,
+    ) {
+        seed_account_alias_manage_permissions(
+            tx,
+            authority,
+            &AccountAlias::new_in_dataspace(label, domain, dataspace),
+        );
     }
 
     fn open_retail_account_aliases(paynet: DataSpaceId, cbuae: DataSpaceId) -> Vec<AccountAlias> {
@@ -9085,6 +9199,7 @@ mod tests {
             .insert(contract_address.clone(), Hash::new("contract-alias"));
 
         let alias: ContractAlias = "router::universal".parse().expect("alias");
+        seed_contract_alias_manage_permissions(&mut tx, &authority, &alias);
         SetContractAlias::bind(contract_address.clone(), alias.clone(), Some(11_000))
             .execute(&authority, &mut tx)
             .expect("bind contract alias");
@@ -9108,6 +9223,40 @@ mod tests {
     }
 
     #[test]
+    fn unprivileged_authority_cannot_bind_privileged_benefit_alias() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let benefit_dataspace = DataSpaceId::new(42);
+        let contract_address =
+            ContractAddress::derive(0, &authority, 0, benefit_dataspace).expect("address");
+        let alias: ContractAlias = "benefit::benefit".parse().expect("benefit alias");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        install_dataspace_catalog_with_lane(
+            &mut tx,
+            benefit_dataspace,
+            "benefit",
+            LaneVisibility::Public,
+        );
+        tx.world.contract_instances.insert(
+            contract_address.clone(),
+            Hash::new("malicious-benefit-lookalike"),
+        );
+
+        let error = SetContractAlias::bind(contract_address, alias, None)
+            .execute(&authority, &mut tx)
+            .expect_err("unprivileged alias binding must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("not permitted to manage contract alias"),
+            "unexpected alias authorization error: {error}"
+        );
+    }
+
+    #[test]
     fn set_contract_alias_allows_active_dynamic_sns_dataspace() {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
@@ -9126,6 +9275,7 @@ mod tests {
         );
 
         let alias: ContractAlias = "router::is".parse().expect("alias");
+        seed_contract_alias_manage_permissions(&mut tx, &authority, &alias);
         SetContractAlias::bind(contract_address.clone(), alias.clone(), Some(11_000))
             .execute(&authority, &mut tx)
             .expect("bind dynamic dataspace contract alias");
@@ -9194,6 +9344,11 @@ mod tests {
                 10_000,
             )
             .expect("seed stale contract alias");
+        seed_contract_alias_manage_permissions(
+            &mut tx,
+            &authority,
+            &"router::universal".parse().expect("alias"),
+        );
 
         SetContractAlias::clear(contract_address.clone())
             .execute(&authority, &mut tx)
@@ -9231,6 +9386,15 @@ mod tests {
         tx.world
             .bind_contract_alias(&contract_address, alias.clone(), None, None, 10_000)
             .expect("seed stale dynamic contract alias");
+        seed_contract_alias_manage_permissions_in_dataspace(
+            &mut tx,
+            &authority,
+            alias.name_segment().parse().expect("alias label"),
+            alias
+                .domain_segment()
+                .map(|name| AccountAliasDomain::new(name.parse().expect("alias domain"))),
+            dynamic_dataspace,
+        );
 
         SetContractAlias::clear(contract_address.clone())
             .execute(&authority, &mut tx)
@@ -9315,6 +9479,11 @@ mod tests {
             .contract_instances
             .insert(contract_address.clone(), Hash::new("contract-alias"));
         seed_account_alias_lease(&mut tx, &authority, &label);
+        seed_contract_alias_manage_permissions(
+            &mut tx,
+            &authority,
+            &"router::universal".parse().expect("alias"),
+        );
 
         let err = SetContractAlias::bind(
             contract_address,

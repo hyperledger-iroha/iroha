@@ -302,11 +302,6 @@ def run_manifest_stub(
         f"--min-replicas={min_replicas}",
         f"--storage-class={storage_class}",
         f"--retention-epoch={retention_epoch}",
-        "--council-signature-public-key="
-        "1111111111111111111111111111111111111111111111111111111111111111",
-        "--council-signature="
-        "2222222222222222222222222222222222222222222222222222222222222222"
-        "2222222222222222222222222222222222222222222222222222222222222222",
         f"--json-out={json_out}",
         f"--manifest-out={manifest_out}",
     ]
@@ -404,9 +399,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         fixture_meta["now_unix_secs"] = now_unix_secs
         retention_epoch = require_metadata_int(
-            fixture_meta.get("retention_epoch", now_unix_secs),
+            fixture_meta.get("retention_epoch", now_unix_secs + 86_400),
             minimum=0,
         )
+        if retention_epoch <= now_unix_secs:
+            raise ValueError(
+                "SoraFS Android codegen fixture retention_epoch must be later than now_unix_secs"
+            )
         min_replicas = require_metadata_int(
             fixture_meta.get("min_replicas", 3),
             minimum=1,

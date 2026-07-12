@@ -2566,6 +2566,14 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "rbc_chunk_expired_total",
             snap.dedup_evictions.rbc_chunk_expired_total,
         ),
+        json_entry(
+            "lane_block_artifact_capacity_total",
+            snap.dedup_evictions.lane_block_artifact_capacity_total,
+        ),
+        json_entry(
+            "lane_block_artifact_expired_total",
+            snap.dedup_evictions.lane_block_artifact_expired_total,
+        ),
     ]);
     let consensus_message_handling_entries = Value::Array(
         snap.consensus_message_handling
@@ -4245,6 +4253,103 @@ mod status_tests {
                 .get("local_peer_removed")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn v2_status_json_projects_settlement_u128_values_as_decimal_strings_everywhere() {
+        let receipt = LaneSettlementReceipt {
+            source_id: [0xAB; 32],
+            local_amount_micro: u128::MAX,
+            xor_due_micro: u128::MAX - 1,
+            xor_after_haircut_micro: u128::MAX - 2,
+            xor_variance_micro: u128::MAX - 3,
+            timestamp_ms: 42,
+        };
+        let commitment = LaneBlockCommitment {
+            block_height: 1,
+            lane_id: LaneId::new(3),
+            lane_incarnation: Hash::new(b"v2-status-u128-lane-incarnation"),
+            dataspace_id: DataSpaceId::new(9),
+            tx_count: 1,
+            total_local_micro: u128::MAX,
+            total_xor_due_micro: u128::MAX - 1,
+            total_xor_after_haircut_micro: u128::MAX - 2,
+            total_xor_variance_micro: u128::MAX - 3,
+            swap_metadata: None,
+            receipts: vec![receipt],
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        };
+        let header = iroha_data_model::block::BlockHeader::new(
+            core::num::NonZeroU64::new(1).expect("nonzero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let relay = iroha_data_model::nexus::LaneRelayEnvelope::new(
+            header,
+            None,
+            None,
+            commitment.clone(),
+            0,
+        )
+        .expect("construct relay fixture");
+        let snapshot = sumeragi::StatusSnapshot {
+            lane_settlement_commitments: vec![commitment],
+            lane_relay_envelopes: vec![relay],
+            ..Default::default()
+        };
+
+        let payload = norito::json::to_value(&sumeragi_v2_status_json_from_snapshot(
+            authoritative_v2_status_fixture(),
+            snapshot,
+            true,
+            false,
+        ))
+        .expect("serialize v2 status projection");
+        let object = payload.as_object().expect("v2 status object");
+        let top_level = object["lane_settlement_commitments"]
+            .as_array()
+            .and_then(|entries| entries.first())
+            .and_then(Value::as_object)
+            .expect("top-level settlement commitment");
+        assert_eq!(
+            top_level.get("total_local_micro").and_then(Value::as_str),
+            Some(u128::MAX.to_string().as_str())
+        );
+        let receipt = top_level["receipts"]
+            .as_array()
+            .and_then(|entries| entries.first())
+            .and_then(Value::as_object)
+            .expect("top-level settlement receipt");
+        assert_eq!(
+            receipt.get("local_amount_micro").and_then(Value::as_str),
+            Some(u128::MAX.to_string().as_str())
+        );
+        let embedded = object["lane_relay_envelopes"]
+            .as_array()
+            .and_then(|entries| entries.first())
+            .and_then(Value::as_object)
+            .and_then(|relay| relay.get("settlement_commitment"))
+            .and_then(Value::as_object)
+            .expect("relay settlement commitment");
+        assert_eq!(
+            embedded.get("total_local_micro").and_then(Value::as_str),
+            Some(u128::MAX.to_string().as_str())
+        );
+        let embedded_receipt = embedded["receipts"]
+            .as_array()
+            .and_then(|entries| entries.first())
+            .and_then(Value::as_object)
+            .expect("relay settlement receipt");
+        assert_eq!(
+            embedded_receipt
+                .get("local_amount_micro")
+                .and_then(Value::as_str),
+            Some(u128::MAX.to_string().as_str())
         );
     }
 
@@ -6129,11 +6234,122 @@ mod status_tests {
 }
 
 #[derive(Debug, crate::json_macros::JsonSerialize)]
+struct LaneSettlementReceiptJson {
+    source_id: [u8; 32],
+    local_amount_micro: String,
+    xor_due_micro: String,
+    xor_after_haircut_micro: String,
+    xor_variance_micro: String,
+    timestamp_ms: u64,
+}
+
+impl From<iroha_data_model::block::consensus::LaneSettlementReceipt> for LaneSettlementReceiptJson {
+    fn from(receipt: iroha_data_model::block::consensus::LaneSettlementReceipt) -> Self {
+        Self {
+            source_id: receipt.source_id,
+            local_amount_micro: receipt.local_amount_micro.to_string(),
+            xor_due_micro: receipt.xor_due_micro.to_string(),
+            xor_after_haircut_micro: receipt.xor_after_haircut_micro.to_string(),
+            xor_variance_micro: receipt.xor_variance_micro.to_string(),
+            timestamp_ms: receipt.timestamp_ms,
+        }
+    }
+}
+
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+struct LaneBlockCommitmentJson {
+    block_height: u64,
+    lane_id: iroha_data_model::nexus::LaneId,
+    lane_incarnation: iroha_crypto::Hash,
+    dataspace_id: iroha_data_model::nexus::DataSpaceId,
+    tx_count: u64,
+    total_local_micro: String,
+    total_xor_due_micro: String,
+    total_xor_after_haircut_micro: String,
+    total_xor_variance_micro: String,
+    #[norito(default)]
+    swap_metadata: Option<iroha_data_model::block::consensus::LaneSwapMetadata>,
+    #[norito(default)]
+    receipts: Vec<LaneSettlementReceiptJson>,
+    #[norito(default)]
+    nexus_fee_receipts: Vec<iroha_data_model::block::consensus::NexusFeeReceipt>,
+    #[norito(default)]
+    native_amx_receipts: Vec<iroha_data_model::block::consensus::NativeAmxReceipt>,
+}
+
+impl From<iroha_data_model::block::consensus::LaneBlockCommitment> for LaneBlockCommitmentJson {
+    fn from(commitment: iroha_data_model::block::consensus::LaneBlockCommitment) -> Self {
+        Self {
+            block_height: commitment.block_height,
+            lane_id: commitment.lane_id,
+            lane_incarnation: commitment.lane_incarnation,
+            dataspace_id: commitment.dataspace_id,
+            tx_count: commitment.tx_count,
+            total_local_micro: commitment.total_local_micro.to_string(),
+            total_xor_due_micro: commitment.total_xor_due_micro.to_string(),
+            total_xor_after_haircut_micro: commitment.total_xor_after_haircut_micro.to_string(),
+            total_xor_variance_micro: commitment.total_xor_variance_micro.to_string(),
+            swap_metadata: commitment.swap_metadata,
+            receipts: commitment.receipts.into_iter().map(Into::into).collect(),
+            nexus_fee_receipts: commitment.nexus_fee_receipts,
+            native_amx_receipts: commitment.native_amx_receipts,
+        }
+    }
+}
+
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+struct LaneRelayEnvelopeJson {
+    lane_id: iroha_data_model::nexus::LaneId,
+    lane_incarnation: iroha_crypto::Hash,
+    dataspace_id: iroha_data_model::nexus::DataSpaceId,
+    block_height: u64,
+    block_header: iroha_data_model::block::BlockHeader,
+    #[norito(default)]
+    qc: Option<iroha_data_model::consensus::Qc>,
+    #[norito(default)]
+    da_commitment_hash:
+        Option<iroha_crypto::HashOf<iroha_data_model::da::commitment::DaCommitmentBundle>>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    lane_block_descriptor_hash: Option<iroha_crypto::Hash>,
+    settlement_commitment: LaneBlockCommitmentJson,
+    settlement_hash: iroha_crypto::HashOf<iroha_data_model::block::consensus::LaneBlockCommitment>,
+    #[norito(default)]
+    rbc_bytes_total: u64,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    manifest_root: Option<[u8; 32]>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    fastpq_proof: Option<iroha_data_model::nexus::LaneFastpqProofMaterial>,
+}
+
+impl From<iroha_data_model::nexus::LaneRelayEnvelope> for LaneRelayEnvelopeJson {
+    fn from(envelope: iroha_data_model::nexus::LaneRelayEnvelope) -> Self {
+        Self {
+            lane_id: envelope.lane_id,
+            lane_incarnation: envelope.lane_incarnation,
+            dataspace_id: envelope.dataspace_id,
+            block_height: envelope.block_height,
+            block_header: envelope.block_header,
+            qc: envelope.qc,
+            da_commitment_hash: envelope.da_commitment_hash,
+            lane_block_descriptor_hash: envelope.lane_block_descriptor_hash,
+            settlement_commitment: envelope.settlement_commitment.into(),
+            settlement_hash: envelope.settlement_hash,
+            rbc_bytes_total: envelope.rbc_bytes_total,
+            manifest_root: envelope.manifest_root,
+            fastpq_proof: envelope.fastpq_proof,
+        }
+    }
+}
+
+#[derive(Debug, crate::json_macros::JsonSerialize)]
 struct SumeragiV2StatusJson {
     #[norito(flatten)]
     authoritative: iroha_data_model::block::consensus_v2::SumeragiV2Status,
-    lane_settlement_commitments: Vec<iroha_data_model::block::consensus::LaneBlockCommitment>,
-    lane_relay_envelopes: Vec<iroha_data_model::nexus::LaneRelayEnvelope>,
+    lane_settlement_commitments: Vec<LaneBlockCommitmentJson>,
+    lane_relay_envelopes: Vec<LaneRelayEnvelopeJson>,
     lane_payload_ownerships: Vec<iroha_data_model::block::consensus::SumeragiLanePayloadOwnership>,
     committed_lane_blocks: Vec<iroha_data_model::block::consensus::SumeragiCommittedLaneBlock>,
     lane_block_sessions: Vec<iroha_data_model::block::consensus::SumeragiLaneBlockSessionStatus>,
@@ -6147,8 +6363,16 @@ impl From<iroha_data_model::block::consensus_v2::SumeragiV2StatusResponse>
     fn from(response: iroha_data_model::block::consensus_v2::SumeragiV2StatusResponse) -> Self {
         Self {
             authoritative: response.authoritative,
-            lane_settlement_commitments: response.lane_settlement_commitments,
-            lane_relay_envelopes: response.lane_relay_envelopes,
+            lane_settlement_commitments: response
+                .lane_settlement_commitments
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            lane_relay_envelopes: response
+                .lane_relay_envelopes
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             lane_payload_ownerships: response.lane_payload_ownerships,
             committed_lane_blocks: response.committed_lane_blocks,
             lane_block_sessions: response.lane_block_sessions,

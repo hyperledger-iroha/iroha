@@ -15,19 +15,21 @@
 use std::{
     collections::{BTreeSet, VecDeque},
     num::NonZeroUsize,
+    time::Duration,
 };
 
 use super::v2_core::EventTag;
 use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     block::{
-        BlockExecutionContextBundle, SignedBlock,
+        BlockExecutionContextBundle, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{NativeAmxReceipt, SumeragiLanePayloadOwnership},
         consensus_v2 as wire,
     },
     consensus::{NposConsensusEffects, PreviousRosterEvidence},
     da::{commitment::DaCommitmentBundle, pin_intent::DaPinIntentBundle},
     events::pipeline::PipelineEventBox,
+    merge::MergeLedgerEntry,
     transaction::{SignedTransaction, TransactionEntrypoint},
 };
 use iroha_primitives::time::TimeSource;
@@ -112,6 +114,9 @@ pub(crate) struct CandidateAttachments {
     pub(crate) npos_consensus_effects: Option<NposConsensusEffects>,
     /// SCCP root derived by deterministic execution, when applicable.
     pub(crate) sccp_commitment_root: Option<[u8; 32]>,
+    /// Complete, locally validated sidecar selected for this exact carrier round.
+    /// Only its compact certified reference is embedded in the block.
+    pub(crate) certified_merge_entry: Option<MergeLedgerEntry>,
 }
 
 /// Read-only description of one canonically ordered proposal candidate.
@@ -407,6 +412,7 @@ impl V2CandidateAssembler {
         let mut pool = self.snapshot_routable_candidates(
             request.queue,
             request.state,
+            &request.attachments,
             exact_payload_limit,
             &mut report,
         );
@@ -529,16 +535,45 @@ impl V2CandidateAssembler {
         &self,
         queue: &Queue,
         state: &State,
+        attachments: &CandidateAttachments,
         payload_limit: usize,
         report: &mut CandidateScanReport,
     ) -> Vec<CandidateRecord> {
         let state_view = state.view();
         let pending = queue.bounded_pending_snapshot(&state_view, self.limits.max_queue_scan);
         drop(state_view);
+        let certified_merge_filter = attachments
+            .certified_merge_entry
+            .as_ref()
+            .and_then(|entry| entry.execution_batch.as_ref())
+            .map(|batch| {
+                (
+                    batch.application_block_header.creation_time(),
+                    batch
+                        .lanes
+                        .iter()
+                        .flat_map(|lane| lane.entrypoint_hashes.iter().copied())
+                        .collect::<BTreeSet<_>>(),
+                )
+            });
 
         let mut records = Vec::with_capacity(pending.len());
         for (source_ordinal, transaction) in pending.into_iter().enumerate() {
             report.inspected = report.inspected.saturating_add(1);
+            if certified_merge_filter
+                .as_ref()
+                .is_some_and(|(application_time, entrypoints)| {
+                    transaction_conflicts_with_certified_merge(
+                        transaction.creation_time(),
+                        Hash::from(transaction.hash_as_entrypoint()),
+                        *application_time,
+                        entrypoints,
+                    )
+                })
+            {
+                report.work_deferred = report.work_deferred.saturating_add(1);
+                continue;
+            }
             let routing_plan = match queue.route_plan_with_state(&transaction, state) {
                 Ok(plan) => plan,
                 Err(_) => {
@@ -583,6 +618,15 @@ impl V2CandidateAssembler {
         let mut builder =
             BlockBuilder::new_with_time_source(transactions, self.time_source.clone())
                 .chain(tag.view(), Some(parent));
+        if let Some(batch) = attachments
+            .certified_merge_entry
+            .as_ref()
+            .and_then(|entry| entry.execution_batch.as_ref())
+        {
+            builder = builder
+                .bind_certified_merge_application_context(&batch.application_block_header)
+                .map_err(|reason| CandidateError::MergeApplicationContext(reason.to_owned()))?;
+        }
 
         let nexus = state.nexus_snapshot();
         builder = builder
@@ -619,8 +663,12 @@ impl V2CandidateAssembler {
                 })
             })
             .collect::<Vec<_>>();
-        let execution_context = BlockExecutionContextBundle::new(execution_context)
+        let mut execution_context = BlockExecutionContextBundle::new(execution_context)
             .with_lane_payload_ownerships(prepared_work.lane_payload_ownerships.clone());
+        if let Some(entry) = attachments.certified_merge_entry.as_ref() {
+            execution_context =
+                execution_context.with_merge_entry(CertifiedMergeLedgerReference::new(entry));
+        }
         builder = builder
             .with_execution_context((!execution_context.is_empty()).then_some(execution_context));
 
@@ -652,6 +700,15 @@ impl V2CandidateAssembler {
             .map_err(|error| CandidateError::CanonicalEncoding(error.to_string()))?;
         Ok((block, canonical_wire, events))
     }
+}
+
+fn transaction_conflicts_with_certified_merge(
+    creation_time: Duration,
+    entrypoint_hash: Hash,
+    application_time: Duration,
+    certified_entrypoints: &BTreeSet<Hash>,
+) -> bool {
+    creation_time >= application_time || certified_entrypoints.contains(&entrypoint_hash)
 }
 
 fn validate_request<Work>(request: &CandidateRequest<'_, Work>) -> Result<(), CandidateError> {
@@ -999,6 +1056,9 @@ pub(crate) enum CandidateError {
     #[error("invalid Sumeragi v2 data-availability layout")]
     InvalidDataAvailabilityLayout,
     /// Block signing failed.
+    #[error("certified merge application context is invalid: {0}")]
+    MergeApplicationContext(String),
+    /// Block signing failed.
     #[error("failed to sign Sumeragi v2 candidate: {0}")]
     Signing(String),
     /// Built header drifted from context/tag/parent inputs.
@@ -1166,5 +1226,38 @@ mod tests {
                 .iter()
                 .any(|entry| entry.entrypoint_hash == removed_hash)
         );
+    }
+
+    #[test]
+    fn certified_merge_filter_defers_time_boundary_and_duplicate_entrypoints() {
+        let application_time = Duration::from_millis(1_000);
+        let duplicate = Hash::new(b"certified merge duplicate entrypoint");
+        let unrelated = Hash::new(b"ordinary queue entrypoint");
+        let certified_entrypoints = BTreeSet::from([duplicate]);
+
+        assert!(!transaction_conflicts_with_certified_merge(
+            Duration::from_millis(999),
+            unrelated,
+            application_time,
+            &certified_entrypoints,
+        ));
+        assert!(transaction_conflicts_with_certified_merge(
+            Duration::from_millis(999),
+            duplicate,
+            application_time,
+            &certified_entrypoints,
+        ));
+        assert!(transaction_conflicts_with_certified_merge(
+            application_time,
+            unrelated,
+            application_time,
+            &certified_entrypoints,
+        ));
+        assert!(transaction_conflicts_with_certified_merge(
+            Duration::from_millis(1_001),
+            unrelated,
+            application_time,
+            &certified_entrypoints,
+        ));
     }
 }

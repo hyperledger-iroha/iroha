@@ -9318,16 +9318,12 @@ fn validate_required_kagemusha_confidential_v2_step_public_inputs(
         match envelope.circuit_id.as_str() {
             confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID => {
                 let (_inputs, nullifiers, outputs, root, asset_tag, chain_tag) =
-                    confidential_v2::parse_transfer_public_inputs(
-                        &step.attachment.proof.bytes,
-                    )?;
+                    confidential_v2::parse_transfer_public_inputs(&step.attachment.proof.bytes)?;
                 (nullifiers, outputs, root, asset_tag, chain_tag)
             }
             confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID => {
                 let (_inputs, nullifiers, change, root, _amount, asset_tag, chain_tag) =
-                    confidential_v2::parse_unshield_public_inputs_v3(
-                        &step.attachment.proof.bytes,
-                    )?;
+                    confidential_v2::parse_unshield_public_inputs_v3(&step.attachment.proof.bytes)?;
                 (nullifiers, [change, [0; 32]], root, asset_tag, chain_tag)
             }
             _ => return Err("Kagemusha fold confidential-v2 circuit is unsupported".to_owned()),
@@ -9962,9 +9958,9 @@ fn kagemusha_pallas_open_envelope_metadata_for_step(
 
     Ok(iroha_zkp_halo2::PolyOpenTranscriptMetadata {
         vk_commitment: Some(actual_vk_commitment),
-        public_inputs_schema_hash: Some(
-            kagemusha_confidential_public_inputs_schema_hash_for_step(step)?,
-        ),
+        public_inputs_schema_hash: Some(kagemusha_confidential_public_inputs_schema_hash_for_step(
+            step,
+        )?),
         domain_tag: Some(domain_tag),
     })
 }

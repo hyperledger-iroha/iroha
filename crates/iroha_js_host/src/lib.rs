@@ -99,8 +99,8 @@ use iroha_data_model::{
         Instruction as InstructionTrait, InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox,
         RecordKaigiUsage, Register, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
         RemoveKeyValue, ReportKaigiRelayHealth, SetAssetDefinitionAlias, SetKaigiRelayManifest,
-        SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferBox, Unregister,
-        UnregisterBox,
+        SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferAssetBatch, TransferBox,
+        Unregister, UnregisterBox,
         bridge::{RemoveSccpRouteManifest, UpsertSccpRouteManifest},
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
@@ -8575,6 +8575,79 @@ fn parse_metadata_payload(context: &str, payload: Option<String>) -> napi::Resul
     )
 }
 
+fn transfer_asset_batch_from_json(value: json::Value) -> napi::Result<InstructionBox> {
+    let json::Value::Object(mut fields) = value else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "TransferAssetBatch payload must be an object",
+        ));
+    };
+    let entries_value = required_value(&mut fields, "entries", "TransferAssetBatch")?;
+    if !fields.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "TransferAssetBatch contains unexpected field(s): {}",
+                fields.keys().cloned().collect::<Vec<_>>().join(", ")
+            ),
+        ));
+    }
+    let json::Value::Array(entry_values) = entries_value else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "TransferAssetBatch.entries must be an array",
+        ));
+    };
+    let mut entries = Vec::with_capacity(entry_values.len());
+    for (index, entry_value) in entry_values.into_iter().enumerate() {
+        let context = format!("TransferAssetBatch.entries[{index}]");
+        let json::Value::Object(mut entry_fields) = entry_value else {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("{context} must be an object"),
+            ));
+        };
+        let from = parse_account_id_value(
+            required_value(&mut entry_fields, "from", &context)?,
+            &format!("{context}.from"),
+        )?;
+        let to = parse_account_id_value(
+            required_value(&mut entry_fields, "to", &context)?,
+            &format!("{context}.to"),
+        )?;
+        let asset_definition_literal = parse_string_value(
+            required_value(&mut entry_fields, "asset_definition", &context)?,
+            &format!("{context}.asset_definition"),
+        )?;
+        let asset_definition = AssetDefinitionId::parse_address_literal(&asset_definition_literal)
+            .map_err(|err| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    format!("invalid {context}.asset_definition: {err}"),
+                )
+            })?;
+        let amount: Numeric =
+            json::from_value(required_value(&mut entry_fields, "amount", &context)?)
+                .map_err(norito_to_napi)?;
+        if !entry_fields.is_empty() {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!(
+                    "{context} contains unexpected field(s): {}",
+                    entry_fields.keys().cloned().collect::<Vec<_>>().join(", ")
+                ),
+            ));
+        }
+        entries.push(iroha_data_model::isi::TransferAssetBatchEntry::new(
+            from,
+            to,
+            asset_definition,
+            amount,
+        ));
+    }
+    Ok(InstructionBox::from(TransferAssetBatch::new(entries)))
+}
+
 #[allow(clippy::too_many_lines)] // comprehensive translation keeps instruction handling centralized
 fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
     if let Ok(instruction) = json::from_value::<InstructionBox>(value.clone()) {
@@ -8606,6 +8679,9 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     })
                     .map_err(norito_to_napi)?;
                 return Ok(InstructionBox::from(SetParameter::new(parameter)));
+            }
+            if let Some(batch_value) = map.remove("TransferAssetBatch") {
+                return transfer_asset_batch_from_json(batch_value);
             }
 
             if let Some(json::Value::Object(mut register_map)) = map.remove("Register") {
@@ -10248,6 +10324,18 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             outer.insert("Transfer".to_owned(), json::Value::Object(transfer_map));
             return Ok(json::Value::Object(outer));
         }
+    }
+
+    if let Some(batch) = instruction_ref
+        .as_any()
+        .downcast_ref::<TransferAssetBatch>()
+    {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "TransferAssetBatch".to_owned(),
+            json::to_value(batch).map_err(norito_to_napi)?,
+        );
+        return Ok(json::Value::Object(outer));
     }
 
     if let Some(burn_box) = instruction_ref.as_any().downcast_ref::<BurnBox>() {
@@ -23545,6 +23633,45 @@ mod tests {
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize instruction from json");
         assert_eq!(reconstructed, instruction);
+    }
+
+    #[test]
+    fn transfer_asset_batch_instruction_json_roundtrip() {
+        let source = sample_account("wonderland");
+        let destination = sample_account("looking_glass");
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("valid domain"),
+            "rose".parse().expect("valid asset name"),
+        );
+        let batch =
+            TransferAssetBatch::new(vec![iroha_data_model::isi::TransferAssetBatchEntry::new(
+                source,
+                destination,
+                asset_definition,
+                Numeric::from_str("1.25").expect("valid numeric"),
+            )]);
+        let instruction = InstructionBox::from(batch);
+
+        let mut json_value =
+            instruction_to_json_value(&instruction).expect("serialize batch instruction to json");
+        assert!(
+            json_value.get("TransferAssetBatch").is_some(),
+            "batch instruction JSON must retain its native variant"
+        );
+
+        let reconstructed = value_to_instruction(json_value.clone())
+            .expect("deserialize batch instruction from native JSON");
+        assert_eq!(reconstructed, instruction);
+
+        let malformed = json_value
+            .get_mut("TransferAssetBatch")
+            .and_then(json::Value::as_object_mut)
+            .expect("batch payload object");
+        malformed.insert("redirect".to_owned(), json::Value::Bool(true));
+        assert!(
+            value_to_instruction(json_value).is_err(),
+            "batch decoder must reject fields outside the native batch schema"
+        );
     }
 
     #[test]

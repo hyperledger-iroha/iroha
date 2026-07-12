@@ -33,6 +33,16 @@ pub const PROTOCOL_VERSION: u16 = 2;
 /// bounds authenticated per-view vote, timeout, proof-of-possession, and
 /// equivocation state identically on every peer.
 pub const MAX_VOTING_ROSTER_LEN: usize = 128;
+/// Maximum settlement commitments exposed by one v2 status response.
+pub const MAX_STATUS_LANE_SETTLEMENT_COMMITMENTS: usize = 128;
+/// Maximum authenticated relay envelopes exposed by one v2 status response.
+pub const MAX_STATUS_LANE_RELAY_ENVELOPES: usize = 64;
+/// Maximum lane payload-ownership records exposed by one v2 status response.
+pub const MAX_STATUS_LANE_PAYLOAD_OWNERSHIPS: usize = 128;
+/// Maximum committed lane-block summaries exposed by one v2 status response.
+pub const MAX_STATUS_COMMITTED_LANE_BLOCKS: usize = 128;
+/// Maximum live lane-block sessions exposed by one v2 status response.
+pub const MAX_STATUS_LANE_BLOCK_SESSIONS: usize = 128;
 /// Permissioned Sumeragi v2 handshake and domain-separation tag.
 pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v2";
 /// NPoS Sumeragi v2 handshake and domain-separation tag.
@@ -48,8 +58,8 @@ pub const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v2";
 /// Keeping the bytes here lets configuration-independent genesis builders emit
 /// a valid signed template without introducing a data-model/config cycle.
 pub const RECOMMENDED_NEXUS_AMX_CONTEXT_HASH: [u8; 32] = [
-    118, 252, 99, 127, 236, 50, 12, 126, 173, 34, 166, 94, 105, 54, 88, 251, 177, 24, 122, 59, 1,
-    82, 144, 13, 100, 100, 76, 132, 30, 119, 202, 127,
+    212, 70, 210, 25, 235, 128, 26, 231, 82, 205, 1, 104, 224, 244, 123, 58, 207, 83, 186, 77, 92,
+    150, 95, 210, 152, 63, 79, 147, 244, 218, 110, 167,
 ];
 
 /// Block height in the v2 protocol.
@@ -1992,6 +2002,18 @@ pub enum SumeragiV2StatusValidationError {
     /// A bounded v2 operator queue reports impossible occupancy.
     #[error("Sumeragi v2 operator queue occupancy exceeds its bound")]
     InvalidOperatorQueue,
+    /// A lane observability vector exceeds its protocol resource bound.
+    #[error("Sumeragi v2 lane observability exceeds its bound")]
+    LaneObservabilityCapacityExceeded,
+    /// A lane payload-ownership row fails its canonical replay-hash checks.
+    #[error("Sumeragi v2 lane payload ownership is invalid")]
+    InvalidLanePayloadOwnership,
+    /// A committed lane-block row reports an impossible identity or quorum.
+    #[error("Sumeragi v2 committed lane-block status is invalid")]
+    InvalidCommittedLaneBlock,
+    /// A live lane-block session reports an impossible identity or quorum.
+    #[error("Sumeragi v2 lane-block session status is invalid")]
+    InvalidLaneBlockSession,
 }
 
 /// Compact Norito payload returned by the Sumeragi v2 status endpoint.
@@ -2150,6 +2172,35 @@ impl SumeragiV2StatusResponse {
     /// Returns a structural status validation error on inconsistent data.
     pub fn validate(&self) -> Result<(), SumeragiV2StatusValidationError> {
         self.authoritative.validate()?;
+        if self.lane_settlement_commitments.len() > MAX_STATUS_LANE_SETTLEMENT_COMMITMENTS
+            || self.lane_relay_envelopes.len() > MAX_STATUS_LANE_RELAY_ENVELOPES
+            || self.lane_payload_ownerships.len() > MAX_STATUS_LANE_PAYLOAD_OWNERSHIPS
+            || self.committed_lane_blocks.len() > MAX_STATUS_COMMITTED_LANE_BLOCKS
+            || self.lane_block_sessions.len() > MAX_STATUS_LANE_BLOCK_SESSIONS
+        {
+            return Err(SumeragiV2StatusValidationError::LaneObservabilityCapacityExceeded);
+        }
+        if self
+            .lane_payload_ownerships
+            .iter()
+            .any(|ownership| ownership.validate_replay_material().is_err())
+        {
+            return Err(SumeragiV2StatusValidationError::InvalidLanePayloadOwnership);
+        }
+        if self
+            .committed_lane_blocks
+            .iter()
+            .any(|entry| !valid_committed_lane_block_status(entry))
+        {
+            return Err(SumeragiV2StatusValidationError::InvalidCommittedLaneBlock);
+        }
+        if self
+            .lane_block_sessions
+            .iter()
+            .any(|entry| !valid_lane_block_session_status(entry))
+        {
+            return Err(SumeragiV2StatusValidationError::InvalidLaneBlockSession);
+        }
         let queues = self.operator.adapter_queues;
         let tx = self.operator.tx_queue;
         if queues.ingress_keys > queues.ingress_capacity
@@ -2166,6 +2217,75 @@ impl SumeragiV2StatusResponse {
         }
         Ok(())
     }
+}
+
+fn valid_committed_lane_block_status(entry: &super::consensus::SumeragiCommittedLaneBlock) -> bool {
+    use super::consensus::{
+        COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT,
+        COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD,
+        COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION,
+        COMMITTED_LANE_STATUS_PAYLOAD_AVAILABLE_AWAITING_EXECUTOR,
+        COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
+        COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION,
+        COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION,
+        COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
+        COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+    };
+
+    let validator_count = usize::try_from(entry.validator_count).unwrap_or(usize::MAX);
+    let payload_flag_matches_status = match entry.execution_status.as_str() {
+        COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD
+        | COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT
+        | COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION
+        | COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION => {
+            !entry.executable_payload_available
+        }
+        COMMITTED_LANE_STATUS_PAYLOAD_AVAILABLE_AWAITING_EXECUTOR
+        | COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION
+        | COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION
+        | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
+        | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION => {
+            entry.executable_payload_available
+        }
+        _ => false,
+    };
+    entry.lane_block_height > 0
+        && entry
+            .lane_incarnation
+            .as_ref()
+            .iter()
+            .any(|byte| *byte != 0)
+        && !entry.qc_mode_tag.trim().is_empty()
+        && entry.validator_count > 0
+        && validator_count <= crate::consensus::MAX_LANE_CONSENSUS_VALIDATORS
+        && entry.min_quorum > 0
+        && entry.min_quorum <= entry.validator_count
+        && entry.prepare_qc_signer_count >= entry.min_quorum
+        && entry.prepare_qc_signer_count <= entry.validator_count
+        && entry.commit_qc_signer_count >= entry.min_quorum
+        && entry.commit_qc_signer_count <= entry.validator_count
+        && payload_flag_matches_status
+}
+
+fn valid_lane_block_session_status(
+    entry: &super::consensus::SumeragiLaneBlockSessionStatus,
+) -> bool {
+    let validator_count = usize::try_from(entry.validator_count).unwrap_or(usize::MAX);
+    let quorum_is_valid = if entry.validator_count == 0 {
+        entry.min_quorum == 0 && entry.prepare_vote_count == 0 && entry.commit_vote_count == 0
+    } else {
+        validator_count <= crate::consensus::MAX_LANE_CONSENSUS_VALIDATORS
+            && entry.min_quorum > 0
+            && entry.min_quorum <= entry.validator_count
+            && entry.prepare_vote_count <= entry.validator_count
+            && entry.commit_vote_count <= entry.validator_count
+    };
+    entry
+        .lane_incarnation
+        .as_ref()
+        .iter()
+        .any(|byte| *byte != 0)
+        && quorum_is_valid
 }
 
 impl ConsensusMessageV2 {
@@ -3312,6 +3432,100 @@ mod tests {
         assert_eq!(
             response.validate(),
             Err(SumeragiV2StatusValidationError::InvalidOperatorQueue)
+        );
+
+        response.operator.tx_queue.retained_bytes = 0;
+        let session = super::super::consensus::SumeragiLaneBlockSessionStatus {
+            lane_id: LaneId::new(1),
+            dataspace_id: crate::nexus::DataSpaceId::new(1),
+            lane_incarnation: Hash::new(b"bounded-v2-status-lane-session"),
+            lane_block_height: 1,
+            lane_block_view: 0,
+            proposal_hash: Hash::new(b"bounded-v2-status-lane-proposal"),
+            has_proposal: true,
+            prepare_vote_count: 0,
+            commit_vote_count: 0,
+            has_prepare_qc: false,
+            has_commit_qc: false,
+            pending_commit_vote_request: false,
+            pending_committed_session_drain: false,
+            committed_session_drained: false,
+            validator_count: 4,
+            min_quorum: 3,
+        };
+        response.lane_block_sessions = vec![session; MAX_STATUS_LANE_BLOCK_SESSIONS];
+        assert_eq!(response.validate(), Ok(()));
+        response.lane_block_sessions.push(session);
+        assert_eq!(
+            response.validate(),
+            Err(SumeragiV2StatusValidationError::LaneObservabilityCapacityExceeded)
+        );
+
+        response.lane_block_sessions.pop();
+        response.lane_block_sessions[0].min_quorum = 5;
+        assert_eq!(
+            response.validate(),
+            Err(SumeragiV2StatusValidationError::InvalidLaneBlockSession)
+        );
+        response.lane_block_sessions.clear();
+
+        response.lane_payload_ownerships.push(
+            super::super::consensus::SumeragiLanePayloadOwnership {
+                proposal_height: 1,
+                proposal_view: 0,
+                lane_id: LaneId::new(1),
+                dataspace_id: crate::nexus::DataSpaceId::new(1),
+                lane_incarnation: Hash::new(b"invalid-v2-status-ownership-incarnation"),
+                lane_block_height: 1,
+                lane_block_view: 0,
+                subject_hash: Hash::new(b"invalid-v2-status-ownership-subject"),
+                qc_mode_tag: "permissioned".to_owned(),
+                accepted_candidate_indices: Vec::new(),
+                accepted_transaction_hashes: Vec::new(),
+                previous_lane_block_height: 0,
+                previous_lane_block_descriptor_hash: None,
+                lane_block_descriptor_hash: None,
+                lane_block_descriptor_validator_set: Vec::new(),
+                lane_block_descriptor_validator_count: 0,
+                lane_block_descriptor_min_quorum: 0,
+                payload_ownership_hash: Hash::new(b"invalid-v2-status-ownership"),
+                rbc_instance_hash: Hash::new(b"invalid-v2-status-ownership-rbc"),
+            },
+        );
+        assert_eq!(
+            response.validate(),
+            Err(SumeragiV2StatusValidationError::InvalidLanePayloadOwnership)
+        );
+        response.lane_payload_ownerships.clear();
+
+        let mut committed = super::super::consensus::SumeragiCommittedLaneBlock {
+            lane_id: LaneId::new(1),
+            dataspace_id: crate::nexus::DataSpaceId::new(1),
+            lane_incarnation: Hash::new(b"valid-v2-status-committed-incarnation"),
+            lane_block_height: 1,
+            lane_block_view: 0,
+            descriptor_hash: Hash::new(b"valid-v2-status-committed-descriptor"),
+            proposal_hash: Hash::new(b"valid-v2-status-committed-proposal"),
+            execution_status:
+                super::super::consensus::COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
+                    .to_owned(),
+            executable_payload_available: true,
+            subject_hash: Hash::new(b"valid-v2-status-committed-subject"),
+            payload_ownership_hash: Hash::new(b"valid-v2-status-committed-ownership"),
+            rbc_instance_hash: Hash::new(b"valid-v2-status-committed-rbc"),
+            qc_mode_tag: "permissioned".to_owned(),
+            validator_count: 4,
+            min_quorum: 3,
+            prepare_qc_signer_count: 3,
+            commit_qc_signer_count: 3,
+        };
+        response.committed_lane_blocks.push(committed.clone());
+        assert_eq!(response.validate(), Ok(()));
+        committed.executable_payload_available = false;
+        response.committed_lane_blocks[0] = committed;
+        assert_eq!(
+            response.validate(),
+            Err(SumeragiV2StatusValidationError::InvalidCommittedLaneBlock)
         );
     }
 

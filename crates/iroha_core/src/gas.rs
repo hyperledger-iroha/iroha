@@ -298,9 +298,7 @@ fn gas_for_recursive_kagemusha_topup(topup: &dm_isi::offline::TopUpKagemushaRecu
     gas
 }
 
-fn gas_for_recursive_kagemusha_topup_v2(
-    topup: &dm_isi::offline::TopUpKagemushaRecursiveV2,
-) -> u64 {
+fn gas_for_recursive_kagemusha_topup_v2(topup: &dm_isi::offline::TopUpKagemushaRecursiveV2) -> u64 {
     let inner = &topup.request.init_request.init_request;
     let mut gas = inner.record_bundle.bundle.steps.first().map_or(0, |step| {
         gas_for_proof_attachment(

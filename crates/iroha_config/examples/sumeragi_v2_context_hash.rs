@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Vec::new()
     };
 
-    let hash = sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &active_records);
+    let hash = sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &active_records, &[]);
     println!("{}", hex::encode(hash.as_ref()));
     println!("{}", norito::json::to_json(&<[u8; 32]>::from(hash))?);
     Ok(())

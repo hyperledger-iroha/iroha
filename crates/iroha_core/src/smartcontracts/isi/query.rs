@@ -558,7 +558,34 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindSorafsOrderbookReceipts(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindSorafsPopIssuerPolicy(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsPopCredentialCommitmentByDigest(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsPopCommitmentRootByVersion(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsPopRevocationPublicationByVersion(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsPopRevocationByNonceCommitment(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsPopAuditDigestBySequence(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsPopRegistryStatus(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindSorafsModerationPolicy(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsModerationAppeal(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsModerationJurorEligibility(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsModerationCase(q) => {

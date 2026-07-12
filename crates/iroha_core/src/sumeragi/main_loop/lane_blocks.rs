@@ -95,6 +95,8 @@ impl Actor {
                 descriptor.dataspace_id,
                 descriptor.lane_incarnation,
                 descriptor.proposal_height,
+                descriptor.lane_block_height,
+                payload.origin_proposal.proposal_hash,
                 descriptor.validator_count,
                 descriptor.min_quorum,
                 descriptor.validator_set_hash,
@@ -260,6 +262,8 @@ impl Actor {
                 descriptor.dataspace_id,
                 descriptor.lane_incarnation,
                 descriptor.proposal_height,
+                descriptor.lane_block_height,
+                handoff.origin_proposal.proposal_hash,
                 descriptor.validator_count,
                 descriptor.min_quorum,
                 descriptor.validator_set_hash,
@@ -389,6 +393,8 @@ impl Actor {
                 body.dataspace_id,
                 body.lane_incarnation,
                 body.proposal_height,
+                body.lane_block_height,
+                body.locked_proposal_hash,
                 body.validator_count,
                 body.min_quorum,
                 body.validator_set_hash,
@@ -501,6 +507,8 @@ impl Actor {
                 body.dataspace_id,
                 body.lane_incarnation,
                 body.proposal_height,
+                body.lane_block_height,
+                body.locked_proposal_hash,
                 body.validator_count,
                 body.min_quorum,
                 body.validator_set_hash,
@@ -610,7 +618,7 @@ impl Actor {
         Ok(())
     }
 
-    fn publish_lane_block_session_status(&self) {
+    pub(super) fn publish_lane_block_session_status(&self) {
         let nexus = self.state.nexus_snapshot();
         let entries = self
             .subsystems
@@ -619,14 +627,13 @@ impl Actor {
             .into_iter()
             .filter(|entry| {
                 self.state.lane_incarnation(entry.lane_id) == Some(entry.lane_incarnation)
-                    && (!nexus.enabled
-                        || crate::state::nexus_active_lane_dataspace_at_height(
-                            entry.lane_id,
-                            &nexus,
-                            u64::try_from(self.state.committed_height())
-                                .unwrap_or(u64::MAX)
-                                .saturating_add(1),
-                        ) == Some(entry.dataspace_id))
+                    && crate::state::consensus_lane_dataspace_at_height(
+                        entry.lane_id,
+                        &nexus,
+                        u64::try_from(self.state.committed_height())
+                            .unwrap_or(u64::MAX)
+                            .saturating_add(1),
+                    ) == Some(entry.dataspace_id)
             })
             .collect();
         super::status::set_lane_block_sessions(entries);
@@ -700,11 +707,29 @@ impl Actor {
             );
             return LaneBlockProposalIngressOutcome::Dropped;
         }
+        if !self.lane_block_slot_within_ingress_horizon(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.dataspace_id,
+            proposal.descriptor.proposal_height,
+            proposal.descriptor.lane_block_height,
+            proposal.proposal_hash,
+        ) {
+            self.record_lane_block_horizon_drop(
+                super::status::ConsensusMessageKind::LaneBlockProposal,
+                proposal.descriptor.lane_id,
+                proposal.descriptor.dataspace_id,
+                proposal.descriptor.proposal_height,
+                proposal.descriptor.lane_block_height,
+            );
+            return LaneBlockProposalIngressOutcome::Dropped;
+        }
         if !self.lane_block_authority_accepts_ingress(
             proposal.descriptor.lane_id,
             proposal.descriptor.dataspace_id,
             proposal.descriptor.lane_incarnation,
             proposal.descriptor.proposal_height,
+            proposal.descriptor.lane_block_height,
+            proposal.proposal_hash,
             proposal.descriptor.validator_count,
             proposal.descriptor.min_quorum,
             proposal.descriptor.validator_set_hash,
@@ -789,11 +814,29 @@ impl Actor {
             );
             return LaneBlockProposalIngressOutcome::Dropped;
         }
+        if !self.lane_block_slot_within_ingress_horizon(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.dataspace_id,
+            proposal.descriptor.proposal_height,
+            proposal.descriptor.lane_block_height,
+            proposal.proposal_hash,
+        ) {
+            self.record_lane_block_horizon_drop(
+                super::status::ConsensusMessageKind::LaneBlockProposal,
+                proposal.descriptor.lane_id,
+                proposal.descriptor.dataspace_id,
+                proposal.descriptor.proposal_height,
+                proposal.descriptor.lane_block_height,
+            );
+            return LaneBlockProposalIngressOutcome::Dropped;
+        }
         if !self.lane_block_authority_accepts_ingress(
             proposal.descriptor.lane_id,
             proposal.descriptor.dataspace_id,
             proposal.descriptor.lane_incarnation,
             proposal.descriptor.proposal_height,
+            proposal.descriptor.lane_block_height,
+            proposal.proposal_hash,
             proposal.descriptor.validator_count,
             proposal.descriptor.min_quorum,
             proposal.descriptor.validator_set_hash,
@@ -934,6 +977,8 @@ impl Actor {
             vote.body.dataspace_id,
             vote.body.lane_incarnation,
             vote.body.proposal_height,
+            vote.body.lane_block_height,
+            vote.body.proposal_hash,
             vote.body.validator_count,
             vote.body.min_quorum,
             vote.body.validator_set_hash,
@@ -946,6 +991,22 @@ impl Actor {
                 vote.body.dataspace_id,
                 vote.body.validator_count,
                 vote.body.min_quorum,
+            );
+            return Ok(());
+        }
+        if !self.lane_block_slot_within_ingress_horizon(
+            vote.body.lane_id,
+            vote.body.dataspace_id,
+            vote.body.proposal_height,
+            vote.body.lane_block_height,
+            vote.body.proposal_hash,
+        ) {
+            self.record_lane_block_horizon_drop(
+                super::status::ConsensusMessageKind::LaneBlockVote,
+                vote.body.lane_id,
+                vote.body.dataspace_id,
+                vote.body.proposal_height,
+                vote.body.lane_block_height,
             );
             return Ok(());
         }
@@ -1033,6 +1094,8 @@ impl Actor {
             qc.body.dataspace_id,
             qc.body.lane_incarnation,
             qc.body.proposal_height,
+            qc.body.lane_block_height,
+            qc.body.proposal_hash,
             qc.body.validator_count,
             qc.body.min_quorum,
             qc.body.validator_set_hash,
@@ -1045,6 +1108,22 @@ impl Actor {
                 qc.body.dataspace_id,
                 qc.body.validator_count,
                 qc.body.min_quorum,
+            );
+            return Ok(());
+        }
+        if !self.lane_block_slot_within_ingress_horizon(
+            qc.body.lane_id,
+            qc.body.dataspace_id,
+            qc.body.proposal_height,
+            qc.body.lane_block_height,
+            qc.body.proposal_hash,
+        ) {
+            self.record_lane_block_horizon_drop(
+                super::status::ConsensusMessageKind::LaneBlockQc,
+                qc.body.lane_id,
+                qc.body.dataspace_id,
+                qc.body.proposal_height,
+                qc.body.lane_block_height,
             );
             return Ok(());
         }
@@ -1205,12 +1284,8 @@ impl Actor {
         proposal_height: u64,
     ) -> bool {
         let nexus = self.state.nexus_snapshot();
-        (!nexus.enabled
-            || crate::state::nexus_active_lane_dataspace_at_height(
-                lane_id,
-                &nexus,
-                proposal_height,
-            ) == Some(dataspace_id))
+        crate::state::consensus_lane_dataspace_at_height(lane_id, &nexus, proposal_height)
+            == Some(dataspace_id)
             && self
                 .state
                 .lane_incarnation_at_height(lane_id, proposal_height)
@@ -1239,7 +1314,307 @@ impl Actor {
         )
     }
 
-    fn lane_block_proposal_sender_accepts_ingress(
+    fn lane_block_slot_is_durably_finalized(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+        lane_block_height: u64,
+    ) -> bool {
+        if self
+            .state
+            .kura()
+            .read_lane_block_artifact(lane_id, lane_block_height)
+            .filter(|artifact| {
+                let ownership = &artifact.ownership;
+                ownership.dataspace_id == dataspace_id
+                    && ownership.lane_incarnation == lane_incarnation
+                    && self
+                        .state
+                        .da_lane_visible_after_reset(ownership.proposal_height, lane_id)
+                    && self.lane_block_artifact_targets_active_route(
+                        lane_id,
+                        dataspace_id,
+                        lane_incarnation,
+                        ownership.proposal_height,
+                    )
+            })
+            .is_some_and(|artifact| {
+                self.state
+                    .lane_block_artifact_is_applied_or_snapshot_anchored_cached(&artifact)
+            })
+        {
+            return true;
+        }
+
+        self.state
+            .kura()
+            .read_certified_lane_block_artifact(lane_id, lane_block_height)
+            .filter(|artifact| {
+                let descriptor = &artifact.proposal.descriptor;
+                descriptor.dataspace_id == dataspace_id
+                    && descriptor.lane_incarnation == lane_incarnation
+                    && self
+                        .state
+                        .da_lane_visible_after_reset(descriptor.proposal_height, lane_id)
+                    && self.lane_block_artifact_targets_active_route(
+                        lane_id,
+                        dataspace_id,
+                        lane_incarnation,
+                        descriptor.proposal_height,
+                    )
+            })
+            .is_some_and(|artifact| {
+                let session = crate::lane_consensus::CommittedLaneBlockSession {
+                    proposal: artifact.proposal,
+                    prepare_qc: artifact.prepare_qc,
+                    commit_qc: artifact.commit_qc,
+                };
+                self.state
+                    .certified_lane_block_session_is_applied_or_snapshot_anchored_cached(&session)
+            })
+    }
+
+    fn exact_kura_lane_block_proposal(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        proposal_height: u64,
+        lane_block_height: u64,
+        proposal_hash: Hash,
+    ) -> Option<crate::sumeragi::consensus::LaneBlockProposalV1> {
+        if let Some(artifact) = self
+            .state
+            .kura()
+            .read_certified_lane_block_artifact(lane_id, lane_block_height)
+        {
+            let descriptor = &artifact.proposal.descriptor;
+            if descriptor.dataspace_id == dataspace_id
+                && descriptor.proposal_height == proposal_height
+                && artifact.proposal.proposal_hash == proposal_hash
+            {
+                return Some(artifact.proposal);
+            }
+        }
+
+        self.state
+            .kura()
+            .read_lane_block_artifact(lane_id, lane_block_height)
+            .filter(|artifact| {
+                artifact.ownership.dataspace_id == dataspace_id
+                    && artifact.ownership.proposal_height == proposal_height
+            })
+            .and_then(|artifact| {
+                Self::lane_block_proposal_from_payload_ownership(
+                    &artifact.ownership,
+                    Some(artifact.proposal_block_hash),
+                )
+            })
+            .filter(|proposal| proposal.proposal_hash == proposal_hash)
+    }
+
+    fn lane_block_slot_within_ingress_horizon(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        proposal_height: u64,
+        lane_block_height: u64,
+        proposal_hash: Hash,
+    ) -> bool {
+        let Some(lane_incarnation) = self
+            .state
+            .lane_incarnation_at_height(lane_id, proposal_height)
+        else {
+            return false;
+        };
+        if !self
+            .state
+            .da_lane_visible_after_reset(proposal_height, lane_id)
+            || !self.lane_block_artifact_targets_active_route(
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+                proposal_height,
+            )
+        {
+            return false;
+        }
+        if self.lane_block_slot_is_durably_finalized(
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            lane_block_height,
+        ) {
+            return false;
+        }
+
+        let global_next_height = self.committed_height_snapshot().saturating_add(1);
+        if proposal_height > global_next_height {
+            return false;
+        }
+        if proposal_height < global_next_height
+            && self
+                .exact_kura_lane_block_proposal(
+                    lane_id,
+                    dataspace_id,
+                    proposal_height,
+                    lane_block_height,
+                    proposal_hash,
+                )
+                .is_none()
+        {
+            return false;
+        }
+
+        let mut finalized_height = 0_u64;
+        let mut unresolved_heights = BTreeSet::new();
+        if let Some(artifact) =
+            self.state
+                .kura()
+                .latest_lane_block_artifact_matching(lane_id, |artifact| {
+                    let ownership = &artifact.ownership;
+                    ownership.dataspace_id == dataspace_id
+                        && ownership.lane_incarnation == lane_incarnation
+                        && self
+                            .state
+                            .da_lane_visible_after_reset(ownership.proposal_height, lane_id)
+                        && self.lane_block_artifact_targets_active_route(
+                            lane_id,
+                            dataspace_id,
+                            lane_incarnation,
+                            ownership.proposal_height,
+                        )
+                })
+        {
+            let ownership = &artifact.ownership;
+            let height = ownership.lane_block_height;
+            if self
+                .state
+                .lane_block_artifact_is_applied_or_snapshot_anchored_cached(&artifact)
+            {
+                finalized_height = finalized_height.max(height);
+            } else {
+                unresolved_heights.insert(height);
+            }
+        }
+        if let Some(artifact) = self
+            .state
+            .kura()
+            .latest_certified_lane_block_artifact_matching(lane_id, |artifact| {
+                let descriptor = &artifact.proposal.descriptor;
+                descriptor.dataspace_id == dataspace_id
+                    && descriptor.lane_incarnation == lane_incarnation
+                    && self
+                        .state
+                        .da_lane_visible_after_reset(descriptor.proposal_height, lane_id)
+                    && self.lane_block_artifact_targets_active_route(
+                        lane_id,
+                        dataspace_id,
+                        lane_incarnation,
+                        descriptor.proposal_height,
+                    )
+            })
+        {
+            let session = crate::lane_consensus::CommittedLaneBlockSession {
+                proposal: artifact.proposal,
+                prepare_qc: artifact.prepare_qc,
+                commit_qc: artifact.commit_qc,
+            };
+            let height = session.proposal.descriptor.lane_block_height;
+            if self
+                .state
+                .certified_lane_block_session_is_applied_or_snapshot_anchored_cached(&session)
+            {
+                finalized_height = finalized_height.max(height);
+            } else {
+                unresolved_heights.insert(height);
+            }
+        }
+        for relay in self.state.lane_relay_snapshot() {
+            let relay_proposal_height = relay.block_header.height().get();
+            if relay.lane_id == lane_id
+                && relay.dataspace_id == dataspace_id
+                && relay.lane_incarnation == lane_incarnation
+                && relay.is_merge_admissible()
+                && relay.lane_block_descriptor_hash.is_some()
+                && self
+                    .state
+                    .da_lane_visible_after_reset(relay_proposal_height, lane_id)
+                && self.lane_block_artifact_targets_active_route(
+                    lane_id,
+                    dataspace_id,
+                    lane_incarnation,
+                    relay_proposal_height,
+                )
+            {
+                unresolved_heights.insert(relay.block_height);
+            }
+        }
+        for tip in self
+            .subsystems
+            .committed_lane_blocks
+            .lane_block_tips_snapshot_for_admissible_lanes(
+                |tip_lane, tip_dataspace, tip_incarnation, _tip_height, tip_proposal_height| {
+                    tip_lane == lane_id
+                        && tip_dataspace == dataspace_id
+                        && tip_incarnation == lane_incarnation
+                        && self
+                            .state
+                            .da_lane_visible_after_reset(tip_proposal_height, tip_lane)
+                        && self.lane_block_artifact_targets_active_route(
+                            tip_lane,
+                            tip_dataspace,
+                            tip_incarnation,
+                            tip_proposal_height,
+                        )
+                },
+            )
+        {
+            unresolved_heights.insert(tip.latest_lane_block_height);
+        }
+
+        let admissible_height = unresolved_heights
+            .into_iter()
+            .filter(|height| *height > finalized_height)
+            .min()
+            .unwrap_or_else(|| finalized_height.saturating_add(1));
+        lane_block_height == admissible_height
+    }
+
+    fn disabled_nexus_lane_block_authority_accepts(
+        &self,
+        proposal_height: u64,
+        validator_count: u32,
+        min_quorum: u32,
+        validator_set_hash: HashOf<Vec<PeerId>>,
+        validator_set: Option<&[PeerId]>,
+        signer: Option<&PeerId>,
+    ) -> bool {
+        if self.state.nexus_snapshot().enabled {
+            return true;
+        }
+        let mut expected = self.shared_lane_block_authority_for_ingress(proposal_height);
+        expected.sort();
+        expected.dedup();
+        if expected.is_empty() {
+            return false;
+        }
+        let Ok(expected_count) = u32::try_from(expected.len()) else {
+            return false;
+        };
+        let Ok(expected_quorum) = u32::try_from(
+            crate::sumeragi::network_topology::commit_quorum_from_len(expected.len()).max(1),
+        ) else {
+            return false;
+        };
+        validator_count == expected_count
+            && min_quorum == expected_quorum
+            && validator_set_hash == HashOf::new(&expected)
+            && signer.is_none_or(|signer| expected.contains(signer))
+            && validator_set.is_none_or(|validator_set| validator_set == expected.as_slice())
+    }
+
+    pub(super) fn lane_block_proposal_sender_accepts_ingress(
         &self,
         proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
         sender: Option<&PeerId>,
@@ -1261,6 +1636,8 @@ impl Actor {
             proposal.descriptor.dataspace_id,
             proposal.descriptor.lane_incarnation,
             proposal.descriptor.proposal_height,
+            proposal.descriptor.lane_block_height,
+            proposal.proposal_hash,
             proposal.descriptor.validator_count,
             proposal.descriptor.min_quorum,
             proposal.descriptor.validator_set_hash,
@@ -1333,15 +1710,49 @@ impl Actor {
         dataspace_id: DataSpaceId,
         lane_incarnation: Hash,
         proposal_height: u64,
+        lane_block_height: u64,
+        proposal_hash: Hash,
         validator_count: u32,
         min_quorum: u32,
         validator_set_hash: HashOf<Vec<PeerId>>,
         validator_set: Option<&[PeerId]>,
         signer: Option<&PeerId>,
     ) -> bool {
+        let global_next_height = self.committed_height_snapshot().saturating_add(1);
+        if proposal_height > global_next_height {
+            return false;
+        }
+        if proposal_height < global_next_height {
+            let Some(canonical) = self.exact_kura_lane_block_proposal(
+                lane_id,
+                dataspace_id,
+                proposal_height,
+                lane_block_height,
+                proposal_hash,
+            ) else {
+                return false;
+            };
+            let descriptor = canonical.descriptor;
+            return lane_incarnation == descriptor.lane_incarnation
+                && validator_count == descriptor.validator_count
+                && min_quorum == descriptor.min_quorum
+                && validator_set_hash == descriptor.validator_set_hash
+                && signer.is_none_or(|signer| descriptor.validator_set.contains(signer))
+                && validator_set.is_none_or(|validator_set| {
+                    validator_set == descriptor.validator_set.as_slice()
+                });
+        }
+
         let nexus = self.state.nexus_snapshot();
         if !nexus.enabled {
-            return true;
+            return self.disabled_nexus_lane_block_authority_accepts(
+                proposal_height,
+                validator_count,
+                min_quorum,
+                validator_set_hash,
+                validator_set,
+                signer,
+            );
         }
         if crate::state::nexus_active_lane_dataspace_at_height(lane_id, &nexus, proposal_height)
             != Some(dataspace_id)
@@ -1404,11 +1815,20 @@ impl Actor {
                 proposal.descriptor.proposal_height,
                 proposal.descriptor.lane_block_height,
             )
+            && self.lane_block_slot_within_ingress_horizon(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.dataspace_id,
+                proposal.descriptor.proposal_height,
+                proposal.descriptor.lane_block_height,
+                proposal.proposal_hash,
+            )
             && self.lane_block_authority_accepts_ingress(
                 proposal.descriptor.lane_id,
                 proposal.descriptor.dataspace_id,
                 proposal.descriptor.lane_incarnation,
                 proposal.descriptor.proposal_height,
+                proposal.descriptor.lane_block_height,
+                proposal.proposal_hash,
                 proposal.descriptor.validator_count,
                 proposal.descriptor.min_quorum,
                 proposal.descriptor.validator_set_hash,
@@ -1448,11 +1868,19 @@ impl Actor {
             body.lane_incarnation,
             body.proposal_height,
             body.lane_block_height,
+        ) && self.lane_block_slot_within_ingress_horizon(
+            body.lane_id,
+            body.dataspace_id,
+            body.proposal_height,
+            body.lane_block_height,
+            body.proposal_hash,
         ) && self.lane_block_authority_accepts_ingress(
             body.lane_id,
             body.dataspace_id,
             body.lane_incarnation,
             body.proposal_height,
+            body.lane_block_height,
+            body.proposal_hash,
             body.validator_count,
             body.min_quorum,
             body.validator_set_hash,
@@ -1516,54 +1944,33 @@ impl Actor {
         let pending_artifacts = self
             .state
             .unapplied_lane_block_artifact_heights_snapshot_cached();
-        if pending_artifacts.is_empty() {
-            return 0;
-        }
-        let all_latest_artifacts_known =
-            pending_artifacts
-                .iter()
-                .all(|(&(lane_id, _dataspace_id), &lane_block_height)| {
-                    let Some(artifact) = self
-                        .state
-                        .kura()
-                        .read_lane_block_artifact(lane_id, lane_block_height)
-                    else {
-                        return false;
-                    };
-                    let Some(proposal) = Self::lane_block_proposal_from_payload_ownership(
-                        &artifact.ownership,
-                        Some(artifact.proposal_block_hash),
-                    ) else {
-                        return false;
-                    };
-                    let key = lane_block_session_key_for_proposal(&proposal);
-                    self.subsystems.lane_blocks.get(&key).is_some()
-                        || self
-                            .subsystems
-                            .committed_lane_blocks
-                            .contains_proposal(&proposal)
-                });
-        if all_latest_artifacts_known {
-            return 0;
-        }
-
         let mut cached = 0_usize;
-        for artifact in self.state.kura().lane_block_artifacts_snapshot() {
-            if Self::lane_block_artifact_has_matching_application_receipt(
-                self.state.kura(),
-                &artifact,
-            ) {
+        for ((expected_lane_id, expected_dataspace_id), lane_block_height) in pending_artifacts {
+            let Some(artifact) = self
+                .state
+                .kura()
+                .read_lane_block_artifact(expected_lane_id, lane_block_height)
+            else {
+                continue;
+            };
+            if self
+                .state
+                .lane_block_artifact_is_applied_or_snapshot_anchored_cached(&artifact)
+            {
                 continue;
             }
             let lane_id = artifact.ownership.lane_id;
             let dataspace_id = artifact.ownership.dataspace_id;
             let lane_block_height = artifact.ownership.lane_block_height;
-            if !self.lane_block_artifact_targets_active_route(
-                lane_id,
-                dataspace_id,
-                artifact.ownership.lane_incarnation,
-                artifact.ownership.proposal_height,
-            ) {
+            if lane_id != expected_lane_id
+                || dataspace_id != expected_dataspace_id
+                || !self.lane_block_artifact_targets_active_route(
+                    lane_id,
+                    dataspace_id,
+                    artifact.ownership.lane_incarnation,
+                    artifact.ownership.proposal_height,
+                )
+            {
                 continue;
             }
             let Some(proposal) = Self::lane_block_proposal_from_payload_ownership(
@@ -1603,9 +2010,11 @@ impl Actor {
         let recovered = self
             .state
             .kura()
-            .autonomous_lane_block_artifacts_snapshot(self.chain_hash, |proposal_height| {
-                self.epoch_for_height(proposal_height)
-            });
+            .latest_autonomous_lane_block_artifacts_snapshot(
+                self.chain_hash,
+                self.recovery_pending_proposal_cap(),
+                |proposal_height| self.epoch_for_height(proposal_height),
+            );
         let mut cached = 0_usize;
         for (artifact, proposal) in recovered {
             let descriptor = &proposal.descriptor;
@@ -1619,6 +2028,8 @@ impl Actor {
                 descriptor.dataspace_id,
                 descriptor.lane_incarnation,
                 descriptor.proposal_height,
+                descriptor.lane_block_height,
+                proposal.proposal_hash,
                 descriptor.validator_count,
                 descriptor.min_quorum,
                 descriptor.validator_set_hash,
@@ -1823,6 +2234,29 @@ impl Actor {
         );
     }
 
+    fn record_lane_block_horizon_drop(
+        &mut self,
+        kind: super::status::ConsensusMessageKind,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        proposal_height: u64,
+        lane_block_height: u64,
+    ) {
+        self.record_consensus_message_handling(
+            kind,
+            super::status::ConsensusMessageOutcome::Dropped,
+            super::status::ConsensusMessageReason::InvalidPayload,
+        );
+        warn!(
+            lane_id = lane_id.as_u32(),
+            dataspace_id = dataspace_id.as_u64(),
+            proposal_height,
+            lane_block_height,
+            committed_height = self.committed_height_snapshot(),
+            "dropping lane-block evidence outside the durable-tip ingress horizon"
+        );
+    }
+
     fn record_unauthorized_lane_block_committee_drop(
         &mut self,
         kind: super::status::ConsensusMessageKind,
@@ -1896,11 +2330,19 @@ impl Actor {
             proposal.descriptor.lane_incarnation,
             proposal.descriptor.proposal_height,
             proposal.descriptor.lane_block_height,
+        ) || !self.lane_block_slot_within_ingress_horizon(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.dataspace_id,
+            proposal.descriptor.proposal_height,
+            proposal.descriptor.lane_block_height,
+            proposal.proposal_hash,
         ) || !self.lane_block_authority_accepts_ingress(
             proposal.descriptor.lane_id,
             proposal.descriptor.dataspace_id,
             proposal.descriptor.lane_incarnation,
             proposal.descriptor.proposal_height,
+            proposal.descriptor.lane_block_height,
+            proposal.proposal_hash,
             proposal.descriptor.validator_count,
             proposal.descriptor.min_quorum,
             proposal.descriptor.validator_set_hash,
@@ -2413,11 +2855,22 @@ impl Actor {
     }
 
     pub(super) fn broadcast_ready_local_lane_block_votes(&mut self) -> bool {
+        let pruned_finalized = self.prune_durably_finalized_lane_block_state();
         let recovered_autonomous_proposals = self.cache_unapplied_autonomous_lane_block_proposals();
         let produced_autonomous_payloads = self.produce_ready_autonomous_lane_payloads();
         let resumed_payload_handoffs = self.process_deferred_lane_payload_handoffs();
         let new_view_votes = self.broadcast_due_lane_block_new_view_votes();
         let recovered_proposals = self.cache_unapplied_lane_block_artifact_proposals();
+        let pruned_noncanonical =
+            self.prune_lane_block_sessions_conflicting_with_canonical_payloads();
+        let canonical_sessions = self.canonical_lane_block_session_keys();
+        let pruned_excess = self
+            .subsystems
+            .lane_blocks
+            .prune_excess_speculative_siblings(
+                LANE_BLOCK_SPECULATIVE_SIBLINGS_PER_GROUP,
+                &canonical_sessions,
+            );
         let (rebroadcasted_proposals, rebroadcasted_proposal_keys) =
             self.rebroadcast_cached_lane_block_proposals_without_commit_qc();
         let progress = self.broadcast_missing_local_lane_block_prepare_votes();
@@ -2439,6 +2892,212 @@ impl Actor {
             || produced_autonomous_payloads > 0
             || resumed_payload_handoffs > 0
             || new_view_votes > 0
+            || pruned_noncanonical > 0
+            || pruned_excess > 0
+            || pruned_finalized > 0
+    }
+
+    pub(super) fn canonical_lane_block_session_keys(
+        &self,
+    ) -> BTreeSet<crate::lane_consensus::LaneBlockSessionKey> {
+        self.subsystems
+            .lane_blocks
+            .cached_proposals()
+            .into_iter()
+            .filter(|proposal| {
+                self.state
+                    .kura()
+                    .lane_block_payload_availability(proposal)
+                    .is_available()
+            })
+            .map(|proposal| crate::lane_consensus::LaneBlockSessionKey {
+                lane_id: proposal.descriptor.lane_id,
+                dataspace_id: proposal.descriptor.dataspace_id,
+                lane_incarnation: proposal.descriptor.lane_incarnation,
+                lane_block_height: proposal.descriptor.lane_block_height,
+                lane_block_view: proposal.descriptor.lane_block_view,
+                proposal_hash: proposal.proposal_hash,
+            })
+            .collect()
+    }
+
+    pub(super) fn prune_lane_block_sessions_conflicting_with_canonical_payloads(
+        &mut self,
+    ) -> usize {
+        let canonical_proposals = self
+            .subsystems
+            .lane_blocks
+            .cached_proposals()
+            .into_iter()
+            .filter(|proposal| {
+                self.state
+                    .kura()
+                    .lane_block_payload_availability(proposal)
+                    .is_available()
+            })
+            .collect::<Vec<_>>();
+        let mut pruned = 0_usize;
+        for proposal in canonical_proposals {
+            pruned = pruned.saturating_add(
+                self.subsystems
+                    .lane_blocks
+                    .prune_uncommitted_sessions_conflicting_with_canonical_proposal(&proposal),
+            );
+        }
+        if pruned > 0 {
+            debug!(
+                pruned,
+                "pruned noncanonical prepared lane-block sessions after canonical payload discovery"
+            );
+        }
+        pruned
+    }
+
+    fn legacy_lane_block_rebroadcast_cooldown(&self) -> Duration {
+        self.payload_rebroadcast_cooldown()
+            .max(CACHED_PROPOSAL_REBROADCAST_COOLDOWN_FLOOR)
+    }
+
+    fn lane_block_proposal_is_admissible_for_rebroadcast(
+        &self,
+        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+    ) -> bool {
+        self.lane_block_route_accepts_ingress(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.dataspace_id,
+            proposal.descriptor.lane_incarnation,
+            proposal.descriptor.proposal_height,
+            proposal.descriptor.lane_block_height,
+        ) && self.lane_block_slot_within_ingress_horizon(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.dataspace_id,
+            proposal.descriptor.proposal_height,
+            proposal.descriptor.lane_block_height,
+            proposal.proposal_hash,
+        ) && self.lane_block_authority_accepts_ingress(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.dataspace_id,
+            proposal.descriptor.lane_incarnation,
+            proposal.descriptor.proposal_height,
+            proposal.descriptor.lane_block_height,
+            proposal.proposal_hash,
+            proposal.descriptor.validator_count,
+            proposal.descriptor.min_quorum,
+            proposal.descriptor.validator_set_hash,
+            Some(proposal.descriptor.validator_set.as_slice()),
+            None,
+        )
+    }
+
+    pub(super) fn lane_block_rebroadcast_next_due(&self, now: Instant) -> Option<Instant> {
+        let local_peer = self.common_config.peer.id().clone();
+        if !self
+            .subsystems
+            .lane_blocks
+            .has_periodic_rebroadcast_work(&local_peer, |proposal| {
+                self.lane_block_proposal_is_admissible_for_rebroadcast(proposal)
+            })
+        {
+            return None;
+        }
+        Some(self.last_lane_block_rebroadcast.map_or(now, |last| {
+            last.checked_add(self.legacy_lane_block_rebroadcast_cooldown())
+                .unwrap_or(now)
+                .max(now)
+        }))
+    }
+
+    fn rebroadcast_cached_lane_block_bundles_if_due(&mut self, now: Instant) -> usize {
+        let _ = self.prune_durably_finalized_lane_block_state();
+        if self.last_lane_block_rebroadcast.is_some_and(|last| {
+            now.saturating_duration_since(last) < self.legacy_lane_block_rebroadcast_cooldown()
+        }) {
+            return 0;
+        }
+
+        let local_peer = self.common_config.peer.id().clone();
+        let bundles = self
+            .subsystems
+            .lane_blocks
+            .periodic_rebroadcast_bundles_after(
+                &local_peer,
+                self.lane_block_rebroadcast_cursor,
+                LANE_BLOCK_REBROADCAST_BUNDLES_PER_TICK,
+                |proposal| self.lane_block_proposal_is_admissible_for_rebroadcast(proposal),
+            );
+        let Some(last_bundle) = bundles.last() else {
+            return 0;
+        };
+        self.lane_block_rebroadcast_cursor = Some(last_bundle.key);
+        self.last_lane_block_rebroadcast = Some(now);
+
+        let mut scheduled = 0_usize;
+        for bundle in bundles {
+            let proposal = bundle.proposal;
+            if !self.lane_block_route_accepts_ingress(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.dataspace_id,
+                proposal.descriptor.lane_incarnation,
+                proposal.descriptor.proposal_height,
+                proposal.descriptor.lane_block_height,
+            ) || !self.lane_block_slot_within_ingress_horizon(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.dataspace_id,
+                proposal.descriptor.proposal_height,
+                proposal.descriptor.lane_block_height,
+                proposal.proposal_hash,
+            ) || !self.lane_block_authority_accepts_ingress(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.dataspace_id,
+                proposal.descriptor.lane_incarnation,
+                proposal.descriptor.proposal_height,
+                proposal.descriptor.lane_block_height,
+                proposal.proposal_hash,
+                proposal.descriptor.validator_count,
+                proposal.descriptor.min_quorum,
+                proposal.descriptor.validator_set_hash,
+                Some(proposal.descriptor.validator_set.as_slice()),
+                None,
+            ) {
+                continue;
+            }
+
+            if bundle.rebroadcast_proposal {
+                scheduled =
+                    scheduled.saturating_add(self.schedule_lane_block_message_to_validator_set(
+                        BlockMessage::LaneBlockProposal(proposal.clone()),
+                        proposal.descriptor.validator_set.as_slice(),
+                    ));
+            }
+            for vote in bundle.local_votes {
+                if !self
+                    .lane_block_vote_body_targets_authorized_local_signer(&vote.body, &local_peer)
+                {
+                    continue;
+                }
+                scheduled =
+                    scheduled.saturating_add(self.schedule_lane_block_message_to_validator_set(
+                        BlockMessage::LaneBlockVote(vote.clone()),
+                        proposal.descriptor.validator_set.as_slice(),
+                    ));
+                self.schedule_background(BackgroundRequest::Broadcast {
+                    msg: BlockMessageWire::new(BlockMessage::LaneBlockVote(vote)),
+                });
+                scheduled = scheduled.saturating_add(1);
+            }
+            for qc in bundle.qcs {
+                scheduled =
+                    scheduled.saturating_add(self.schedule_lane_block_message_to_validator_set(
+                        BlockMessage::LaneBlockQc(qc.clone()),
+                        qc.validator_set.as_slice(),
+                    ));
+                self.schedule_background(BackgroundRequest::Broadcast {
+                    msg: BlockMessageWire::new(BlockMessage::LaneBlockQc(qc)),
+                });
+                scheduled = scheduled.saturating_add(1);
+            }
+        }
+        scheduled
     }
 
     fn broadcast_due_lane_block_new_view_votes(&mut self) -> usize {
@@ -2557,6 +3216,8 @@ impl Actor {
                 proposal.descriptor.dataspace_id,
                 proposal.descriptor.lane_incarnation,
                 proposal.descriptor.proposal_height,
+                proposal.descriptor.lane_block_height,
+                proposal.proposal_hash,
                 proposal.descriptor.validator_count,
                 proposal.descriptor.min_quorum,
                 proposal.descriptor.validator_set_hash,
@@ -2635,6 +3296,8 @@ impl Actor {
                     proposal.descriptor.dataspace_id,
                     proposal.descriptor.lane_incarnation,
                     proposal.descriptor.proposal_height,
+                    proposal.descriptor.lane_block_height,
+                    proposal.proposal_hash,
                     proposal.descriptor.validator_count,
                     proposal.descriptor.min_quorum,
                     proposal.descriptor.validator_set_hash,
@@ -2687,6 +3350,8 @@ impl Actor {
                 qc.body.dataspace_id,
                 qc.body.lane_incarnation,
                 qc.body.proposal_height,
+                qc.body.lane_block_height,
+                qc.body.proposal_hash,
                 qc.body.validator_count,
                 qc.body.min_quorum,
                 qc.body.validator_set_hash,
@@ -2821,6 +3486,8 @@ impl Actor {
             proposal.descriptor.dataspace_id,
             proposal.descriptor.lane_incarnation,
             proposal.descriptor.proposal_height,
+            proposal.descriptor.lane_block_height,
+            proposal.proposal_hash,
             proposal.descriptor.validator_count,
             proposal.descriptor.min_quorum,
             proposal.descriptor.validator_set_hash,
@@ -3008,11 +3675,29 @@ impl Actor {
                 );
                 continue;
             }
+            if !self.lane_block_slot_within_ingress_horizon(
+                qc.body.lane_id,
+                qc.body.dataspace_id,
+                qc.body.proposal_height,
+                qc.body.lane_block_height,
+                qc.body.proposal_hash,
+            ) {
+                self.record_lane_block_horizon_drop(
+                    super::status::ConsensusMessageKind::LaneBlockQc,
+                    qc.body.lane_id,
+                    qc.body.dataspace_id,
+                    qc.body.proposal_height,
+                    qc.body.lane_block_height,
+                );
+                continue;
+            }
             if !self.lane_block_authority_accepts_ingress(
                 qc.body.lane_id,
                 qc.body.dataspace_id,
                 qc.body.lane_incarnation,
                 qc.body.proposal_height,
+                qc.body.lane_block_height,
+                qc.body.proposal_hash,
                 qc.body.validator_count,
                 qc.body.min_quorum,
                 qc.body.validator_set_hash,
@@ -3057,12 +3742,13 @@ impl Actor {
                                lane_incarnation: Hash,
                                _lane_block_height: u64,
                                proposal_height: u64| {
-            (!nexus.enabled
-                || crate::state::nexus_active_lane_dataspace_at_height(
+            self.state
+                .da_lane_visible_after_reset(proposal_height, lane_id)
+                && crate::state::consensus_lane_dataspace_at_height(
                     lane_id,
                     &nexus,
                     proposal_height,
-                ) == Some(dataspace_id))
+                ) == Some(dataspace_id)
                 && self
                     .state
                     .lane_incarnation_at_height(lane_id, proposal_height)
@@ -3076,27 +3762,97 @@ impl Actor {
             .subsystems
             .committed_lane_blocks
             .retain_sessions_for_admissible_lanes(&admissible_lane);
-        let pruned = pruned_lane_sessions.saturating_add(pruned_committed_sessions);
+        let next_proposal_height = self.committed_height_snapshot().saturating_add(1);
+        let pruned_inactive_commit_locks = self
+            .subsystems
+            .lane_blocks
+            .prune_commit_vote_locks_for_inactive_incarnations(
+                |lane_id, dataspace_id, lane_incarnation| {
+                    crate::state::consensus_lane_dataspace_at_height(
+                        lane_id,
+                        &nexus,
+                        next_proposal_height,
+                    ) == Some(dataspace_id)
+                        && self
+                            .state
+                            .lane_incarnation_at_height(lane_id, next_proposal_height)
+                            == Some(lane_incarnation)
+                },
+            );
+        let pruned = pruned_lane_sessions
+            .saturating_add(pruned_committed_sessions)
+            .saturating_add(pruned_inactive_commit_locks);
         if pruned > 0 {
             debug!(
                 pruned_lane_sessions,
                 pruned_committed_sessions,
+                pruned_inactive_commit_locks,
                 "pruned cached lane-block sessions for inactive lane routes"
             );
         }
         pruned
     }
 
+    fn prune_durably_finalized_lane_block_state(&mut self) -> usize {
+        let candidate_slots = self
+            .subsystems
+            .lane_blocks
+            .commit_vote_lock_slots()
+            .into_iter()
+            .chain(
+                self.subsystems
+                    .lane_blocks
+                    .status_snapshot()
+                    .into_iter()
+                    .map(|session| {
+                        (
+                            session.lane_id,
+                            session.dataspace_id,
+                            session.lane_incarnation,
+                            session.lane_block_height,
+                        )
+                    }),
+            )
+            .collect::<BTreeSet<_>>();
+        let finalized_slots = candidate_slots
+            .into_iter()
+            .filter(
+                |(lane_id, dataspace_id, lane_incarnation, lane_block_height)| {
+                    self.lane_block_slot_is_durably_finalized(
+                        *lane_id,
+                        *dataspace_id,
+                        *lane_incarnation,
+                        *lane_block_height,
+                    )
+                },
+            )
+            .collect::<BTreeSet<_>>();
+        self.subsystems
+            .lane_blocks
+            .prune_sessions_and_commit_vote_locks_for_finalized_slots(
+                |lane_id, dataspace_id, lane_incarnation, lane_block_height| {
+                    finalized_slots.contains(&(
+                        lane_id,
+                        dataspace_id,
+                        lane_incarnation,
+                        lane_block_height,
+                    ))
+                },
+            )
+    }
+
     pub(super) fn queue_committed_lane_block_sessions(&mut self) -> bool {
         let pruned_inactive_lane_sessions = self.prune_lane_block_sessions_for_inactive_lanes();
+        let mut pruned_finalized_lane_state = self.prune_durably_finalized_lane_block_state();
         let pruned_applied_before = self
             .subsystems
             .committed_lane_blocks
-            .prune_application_receipted_sessions(self.state.kura());
+            .prune_applied_or_snapshot_anchored_sessions_for_state(&self.state);
         let queued = self.enqueue_ready_committed_lane_block_sessions();
         let pending_before_processing = self.subsystems.committed_lane_blocks.len();
         if queued == 0
             && pruned_inactive_lane_sessions == 0
+            && pruned_finalized_lane_state == 0
             && pruned_applied_before == 0
             && pending_before_processing == 0
         {
@@ -3129,15 +3885,11 @@ impl Actor {
         let canonical_application_receipts = self
             .subsystems
             .committed_lane_blocks
-            .record_available_payload_application_receipts_into_kura(self.state.kura());
+            .record_available_payload_application_receipts_into_kura_for_state(&self.state);
         let canonical_receipted_status = if canonical_application_receipts > 0 {
             self.subsystems
                 .committed_lane_blocks
-                .status_snapshot_with_payload_availability(
-                    self.state.kura(),
-                    u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX),
-                    Some(self.state.lane_execution_state_hash()),
-                )
+                .status_snapshot_for_state(&self.state)
         } else {
             Vec::new()
         };
@@ -3151,20 +3903,16 @@ impl Actor {
         let application_receipts = self
             .subsystems
             .committed_lane_blocks
-            .record_available_payload_application_receipts_into_kura(self.state.kura())
+            .record_available_payload_application_receipts_into_kura_for_state(&self.state)
             .saturating_add(canonical_application_receipts);
         let committed_status_before_prune = self
             .subsystems
             .committed_lane_blocks
-            .status_snapshot_with_payload_availability(
-                self.state.kura(),
-                u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX),
-                Some(self.state.lane_execution_state_hash()),
-            );
+            .status_snapshot_for_state(&self.state);
         let pruned_applied_after = self
             .subsystems
             .committed_lane_blocks
-            .prune_application_receipted_sessions(self.state.kura())
+            .prune_applied_or_snapshot_anchored_sessions_for_state(&self.state)
             .saturating_add(pruned_canonical_receipted);
         let queued_after_prune = if pruned_applied_after > 0 {
             self.enqueue_ready_committed_lane_block_sessions()
@@ -3182,6 +3930,8 @@ impl Actor {
         let committed_status =
             super::merge_committed_lane_block_statuses(committed_status, final_committed_status);
         let pending = self.subsystems.committed_lane_blocks.len();
+        pruned_finalized_lane_state = pruned_finalized_lane_state
+            .saturating_add(self.prune_durably_finalized_lane_block_state());
         let merge_source_progress =
             queued > 0 || recovered_inputs > 0 || verified_input_progress || queued_after_prune > 0;
         if merge_source_progress
@@ -3212,6 +3962,7 @@ impl Actor {
             verified_input_progress,
             application_receipts,
             pruned_inactive_lane_sessions,
+            pruned_finalized_lane_state,
             pruned_applied_before,
             pruned_applied_after,
             queued_after_prune,
@@ -3225,6 +3976,7 @@ impl Actor {
             || payload_hint_repair_requests > 0
             || application_receipts > 0
             || pruned_inactive_lane_sessions > 0
+            || pruned_finalized_lane_state > 0
             || pruned_applied_before > 0
             || pruned_applied_after > 0
             || queued_after_prune > 0

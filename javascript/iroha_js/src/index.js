@@ -20,6 +20,11 @@ export {
 } from "./address.js";
 export { normalizeIdentifierInput } from "./normalizers.js";
 export {
+  computeIvmArtifactHashes,
+  IVM_ARTIFACT_MAX_BYTES,
+  IVM_PROGRAM_HEADER_LENGTH,
+} from "./ivmArtifact.js";
+export {
   assetReferencesMatch,
   composeAssetHoldingId,
   ensureCanonicalAccountId,
@@ -36,6 +41,23 @@ export {
   tryNormalizeI105AccountId,
 } from "./normalizers.js";
 export { MultisigSpecBuilder, MultisigSpec } from "./multisig.js";
+export {
+  VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+  VALIDATION_FEE_DS_SCALE,
+  VALIDATION_FEE_INITIAL_MINOR_UNITS,
+  VALIDATION_FEE_POLICY_HASH_DOMAIN,
+  VALIDATION_FEE_POLICY_SIGNATURE_DOMAIN,
+  VALIDATION_FEE_POLICY_TYPE_NAME,
+  VALIDATION_FEE_CHARGING_MODE,
+  VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS,
+  ValidationFeePolicyError,
+  encodeValidationFeePolicyNorito,
+  validationFeePolicyHash,
+  validationFeePolicyLedgerSignaturePayload,
+  verifyValidationFeePolicyRegistry,
+  verifySignedValidationFeePolicy,
+  validationFeeQuantity,
+} from "./validationFeePolicy.js";
 export { ValidationError, ValidationErrorCode } from "./validationError.js";
 export {
   ToriiClient,
@@ -286,6 +308,8 @@ export {
   buildTransaction,
   buildRegisterSnsNameTransaction,
   buildIvmProvedTransaction,
+  submitIvmProvedContractCall,
+  submitValidationFeeIvmProvedContractCall,
   buildKagemushaInstructionArchiveInstruction,
   buildKagemushaInstructionTransaction,
   buildKagemushaRecursiveTopUpTransaction,
@@ -367,6 +391,7 @@ export {
   browserTransactionPayloadHashHex,
   buildBrowserTransferPayload,
   finalizeBrowserSignedTransaction,
+  validateBrowserTransferSignable,
 } from "./transactionCodec.js";
 export {
   OfflineQrPayloadKind,

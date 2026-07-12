@@ -355,10 +355,30 @@ pub(crate) fn committed_nexus_amx_context_hash(state: &State) -> Hash {
         .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
         .map(|(key, record)| (key.clone(), record.clone()))
         .collect::<Vec<_>>();
+    let lane_lifecycle = view
+        .nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .map(
+            |lane| iroha_config::parameters::actual::SumeragiV2LaneLifecycleEntry {
+                lane_id: lane.id,
+                incarnation: *view
+                    .lane_incarnations
+                    .get(&lane.id)
+                    .expect("validated state view has every active lane incarnation"),
+                activation_height: *view
+                    .lane_incarnation_activation_heights
+                    .get(&lane.id)
+                    .expect("validated state view has every lane activation height"),
+            },
+        )
+        .collect::<Vec<_>>();
     iroha_config::parameters::actual::sumeragi_v2_nexus_amx_context_hash(
-        &state.nexus_snapshot(),
-        &state.pipeline_snapshot(),
+        &view.nexus,
+        &view.pipeline,
         &active_validators,
+        &lane_lifecycle,
     )
 }
 

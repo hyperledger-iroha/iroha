@@ -17,6 +17,7 @@ use iroha_data_model::{
     },
     peer::PeerId,
 };
+use mv::storage::StorageReadOnly;
 use thiserror::Error;
 
 use super::{

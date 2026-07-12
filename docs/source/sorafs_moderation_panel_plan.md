@@ -48,9 +48,10 @@ policy digest, and the checker emits those valid panel policy digests as
 one valid case, roster, tally, or policy anchor appears, and clears the mixed
 `valid_case_digests`, `valid_roster_bindings`, `valid_tally_bindings`, or
 `valid_policy_digests` set before aggregate promotion can report ready.
-It does not yet ship the full moderation appeal service, production panel
-orchestrator, secure evidence viewer, juror portal workflow, or reviewed
-deployment evidence described in the original plan.
+The consensus path now ships authoritative appeal intake and deterministic
+PoP-gated panel formation. It does not yet ship the deployed moderation service
+facade, production panel orchestrator, secure evidence viewer, juror portal
+workflow, or reviewed deployment evidence described in the original plan.
 
 ## Shipped Foundations
 
@@ -72,13 +73,31 @@ deployment evidence described in the original plan.
   `escalate` choices.
 - `iroha_data_model::sorafs::moderation_ledger`, first-class moderation ISIs,
   and typed `FindSorafsModeration*` queries provide the consensus-owned ballot
-  source of truth. Governance policy snapshots bound panel/window/challenge
-  resources and distinct missing-commit/unrevealed-commit penalties; block time
-  controls every phase; juror commit/reveal transactions are authority-bound;
-  payload-free challenges block unsafe progress; and finalization atomically
-  persists decisions, contested ties, missed-quorum outcomes, or accepted
-  challenge outcomes plus any no-show records. These instructions and queries
-  use Iroha's existing signed transaction and generic Torii query APIs.
+  source of truth. Appellant-bound intake pins the active moderation policy and
+  native PoP root/revocation/audit snapshot, deduplicates case, proof-token,
+  and deposit-lock digests, and fixes bounded registration, acceptance,
+  commit/challenge/reveal windows. Private Halo2 membership proofs are verified
+  against that exact snapshot while only their digest, appeal nullifier,
+  eligibility class, expiry, and account binding are retained. Sortition uses a
+  domain-separated, hardware-independent BLAKE3 score over the immutable seed
+  and deterministic per-credential appeal nullifier, rejects duplicate people
+  and accounts, recomputes the proposed roster, and persists an immutable
+  waitlist. Primary assignment acceptance and deterministic waitlist failover
+  activate the existing commit/reveal case atomically or record a terminal
+  insufficient-pool/failover-exhausted state. Governance policy snapshots also
+  bound panel/window/challenge resources and distinct
+  missing-commit/unrevealed-commit penalties; block time controls every phase;
+  juror transactions are authority-bound; payload-free challenges block unsafe
+  progress; and finalization atomically persists the appeal and ballot outcome
+  plus any no-show records. These instructions and queries use Iroha's existing
+  signed transaction and generic Torii query APIs.
+- `iroha_data_model::sorafs::pop_registry`, its permissioned issuer ISIs, and
+  public typed queries now provide the consensus-owned active credential root,
+  revocation root/list version, payload-free credential/revocation commitments,
+  and audit head consumed by the moderation snapshot. Pending appeals fail
+  closed if any pinned publication or audit anchor is no longer active; raw
+  credential, witness, nonce, and proof payloads are never persisted in the
+  moderation ledger.
 - `sorafs_node::ModerationBallotRuntime` is wired through `NodeHandle` as a
   deterministic local lifecycle store for ballot announcement, eligible-juror
   commit acceptance, challenge-buffered reveal acceptance, quorum tallying,
@@ -110,7 +129,8 @@ deployment evidence described in the original plan.
 
 ## Intended Panel Lifecycle
 
-The production service still targets this lifecycle:
+The production service wraps this lifecycle; steps 1, 2, and the
+consensus-owned portion of step 4 are now native ledger transitions:
 
 1. Appeal intake validates the appellant, related moderation proof tokens,
    evidence references, deposit quote, and policy reference.
@@ -123,15 +143,14 @@ The production service still targets this lifecycle:
 5. The decision updates the moderation cache, appeal finance settlement,
    transparency ledger, and any provider reputation penalties.
 
-Only steps that can be represented by the shipped helper crates, authoritative
-ledger ISIs/queries, CLI commands, local `sorafs_node` runtime, and local Torii
-moderation ballot API are available today.
+The deployed evidence-viewer, notification/orchestration, downstream outcome,
+and settlement integrations around those native transitions remain open.
 
 ## Data Boundaries
 
-The shipped `PolicyJury*` types are reusable governance data structures, not a
-complete SoraFS moderation-panel runtime. SoraFS-specific ballot wrappers now
-bind:
+The reusable `PolicyJury*` types remain governance data structures, while the
+native moderation intake/sortition lifecycle supplies the SoraFS-specific
+runtime binding. Together with the ballot wrappers it binds:
 
 - appeal case identifiers;
 - moderation policy references;
@@ -140,35 +159,41 @@ bind:
 - settlement manifest version;
 - moderation vote choices;
 
-The authoritative ledger plus local runtime and Torii API now bind panel-size/quorum policy,
-commit/reveal windows, eligible jurors, and the payload-free no-show penalty
-plan readback route. The production service still needs deployed integrations
-that bind:
+The authoritative ledger plus local runtime and Torii API now bind
+panel-size/quorum policy, intake/deposit digests, exact active PoP snapshots,
+proof-nullifier replay protection, deterministic primary/waitlist selection,
+assignment failover, commit/reveal windows, eligible jurors, and the
+payload-free no-show penalty plan readback route. The production service still
+needs deployed integrations that bind:
 
 - evidence access attestation;
 - decision publication and appeal cache updates.
 
 Do not document `sorafs moderation jury-accept`,
 `sorafs moderation open-case`, or similar portal commands as shipped until the
-corresponding service and CLI handlers exist.
+corresponding service and CLI handlers exist. Native assignment acceptance and
+case activation are submitted as typed ISIs; no direct-open ISI exists.
 
 ## Remaining Production Gates
 
-- Implement the moderation appeal intake API and persisted case lifecycle state.
-- Adapt policy-jury sortition to SoraFS moderation cases, PoP snapshots, juror
-  eligibility, no-show failover, and roster privacy requirements.
 - Ship the secure evidence viewer and audit logger described by
   `docs/source/sorafs_evidence_viewer_plan.md`.
-- Build and deploy the production ballot orchestrator, challenge monitor,
-  scheduled no-show settlement handoff, and juror portal around the
-  authoritative commit/reveal ledger described by
+- Build and deploy the production appeal/panel transaction submitter, retry and
+  reconciliation worker, ballot orchestrator, challenge monitor, juror
+  notification/portal workflow, and scheduled no-show settlement handoff around
+  the authoritative intake, sortition, and commit/reveal ledger described by
   `docs/source/sorafs_commit_reveal_plan.md`.
 - Connect panel outcomes to gateway compliance caches, transparency
   publication, settlement reconciliation, and reputation scoring.
 - Promote local Governance DAG moderation event publication into the durable
   contract-backed and public IPFS/IPNS decision trail.
-- Add end-to-end tests for appeal submission, juror selection, evidence access,
-  commit/reveal voting, decision publication, and settlement.
+- Add reviewed four-peer deployed end-to-end tests for appeal submission,
+  private juror enrollment, evidence access, commit/reveal voting, decision
+  publication, restart reconciliation, and settlement. Native unit/integration
+  coverage already exercises malformed/noncanonical proof rejection, wrong and
+  rotated roots, credential-nullifier replay, biased/duplicate rosters,
+  deadline and authority violations, insufficient pools, no-show failover and
+  exhaustion, replay, and transaction atomicity.
 - Capture reviewed, payload-free deployed evidence for appeal intake, sortition
   roster, evidence viewer, operator workflow, juror notification, commit/reveal,
   decision publication, settlement integration, transparency/reputation handoff,

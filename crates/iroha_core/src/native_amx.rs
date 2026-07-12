@@ -54,6 +54,8 @@ const NATIVE_AMX_SIGNING_DIRECTORY_MODE: u32 = 0o700;
 const NATIVE_AMX_SIGNING_FILE_MODE: u32 = 0o600;
 /// Hard protocol cap for a coordinator plus all native AMX participant legs.
 pub(crate) const MAX_NATIVE_AMX_PLAN_LEGS: usize = 256;
+/// Maximum participant legs after reserving one plan slot for the coordinator.
+pub(crate) const MAX_NATIVE_AMX_PARTICIPANT_LEGS: usize = MAX_NATIVE_AMX_PLAN_LEGS - 1;
 /// Hard protocol cap for one native AMX participant committee.
 pub(crate) const MAX_NATIVE_AMX_VALIDATORS: usize = 128;
 /// Canonical compressed BLS-normal signature/proof size.
@@ -2351,7 +2353,7 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
         return receipt.is_none();
     };
     if native_plan.participants.is_empty()
-        || native_plan.participants.len() >= MAX_NATIVE_AMX_PLAN_LEGS
+        || !native_amx_participant_leg_count_within_limit(native_plan.participants.len())
     {
         return false;
     }
@@ -2372,7 +2374,7 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
         || receipt.lane_block_view != descriptor.lane_block_view
         || receipt.coordinator_proposal_hash != coordinator_proposal.proposal_hash
         || receipt.legs.len() != native_plan.participants.len()
-        || receipt.legs.len() >= MAX_NATIVE_AMX_PLAN_LEGS
+        || !native_amx_participant_leg_count_within_limit(receipt.legs.len())
     {
         return false;
     }
@@ -2470,6 +2472,12 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
             expected_commit_body.phase = NativeAmxPhase::Commit;
             commit.body == expected_commit_body
         })
+}
+
+/// Return whether a participant-only leg count fits the coordinator-inclusive plan cap.
+#[must_use]
+pub(crate) const fn native_amx_participant_leg_count_within_limit(count: usize) -> bool {
+    count <= MAX_NATIVE_AMX_PARTICIPANT_LEGS
 }
 
 fn native_amx_bodies_match_leg(
@@ -2899,6 +2907,21 @@ mod tests {
         HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(Hash::new(
             label,
         )))
+    }
+
+    #[test]
+    fn participant_leg_cap_reserves_one_slot_for_the_coordinator() {
+        assert_eq!(
+            MAX_NATIVE_AMX_PARTICIPANT_LEGS + 1,
+            MAX_NATIVE_AMX_PLAN_LEGS
+        );
+        assert!(native_amx_participant_leg_count_within_limit(0));
+        assert!(native_amx_participant_leg_count_within_limit(
+            MAX_NATIVE_AMX_PARTICIPANT_LEGS
+        ));
+        assert!(!native_amx_participant_leg_count_within_limit(
+            MAX_NATIVE_AMX_PLAN_LEGS
+        ));
     }
 
     #[cfg(not(unix))]

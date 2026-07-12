@@ -521,7 +521,8 @@ mod tests {
                 lane_block_height: 9,
                 tip_hash: HashOf::from_untyped_unchecked(Hash::prehashed([3_u8; Hash::LENGTH])),
                 merge_hint_root: Hash::new(b"hint"),
-                settlement_hash: HashOf::new(&settlement_commitment),
+                settlement_hash: crate::nexus::compute_settlement_hash(&settlement_commitment)
+                    .expect("sample settlement should hash canonically"),
                 settlement_commitment,
                 relay_envelope: None,
             }],

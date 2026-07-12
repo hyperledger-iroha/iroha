@@ -1,6 +1,5 @@
 package org.hyperledger.iroha.android.model.instructions;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
@@ -370,15 +369,21 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
   }
 
   private static String requireAliasText(final String value, final String field) {
-    if (value == null
-        || value.isEmpty()
-        || !value.equals(value.trim())
-        || value.getBytes(StandardCharsets.UTF_8).length > 128) {
-      throw new IllegalArgumentException(field + " must be unpadded UTF-8 of at most 128 bytes");
+    if (value == null || value.isEmpty() || value.length() > 128) {
+      throw new IllegalArgumentException(
+          field + " must contain 1..128 lowercase ASCII letters, digits, '.', '-', or '_'");
     }
     for (int index = 0; index < value.length(); index++) {
-      if (Character.isISOControl(value.charAt(index))) {
-        throw new IllegalArgumentException(field + " must not contain control characters");
+      final char character = value.charAt(index);
+      final boolean allowed =
+          (character >= 'a' && character <= 'z')
+              || (character >= '0' && character <= '9')
+              || character == '.'
+              || character == '-'
+              || character == '_';
+      if (!allowed) {
+        throw new IllegalArgumentException(
+            field + " must contain 1..128 lowercase ASCII letters, digits, '.', '-', or '_'");
       }
     }
     return value;

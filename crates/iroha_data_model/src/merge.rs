@@ -982,12 +982,13 @@ mod tests {
                         DataSpaceId::new(7),
                         11,
                     ),
-                    settlement_hash: HashOf::new(&sample_settlement(
+                    settlement_hash: crate::nexus::compute_settlement_hash(&sample_settlement(
                         LaneId::new(1),
                         sample_hash(b"incarnation-1"),
                         DataSpaceId::new(7),
                         11,
-                    )),
+                    ))
+                    .expect("sample settlement should hash canonically"),
                     relay_envelope: None,
                 },
                 MergeLaneSnapshot {
@@ -1005,12 +1006,13 @@ mod tests {
                         DataSpaceId::new(9),
                         14,
                     ),
-                    settlement_hash: HashOf::new(&sample_settlement(
+                    settlement_hash: crate::nexus::compute_settlement_hash(&sample_settlement(
                         LaneId::new(2),
                         sample_hash(b"incarnation-2"),
                         DataSpaceId::new(9),
                         14,
-                    )),
+                    ))
+                    .expect("sample settlement should hash canonically"),
                     relay_envelope: None,
                 },
             ],

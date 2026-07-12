@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import vm from "node:vm";
 import {
   ToriiClient,
   ToriiDataModelMismatchError,
@@ -39,9 +40,15 @@ import {
   AccountAddressErrorCode,
 } from "../src/address.js";
 import { sorafsGatewayFetch } from "../src/sorafs.js";
+import { IVM_ARTIFACT_MAX_BYTES } from "../src/ivmArtifact.js";
+import { blake2b256 } from "../src/blake2b.js";
 import { makeNativeTest, nativeBinding, nativeSkipMessage } from "./helpers/native.js";
 
 const BASE_URL = "https://localhost:8080";
+const IVM_ARTIFACT_MAX_BASE64_LENGTH =
+  Math.ceil(IVM_ARTIFACT_MAX_BYTES / 3) * 4;
+const CONTRACT_CODE_BYTES_JSON_MAX_BYTES =
+  IVM_ARTIFACT_MAX_BASE64_LENGTH + 1024;
 const SAMPLE_ACCOUNT_SIGNATORY =
   "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
 const SAMPLE_ACCOUNT_DOMAIN = "wonderland";
@@ -3179,6 +3186,10 @@ test("registerSorafsPinManifest rejects malformed and oversized aliases before f
     [{ namespace: "docs", name: "main", proof_base64: "cHJvb2Y=", proof: "cHJvb2Y=" }, /unsupported fields: proof/i],
     [{ namespace: " docs", name: "main", proof_base64: "cHJvb2Y=" }, /alias\.namespace.*whitespace/i],
     [{ namespace: "docs", name: "main ", proof_base64: "cHJvb2Y=" }, /alias\.name.*whitespace/i],
+    [{ namespace: "Docs", name: "main", proof_base64: "cHJvb2Y=" }, /alias\.namespace.*lowercase ASCII/i],
+    [{ namespace: "docs", name: "main site", proof_base64: "cHJvb2Y=" }, /alias\.name.*lowercase ASCII/i],
+    [{ namespace: "docs", name: "máin", proof_base64: "cHJvb2Y=" }, /alias\.name.*lowercase ASCII/i],
+    [{ namespace: "docs", name: "a".repeat(129), proof_base64: "cHJvb2Y=" }, /alias\.name.*128/i],
     [{ name: "main", proof_base64: "cHJvb2Y=" }, /alias\.namespace/i],
     [{ namespace: "docs", proof_base64: "cHJvb2Y=" }, /alias\.name/i],
     [{ namespace: "docs", name: "main" }, /alias\.proof_base64/i],
@@ -8506,6 +8517,7 @@ test("submitTransaction rejects unavailable pipeline submit", async () => {
 
 test("submitTransaction wraps native Norito transaction payload for pipeline submit", async () => {
   const payload = new Uint8Array([0xab, 0xcd]);
+  const controller = new AbortController();
   let nativeEncodeCalls = 0;
   const nativeBinding = {
     encodeSignedTransactionNorito: (buffer) => {
@@ -8547,6 +8559,7 @@ test("submitTransaction wraps native Norito transaction payload for pipeline sub
     }
     assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
     assert.equal(init.method, "POST");
+    assert.equal(init.signal, controller.signal);
     assert.equal(init.headers["Content-Type"], "application/x-norito");
     assert.deepEqual([...Buffer.from(init.body).values()], [0x01, 0xca, 0xfe]);
     return createResponse({
@@ -8556,9 +8569,31 @@ test("submitTransaction wraps native Norito transaction payload for pipeline sub
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
-  const response = await client.submitTransaction(payload);
+  const response = await client.submitTransaction(payload, {
+    signal: controller.signal,
+  });
   assert.deepEqual(response, { ok: true });
   assert.equal(nativeEncodeCalls, 1);
+});
+
+test("submitTransaction rejects an aborted signal before any fetch", async () => {
+  let fetchCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("aborted transaction must not fetch");
+    },
+  });
+  const controller = new AbortController();
+  controller.abort(new Error("caller cancelled final submission"));
+  await assert.rejects(
+    () =>
+      client.submitTransaction(Uint8Array.of(1), {
+        signal: controller.signal,
+      }),
+    /caller cancelled final submission/,
+  );
+  assert.equal(fetchCalls, 0);
 });
 
 test("submitTransaction unwraps native NRT0 Norito frames before pipeline submit", async () => {
@@ -17002,7 +17037,7 @@ test("listNfts hits nft endpoint", async () => {
   assert.deepEqual(payload.items[0], { id: "nft#1" });
 });
 
-test("listExplorerNfts encodes owner/domain filters and pagination", async () => {
+test("listExplorerNfts retains generic JSON parsing and encodes filters", async () => {
   const calls = [];
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
@@ -21452,6 +21487,42 @@ test("deployContract rejects invalid base64 payloads", async () => {
   );
 });
 
+test("contract registration and deployment cap exact artifact bytes before fetch", async () => {
+  const maxBase64Length = Math.ceil(IVM_ARTIFACT_MAX_BYTES / 3) * 4;
+  const attacks = [
+    ["A".repeat(maxBase64Length + 1), /4194304-byte artifact limit/],
+    [Buffer.alloc(IVM_ARTIFACT_MAX_BYTES + 1), /4194304-byte artifact limit/],
+    ["Y29kZQ==\n", /canonical standard base64/],
+  ];
+  for (const [artifact, expected] of attacks) {
+    for (const operation of ["register", "deploy"]) {
+      let fetchCalls = 0;
+      const client = new ToriiClient(BASE_URL, {
+        fetchImpl: async () => {
+          fetchCalls += 1;
+          throw new Error("fetch must not run for invalid artifact bytes");
+        },
+      });
+      const promise =
+        operation === "register"
+          ? client.registerContractCode({
+              authority: FIXTURE_ALICE_ID,
+              privateKey: "ed25519:deadbeef",
+              manifest: {},
+              codeBytes: artifact,
+            })
+          : client.deployContract({
+              authority: FIXTURE_ALICE_ID,
+              privateKey: "ed25519:deadbeef",
+              contractAlias: "router::universal",
+              codeB64: artifact,
+            });
+      await assert.rejects(promise, expected);
+      assert.equal(fetchCalls, 0, `${operation} must validate before fetch`);
+    }
+  }
+});
+
 test("deployContract rejects empty code bytes", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
@@ -22372,13 +22443,1114 @@ test("getMultisigSpec accepts domain-scoped aliases and rejects unsupported alia
   );
 });
 
+test("IVM proved contract helpers simulate, derive, prove, and poll authoritative payloads", async () => {
+  const jobId = "ab".repeat(16);
+  const proved = {
+    bytecode: "Y29kZQ==",
+    overlay: [],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  const attachment = {
+    backend: "halo2/ipa",
+    proof: { backend: "halo2/ipa", bytes_b64: "AQID" },
+    vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+  };
+  const calls = [];
+  let statusReads = 0;
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    if (url.endsWith("/v1/contracts/call/simulate")) {
+      return createStreamedJsonResponse({
+        status: 200,
+        jsonData: {
+          ok: true,
+          dataspace: "universal",
+          contract_address: "tairac1routerfixture",
+          code_hash_hex: "11".repeat(32),
+          abi_hash_hex: "22".repeat(32),
+          entrypoint: "route_swap",
+          normalized_payload: { amount: 7 },
+          gas_limit: 5000,
+          gas_used: 800,
+          queued_instructions: [],
+          result: null,
+          error: null,
+          vm_diagnostic: null,
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/v1/zk/ivm/derive")) {
+      return createStreamedJsonResponse({
+        status: 200,
+        jsonData: { proved },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/v1/zk/ivm/prove") && init.method === "POST") {
+      return createStreamedJsonResponse({
+        status: 202,
+        jsonData: { job_id: jobId },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith(`/v1/zk/ivm/prove/${jobId}`)) {
+      statusReads += 1;
+      return createStreamedJsonResponse({
+        status: 200,
+        jsonData:
+          statusReads === 1
+            ? {
+                job_id: jobId,
+                status: "running",
+              }
+            : {
+                job_id: jobId,
+                status: "done",
+                proved,
+                attachment,
+              },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected request ${init.method} ${url}`);
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const simulation = await client.simulateContractCall({
+    authority: SAMPLE_ACCOUNT_ID,
+    contractAlias: "dlmm_router::dlmm.universal",
+    entrypoint: "route_swap",
+    payload: { amount: 7 },
+    gasLimit: 5000,
+  });
+  assert.equal(simulation.ok, true);
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    authority: SAMPLE_ACCOUNT_ID,
+    contract_alias: "dlmm_router::dlmm.universal",
+    entrypoint: "route_swap",
+    payload: { amount: 7 },
+    gas_limit: 5000,
+  });
+
+  const proofRequest = {
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    metadata: {
+      contract_address: simulation.contract_address,
+      contract_entrypoint: simulation.entrypoint,
+      contract_payload: simulation.normalized_payload,
+      gas_limit: simulation.gas_limit,
+    },
+    bytecode: proved.bytecode,
+  };
+  const derived = await client.deriveIvmProved(proofRequest);
+  assert.deepEqual(derived, { proved });
+  const completed = await client.proveIvmAndWait(
+    { ...proofRequest, proved: derived.proved },
+    { intervalMs: 0, timeoutMs: 1000 },
+  );
+  assert.equal(statusReads, 2);
+  assert.equal(completed.status, "done");
+  assert.deepEqual(completed.proved, proved);
+  assert.deepEqual(completed.attachment, attachment);
+
+  const deriveBody = JSON.parse(calls[1].init.body);
+  const proveBody = JSON.parse(calls[2].init.body);
+  assert.equal(
+    JSON.stringify(deriveBody.metadata),
+    JSON.stringify(proofRequest.metadata),
+  );
+  assert.equal(
+    JSON.stringify(proveBody.metadata),
+    JSON.stringify(proofRequest.metadata),
+  );
+  assert.equal(Object.hasOwn(proveBody, "proved"), false);
+});
+
+test("IVM response endpoints enforce declared caps before reads and forward signals", async () => {
+  const jobId = "ab".repeat(16);
+  const controller = new AbortController();
+  const executionRequest = {
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    metadata: {},
+    bytecode: "Y29kZQ==",
+  };
+  const cases = [
+    {
+      name: "simulation",
+      invoke: (client) =>
+        client.simulateContractCall(
+          {
+            authority: SAMPLE_ACCOUNT_ID,
+            contractAlias: "dlmm_router::dlmm.universal",
+            gasLimit: 5000,
+          },
+          { signal: controller.signal },
+        ),
+    },
+    {
+      name: "derive",
+      invoke: (client) =>
+        client.deriveIvmProved(executionRequest, {
+          signal: controller.signal,
+        }),
+    },
+    {
+      name: "prove creation",
+      invoke: (client) =>
+        client.startIvmProve(executionRequest, {
+          signal: controller.signal,
+        }),
+    },
+    {
+      name: "prove status",
+      invoke: (client) =>
+        client.getIvmProveJob(jobId, { signal: controller.signal }),
+    },
+    {
+      name: "prove cancellation",
+      invoke: (client) =>
+        client.cancelIvmProveJob(jobId, { signal: controller.signal }),
+    },
+  ];
+
+  for (const { name, invoke } of cases) {
+    let bodyReads = 0;
+    let capturedSignal;
+    const response = {
+      status: 200,
+      headers: new Headers({
+        "content-type": "application/json",
+        "content-length": "1000000000",
+      }),
+      get body() {
+        bodyReads += 1;
+        throw new Error("oversized body must not be read");
+      },
+    };
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async (_url, init) => {
+        capturedSignal = init.signal;
+        return response;
+      },
+    });
+    await assert.rejects(invoke(client), /exceeds the .*response limit/, name);
+    assert.equal(bodyReads, 0, `${name} must reject before reading`);
+    assert.equal(capturedSignal, controller.signal, `${name} signal`);
+  }
+});
+
+test("IVM bounded responses reject invalid UTF-8 and malformed JSON", async () => {
+  const request = {
+    authority: SAMPLE_ACCOUNT_ID,
+    contractAlias: "dlmm_router::dlmm.universal",
+    gasLimit: 5000,
+  };
+  for (const [body, expected] of [
+    [Uint8Array.of(0xc3, 0x28), /must be valid UTF-8/],
+    [new TextEncoder().encode("{"), /must contain valid JSON/],
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        new Response(body, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(() => client.simulateContractCall(request), expected);
+  }
+});
+
+test("IVM derive and prove requests reject oversized or noncanonical bytecode before fetch", async () => {
+  const executionRequest = {
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    metadata: {},
+  };
+  const maxBase64Length = Math.ceil(IVM_ARTIFACT_MAX_BYTES / 3) * 4;
+  const attacks = [
+    ["A".repeat(maxBase64Length + 1), /4194304-byte artifact limit/],
+    [Buffer.alloc(IVM_ARTIFACT_MAX_BYTES + 1), /4194304-byte artifact limit/],
+    ["Y29kZQ==\n", /canonical standard base64/],
+  ];
+  if (typeof SharedArrayBuffer === "function") {
+    const shared = new Uint8Array(new SharedArrayBuffer(4));
+    Object.defineProperties(shared, {
+      buffer: { value: Uint8Array.of(1, 2, 3, 4).buffer },
+      byteOffset: { value: 0 },
+      byteLength: { value: 4 },
+    });
+    attacks.push([shared, /must not use SharedArrayBuffer/]);
+  }
+
+  for (const method of ["deriveIvmProved", "startIvmProve"]) {
+    for (const [bytecode, expected] of attacks) {
+      let fetchCalls = 0;
+      const client = new ToriiClient(BASE_URL, {
+        fetchImpl: async () => {
+          fetchCalls += 1;
+          throw new Error("fetch must not run for invalid bytecode");
+        },
+      });
+      await assert.rejects(
+        () => client[method]({ ...executionRequest, bytecode }),
+        expected,
+      );
+      assert.equal(fetchCalls, 0, `${method} must validate before fetch`);
+    }
+  }
+});
+
+test("IVM proof requests enforce the aggregate Torii body limit before fetch", async () => {
+  const baseRequest = {
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    bytecode: "Y29kZQ==",
+  };
+  const maxBytecode = Buffer.alloc(IVM_ARTIFACT_MAX_BYTES, 0x61).toString(
+    "base64",
+  );
+  const proved = {
+    bytecode: maxBytecode,
+    overlay: [],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  for (const [method, request] of [
+    [
+      "deriveIvmProved",
+      { ...baseRequest, metadata: { attacker: "x".repeat(8 * 1024 * 1024) } },
+    ],
+    [
+      "startIvmProve",
+      {
+        ...baseRequest,
+        metadata: {},
+        bytecode: maxBytecode,
+        proved,
+      },
+    ],
+  ]) {
+    let fetchCalls = 0;
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        throw new Error("oversized proof request must not fetch");
+      },
+    });
+    await assert.rejects(
+      () => client[method](request),
+      /exceeds the 8388608-byte request limit/,
+    );
+    assert.equal(fetchCalls, 0, method);
+  }
+});
+
+test("proveIvmAndWait sends one maximum artifact without duplicating proved", async () => {
+  const jobId = "ab".repeat(16);
+  const maxBytecode = Buffer.alloc(IVM_ARTIFACT_MAX_BYTES, 0x61).toString(
+    "base64",
+  );
+  const proved = {
+    bytecode: maxBytecode,
+    overlay: [],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  let postedBody;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (_url, init) => {
+      postedBody = init.body;
+      return createStreamedJsonResponse({
+        status: 202,
+        jsonData: { job_id: jobId },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  client.waitForIvmProveJob = async () => ({
+    job_id: jobId,
+    status: "done",
+    error: null,
+    proved,
+    attachment: {
+      backend: "halo2/ipa",
+      proof: { backend: "halo2/ipa", bytes_b64: "AQID" },
+      vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    },
+  });
+  await client.proveIvmAndWait({
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    metadata: {},
+    bytecode: maxBytecode,
+    proved,
+  });
+  assert.ok(Buffer.byteLength(postedBody, "utf8") <= 8 * 1024 * 1024);
+  const posted = JSON.parse(postedBody);
+  assert.equal(posted.bytecode, maxBytecode);
+  assert.equal(Object.hasOwn(posted, "proved"), false);
+});
+
+test("proveIvmAndWait rejects a completed payload that differs from local proved", async () => {
+  const jobId = "ab".repeat(16);
+  const proved = {
+    bytecode: "Y29kZQ==",
+    overlay: [],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("focused method stubs should replace fetch");
+    },
+  });
+  client.startIvmProve = async (request) => {
+    assert.equal(Object.hasOwn(request, "proved"), false);
+    return { job_id: jobId };
+  };
+  client.waitForIvmProveJob = async () => ({
+    job_id: jobId,
+    status: "done",
+    proved: { ...proved, events_commitment: "03".repeat(32) },
+    attachment: {},
+  });
+  client.cancelIvmProveJob = async () => ({ job_id: jobId });
+  await assert.rejects(
+    () =>
+      client.proveIvmAndWait({
+        vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+        authority: SAMPLE_ACCOUNT_ID,
+        metadata: {},
+        bytecode: proved.bytecode,
+        proved,
+      }),
+    /differs from the locally derived payload/,
+  );
+});
+
+test("IVM request JSON cloning rejects accessors, cycles, symbols, and deep values", async () => {
+  const baseRequest = {
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    bytecode: "Y29kZQ==",
+  };
+  let getterCalls = 0;
+  const accessorMetadata = {};
+  Object.defineProperty(accessorMetadata, "secret", {
+    enumerable: true,
+    get() {
+      getterCalls += 1;
+      return "stolen";
+    },
+  });
+  const cyclicMetadata = {};
+  cyclicMetadata.self = cyclicMetadata;
+  const symbolMetadata = { [Symbol("hidden")]: true };
+  let deepMetadata = {};
+  for (let index = 0; index < 130; index += 1) {
+    deepMetadata = { nested: deepMetadata };
+  }
+  for (const [metadata, expected] of [
+    [accessorMetadata, /enumerable data property/],
+    [cyclicMetadata, /cyclic references/],
+    [symbolMetadata, /keys must be strings without symbols/],
+    [deepMetadata, /JSON nesting limit/],
+    [{ nodes: new Array(100_001).fill(null) }, /JSON value limit/],
+  ]) {
+    let fetchCalls = 0;
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        throw new Error("invalid metadata must not fetch");
+      },
+    });
+    await assert.rejects(
+      () => client.deriveIvmProved({ ...baseRequest, metadata }),
+      expected,
+    );
+    assert.equal(fetchCalls, 0);
+  }
+  assert.equal(getterCalls, 0);
+});
+
+test("IVM request bytecode accepts genuine cross-realm binary views without user getters", async () => {
+  const expectedBytecode = "Y29kZQ==";
+  const crossRealmInputs = [
+    vm.runInNewContext("Uint8Array.from([99,111,100,101]).buffer"),
+    vm.runInNewContext("Uint8Array.from([99,111,100,101])"),
+    vm.runInNewContext(
+      "new DataView(Uint8Array.from([0,99,111,100,101,0]).buffer,1,4)",
+    ),
+  ];
+  for (const bytecode of crossRealmInputs) {
+    Object.defineProperties(bytecode, {
+      byteLength: {
+        get() {
+          throw new Error("shadow byteLength must not be read");
+        },
+      },
+      ...(ArrayBuffer.isView(bytecode)
+        ? {
+            buffer: {
+              get() {
+                throw new Error("shadow buffer must not be read");
+              },
+            },
+            byteOffset: {
+              get() {
+                throw new Error("shadow byteOffset must not be read");
+              },
+            },
+          }
+        : {
+            slice: {
+              value() {
+                throw new Error("shadow slice must not run");
+              },
+            },
+          }),
+    });
+    let posted;
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async (_url, init) => {
+        posted = JSON.parse(init.body);
+        return createStreamedJsonResponse({
+          status: 200,
+          jsonData: {
+            proved: {
+              bytecode: expectedBytecode,
+              overlay: [],
+              events_commitment: "01".repeat(32),
+              gas_policy_commitment: "02".repeat(32),
+            },
+          },
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    await client.deriveIvmProved({
+      vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+      authority: SAMPLE_ACCOUNT_ID,
+      metadata: {},
+      bytecode,
+    });
+    assert.equal(posted.bytecode, expectedBytecode);
+  }
+});
+
+test("IVM derive and proof status responses cap and canonicalize proved bytecode", async () => {
+  const baseProved = {
+    overlay: [],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  const maxBase64Length = Math.ceil(IVM_ARTIFACT_MAX_BYTES / 3) * 4;
+  const deriveClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createStreamedJsonResponse({
+        status: 200,
+        jsonData: {
+          proved: { ...baseProved, bytecode: "A".repeat(maxBase64Length) },
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () =>
+      deriveClient.deriveIvmProved({
+        vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+        authority: SAMPLE_ACCOUNT_ID,
+        metadata: {},
+        bytecode: "Y29kZQ==",
+      }),
+    /4194304-byte artifact limit/,
+  );
+
+  const jobId = "ab".repeat(16);
+  const statusClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createStreamedJsonResponse({
+        status: 200,
+        jsonData: {
+          job_id: jobId,
+          status: "done",
+          proved: { ...baseProved, bytecode: "Y29kZQ==\n" },
+          attachment: {},
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => statusClient.getIvmProveJob(jobId),
+    /canonical standard base64/,
+  );
+});
+
+test("IVM derive response envelope and overlay arrays require exact data properties", async () => {
+  const request = {
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    metadata: {},
+    bytecode: "Y29kZQ==",
+  };
+  const baseProved = {
+    bytecode: "Y29kZQ==",
+    overlay: [],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  let getterCalls = 0;
+  const accessorEnvelope = {};
+  Object.defineProperty(accessorEnvelope, "proved", {
+    enumerable: true,
+    get() {
+      getterCalls += 1;
+      return baseProved;
+    },
+  });
+  const symbolEnvelope = { proved: baseProved, [Symbol("hidden")]: true };
+  const accessorOverlay = [];
+  Object.defineProperty(accessorOverlay, "0", {
+    enumerable: true,
+    configurable: true,
+    get() {
+      getterCalls += 1;
+      return { Log: { message: "attacker" } };
+    },
+  });
+  accessorOverlay.length = 1;
+  const sparseOverlay = new Array(1);
+  const extraOverlay = [];
+  extraOverlay.extra = true;
+  for (const [body, expected] of [
+    [{ proved: baseProved, extra: true }, /must contain exactly/],
+    [symbolEnvelope, /must contain exactly/],
+    [accessorEnvelope, /enumerable data property/],
+    [{ proved: { ...baseProved, overlay: accessorOverlay } }, /enumerable data property/],
+    [{ proved: { ...baseProved, overlay: sparseOverlay } }, /dense exact JSON array/],
+    [{ proved: { ...baseProved, overlay: extraOverlay } }, /dense exact JSON array/],
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({ status: 200 }),
+    });
+    client._maybeBoundedJson = async () => body;
+    await assert.rejects(() => client.deriveIvmProved(request), expected);
+  }
+  assert.equal(getterCalls, 0);
+});
+
+test("IVM JSON cloning preserves dangerous-looking own keys without inheritance", async () => {
+  const overlayEntry = JSON.parse(
+    '{"Log":{"message":"safe"},"__proto__":{"Transfer":{"Asset":{"source":"fee#alice","destination":"treasury","object":"1"}}},"constructor":"literal","prototype":"literal","":7}',
+  );
+  const proved = {
+    bytecode: "Y29kZQ==",
+    overlay: [overlayEntry],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createStreamedJsonResponse({
+        status: 200,
+        jsonData: { proved },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  const result = await client.deriveIvmProved({
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    metadata: {},
+    bytecode: proved.bytecode,
+  });
+  const normalized = result.proved.overlay[0];
+  assert.equal(Object.getPrototypeOf(normalized), null);
+  assert.equal(Object.hasOwn(normalized, "__proto__"), true);
+  assert.equal(Object.hasOwn(normalized, "Transfer"), false);
+  assert.equal(normalized.Transfer, undefined);
+  assert.equal(normalized.constructor, "literal");
+  assert.equal(normalized.prototype, "literal");
+  assert.equal(normalized[""], 7);
+  assert.deepEqual(JSON.parse(JSON.stringify(normalized)), overlayEntry);
+});
+
+test("IVM proved DTOs and proof-job states are exact and internally consistent", async () => {
+  const jobId = "ab".repeat(16);
+  const validProved = {
+    bytecode: "Y29kZQ==",
+    overlay: [],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  const validAttachment = {
+    backend: "halo2/ipa",
+    proof: { backend: "halo2/ipa", bytes_b64: "AQID" },
+    vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+  };
+  const canonicalStatuses = [
+    { job_id: jobId, status: "pending" },
+    { job_id: jobId, status: "running" },
+    { job_id: jobId, status: "error", error: "prover failed" },
+    {
+      job_id: jobId,
+      status: "done",
+      proved: validProved,
+      attachment: validAttachment,
+    },
+  ];
+  for (const jsonData of canonicalStatuses) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createStreamedJsonResponse({
+          status: 200,
+          jsonData,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    const normalized = await client.getIvmProveJob(jobId);
+    assert.equal(normalized.status, jsonData.status);
+    assert.equal(normalized.error, jsonData.error ?? null);
+    assert.deepEqual(normalized.proved, jsonData.proved ?? null);
+    assert.deepEqual(normalized.attachment, jsonData.attachment ?? null);
+  }
+  const statusCases = [
+    [
+      { job_id: jobId.toUpperCase(), status: "running" },
+      /exact lowercase/,
+    ],
+    [
+      { job_id: jobId, status: "RUNNING" },
+      /must be pending, running, done, or error/,
+    ],
+    [
+      { job_id: jobId, status: " running " },
+      /surrounding whitespace/,
+    ],
+    [
+      {
+        job_id: jobId,
+        status: "done",
+        error: "attacker error",
+        proved: validProved,
+        attachment: {},
+      },
+      /must contain exactly/,
+    ],
+    [
+      {
+        job_id: jobId,
+        status: "done",
+        proved: { bytecode: "Y29kZQ==", overlay: [] },
+        attachment: {},
+      },
+      /must contain exactly/,
+    ],
+    [
+      {
+        job_id: jobId,
+        status: "running",
+        proved: validProved,
+        attachment: {},
+      },
+      /must contain exactly/,
+    ],
+    [
+      {
+        job_id: jobId,
+        status: "error",
+        error: null,
+      },
+      /must be a string|must not be empty/,
+    ],
+  ];
+  for (const [jsonData, expected] of statusCases) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createStreamedJsonResponse({
+          status: 200,
+          jsonData,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(() => client.getIvmProveJob(jobId), expected);
+  }
+
+  for (const proved of [
+    { ...validProved, extra: true },
+    { ...validProved, overlay: {} },
+    { ...validProved, events_commitment: "01" },
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createStreamedJsonResponse({
+          status: 200,
+          jsonData: { proved },
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(
+      () =>
+        client.deriveIvmProved({
+          vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+          authority: SAMPLE_ACCOUNT_ID,
+          metadata: {},
+          bytecode: "Y29kZQ==",
+        }),
+      /must contain exactly|overlay must be an array|32-byte hex string/,
+    );
+  }
+});
+
+test("IVM proof jobs bind returned ids and provided proved bytecode", async () => {
+  const requestedJobId = "ab".repeat(16);
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createStreamedJsonResponse({
+        status: 200,
+        jsonData: {
+          job_id: "cd".repeat(16),
+          status: "running",
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => client.getIvmProveJob(requestedJobId),
+    /returned a different job id/,
+  );
+
+  let fetchCalls = 0;
+  const startClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("mismatched proved bytecode must not fetch");
+    },
+  });
+  await assert.rejects(
+    () =>
+      startClient.startIvmProve({
+        vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+        authority: SAMPLE_ACCOUNT_ID,
+        metadata: {},
+        bytecode: "Y29kZQ==",
+        proved: {
+          bytecode: "YXR0YWNrZXI=",
+          overlay: [],
+          events_commitment: "01".repeat(32),
+          gas_policy_commitment: "02".repeat(32),
+        },
+      }),
+    /proved\.bytecode must exactly match .*\.bytecode/,
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("IVM proof job attachments enforce structural hashes and rolling wire compatibility", async () => {
+  const jobId = "ab".repeat(16);
+  const proved = {
+    bytecode: "Y29kZQ==",
+    overlay: [],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  const valid = {
+    backend: "halo2/ipa",
+    proof: { backend: "halo2/ipa", bytes_b64: "AQID" },
+    vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+  };
+  const envelopeHash = [...blake2b256(Uint8Array.of(1, 2, 3))];
+  envelopeHash[31] |= 1;
+  for (const attachment of [
+    { ...valid, envelope_hash: envelopeHash },
+    {
+      backend: "halo2/ipa",
+      proof: { backend: "halo2/ipa", bytes: [1, 2, 3] },
+      vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+      vk_commitment: null,
+      envelope_hash: null,
+      lane_privacy: null,
+    },
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createStreamedJsonResponse({
+          status: 200,
+          jsonData: { job_id: jobId, status: "done", proved, attachment },
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    const result = await client.getIvmProveJob(jobId);
+    assert.deepEqual(result.attachment.proof, {
+      backend: "halo2/ipa",
+      bytes_b64: "AQID",
+    });
+    if (attachment.envelope_hash === null) {
+      assert.equal(Object.hasOwn(result.attachment, "envelope_hash"), false);
+      assert.equal(Object.hasOwn(result.attachment, "vk_commitment"), false);
+      assert.equal(Object.hasOwn(result.attachment, "lane_privacy"), false);
+    } else {
+      assert.deepEqual(result.attachment.envelope_hash, envelopeHash);
+    }
+  }
+
+  const proofMaxBase64Length = Math.ceil((8 * 1024 * 1024) / 3) * 4;
+  let accessorCalls = 0;
+  const accessorProof = { backend: "halo2/ipa" };
+  Object.defineProperty(accessorProof, "bytes", {
+    enumerable: true,
+    get() {
+      accessorCalls += 1;
+      return [1, 2, 3];
+    },
+  });
+  const oversizedLegacy = new Array(8 * 1024 * 1024 + 1);
+  const attacks = [
+    [{ ...valid, extra: true }, /only supported optional fields/],
+    [
+      {
+        ...valid,
+        proof: {
+          backend: "halo2/ipa",
+          bytes_b64: "AQID",
+          bytes: [1, 2, 3],
+        },
+      },
+      /exactly backend and one of/,
+    ],
+    [
+      { ...valid, proof: { backend: "halo2/ipa" } },
+      /exactly backend and one of/,
+    ],
+    [
+      {
+        ...valid,
+        proof: { backend: "halo2/ipa", bytes_b64: "AQID", extra: true },
+      },
+      /exactly backend and one of/,
+    ],
+    [
+      { ...valid, proof: { backend: "stark/fri", bytes_b64: "AQID" } },
+      /proof\.backend must match/,
+    ],
+    [
+      { ...valid, proof: { backend: "halo2/ipa", bytes_b64: "AQID\n" } },
+      /canonical standard base64/,
+    ],
+    [
+      { ...valid, proof: { backend: "halo2/ipa", bytes_b64: "AB==" } },
+      /canonical standard base64/,
+    ],
+    [
+      {
+        ...valid,
+        proof: {
+          backend: "halo2/ipa",
+          bytes_b64: "A".repeat(proofMaxBase64Length),
+        },
+      },
+      /8388608-byte proof limit/,
+    ],
+    [{ ...valid, proof: { backend: "halo2/ipa", bytes: [1, 256] } }, /unsigned byte/],
+    [{ ...valid, proof: { backend: "halo2/ipa", bytes: oversizedLegacy } }, /proof limit/],
+    [{ ...valid, proof: accessorProof }, /enumerable data property/],
+    [{ ...valid, vk_commitment: null }, /exact byte array/],
+    [{ ...valid, vk_commitment: Array(32).fill(0) }, /must be non-zero/],
+    [{ ...valid, envelope_hash: Array(32).fill(0) }, /must be non-zero/],
+    [{ ...valid, envelope_hash: Array(32).fill(7) }, /must match proof bytes/],
+  ];
+  for (const [attachment, expected] of attacks) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({ status: 200 }),
+    });
+    client._maybeBoundedJson = async () => ({
+      job_id: jobId,
+      status: "done",
+      proved,
+      attachment,
+    });
+    await assert.rejects(() => client.getIvmProveJob(jobId), expected);
+  }
+  assert.equal(accessorCalls, 0);
+});
+
+test("simulateContractCall rejects fail-open ok coercion and inconsistent errors", async () => {
+  const baseResponse = {
+    dataspace: "universal",
+    contract_address: "tairac1routerfixture",
+    code_hash_hex: "11".repeat(32),
+    abi_hash_hex: "22".repeat(32),
+    entrypoint: "route_swap",
+    normalized_payload: null,
+    gas_limit: 5000,
+    gas_used: 0,
+    queued_instructions: [],
+    result: null,
+    vm_diagnostic: null,
+  };
+  const request = {
+    authority: SAMPLE_ACCOUNT_ID,
+    contractAlias: "dlmm_router::dlmm.universal",
+    gasLimit: 5000,
+  };
+  async function rejectsResponse(jsonData, expected) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createStreamedJsonResponse({
+          status: 200,
+          jsonData,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(() => client.simulateContractCall(request), expected);
+  }
+
+  await rejectsResponse(
+    { ...baseResponse, ok: "false", error: "VM failed" },
+    /response\.ok must be a boolean/,
+  );
+  await rejectsResponse(
+    { ...baseResponse, ok: 1, error: null },
+    /response\.ok must be a boolean/,
+  );
+  await rejectsResponse(
+    { ...baseResponse, ok: true, error: "attacker diagnostic" },
+    /successful .* must not contain an error/,
+  );
+  await rejectsResponse(
+    { ...baseResponse, ok: false, error: null },
+    /failed .* must contain a non-empty error/,
+  );
+});
+
+test("proveIvmAndWait validates polling options before creating a proof job", async () => {
+  let requests = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      requests += 1;
+      throw new Error("proof job must not be created");
+    },
+  });
+  await assert.rejects(
+    () => client.proveIvmAndWait({}, { intervalMs: -1 }),
+    /intervalMs.*non-negative/i,
+  );
+  await assert.rejects(
+    () => client.proveIvmAndWait({}, { timeoutMs: Number.NaN }),
+    /timeoutMs.*integer/i,
+  );
+  assert.equal(requests, 0);
+});
+
+test("proveIvmAndWait best-effort cancels a job when polling fails", async () => {
+  const jobId = "ef".repeat(16);
+  const request = {
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    metadata: {},
+    bytecode: "Y29kZQ==",
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("focused method stubs should replace network access");
+    },
+  });
+  let startCalls = 0;
+  let waitCalls = 0;
+  let cancelCalls = 0;
+  client.startIvmProve = async () => {
+    startCalls += 1;
+    return { job_id: jobId };
+  };
+  client.waitForIvmProveJob = async () => {
+    waitCalls += 1;
+    throw new Error("synthetic timeout");
+  };
+  client.cancelIvmProveJob = async (actualJobId, options) => {
+    cancelCalls += 1;
+    assert.equal(actualJobId, jobId);
+    assert.deepEqual(options, undefined);
+    return { job_id: jobId };
+  };
+  await assert.rejects(
+    () => client.proveIvmAndWait(request, { timeoutMs: 0 }),
+    /synthetic timeout/,
+  );
+  assert.equal(startCalls, 1);
+  assert.equal(waitCalls, 1);
+  assert.equal(cancelCalls, 1);
+
+  client.cancelIvmProveJob = async () => {
+    throw new Error("synthetic cancellation failure");
+  };
+  await assert.rejects(
+    () => client.proveIvmAndWait(request, { timeoutMs: 0 }),
+    /synthetic timeout/,
+  );
+});
+
+test("cancelIvmProveJob sends DELETE and rejects a mismatched response id", async () => {
+  const jobId = "ab".repeat(16);
+  const calls = [];
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return createStreamedJsonResponse({
+        status: 200,
+        jsonData: { job_id: jobId },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  assert.deepEqual(await client.cancelIvmProveJob(jobId.toUpperCase()), {
+    job_id: jobId,
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].init.method, "DELETE");
+  assert.ok(calls[0].url.endsWith(`/v1/zk/ivm/prove/${jobId}`));
+
+  const mismatched = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createStreamedJsonResponse({
+        status: 200,
+        jsonData: { job_id: "cd".repeat(16) },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => mismatched.cancelIvmProveJob(jobId),
+    /returned a different job id/,
+  );
+});
+
+test("waitForIvmProveJob fails closed when a done job omits proof material", async () => {
+  const jobId = "cd".repeat(16);
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createStreamedJsonResponse({
+        status: 200,
+        jsonData: {
+          job_id: jobId,
+          status: "done",
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => client.waitForIvmProveJob(jobId, { intervalMs: 0 }),
+    /must contain exactly|requires proved payload and attachment/,
+  );
+});
+
 test("getContractManifest returns normalized payload", async () => {
   const signer = `ed25519:ed0120${"11".repeat(32)}`;
   const signature = `ed25519:${"22".repeat(64)}`;
   const signerCanonical = signer.split(":")[1];
   const signatureCanonical = signature.split(":")[1].toUpperCase();
   const fetchImpl = async () =>
-    createResponse({
+    createStreamedJsonResponse({
       status: 200,
       jsonData: {
         manifest: {
@@ -22425,16 +23597,778 @@ test("getContractManifest returns null on 404", async () => {
   assert.equal(result, null);
 });
 
-test("getContractCodeBytes returns record", async () => {
-  const fetchImpl = async () =>
-    createResponse({
+test("getContractCodeBytes returns a bounded record and forwards AbortSignal", async () => {
+  const controller = new AbortController();
+  let capturedSignal;
+  const fetchImpl = async (_url, init) => {
+    capturedSignal = init.signal;
+    return new Response(JSON.stringify({ code_b64: "Y29kZQ==" }), {
       status: 200,
-      jsonData: { code_b64: "Y29kZQ==" },
       headers: { "content-type": "application/json" },
     });
+  };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getContractCodeBytes("1".repeat(64));
+  const result = await client.getContractCodeBytes("1".repeat(64), {
+    signal: controller.signal,
+  });
   assert.deepEqual(result, { code_b64: "Y29kZQ==" });
+  assert.equal(capturedSignal, controller.signal);
+});
+
+test("getContractCodeBytes validates options before fetch", async () => {
+  let fetchCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("fetch must not run");
+    },
+  });
+  await assert.rejects(
+    () => client.getContractCodeBytes("1".repeat(64), { limit: 1 }),
+    /getContractCodeBytes options contains unsupported fields: limit/,
+  );
+  await assert.rejects(
+    () => client.getContractCodeBytes("1".repeat(64), { signal: {} }),
+    /signal.*AbortSignal/i,
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("bounded code-byte responses cancel on early rejection and 404", async () => {
+  const cases = [
+    {
+      name: "wrong content type",
+      status: 200,
+      headers: { "content-type": "text/plain" },
+      expected: null,
+    },
+    {
+      name: "oversized Content-Length",
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(CONTRACT_CODE_BYTES_JSON_MAX_BYTES + 1),
+      },
+      error: /response limit/,
+    },
+    {
+      name: "missing byte stream",
+      status: 200,
+      headers: { "content-type": "application/json" },
+      error: /requires a byte-stream response body/,
+    },
+    {
+      name: "not found",
+      status: 404,
+      headers: { "content-type": "application/json" },
+      expected: null,
+    },
+  ];
+  for (const entry of cases) {
+    let cancelCalls = 0;
+    const body = {
+      cancel() {
+        cancelCalls += 1;
+      },
+    };
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => ({
+        status: entry.status,
+        headers: new Headers(entry.headers),
+        body,
+      }),
+    });
+    const operation = client.getContractCodeBytes("1".repeat(64));
+    if (entry.error) {
+      await assert.rejects(operation, entry.error, entry.name);
+    } else {
+      assert.equal(await operation, entry.expected, entry.name);
+    }
+    assert.equal(cancelCalls, 1, `${entry.name} cancellation`);
+  }
+});
+
+test("bounded JSON responses require one exact application/json media type", async () => {
+  for (const contentType of [
+    "application/json",
+    "APPLICATION/JSON",
+    " application/json ; charset=utf-8 ",
+    'application/json; charset="utf-8"; profile="a,b"',
+    'application/json; title="caf\u00e9"',
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ code_b64: "Y29kZQ==" }), {
+          status: 200,
+          headers: { "content-type": contentType },
+        }),
+    });
+    assert.deepEqual(
+      await client.getContractCodeBytes("1".repeat(64)),
+      { code_b64: "Y29kZQ==" },
+      contentType,
+    );
+  }
+
+  for (const contentType of [
+    "text/application/json",
+    "application/json-evil",
+    "application/json, application/json",
+    "application/json, text/plain",
+    "application/json; charset=utf-8, application/json",
+    "application/json;",
+    "application/json; charset",
+    "application/json; charset =utf-8",
+    "application/j\u017fon",
+    "\u0430pplication/json",
+    "application/js\u03bfn",
+    "application\uff0fjson",
+  ]) {
+    let bodyReads = 0;
+    let cancelCalls = 0;
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => ({
+        status: 200,
+        headers: {
+          get(name) {
+            return name.toLowerCase() === "content-type" ? contentType : null;
+          },
+        },
+        body: {
+          getReader() {
+            bodyReads += 1;
+            throw new Error("confused media type body must not be read");
+          },
+          cancel() {
+            cancelCalls += 1;
+          },
+        },
+      }),
+    });
+    assert.equal(
+      await client.getContractCodeBytes("1".repeat(64)),
+      null,
+      contentType,
+    );
+    assert.equal(bodyReads, 0, `${contentType} body reads`);
+    assert.equal(cancelCalls, 1, `${contentType} cancellation`);
+  }
+});
+
+test("bounded code-byte response reads enforce timeout and caller abort", async () => {
+  for (const mode of ["timeout", "abort"]) {
+    let cancelCalls = 0;
+    const reader = {
+      read() {
+        return new Promise(() => {});
+      },
+      cancel() {
+        cancelCalls += 1;
+      },
+      releaseLock() {},
+    };
+    const body = {
+      getReader() {
+        return reader;
+      },
+    };
+    const controller = new AbortController();
+    const client = new ToriiClient(BASE_URL, {
+      timeoutMs: mode === "timeout" ? 10 : 1_000,
+      fetchImpl: async () => ({
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        body,
+      }),
+    });
+    if (mode === "abort") {
+      setTimeout(() => controller.abort(new Error("caller stopped body read")), 10);
+    }
+    const startedAt = Date.now();
+    await assert.rejects(
+      () =>
+        client.getContractCodeBytes("1".repeat(64), {
+          ...(mode === "abort" ? { signal: controller.signal } : {}),
+        }),
+      mode === "timeout" ? /body read timed out after 10ms/ : /caller stopped body read/,
+    );
+    assert.ok(Date.now() - startedAt < 500, `${mode} must terminate promptly`);
+    assert.equal(cancelCalls, 1, `${mode} reader cancellation`);
+  }
+});
+
+test("bounded readers close reentrant abort and hostile signal cleanup races", async () => {
+  for (const abortPoint of ["content-length", "getReader"]) {
+    const controller = new AbortController();
+    const reason = new Error(`abort from ${abortPoint}`);
+    let cancelCalls = 0;
+    let releaseCalls = 0;
+    let reads = 0;
+    const reader = {
+      async read() {
+        reads += 1;
+        return reads === 1
+          ? {
+              done: false,
+              value: new TextEncoder().encode('{"code_b64":"Y29kZQ=="}'),
+            }
+          : { done: true, value: undefined };
+      },
+      cancel() {
+        cancelCalls += 1;
+      },
+      releaseLock() {
+        releaseCalls += 1;
+      },
+    };
+    const body = {
+      getReader() {
+        if (abortPoint === "getReader") controller.abort(reason);
+        return reader;
+      },
+    };
+    const headers = {
+      get(name) {
+        if (name.toLowerCase() === "content-type") return "application/json";
+        if (name.toLowerCase() === "content-length") {
+          if (abortPoint === "content-length") controller.abort(reason);
+          return null;
+        }
+        return null;
+      },
+    };
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => ({ status: 200, headers, body }),
+    });
+    await assert.rejects(
+      () =>
+        client.getContractCodeBytes("1".repeat(64), {
+          signal: controller.signal,
+        }),
+      new RegExp(`abort from ${abortPoint}`),
+    );
+    assert.equal(cancelCalls, 1, abortPoint);
+    assert.equal(releaseCalls, 1, abortPoint);
+  }
+
+  const shadowedController = new AbortController();
+  const shadowedReason = new Error("intrinsic aborted state wins");
+  shadowedController.abort(shadowedReason);
+  Object.defineProperties(shadowedController.signal, {
+    aborted: { value: false },
+    reason: { value: undefined },
+    addEventListener: { value() {} },
+    removeEventListener: { value() {} },
+    throwIfAborted: { value() {} },
+  });
+  let shadowBodyCancels = 0;
+  const shadowClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => ({
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: {
+        cancel() {
+          shadowBodyCancels += 1;
+        },
+      },
+    }),
+  });
+  await assert.rejects(
+    () =>
+      shadowClient.getContractCodeBytes("1".repeat(64), {
+        signal: shadowedController.signal,
+      }),
+    /intrinsic aborted state wins/,
+  );
+  assert.equal(shadowBodyCancels, 1);
+
+  for (const mode of ["add throws", "remove throws"]) {
+    let readerCancels = 0;
+    let releases = 0;
+    const customSignal = {
+      aborted: false,
+      addEventListener() {
+        if (mode === "add throws") throw new Error("listener boom");
+      },
+      removeEventListener() {
+        if (mode === "remove throws") throw new Error("cleanup boom");
+      },
+    };
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => ({
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        body: {
+          getReader() {
+            return {
+              async read() {
+                if (mode === "remove throws") {
+                  return { done: false, value: "not bytes" };
+                }
+                return { done: true, value: undefined };
+              },
+              cancel() {
+                readerCancels += 1;
+              },
+              releaseLock() {
+                releases += 1;
+              },
+            };
+          },
+        },
+      }),
+    });
+    await assert.rejects(
+      () =>
+        client.getContractCodeBytes("1".repeat(64), {
+          signal: customSignal,
+        }),
+      mode === "add throws" ? /listener boom/ : /non-byte chunk/,
+    );
+    assert.equal(readerCancels, 1, mode);
+    assert.equal(releases, 1, mode);
+  }
+});
+
+test("bounded readers cancel when custom header methods throw", async () => {
+  let cancelCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => ({
+      status: 200,
+      headers: {
+        get() {
+          throw new Error("hostile header getter");
+        },
+      },
+      body: {
+        cancel() {
+          cancelCalls += 1;
+        },
+      },
+    }),
+  });
+  await assert.rejects(
+    () => client.getContractCodeBytes("1".repeat(64)),
+    /hostile header getter/,
+  );
+  assert.equal(cancelCalls, 1);
+});
+
+test("bounded code-byte responses cancel after UTF-8 and JSON rejection", async () => {
+  for (const [bytes, expected] of [
+    [Uint8Array.of(0xc3, 0x28), /must be valid UTF-8/],
+    [new TextEncoder().encode("{"), /must contain valid JSON/],
+  ]) {
+    let bodyCancelCalls = 0;
+    let reads = 0;
+    const body = {
+      getReader() {
+        return {
+          async read() {
+            reads += 1;
+            return reads === 1
+              ? { done: false, value: bytes }
+              : { done: true, value: undefined };
+          },
+          releaseLock() {},
+        };
+      },
+      cancel() {
+        bodyCancelCalls += 1;
+      },
+    };
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => ({
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        body,
+      }),
+    });
+    await assert.rejects(
+      () => client.getContractCodeBytes("1".repeat(64)),
+      expected,
+    );
+    assert.equal(bodyCancelCalls, 1);
+  }
+});
+
+test("IVM request and bounded response copies never consult buffer species", async () => {
+  const requestBuffer = Uint8Array.from([99, 111, 100, 101]).buffer;
+  let requestConstructorReads = 0;
+  Object.defineProperty(requestBuffer, "constructor", {
+    get() {
+      requestConstructorReads += 1;
+      throw new Error("request buffer constructor must not run");
+    },
+  });
+  const deriveClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createStreamedJsonResponse({
+        status: 200,
+        jsonData: {
+          proved: {
+            bytecode: "Y29kZQ==",
+            overlay: [],
+            events_commitment: "01".repeat(32),
+            gas_policy_commitment: "02".repeat(32),
+          },
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await deriveClient.deriveIvmProved({
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    metadata: {},
+    bytecode: requestBuffer,
+  });
+  assert.equal(requestConstructorReads, 0);
+
+  const responseChunk = new TextEncoder().encode('{"code_b64":"Y29kZQ=="}');
+  let responseConstructorReads = 0;
+  Object.defineProperty(responseChunk.buffer, "constructor", {
+    get() {
+      responseConstructorReads += 1;
+      throw new Error("response buffer constructor must not run");
+    },
+  });
+  let reads = 0;
+  const responseClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => ({
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: {
+        getReader() {
+          return {
+            async read() {
+              reads += 1;
+              return reads === 1
+                ? { done: false, value: responseChunk }
+                : { done: true, value: undefined };
+            },
+            releaseLock() {},
+          };
+        },
+      },
+    }),
+  });
+  assert.deepEqual(await responseClient.getContractCodeBytes("1".repeat(64)), {
+    code_b64: "Y29kZQ==",
+  });
+  assert.equal(responseConstructorReads, 0);
+});
+
+test("bounded response readers reject accessor read results without invoking them", async () => {
+  let getterCalls = 0;
+  let cancelCalls = 0;
+  const readResult = { value: Uint8Array.of(1) };
+  Object.defineProperty(readResult, "done", {
+    enumerable: true,
+    get() {
+      getterCalls += 1;
+      return false;
+    },
+  });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => ({
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: {
+        getReader() {
+          return {
+            async read() {
+              return readResult;
+            },
+            cancel() {
+              cancelCalls += 1;
+            },
+            releaseLock() {},
+          };
+        },
+      },
+    }),
+  });
+  await assert.rejects(
+    () => client.getContractCodeBytes("1".repeat(64)),
+    /done must be an enumerable data property/,
+  );
+  assert.equal(getterCalls, 0);
+  assert.equal(cancelCalls, 1);
+});
+
+test("getContractCodeBytes rejects oversized declared bodies before reading", async () => {
+  for (const contentLength of [
+    String(CONTRACT_CODE_BYTES_JSON_MAX_BYTES + 1),
+    "-1",
+    "1.5",
+    "9007199254740993",
+  ]) {
+    let bodyReads = 0;
+    const response = {
+      status: 200,
+      headers: new Headers({
+        "content-type": "application/json",
+        "content-length": contentLength,
+      }),
+      get body() {
+        bodyReads += 1;
+        throw new Error("body must not be read");
+      },
+    };
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => response,
+    });
+    await assert.rejects(
+      () => client.getContractCodeBytes("1".repeat(64)),
+      /Content-Length|response limit/,
+    );
+    assert.equal(bodyReads, 0);
+  }
+});
+
+test("getContractCodeBytes bounds actual streamed bytes with absent or lying headers", async () => {
+  for (const contentLength of [null, "1"]) {
+    let cancelled = false;
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          new Uint8Array(CONTRACT_CODE_BYTES_JSON_MAX_BYTES),
+        );
+        controller.enqueue(Uint8Array.of(0x20));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const headers = new Headers({ "content-type": "application/json" });
+    if (contentLength !== null) headers.set("content-length", contentLength);
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => new Response(body, { status: 200, headers }),
+    });
+    await assert.rejects(
+      () => client.getContractCodeBytes("1".repeat(64)),
+      /exceeds the .*response limit/,
+    );
+    assert.equal(cancelled, true);
+  }
+});
+
+test("getContractCodeBytes fails closed without a bounded byte stream", async () => {
+  let textCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => ({
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => ({ code_b64: "Y29kZQ==" }),
+      text: async () => {
+        textCalls += 1;
+        return JSON.stringify({ code_b64: "Y29kZQ==" });
+      },
+    }),
+  });
+  await assert.rejects(
+    () => client.getContractCodeBytes("1".repeat(64)),
+    /requires a byte-stream response body/,
+  );
+  assert.equal(textCalls, 0);
+});
+
+test("getContractCodeBytes rejects shared and snapshots reused stream chunks", async () => {
+  if (typeof SharedArrayBuffer === "function") {
+    let read = false;
+    let cancelled = false;
+    const sharedChunk = new Uint8Array(new SharedArrayBuffer(1));
+    Object.defineProperties(sharedChunk, {
+      buffer: { value: new ArrayBuffer(1) },
+      byteOffset: { value: 0 },
+      byteLength: { value: 1 },
+    });
+    const sharedResponse = {
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: {
+        getReader() {
+          return {
+            async read() {
+              if (read) return { done: true, value: undefined };
+              read = true;
+              return {
+                done: false,
+                value: sharedChunk,
+              };
+            },
+            async cancel() {
+              cancelled = true;
+            },
+            releaseLock() {},
+          };
+        },
+      },
+    };
+    const sharedClient = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => sharedResponse,
+    });
+    await assert.rejects(
+      () => sharedClient.getContractCodeBytes("1".repeat(64)),
+      /must not use SharedArrayBuffer-backed chunks/,
+    );
+    assert.equal(cancelled, true);
+  }
+
+  const first = new TextEncoder().encode('{"code_b64":"');
+  Object.defineProperties(first, {
+    buffer: {
+      get() {
+        throw new Error("shadow buffer must not be read");
+      },
+    },
+    byteOffset: {
+      get() {
+        throw new Error("shadow byteOffset must not be read");
+      },
+    },
+    byteLength: {
+      get() {
+        throw new Error("shadow byteLength must not be read");
+      },
+    },
+  });
+  const second = new TextEncoder().encode('Y29kZQ=="}');
+  let readIndex = 0;
+  const response = {
+    status: 200,
+    headers: new Headers({ "content-type": "application/json" }),
+    body: {
+      getReader() {
+        return {
+          async read() {
+            readIndex += 1;
+            if (readIndex === 1) return { done: false, value: first };
+            if (readIndex === 2) {
+              first.fill(0x78);
+              return { done: false, value: second };
+            }
+            return { done: true, value: undefined };
+          },
+          releaseLock() {},
+        };
+      },
+    },
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => response,
+  });
+  assert.deepEqual(await client.getContractCodeBytes("1".repeat(64)), {
+    code_b64: "Y29kZQ==",
+  });
+});
+
+test("getContractCodeBytes cancels non-progress and fragmented streams", async () => {
+  for (const mode of ["empty", "fragmented"]) {
+    let reads = 0;
+    let cancelled = false;
+    const response = {
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: {
+        getReader() {
+          return {
+            async read() {
+              reads += 1;
+              return {
+                done: false,
+                value:
+                  mode === "empty" ? new Uint8Array(0) : Uint8Array.of(0x20),
+              };
+            },
+            async cancel() {
+              cancelled = true;
+            },
+            releaseLock() {},
+          };
+        },
+      },
+    };
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => response,
+    });
+    await assert.rejects(
+      () => client.getContractCodeBytes("1".repeat(64)),
+      mode === "empty" ? /empty non-progress chunk/ : /too many fragmented chunks/,
+    );
+    assert.equal(cancelled, true);
+    assert.equal(
+      reads,
+      mode === "empty" ? 1 : 64 * 1024 + 1,
+      `${mode} stream read bound`,
+    );
+  }
+});
+
+test("getContractCodeBytes rejects oversized base64 before decoding", async () => {
+  const attacks = [
+    "A".repeat(IVM_ARTIFACT_MAX_BASE64_LENGTH + 1),
+    Buffer.alloc(IVM_ARTIFACT_MAX_BYTES + 1).toString("base64"),
+  ];
+  for (const code_b64 of attacks) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ code_b64 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(
+      () => client.getContractCodeBytes("1".repeat(64)),
+      /exceeds the 4194304-byte artifact limit/,
+    );
+  }
+});
+
+test("getContractCodeBytes rejects non-string code_b64 JSON values", async () => {
+  for (const code_b64 of [null, [], {}, [89, 50, 57, 107, 90, 81]]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ code_b64 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(
+      () => client.getContractCodeBytes("1".repeat(64)),
+      /code_b64 must be a base64 string/,
+    );
+  }
+});
+
+test("getContractCodeBytes rejects ambiguous or active DTO shapes", async () => {
+  let accessorReads = 0;
+  const accessor = {};
+  Object.defineProperty(accessor, "code_b64", {
+    enumerable: true,
+    get() {
+      accessorReads += 1;
+      return "Y29kZQ==";
+    },
+  });
+  const withSymbol = { code_b64: "Y29kZQ==" };
+  withSymbol[Symbol("attacker")] = true;
+  for (const payload of [
+    {},
+    { code_b64: "Y29kZQ==", extra: true },
+    withSymbol,
+    accessor,
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => ({ status: 200 }),
+    });
+    client._maybeBoundedJson = async () => payload;
+    await assert.rejects(
+      () => client.getContractCodeBytes("1".repeat(64)),
+      /exactly the code_b64 field|enumerable data property/,
+    );
+  }
+  assert.equal(accessorReads, 0, "accessor payload must be rejected without invocation");
 });
 
 test("getGovernanceContract mirrors response handling", async () => {
@@ -24315,6 +26249,277 @@ test("listTelemetryPeersInfo rejects malformed payloads", async () => {
   );
 });
 
+test("submitTransaction bounds node capabilities before any pipeline side effect", async () => {
+  for (const mode of ["declared oversized", "stalled"]) {
+    let pipelineCalls = 0;
+    let cancelCalls = 0;
+    const body =
+      mode === "stalled"
+        ? {
+            getReader() {
+              return {
+                read() {
+                  return new Promise(() => {});
+                },
+                cancel() {
+                  cancelCalls += 1;
+                },
+                releaseLock() {},
+              };
+            },
+          }
+        : {
+            cancel() {
+              cancelCalls += 1;
+            },
+          };
+    const client = new ToriiClient(BASE_URL, {
+      timeoutMs: 10,
+      __nativeBinding: {},
+      fetchImpl: async (url) => {
+        if (url.endsWith("/v1/node/capabilities")) {
+          return {
+            status: 200,
+            headers: new Headers({
+              "content-type": "application/json",
+              ...(mode === "declared oversized"
+                ? { "content-length": String(1024 * 1024 + 1) }
+                : {}),
+            }),
+            body,
+          };
+        }
+        pipelineCalls += 1;
+        throw new Error("pipeline must not be reached");
+      },
+    });
+    await assert.rejects(
+      () => client.submitTransaction(Uint8Array.of(1)),
+      mode === "stalled" ? /body read timed out after 10ms/ : /response limit/,
+    );
+    assert.equal(pipelineCalls, 0, mode);
+    assert.equal(cancelCalls, 1, mode);
+  }
+});
+
+test("submitTransaction caller abort does not wait for shared capability validation", async () => {
+  const controller = new AbortController();
+  let pipelineCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    timeoutMs: 30,
+    __nativeBinding: {},
+    fetchImpl: async (url) => {
+      if (url.endsWith("/v1/node/capabilities")) {
+        return {
+          status: 200,
+          headers: new Headers({ "content-type": "application/json" }),
+          body: {
+            getReader() {
+              return {
+                read() {
+                  return new Promise(() => {});
+                },
+                cancel() {},
+                releaseLock() {},
+              };
+            },
+          },
+        };
+      }
+      pipelineCalls += 1;
+      throw new Error("pipeline must not be reached");
+    },
+  });
+  const reason = new Error("caller abandoned validation");
+  setTimeout(() => controller.abort(reason), 5);
+  const startedAt = Date.now();
+  await assert.rejects(
+    () =>
+      client.submitTransaction(Uint8Array.of(1), {
+        signal: controller.signal,
+      }),
+    /caller abandoned validation/,
+  );
+  assert.ok(Date.now() - startedAt < 200);
+  assert.equal(pipelineCalls, 0);
+});
+
+test("submitTransaction bounds JSON and Norito success receipts after one submit", async () => {
+  for (const contentType of ["application/json", "application/x-norito"]) {
+    for (const mode of ["declared oversized", "stalled"]) {
+      let pipelineCalls = 0;
+      let cancelCalls = 0;
+      const body =
+        mode === "stalled"
+          ? {
+              getReader() {
+                return {
+                  read() {
+                    return new Promise(() => {});
+                  },
+                  cancel() {
+                    cancelCalls += 1;
+                  },
+                  releaseLock() {},
+                };
+              },
+            }
+          : {
+              cancel() {
+                cancelCalls += 1;
+              },
+            };
+      const client = new ToriiClient(BASE_URL, {
+        timeoutMs: 10,
+        __nativeBinding: {},
+        fetchImpl: async (url) => {
+          if (url.endsWith("/v1/node/capabilities")) {
+            return createResponse({
+              status: 200,
+              jsonData: validNodeCapabilitiesPayload(),
+              headers: { "content-type": "application/json" },
+            });
+          }
+          pipelineCalls += 1;
+          return {
+            status: 202,
+            headers: new Headers({
+              "content-type": contentType,
+              ...(mode === "declared oversized"
+                ? { "content-length": String(1024 * 1024 + 1) }
+                : {}),
+            }),
+            body,
+          };
+        },
+      });
+      await assert.rejects(
+        () => client.submitTransaction(Uint8Array.of(1)),
+        mode === "stalled" ? /body read timed out after 10ms/ : /response limit/,
+      );
+      assert.equal(pipelineCalls, 1, `${contentType} ${mode}`);
+      assert.equal(cancelCalls, 1, `${contentType} ${mode}`);
+    }
+  }
+});
+
+test("transaction status bodies are bounded and 404 bodies are cancelled", async () => {
+  const hash = "11".repeat(32);
+  for (const mode of ["not found", "declared oversized", "stalled"]) {
+    let cancelCalls = 0;
+    const body =
+      mode === "stalled"
+        ? {
+            getReader() {
+              return {
+                read() {
+                  return new Promise(() => {});
+                },
+                cancel() {
+                  cancelCalls += 1;
+                },
+                releaseLock() {},
+              };
+            },
+          }
+        : {
+            cancel() {
+              cancelCalls += 1;
+            },
+          };
+    const client = new ToriiClient(BASE_URL, {
+      timeoutMs: 10,
+      fetchImpl: async () => ({
+        status: mode === "not found" ? 404 : 200,
+        headers: new Headers({
+          "content-type": "application/json",
+          ...(mode === "declared oversized"
+            ? { "content-length": String(1024 * 1024 + 1) }
+            : {}),
+        }),
+        body,
+      }),
+    });
+    const operation = client.getTransactionStatus(hash);
+    if (mode === "not found") {
+      assert.equal(await operation, null);
+    } else {
+      await assert.rejects(
+        operation,
+        mode === "stalled" ? /body read timed out after 10ms/ : /response limit/,
+      );
+    }
+    assert.equal(cancelCalls, 1, mode);
+  }
+});
+
+test("HTTP error diagnostics abort stalled bodies and retry cleanup cancels discarded bodies", async () => {
+  const controller = new AbortController();
+  let errorBodyCancels = 0;
+  const errorClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => ({
+      status: 500,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: {
+        getReader() {
+          return {
+            read() {
+              return new Promise(() => {});
+            },
+            cancel() {
+              errorBodyCancels += 1;
+            },
+            releaseLock() {},
+          };
+        },
+      },
+    }),
+  });
+  setTimeout(() => controller.abort(new Error("stop stalled error body")), 5);
+  await assert.rejects(
+    () =>
+      errorClient.simulateContractCall(
+        {
+          authority: SAMPLE_ACCOUNT_ID,
+          contractAlias: "dlmm_router::dlmm.universal",
+          gasLimit: 5000,
+        },
+        { signal: controller.signal },
+      ),
+    /stop stalled error body/,
+  );
+  assert.equal(errorBodyCancels, 1);
+
+  let requests = 0;
+  let retryBodyCancels = 0;
+  const retryClient = new ToriiClient(BASE_URL, {
+    maxRetries: 1,
+    backoffInitialMs: 0,
+    fetchImpl: async () => {
+      requests += 1;
+      if (requests === 1) {
+        return {
+          status: 503,
+          headers: new Headers({ "content-type": "application/json" }),
+          body: {
+            cancel() {
+              retryBodyCancels += 1;
+            },
+          },
+        };
+      }
+      return createResponse({
+        status: 200,
+        jsonData: validNodeCapabilitiesPayload(),
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  assert.equal((await retryClient.getNodeCapabilities()).abiVersion, 1);
+  assert.equal(requests, 2);
+  assert.equal(retryBodyCancels, 1);
+});
+
 test("methods surface HTTP errors with body", async () => {
   const fetchImpl = async () =>
     createResponse({ status: 500, textBody: "boom", jsonData: { error: "boom" } });
@@ -24354,7 +26559,7 @@ test("http errors expose structured fields", async () => {
       assert.deepEqual(error.expected, [200]);
       assert.equal(error.code, payload.code);
       assert.equal(error.errorMessage, payload.message);
-      assert.equal(error.bodyJson, payload);
+      assert.deepEqual(error.bodyJson, payload);
       return true;
     },
   );
@@ -24432,7 +26637,45 @@ function requireSorafsNative(t) {
   return native;
 }
 
+function validNodeCapabilitiesPayload() {
+  return {
+    abi_version: 1,
+    data_model_version: 1,
+    crypto: {
+      sm: {
+        enabled: false,
+        default_hash: "sha2_256",
+        allowed_signing: ["ed25519"],
+        sm2_distid_default: "",
+        openssl_preview: false,
+        acceleration: {
+          scalar: true,
+          neon_sm3: false,
+          neon_sm4: false,
+          policy: "scalar-only",
+        },
+      },
+      curves: {
+        registry_version: 1,
+        allowed_curve_ids: [1],
+      },
+    },
+  };
+}
+
 function createResponse({ status, jsonData = {}, arrayData, textBody, headers }) {
+  const responseText =
+    typeof textBody === "string" ? textBody : JSON.stringify(jsonData ?? {});
+  const bodyBytes =
+    arrayData instanceof ArrayBuffer
+      ? new Uint8Array(arrayData)
+      : ArrayBuffer.isView(arrayData)
+        ? new Uint8Array(
+            arrayData.buffer,
+            arrayData.byteOffset,
+            arrayData.byteLength,
+          )
+        : new TextEncoder().encode(responseText);
   return {
     status,
     json: async () => jsonData,
@@ -24443,9 +26686,18 @@ function createResponse({ status, jsonData = {}, arrayData, textBody, headers })
       if (ArrayBuffer.isView(arrayData)) {
         return arrayData.buffer.slice(arrayData.byteOffset, arrayData.byteOffset + arrayData.byteLength);
       }
-      return new TextEncoder().encode(textBody ?? JSON.stringify(jsonData ?? {})).buffer;
+      return bodyBytes.buffer.slice(
+        bodyBytes.byteOffset,
+        bodyBytes.byteOffset + bodyBytes.byteLength,
+      );
     },
-    text: async () => (typeof textBody === "string" ? textBody : JSON.stringify(jsonData ?? {})),
+    text: async () => responseText,
+    body: new ReadableStream({
+      start(controller) {
+        if (bodyBytes.byteLength > 0) controller.enqueue(bodyBytes);
+        controller.close();
+      },
+    }),
     headers: {
       get(name) {
         if (!headers) {
@@ -24461,6 +26713,13 @@ function createResponse({ status, jsonData = {}, arrayData, textBody, headers })
       },
     },
   };
+}
+
+function createStreamedJsonResponse({ status, jsonData, headers = {} }) {
+  return new Response(JSON.stringify(jsonData), {
+    status,
+    headers,
+  });
 }
 
 function markFetchSupportsRawUtf8Headers(fetchImpl) {

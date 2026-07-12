@@ -626,8 +626,8 @@ public struct KagemushaRequestAuthorizationFieldsV2: Equatable, Sendable {
         self.expiresAtMilliseconds = expiresAtMilliseconds
         self.nonce = Data(nonce)
         self.payloadDigest = Data(payloadDigest)
-        self.appAttestEvidenceSHA256 = appAttestEvidenceSHA256.map(Data.init)
-        self.appAttestEvidence = appAttestEvidence.map(Data.init)
+        self.appAttestEvidenceSHA256 = appAttestEvidenceSHA256.map { Data($0) }
+        self.appAttestEvidence = appAttestEvidence.map { Data($0) }
     }
 
     public func signingBytes() throws -> Data {
@@ -807,7 +807,7 @@ public struct KagemushaRecursiveSpendTopUpAnchorV2: Equatable, Sendable {
         self.amount = amount
         self.initialRoot = Data(initialRoot)
         self.finalizedRoot = Data(finalizedRoot)
-        self.topUpAnchorNullifiers = topUpAnchorNullifiers.map(Data.init)
+        self.topUpAnchorNullifiers = topUpAnchorNullifiers.map { Data($0) }
         self.currentNote = currentNote
         self.topUpOperationID = Data(topUpOperationID)
         self.transferVerifierID = transferVerifierID
@@ -1127,7 +1127,7 @@ public struct KagemushaRecursiveSpendLineageWitnessV2: Equatable, Sendable {
             finalBundleDigest,
             field: "finalBundleDigest"
         )
-        self.transitionArchives = transitionArchives.map(Data.init)
+        self.transitionArchives = transitionArchives.map { Data($0) }
         self.finalBundleDigest = Data(finalBundleDigest)
     }
 
@@ -1331,8 +1331,8 @@ public struct KagemushaUnshieldPublicInputsBindingV2: Equatable, Sendable {
         ] where value.count != 32 {
             throw KagemushaRecursiveSpendV2Error.invalidField(field)
         }
-        self.inputCommitments = inputCommitments.map(Data.init)
-        self.nullifiers = nullifiers.map(Data.init)
+        self.inputCommitments = inputCommitments.map { Data($0) }
+        self.nullifiers = nullifiers.map { Data($0) }
         self.changeOutputCommitment = Data(changeOutputCommitment)
         self.root = Data(root)
         self.publicAmount = Data(publicAmount)

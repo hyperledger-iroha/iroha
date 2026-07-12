@@ -5002,12 +5002,230 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
     norito::json::Value::Object(root)
 }
 
+fn parse_canonical_u128_json(field: &str, value: &str) -> Result<u128> {
+    if value.is_empty()
+        || (value.len() > 1 && value.starts_with('0'))
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(eyre!(
+            "invalid {field}: expected a canonical unsigned decimal u128 string"
+        ));
+    }
+    value
+        .parse::<u128>()
+        .map_err(|error| eyre!("invalid {field}: {error}"))
+}
+
+#[derive(Debug, JsonDeserialize, JsonSerialize)]
+struct LaneSettlementReceiptJson {
+    source_id: [u8; 32],
+    local_amount_micro: String,
+    xor_due_micro: String,
+    xor_after_haircut_micro: String,
+    xor_variance_micro: String,
+    timestamp_ms: u64,
+}
+
+impl From<iroha_data_model::block::consensus::LaneSettlementReceipt> for LaneSettlementReceiptJson {
+    fn from(receipt: iroha_data_model::block::consensus::LaneSettlementReceipt) -> Self {
+        Self {
+            source_id: receipt.source_id,
+            local_amount_micro: receipt.local_amount_micro.to_string(),
+            xor_due_micro: receipt.xor_due_micro.to_string(),
+            xor_after_haircut_micro: receipt.xor_after_haircut_micro.to_string(),
+            xor_variance_micro: receipt.xor_variance_micro.to_string(),
+            timestamp_ms: receipt.timestamp_ms,
+        }
+    }
+}
+
+impl TryFrom<LaneSettlementReceiptJson>
+    for iroha_data_model::block::consensus::LaneSettlementReceipt
+{
+    type Error = eyre::Report;
+
+    fn try_from(receipt: LaneSettlementReceiptJson) -> Result<Self> {
+        Ok(Self {
+            source_id: receipt.source_id,
+            local_amount_micro: parse_canonical_u128_json(
+                "lane settlement receipt local_amount_micro",
+                &receipt.local_amount_micro,
+            )?,
+            xor_due_micro: parse_canonical_u128_json(
+                "lane settlement receipt xor_due_micro",
+                &receipt.xor_due_micro,
+            )?,
+            xor_after_haircut_micro: parse_canonical_u128_json(
+                "lane settlement receipt xor_after_haircut_micro",
+                &receipt.xor_after_haircut_micro,
+            )?,
+            xor_variance_micro: parse_canonical_u128_json(
+                "lane settlement receipt xor_variance_micro",
+                &receipt.xor_variance_micro,
+            )?,
+            timestamp_ms: receipt.timestamp_ms,
+        })
+    }
+}
+
+#[derive(Debug, JsonDeserialize, JsonSerialize)]
+struct LaneBlockCommitmentJson {
+    block_height: u64,
+    lane_id: iroha_data_model::nexus::LaneId,
+    lane_incarnation: Hash,
+    dataspace_id: iroha_data_model::nexus::DataSpaceId,
+    tx_count: u64,
+    total_local_micro: String,
+    total_xor_due_micro: String,
+    total_xor_after_haircut_micro: String,
+    total_xor_variance_micro: String,
+    #[norito(default)]
+    swap_metadata: Option<iroha_data_model::block::consensus::LaneSwapMetadata>,
+    #[norito(default)]
+    receipts: Vec<LaneSettlementReceiptJson>,
+    #[norito(default)]
+    nexus_fee_receipts: Vec<iroha_data_model::block::consensus::NexusFeeReceipt>,
+    #[norito(default)]
+    native_amx_receipts: Vec<iroha_data_model::block::consensus::NativeAmxReceipt>,
+}
+
+impl From<iroha_data_model::block::consensus::LaneBlockCommitment> for LaneBlockCommitmentJson {
+    fn from(commitment: iroha_data_model::block::consensus::LaneBlockCommitment) -> Self {
+        Self {
+            block_height: commitment.block_height,
+            lane_id: commitment.lane_id,
+            lane_incarnation: commitment.lane_incarnation,
+            dataspace_id: commitment.dataspace_id,
+            tx_count: commitment.tx_count,
+            total_local_micro: commitment.total_local_micro.to_string(),
+            total_xor_due_micro: commitment.total_xor_due_micro.to_string(),
+            total_xor_after_haircut_micro: commitment.total_xor_after_haircut_micro.to_string(),
+            total_xor_variance_micro: commitment.total_xor_variance_micro.to_string(),
+            swap_metadata: commitment.swap_metadata,
+            receipts: commitment.receipts.into_iter().map(Into::into).collect(),
+            nexus_fee_receipts: commitment.nexus_fee_receipts,
+            native_amx_receipts: commitment.native_amx_receipts,
+        }
+    }
+}
+
+impl TryFrom<LaneBlockCommitmentJson> for iroha_data_model::block::consensus::LaneBlockCommitment {
+    type Error = eyre::Report;
+
+    fn try_from(commitment: LaneBlockCommitmentJson) -> Result<Self> {
+        let total_local_micro = parse_canonical_u128_json(
+            "lane settlement commitment total_local_micro",
+            &commitment.total_local_micro,
+        )?;
+        let total_xor_due_micro = parse_canonical_u128_json(
+            "lane settlement commitment total_xor_due_micro",
+            &commitment.total_xor_due_micro,
+        )?;
+        let total_xor_after_haircut_micro = parse_canonical_u128_json(
+            "lane settlement commitment total_xor_after_haircut_micro",
+            &commitment.total_xor_after_haircut_micro,
+        )?;
+        let total_xor_variance_micro = parse_canonical_u128_json(
+            "lane settlement commitment total_xor_variance_micro",
+            &commitment.total_xor_variance_micro,
+        )?;
+        let receipts = commitment
+            .receipts
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            block_height: commitment.block_height,
+            lane_id: commitment.lane_id,
+            lane_incarnation: commitment.lane_incarnation,
+            dataspace_id: commitment.dataspace_id,
+            tx_count: commitment.tx_count,
+            total_local_micro,
+            total_xor_due_micro,
+            total_xor_after_haircut_micro,
+            total_xor_variance_micro,
+            swap_metadata: commitment.swap_metadata,
+            receipts,
+            nexus_fee_receipts: commitment.nexus_fee_receipts,
+            native_amx_receipts: commitment.native_amx_receipts,
+        })
+    }
+}
+
+#[derive(Debug, JsonDeserialize, JsonSerialize)]
+struct LaneRelayEnvelopeJson {
+    lane_id: iroha_data_model::nexus::LaneId,
+    lane_incarnation: Hash,
+    dataspace_id: iroha_data_model::nexus::DataSpaceId,
+    block_height: u64,
+    block_header: iroha_data_model::block::BlockHeader,
+    #[norito(default)]
+    qc: Option<iroha_data_model::consensus::Qc>,
+    #[norito(default)]
+    da_commitment_hash: Option<HashOf<iroha_data_model::da::commitment::DaCommitmentBundle>>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    lane_block_descriptor_hash: Option<Hash>,
+    settlement_commitment: LaneBlockCommitmentJson,
+    settlement_hash: HashOf<iroha_data_model::block::consensus::LaneBlockCommitment>,
+    #[norito(default)]
+    rbc_bytes_total: u64,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    manifest_root: Option<[u8; 32]>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    fastpq_proof: Option<iroha_data_model::nexus::LaneFastpqProofMaterial>,
+}
+
+impl From<iroha_data_model::nexus::LaneRelayEnvelope> for LaneRelayEnvelopeJson {
+    fn from(envelope: iroha_data_model::nexus::LaneRelayEnvelope) -> Self {
+        Self {
+            lane_id: envelope.lane_id,
+            lane_incarnation: envelope.lane_incarnation,
+            dataspace_id: envelope.dataspace_id,
+            block_height: envelope.block_height,
+            block_header: envelope.block_header,
+            qc: envelope.qc,
+            da_commitment_hash: envelope.da_commitment_hash,
+            lane_block_descriptor_hash: envelope.lane_block_descriptor_hash,
+            settlement_commitment: envelope.settlement_commitment.into(),
+            settlement_hash: envelope.settlement_hash,
+            rbc_bytes_total: envelope.rbc_bytes_total,
+            manifest_root: envelope.manifest_root,
+            fastpq_proof: envelope.fastpq_proof,
+        }
+    }
+}
+
+impl TryFrom<LaneRelayEnvelopeJson> for iroha_data_model::nexus::LaneRelayEnvelope {
+    type Error = eyre::Report;
+
+    fn try_from(envelope: LaneRelayEnvelopeJson) -> Result<Self> {
+        Ok(Self {
+            lane_id: envelope.lane_id,
+            lane_incarnation: envelope.lane_incarnation,
+            dataspace_id: envelope.dataspace_id,
+            block_height: envelope.block_height,
+            block_header: envelope.block_header,
+            qc: envelope.qc,
+            da_commitment_hash: envelope.da_commitment_hash,
+            lane_block_descriptor_hash: envelope.lane_block_descriptor_hash,
+            settlement_commitment: envelope.settlement_commitment.try_into()?,
+            settlement_hash: envelope.settlement_hash,
+            rbc_bytes_total: envelope.rbc_bytes_total,
+            manifest_root: envelope.manifest_root,
+            fastpq_proof: envelope.fastpq_proof,
+        })
+    }
+}
+
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 struct SumeragiV2StatusJson {
     #[norito(flatten)]
     authoritative: SumeragiV2Status,
-    lane_settlement_commitments: Vec<iroha_data_model::block::consensus::LaneBlockCommitment>,
-    lane_relay_envelopes: Vec<iroha_data_model::nexus::LaneRelayEnvelope>,
+    lane_settlement_commitments: Vec<LaneBlockCommitmentJson>,
+    lane_relay_envelopes: Vec<LaneRelayEnvelopeJson>,
     lane_payload_ownerships: Vec<iroha_data_model::block::consensus::SumeragiLanePayloadOwnership>,
     committed_lane_blocks: Vec<iroha_data_model::block::consensus::SumeragiCommittedLaneBlock>,
     lane_block_sessions: Vec<iroha_data_model::block::consensus::SumeragiLaneBlockSessionStatus>,
@@ -5015,18 +5233,51 @@ struct SumeragiV2StatusJson {
     operator: iroha_data_model::block::consensus_v2::SumeragiV2OperatorStatus,
 }
 
-impl From<SumeragiV2StatusJson> for SumeragiV2StatusResponse {
-    fn from(status: SumeragiV2StatusJson) -> Self {
+impl From<SumeragiV2StatusResponse> for SumeragiV2StatusJson {
+    fn from(status: SumeragiV2StatusResponse) -> Self {
         Self {
             authoritative: status.authoritative,
-            lane_settlement_commitments: status.lane_settlement_commitments,
-            lane_relay_envelopes: status.lane_relay_envelopes,
+            lane_settlement_commitments: status
+                .lane_settlement_commitments
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            lane_relay_envelopes: status
+                .lane_relay_envelopes
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             lane_payload_ownerships: status.lane_payload_ownerships,
             committed_lane_blocks: status.committed_lane_blocks,
             lane_block_sessions: status.lane_block_sessions,
             local_peer_removed: status.local_peer_removed,
             operator: status.operator,
         }
+    }
+}
+
+impl TryFrom<SumeragiV2StatusJson> for SumeragiV2StatusResponse {
+    type Error = eyre::Report;
+
+    fn try_from(status: SumeragiV2StatusJson) -> Result<Self> {
+        Ok(Self {
+            authoritative: status.authoritative,
+            lane_settlement_commitments: status
+                .lane_settlement_commitments
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>>>()?,
+            lane_relay_envelopes: status
+                .lane_relay_envelopes
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>>>()?,
+            lane_payload_ownerships: status.lane_payload_ownerships,
+            committed_lane_blocks: status.committed_lane_blocks,
+            lane_block_sessions: status.lane_block_sessions,
+            local_peer_removed: status.local_peer_removed,
+            operator: status.operator,
+        })
     }
 }
 
@@ -5171,7 +5422,7 @@ impl Client {
                 eyre!("Failed to decode authoritative Sumeragi v2 Norito status: {error}")
             })?
         } else if Self::is_json_content_type(content_type) {
-            norito::json::from_slice::<SumeragiV2StatusJson>(response.body())?.into()
+            norito::json::from_slice::<SumeragiV2StatusJson>(response.body())?.try_into()?
         } else {
             match decode_from_bytes::<SumeragiV2StatusResponse>(response.body()) {
                 Ok(status) => status,
@@ -5182,7 +5433,7 @@ impl Client {
                                 "Failed to decode authoritative Sumeragi v2 status without a supported content type: Norito: {norito_error}; JSON: {json_error}"
                             )
                         })?;
-                    json.into()
+                    json.try_into()?
                 }
             }
         };
@@ -23639,17 +23890,8 @@ mod tests {
     }
 
     fn sumeragi_v2_status_json_bytes(status: &SumeragiV2StatusResponse) -> Vec<u8> {
-        norito::json::to_vec(&SumeragiV2StatusJson {
-            authoritative: status.authoritative.clone(),
-            lane_settlement_commitments: status.lane_settlement_commitments.clone(),
-            lane_relay_envelopes: status.lane_relay_envelopes.clone(),
-            lane_payload_ownerships: status.lane_payload_ownerships.clone(),
-            committed_lane_blocks: status.committed_lane_blocks.clone(),
-            lane_block_sessions: status.lane_block_sessions.clone(),
-            local_peer_removed: status.local_peer_removed,
-            operator: status.operator,
-        })
-        .expect("encode flattened v2 status payload as json")
+        norito::json::to_vec(&SumeragiV2StatusJson::from(status.clone()))
+            .expect("encode flattened v2 status payload as json")
     }
 
     #[test]
@@ -23679,16 +23921,7 @@ mod tests {
             name.eq_ignore_ascii_case("accept") && value == APPLICATION_NORITO
         }));
 
-        let flattened = SumeragiV2StatusJson {
-            authoritative: expected.authoritative.clone(),
-            lane_settlement_commitments: expected.lane_settlement_commitments.clone(),
-            lane_relay_envelopes: expected.lane_relay_envelopes.clone(),
-            lane_payload_ownerships: expected.lane_payload_ownerships.clone(),
-            committed_lane_blocks: expected.committed_lane_blocks.clone(),
-            lane_block_sessions: expected.lane_block_sessions.clone(),
-            local_peer_removed: expected.local_peer_removed,
-            operator: expected.operator,
-        };
+        let flattened = SumeragiV2StatusJson::from(expected.clone());
         let json_response = Response::builder()
             .status(StatusCode::OK)
             .header("content-type", APPLICATION_JSON)
@@ -23700,6 +23933,124 @@ mod tests {
         })
         .expect("decode flattened JSON v2 status");
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn get_sumeragi_v2_status_json_preserves_u128_max_as_decimal_strings() {
+        let mut expected = sample_sumeragi_v2_status_response();
+        let mut settlement = expected.lane_settlement_commitments[0].clone();
+        settlement.total_local_micro = u128::MAX;
+        settlement.total_xor_due_micro = u128::MAX - 1;
+        settlement.total_xor_after_haircut_micro = u128::MAX - 2;
+        settlement.total_xor_variance_micro = u128::MAX - 3;
+        settlement.receipts = vec![iroha_data_model::block::consensus::LaneSettlementReceipt {
+            source_id: [0xAB; 32],
+            local_amount_micro: u128::MAX,
+            xor_due_micro: u128::MAX - 1,
+            xor_after_haircut_micro: u128::MAX - 2,
+            xor_variance_micro: u128::MAX - 3,
+            timestamp_ms: 42,
+        }];
+
+        let old_relay = expected.lane_relay_envelopes[0].clone();
+        let mut relay = LaneRelayEnvelope::new(
+            old_relay.block_header,
+            old_relay.qc,
+            old_relay.da_commitment_hash,
+            settlement.clone(),
+            old_relay.rbc_bytes_total,
+        )
+        .expect("rebuild relay after changing settlement values");
+        relay.lane_block_descriptor_hash = old_relay.lane_block_descriptor_hash;
+        relay.manifest_root = old_relay.manifest_root;
+        relay.fastpq_proof = old_relay.fastpq_proof;
+        expected.lane_settlement_commitments = vec![settlement];
+        expected.lane_relay_envelopes = vec![relay];
+
+        let projected = SumeragiV2StatusJson::from(expected.clone());
+        assert_eq!(
+            projected.lane_settlement_commitments[0].total_local_micro,
+            u128::MAX.to_string()
+        );
+        assert_eq!(
+            projected.lane_settlement_commitments[0].receipts[0].local_amount_micro,
+            u128::MAX.to_string()
+        );
+        assert_eq!(
+            projected.lane_relay_envelopes[0]
+                .settlement_commitment
+                .total_local_micro,
+            u128::MAX.to_string()
+        );
+        assert_eq!(
+            projected.lane_relay_envelopes[0]
+                .settlement_commitment
+                .receipts[0]
+                .local_amount_micro,
+            u128::MAX.to_string()
+        );
+
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON)
+            .body(norito::json::to_vec(&projected).expect("serialize projected v2 status"))
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let client = client_with_base_url(base_url());
+        let decoded = with_mock_http(respond_with(&snapshots, response), || {
+            client.get_sumeragi_v2_status()
+        })
+        .expect("decode canonical u128 decimal strings");
+        assert_eq!(decoded, expected);
+    }
+
+    #[test]
+    fn get_sumeragi_v2_status_json_rejects_noncanonical_u128_strings() {
+        let client = client_with_base_url(base_url());
+        for invalid in [
+            "",
+            "00",
+            "01",
+            "+1",
+            "-1",
+            " 1",
+            "1 ",
+            "340282366920938463463374607431768211456",
+        ] {
+            let mut projected = SumeragiV2StatusJson::from(sample_sumeragi_v2_status_response());
+            projected.lane_settlement_commitments[0].total_local_micro = invalid.to_owned();
+            let response = Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", APPLICATION_JSON)
+                .body(norito::json::to_vec(&projected).expect("serialize invalid v2 status"))
+                .unwrap();
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            assert!(
+                with_mock_http(respond_with(&snapshots, response), || {
+                    client.get_sumeragi_v2_status()
+                })
+                .is_err(),
+                "non-canonical u128 value {invalid:?} must be rejected"
+            );
+        }
+
+        let mut projected = SumeragiV2StatusJson::from(sample_sumeragi_v2_status_response());
+        projected.lane_relay_envelopes[0]
+            .settlement_commitment
+            .total_xor_due_micro = "01".to_owned();
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON)
+            .body(norito::json::to_vec(&projected).expect("serialize invalid relay settlement"))
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        assert!(
+            with_mock_http(respond_with(&snapshots, response), || {
+                client.get_sumeragi_v2_status()
+            })
+            .is_err(),
+            "non-canonical u128 value in embedded relay settlement must be rejected"
+        );
     }
 
     #[test]

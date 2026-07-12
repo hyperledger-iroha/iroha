@@ -9,6 +9,7 @@ private const val SORAFS_REGISTER_PIN_ACTION = "RegisterPinManifest"
 private const val MAX_MANIFEST_PAYLOAD_BYTES = 512 * 1024
 private const val MAX_ALIAS_PROOF_BYTES = 1024 * 1024
 private val canonicalSorafsHex = Regex("^[0-9a-f]+$")
+private val canonicalSorafsAliasSegment = Regex("^[a-z0-9._-]{1,128}$")
 
 private fun requireCanonicalHex(
     value: String?,
@@ -56,11 +57,9 @@ private fun requireCanonicalManifestPayload(value: String?): String {
 }
 
 private fun requireAliasText(value: String?, fieldName: String): String {
-    require(!value.isNullOrEmpty()) { "$fieldName must not be empty" }
-    require(value == value.trim() && value.toByteArray(Charsets.UTF_8).size <= 128) {
-        "$fieldName must be unpadded UTF-8 of at most 128 bytes"
+    require(value != null && canonicalSorafsAliasSegment.matches(value)) {
+        "$fieldName must contain 1..128 lowercase ASCII letters, digits, '.', '-', or '_'"
     }
-    require(value.none(Char::isISOControl)) { "$fieldName must not contain control characters" }
     return value
 }
 

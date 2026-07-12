@@ -149,9 +149,9 @@ negative_control_commands = (
     ("Swift contract test negative control", f"{main_command} --negative-control-swift-contract-test"),
     ("C# malformed response test negative control", f"{main_command} --negative-control-csharp-malformed-response-test"),
     ("Kotlin builder test negative control", f"{main_command} --negative-control-kotlin-builder-test"),
-    ("Kotlin chunker unsigned test negative control", f"{main_command} --negative-control-kotlin-chunker-unsigned-test"),
+    ("Kotlin successor digest test negative control", f"{main_command} --negative-control-kotlin-successor-digest-test"),
     ("Java builder test negative control", f"{main_command} --negative-control-java-builder-test"),
-    ("Java chunker unsigned test negative control", f"{main_command} --negative-control-java-chunker-unsigned-test"),
+    ("Java successor digest test negative control", f"{main_command} --negative-control-java-successor-digest-test"),
 )
 
 
@@ -389,6 +389,7 @@ def check_javascript_contract():
         require_contains(path, "normalizeSorafsPinRegisterResponse", "typed response normalization")
         require_contains(path, '"manifest_payload"', "canonical manifest payload field")
         require_contains(path, "SORAFS_PIN_REGISTER_MAX_MANIFEST_BYTES = 512 * 1024", "manifest payload bound")
+        require_contains(path, "normalizeSorafsPinRegisterAliasSegment", "canonical alias segment validation")
         require_contains(path, "successor_of_hex must not be zero", "inert successor rejection")
     require_contains("javascript/iroha_js/index.d.ts", "registerSorafsPinManifest(", "TypeScript register declaration")
     require_contains("javascript/iroha_js/index.d.ts", "registerSorafsPinManifestTyped(", "TypeScript typed register declaration")
@@ -409,15 +410,16 @@ def check_python_contract():
         require_contains(path, '"/v1/sorafs/pin/register"', "paid-pin endpoint")
         require_contains(path, "_normalize_sorafs_pin_register_request", "request normalization")
         require_contains(path, "SorafsPinRegisterResponse.from_payload", "typed response normalization")
-        require_contains(path, "ambiguous aliases", "ambiguous alias rejection")
-        require_contains(path, '"manifest_b64"', "canonical manifest payload field")
-        require_contains(path, '"manifestBytes"', "manifest byte payload alias")
-        require_contains(path, "accepts only one of manifest_b64 or manifest_bytes", "manifest payload alias conflict")
-    require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", "test_register_sorafs_pin_manifest_rejects_duplicate_aliases_before_request", "duplicate request alias adversarial test")
+        require_contains(path, '"manifest_payload"', "canonical manifest payload field")
+        require_contains(path, "contains unsupported fields", "unknown-field rejection")
+        require_contains(path, "_SORAFS_MAX_MANIFEST_ENCODED_BYTES = 512 * 1024", "manifest payload bound")
+        require_contains(path, "_SORAFS_MAX_ALIAS_PROOF_BYTES = 1024 * 1024", "alias proof bound")
+        require_contains(path, "successor_of_hex must not be zero", "inert successor rejection")
+    require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", "test_register_sorafs_pin_manifest_rejects_retired_and_unknown_fields", "retired request-field adversarial test")
     require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", "test_register_sorafs_pin_manifest_rejects_alias_object_with_flat_alias_fields", "alias object adversarial test")
     require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", "test_register_sorafs_pin_manifest_rejects_invalid_inputs_before_request", "invalid input adversarial test")
-    require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", '"manifestBytes": b"manifest-norito"', "manifest bytes request test")
-    require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", 'body["manifest_b64"]', "canonical manifest payload assertion")
+    require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", '"manifest_payload": b"manifest-norito"', "manifest bytes request test")
+    require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", 'body["manifest_payload"]', "canonical manifest payload assertion")
     require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", "test_register_sorafs_pin_manifest_typed_rejects_duplicate_response_aliases", "response alias adversarial test")
 
 
@@ -440,18 +442,20 @@ def check_csharp_contract():
     require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs", "RegisterSoraFsPinManifestAsync", "C# API")
     require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs", '"/v1/sorafs/pin/register"', "C# endpoint")
     require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs", "NormalizeSoraFsPinRegisterRequest", "C# request normalization")
-    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs", "NormalizeOptionalSoraFsManifestPayload", "C# manifest payload normalization")
+    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs", "NormalizeRequiredSoraFsManifestPayload", "C# manifest payload normalization")
+    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs", "SoraFsManifestPayloadMaxBytes = 512 * 1024", "C# manifest payload bound")
+    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs", "SoraFsAliasProofMaxBytes = 1024 * 1024", "C# alias proof bound")
     require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs", "Convert.ToBase64String(manifestBytes)", "C# manifest bytes normalization")
-    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs", "Provide either ManifestBase64 or ManifestBytes, not both.", "C# manifest payload alias conflict")
-    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs", "public string? ManifestBase64", "C# manifest base64 input")
+    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs", "Provide either ManifestPayloadBase64 or ManifestBytes, not both.", "C# manifest payload alias conflict")
+    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs", "public string? ManifestPayloadBase64", "C# manifest base64 input")
     require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs", "public byte[]? ManifestBytes", "C# manifest bytes input")
-    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs", '[JsonPropertyName("manifest_b64")]', "C# canonical manifest payload coding key")
+    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs", '[JsonPropertyName("manifest_payload")]', "C# canonical manifest payload coding key")
     require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs", "ToriiSoraFsPinRegisterResponse", "C# response model")
     require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiJsonSerializerContext.cs", "ToriiSoraFsPinRegisterWireRequest", "C# wire request JSON context")
     require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiJsonSerializerContext.cs", "ToriiSoraFsPinRegisterResponse", "C# source-generated JSON context")
     require_contains("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs", "RegisterSoraFsPinManifestAsyncRejectsMalformedInputsBeforeRequest", "C# malformed input test")
-    require_contains("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs", "RegisterSoraFsPinManifestAsyncAcceptsManifestBase64Payload", "C# manifest base64 request test")
-    require_contains("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs", 'GetProperty("manifest_b64")', "C# canonical manifest payload assertion")
+    require_contains("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs", "RegisterSoraFsPinManifestAsyncAcceptsCanonicalManifestPayloadBase64", "C# manifest base64 request test")
+    require_contains("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs", 'GetProperty("manifest_payload")', "C# canonical manifest payload assertion")
     require_contains("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs", "Assert.Null(handler.LastRequest)", "C# no-request assertion")
     require_contains("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs", "RegisterSoraFsPinManifestAsyncRejectsMalformedResponse", "C# malformed response test")
 
@@ -459,13 +463,13 @@ def check_csharp_contract():
 def check_jvm_contract():
     require_contains("kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstruction.kt", "RegisterPinManifestInstruction", "Kotlin paid-pin instruction")
     require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt", "builder rejects empty invalid noncanonical and oversized manifest payloads", "Kotlin manifest-payload fail-closed test")
-    require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt", "digests require nonzero canonical lowercase 32 byte hex", "Kotlin commitment adversarial test")
+    require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt", "successor digest requires nonzero canonical lowercase 32 byte hex", "Kotlin successor adversarial test")
     require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt", "alias fields are all or nothing and bounded canonical hex", "Kotlin alias adversarial test")
     require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt", "from arguments rejects legacy unknown and missing fields", "Kotlin first-release schema adversarial test")
     require_contains("java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RegisterPinManifestInstruction.java", "RegisterPinManifest", "Java paid-pin instruction")
     require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java", "rejectsOversizedManifestPayload();", "Java manifest size adversarial test invocation")
     require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java", "rejectsLegacyAndUnknownArguments();", "Java first-release schema adversarial test invocation")
-    require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java", "rejectsMalformedChunkDigest();", "Java commitment adversarial test invocation")
+    require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java", "rejectsMalformedSuccessorDigest();", "Java successor adversarial test invocation")
     require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java", "rejectsPartialAliasBinding();", "Java alias adversarial test invocation")
 
 
@@ -792,8 +796,8 @@ source_modes = {
     ),
     "--negative-control-python-adversarial-test": (
         "python/iroha_python/tests/client_sorafs_pin_register_test.py",
-        "test_register_sorafs_pin_manifest_rejects_duplicate_aliases_before_request",
-        "test_register_sorafs_pin_manifest_duplicate_aliases_disabled",
+        "test_register_sorafs_pin_manifest_rejects_retired_and_unknown_fields",
+        "test_register_sorafs_pin_manifest_retired_fields_disabled",
         "Python adversarial test drift",
     ),
     "--negative-control-swift-contract-test": (
@@ -814,11 +818,11 @@ source_modes = {
         "builder manifest payload test disabled",
         "Kotlin builder test drift",
     ),
-    "--negative-control-kotlin-chunker-unsigned-test": (
+    "--negative-control-kotlin-successor-digest-test": (
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt",
-        "digests require nonzero canonical lowercase 32 byte hex",
-        "digest canonicality test disabled",
-        "Kotlin digest canonicality test drift",
+        "successor digest requires nonzero canonical lowercase 32 byte hex",
+        "successor canonicality test disabled",
+        "Kotlin successor canonicality test drift",
     ),
     "--negative-control-java-builder-test": (
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java",
@@ -826,11 +830,11 @@ source_modes = {
         "rejectsLegacyAndUnknownArgumentsDisabled();",
         "Java builder test drift",
     ),
-    "--negative-control-java-chunker-unsigned-test": (
+    "--negative-control-java-successor-digest-test": (
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java",
-        "rejectsMalformedChunkDigest();",
-        "rejectsMalformedChunkDigestDisabled();",
-        "Java digest canonicality test drift",
+        "rejectsMalformedSuccessorDigest();",
+        "rejectsMalformedSuccessorDigestDisabled();",
+        "Java successor canonicality test drift",
     ),
 }
 

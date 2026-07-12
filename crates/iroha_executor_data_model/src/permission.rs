@@ -640,6 +640,18 @@ pub mod sorafs {
     }
 
     permission! {
+        /// Permission to activate or rotate the authoritative `SoraFS` PoP issuer policy.
+        #[derive(Copy)]
+        pub struct CanManageSorafsPopRegistry;
+    }
+
+    permission! {
+        /// Permission to publish authoritative `SoraFS` PoP credential and revocation state.
+        #[derive(Copy)]
+        pub struct CanOperateSorafsPopIssuer;
+    }
+
+    permission! {
         /// Permission to upsert `SoraFS` provider credit records.
         #[derive(Copy)]
         pub struct CanUpsertSorafsProviderCredit;

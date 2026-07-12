@@ -371,6 +371,70 @@ fn apply_sm_openssl_preview(enabled: bool) {
 #[cfg(not(feature = "sm-ffi-openssl"))]
 fn apply_sm_openssl_preview(_: bool) {}
 
+/// Bounds for artifacts retained by a host execution used by non-consensus tooling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostOutputLimits {
+    /// Maximum queued instructions, pending FastPQ entries, durable writes, and completed AXT items.
+    pub max_items: usize,
+    /// Maximum aggregate encoded/retained bytes for those artifacts.
+    pub max_bytes: usize,
+}
+
+impl HostOutputLimits {
+    /// Construct an output budget.
+    #[must_use]
+    pub const fn new(max_items: usize, max_bytes: usize) -> Self {
+        Self {
+            max_items,
+            max_bytes,
+        }
+    }
+}
+
+/// Sticky reason a bounded host stopped retaining execution output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostOutputBudgetViolation {
+    /// Retained item count would exceed the configured limit.
+    ItemCount {
+        /// Item count that would have been retained.
+        attempted: usize,
+        /// Configured maximum item count.
+        limit: usize,
+    },
+    /// Retained bytes would exceed the configured limit.
+    EncodedBytes {
+        /// Byte count that would have been retained.
+        attempted: usize,
+        /// Configured maximum retained bytes.
+        limit: usize,
+    },
+    /// An artifact could not be measured with the canonical encoder.
+    EncodingFailed,
+}
+
+struct BoundedCountingWriter {
+    written: usize,
+    max: usize,
+}
+
+impl std::io::Write for BoundedCountingWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let next = self
+            .written
+            .checked_add(bytes.len())
+            .ok_or_else(|| std::io::Error::other("encoded output length overflow"))?;
+        if next > self.max {
+            return Err(std::io::Error::other("encoded output exceeds host limit"));
+        }
+        self.written = next;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Core host adapter used by Iroha to run IVM bytecode.
 ///
 /// Stateful operations must be translated into ISIs and executed via the
@@ -386,6 +450,10 @@ pub struct CoreHostImpl<QS> {
     stark_config: iroha_config::parameters::actual::Stark,
     crypto: Arc<iroha_config::parameters::actual::Crypto>,
     queued: Vec<QueuedInstruction>,
+    instruction_queue_limits: Option<HostOutputLimits>,
+    instruction_queue_count: usize,
+    instruction_queue_encoded_bytes: usize,
+    instruction_queue_violation: Option<HostOutputBudgetViolation>,
     fastpq_batch_entries: Option<Vec<TransferAssetBatchEntry>>,
     // Snapshot of accounts available for simple iteration helpers used by samples.
     accounts_snapshot: Arc<Vec<AccountId>>,
@@ -1478,6 +1546,7 @@ struct NestedContractCallHostSnapshot {
     current_contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     args: Option<iroha_primitives::json::Json>,
     fastpq_batch_entries: Option<Vec<TransferAssetBatchEntry>>,
+    default: ivm::host::DefaultHost,
     nft_seq: u64,
     queued: Vec<QueuedInstruction>,
     durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
@@ -1497,6 +1566,10 @@ struct NestedContractCallHostSnapshot {
     axt_proof_cache: BTreeMap<DataSpaceId, CachedProofEntry>,
     last_axt_reject: Option<AxtRejectContext>,
     amx_budget_violation: Option<AmxBudgetViolation>,
+    output_count_before: usize,
+    output_bytes_before: usize,
+    output_violation_before: Option<HostOutputBudgetViolation>,
+    output_clone_reservation_bytes: usize,
 }
 
 impl HostExecutionArtifacts {
@@ -1505,6 +1578,19 @@ impl HostExecutionArtifacts {
             .iter()
             .map(|queued| queued.instruction.clone())
             .collect()
+    }
+
+    pub(crate) fn queued_instructions_by_authority(
+        &self,
+    ) -> BTreeMap<AccountId, Vec<InstructionBox>> {
+        let mut grouped = BTreeMap::new();
+        for queued in &self.queued {
+            grouped
+                .entry(queued.authority.clone())
+                .or_insert_with(Vec::new)
+                .push(queued.instruction.clone());
+        }
+        grouped
     }
 
     fn seed_queued_call_hash_if_missing(
@@ -1543,6 +1629,28 @@ impl HostExecutionArtifacts {
         Ok(())
     }
 
+    /// Materialize deterministically replayed AXT completions at the transaction's lane/height.
+    ///
+    /// Raw and proof-carrying IVM execution must use this same path so a verified replay cannot
+    /// silently discard an AXT envelope or derive different persistence metadata.
+    pub(crate) fn record_completed_axt_states(
+        tx: &mut StateTransaction<'_, '_>,
+        completed_axt: Vec<axt::HostAxtState>,
+    ) {
+        if completed_axt.is_empty() {
+            return;
+        }
+        let lane = tx.current_lane_id.unwrap_or_else(|| LaneId::new(0));
+        let commit_height = tx.block_height();
+        for state in completed_axt {
+            tx.record_axt_envelope(CoreHostImpl::<NoQueryState>::materialize_axt_record(
+                &state,
+                lane,
+                commit_height,
+            ));
+        }
+    }
+
     pub(crate) fn apply_to_transaction(
         self,
         tx: &mut StateTransaction<'_, '_>,
@@ -1561,24 +1669,7 @@ impl HostExecutionArtifacts {
         if self.confidential_gas_delta > 0 {
             tx.record_confidential_gas_delta(self.confidential_gas_delta);
         }
-        if !self.completed_axt.is_empty() {
-            let lane = tx.current_lane_id.unwrap_or_else(|| LaneId::new(0));
-            let commit_height = tx.block_height();
-            let envelopes: Vec<_> = self
-                .completed_axt
-                .into_iter()
-                .map(|state| {
-                    CoreHostImpl::<NoQueryState>::materialize_axt_record(
-                        &state,
-                        lane,
-                        commit_height,
-                    )
-                })
-                .collect();
-            for envelope in envelopes {
-                tx.record_axt_envelope(envelope);
-            }
-        }
+        Self::record_completed_axt_states(tx, self.completed_axt);
         if !self.durable_state_overlay.is_empty() {
             for (path, value) in self.durable_state_overlay {
                 if let Some(stored) = value {
@@ -1739,6 +1830,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             stark_config: iroha_config::parameters::actual::Stark::default(),
             crypto,
             queued: Vec::new(),
+            instruction_queue_limits: None,
+            instruction_queue_count: 0,
+            instruction_queue_encoded_bytes: 0,
+            instruction_queue_violation: None,
             fastpq_batch_entries: None,
             accounts_snapshot: Arc::new(Vec::new()),
             bound_contract_records_by_subject: BTreeMap::new(),
@@ -1826,6 +1921,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             stark_config: iroha_config::parameters::actual::Stark::default(),
             crypto,
             queued: Vec::new(),
+            instruction_queue_limits: None,
+            instruction_queue_count: 0,
+            instruction_queue_encoded_bytes: 0,
+            instruction_queue_violation: None,
             fastpq_batch_entries: None,
             accounts_snapshot: accounts,
             bound_contract_records_by_subject: BTreeMap::new(),
@@ -1896,6 +1995,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             stark_config: iroha_config::parameters::actual::Stark::default(),
             crypto,
             queued: Vec::new(),
+            instruction_queue_limits: None,
+            instruction_queue_count: 0,
+            instruction_queue_encoded_bytes: 0,
+            instruction_queue_violation: None,
             fastpq_batch_entries: None,
             accounts_snapshot: accounts,
             bound_contract_records_by_subject: BTreeMap::new(),
@@ -3260,6 +3363,138 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .collect()
     }
 
+    /// Configure a sticky aggregate output budget for tooling executions.
+    ///
+    /// Consensus execution leaves this unset and retains its existing policy.
+    /// Torii helpers set it before running untrusted bytecode so output is
+    /// rejected before vectors/maps grow past the transport budget.
+    pub fn set_output_limits(&mut self, limits: HostOutputLimits) {
+        self.instruction_queue_limits = Some(limits);
+        self.instruction_queue_count = 0;
+        self.instruction_queue_encoded_bytes = 0;
+        self.instruction_queue_violation = None;
+    }
+
+    /// Return the first output-budget violation observed by this host.
+    #[must_use]
+    pub const fn output_budget_violation(&self) -> Option<HostOutputBudgetViolation> {
+        self.instruction_queue_violation
+    }
+
+    /// Number of items currently accounted against a configured output budget.
+    #[must_use]
+    pub const fn retained_output_items(&self) -> usize {
+        self.instruction_queue_count
+    }
+
+    /// Encoded/retained bytes currently accounted against a configured output budget.
+    #[must_use]
+    pub const fn retained_output_bytes(&self) -> usize {
+        self.instruction_queue_encoded_bytes
+    }
+
+    fn try_reserve_output(&mut self, items: usize, bytes: usize) -> bool {
+        let Some(limits) = self.instruction_queue_limits else {
+            return true;
+        };
+        if self.instruction_queue_violation.is_some() {
+            return false;
+        }
+        let attempted_items = self
+            .instruction_queue_count
+            .checked_add(items)
+            .unwrap_or(usize::MAX);
+        if attempted_items > limits.max_items {
+            self.instruction_queue_violation = Some(HostOutputBudgetViolation::ItemCount {
+                attempted: attempted_items,
+                limit: limits.max_items,
+            });
+            return false;
+        }
+        let attempted_bytes = self
+            .instruction_queue_encoded_bytes
+            .checked_add(bytes)
+            .unwrap_or(usize::MAX);
+        if attempted_bytes > limits.max_bytes {
+            self.instruction_queue_violation = Some(HostOutputBudgetViolation::EncodedBytes {
+                attempted: attempted_bytes,
+                limit: limits.max_bytes,
+            });
+            return false;
+        }
+        self.instruction_queue_count = attempted_items;
+        self.instruction_queue_encoded_bytes = attempted_bytes;
+        true
+    }
+
+    fn try_reserve_serialized_output<T: NoritoSerialize + ?Sized>(
+        &mut self,
+        value: &T,
+        items: usize,
+    ) -> bool {
+        const RETAINED_ITEM_OVERHEAD_BYTES: usize = 64;
+        let Some(limits) = self.instruction_queue_limits else {
+            return true;
+        };
+        if self.instruction_queue_violation.is_some() {
+            return false;
+        }
+        let remaining = limits
+            .max_bytes
+            .saturating_sub(self.instruction_queue_encoded_bytes);
+        // A single retained Norito value is later rendered as JSON by tooling.
+        // Bound each canonical fragment as well as the aggregate so one value
+        // cannot trigger an attacker-sized temporary JSON allocation before
+        // the final response writer observes its cap. The 1/8 share leaves a
+        // conservative expansion allowance for JSON strings/base64/field names.
+        let per_item_limit = limits.max_bytes.saturating_div(8).max(1);
+        let payload_limit = remaining
+            .saturating_sub(RETAINED_ITEM_OVERHEAD_BYTES)
+            .min(per_item_limit);
+        let mut writer = BoundedCountingWriter {
+            written: 0,
+            max: payload_limit,
+        };
+        if value.serialize(&mut writer).is_err() {
+            self.instruction_queue_violation = Some(HostOutputBudgetViolation::EncodedBytes {
+                attempted: limits.max_bytes.saturating_add(1),
+                limit: limits.max_bytes,
+            });
+            return false;
+        }
+        self.try_reserve_output(
+            items,
+            writer.written.saturating_add(RETAINED_ITEM_OVERHEAD_BYTES),
+        )
+    }
+
+    fn try_reserve_durable_state_update(&mut self, key: &Name, value_len: usize) -> bool {
+        const DURABLE_ENTRY_OVERHEAD_BYTES: usize = 64;
+        let Some(_limits) = self.instruction_queue_limits else {
+            return true;
+        };
+        let new_bytes = key
+            .as_ref()
+            .len()
+            .saturating_add(value_len)
+            .saturating_add(DURABLE_ENTRY_OVERHEAD_BYTES);
+        let old_bytes = self.durable_state_overlay.get(key).map_or(0, |value| {
+            key.as_ref()
+                .len()
+                .saturating_add(value.as_ref().map_or(0, Vec::len))
+                .saturating_add(DURABLE_ENTRY_OVERHEAD_BYTES)
+        });
+        let items = usize::from(old_bytes == 0);
+        if new_bytes >= old_bytes {
+            self.try_reserve_output(items, new_bytes - old_bytes)
+        } else {
+            self.instruction_queue_encoded_bytes = self
+                .instruction_queue_encoded_bytes
+                .saturating_sub(old_bytes - new_bytes);
+            true
+        }
+    }
+
     fn drain_queued_instructions(&mut self) -> Vec<QueuedInstruction> {
         self.flush_pending_fastpq_batch();
         mem::take(&mut self.queued)
@@ -3291,6 +3526,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// Drain durable contract-state writes collected during the last VM run.
     pub fn drain_durable_state_overlay(&mut self) -> BTreeMap<Name, Option<Vec<u8>>> {
         mem::take(&mut self.durable_state_overlay)
+    }
+
+    /// Drain completed AXT states so deterministic proof replay can persist them after
+    /// verification using the same lane/height materialization as raw execution.
+    pub(crate) fn drain_completed_axt_states(&mut self) -> Vec<axt::HostAxtState> {
+        mem::take(&mut self.completed_axt)
     }
 
     /// Test helper: seed the transfer verification latch with a known envelope hash.
@@ -3510,11 +3751,27 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         if !self.access_log_enabled {
             return;
         }
+        if self.state_access_log.read_keys.contains(key) {
+            return;
+        }
+        if !self.try_reserve_output(1, key.len().saturating_add(64)) {
+            return;
+        }
         self.state_access_log.read_keys.insert(key.to_string());
     }
 
     fn log_state_write_key(&mut self, key: &str) {
         if !self.access_log_enabled {
+            return;
+        }
+        let unique_key = !self.state_access_log.write_keys.contains(key);
+        let items = 1_usize.saturating_add(usize::from(unique_key));
+        let bytes = key.len().saturating_add(64).saturating_add(
+            unique_key
+                .then_some(key.len().saturating_add(32))
+                .unwrap_or(0),
+        );
+        if !self.try_reserve_output(items, bytes) {
             return;
         }
         self.state_access_log.write_keys.insert(key.to_string());
@@ -4438,6 +4695,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let expiry_with_skew = proof
             .expiry_slot
             .map(|slot| self.axt_expiry_slot_with_skew(slot, None));
+        if !self.try_reserve_output(1, proof.payload.len().saturating_add(128)) {
+            return Err(ivm::VMError::PermissionDenied);
+        }
         // Keep the recorded proof expiry as provided; skew is only applied to cache/slot checks.
         let proof_for_state = ProofBlob {
             payload: proof.payload.clone(),
@@ -4634,12 +4894,29 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Self::alloc_tlv_payload(vm, PointerType::NoritoBytes, payload)
     }
 
-    fn snapshot_nested_contract_call(&self) -> NestedContractCallHostSnapshot {
-        NestedContractCallHostSnapshot {
+    fn snapshot_nested_contract_call(&mut self) -> Option<NestedContractCallHostSnapshot> {
+        // A nested rollback snapshot deep-clones retained host artifacts. In
+        // bounded tooling mode, reserve that duplicate before cloning so call
+        // depth cannot multiply the output budget in transient memory.
+        let output_count_before = self.instruction_queue_count;
+        let output_bytes_before = self.instruction_queue_encoded_bytes;
+        let output_violation_before = self.instruction_queue_violation;
+        let output_clone_reservation_bytes = if self.instruction_queue_limits.is_some() {
+            self.instruction_queue_encoded_bytes
+        } else {
+            0
+        };
+        if output_clone_reservation_bytes > 0
+            && !self.try_reserve_output(0, output_clone_reservation_bytes)
+        {
+            return None;
+        }
+        Some(NestedContractCallHostSnapshot {
             authority: self.authority.clone(),
             current_contract_runtime_context: self.current_contract_runtime_context.clone(),
             args: self.args.clone(),
             fastpq_batch_entries: self.fastpq_batch_entries.clone(),
+            default: self.default.clone(),
             nft_seq: self.nft_seq,
             queued: self.queued.clone(),
             durable_state_overlay: self.durable_state_overlay.clone(),
@@ -4659,7 +4936,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             axt_proof_cache: self.axt_proof_cache.clone(),
             last_axt_reject: self.last_axt_reject.clone(),
             amx_budget_violation: self.amx_budget_violation,
-        }
+            output_count_before,
+            output_bytes_before,
+            output_violation_before,
+            output_clone_reservation_bytes,
+        })
     }
 
     fn restore_nested_contract_call_frame(&mut self, snapshot: &NestedContractCallHostSnapshot) {
@@ -4667,10 +4948,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.current_contract_runtime_context = snapshot.current_contract_runtime_context.clone();
         self.args = snapshot.args.clone();
         self.fastpq_batch_entries = snapshot.fastpq_batch_entries.clone();
+        self.instruction_queue_encoded_bytes = self
+            .instruction_queue_encoded_bytes
+            .saturating_sub(snapshot.output_clone_reservation_bytes);
     }
 
     fn rollback_nested_contract_call(&mut self, snapshot: &NestedContractCallHostSnapshot) {
         self.restore_nested_contract_call_frame(snapshot);
+        self.default = snapshot.default.clone();
         self.nft_seq = snapshot.nft_seq;
         self.queued = snapshot.queued.clone();
         self.durable_state_overlay = snapshot.durable_state_overlay.clone();
@@ -4690,12 +4975,23 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.axt_proof_cache = snapshot.axt_proof_cache.clone();
         self.last_axt_reject = snapshot.last_axt_reject.clone();
         self.amx_budget_violation = snapshot.amx_budget_violation;
+        self.instruction_queue_count = snapshot.output_count_before;
+        self.instruction_queue_encoded_bytes = snapshot.output_bytes_before;
+        self.instruction_queue_violation = snapshot.output_violation_before;
     }
 
     fn encode_nested_contract_return(
         vm: &IVM,
         schema: &NestedCallReturnSchema,
     ) -> Result<Option<Vec<u8>>, ivm::VMError> {
+        // Pointer-shaped return values retain their validated pointer-ABI TLV
+        // envelope inside the outer NoritoBytes transport. This is the same
+        // representation produced by `pointer_to_norito` in the parent VM.
+        let transport_pointer = || {
+            vm.clone_tlv(vm.register(10))
+                .map(Some)
+                .map_err(|_| ivm::VMError::NoritoInvalid)
+        };
         match schema {
             NestedCallReturnSchema::Unit => Ok(None),
             NestedCallReturnSchema::Int => {
@@ -4708,84 +5004,61 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 .map(Some)
                 .map_err(|_| ivm::VMError::NoritoInvalid),
             NestedCallReturnSchema::Numeric => {
-                let value: iroha_primitives::numeric::Numeric =
+                let _value: iroha_primitives::numeric::Numeric =
                     Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
-                norito::to_bytes(&value)
-                    .map(Some)
-                    .map_err(|_| ivm::VMError::NoritoInvalid)
+                transport_pointer()
             }
             NestedCallReturnSchema::Json => {
-                let value = Self::decode_tlv_json(vm, vm.register(10))?;
-                norito::to_bytes(&value)
-                    .map(Some)
-                    .map_err(|_| ivm::VMError::NoritoInvalid)
+                let _value = Self::decode_tlv_json(vm, vm.register(10))?;
+                transport_pointer()
             }
             NestedCallReturnSchema::Name => {
-                let value: Name = Self::decode_tlv_typed(vm, vm.register(10), PointerType::Name)?;
-                norito::to_bytes(&value)
-                    .map(Some)
-                    .map_err(|_| ivm::VMError::NoritoInvalid)
+                let _value: Name = Self::decode_tlv_typed(vm, vm.register(10), PointerType::Name)?;
+                transport_pointer()
             }
             NestedCallReturnSchema::AccountId => {
-                let value: AccountId =
+                let _value: AccountId =
                     Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
-                norito::to_bytes(&value)
-                    .map(Some)
-                    .map_err(|_| ivm::VMError::NoritoInvalid)
+                transport_pointer()
             }
             NestedCallReturnSchema::AssetDefinitionId => {
-                let value: AssetDefinitionId =
+                let _value: AssetDefinitionId =
                     Self::decode_tlv_typed(vm, vm.register(10), PointerType::AssetDefinitionId)?;
-                norito::to_bytes(&value)
-                    .map(Some)
-                    .map_err(|_| ivm::VMError::NoritoInvalid)
+                transport_pointer()
             }
             NestedCallReturnSchema::AssetId => {
-                let value: AssetId =
+                let _value: AssetId =
                     Self::decode_tlv_typed(vm, vm.register(10), PointerType::AssetId)?;
-                norito::to_bytes(&value)
-                    .map(Some)
-                    .map_err(|_| ivm::VMError::NoritoInvalid)
+                transport_pointer()
             }
             NestedCallReturnSchema::DomainId => {
-                let value: DomainId =
+                let _value: DomainId =
                     Self::decode_tlv_typed(vm, vm.register(10), PointerType::DomainId)?;
-                norito::to_bytes(&value)
-                    .map(Some)
-                    .map_err(|_| ivm::VMError::NoritoInvalid)
+                transport_pointer()
             }
             NestedCallReturnSchema::NftId => {
-                let value: NftId = Self::decode_tlv_typed(vm, vm.register(10), PointerType::NftId)?;
-                norito::to_bytes(&value)
-                    .map(Some)
-                    .map_err(|_| ivm::VMError::NoritoInvalid)
+                let _value: NftId =
+                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::NftId)?;
+                transport_pointer()
             }
             NestedCallReturnSchema::Blob | NestedCallReturnSchema::Bytes => {
-                let value = Self::decode_tlv_blob(vm, vm.register(10))?;
-                norito::to_bytes(&value)
-                    .map(Some)
-                    .map_err(|_| ivm::VMError::NoritoInvalid)
+                let _value = Self::decode_tlv_blob(vm, vm.register(10))?;
+                transport_pointer()
             }
             NestedCallReturnSchema::DataSpaceId => {
-                let value: DataSpaceId =
+                let _value: DataSpaceId =
                     Self::decode_tlv_typed(vm, vm.register(10), PointerType::DataSpaceId)?;
-                norito::to_bytes(&value)
-                    .map(Some)
-                    .map_err(|_| ivm::VMError::NoritoInvalid)
+                transport_pointer()
             }
             NestedCallReturnSchema::AxtDescriptor => {
-                let value: iroha_data_model::nexus::AxtDescriptor =
+                let _value: iroha_data_model::nexus::AxtDescriptor =
                     Self::decode_tlv_typed(vm, vm.register(10), PointerType::AxtDescriptor)?;
-                norito::to_bytes(&value)
-                    .map(Some)
-                    .map_err(|_| ivm::VMError::NoritoInvalid)
+                transport_pointer()
             }
             NestedCallReturnSchema::AssetHandle => {
-                let value: iroha_data_model::nexus::AssetHandle =
+                let _value: iroha_data_model::nexus::AssetHandle =
                     Self::decode_tlv_typed(vm, vm.register(10), PointerType::AssetHandle)?;
-                norito::to_bytes(&value)
-                    .map(Some)
-                    .map_err(|_| ivm::VMError::NoritoInvalid)
+                transport_pointer()
             }
         }
     }
@@ -4875,10 +5148,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             payload: Some(payload),
         };
         let entrypoint_name = invocation.entrypoint.clone();
-        let call_context = crate::executor::parse_contract_invocation_execution_context(
+        let call_context = crate::executor::parse_nested_contract_invocation_execution_context(
             &invocation,
             record.code_bytes.as_ref(),
             record.contract_alias.clone(),
+            record.contract_subject.clone(),
         )
         .map_err(|err| ivm::VMError::metered(request_gas, map_validation_fail(&err)))?;
         if call_context.entrypoint_permission().is_some() {
@@ -4895,7 +5169,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let callee_context = call_context
             .runtime_context()
             .ok_or_else(|| ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied))?;
-        let return_type = record
+        let entrypoint_descriptor = record
             .manifest
             .entrypoints
             .as_ref()
@@ -4903,8 +5177,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 entrypoints
                     .iter()
                     .find(|descriptor| descriptor.name == entrypoint_name)
-            })
-            .and_then(|descriptor| descriptor.return_type.as_deref());
+            });
+        let entrypoint_is_view = entrypoint_descriptor.is_some_and(|descriptor| {
+            matches!(
+                descriptor.kind,
+                iroha_data_model::smart_contract::manifest::EntryPointKind::View
+            )
+        });
+        let return_type =
+            entrypoint_descriptor.and_then(|descriptor| descriptor.return_type.as_deref());
         let return_schema = NestedCallReturnSchema::parse(return_type)
             .map_err(|err| ivm::VMError::metered(request_gas, err))?;
         if vm.remaining_gas() < request_gas {
@@ -4923,7 +5204,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         child_vm.set_gas_limit(child_gas_limit);
 
-        let snapshot = self.snapshot_nested_contract_call();
+        let snapshot = self
+            .snapshot_nested_contract_call()
+            .ok_or_else(|| ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied))?;
         self.authority = caller_context.contract_subject.clone();
         self.current_contract_runtime_context = Some(callee_context);
         self.args = Some(call_context.args().clone());
@@ -4935,7 +5218,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 let encoded_return = Self::encode_nested_contract_return(&child_vm, &return_schema)
                     .map_err(|err| ivm::VMError::metered(request_gas, err))?;
                 vm.gas_remaining = child_vm.remaining_gas().saturating_add(request_gas);
-                self.restore_nested_contract_call_frame(&snapshot);
+                if entrypoint_is_view {
+                    // A view's return value is observable, but none of its host-side
+                    // effects (including effects from further nested calls) may escape.
+                    self.rollback_nested_contract_call(&snapshot);
+                } else {
+                    self.restore_nested_contract_call_frame(&snapshot);
+                }
                 match encoded_return {
                     Some(encoded_return) => {
                         let return_bytes = encoded_return.len();
@@ -6033,11 +6322,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     fn queue_instruction(&mut self, instr: InstructionBox) -> u64 {
         let gas = crate::gas::meter_instruction(&instr);
-        self.queued.push(QueuedInstruction {
-            instruction: instr,
-            authority: self.authority.clone(),
-            contract_runtime_context: self.current_contract_runtime_context.clone(),
-        });
+        if self.try_reserve_serialized_output(&instr, 1) {
+            self.queued.push(QueuedInstruction {
+                instruction: instr,
+                authority: self.authority.clone(),
+                contract_runtime_context: self.current_contract_runtime_context.clone(),
+            });
+        }
         gas
     }
 
@@ -6054,17 +6345,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     {
         let mut gas = 0_u64;
         for instr in instrs {
-            gas = gas.saturating_add(crate::gas::meter_instruction(&instr));
-            self.queued.push(QueuedInstruction {
-                instruction: instr,
-                authority: self.authority.clone(),
-                contract_runtime_context: self.current_contract_runtime_context.clone(),
-            });
+            gas = gas.saturating_add(self.queue_instruction(instr));
         }
         gas
     }
 
     fn enqueue_fastpq_batch(&mut self, entries: Vec<TransferAssetBatchEntry>) {
+        // Entries are accounted incrementally by `push_fastpq_batch_entry` so
+        // a long unfinished batch cannot grow without bound.
         self.queued.push(QueuedInstruction {
             instruction: InstructionBox::from(TransferAssetBatch::new(entries)),
             authority: self.authority.clone(),
@@ -6108,14 +6396,20 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn push_fastpq_batch_entry(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
-        let Some(entries) = self.fastpq_batch_entries.as_mut() else {
+        if self.fastpq_batch_entries.is_none() {
             return Err(ivm::VMError::PermissionDenied);
-        };
+        }
         let (from, to, asset_def, amount) = Self::decode_transfer_v1_args(vm)?;
         let asset_id = AssetId::of(asset_def.clone(), from.clone());
         let isi = Transfer::asset_numeric(asset_id, amount.clone(), to.clone());
-        let gas = crate::gas::meter_instruction(&InstructionBox::from(TransferBox::from(isi)));
-        entries.push(TransferAssetBatchEntry::new(from, to, asset_def, amount));
+        let instruction = InstructionBox::from(TransferBox::from(isi));
+        let gas = crate::gas::meter_instruction(&instruction);
+        if self.try_reserve_serialized_output(&instruction, 1) {
+            self.fastpq_batch_entries
+                .as_mut()
+                .expect("batch checked above")
+                .push(TransferAssetBatchEntry::new(from, to, asset_def, amount));
+        }
         Ok(gas)
     }
 
@@ -6197,6 +6491,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .as_ref()
             .and_then(Self::policy_current_slot);
         self.reset_axt_proof_cache_for_slot(policy_slot);
+        if !self.try_reserve_output(
+            1,
+            descriptor_tlv
+                .payload
+                .len()
+                .saturating_mul(3)
+                .saturating_add(256),
+        ) {
+            return Err(ivm::VMError::PermissionDenied);
+        }
         self.axt_state = Some(axt::HostAxtState::new(descriptor, binding));
         Ok(gas)
     }
@@ -6240,6 +6544,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 None,
             );
             return Err(err);
+        }
+        if !self.try_reserve_output(1, gas_len.saturating_mul(2).saturating_add(128)) {
+            return Err(ivm::VMError::PermissionDenied);
         }
         let record_result = {
             let state = self.axt_state.as_mut().expect("axt_state checked above");
@@ -6741,6 +7048,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             amount_commitment: resolved_amount.amount_commitment,
         };
         self.enforce_axt_policy(&usage)?;
+        if !self.try_reserve_output(1, gas_len.saturating_mul(2).saturating_add(256)) {
+            return Err(ivm::VMError::PermissionDenied);
+        }
         let state = self.axt_state.as_mut().expect("axt_state checked above");
         let usage_for_logging = usage.clone();
         if let Err(err) = state.record_handle(usage) {
@@ -6831,6 +7141,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         match state.validate_commit() {
             Ok(()) => {
+                // AXT_BEGIN/TOUCH/PROOF/HANDLE admitted each owned component
+                // before it was cloned into active state. Completion transfers
+                // the state into the terminal vector without further growth.
                 self.completed_axt.push(state);
                 Ok(gas)
             }
@@ -8362,8 +8675,22 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let path = Self::decode_name_payload(path_tlv.payload)?;
                 Self::ensure_contract_state_write_allowed(&path)?;
                 let val_tlv = Self::expect_tlv(vm, val_ptr, PointerType::NoritoBytes)?;
+                let key = self
+                    .scoped_durable_state_path(&path)?
+                    .unwrap_or_else(|| path.clone());
+                if crate::smartcontracts::code::is_contract_subject_history_key(&path)
+                    || crate::validation_fee::is_validation_fee_credit_state_key(&key)
+                {
+                    return Err(ivm::VMError::PermissionDenied);
+                }
+                let stored_len = 7_usize
+                    .saturating_add(val_tlv.payload.len())
+                    .saturating_add(Hash::LENGTH);
+                if !self.try_reserve_durable_state_update(&key, stored_len) {
+                    return Ok(Self::state_query_gas(val_tlv.payload.len()));
+                }
                 self.log_state_write_key(path.as_ref());
-                let mut stored = Vec::with_capacity(7 + val_tlv.payload.len() + Hash::LENGTH);
+                let mut stored = Vec::with_capacity(stored_len);
                 stored.extend_from_slice(&(val_tlv.type_id as u16).to_be_bytes());
                 stored.push(val_tlv.version);
                 let payload_len = u32::try_from(val_tlv.payload.len())
@@ -8372,9 +8699,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 stored.extend_from_slice(val_tlv.payload);
                 let h: [u8; Hash::LENGTH] = Hash::new(val_tlv.payload).into();
                 stored.extend_from_slice(&h);
-                let key = self
-                    .scoped_durable_state_path(&path)?
-                    .unwrap_or_else(|| path.clone());
                 self.durable_state_overlay.insert(key, Some(stored));
                 Ok(Self::state_query_gas(val_tlv.payload.len()))
             }
@@ -8383,10 +8707,23 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let path_tlv = Self::expect_tlv(vm, path_ptr, PointerType::Name)?;
                 let path = Self::decode_name_payload(path_tlv.payload)?;
                 Self::ensure_contract_state_write_allowed(&path)?;
-                self.log_state_write_key(path.as_ref());
-                if let Some(scoped_path) = self.scoped_durable_state_path(&path)? {
+                let scoped_path = self.scoped_durable_state_path(&path)?;
+                let effective_path = scoped_path.as_ref().unwrap_or(&path);
+                if crate::smartcontracts::code::is_contract_subject_history_key(&path)
+                    || crate::validation_fee::is_validation_fee_credit_state_key(effective_path)
+                {
+                    return Err(ivm::VMError::PermissionDenied);
+                }
+                if let Some(scoped_path) = scoped_path {
+                    if !self.try_reserve_durable_state_update(&scoped_path, 0) {
+                        return Ok(16);
+                    }
                     self.durable_state_overlay.insert(scoped_path, None);
                 }
+                if !self.try_reserve_durable_state_update(&path, 0) {
+                    return Ok(16);
+                }
+                self.log_state_write_key(path.as_ref());
                 self.durable_state_overlay.insert(path, None);
                 Ok(16)
             }
@@ -12199,6 +12536,161 @@ seiyaku AliasPayout {{
         (result, vm, durable_state_overlay)
     }
 
+    fn install_typed_view_binding_fixture(
+        state: &State,
+        authority: &AccountId,
+        actual_asset: &AssetDefinitionId,
+        actual_account: &AccountId,
+        expected_asset: &AssetDefinitionId,
+        expected_account: &AccountId,
+    ) -> (ContractAddress, ContractAddress) {
+        let pool_contract = install_contract(
+            state,
+            authority,
+            r#"
+seiyaku TypedPoolViews {
+  state AssetDefinitionId QuoteAsset;
+  state AccountId PoolAccount;
+
+  kotoage fn bind(quote_asset: AssetDefinitionId, pool_account: AccountId) {
+    QuoteAsset = quote_asset;
+    PoolAccount = pool_account;
+  }
+
+  view fn quote_asset() -> AssetDefinitionId {
+    return QuoteAsset;
+  }
+
+  view fn pool_account() -> AccountId {
+    return PoolAccount;
+  }
+}
+"#,
+            0,
+        );
+        let binding_caller = install_contract(
+            state,
+            authority,
+            r#"
+seiyaku TypedPoolBindingCaller {
+  state bytes PoolContract;
+  state AssetDefinitionId ExpectedQuoteAsset;
+  state AccountId ExpectedPoolAccount;
+  state int Checked;
+
+  kotoage fn bind(pool_contract: bytes,
+                  expected_quote_asset: AssetDefinitionId,
+                  expected_pool_account: AccountId) {
+    PoolContract = pool_contract;
+    ExpectedQuoteAsset = expected_quote_asset;
+    ExpectedPoolAccount = expected_pool_account;
+  }
+
+  kotoage fn asset_matches() -> int permission(AssetOps) {
+    let returned_asset = call_contract(PoolContract, "quote_asset", json_object());
+    if tlv_eq(returned_asset, pointer_to_norito(ExpectedQuoteAsset)) {
+      return 1;
+    }
+    return 0;
+  }
+
+  kotoage fn account_matches() -> int permission(AssetOps) {
+    let returned_account = call_contract(PoolContract, "pool_account", json_object());
+    if tlv_eq(returned_account, pointer_to_norito(ExpectedPoolAccount)) {
+      return 1;
+    }
+    return 0;
+  }
+
+  kotoage fn verify() -> int permission(AssetOps) {
+    let payload = json_object();
+    let returned_asset = call_contract(PoolContract, "quote_asset", payload);
+    assert(tlv_eq(returned_asset, pointer_to_norito(ExpectedQuoteAsset)),
+           "quote asset mismatch");
+    Checked = 1;
+    let returned_account = call_contract(PoolContract, "pool_account", payload);
+    assert(tlv_eq(returned_account, pointer_to_norito(ExpectedPoolAccount)),
+           "pool account mismatch");
+    Checked = 2;
+    return Checked;
+  }
+}
+"#,
+            1,
+        );
+        let outer_caller = install_contract(
+            state,
+            authority,
+            r#"
+seiyaku OuterCaller {
+  kotoage fn main() -> int { return 0; }
+}
+"#,
+            2,
+        );
+        grant_asset_ops_to_account(state, authority, outer_caller.subject_id());
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let pool_bind_payload = Json::from_str_norito(&format!(
+            r#"{{"quote_asset":"{}","pool_account":"{}"}}"#,
+            actual_asset, actual_account
+        ))
+        .expect("pool bind payload");
+        execute_contract_call_transaction(
+            state,
+            authority,
+            &fixture_signing_keypair(authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: pool_contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(pool_bind_payload),
+            },
+            &mut ivm_cache,
+        );
+        let binding_caller_payload = Json::from_str_norito(&format!(
+            r#"{{"pool_contract":"0x{}","expected_quote_asset":"{}","expected_pool_account":"{}"}}"#,
+            hex::encode(pool_contract.as_ref()),
+            expected_asset,
+            expected_account
+        ))
+        .expect("binding caller payload");
+        execute_contract_call_transaction(
+            state,
+            authority,
+            &fixture_signing_keypair(authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: binding_caller.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(binding_caller_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let view = state.view();
+        let persisted = |suffix: &str| {
+            view.world()
+                .smart_contract_state()
+                .iter()
+                .find(|(key, _)| key.as_ref().ends_with(suffix))
+                .map(|(_, value)| value.clone())
+                .unwrap_or_else(|| panic!("missing persisted typed binding state {suffix}"))
+        };
+        assert_eq!(
+            persisted("/QuoteAsset"),
+            persisted("/ExpectedQuoteAsset"),
+            "fixture must persist byte-identical AssetDefinitionId values",
+        );
+        if actual_account == expected_account {
+            assert_eq!(
+                persisted("/PoolAccount"),
+                persisted("/ExpectedPoolAccount"),
+                "fixture must persist byte-identical AccountId values",
+            );
+        }
+
+        (outer_caller, binding_caller)
+    }
+
     #[test]
     fn execute_query_syscall_returns_norito_response_and_gas() {
         crate::test_alias::ensure();
@@ -13787,6 +14279,53 @@ seiyaku AliasPayout {{
     }
 
     #[test]
+    fn bounded_host_stops_queue_growth_before_push() {
+        let authority = (*ALICE_ID).clone();
+        let mut host = CoreHost::new(authority);
+        host.set_output_limits(HostOutputLimits::new(2, 1024 * 1024));
+        let instruction =
+            InstructionBox::from(Log::new(iroha_logger::Level::INFO, "bounded".to_owned()));
+
+        for _ in 0..10_000 {
+            host.queue_instruction(instruction.clone());
+        }
+
+        assert_eq!(host.queued.len(), 2);
+        assert!(matches!(
+            host.output_budget_violation(),
+            Some(HostOutputBudgetViolation::ItemCount {
+                attempted: 3,
+                limit: 2
+            })
+        ));
+    }
+
+    #[test]
+    fn bounded_host_stops_unique_durable_state_growth_before_insert() {
+        let authority = (*ALICE_ID).clone();
+        let mut host = CoreHost::new(authority);
+        host.set_output_limits(HostOutputLimits::new(3, 1024 * 1024));
+
+        for index in 0..10_000 {
+            let key: Name = format!("bounded_state_{index}")
+                .parse()
+                .expect("valid name");
+            if host.try_reserve_durable_state_update(&key, 32) {
+                host.durable_state_overlay.insert(key, Some(vec![0; 32]));
+            }
+        }
+
+        assert_eq!(host.durable_state_overlay.len(), 3);
+        assert!(matches!(
+            host.output_budget_violation(),
+            Some(HostOutputBudgetViolation::ItemCount {
+                attempted: 4,
+                limit: 3
+            })
+        ));
+    }
+
+    #[test]
     fn execute_instruction_syscall_allows_sccp_record_message() {
         let authority = (*ALICE_ID).clone();
         let mut host = CoreHost::new(authority);
@@ -14029,6 +14568,7 @@ seiyaku RecordFromPayload {
     fn fastpq_batch_entry_syscall_returns_transfer_gas() {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());
+        host.set_output_limits(HostOutputLimits::new(1, 1024 * 1024));
         let mut vm = IVM::new(1_000);
         vm.load_program(&ivm::ProgramMetadata::default().encode())
             .expect("load meta");
@@ -14069,12 +14609,23 @@ seiyaku RecordFromPayload {
         let gas = host
             .syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)
             .expect("batch entry");
+        for _ in 0..10_000 {
+            host.syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)
+                .expect("over-limit batch entry remains metered");
+        }
         let asset_id = AssetId::of(asset_def, from.clone());
         let isi = Transfer::asset_numeric(asset_id, amount, to);
         let expected = crate::gas::meter_instruction(&InstructionBox::from(TransferBox::from(isi)));
         assert_eq!(gas, expected);
         assert!(host.queued.is_empty());
         assert_eq!(host.fastpq_batch_entries.as_ref().map(Vec::len), Some(1));
+        assert!(matches!(
+            host.output_budget_violation(),
+            Some(HostOutputBudgetViolation::ItemCount {
+                attempted: 2,
+                limit: 1
+            })
+        ));
     }
 
     fn scoped_transfer_state(
@@ -15263,9 +15814,234 @@ seiyaku Callee {
             .memory
             .validate_tlv(vm.register(10))
             .expect("returned NoritoBytes tlv");
-        let returned: AccountId =
-            norito::decode_from_bytes(tlv.payload).expect("decode AccountId return");
+        let returned_tlv =
+            pointer_abi::validate_tlv_bytes(tlv.payload).expect("decode transported AccountId TLV");
+        assert_eq!(returned_tlv.type_id, PointerType::AccountId);
+        let returned: AccountId = norito::decode_from_bytes(returned_tlv.payload)
+            .expect("decode transported AccountId return");
         assert_eq!(returned, caller_contract.subject_id());
+    }
+
+    #[test]
+    fn call_contract_typed_views_accept_exact_norito_binding() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let asset_definition =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let (outer_caller, binding_caller) = install_typed_view_binding_fixture(
+            &state,
+            &authority,
+            &asset_definition,
+            &authority,
+            &asset_definition,
+            &authority,
+        );
+
+        for entrypoint in ["asset_matches", "account_matches"] {
+            let (probe_result, probe_vm, probe_overlay) = call_contract_syscall(
+                &state,
+                &authority,
+                &outer_caller,
+                &binding_caller,
+                entrypoint,
+                Json::new(()),
+            );
+            probe_result.expect("matching typed view probe should execute");
+            let probe_return = probe_vm
+                .memory
+                .validate_tlv(probe_vm.register(10))
+                .expect("typed view probe NoritoBytes");
+            let matches: i64 =
+                norito::decode_from_bytes(probe_return.payload).expect("decode match probe");
+            assert_eq!(matches, 1, "{entrypoint} must compare byte-exactly");
+            assert!(probe_overlay.is_empty(), "match probes are read-only");
+        }
+
+        let (result, vm, durable_state_overlay) = call_contract_syscall(
+            &state,
+            &authority,
+            &outer_caller,
+            &binding_caller,
+            "verify",
+            Json::new(()),
+        );
+
+        result.expect("matching typed pool views should satisfy the binding caller");
+        let returned = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("binding result NoritoBytes");
+        assert_eq!(returned.type_id, PointerType::NoritoBytes);
+        let checked: i64 =
+            norito::decode_from_bytes(returned.payload).expect("decode binding result");
+        assert_eq!(checked, 2, "both typed views must match");
+        assert!(
+            durable_state_overlay
+                .keys()
+                .any(|key| key.as_ref().ends_with("/Checked")),
+            "successful nested binding must retain the caller's final state write",
+        );
+    }
+
+    #[test]
+    fn call_contract_typed_view_mismatch_rolls_back_nested_caller_state() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let mismatched_account: AccountId = fixture_account("bob");
+        let state = contract_test_state(&authority);
+        let asset_definition =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let (outer_caller, binding_caller) = install_typed_view_binding_fixture(
+            &state,
+            &authority,
+            &asset_definition,
+            &authority,
+            &asset_definition,
+            &mismatched_account,
+        );
+
+        let (probe_result, probe_vm, probe_overlay) = call_contract_syscall(
+            &state,
+            &authority,
+            &outer_caller,
+            &binding_caller,
+            "account_matches",
+            Json::new(()),
+        );
+        probe_result.expect("mismatched typed view probe should execute");
+        let probe_return = probe_vm
+            .memory
+            .validate_tlv(probe_vm.register(10))
+            .expect("typed view probe NoritoBytes");
+        let matches: i64 =
+            norito::decode_from_bytes(probe_return.payload).expect("decode mismatch probe");
+        assert_eq!(matches, 0, "the mismatched AccountId must compare unequal");
+        assert!(probe_overlay.is_empty(), "mismatch probe is read-only");
+
+        let (result, _vm, durable_state_overlay) = call_contract_syscall(
+            &state,
+            &authority,
+            &outer_caller,
+            &binding_caller,
+            "verify",
+            Json::new(()),
+        );
+
+        assert!(
+            result.is_err(),
+            "mismatched AccountId view must reject the pool binding",
+        );
+        assert!(
+            durable_state_overlay.is_empty(),
+            "the failed nested binding must roll back Checked = 1 after the asset view matched",
+        );
+    }
+
+    #[test]
+    fn nested_view_returns_value_but_discards_attempted_state_mutation() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let caller = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku ViewCaller {
+  kotoage fn main() -> int { return 0; }
+}
+"#,
+            0,
+        );
+        let callee = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku EffectfulView {
+  state int Counter;
+
+  kotoage fn seed(value: int) {
+    Counter = value;
+  }
+
+  kotoage fn increment_then_return() -> int {
+    Counter = Counter + 1;
+    return Counter;
+  }
+}
+"#,
+            1,
+        );
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: callee.clone(),
+                entrypoint: "seed".to_owned(),
+                payload: Some(Json::from_str_norito(r#"{"value":5}"#).expect("seed payload")),
+            },
+            &mut ivm_cache,
+        );
+
+        // The compiler rejects durable mutation in a declared view. Bypass that
+        // first-line guarantee here by corrupting the registered manifest after
+        // deployment, so this test exercises the host's independent rollback
+        // boundary for an entrypoint whose bytecode can still mutate state.
+        let record =
+            crate::smartcontracts::code::fetch_bound_contract_record(&state.view(), &callee)
+                .expect("installed effectful contract record");
+        let mut malicious_manifest = record.manifest;
+        let descriptor = malicious_manifest
+            .entrypoints
+            .as_mut()
+            .and_then(|entrypoints| {
+                entrypoints
+                    .iter_mut()
+                    .find(|descriptor| descriptor.name == "increment_then_return")
+            })
+            .expect("effectful entrypoint descriptor");
+        descriptor.kind = iroha_data_model::smart_contract::manifest::EntryPointKind::View;
+        malicious_manifest.provenance = None;
+        malicious_manifest = malicious_manifest.signed(&fixture_signing_keypair(&authority));
+
+        let next_height = u64::try_from(state.view().height() + 1)
+            .ok()
+            .and_then(core::num::NonZeroU64::new)
+            .expect("next block height must fit in u64 and be non-zero");
+        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut tx = block.transaction();
+        tx.world
+            .contract_manifests
+            .insert(record.code_hash, malicious_manifest);
+        tx.apply();
+        block
+            .commit()
+            .expect("commit adversarial registered-manifest mutation");
+
+        for _ in 0..2 {
+            let (result, vm, durable_state_overlay) = call_contract_syscall(
+                &state,
+                &authority,
+                &caller,
+                &callee,
+                "increment_then_return",
+                Json::new(()),
+            );
+            result.expect("nested view should return its computed value");
+            let returned = vm
+                .memory
+                .validate_tlv(vm.register(10))
+                .expect("view result NoritoBytes");
+            let value: i64 =
+                norito::decode_from_bytes(returned.payload).expect("decode view result");
+            assert_eq!(value, 6, "each view must begin from the persisted value");
+            assert!(
+                durable_state_overlay.is_empty(),
+                "a nested view must discard attempted durable-state mutation",
+            );
+        }
     }
 
     #[test]
@@ -18296,6 +19072,11 @@ seiyaku Vault {
             durable_state_overlay: BTreeMap::new(),
         };
 
+        let grouped = artifacts.queued_instructions_by_authority();
+        assert_eq!(grouped.len(), 1);
+        assert_eq!(grouped.get(&nested_authority).map(Vec::len), Some(1));
+        assert!(!grouped.contains_key(&outer_authority));
+
         artifacts
             .apply_to_transaction(&mut stx, &outer_authority)
             .expect("queued instruction should execute under queued authority");
@@ -19217,6 +19998,120 @@ seiyaku Vault {
         let keys: Vec<Name> =
             norito::decode_from_bytes(keys_tlv.payload).expect("decode verified relay keys");
         assert_eq!(keys, vec![path]);
+    }
+
+    #[test]
+    fn guest_state_syscalls_cannot_mutate_contract_subject_history() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let history_key = crate::smartcontracts::code::contract_subject_history_key(
+            &contract_address.subject_id(),
+        );
+        let mut host = CoreHost::new(authority);
+        let mut vm = IVM::new(10_000);
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&history_key));
+        let value_bytes = norito::to_bytes(&1_u64).expect("encode state value");
+        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &value_bytes);
+
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, value_ptr);
+        assert!(matches!(
+            host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
+            Err(ivm::VMError::PermissionDenied)
+        ));
+        vm.set_register(10, path_ptr);
+        assert!(matches!(
+            host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
+            Err(ivm::VMError::PermissionDenied)
+        ));
+        assert!(host.drain_durable_state_overlay().is_empty());
+    }
+
+    #[test]
+    fn contract_reads_but_cannot_mutate_consensus_validation_fee_credit() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            91,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let context = ContractRuntimeExecutionContext {
+            contract_subject: contract_address.subject_id(),
+            contract_address: contract_address.clone(),
+            contract_alias: Some("validation_fee::credit_reader".parse().expect("alias")),
+            entrypoint: "main".to_owned(),
+        };
+        let credit_key =
+            crate::validation_fee::validation_fee_credit_state_key_for_address(&contract_address);
+        let mut world = World::new();
+        world.smart_contract_state.insert(
+            credit_key,
+            norito::to_bytes(&100_i64).expect("encode native consensus credit"),
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+
+        let source = r#"
+            state int AvailableValidationFeeMinorUnits;
+            fn main() -> int {
+                return AvailableValidationFeeMinorUnits;
+            }
+        "#;
+        let code = ivm::kotodama::compiler::Compiler::new()
+            .compile_source(source)
+            .expect("compile validation-fee credit reader");
+        let mut contract_host = CoreHost::from_state(authority.clone(), &state);
+        contract_host.set_contract_runtime_context(Some(context.clone()));
+        let mut contract_vm = IVM::new(u64::MAX);
+        contract_vm.set_host(contract_host);
+        contract_vm.load_program(&code).expect("load credit reader");
+        contract_vm.run().expect("read native consensus credit");
+        assert_eq!(
+            contract_vm.register(10),
+            100,
+            "Kotodama state int must decode the exact native consensus value"
+        );
+
+        let mut host = CoreHost::from_state(authority, &state);
+        host.set_contract_runtime_context(Some(context));
+        let mut vm = IVM::new(10_000);
+        let value_ptr = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &norito::to_bytes(&999_i64).expect("encode forged credit"),
+        );
+        for leaf in [
+            crate::validation_fee::VALIDATION_FEE_CREDIT_STATE_LEAF,
+            crate::validation_fee::VALIDATION_FEE_CREDIT_ASSET_STATE_LEAF,
+        ] {
+            let leaf: Name = leaf.parse().expect("reserved validation-fee credit leaf");
+            let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&leaf));
+            vm.set_register(10, path_ptr);
+            vm.set_register(11, value_ptr);
+            assert!(matches!(
+                host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
+                Err(ivm::VMError::PermissionDenied)
+            ));
+            vm.set_register(10, path_ptr);
+            assert!(matches!(
+                host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
+                Err(ivm::VMError::PermissionDenied)
+            ));
+        }
+        assert!(host.drain_durable_state_overlay().is_empty());
     }
 
     #[test]

@@ -19,7 +19,9 @@ use iroha_data_model::{
     alias::{
         AliasAttestation, AliasEvent, AliasIndex, AliasRecord, AliasRecordedEvent, AliasTarget,
     },
+    domain::DomainId,
     name::Name,
+    nexus::DataSpaceId,
     permission::Permission,
 };
 use iroha_executor_data_model::permission::account::{
@@ -250,25 +252,44 @@ pub fn authority_can_manage_account_alias(
         return true;
     }
 
+    match alias.domain_id(world.dataspace_catalog()) {
+        Ok(domain_id) => authority_can_manage_account_alias_scope(
+            world,
+            authority,
+            alias.dataspace,
+            domain_id.as_ref(),
+        ),
+        Err(_) => false,
+    }
+}
+
+/// Return `true` when `authority` holds account-alias management permission for an explicit
+/// dataspace/domain scope.
+///
+/// This variant remains usable while a dynamic dataspace alias is inactive, allowing a stale
+/// binding to be cleared without trusting caller-supplied namespace metadata.
+pub fn authority_can_manage_account_alias_scope(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    dataspace: DataSpaceId,
+    domain: Option<&DomainId>,
+) -> bool {
     let dataspace_permission: Permission = CanManageAccountAlias {
-        scope: AccountAliasPermissionScope::Dataspace(alias.dataspace),
+        scope: AccountAliasPermissionScope::Dataspace(dataspace),
     }
     .into();
     if !authority_has_permission(world, authority, &dataspace_permission) {
         return false;
     }
 
-    match alias.domain_id(world.dataspace_catalog()) {
-        Ok(Some(domain_id)) => {
-            let domain_permission: Permission = CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Domain(domain_id),
-            }
-            .into();
-            authority_has_permission(world, authority, &domain_permission)
-        }
-        Ok(None) => true,
-        Err(_) => false,
+    let Some(domain_id) = domain else {
+        return true;
+    };
+    let domain_permission: Permission = CanManageAccountAlias {
+        scope: AccountAliasPermissionScope::Domain(domain_id.clone()),
     }
+    .into();
+    authority_has_permission(world, authority, &domain_permission)
 }
 
 /// Supported alias VOPRF backend (placeholder).

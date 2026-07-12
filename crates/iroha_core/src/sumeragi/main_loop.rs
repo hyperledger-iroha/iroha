@@ -656,6 +656,12 @@ const PAYLOAD_REBROADCAST_COOLDOWN_MULTIPLIER: u32 = 2;
 /// their retry cadence below the small control-plane cadence so recovery cannot
 /// flood per-peer post queues while waiting for a commit QC.
 const CACHED_PROPOSAL_REBROADCAST_COOLDOWN_FLOOR: Duration = Duration::from_millis(500);
+/// Keep speculative lane-block siblings bounded while tolerating one-view message reordering.
+const LANE_BLOCK_SPECULATIVE_SIBLINGS_PER_GROUP: usize = 2;
+/// Bound durable status recovery independently of total certified lane history.
+const LANE_BLOCK_STATUS_CERTIFIED_SCAN_LIMIT: usize = 64;
+/// Limit periodic lane-block replay to a small stable round-robin slice per due tick.
+const LANE_BLOCK_REBROADCAST_BUNDLES_PER_TICK: usize = 2;
 /// Standalone lane proposals, votes, and certificates fan out both directly to the committee and
 /// over the consensus topic. Keep retries bounded so stalled lane sessions cannot multiply traffic
 /// on every actor tick.
@@ -1096,11 +1102,70 @@ fn realign_qcs_after_failed_commit(
     (new_locked, new_highest)
 }
 
+#[derive(Debug)]
+struct RetryableRequeueTransaction {
+    tx: Box<AcceptedTransaction<'static>>,
+    routing_plan: Option<crate::queue::RoutingPlan>,
+    error: crate::queue::Error,
+}
+
+#[derive(Debug)]
+struct TerminalRequeueRejection {
+    hash: HashOf<SignedTransaction>,
+    reason: String,
+}
+
+#[derive(Debug, Default)]
+struct RequeueBlockTransactionsReport {
+    newly_queued: usize,
+    already_queued: usize,
+    committed: usize,
+    expired: usize,
+    terminal_rejected: Vec<TerminalRequeueRejection>,
+    retryable: Vec<RetryableRequeueTransaction>,
+    gossip_hashes: Vec<HashOf<SignedTransaction>>,
+}
+
+impl RequeueBlockTransactionsReport {
+    fn note_gossip_hash(&mut self, hash: HashOf<SignedTransaction>) {
+        if !self.gossip_hashes.contains(&hash) {
+            self.gossip_hashes.push(hash);
+        }
+    }
+
+    fn failures(&self) -> usize {
+        self.retryable
+            .len()
+            .saturating_add(self.terminal_rejected.len())
+    }
+
+    fn duplicate_dispositions(&self) -> usize {
+        self.already_queued.saturating_add(self.committed)
+    }
+
+    fn available_or_owned(&self) -> usize {
+        self.newly_queued
+            .saturating_add(self.already_queued)
+            .saturating_add(self.retryable.len())
+    }
+
+    fn requires_retry(&self) -> bool {
+        !self.retryable.is_empty()
+    }
+
+    fn take_retryable_entrypoints(&mut self) -> Vec<TransactionEntrypoint> {
+        self.retryable
+            .drain(..)
+            .map(|retry| (*retry.tx).into_entrypoint())
+            .collect()
+    }
+}
+
 fn requeue_block_transactions<I>(
     queue: &Queue,
     state: &State,
     txs: I,
-) -> (usize, usize, usize, Vec<HashOf<SignedTransaction>>)
+) -> RequeueBlockTransactionsReport
 where
     I: IntoIterator<Item = TransactionEntrypoint>,
 {
@@ -1112,21 +1177,18 @@ fn requeue_block_transactions_skipping_known_committed<I>(
     state: &State,
     txs: I,
     known_committed_hashes: Option<&BTreeSet<HashOf<SignedTransaction>>>,
-) -> (usize, usize, usize, Vec<HashOf<SignedTransaction>>)
+) -> RequeueBlockTransactionsReport
 where
     I: IntoIterator<Item = TransactionEntrypoint>,
 {
-    let mut requeued = 0usize;
-    let mut failures = 0usize;
-    let mut duplicate_failures = 0usize;
+    let mut report = RequeueBlockTransactionsReport::default();
     let mut full_failures = 0usize;
     let mut latency_saturated_failures = 0usize;
-    let mut gossip_hashes: Vec<_> = Vec::new();
     for tx in txs {
-        let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(tx));
+        let mut accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(tx));
         let tx_hash = accepted.hash();
         if known_committed_hashes.is_some_and(|hashes| hashes.contains(&tx_hash)) {
-            duplicate_failures = duplicate_failures.saturating_add(1);
+            report.committed = report.committed.saturating_add(1);
             trace!(
                 tx = %tx_hash,
                 "transaction already committed in canonical block during requeue; skipping"
@@ -1134,7 +1196,7 @@ where
             continue;
         }
         if state.has_committed_transaction(tx_hash) {
-            duplicate_failures = duplicate_failures.saturating_add(1);
+            report.committed = report.committed.saturating_add(1);
             trace!(
                 tx = %tx_hash,
                 "transaction already committed during requeue; skipping"
@@ -1142,15 +1204,15 @@ where
             continue;
         }
         if queue.contains_transaction_hash(tx_hash) {
-            duplicate_failures = duplicate_failures.saturating_add(1);
+            report.already_queued = report.already_queued.saturating_add(1);
+            report.note_gossip_hash(tx_hash);
             trace!(
                 tx = %tx_hash,
                 "transaction already in queue during requeue; keeping pending block"
             );
-            gossip_hashes.push(tx_hash);
             continue;
         }
-        let (routing_plan, ledger_plan) =
+        let (mut routing_plan, mut ledger_plan) =
             if let Some(plan) = crate::queue::routing_ledger::get_plan(&tx_hash) {
                 let ledger_plan = plan.clone();
                 (plan, Some(ledger_plan))
@@ -1171,7 +1233,10 @@ where
                 match queue.route_plan_for_gossip_with_state(&accepted, state) {
                     Ok(plan) => (plan, None),
                     Err(err) => {
-                        failures = failures.saturating_add(1);
+                        report.terminal_rejected.push(TerminalRequeueRejection {
+                            hash: tx_hash,
+                            reason: err.to_string(),
+                        });
                         warn!(
                             tx = %tx_hash,
                             reason = %err,
@@ -1182,43 +1247,76 @@ where
                     }
                 }
             };
-        match queue.push_requeued_with_routing_plan(accepted, routing_plan, state) {
-            Ok(()) => {
-                requeued = requeued.saturating_add(1);
-                gossip_hashes.push(tx_hash);
-            }
-            Err(push_err) => {
-                if let Some(plan) = ledger_plan.as_ref() {
-                    crate::queue::routing_ledger::discard_plan_if_matches(&tx_hash, plan);
+        loop {
+            match queue.push_requeued_with_routing_plan(accepted, routing_plan.clone(), state) {
+                Ok(()) => {
+                    report.newly_queued = report.newly_queued.saturating_add(1);
+                    report.note_gossip_hash(tx_hash);
+                    break;
                 }
-                match push_err.err {
-                    crate::queue::Error::IsInQueue => {
-                        duplicate_failures = duplicate_failures.saturating_add(1);
-                        trace!(
-                            tx = %tx_hash,
-                            "transaction already in queue during requeue; keeping pending block"
+                Err(push_err) => {
+                    let crate::queue::Failure { tx, err } = push_err;
+                    if matches!(&err, crate::queue::Error::UnresolvedRoute { .. })
+                        && let Some(stale_plan) = ledger_plan.take()
+                    {
+                        crate::queue::routing_ledger::discard_plan_if_matches(
+                            &tx_hash,
+                            &stale_plan,
                         );
-                        gossip_hashes.push(tx_hash);
+                        accepted = *tx;
+                        match queue.route_plan_for_gossip_with_state(&accepted, state) {
+                            Ok(fresh_plan) => {
+                                routing_plan = fresh_plan;
+                                continue;
+                            }
+                            Err(fresh_error) => {
+                                report.terminal_rejected.push(TerminalRequeueRejection {
+                                    hash: tx_hash,
+                                    reason: fresh_error.to_string(),
+                                });
+                                break;
+                            }
+                        }
                     }
-                    crate::queue::Error::InBlockchain => {
-                        duplicate_failures = duplicate_failures.saturating_add(1);
-                        trace!(
-                            tx = %tx_hash,
-                            "transaction already committed during requeue; skipping"
-                        );
+                    match err {
+                        crate::queue::Error::IsInQueue => {
+                            report.already_queued = report.already_queued.saturating_add(1);
+                            report.note_gossip_hash(tx_hash);
+                            trace!(
+                                tx = %tx_hash,
+                                "transaction already in queue during requeue; retaining existing ownership"
+                            );
+                        }
+                        crate::queue::Error::InBlockchain => {
+                            report.committed = report.committed.saturating_add(1);
+                        }
+                        crate::queue::Error::Expired => {
+                            report.expired = report.expired.saturating_add(1);
+                        }
+                        retryable_error @ (crate::queue::Error::Full
+                        | crate::queue::Error::LatencySaturated
+                        | crate::queue::Error::MaximumTransactionsPerUser) => {
+                            if matches!(&retryable_error, crate::queue::Error::Full) {
+                                full_failures = full_failures.saturating_add(1);
+                            }
+                            if matches!(&retryable_error, crate::queue::Error::LatencySaturated) {
+                                latency_saturated_failures =
+                                    latency_saturated_failures.saturating_add(1);
+                            }
+                            report.retryable.push(RetryableRequeueTransaction {
+                                tx,
+                                routing_plan: Some(routing_plan.clone()),
+                                error: retryable_error,
+                            });
+                        }
+                        terminal_error => {
+                            report.terminal_rejected.push(TerminalRequeueRejection {
+                                hash: tx_hash,
+                                reason: terminal_error.to_string(),
+                            });
+                        }
                     }
-                    crate::queue::Error::Full => {
-                        failures = failures.saturating_add(1);
-                        full_failures = full_failures.saturating_add(1);
-                    }
-                    crate::queue::Error::LatencySaturated => {
-                        failures = failures.saturating_add(1);
-                        latency_saturated_failures = latency_saturated_failures.saturating_add(1);
-                    }
-                    err => {
-                        failures = failures.saturating_add(1);
-                        warn!(?err, "failed to requeue transaction after commit failure");
-                    }
+                    break;
                 }
             }
         }
@@ -1235,10 +1333,25 @@ where
             "failed to requeue transactions after commit failure because the queue latency budget is saturated"
         );
     }
-    if !gossip_hashes.is_empty() {
-        queue.requeue_gossip_hashes(gossip_hashes.iter().copied());
+    for retry in &report.retryable {
+        debug!(
+            tx = %retry.tx.hash(),
+            reason = %retry.error,
+            has_routing_plan = retry.routing_plan.is_some(),
+            "retaining transaction under pending-block ownership for requeue retry"
+        );
     }
-    (requeued, failures, duplicate_failures, gossip_hashes)
+    for rejection in &report.terminal_rejected {
+        warn!(
+            tx = %rejection.hash,
+            reason = %rejection.reason,
+            "transaction requeue reached a terminal rejection"
+        );
+    }
+    // Requeue every locally available hash exactly once per ownership-transfer pass. This covers
+    // both newly restored and already-resident transactions without duplicating gossip entries.
+    queue.requeue_gossip_hashes(report.gossip_hashes.iter().copied());
+    report
 }
 
 fn block_external_transaction_hashes(block: &SignedBlock) -> BTreeSet<HashOf<SignedTransaction>> {
@@ -1250,12 +1363,14 @@ fn block_external_transaction_hashes(block: &SignedBlock) -> BTreeSet<HashOf<Sig
         .collect()
 }
 
+const PENDING_REQUEUE_BASE_BACKOFF: Duration = Duration::from_millis(50);
+
 fn drop_pending_block_and_requeue(
     pending_blocks: &mut BTreeMap<HashOf<BlockHeader>, PendingBlock>,
     pending_hash: HashOf<BlockHeader>,
     queue: &Queue,
     state: &State,
-) -> Option<(usize, usize, usize, usize)> {
+) -> Option<(usize, usize, usize, usize, bool)> {
     drop_pending_block_and_requeue_skipping_known_committed(
         pending_blocks,
         pending_hash,
@@ -1271,22 +1386,36 @@ fn drop_pending_block_and_requeue_skipping_known_committed(
     queue: &Queue,
     state: &State,
     known_committed_hashes: Option<&BTreeSet<HashOf<SignedTransaction>>>,
-) -> Option<(usize, usize, usize, usize)> {
-    let pending = pending_blocks.remove(&pending_hash)?;
-    let tx_count = pending.block.external_entrypoint_count();
-    let (requeued, failures, duplicate_failures, _) =
-        requeue_block_transactions_skipping_known_committed(
-            queue,
-            state,
-            pending.block.external_entrypoints_cloned(),
-            known_committed_hashes,
-        );
-    Some((tx_count, requeued, failures, duplicate_failures))
-}
-
-#[inline]
-fn drop_pending_after_requeue(failures: usize, _duplicate_failures: usize) -> bool {
-    failures > 0
+) -> Option<(usize, usize, usize, usize, bool)> {
+    let mut pending = pending_blocks.remove(&pending_hash)?;
+    let txs = if pending.requeue_pending {
+        pending.take_requeue_retry_payload()
+    } else {
+        pending.block.external_entrypoints_cloned().collect()
+    };
+    let tx_count = txs.len();
+    let mut report = requeue_block_transactions_skipping_known_committed(
+        queue,
+        state,
+        txs,
+        known_committed_hashes,
+    );
+    let requeued = report.newly_queued;
+    let failures = report.failures();
+    let duplicate_failures = report.duplicate_dispositions();
+    let retained_for_retry = report.requires_retry();
+    if retained_for_retry {
+        let retry_payload = report.take_retryable_entrypoints();
+        pending.mark_requeue_pending(Instant::now(), PENDING_REQUEUE_BASE_BACKOFF, retry_payload);
+        pending_blocks.insert(pending_hash, pending);
+    }
+    Some((
+        tx_count,
+        requeued,
+        failures,
+        duplicate_failures,
+        retained_for_retry,
+    ))
 }
 
 #[cfg(test)]
@@ -1463,40 +1592,19 @@ mod requeue_block_transaction_tests {
             fixture.stale_plan.clone(),
             iroha_config::parameters::defaults::queue::CAPACITY.get(),
         );
-        let (requeued, failures, duplicate_failures, gossip_hashes) = requeue_block_transactions(
-            &queue,
-            &fixture.state,
-            vec![TransactionEntrypoint::External(fixture.signed_tx.clone())],
-        );
-
-        assert_eq!(requeued, 0, "stale Native AMX plan must not requeue");
-        assert_eq!(failures, 1, "stale Native AMX plan is a hard failure");
-        assert_eq!(duplicate_failures, 0);
-        assert!(gossip_hashes.is_empty(), "failed requeue must not gossip");
-        assert_eq!(queue.queued_len(), 0);
-        assert!(!queue.contains_transaction_hash(tx_hash));
-        assert!(
-            crate::queue::routing_ledger::get_plan(&tx_hash).is_none(),
-            "stale full-plan hint must be discarded after rejection"
-        );
-        assert!(
-            crate::queue::routing_ledger::get(&tx_hash).is_none(),
-            "stale coordinator hint must be discarded with the full plan"
-        );
-
-        let (requeued, failures, duplicate_failures, gossip_hashes) = requeue_block_transactions(
+        let report = requeue_block_transactions(
             &queue,
             &fixture.state,
             vec![TransactionEntrypoint::External(fixture.signed_tx.clone())],
         );
 
         assert_eq!(
-            requeued, 1,
-            "second requeue should recompute the current Native AMX plan"
+            report.newly_queued, 1,
+            "requeue should discard the stale plan and recompute the current Native AMX plan in the same call"
         );
-        assert_eq!(failures, 0);
-        assert_eq!(duplicate_failures, 0);
-        assert_eq!(gossip_hashes, vec![tx_hash]);
+        assert_eq!(report.failures(), 0);
+        assert_eq!(report.duplicate_dispositions(), 0);
+        assert_eq!(report.gossip_hashes, vec![tx_hash]);
         assert_eq!(queue.queued_len(), 1);
         assert!(queue.contains_transaction_hash(tx_hash));
         let recorded_plan = crate::queue::routing_ledger::get_plan(&tx_hash)
@@ -1524,6 +1632,7 @@ struct QcCommitFailureOutcome {
 struct PrevBlockMismatchOutcome {
     requeued: usize,
     failures: usize,
+    retry_payload: Vec<TransactionEntrypoint>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1539,22 +1648,29 @@ fn handle_commit_failure_with_qc_quorum(
     highest_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     latest_committed: Option<crate::sumeragi::consensus::QcHeaderRef>,
 ) -> QcCommitFailureOutcome {
-    let (requeued, failed_requeues, duplicate_requeues, _) =
+    let mut report =
         requeue_block_transactions(queue, state, failed_block.external_entrypoints_cloned());
     let (new_locked, new_highest) =
         realign_qcs_after_failed_commit(locked_qc, highest_qc, block_hash, latest_committed);
     pending.set_block(failed_block);
-    pending.mark_aborted();
+    let failed_requeues = report.failures();
+    let retain_for_retry = report.requires_retry();
+    if retain_for_retry {
+        let retry_payload = report.take_retryable_entrypoints();
+        pending.mark_requeue_pending(Instant::now(), PENDING_REQUEUE_BASE_BACKOFF, retry_payload);
+    } else {
+        pending.mark_aborted();
+    }
 
     QcCommitFailureOutcome {
         pending,
         locked_qc: new_locked,
         highest_qc: new_highest,
         clean_block_hash: true,
-        requeued,
+        requeued: report.newly_queued,
         failed_requeues,
         view_change_triggered: true,
-        drop_pending: drop_pending_after_requeue(failed_requeues, duplicate_requeues),
+        drop_pending: !retain_for_retry,
     }
 }
 
@@ -1562,8 +1678,15 @@ fn handle_prev_block_mismatch<I>(queue: &Queue, state: &State, txs: I) -> PrevBl
 where
     I: IntoIterator<Item = TransactionEntrypoint>,
 {
-    let (requeued, failures, _duplicates, _) = requeue_block_transactions(queue, state, txs);
-    PrevBlockMismatchOutcome { requeued, failures }
+    let mut report = requeue_block_transactions(queue, state, txs);
+    let requeued = report.newly_queued;
+    let failures = report.failures();
+    let retry_payload = report.take_retryable_entrypoints();
+    PrevBlockMismatchOutcome {
+        requeued,
+        failures,
+        retry_payload,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -2547,6 +2670,19 @@ fn should_retry_idle_view_after_proposal(
     commit_inflight: bool,
 ) -> bool {
     skipped_idle_view_for_proposal && queue_len > 0 && pending_blocks == 0 && !commit_inflight
+}
+
+fn should_defer_proposal_attempt_for_tick_budget(
+    tick_deadline: Option<Instant>,
+    attempt_start: Instant,
+    queue_ready: bool,
+    backpressure: propose::ProposalBackpressure,
+    commit_inflight: bool,
+) -> bool {
+    matches!(tick_deadline, Some(deadline) if attempt_start >= deadline)
+        && !(queue_ready
+            && !commit_inflight
+            && proposal_backpressure_allows_queue_work(backpressure))
 }
 
 fn rotate_topology_for_mode(
@@ -7248,7 +7384,9 @@ impl Actor {
             .pending
             .pending_blocks
             .iter()
-            .filter(|(hash, _)| **hash != protected_hash)
+            // Retry owners are quarantined payload custody, not disposable recovery bodies. The
+            // newly inserted protected body is rejected below if no ordinary victim can make room.
+            .filter(|(hash, pending)| **hash != protected_hash && !pending.requeue_pending)
             .map(|(hash, pending)| {
                 (
                     self.pending_block_body_retention_rank(*hash, pending, tip_height, tip_hash),
@@ -7264,7 +7402,7 @@ impl Actor {
             if self.pending.pending_blocks.len() <= cap {
                 break;
             }
-            let Some((tx_count, requeued, failures, duplicate_failures)) =
+            let Some((tx_count, requeued, failures, duplicate_failures, retained_for_retry)) =
                 self.drop_pending_block_for_memory_cap(victim_hash, height, view)
             else {
                 debug!(
@@ -7278,6 +7416,19 @@ impl Actor {
                 );
                 continue;
             };
+            if retained_for_retry {
+                warn!(
+                    height,
+                    view,
+                    block = %victim_hash,
+                    cap,
+                    pending_blocks = self.pending.pending_blocks.len(),
+                    failures,
+                    source,
+                    "pending block cap victim retained as transaction requeue owner"
+                );
+                continue;
+            }
             super::status::inc_pending_queue_evictions_total(1);
             debug!(
                 height,
@@ -7295,16 +7446,93 @@ impl Actor {
         }
 
         if self.pending.pending_blocks.len() > cap {
+            let mut rejected = self.pending.pending_blocks.remove(&protected_hash);
+            if let Some(protected) = rejected.as_mut()
+                && protected.requeue_pending
+            {
+                let retry_payload = protected.take_requeue_retry_payload();
+                let retry_owner = self
+                    .pending
+                    .pending_blocks
+                    .values_mut()
+                    .find(|pending| pending.requeue_pending)
+                    .expect("over-cap requeue owner must have an existing bounded owner");
+                retry_owner.requeue_retry_payload.extend(retry_payload);
+            }
             warn!(
                 cap,
                 pending_blocks = self.pending.pending_blocks.len(),
                 protected = %protected_hash,
                 source,
-                "pending block body cap remains exceeded after deterministic eviction pass"
+                rejected = rejected.is_some(),
+                "rejected newly protected pending body because retry owners exhausted the bounded cap"
             );
+            debug_assert!(
+                self.pending.pending_blocks.len() <= cap,
+                "pending block cap enforcement must remain hard-bounded"
+            );
+            return false;
         }
 
         self.pending.pending_blocks.contains_key(&protected_hash)
+    }
+
+    /// Retry bounded transaction-queue ownership transfers for inactive pending blocks.
+    ///
+    /// The original block remains the authoritative payload owner across transient queue
+    /// saturation. Each pass is bounded so a full queue cannot monopolize the actor tick.
+    pub(super) fn retry_pending_block_requeues(&mut self, now: Instant, max_blocks: usize) -> bool {
+        let due = self
+            .pending
+            .pending_blocks
+            .iter()
+            .filter_map(|(hash, pending)| pending.requeue_retry_due(now).then_some(*hash))
+            .take(max_blocks.max(1))
+            .collect::<Vec<_>>();
+        let mut progress = false;
+        for hash in due {
+            let Some(mut pending) = self.pending.pending_blocks.remove(&hash) else {
+                continue;
+            };
+            let retry_payload = pending.take_requeue_retry_payload();
+            let mut report =
+                requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), retry_payload);
+            let transferred = report
+                .newly_queued
+                .saturating_add(report.already_queued)
+                .saturating_add(report.committed)
+                .saturating_add(report.expired)
+                .saturating_add(report.terminal_rejected.len());
+            progress |= transferred > 0;
+            if report.requires_retry() {
+                let retryable = report.retryable.len();
+                let retry_payload = report.take_retryable_entrypoints();
+                pending.mark_requeue_pending(now, PENDING_REQUEUE_BASE_BACKOFF, retry_payload);
+                self.pending.pending_blocks.insert(hash, pending);
+                debug!(
+                    block = %hash,
+                    retryable,
+                    attempts = self
+                        .pending
+                        .pending_blocks
+                        .get(&hash)
+                        .map_or(0, |pending| pending.requeue_retry_attempts),
+                    "pending block retains transaction ownership after bounded requeue retry"
+                );
+            } else {
+                debug!(
+                    block = %hash,
+                    newly_queued = report.newly_queued,
+                    already_queued = report.already_queued,
+                    committed = report.committed,
+                    expired = report.expired,
+                    terminal_rejected = report.terminal_rejected.len(),
+                    "released retained pending block after transaction ownership transfer"
+                );
+                progress = true;
+            }
+        }
+        progress
     }
 
     fn pending_block_validation_priority_reason(
@@ -13242,6 +13470,24 @@ impl From<&super::vnext::ViewChangeVote> for VNextViewChangeVoteKey {
     }
 }
 
+/// Guards whose atomic scheduler return hit an internal queue invariant.
+///
+/// The actor retries this batch before selecting any more proposal work. If the actor itself is
+/// torn down before recovery, leaking the guards is intentional: running their `Drop` handlers
+/// would delete accepted transactions, while the queue journal can restore the still-reserved
+/// entries on restart.
+#[derive(Default)]
+struct ProposalGuardReturnQuarantine {
+    guards: Vec<crate::queue::TransactionGuard>,
+}
+
+impl Drop for ProposalGuardReturnQuarantine {
+    fn drop(&mut self) {
+        let guards = std::mem::take(&mut self.guards);
+        std::mem::forget(guards);
+    }
+}
+
 /// Lightweight wrapper around the consensus main loop.
 ///
 /// This struct subsumes the former stub actor as we integrate the
@@ -13260,6 +13506,7 @@ pub(super) struct Actor {
     events_sender: EventsSender,
     state: Arc<State>,
     queue: Arc<Queue>,
+    proposal_guard_return_quarantine: ProposalGuardReturnQuarantine,
     kura: Arc<Kura>,
     network: IrohaNetwork,
     subsystems: ActorSubsystems,
@@ -13370,6 +13617,8 @@ pub(super) struct Actor {
     tick_counter: u64,
     tick_in_progress: bool,
     last_tick_heartbeat_log: Instant,
+    last_lane_block_rebroadcast: Option<Instant>,
+    lane_block_rebroadcast_cursor: Option<crate::lane_consensus::LaneBlockSessionKey>,
     tick_timing: TickTimingMonitor,
     tick_timing_thresholds: TickTimingThresholds,
     tick_lag_last_progress_at: Instant,
@@ -13866,6 +14115,7 @@ impl CommittedLaneBlockQueue {
         hydrated
     }
 
+    #[cfg(test)]
     fn hydrate_unapplied_from_certified_sessions<I>(
         &mut self,
         sessions: I,
@@ -13881,6 +14131,19 @@ impl CommittedLaneBlockQueue {
         )
     }
 
+    fn hydrate_unapplied_from_certified_sessions_for_state<I>(
+        &mut self,
+        sessions: I,
+        state: &crate::state::State,
+    ) -> usize
+    where
+        I: IntoIterator<Item = crate::lane_consensus::CommittedLaneBlockSession>,
+    {
+        self.hydrate_from_certified_sessions(sessions.into_iter().filter(|session| {
+            !state.certified_lane_block_session_is_applied_or_snapshot_anchored_cached(session)
+        }))
+    }
+
     fn prune_application_receipted_sessions(&mut self, kura: &crate::kura::Kura) -> usize {
         let before = self.pending.len();
         self.pending
@@ -13892,6 +14155,22 @@ impl CommittedLaneBlockQueue {
         pruned
     }
 
+    fn prune_applied_or_snapshot_anchored_sessions_for_state(
+        &mut self,
+        state: &crate::state::State,
+    ) -> usize {
+        let before = self.pending.len();
+        self.pending.retain(|session| {
+            !state.certified_lane_block_session_is_applied_or_snapshot_anchored_cached(session)
+        });
+        let pruned = before.saturating_sub(self.pending.len());
+        if pruned > 0 {
+            self.retain_verified_execution_inputs_for_pending();
+        }
+        pruned
+    }
+
+    #[cfg(test)]
     fn unapplied_lane_ids_for_admissible_lanes(
         &self,
         kura: &crate::kura::Kura,
@@ -13908,6 +14187,31 @@ impl CommittedLaneBlockQueue {
                     descriptor.lane_id,
                     descriptor.dataspace_id,
                     descriptor.lane_incarnation,
+                    descriptor.lane_block_height,
+                    descriptor.proposal_height,
+                )
+                .then_some(descriptor.lane_id)
+            })
+            .collect()
+    }
+
+    fn unapplied_lane_ids_for_admissible_lanes_for_state(
+        &self,
+        state: &crate::state::State,
+        admissible_lane: impl Fn(LaneId, DataSpaceId, u64, u64) -> bool,
+    ) -> BTreeSet<LaneId> {
+        self.pending
+            .iter()
+            .filter_map(|session| {
+                if state
+                    .certified_lane_block_session_is_applied_or_snapshot_anchored_cached(session)
+                {
+                    return None;
+                }
+                let descriptor = &session.proposal.descriptor;
+                admissible_lane(
+                    descriptor.lane_id,
+                    descriptor.dataspace_id,
                     descriptor.lane_block_height,
                     descriptor.proposal_height,
                 )
@@ -13959,6 +14263,7 @@ impl CommittedLaneBlockQueue {
         })
     }
 
+    #[cfg(test)]
     fn status_snapshot_with_payload_availability(
         &self,
         kura: &crate::kura::Kura,
@@ -14058,19 +14363,104 @@ impl CommittedLaneBlockQueue {
             .collect()
     }
 
+    fn status_snapshot_with_payload_availability_for_state(
+        &self,
+        state: &crate::state::State,
+    ) -> Vec<super::status::CommittedLaneBlockSnapshot> {
+        let kura = state.kura();
+        let expected_chain_id_hash =
+            Hash::new(state.chain_id_ref().clone().into_inner().as_bytes());
+        let current_state_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
+        let current_state_hash = Some(state.lane_execution_state_hash());
+        self.pending
+            .iter()
+            .filter_map(|session| {
+                let execution_status = if kura
+                    .lane_block_application_receipt_available(&session.proposal)
+                {
+                    let descriptor = &session.proposal.descriptor;
+                    match kura.read_lane_block_application_receipt(
+                        descriptor.lane_id,
+                        descriptor.lane_block_height,
+                    ) {
+                        Some(receipt)
+                            if receipt.format
+                                == crate::kura::LaneBlockApplicationReceiptArtifactFormat::DirectExecution =>
+                        {
+                            super::status::CommittedLaneBlockExecutionStatus::StateAppliedByDirectExecution
+                        }
+                        _ => {
+                            super::status::CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock
+                        }
+                    }
+                } else if state
+                    .certified_lane_block_session_is_applied_or_snapshot_anchored_cached(session)
+                {
+                    return None;
+                } else if kura
+                    .lane_block_application_receipt_conflicts_with_preflight(&session.proposal)
+                {
+                    super::status::CommittedLaneBlockExecutionStatus::ApplicationReceiptConflictsWithPreflight
+                } else if !state
+                    .certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
+                        &session.proposal,
+                    )
+                {
+                    super::status::CommittedLaneBlockExecutionStatus::AwaitingPredecessorApplication
+                } else if kura
+                    .read_preflighted_lane_block_execution_input_for_application(
+                        &session.proposal,
+                        current_state_height,
+                        current_state_hash.clone(),
+                    )
+                    .is_some()
+                {
+                    super::status::CommittedLaneBlockExecutionStatus::PayloadPreflightedAwaitingStateApplication
+                } else if let Some(true) = kura
+                    .lane_block_execution_preflight_has_rejections(
+                        &session.proposal,
+                        current_state_height,
+                        current_state_hash.clone(),
+                    )
+                {
+                    super::status::CommittedLaneBlockExecutionStatus::PayloadPreflightRejectedAwaitingStateApplication
+                } else if self.execution_input_verified(&session.proposal)
+                    || kura.lane_block_execution_input_available(&session.proposal)
+                {
+                    super::status::CommittedLaneBlockExecutionStatus::PayloadRecoveredAwaitingStateApplication
+                } else if kura
+                    .lane_block_payload_availability(&session.proposal)
+                    .is_available()
+                    || Self::certified_autonomous_payload_context(
+                        session,
+                        expected_chain_id_hash,
+                    )
+                    .is_some_and(|(expected_chain_id_hash, expected_epoch)| {
+                        kura.autonomous_lane_payload_available(
+                            &session.proposal,
+                            expected_chain_id_hash,
+                            expected_epoch,
+                        )
+                    })
+                {
+                    super::status::CommittedLaneBlockExecutionStatus::PayloadAvailableAwaitingExecutor
+                } else {
+                    super::status::CommittedLaneBlockExecutionStatus::AwaitingExecutablePayload
+                };
+                Some(super::status::CommittedLaneBlockSnapshot::from_committed_session_with_execution_status(
+                    session,
+                    execution_status,
+                ))
+            })
+            .collect()
+    }
+
     fn status_snapshot_for_state(
         &self,
         state: &crate::state::State,
     ) -> Vec<super::status::CommittedLaneBlockSnapshot> {
         let durable_applied = Self::durable_applied_status_snapshot_for_state(state);
-        let expected_chain_id_hash =
-            Hash::new(state.chain_id_ref().clone().into_inner().as_bytes());
-        let pending = self.status_snapshot_with_payload_availability_and_autonomous_context(
-            state.kura(),
-            u64::try_from(state.committed_height()).unwrap_or(u64::MAX),
-            Some(state.lane_execution_state_hash()),
-            |session| Self::certified_autonomous_payload_context(session, expected_chain_id_hash),
-        );
+        let pending = self.status_snapshot_with_payload_availability_for_state(state);
         merge_committed_lane_block_statuses(durable_applied, pending)
     }
 
@@ -14081,7 +14471,9 @@ impl CommittedLaneBlockQueue {
             (LaneId, DataSpaceId, Hash),
             super::status::CommittedLaneBlockSnapshot,
         >::new();
-        for session in state.certified_lane_block_sessions_snapshot_cached() {
+        for session in state
+            .certified_lane_block_sessions_snapshot_cached(LANE_BLOCK_STATUS_CERTIFIED_SCAN_LIMIT)
+        {
             let descriptor = &session.proposal.descriptor;
             if state.lane_incarnation(descriptor.lane_id) != Some(descriptor.lane_incarnation) {
                 continue;
@@ -14139,17 +14531,19 @@ impl CommittedLaneBlockQueue {
         }
     }
 
-    fn recover_available_payloads_into_kura_with_autonomous_context<F>(
+    fn recover_available_payloads_into_kura_with_autonomous_context<F, E>(
         &mut self,
         kura: &crate::kura::Kura,
         mut autonomous_context: F,
+        mut eligible: E,
     ) -> usize
     where
         F: FnMut(&crate::lane_consensus::CommittedLaneBlockSession) -> Option<(Hash, u64)>,
+        E: FnMut(&crate::lane_consensus::CommittedLaneBlockSession) -> bool,
     {
         let mut recovered = 0_usize;
         for session in &self.pending {
-            if !kura.lane_block_predecessor_application_receipt_available(&session.proposal) {
+            if !eligible(session) {
                 continue;
             }
             let input_identity = Self::execution_input_identity(&session.proposal);
@@ -14214,7 +14608,11 @@ impl CommittedLaneBlockQueue {
 
     #[cfg(test)]
     fn recover_available_payloads_into_kura(&mut self, kura: &crate::kura::Kura) -> usize {
-        self.recover_available_payloads_into_kura_with_autonomous_context(kura, |_| None)
+        self.recover_available_payloads_into_kura_with_autonomous_context(
+            kura,
+            |_| None,
+            |session| kura.lane_block_predecessor_application_receipt_available(&session.proposal),
+        )
     }
 
     /// Return the locally admissible chain/epoch binding certified by the
@@ -14252,14 +14650,24 @@ impl CommittedLaneBlockQueue {
     ///
     /// This is the only production handoff for commit-certified lane sessions
     /// until the merge subsystem supplies a consensus-certified total order.
-    /// Its state argument is intentional: adversarial tests assert that neither
-    /// QC arrival order nor payload recovery changes the shared state identity.
+    /// Snapshot-anchored and already-applied sessions are skipped so restart
+    /// recovery remains idempotent. Its state argument is intentional:
+    /// adversarial tests assert that neither QC arrival order nor payload
+    /// recovery changes the shared state identity.
     fn recover_certified_inputs_awaiting_merge(&mut self, state: &crate::state::State) -> usize {
         let expected_chain_id_hash =
             Hash::new(state.chain_id_ref().clone().into_inner().as_bytes());
-        self.recover_available_payloads_into_kura_with_autonomous_context(state.kura(), |session| {
-            Self::certified_autonomous_payload_context(session, expected_chain_id_hash)
-        })
+        self.recover_available_payloads_into_kura_with_autonomous_context(
+            state.kura(),
+            |session| Self::certified_autonomous_payload_context(session, expected_chain_id_hash),
+            |session| {
+                !state.certified_lane_block_session_is_applied_or_snapshot_anchored_cached(session)
+                    && state
+                        .certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
+                            &session.proposal,
+                        )
+            },
+        )
     }
 
     fn payload_hint_repair_candidates(
@@ -14293,10 +14701,14 @@ impl CommittedLaneBlockQueue {
             .pending
             .iter()
             .filter_map(|session| {
-                if !state
-                    .kura()
-                    .lane_block_predecessor_application_receipt_available(&session.proposal)
+                if state
+                    .certified_lane_block_session_is_applied_or_snapshot_anchored_cached(session)
                 {
+                    return None;
+                }
+                if !state.certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
+                    &session.proposal,
+                ) {
                     return None;
                 }
                 if state
@@ -14560,18 +14972,25 @@ impl CommittedLaneBlockQueue {
     fn apply_preflighted_execution_inputs_to_state(&self, state: &crate::state::State) -> usize {
         let mut applied = 0_usize;
         for session in &self.pending {
+            if state.certified_lane_block_session_is_applied_or_snapshot_anchored_cached(session) {
+                continue;
+            }
+            if !state.certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
+                &session.proposal,
+            ) {
+                continue;
+            }
             let current_state_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
             let current_state_hash = Some(state.lane_execution_state_hash());
-            let Some(input) = state
+            if state
                 .kura()
-                .read_preflighted_lane_block_execution_input_for_application(
-                    &session.proposal,
-                    current_state_height,
-                    current_state_hash,
-                )
-            else {
+                .lane_block_application_receipt_available(&session.proposal)
+                || state
+                    .kura()
+                    .lane_block_application_receipt_conflicts_with_preflight(&session.proposal)
+            {
                 continue;
-            };
+            }
             let descriptor = &session.proposal.descriptor;
             let Some(preflight) = state.kura().read_lane_block_execution_preflight(
                 descriptor.lane_id,
@@ -14579,6 +14998,25 @@ impl CommittedLaneBlockQueue {
             ) else {
                 continue;
             };
+            if preflight.proposal != session.proposal
+                || preflight.preflight_state_height != current_state_height
+                || preflight.preflight_state_hash != current_state_hash
+                || preflight.has_rejections()
+            {
+                continue;
+            }
+            let Some(input) = state
+                .kura()
+                .read_lane_block_execution_input(descriptor.lane_id, descriptor.lane_block_height)
+            else {
+                continue;
+            };
+            if input.proposal != preflight.proposal
+                || input.artifact != preflight.artifact
+                || input.entrypoint_hashes != preflight.entrypoint_hashes
+            {
+                continue;
+            }
             let Some(receipt) =
                 crate::kura::LaneBlockApplicationReceiptArtifact::new_direct_execution(
                     &input, &preflight,
@@ -14779,6 +15217,7 @@ impl CommittedLaneBlockQueue {
             .collect()
     }
 
+    #[cfg(test)]
     fn record_available_payload_application_receipts_into_kura(
         &self,
         kura: &crate::kura::Kura,
@@ -14817,9 +15256,46 @@ impl CommittedLaneBlockQueue {
         recorded
     }
 
+    fn record_available_payload_application_receipts_into_kura_for_state(
+        &self,
+        state: &crate::state::State,
+    ) -> usize {
+        let mut recorded = 0_usize;
+        let kura = state.kura();
+        for session in &self.pending {
+            if state.certified_lane_block_session_is_applied_or_snapshot_anchored_cached(session) {
+                continue;
+            }
+            if !state.certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
+                &session.proposal,
+            ) {
+                continue;
+            }
+            if kura.lane_block_application_receipt_available(&session.proposal) {
+                continue;
+            }
+            match kura.persist_lane_block_application_receipt_if_ready(&session.proposal) {
+                Ok(true) => recorded = recorded.saturating_add(1),
+                Ok(false) => continue,
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        lane_id = ?session.proposal.descriptor.lane_id,
+                        dataspace_id = ?session.proposal.descriptor.dataspace_id,
+                        lane_block_height = session.proposal.descriptor.lane_block_height,
+                        lane_block_view = session.proposal.descriptor.lane_block_view,
+                        "failed to persist lane-block application receipt"
+                    );
+                    continue;
+                }
+            }
+        }
+        recorded
+    }
+
     fn lane_block_tips_snapshot_for_admissible_lanes(
         &self,
-        admissible_lane: impl Fn(LaneId, DataSpaceId, Hash, u64) -> bool,
+        admissible_lane: impl Fn(LaneId, DataSpaceId, Hash, u64, u64) -> bool,
     ) -> Vec<lane_scheduler::LaneBlockTip> {
         self.pending
             .iter()
@@ -14830,6 +15306,7 @@ impl CommittedLaneBlockQueue {
                     descriptor.dataspace_id,
                     descriptor.lane_incarnation,
                     descriptor.lane_block_height,
+                    descriptor.proposal_height,
                 )
                 .then_some(lane_scheduler::LaneBlockTip {
                     lane_id: descriptor.lane_id,
@@ -15276,7 +15753,6 @@ impl DaSpoolCache {
 }
 
 struct DaRbcState {
-    da: DaState,
     rbc: RbcState,
     spool_dir: PathBuf,
     spool_cache: DaSpoolCache,
@@ -15308,29 +15784,6 @@ impl RbcRosterSource {
             other
         } else {
             self
-        }
-    }
-}
-
-#[derive(Debug)]
-struct DaState {
-    /// Per-block DA bundles sealed by this node (in-memory index).
-    da_bundles: BTreeMap<u64, DaCommitmentBundle>,
-    /// Per-block DA pin intent bundles sealed by this node (in-memory index).
-    da_pin_bundles: BTreeMap<u64, DaPinIntentBundle>,
-    /// Keys of commitments already sealed to avoid duplicates.
-    sealed_commitments: BTreeSet<iroha_data_model::da::commitment::DaCommitmentKey>,
-    /// Keys of pin intents already sealed to avoid duplicates.
-    sealed_pin_intents: BTreeSet<(u32, u64, u64)>,
-}
-
-impl DaState {
-    fn new() -> Self {
-        Self {
-            da_bundles: BTreeMap::new(),
-            da_pin_bundles: BTreeMap::new(),
-            sealed_commitments: BTreeSet::new(),
-            sealed_pin_intents: BTreeSet::new(),
         }
     }
 }
@@ -23031,7 +23484,6 @@ impl Actor {
             commit: CommitState::new(),
             propose: propose_state,
             da_rbc: DaRbcState {
-                da: DaState::new(),
                 rbc: rbc_state,
                 spool_dir: da_spool_dir,
                 spool_cache: DaSpoolCache::default(),
@@ -23069,31 +23521,33 @@ impl Actor {
         if let Err(err) = state.ensure_da_indexes_hydrated() {
             warn!(
                 ?err,
-                "failed to hydrate DA reset watermarks before certified lane-block recovery"
+                "failed to hydrate canonical DA indexes during consensus initialization; DA proposal assembly will remain disabled"
             );
         }
         let hydrated_committed_lane_blocks = subsystems
             .committed_lane_blocks
-            .hydrate_unapplied_from_certified_sessions(
-                state.certified_lane_block_sessions_snapshot_cached(),
-                state.kura(),
+            .hydrate_unapplied_from_certified_sessions_for_state(
+                state.certified_lane_block_sessions_snapshot_cached(
+                    config.recovery.pending_proposal_cap.max(1),
+                ),
+                &state,
             );
         let recovered_lane_block_execution_inputs = subsystems
             .committed_lane_blocks
             .recover_certified_inputs_awaiting_merge(&state);
         let recorded_lane_block_application_receipts_before_preflight = subsystems
             .committed_lane_blocks
-            .record_available_payload_application_receipts_into_kura(state.kura());
+            .record_available_payload_application_receipts_into_kura_for_state(&state);
         let pruned_canonical_receipted_committed_lane_blocks = subsystems
             .committed_lane_blocks
             .prune_application_receipted_sessions(state.kura());
         let recorded_lane_block_application_receipts = subsystems
             .committed_lane_blocks
-            .record_available_payload_application_receipts_into_kura(state.kura())
+            .record_available_payload_application_receipts_into_kura_for_state(&state)
             .saturating_add(recorded_lane_block_application_receipts_before_preflight);
         let pruned_applied_committed_lane_blocks = subsystems
             .committed_lane_blocks
-            .prune_application_receipted_sessions(state.kura())
+            .prune_applied_or_snapshot_anchored_sessions_for_state(&state)
             .saturating_add(pruned_canonical_receipted_committed_lane_blocks);
         let committed_lane_block_status = subsystems
             .committed_lane_blocks
@@ -23193,6 +23647,7 @@ impl Actor {
             events_sender,
             state,
             queue,
+            proposal_guard_return_quarantine: ProposalGuardReturnQuarantine::default(),
             kura,
             network,
             subsystems,
@@ -23300,6 +23755,8 @@ impl Actor {
             tick_counter: 0,
             tick_in_progress: false,
             last_tick_heartbeat_log: now,
+            last_lane_block_rebroadcast: None,
+            lane_block_rebroadcast_cursor: None,
             tick_timing: TickTimingMonitor::new(now),
             tick_timing_thresholds: TickTimingThresholds::default(),
             tick_lag_last_progress_at: now,
@@ -24515,6 +24972,9 @@ impl Actor {
     }
 
     pub(super) fn next_tick_deadline(&self, now: Instant) -> Option<Instant> {
+        if !self.proposal_guard_return_quarantine.guards.is_empty() {
+            return Some(now);
+        }
         let queue_len = self.queue.active_len();
         if queue_len > 0 {
             return Some(now);
@@ -24547,6 +25007,7 @@ impl Actor {
         }
 
         next_due = Self::merge_deadline(next_due, self.rbc_next_due(now));
+        next_due = Self::merge_deadline(next_due, self.lane_block_rebroadcast_next_due(now));
         next_due = Self::merge_deadline(next_due, self.frontier_body_next_due(now));
         next_due = Self::merge_deadline(
             next_due,
@@ -24756,7 +25217,7 @@ impl Actor {
                     self.state
                         .lane_incarnation_at_height(key.lane_id, key.proposal_height)
                         == Some(key.lane_incarnation)
-                        && crate::state::nexus_active_lane_dataspace_at_height(
+                        && crate::state::consensus_lane_dataspace_at_height(
                             key.lane_id,
                             &nexus,
                             key.proposal_height,
@@ -24868,6 +25329,10 @@ impl Actor {
         self.tick_in_progress = true;
         let tick_start = Instant::now();
         self.tick_counter = self.tick_counter.saturating_add(1);
+        let had_quarantined_proposal_guards =
+            !self.proposal_guard_return_quarantine.guards.is_empty();
+        let quarantine_retry_progress =
+            had_quarantined_proposal_guards && self.retry_quarantined_proposal_guards();
         self.hotspot_log_summary.emit_if_due(tick_start);
         let heartbeat_backpressure = self.queue_backpressure_state();
         let heartbeat_queue_len = self.queue.active_len();
@@ -24893,6 +25358,7 @@ impl Actor {
             );
         }
         let mut progress = self.tick_mode_management();
+        progress |= quarantine_retry_progress;
         let expired_culled = if self.tick_counter % Self::TICK_EXPIRED_CULL_STRIDE == 0 {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.cull_expired");
             self.queue.cull_expired_entries_if_due()
@@ -24902,6 +25368,7 @@ impl Actor {
         if expired_culled > 0 {
             progress = true;
         }
+        progress |= self.retry_pending_block_requeues(tick_start, 8);
         if self.tick_counter % Self::TICK_EXPIRED_CULL_STRIDE == 0 {
             match self.reconcile_lane_reservation_ownership() {
                 Ok((finalized_committed, released_orphans)) => {
@@ -25252,11 +25719,35 @@ impl Actor {
             let attempt_budget_exhausted =
                 Self::tick_budget_exhausted(tick_deadline, propose_start);
             proposal_budget_exhausted |= attempt_budget_exhausted;
-            if !Self::proposal_maintenance_due(attempt_budget_exhausted, true, self.tick_counter) {
+            let defer_for_budget = should_defer_proposal_attempt_for_tick_budget(
+                tick_deadline,
+                propose_start,
+                queue_ready,
+                proposal_backpressure,
+                self.subsystems.commit.inflight.is_some(),
+            );
+            if defer_for_budget
+                && !Self::proposal_maintenance_due(
+                    attempt_budget_exhausted,
+                    true,
+                    self.tick_counter,
+                )
+            {
                 self.subsystems.propose.pacemaker.next_deadline = propose_start;
             } else {
                 proposal_attempted = true;
-                if self.on_pacemaker_propose_ready(now) {
+                if attempt_budget_exhausted {
+                    trace!(
+                        queue_len,
+                        "running due queued proposal attempt despite exhausted tick budget"
+                    );
+                }
+                let proposal_now = if attempt_budget_exhausted {
+                    propose_start
+                } else {
+                    now
+                };
+                if self.on_pacemaker_propose_ready(proposal_now) {
                     progress = true;
                 }
             }
@@ -25291,11 +25782,35 @@ impl Actor {
             let attempt_budget_exhausted =
                 Self::tick_budget_exhausted(tick_deadline, propose_start);
             proposal_budget_exhausted |= attempt_budget_exhausted;
-            if !Self::proposal_maintenance_due(attempt_budget_exhausted, true, self.tick_counter) {
+            let defer_for_budget = should_defer_proposal_attempt_for_tick_budget(
+                tick_deadline,
+                propose_start,
+                queue_ready,
+                proposal_backpressure,
+                self.subsystems.commit.inflight.is_some(),
+            );
+            if defer_for_budget
+                && !Self::proposal_maintenance_due(
+                    attempt_budget_exhausted,
+                    true,
+                    self.tick_counter,
+                )
+            {
                 self.subsystems.propose.pacemaker.next_deadline = propose_start;
             } else {
                 proposal_attempted = true;
-                if self.on_pacemaker_propose_ready(now) {
+                if attempt_budget_exhausted {
+                    trace!(
+                        queue_len,
+                        "running due queued pacemaker attempt despite exhausted tick budget"
+                    );
+                }
+                let proposal_now = if attempt_budget_exhausted {
+                    propose_start
+                } else {
+                    now
+                };
+                if self.on_pacemaker_propose_ready(proposal_now) {
                     progress = true;
                 }
             }
@@ -28221,6 +28736,7 @@ impl Actor {
         let MergeSidecarChunkIngestOutcome::Complete(completed) = outcome else {
             return;
         };
+        let reference_digest = certified_merge_reference_digest(&completed.reference);
         let entry = match decode_certified_merge_sidecar(&completed.reference, &completed.bytes) {
             Ok(entry) => entry,
             Err(error) => {
@@ -28230,7 +28746,7 @@ impl Actor {
                     ?error,
                     "reassembled certified merge sidecar is corrupt; rotating holder"
                 );
-                self.retry_completed_merge_sidecar(entry_hash, now);
+                self.retry_completed_merge_sidecar(entry_hash, reference_digest, now);
                 return;
             }
         };
@@ -28252,11 +28768,13 @@ impl Actor {
         match self.kura.persist_pending_certified_merge_entry(&entry) {
             Ok(persisted_hash) if persisted_hash == entry_hash => {
                 let requester = self.common_config.peer.id().clone();
-                let (deferred, _) = self
-                    .subsystems
-                    .merge
-                    .sidecars
-                    .finish_completed(entry_hash, true, &requester, now);
+                let (deferred, _) = self.subsystems.merge.sidecars.finish_completed(
+                    entry_hash,
+                    reference_digest,
+                    true,
+                    &requester,
+                    now,
+                );
                 info!(
                     %sender,
                     %entry_hash,
@@ -28283,7 +28801,7 @@ impl Actor {
                     ?error,
                     "failed to persist validated certified merge sidecar; rotating holder"
                 );
-                self.retry_completed_merge_sidecar(entry_hash, now);
+                self.retry_completed_merge_sidecar(entry_hash, reference_digest, now);
             }
         }
     }
@@ -28291,14 +28809,17 @@ impl Actor {
     fn retry_completed_merge_sidecar(
         &mut self,
         entry_hash: HashOf<MergeLedgerEntry>,
+        reference_digest: Hash,
         now: Instant,
     ) {
         let requester = self.common_config.peer.id().clone();
-        let (_, retry) = self
-            .subsystems
-            .merge
-            .sidecars
-            .finish_completed(entry_hash, false, &requester, now);
+        let (_, retry) = self.subsystems.merge.sidecars.finish_completed(
+            entry_hash,
+            reference_digest,
+            false,
+            &requester,
+            now,
+        );
         if let Some(post) = retry {
             self.post_certified_merge_sidecar(post);
         }
@@ -47695,6 +48216,22 @@ impl Actor {
     }
 
     fn prune_stale_view_state(&mut self, height: u64, min_view: u64) {
+        let canonical_lane_block_sessions = self.canonical_lane_block_session_keys();
+        // The compatibility lane planner currently uses the global proposal view as
+        // `lane_block_view`. Prune superseded prepare-only replay state before any
+        // subsequent tick can synthesize votes or retransmit it. Commit evidence and
+        // exact durable canonical sessions remain protected.
+        let lane_block_sessions_removed = self
+            .subsystems
+            .lane_blocks
+            .prune_uncommitted_sessions_below_proposal_view(
+                height,
+                min_view,
+                &canonical_lane_block_sessions,
+            );
+        if lane_block_sessions_removed > 0 {
+            self.publish_lane_block_session_status();
+        }
         self.subsystems
             .propose
             .highest_qc_missing_defer_markers
@@ -47861,6 +48398,7 @@ impl Actor {
             || missing_removed > 0
             || missing_commit_qc_removed > 0
             || rbc_removed > 0
+            || lane_block_sessions_removed > 0
         {
             info!(
                 height,
@@ -47870,6 +48408,7 @@ impl Actor {
                 missing_removed,
                 missing_commit_qc_removed,
                 rbc_removed,
+                lane_block_sessions_removed,
                 "pruned stale view state after view change"
             );
         }

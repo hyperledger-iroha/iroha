@@ -111,6 +111,51 @@ impl BlockMessage {
         }
     }
 
+    /// Return whether queue saturation must never drop this consensus message.
+    ///
+    /// Callers on asynchronous network workers should offload blocking enqueue
+    /// operations before forwarding messages in this class.  The match is
+    /// intentionally exhaustive so every newly introduced wire variant must
+    /// make an explicit liveness decision.
+    #[must_use]
+    pub fn requires_blocking_ingress(&self) -> bool {
+        match self {
+            Self::BlockCreated(_)
+            | Self::BlockSyncUpdate(_)
+            | Self::FetchBlockBody(_)
+            | Self::BlockBodyResponse(_)
+            | Self::CertifiedBlockFetch(_)
+            | Self::VrfCommit(_)
+            | Self::VrfReveal(_)
+            | Self::RbcInitRequest(_)
+            | Self::RbcChunkRequest(_)
+            | Self::RbcInit(_)
+            | Self::RbcChunk(_)
+            | Self::RbcChunkCompact(_)
+            | Self::RbcReady(_)
+            | Self::RbcDeliver(_)
+            | Self::Proposal(_)
+            | Self::LaneBlockProposal(_)
+            | Self::LaneExecutablePayload(_)
+            | Self::LaneExecutablePayloadHandoff(_)
+            | Self::LaneBlockNewViewVote(_)
+            | Self::LaneBlockNewViewCertificate(_)
+            | Self::QcVote(_)
+            | Self::Qc(_)
+            | Self::LaneBlockVote(_)
+            | Self::LaneBlockQc(_) => true,
+            Self::FetchPendingBlock(request) => {
+                request.priority == Some(FetchPendingBlockPriority::Consensus)
+                    || request.commit_qc_only == Some(true)
+            }
+            Self::V2(_) => self.v2_requires_blocking_ingress(),
+            Self::ConsensusParams(_)
+            | Self::ExecWitness(_)
+            | Self::KuraReplicaAdvert(_)
+            | Self::ProposalHint(_) => false,
+        }
+    }
+
     /// Build an RBC chunk message, using the compact variant when fields fit.
     pub fn from_rbc_chunk(chunk: super::consensus::RbcChunk) -> Self {
         let super::consensus::RbcChunk {
@@ -991,6 +1036,7 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::{
         AccountId, ChainId, Level,
+        block::consensus_v2::{ConsensusMessageV2Payload, PayloadChunk},
         consensus::{
             PreviousRosterEvidence, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
         },
@@ -1583,6 +1629,67 @@ mod tests {
             commit_qc_only: None,
         });
         assert_eq!(fetch.priority(), iroha_p2p::Priority::High);
+    }
+
+    #[test]
+    fn blocking_ingress_policy_handles_recovery_flags_and_malformed_v2_fail_closed() {
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x7A; 32]));
+        let requester = checked_random_peer_id();
+        let background = FetchPendingBlock {
+            requester: requester.clone(),
+            block_hash,
+            height: 7,
+            view: 2,
+            priority: None,
+            requester_roster_proof_known: Some(false),
+            commit_qc_only: Some(false),
+        };
+        assert!(
+            !BlockMessage::FetchPendingBlock(background.clone()).requires_blocking_ingress(),
+            "ordinary repair traffic may use the bounded non-blocking queue"
+        );
+
+        let mut consensus_priority = background.clone();
+        consensus_priority.priority = Some(FetchPendingBlockPriority::Consensus);
+        assert!(
+            BlockMessage::FetchPendingBlock(consensus_priority).requires_blocking_ingress(),
+            "consensus-priority repair must not be dropped under saturation"
+        );
+
+        let mut commit_qc_only = background;
+        commit_qc_only.commit_qc_only = Some(true);
+        assert!(
+            BlockMessage::FetchPendingBlock(commit_qc_only).requires_blocking_ingress(),
+            "commit-QC recovery must not be dropped under saturation"
+        );
+
+        assert!(
+            BlockMessage::RbcInitRequest(sample_rbc_init_request(0x7B)).requires_blocking_ingress(),
+            "RBC repair requests are liveness-critical"
+        );
+
+        let malformed_v2 = BlockMessage::V2(ConsensusMessageV2::new(
+            ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
+                manifest_hash: HashOf::from_untyped_unchecked(Hash::new(b"malformed-v2-manifest")),
+                index: u32::MAX,
+                bytes: Vec::new(),
+                sender: u32::MAX,
+                signature: Vec::new(),
+            }),
+        ));
+        assert!(
+            !malformed_v2.requires_blocking_ingress(),
+            "retransmittable v2 payload chunks use bounded best-effort ingress"
+        );
+
+        assert!(
+            !BlockMessage::ConsensusParams(ConsensusParamsAdvert {
+                collectors_k: 1,
+                redundant_send_r: 1,
+                membership: None,
+            })
+            .requires_blocking_ingress()
+        );
     }
 
     #[test]

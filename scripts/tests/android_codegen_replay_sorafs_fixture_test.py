@@ -447,7 +447,6 @@ def test_build_fixture_example_uses_reviewed_metadata_timestamp() -> None:
         "telemetry_file": "telemetry.json",
         "now_unix_secs": 1_725_000_000,
     }
-    chunker_fixture = {"chunk_digest_sha3_256": "a" * 64}
     manifest_report = {
         "chunking": {
             "profile_id": "sf1",
@@ -467,16 +466,68 @@ def test_build_fixture_example_uses_reviewed_metadata_timestamp() -> None:
 
     example = MODULE.build_fixture_example(
         fixture_meta,
-        chunker_fixture,
         manifest_report,
         MODULE.REPO_ROOT / "target-codex" / "android_codegen" / "report.json",
         "AQID",
     )
 
     assert example["generated_at"] == "2024-08-30T06:40:00Z"
-    assert example["instruction"]["submitted_epoch"] == 0
+    assert example["instruction"]["submitted_epoch"] == 1_725_000_000
     assert example["instruction"]["manifest_payload_base64"] == "AQID"
     assert "digest_hex" not in example["instruction"]
+    assert "chunk_digest_sha3_256_hex" not in example["instruction"]
+
+
+def test_main_rejects_nonfuture_retention_before_subprocess(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    fixture_dir = tmp_path / "fixtures"
+    fixture_dir.mkdir()
+    now = 1_725_000_000
+    (fixture_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "payload_path": "payload.bin",
+                "plan_file": "plan.json",
+                "providers_file": "providers.json",
+                "telemetry_file": "telemetry.json",
+                "options_file": "options.json",
+                "profile_handle": "sorafs.sf1@1.0.0",
+                "fixture": "multi_peer_parity_v1",
+                "now_unix_secs": now,
+                "retention_epoch": now,
+            }
+        ),
+        encoding="utf-8",
+    )
+    chunker_fixture = tmp_path / "chunker.json"
+    chunker_fixture.write_text("{}", encoding="utf-8")
+
+    def fail_manifest_stub(*_args, **_kwargs) -> None:
+        raise AssertionError("stale retention reached manifest replay")
+
+    monkeypatch.setattr(MODULE, "run_manifest_stub", fail_manifest_stub)
+
+    try:
+        MODULE.main(
+            [
+                "--fixture-dir",
+                str(fixture_dir),
+                "--chunker-fixture",
+                str(chunker_fixture),
+                "--register-pin-example",
+                str(tmp_path / "register_pin.json"),
+                "--report-dir",
+                str(tmp_path / "reports"),
+                "--tracked-fixture-out",
+                str(tmp_path / "tracked.json"),
+            ]
+        )
+    except SystemExit as error:
+        assert "retention_epoch must be later than now_unix_secs" in str(error)
+    else:
+        raise AssertionError("nonfuture retention was accepted")
 
 
 def test_main_rejects_absolute_payload_metadata_path_before_subprocess_without_leaking(

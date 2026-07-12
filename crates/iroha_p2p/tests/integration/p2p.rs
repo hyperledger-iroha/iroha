@@ -94,6 +94,13 @@ fn setup_logger() {
 }
 
 fn default_soranet_handshake() -> ActualSoranetHandshake {
+    // Admission-puzzle behavior has dedicated integration coverage. General
+    // network timing tests disable it so they measure the behavior they name.
+    let pow = SoranetPow {
+        required: false,
+        puzzle: None,
+        ..SoranetPow::default()
+    };
     ActualSoranetHandshake {
         descriptor_commit: WithOrigin::inline(DEFAULT_DESCRIPTOR_COMMIT.to_vec()),
         client_capabilities: WithOrigin::inline(DEFAULT_CLIENT_CAPABILITIES.to_vec()),
@@ -102,7 +109,7 @@ fn default_soranet_handshake() -> ActualSoranetHandshake {
         kem_id: 1,
         sig_id: 1,
         resume_hash: None,
-        pow: SoranetPow::default(),
+        pow,
     }
 }
 

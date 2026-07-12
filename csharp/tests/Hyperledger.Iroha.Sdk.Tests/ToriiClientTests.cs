@@ -8947,9 +8947,20 @@ public sealed class ToriiClientTests
             valid with { SubmittedEpoch = null },
             valid with { GasAssetId = " " },
             valid with { Alias = valid.Alias! with { Namespace = "" } },
+            valid with { Alias = valid.Alias! with { Namespace = new string('a', 129) } },
+            valid with { Alias = valid.Alias! with { Namespace = "Docs" } },
+            valid with { Alias = valid.Alias! with { Name = "main site" } },
+            valid with { Alias = valid.Alias! with { Name = "máin" } },
             valid with { Alias = valid.Alias! with { ProofBase64 = null } },
             valid with { Alias = valid.Alias! with { ProofBase64 = "not base64!" } },
             valid with { Alias = valid.Alias! with { ProofBase64 = Convert.ToBase64String(Array.Empty<byte>()) } },
+            valid with
+            {
+                Alias = valid.Alias! with
+                {
+                    ProofBase64 = Convert.ToBase64String(new byte[(1024 * 1024) + 1]),
+                },
+            },
         };
 
         using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request should not be sent"));

@@ -71,7 +71,16 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_sorafs_orderbook_status(FindSorafsOrderbookStatus),
         visit_find_sorafs_orderbook_orders(FindSorafsOrderbookOrders),
         visit_find_sorafs_orderbook_receipts(FindSorafsOrderbookReceipts),
+        visit_find_sorafs_pop_issuer_policy(FindSorafsPopIssuerPolicy),
+        visit_find_sorafs_pop_credential_commitment_by_digest(FindSorafsPopCredentialCommitmentByDigest),
+        visit_find_sorafs_pop_commitment_root_by_version(FindSorafsPopCommitmentRootByVersion),
+        visit_find_sorafs_pop_revocation_publication_by_version(FindSorafsPopRevocationPublicationByVersion),
+        visit_find_sorafs_pop_revocation_by_nonce_commitment(FindSorafsPopRevocationByNonceCommitment),
+        visit_find_sorafs_pop_audit_digest_by_sequence(FindSorafsPopAuditDigestBySequence),
+        visit_find_sorafs_pop_registry_status(FindSorafsPopRegistryStatus),
         visit_find_sorafs_moderation_policy(FindSorafsModerationPolicy),
+        visit_find_sorafs_moderation_appeal(FindSorafsModerationAppeal),
+        visit_find_sorafs_moderation_juror_eligibility(FindSorafsModerationJurorEligibility),
         visit_find_sorafs_moderation_case(FindSorafsModerationCase),
         visit_find_sorafs_moderation_commit(FindSorafsModerationCommit),
         visit_find_sorafs_moderation_reveal(FindSorafsModerationReveal),
@@ -238,8 +247,35 @@ macro_rules! query_visitors {
             visit_find_sorafs_orderbook_receipts(
                 &$crate::query::sorafs::prelude::FindSorafsOrderbookReceipts
             ),
+            visit_find_sorafs_pop_issuer_policy(
+                &$crate::query::sorafs::prelude::FindSorafsPopIssuerPolicy
+            ),
+            visit_find_sorafs_pop_credential_commitment_by_digest(
+                &$crate::query::sorafs::prelude::FindSorafsPopCredentialCommitmentByDigest
+            ),
+            visit_find_sorafs_pop_commitment_root_by_version(
+                &$crate::query::sorafs::prelude::FindSorafsPopCommitmentRootByVersion
+            ),
+            visit_find_sorafs_pop_revocation_publication_by_version(
+                &$crate::query::sorafs::prelude::FindSorafsPopRevocationPublicationByVersion
+            ),
+            visit_find_sorafs_pop_revocation_by_nonce_commitment(
+                &$crate::query::sorafs::prelude::FindSorafsPopRevocationByNonceCommitment
+            ),
+            visit_find_sorafs_pop_audit_digest_by_sequence(
+                &$crate::query::sorafs::prelude::FindSorafsPopAuditDigestBySequence
+            ),
+            visit_find_sorafs_pop_registry_status(
+                &$crate::query::sorafs::prelude::FindSorafsPopRegistryStatus
+            ),
             visit_find_sorafs_moderation_policy(
                 &$crate::query::sorafs::prelude::FindSorafsModerationPolicy
+            ),
+            visit_find_sorafs_moderation_appeal(
+                &$crate::query::sorafs::prelude::FindSorafsModerationAppeal
+            ),
+            visit_find_sorafs_moderation_juror_eligibility(
+                &$crate::query::sorafs::prelude::FindSorafsModerationJurorEligibility
             ),
             visit_find_sorafs_moderation_case(
                 &$crate::query::sorafs::prelude::FindSorafsModerationCase
@@ -387,7 +423,16 @@ mod tests {
             SingularQueryBox::FindSorafsOrderbookStatus(_) => {}
             SingularQueryBox::FindSorafsOrderbookOrders(_) => {}
             SingularQueryBox::FindSorafsOrderbookReceipts(_) => {}
+            SingularQueryBox::FindSorafsPopIssuerPolicy(_) => {}
+            SingularQueryBox::FindSorafsPopCredentialCommitmentByDigest(_) => {}
+            SingularQueryBox::FindSorafsPopCommitmentRootByVersion(_) => {}
+            SingularQueryBox::FindSorafsPopRevocationPublicationByVersion(_) => {}
+            SingularQueryBox::FindSorafsPopRevocationByNonceCommitment(_) => {}
+            SingularQueryBox::FindSorafsPopAuditDigestBySequence(_) => {}
+            SingularQueryBox::FindSorafsPopRegistryStatus(_) => {}
             SingularQueryBox::FindSorafsModerationPolicy(_) => {}
+            SingularQueryBox::FindSorafsModerationAppeal(_) => {}
+            SingularQueryBox::FindSorafsModerationJurorEligibility(_) => {}
             SingularQueryBox::FindSorafsModerationCase(_) => {}
             SingularQueryBox::FindSorafsModerationCommit(_) => {}
             SingularQueryBox::FindSorafsModerationReveal(_) => {}

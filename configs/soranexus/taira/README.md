@@ -251,8 +251,8 @@ advertises `route=taira_tron_xor` and `asset=xor` from `/v1/sccp/manifests`.
 The repo now supports a dedicated Taira validator runtime image via the main
 `Dockerfile`:
 
-- local build helper:
-  - `scripts/build_release_image.sh --profile iroha3 --config taira`
+- attested local build helper from the sibling DPN API checkout:
+  - `dpn-api-rust/ops/taira/build-validator-image.sh`
 - manual publish workflow:
   - `.github/workflows/publish_taira_validator.yml`
 
@@ -271,12 +271,19 @@ Manual publish prerequisites:
   first `hyperledger/iroha:taira-*` and
   `docker.soramitsu.co.jp/iroha3/iroha:taira-*` tags actually exist before
   operator hosts switch to the published image path
+- the exact 40-character DPN API commit containing the reviewed validator
+  source bundle and Cargo lock; mutable branches and tags are rejected
 
 If the Docker host is memory-constrained, cap Cargo parallelism during the
 image build:
 
-- `scripts/build_release_image.sh --profile iroha3 --config taira`
-- or, for a direct Docker build, `docker build --build-arg CONFIG_PROFILE=taira --build-arg FEATURES=embedded-soracloud-runtime --build-arg CARGO_BUILD_JOBS=1 --build-arg BINARIES=irohad ...`
+- `dpn-api-rust/ops/taira/build-validator-image.sh --cargo-build-jobs 1 --binaries irohad`
+
+The DPN wrapper verifies the pinned base commit, exact binary worktree patch,
+full reconstructed source-tree digest, Rust toolchain, and reviewed Cargo lock
+before the Docker build starts. The Dockerfile independently requires the lock
+and source-tree digests, uses `cargo --locked`, rejects prebuilt Taira binaries,
+and records both digests in the image.
 
 The image ships:
 
@@ -861,8 +868,10 @@ away from the shipped MCP-enabled config:
 1. Check out this repository on the validator host, for example at
    `/opt/iroha`.
 2. Build a rollout bundle from the exact runtime revision you intend to ship:
-   - `bash configs/soranexus/taira/build_taira_rollout_bundle.sh`
-   - the script refuses a dirty worktree by default and writes
+   - from the sibling DPN API checkout, run
+     `IROHA_DIR=/opt/iroha ops/taira/build-validator-bundle.sh`
+   - the wrapper accepts either the policy-pinned clean commit or the one exact
+     attested source patch, then writes
      `dist/taira-rollout/<bundle>/rollout.manifest.json` plus
      `sha256sums.txt`
    - the script runs `cargo test -p iroha_core queue::router::tests::smart_contract_deploy_rule --lib`

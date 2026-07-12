@@ -10615,6 +10615,17 @@ export function blake2b256(
   },
 ): Uint8Array;
 
+export const IVM_PROGRAM_HEADER_LENGTH: 17;
+export const IVM_ARTIFACT_MAX_BYTES: 4194304;
+
+/** Compute ledger/Core body identity and full-artifact SHA-256 identity. */
+export function computeIvmArtifactHashes(
+  artifact: Uint8Array | ArrayBuffer | ArrayBufferView,
+): {
+  codeHashHex: string;
+  artifactSha256Hex: string;
+};
+
 export interface ConfidentialGasSchedule {
   proofBase: number;
   perPublicInput: number;
@@ -12820,6 +12831,8 @@ export interface ToriiClientOptions extends ToriiClientRetryOptions {
   fetchImpl?: typeof fetch;
   config?: ToriiClientConfigSource;
   allowInsecure?: boolean;
+  /** Immutable out-of-band trust anchor required by validation-fee submission. */
+  validationFeeVerificationContext?: ValidationFeePolicyVerificationContext;
   sorafsAliasPolicy?: SorafsAliasPolicyOptions;
   onSorafsAliasWarning?: (warning: SorafsAliasWarning) => void;
   sorafsGatewayFetch?: typeof sorafsGatewayFetch;
@@ -15795,6 +15808,253 @@ export interface IvmProvedTransactionAssemblyInput {
   privateKeyAlgorithm?: string | null;
 }
 
+export type ValidationFeePolicyByteSource =
+  | Uint8Array
+  | ArrayBuffer
+  | ArrayBufferView
+  | readonly number[]
+  | string;
+
+export interface ValidationFeePolicyV1 {
+  schema_version: number;
+  network_id: string;
+  genesis_hash: ValidationFeePolicyByteSource;
+  policy_version: NumericLike;
+  previous_policy_hash: ValidationFeePolicyByteSource | null;
+  ds_asset_id: string;
+  ds_scale: number;
+  fee_minor_units: NumericLike;
+  treasury_account_id: string;
+  charging_mode: "PER_QUALIFYING_TRANSFER_INSTRUCTION";
+  effective_from_height: NumericLike;
+  expires_after_height: NumericLike | null;
+  governance_keyset_id: string;
+  exemption_classes: readonly string[];
+}
+
+export interface ValidationFeePolicySignatureV1 {
+  signer_public_key?: ValidationFeePolicyByteSource;
+  public_key?: ValidationFeePolicyByteSource;
+  signature:
+    | ValidationFeePolicyByteSource
+    | {
+        payload?: ValidationFeePolicyByteSource;
+        bytes?: ValidationFeePolicyByteSource;
+        signature?: ValidationFeePolicyByteSource;
+      };
+}
+
+export interface SignedValidationFeePolicyV1 {
+  policy: ValidationFeePolicyV1;
+  signatures: readonly ValidationFeePolicySignatureV1[];
+}
+
+export interface ValidationFeeGovernanceKeyV1 {
+  public_key: ValidationFeePolicyByteSource;
+  weight: NumericLike;
+}
+
+export interface ValidationFeeGovernanceKeysetV1 {
+  keyset_id: string;
+  threshold: NumericLike;
+  keys?: readonly ValidationFeeGovernanceKeyV1[];
+  public_keys?: readonly ValidationFeePolicyByteSource[];
+  public_keys_hex?: readonly string[];
+}
+
+export interface ValidationFeePolicyRegistryEntryV1 {
+  policy_version: NumericLike;
+  policy_hash: ValidationFeePolicyByteSource;
+  previous_policy_hash: ValidationFeePolicyByteSource | null;
+}
+
+export interface ValidationFeePolicyRegistryV1 {
+  active_policy_hash: ValidationFeePolicyByteSource;
+  active_policy_version: NumericLike;
+  registered_policies: readonly ValidationFeePolicyRegistryEntryV1[];
+}
+
+export interface ValidationFeePolicyVerificationContext {
+  networkId?: string;
+  network_id?: string;
+  genesisHash?: ValidationFeePolicyByteSource;
+  genesis_hash?: ValidationFeePolicyByteSource;
+  currentHeight?: NumericLike;
+  current_height?: NumericLike;
+  governanceKeyset?: ValidationFeeGovernanceKeysetV1;
+  governance_keyset?: ValidationFeeGovernanceKeysetV1;
+  governanceKeysets?: readonly ValidationFeeGovernanceKeysetV1[];
+  governance_keysets?: readonly ValidationFeeGovernanceKeysetV1[];
+  policyRegistry?: ValidationFeePolicyRegistryV1;
+  policy_registry?: ValidationFeePolicyRegistryV1;
+  /** Active-policy verification is mandatory; `false` is rejected. */
+  requireActive?: true;
+  /** Snake-case alias for `requireActive`; `false` is rejected. */
+  require_active?: true;
+}
+
+export interface VerifiedValidationFeePolicy {
+  policy: ValidationFeePolicyV1;
+  policyHashHex: string;
+  policyVersion: bigint;
+  validSignatureCount: number;
+  validSignatureWeight: bigint;
+  registry: {
+    activePolicyVersion: bigint;
+    activePolicyHashHex: string;
+    registeredPolicyCount: number;
+  };
+}
+
+export interface IvmValidationFeePolicyIntent {
+  signedPolicy?: SignedValidationFeePolicyV1;
+  signed_policy?: SignedValidationFeePolicyV1;
+  /** Per-call trust overrides are rejected; configure the ToriiClient instead. */
+  verificationContext?: never;
+  /** Per-call trust overrides are rejected; configure the ToriiClient instead. */
+  verification_context?: never;
+  /** Optional assertion checked against the count derived from the proved overlay. */
+  qualifyingTransferCount?: NumericLike;
+  /** Snake-case alias for `qualifyingTransferCount`. */
+  qualifying_transfer_count?: NumericLike;
+  feeInstructionIndex?: NumericLike;
+  fee_instruction_index?: NumericLike;
+  feeTransferEntryIndex?: NumericLike | null;
+  fee_transfer_entry_index?: NumericLike | null;
+}
+
+export interface RequiredIvmOverlayTransfer {
+  sourceAssetHoldingId?: string;
+  source_asset_holding_id?: string;
+  sourceAssetId?: string;
+  source_asset_id?: string;
+  quantity: NumericLike;
+  destinationAccountId?: string;
+  destination_account_id?: string;
+}
+
+export interface IvmProvedContractCallInputBase {
+  authority: string;
+  entrypoint?: string | null;
+  payload?: JsonValue;
+  metadata?: MetadataLike;
+  nonce?: number | null;
+}
+
+type IvmRequiredAliasPair<
+  Camel extends string,
+  Snake extends string,
+  Value,
+> =
+  | ({ [Key in Camel]: Value } & { [Key in Snake]?: never })
+  | ({ [Key in Camel]?: never } & { [Key in Snake]: Value });
+
+type IvmOptionalAliasPair<
+  Camel extends string,
+  Snake extends string,
+  Value,
+> =
+  | ({ [Key in Camel]?: Value } & { [Key in Snake]?: never })
+  | ({ [Key in Camel]?: never } & { [Key in Snake]: Value });
+
+type IvmContractTarget =
+  | (IvmRequiredAliasPair<"contractAddress", "contract_address", string> & {
+      contractAlias?: never;
+      contract_alias?: never;
+    })
+  | (IvmRequiredAliasPair<"contractAlias", "contract_alias", string> & {
+      contractAddress?: never;
+      contract_address?: never;
+    });
+
+type IvmProvedContractCallCore = IvmProvedContractCallInputBase &
+  IvmRequiredAliasPair<"chainId", "chain_id", string> &
+  IvmRequiredAliasPair<
+    "privateKey",
+    "private_key",
+    Buffer | ArrayBuffer | ArrayBufferView
+  > &
+  IvmOptionalAliasPair<
+    "privateKeyAlgorithm",
+    "private_key_algorithm",
+    string | null
+  > &
+  IvmRequiredAliasPair<"vkRef", "vk_ref", IvmVerifyingKeyRef> &
+  IvmContractTarget &
+  IvmRequiredAliasPair<"gasLimit", "gas_limit", NumericLike> &
+  IvmOptionalAliasPair<"gasAssetId", "gas_asset_id", string | null> &
+  IvmOptionalAliasPair<"feeSponsor", "fee_sponsor", string | null> &
+  IvmOptionalAliasPair<
+    "requiredOverlayTransfer",
+    "required_overlay_transfer",
+    RequiredIvmOverlayTransfer | null
+  > &
+  IvmOptionalAliasPair<"creationTimeMs", "creation_time_ms", number | null> &
+  IvmOptionalAliasPair<"ttlMs", "ttl_ms", number | null> &
+  IvmRequiredAliasPair<
+    "expectedCodeHashHex",
+    "expected_code_hash_hex",
+    string
+  > &
+  IvmRequiredAliasPair<
+    "expectedArtifactSha256Hex",
+    "expected_artifact_sha256_hex",
+    string
+  >;
+
+/**
+ * A proved deployed-contract call must carry an independently trusted code
+ * hash and a SHA-256 digest of the complete artifact. The helper verifies
+ * Torii's simulation, the ledger/Core body hash, and every header/body byte
+ * against those values before deriving, proving, signing, or submitting.
+ */
+export type IvmProvedContractCallInput = IvmProvedContractCallCore &
+  IvmOptionalAliasPair<
+    "validationFeePolicy",
+    "validation_fee_policy",
+    IvmValidationFeePolicyIntent | null
+  >;
+
+/** Input for the strict validation-fee submission helper. */
+export type ValidationFeeIvmProvedContractCallInput =
+  IvmProvedContractCallCore &
+    IvmRequiredAliasPair<
+      "validationFeePolicy",
+      "validation_fee_policy",
+      IvmValidationFeePolicyIntent
+    >;
+
+export interface IvmProvedContractCallOptions {
+  signal?: AbortSignal;
+  proofIntervalMs?: number;
+  proofTimeoutMs?: number | null;
+  waitForCommit?: boolean;
+  transactionIntervalMs?: number;
+  transactionTimeoutMs?: number | null;
+  transactionStatusScope?: "local" | "auto" | "global";
+}
+
+export interface IvmProvedContractCallResult {
+  hash: string;
+  signedTransaction: Buffer;
+  submission: unknown;
+  status: ToriiPipelineStatus | null;
+  simulation: ContractCallSimulateResponse;
+  metadata: { [key: string]: JsonValue };
+  proved: IvmProvedPayload;
+  attachment: { [key: string]: JsonValue };
+  proofJobId: string;
+  requiredOverlayTransfer: JsonValue | null;
+  validationFeePolicy: {
+    policyVersion: number;
+    policyHash: string;
+    qualifyingTransferCount: number;
+    feeInstructionIndex: number;
+    feeTransferEntryIndex: number | null;
+    feeQuantity: string;
+  } | null;
+}
+
 export interface MintAssetInput {
   chainId: string;
   authority: string;
@@ -16861,6 +17121,93 @@ export interface ContractCallResponse {
   transaction_scaffold_b64: string | null;
   signed_transaction_b64: string | null;
   signing_message_b64: string | null;
+}
+
+export interface ContractCallSimulateRequest {
+  authority: string;
+  contractAddress?: string;
+  contract_address?: string;
+  contractAlias?: string;
+  contract_alias?: string;
+  entrypoint?: string | null;
+  payload?: JsonValue;
+  gasAssetId?: string | null;
+  gas_asset_id?: string | null;
+  feeSponsor?: string | null;
+  fee_sponsor?: string | null;
+  gasLimit: NumericLike;
+  gas_limit?: NumericLike;
+}
+
+export interface ContractCallSimulateResponse {
+  ok: boolean;
+  dataspace: string;
+  contract_address: string | null;
+  code_hash_hex: string;
+  abi_hash_hex: string;
+  entrypoint: string;
+  normalized_payload: JsonValue | null;
+  gas_limit: number;
+  gas_used: number;
+  queued_instructions: JsonValue[];
+  result: JsonValue | null;
+  error: string | null;
+  vm_diagnostic: JsonValue | null;
+}
+
+export interface IvmVerifyingKeyRef {
+  backend: string;
+  name: string;
+}
+
+export interface IvmProvedPayload {
+  bytecode: string;
+  overlay: JsonValue[];
+  events_commitment: string;
+  gas_policy_commitment: string;
+}
+
+export interface IvmCompactProofAttachment {
+  backend: string;
+  proof: {
+    backend: string;
+    bytes_b64: string;
+  };
+  vk_ref: IvmVerifyingKeyRef;
+  vk_commitment?: JsonValue;
+  envelope_hash?: JsonValue;
+  lane_privacy?: JsonValue;
+}
+
+export interface ZkIvmExecutionRequest {
+  vkRef?: IvmVerifyingKeyRef;
+  vk_ref?: IvmVerifyingKeyRef;
+  authority: string;
+  metadata?: { [key: string]: JsonValue };
+  bytecode: string | ArrayBufferView | ArrayBuffer | Buffer;
+  proved?: IvmProvedPayload | null;
+}
+
+export interface ZkIvmDeriveResponse {
+  proved: IvmProvedPayload;
+}
+
+export interface ZkIvmProveJobCreatedResponse {
+  job_id: string;
+}
+
+export interface ZkIvmProveJobResponse {
+  job_id: string;
+  status: "pending" | "running" | "done" | "error";
+  error: string | null;
+  proved: IvmProvedPayload | null;
+  attachment: IvmCompactProofAttachment | null;
+}
+
+export interface ZkIvmProveWaitOptions {
+  signal?: AbortSignal;
+  intervalMs?: number;
+  timeoutMs?: number | null;
 }
 
 export interface ContractManifestRecord {
@@ -19136,6 +19483,7 @@ export declare class ToriiClient {
   ): Promise<unknown | null>;
   submitTransaction(
     payload: ArrayBufferView | ArrayBuffer | Buffer,
+    options?: { signal?: AbortSignal },
   ): Promise<unknown>;
   submitTransactionBatch(
     payloads: ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>,
@@ -19733,6 +20081,34 @@ export declare class ToriiClient {
     request: ContractCallRequest,
     options?: { signal?: AbortSignal },
   ): Promise<ContractCallResponse>;
+  simulateContractCall(
+    request: ContractCallSimulateRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ContractCallSimulateResponse>;
+  deriveIvmProved(
+    request: ZkIvmExecutionRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ZkIvmDeriveResponse>;
+  startIvmProve(
+    request: ZkIvmExecutionRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ZkIvmProveJobCreatedResponse>;
+  getIvmProveJob(
+    jobId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ZkIvmProveJobResponse>;
+  cancelIvmProveJob(
+    jobId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ZkIvmProveJobCreatedResponse>;
+  waitForIvmProveJob(
+    jobId: string,
+    options?: ZkIvmProveWaitOptions,
+  ): Promise<ZkIvmProveJobResponse>;
+  proveIvmAndWait(
+    request: ZkIvmExecutionRequest,
+    options?: ZkIvmProveWaitOptions,
+  ): Promise<ZkIvmProveJobResponse>;
   proposeMultisig(
     request: MultisigProposeRequest,
     options?: { signal?: AbortSignal },
@@ -19765,6 +20141,7 @@ export declare class ToriiClient {
   ): Promise<ContractManifestRecord | null>;
   getContractCodeBytes(
     codeHashHex: string,
+    options?: { signal?: AbortSignal },
   ): Promise<ContractCodeBytesRecord | null>;
   getGovernanceContract(
     contractAddress: string,
@@ -20010,82 +20387,7 @@ export function ed25519SeedToRecoveryPhrase(
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
 ): RecoveryPhrase;
 
-export function canonicalQueryString(
-  query?: string | URLSearchParams | null,
-): string;
-
-export function canonicalRequestMessage(params: {
-  method: string;
-  path: string;
-  query?: string | URLSearchParams;
-  body?: Buffer | ArrayBuffer | ArrayBufferView | string;
-}): Buffer;
-
-export function canonicalRequestSignatureMessage(params: {
-  method: string;
-  path: string;
-  query?: string | URLSearchParams;
-  body?: Buffer | ArrayBuffer | ArrayBufferView | string;
-  timestampMs: number;
-  nonce: string;
-}): Buffer;
-
-export function buildCanonicalRequestHeaders(params: {
-  accountId: string;
-  method: string;
-  path: string;
-  query?: string | URLSearchParams;
-  body?: Buffer | ArrayBuffer | ArrayBufferView | string;
-  privateKey: ArrayBufferView | ArrayBuffer | Buffer;
-  timestampMs?: number;
-  nonce?: string;
-}): {
-  "X-Iroha-Account": string;
-  "X-Iroha-Signature": string;
-  "X-Iroha-Timestamp-Ms": string;
-  "X-Iroha-Nonce": string;
-};
-
-export interface CanonicalJsonRequestSignerInput {
-  message: Buffer;
-  messageBase64: string;
-  method: string;
-  path: string;
-  query?: string | URLSearchParams;
-  body: string;
-  timestampMs: number;
-  nonce: string;
-}
-
-export type CanonicalJsonRequestSignature =
-  | Buffer
-  | Uint8Array
-  | ArrayBuffer
-  | ArrayBufferView
-  | string;
-
-export function buildCanonicalJsonRequest(params: {
-  accountId: string;
-  method?: string;
-  path: string;
-  baseUrl?: string;
-  query?: string | URLSearchParams;
-  body?: unknown;
-  headers?:
-    | Headers
-    | ReadonlyArray<readonly [string, string]>
-    | Record<string, string>;
-  privateKey?: ArrayBufferView | ArrayBuffer | Buffer;
-  sign?: (
-    input: CanonicalJsonRequestSignerInput,
-  ) => CanonicalJsonRequestSignature | Promise<CanonicalJsonRequestSignature>;
-  timestampMs?: number;
-  nonce?: string;
-}): Promise<{
-  method: string;
-  headers: Record<string, string>;
-  body: string;
-}>;
+export * from "./canonical-request.js";
 
 export function deriveConfidentialKeyset(
   spendKey: ArrayBufferView | ArrayBuffer | Buffer,
@@ -21013,6 +21315,61 @@ export function buildRemoveSccpRouteManifestTransaction(
 export function buildIvmProvedTransaction(
   input: IvmProvedTransactionAssemblyInput,
 ): SignedTransactionResult;
+
+export const VALIDATION_FEE_POLICY_SCHEMA_VERSION: 1;
+export const VALIDATION_FEE_DS_SCALE: 2;
+export const VALIDATION_FEE_INITIAL_MINOR_UNITS: 10n;
+export const VALIDATION_FEE_POLICY_HASH_DOMAIN: string;
+export const VALIDATION_FEE_POLICY_SIGNATURE_DOMAIN: string;
+export const VALIDATION_FEE_POLICY_TYPE_NAME: string;
+export const VALIDATION_FEE_CHARGING_MODE: "PER_QUALIFYING_TRANSFER_INSTRUCTION";
+export const VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS: "TREASURY_PAYOUT";
+
+export class ValidationFeePolicyError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string);
+}
+
+export function encodeValidationFeePolicyNorito(
+  policy: ValidationFeePolicyV1,
+): Uint8Array;
+export function validationFeePolicyHash(policy: ValidationFeePolicyV1): string;
+export function validationFeePolicyLedgerSignaturePayload(
+  policy: ValidationFeePolicyV1,
+): Uint8Array;
+export function verifyValidationFeePolicyRegistry(
+  registry: ValidationFeePolicyRegistryV1,
+  policy: ValidationFeePolicyV1,
+): {
+  activePolicyVersion: bigint;
+  activePolicyHashHex: string;
+  registeredPolicyCount: number;
+};
+export function verifySignedValidationFeePolicy(
+  signedPolicy: SignedValidationFeePolicyV1,
+  context: ValidationFeePolicyVerificationContext,
+): VerifiedValidationFeePolicy;
+export function validationFeeQuantity(
+  policy: ValidationFeePolicyV1,
+  qualifyingTransferCount: NumericLike,
+): string;
+
+/** Generic proof-bound submission helper; validation-fee policy is optional. */
+export function submitIvmProvedContractCall(
+  client: ToriiClient,
+  input: IvmProvedContractCallInput,
+  options?: IvmProvedContractCallOptions,
+): Promise<IvmProvedContractCallResult>;
+
+/**
+ * Strict proof-bound submission helper that requires and independently verifies
+ * a signed active validation-fee policy before signing or submission.
+ */
+export function submitValidationFeeIvmProvedContractCall(
+  client: ToriiClient,
+  input: ValidationFeeIvmProvedContractCallInput,
+  options?: IvmProvedContractCallOptions,
+): Promise<IvmProvedContractCallResult>;
 
 export function buildKagemushaInstructionArchiveInstruction(
   input: KagemushaInstructionArchiveInput,

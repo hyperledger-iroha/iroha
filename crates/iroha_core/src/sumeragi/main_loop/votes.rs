@@ -2009,7 +2009,7 @@ impl Actor {
         let mut descendant_requeue_failures = 0usize;
         let mut descendant_requeue_duplicates = 0usize;
         for (pending_hash, pending_height, pending_view) in descendant_pending {
-            if let Some((_, requeued, failures, duplicate_failures)) =
+            if let Some((_, requeued, failures, duplicate_failures, _retained_for_retry)) =
                 self.drop_stale_pending_block(pending_hash, pending_height, pending_view)
             {
                 descendant_pending_removed = descendant_pending_removed.saturating_add(1);
@@ -2864,6 +2864,26 @@ impl Actor {
         mode_tag: &str,
         signature_result: Option<Result<(), VoteSignatureError>>,
     ) -> bool {
+        self.validate_and_record_vote_with_expected_chain_order_result(
+            vote,
+            signature_topology,
+            evidence_context,
+            mode_tag,
+            None,
+            signature_result,
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn validate_and_record_vote_with_expected_chain_order_result(
+        &mut self,
+        vote: &crate::sumeragi::consensus::Vote,
+        signature_topology: &super::network_topology::Topology,
+        evidence_context: &super::evidence::EvidenceValidationContext<'_>,
+        mode_tag: &str,
+        expected_chain_order: Option<(iroha_crypto::Hash, u64)>,
+        signature_result: Option<Result<(), VoteSignatureError>>,
+    ) -> bool {
         let (consensus_mode, _, _) = self.consensus_context_for_height(vote.height);
         let roster_len = u32::try_from(signature_topology.as_ref().len()).unwrap_or(u32::MAX);
         let roster_hash = iroha_crypto::HashOf::new(&signature_topology.as_ref().to_vec());
@@ -2949,13 +2969,15 @@ impl Actor {
             record_drop(super::status::VoteValidationDropReason::HighestQcMismatch);
             return false;
         }
-        let (expected_chain_order_hash, expected_rechain_seq) = self
-            .vnext_chain_order_binding_for_signature_topology(
-                vote.height,
-                vote.view,
-                consensus_mode,
-                signature_topology,
-            );
+        let (expected_chain_order_hash, expected_rechain_seq) = expected_chain_order
+            .unwrap_or_else(|| {
+                self.vnext_chain_order_binding_for_signature_topology(
+                    vote.height,
+                    vote.view,
+                    consensus_mode,
+                    signature_topology,
+                )
+            });
         if vote.chain_order_hash != expected_chain_order_hash
             || vote.rechain_seq != expected_rechain_seq
         {
@@ -3210,7 +3232,34 @@ impl Actor {
                                 now,
                             )
                     });
-                if new_view_qc_supersedes || certified_commit_supersedes {
+                let stale_higher_view_recovery_precommit = signer_peer
+                    == self.common_config.peer.id()
+                    && self.stale_higher_view_local_precommit_allows_recovery_precommit(
+                        vote.block_hash,
+                        vote.height,
+                        vote.view,
+                        &existing,
+                        now,
+                        evidence_context.topology,
+                        signature_topology,
+                        vote.signer,
+                        None,
+                        Some((vote.parent_state_root, vote.post_state_root)),
+                    );
+                let stale_local_vote_can_rotate = signer_peer == self.common_config.peer.id()
+                    && matches!(vote.phase, Phase::Prepare | Phase::Commit)
+                    && !self.local_same_height_vote_blocks_fresh_proposal(
+                        vote.height,
+                        vote.view,
+                        &existing,
+                        now,
+                        true,
+                    );
+                if new_view_qc_supersedes
+                    || certified_commit_supersedes
+                    || stale_higher_view_recovery_precommit
+                    || stale_local_vote_can_rotate
+                {
                     info!(
                         phase = ?vote.phase,
                         height = vote.height,
@@ -3223,6 +3272,8 @@ impl Actor {
                         signer_peer = ?signer_peer,
                         new_view_qc_supersedes,
                         certified_commit_supersedes,
+                        stale_higher_view_recovery_precommit,
+                        stale_local_vote_can_rotate,
                         "accepting vote: same-height signer vote is superseded"
                     );
                 } else if self.should_defer_same_height_supersession_conflict(vote, &existing) {

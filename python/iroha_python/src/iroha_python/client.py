@@ -2256,6 +2256,8 @@ _SORAFS_MAX_MANIFEST_ENCODED_BYTES = 512 * 1024
 _SORAFS_MAX_MANIFEST_BASE64_BYTES = (
     (_SORAFS_MAX_MANIFEST_ENCODED_BYTES + 2) // 3 * 4
 )
+_SORAFS_MAX_ALIAS_PROOF_BYTES = 1024 * 1024
+_SORAFS_MAX_ALIAS_PROOF_BASE64_BYTES = ((_SORAFS_MAX_ALIAS_PROOF_BYTES + 2) // 3 * 4)
 
 
 def _normalize_sorafs_manifest_payload(value: Any, context: str) -> str:
@@ -2278,17 +2280,37 @@ def _normalize_sorafs_manifest_payload(value: Any, context: str) -> str:
     return normalized
 
 
+def _normalize_sorafs_alias_proof(value: Any, context: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{context} must be a canonical base64 string")
+    if len(value) > _SORAFS_MAX_ALIAS_PROOF_BASE64_BYTES:
+        raise ValueError(
+            f"{context} must encode at most {_SORAFS_MAX_ALIAS_PROOF_BYTES} bytes"
+        )
+    normalized = _normalize_required_base64_payload(value, context)
+    if len(base64.b64decode(normalized, validate=True)) > _SORAFS_MAX_ALIAS_PROOF_BYTES:
+        raise ValueError(
+            f"{context} must encode at most {_SORAFS_MAX_ALIAS_PROOF_BYTES} bytes"
+        )
+    return normalized
+
+
+def _normalize_sorafs_alias_text(value: Any, context: str) -> str:
+    normalized = _require_exact_non_empty_string(value, context)
+    if len(normalized) > 128 or re.fullmatch(r"[a-z0-9._-]+", normalized) is None:
+        raise ValueError(
+            f"{context} must contain 1..128 lowercase ASCII letters, digits, '.', '-', or '_'"
+        )
+    return normalized
+
+
 def _normalize_sorafs_pin_alias_request(value: Any, context: str) -> Dict[str, str]:
     if not isinstance(value, Mapping):
         raise TypeError(f"{context} must be an object")
     allowed_fields = {
         "namespace",
         "name",
-        "proof",
-        "proof_b64",
-        "proofB64",
         "proof_base64",
-        "proofBase64",
     }
     unknown_fields = sorted(set(value) - allowed_fields)
     if unknown_fields:
@@ -2297,56 +2319,21 @@ def _normalize_sorafs_pin_alias_request(value: Any, context: str) -> Dict[str, s
         )
     namespace_value = _first_present(value, "namespace")
     name_value = _first_present(value, "name")
-    proof_value = _first_present(
-        value,
-        "proof",
-        "proof_b64",
-        "proofB64",
-        "proof_base64",
-        "proofBase64",
-    )
+    proof_value = _first_present(value, "proof_base64")
     if namespace_value is _MISSING:
         raise TypeError(f"{context}.namespace is required")
     if name_value is _MISSING:
         raise TypeError(f"{context}.name is required")
     if proof_value is _MISSING:
-        raise TypeError(f"{context}.proof is required")
+        raise TypeError(f"{context}.proof_base64 is required")
     return {
-        "namespace": _require_non_empty_string(namespace_value, f"{context}.namespace"),
-        "name": _require_non_empty_string(name_value, f"{context}.name"),
-        "proof_base64": _normalize_required_base64_payload(
+        "namespace": _normalize_sorafs_alias_text(namespace_value, f"{context}.namespace"),
+        "name": _normalize_sorafs_alias_text(name_value, f"{context}.name"),
+        "proof_base64": _normalize_sorafs_alias_proof(
             proof_value,
-            f"{context}.proof",
+            f"{context}.proof_base64",
         ),
     }
-
-
-def _normalize_sorafs_credentials_aliases(
-    request: Mapping[str, Any],
-    *,
-    context: str,
-) -> Dict[str, Any]:
-    normalized = dict(request)
-    aliases = {
-        "privateKey": "private_key",
-        "privateKeyMultihash": "private_key_multihash",
-        "privateKeyHex": "private_key_hex",
-        "privateKeyBytes": "private_key_bytes",
-        "privateKeySeed": "private_key_seed",
-        "privateKeyAlgorithm": "private_key_algorithm",
-    }
-    for alias_key, canonical_key in aliases.items():
-        if alias_key not in normalized:
-            continue
-        alias_value = normalized.pop(alias_key)
-        canonical_value = normalized.get(canonical_key)
-        if canonical_value is not None and alias_value is not None:
-            raise TypeError(
-                f"{context} accepts only one of {canonical_key} or {alias_key}"
-            )
-        if alias_value is not None:
-            normalized[canonical_key] = alias_value
-    return normalized
 
 
 def _normalize_sorafs_pin_register_request(
@@ -2358,64 +2345,38 @@ def _normalize_sorafs_pin_register_request(
         raise TypeError(f"{context} must be an object")
     allowed_fields = {
         "authority",
-        "account",
         "private_key",
-        "privateKey",
-        "private_key_multihash",
-        "privateKeyMultihash",
-        "private_key_hex",
-        "privateKeyHex",
-        "private_key_bytes",
-        "privateKeyBytes",
-        "private_key_seed",
-        "privateKeySeed",
-        "private_key_algorithm",
-        "privateKeyAlgorithm",
         "manifest_payload",
-        "manifestPayload",
-        "manifest_bytes",
-        "manifestBytes",
         "submitted_epoch",
-        "submittedEpoch",
         "gas_asset_id",
-        "gasAssetId",
         "alias",
-        "alias_namespace",
-        "aliasNamespace",
-        "alias_name",
-        "aliasName",
-        "alias_proof",
-        "aliasProof",
-        "alias_proof_b64",
-        "aliasProofB64",
-        "alias_proof_base64",
-        "aliasProofBase64",
         "successor_of_hex",
-        "successorOfHex",
     }
     unknown_fields = sorted(set(request) - allowed_fields)
     if unknown_fields:
         raise TypeError(
             f"{context} contains unsupported fields: {', '.join(unknown_fields)}"
         )
-    credentials = _normalize_authority_credentials(
-        _normalize_sorafs_credentials_aliases(request, context=context),
-        context=context,
-    )
+    credentials = {
+        "authority": _require_exact_non_empty_string(
+            request.get("authority"),
+            f"{context}.authority",
+        ),
+        "private_key": _require_exact_non_empty_string(
+            request.get("private_key"),
+            f"{context}.private_key",
+        ),
+    }
 
-    manifest_payload_value = _first_present(
-        request,
-        "manifest_payload",
-        "manifestPayload",
-        "manifest_bytes",
-        "manifestBytes",
-    )
-    submitted_epoch_value = _first_present(request, "submitted_epoch", "submittedEpoch")
-    gas_asset_value = _first_present(request, "gas_asset_id", "gasAssetId")
+    manifest_payload_value = _first_present(request, "manifest_payload")
+    submitted_epoch_value = _first_present(request, "submitted_epoch")
+    gas_asset_value = _first_present(request, "gas_asset_id")
     if manifest_payload_value is _MISSING:
         raise TypeError(f"{context}.manifest_payload is required")
     if submitted_epoch_value is _MISSING:
         raise TypeError(f"{context}.submitted_epoch is required")
+    if not isinstance(submitted_epoch_value, int) or isinstance(submitted_epoch_value, bool):
+        raise TypeError(f"{context}.submitted_epoch must be an integer")
 
     payload: Dict[str, Any] = {
         **credentials,
@@ -2430,43 +2391,19 @@ def _normalize_sorafs_pin_register_request(
         ),
     }
     if gas_asset_value is not _MISSING:
-        payload["gas_asset_id"] = _require_non_empty_string(
+        payload["gas_asset_id"] = _require_exact_non_empty_string(
             gas_asset_value,
             f"{context}.gas_asset_id",
         )
 
     alias_value = _first_present(request, "alias")
-    alias_namespace = _first_present(request, "alias_namespace", "aliasNamespace")
-    alias_name = _first_present(request, "alias_name", "aliasName")
-    alias_proof = _first_present(
-        request,
-        "alias_proof",
-        "aliasProof",
-        "alias_proof_b64",
-        "aliasProofB64",
-        "alias_proof_base64",
-        "aliasProofBase64",
-    )
-    has_flat_alias = (
-        alias_namespace is not _MISSING
-        or alias_name is not _MISSING
-        or alias_proof is not _MISSING
-    )
-    if alias_value is not _MISSING and has_flat_alias:
-        raise TypeError(f"{context}.alias must not be combined with flat alias fields")
-    if alias_value is _MISSING and has_flat_alias:
-        alias_value = {
-            "namespace": None if alias_namespace is _MISSING else alias_namespace,
-            "name": None if alias_name is _MISSING else alias_name,
-            "proof": None if alias_proof is _MISSING else alias_proof,
-        }
     if alias_value is not _MISSING:
         payload["alias"] = _normalize_sorafs_pin_alias_request(
             alias_value,
             f"{context}.alias",
         )
 
-    successor_value = _first_present(request, "successor_of_hex", "successorOfHex")
+    successor_value = _first_present(request, "successor_of_hex")
     if successor_value is not _MISSING:
         successor = _normalize_sorafs_digest_hex(
             successor_value,

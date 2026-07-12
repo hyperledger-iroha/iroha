@@ -13,6 +13,8 @@ use base64::Engine as _;
 #[cfg(feature = "json")]
 use base64::engine::general_purpose::STANDARD;
 use iroha_schema::{Ident, IntoSchema};
+#[cfg(feature = "json")]
+use norito::json::JsonDeserialize as _;
 use norito::{
     codec::{Decode, Encode},
     core as ncore,
@@ -546,6 +548,103 @@ fn proof_attachment_json_optional_fixed_bytes<const N: usize>(
 }
 
 #[cfg(feature = "json")]
+fn decode_canonical_base64_bounded(
+    encoded: &str,
+    max_decoded_len: usize,
+    field: &'static str,
+) -> Result<Vec<u8>, norito::json::Error> {
+    let max_encoded_len = max_decoded_len.div_ceil(3).saturating_mul(4);
+    if encoded.is_empty() || encoded.len() > max_encoded_len {
+        return Err(norito::json::Error::InvalidField {
+            field: field.into(),
+            message: "must be non-empty and within the proof byte limit".into(),
+        });
+    }
+    let decoded = STANDARD
+        .decode(encoded)
+        .map_err(|_| norito::json::Error::InvalidField {
+            field: field.into(),
+            message: "expected canonical standard base64 string".into(),
+        })?;
+    if decoded.len() > max_decoded_len {
+        return Err(norito::json::Error::InvalidField {
+            field: field.into(),
+            message: "decoded value exceeds the proof byte limit".into(),
+        });
+    }
+    if STANDARD.encode(&decoded) != encoded {
+        return Err(norito::json::Error::InvalidField {
+            field: field.into(),
+            message: "expected canonical standard base64 string".into(),
+        });
+    }
+    Ok(decoded)
+}
+
+#[cfg(feature = "json")]
+fn proof_attachment_json_proof_box(
+    object: &norito::json::Map,
+) -> Result<ProofBox, norito::json::Error> {
+    let value = object
+        .get("proof")
+        .ok_or_else(|| norito::json::Error::missing_field("proof"))?;
+    let proof = value
+        .as_object()
+        .ok_or_else(|| norito::json::Error::InvalidField {
+            field: "proof".into(),
+            message: "expected object".into(),
+        })?;
+    for key in proof.keys() {
+        if !matches!(key.as_str(), "backend" | "bytes" | "bytes_b64") {
+            return Err(norito::json::Error::InvalidField {
+                field: format!("proof.{key}"),
+                message: "unknown field".into(),
+            });
+        }
+    }
+
+    let backend = proof
+        .get("backend")
+        .ok_or_else(|| norito::json::Error::missing_field("proof.backend"))
+        .and_then(Ident::json_from_value)?;
+    let bytes = match (proof.get("bytes"), proof.get("bytes_b64")) {
+        (Some(_), Some(_)) => {
+            return Err(norito::json::Error::InvalidField {
+                field: "proof".into(),
+                message: "must contain exactly one of bytes or bytes_b64".into(),
+            });
+        }
+        (Some(value), None) => Vec::<u8>::json_from_value(value)?,
+        (None, Some(value)) => {
+            let encoded = value
+                .as_str()
+                .ok_or_else(|| norito::json::Error::InvalidField {
+                    field: "proof.bytes_b64".into(),
+                    message: "expected canonical standard base64 string".into(),
+                })?;
+            decode_canonical_base64_bounded(
+                encoded,
+                MAX_LEN_PREFIXED_FIELD_BYTES,
+                "proof.bytes_b64",
+            )?
+        }
+        (None, None) => {
+            return Err(norito::json::Error::InvalidField {
+                field: "proof".into(),
+                message: "must contain exactly one of bytes or bytes_b64".into(),
+            });
+        }
+    };
+    if bytes.len() > MAX_LEN_PREFIXED_FIELD_BYTES {
+        return Err(norito::json::Error::InvalidField {
+            field: "proof.bytes".into(),
+            message: format!("proof bytes exceed the {MAX_LEN_PREFIXED_FIELD_BYTES}-byte limit"),
+        });
+    }
+    Ok(ProofBox::new(backend, bytes))
+}
+
+#[cfg(feature = "json")]
 fn proof_attachment_json_reject_unknown_nested_fields(
     object: &norito::json::Map,
     field: &'static str,
@@ -601,7 +700,11 @@ impl norito::json::JsonDeserialize for ProofAttachment {
             }
         }
 
-        proof_attachment_json_reject_unknown_nested_fields(object, "proof", &["backend", "bytes"])?;
+        proof_attachment_json_reject_unknown_nested_fields(
+            object,
+            "proof",
+            &["backend", "bytes", "bytes_b64"],
+        )?;
         proof_attachment_json_reject_unknown_nested_fields(object, "vk_ref", &["backend", "name"])?;
 
         let lane_privacy = match object.get("lane_privacy") {
@@ -614,7 +717,7 @@ impl norito::json::JsonDeserialize for ProofAttachment {
         };
 
         let backend: Ident = proof_attachment_json_required(object, "backend")?;
-        let proof: ProofBox = proof_attachment_json_required(object, "proof")?;
+        let proof = proof_attachment_json_proof_box(object)?;
         if proof.backend != backend {
             return Err(norito::json::Error::InvalidField {
                 field: "proof.backend".into(),
@@ -1586,6 +1689,51 @@ mod tests {
             })
         );
         assert!(attachment.envelope_hash.is_none());
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn proof_attachment_json_accepts_canonical_compact_proof_bytes() {
+        let json = r#"{
+            "backend": "halo2/ipa",
+            "proof": { "backend": "halo2/ipa", "bytes_b64": "AQID" },
+            "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
+        }"#;
+        let attachment: ProofAttachment = norito::json::from_str(json).expect("compact JSON");
+        assert_eq!(attachment.proof.bytes, vec![1, 2, 3]);
+
+        let legacy = norito::json::to_json(&attachment).expect("serialize legacy-compatible JSON");
+        assert!(legacy.contains("\"bytes\":[1,2,3]"));
+        assert!(!legacy.contains("bytes_b64"));
+        let roundtrip: ProofAttachment =
+            norito::json::from_str(&legacy).expect("legacy roundtrip JSON");
+        assert_eq!(roundtrip, attachment);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn proof_attachment_json_rejects_ambiguous_or_noncanonical_compact_bytes() {
+        for proof_json in [
+            r#"{"backend":"halo2/ipa","bytes":[1,2,3],"bytes_b64":"AQID"}"#,
+            r#"{"backend":"halo2/ipa"}"#,
+            r#"{"backend":"halo2/ipa","bytes_b64":"AQID="}"#,
+            r#"{"backend":"halo2/ipa","bytes_b64":" AQID"}"#,
+            r#"{"backend":"halo2/ipa","bytes_b64":"AQI"}"#,
+        ] {
+            let json = format!(
+                r#"{{"backend":"halo2/ipa","proof":{proof_json},"vk_ref":{{"backend":"halo2/ipa","name":"vk_1"}}}}"#
+            );
+            norito::json::from_str::<ProofAttachment>(&json)
+                .expect_err("ambiguous or noncanonical compact proof bytes must fail");
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn compact_proof_base64_bound_is_checked_before_decode() {
+        let err = decode_canonical_base64_bounded("AQID", 2, "proof.bytes_b64")
+            .expect_err("three decoded bytes must exceed a two-byte limit");
+        assert!(err.to_string().contains("proof byte limit"));
     }
 
     #[cfg(feature = "json")]

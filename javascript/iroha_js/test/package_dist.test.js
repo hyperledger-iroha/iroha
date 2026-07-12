@@ -9,6 +9,10 @@ import { ed25519 } from "@noble/curves/ed25519";
 import {
   AccountAddress,
   ToriiClient,
+  submitIvmProvedContractCall,
+  submitValidationFeeIvmProvedContractCall,
+  validationFeePolicyHash,
+  verifySignedValidationFeePolicy,
   SCCP_DOMAIN_BSC,
   SCCP_DOMAIN_ETH,
   SCCP_DOMAIN_SOL,
@@ -2500,6 +2504,10 @@ function sampleEthExecutionHeaderRlp(
 }
 
 test("package dist entrypoint imports and emits halfwidth i105 literals", () => {
+  assert.equal(typeof submitIvmProvedContractCall, "function");
+  assert.equal(typeof submitValidationFeeIvmProvedContractCall, "function");
+  assert.equal(typeof validationFeePolicyHash, "function");
+  assert.equal(typeof verifySignedValidationFeePolicy, "function");
   const publicKey = deterministicEd25519PublicKey(0x20);
   const address = AccountAddress.fromAccount({ publicKey });
   const literal = address.toI105(0x02f1);

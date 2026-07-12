@@ -12,7 +12,9 @@
 //! policy so ISI definitions can coordinate incentives deterministically. The
 //! repair module models audit-driven repair queues that tie proof failures to
 //! remediation workflows, and the transparency module defines canonical
-//! moderation ledger payloads/proofs for public SFM-4c verifiers.
+//! moderation ledger payloads/proofs for public SFM-4c verifiers. The
+//! `pop_registry` module defines the consensus-owned, payload-free credential
+//! issuer commitments and signed root/revocation publications used by SFM-4b1.
 
 /// Capacity marketplace records (provider declarations, telemetry, fees).
 pub mod capacity;
@@ -31,6 +33,9 @@ pub mod orderbook;
 
 /// Pin registry manifest metadata and lifecycle records.
 pub mod pin_registry;
+
+/// Authoritative proof-of-personhood issuer and registry records.
+pub mod pop_registry;
 
 /// Storage deal contracts, micropayment tickets, and settlement ledgers.
 pub mod deal;
@@ -99,19 +104,34 @@ pub mod prelude {
             is_canonical_moderation_artifact_path_v1, moderation_model_required_operations_v1,
         },
         moderation_ledger::{
-            MODERATION_LEDGER_CASE_VERSION_V1, MODERATION_LEDGER_MAX_CHALLENGES_V1,
-            MODERATION_LEDGER_MAX_EVIDENCE_URI_BYTES_V1, MODERATION_LEDGER_MAX_IDENTIFIER_BYTES_V1,
+            MODERATION_APPEAL_INTAKE_DIGEST_DOMAIN_V1,
+            MODERATION_APPEAL_INTAKE_VERSION_V1, MODERATION_LEDGER_CASE_VERSION_V1,
+            MODERATION_LEDGER_MAX_CANDIDATE_POOL_SIZE_V1,
+            MODERATION_LEDGER_MAX_CHALLENGES_V1,
+            MODERATION_LEDGER_MAX_EVIDENCE_URI_BYTES_V1,
+            MODERATION_LEDGER_MAX_EXCLUSIONS_V1, MODERATION_LEDGER_MAX_IDENTIFIER_BYTES_V1,
             MODERATION_LEDGER_MAX_NONCE_BYTES_V1, MODERATION_LEDGER_MAX_PANEL_SIZE_V1,
             MODERATION_LEDGER_MAX_PENALTY_POINTS_V1, MODERATION_LEDGER_MAX_REASON_BYTES_V1,
-            MODERATION_LEDGER_MAX_TOTAL_WINDOW_MS_V1, MODERATION_LEDGER_POLICY_DIGEST_DOMAIN_V1,
+            MODERATION_LEDGER_MAX_TOTAL_WINDOW_MS_V1,
+            MODERATION_LEDGER_MAX_WAITLIST_SIZE_V1, MODERATION_LEDGER_POLICY_DIGEST_DOMAIN_V1,
             MODERATION_LEDGER_POLICY_VERSION_V1, MODERATION_LEDGER_ROSTER_HASH_DOMAIN_V1,
+            MODERATION_POP_CHALLENGE_DOMAIN_V1, MODERATION_POP_SNAPSHOT_DIGEST_DOMAIN_V1,
+            MODERATION_SORTITION_DIGEST_DOMAIN_V1, MODERATION_SORTITION_SCORE_DOMAIN_V1,
+            MODERATION_SORTITION_SEED_DOMAIN_V1, ModerationAppealIntakeError,
+            ModerationAppealIntakeV1, ModerationAppealRecordV1, ModerationAppealStatusV1,
             ModerationCaseRecordV1, ModerationCaseSpecError, ModerationCaseSpecV1,
             ModerationCaseStatusV1, ModerationChallengeDecisionV1, ModerationChallengeKindV1,
-            ModerationChallengeRecordV1, ModerationCommitRecordV1, ModerationLedgerPolicyError,
+            ModerationChallengeRecordV1, ModerationCommitRecordV1,
+            ModerationJurorEligibilityClassV1, ModerationJurorEligibilityRecordV1,
+            ModerationJurorReplacementV1, ModerationLedgerPolicyError,
             ModerationLedgerPolicyRecord, ModerationLedgerPolicyV1, ModerationLedgerStatusV1,
             ModerationNoShowKindV1, ModerationNoShowRecordV1, ModerationOutcomeKindV1,
-            ModerationOutcomeRecordV1, ModerationRevealRecordV1, ModerationVoteCountsV1,
-            sorafs_moderation_panel_roster_hash_v1,
+            ModerationOutcomeRecordV1, ModerationPanelSelectionV1,
+            ModerationPoPRegistrySnapshotError, ModerationPoPRegistrySnapshotV1,
+            ModerationRevealRecordV1, ModerationSortitionError, ModerationVoteCountsV1,
+            sorafs_moderation_panel_roster_hash_v1, sorafs_moderation_pop_challenge_v1,
+            sorafs_moderation_pop_verifier_context_v1, sorafs_moderation_select_panel_v1,
+            sorafs_moderation_sortition_digest_v1, sorafs_moderation_sortition_seed_v1,
         },
         orderbook::{
             ORDERBOOK_ADMISSION_POLICY_DIGEST_DOMAIN_V1, ORDERBOOK_ADMISSION_POLICY_VERSION_V1,
@@ -131,6 +151,23 @@ pub mod prelude {
             ManifestDigest, ManifestRootCid, ManifestRootCidError, ManifestRootCidErrorKind,
             PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId, ReplicationOrderRecord,
             ReplicationOrderStatus, StorageClass,
+        },
+        pop_registry::{
+            POP_COMMITMENT_ROOT_PAYLOAD_MAX_BYTES_V1, POP_CREDENTIAL_COMMITMENT_BATCH_VERSION_V1,
+            POP_CREDENTIAL_COMMITMENTS_MAX_V1, POP_CREDENTIAL_LIFETIME_MAX_SECS_V1,
+            POP_CREDENTIAL_PAYLOAD_COMMITMENT_DOMAIN_V1, POP_ISSUER_ID_MAX_BYTES_V1,
+            POP_ISSUER_POLICY_DIGEST_DOMAIN_V1, POP_ISSUER_POLICY_VERSION_V1,
+            POP_PUBLICATION_CLOCK_SKEW_MAX_SECS_V1, POP_REGISTRY_AUDIT_DIGEST_DOMAIN_V1,
+            POP_REGISTRY_PAYLOAD_DIGEST_DOMAIN_V1, POP_REVOCATION_LIST_PAYLOAD_MAX_BYTES_V1,
+            POP_REVOCATION_NONCE_COMMITMENT_DOMAIN_V1, POP_REVOCATIONS_PER_PUBLICATION_MAX_V1,
+            PopCommitmentRootRecordV1, PopCredentialCommitmentBatchV1,
+            PopCredentialCommitmentBatchValidationError, PopCredentialCommitmentRecordV1,
+            PopCredentialCommitmentV1, PopCredentialCommitmentValidationError,
+            PopIssuerPolicyRecordV1, PopIssuerPolicyV1, PopIssuerPolicyValidationError,
+            PopRegistryAuditDigestRecordV1, PopRegistryAuditEventKindV1,
+            PopRegistryRevocationReasonV1, PopRegistryStatusV1, PopRevocationPublicationRecordV1,
+            PopRevocationRecordV1, pop_credential_payload_commitment_v1,
+            pop_registry_payload_digest_v1, pop_revocation_nonce_commitment_v1,
         },
         pricing::{
             CollateralPolicy, CommitmentDiscountTier, CreditMutationError, CreditPolicy,

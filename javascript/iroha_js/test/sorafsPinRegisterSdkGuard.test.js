@@ -338,9 +338,9 @@ test("SoraFS pin-register SDK guard locks required workflow lanes", () => {
     "--negative-control-swift-contract-test",
     "--negative-control-csharp-malformed-response-test",
     "--negative-control-kotlin-builder-test",
-    "--negative-control-kotlin-chunker-unsigned-test",
+    "--negative-control-kotlin-successor-digest-test",
     "--negative-control-java-builder-test",
-    "--negative-control-java-chunker-unsigned-test",
+    "--negative-control-java-successor-digest-test",
   ]) {
     assert.match(workflow, new RegExp(`bash ci/check_sorafs_pin_register_sdk_guard\\.sh ${mode}`));
     assert.match(guard, new RegExp(mode));
@@ -437,6 +437,7 @@ test("SoraFS pin-register SDK guard exposes typed JavaScript helpers", () => {
     assert.match(text, /normalizeSorafsPinRegisterResponse/);
     assert.match(text, /"manifest_payload"/);
     assert.match(text, /SORAFS_PIN_REGISTER_MAX_MANIFEST_BYTES = 512 \* 1024/);
+    assert.match(text, /normalizeSorafsPinRegisterAliasSegment/);
     assert.match(text, /successor_of_hex must not be zero/);
     const builder = text.match(
       /function buildSorafsPinRegisterPayload[\s\S]*?const SORAFS_PIN_REGISTER_MAX_MANIFEST_BYTES/,
@@ -472,11 +473,12 @@ test("SoraFS pin-register SDK guard exposes typed JavaScript helpers", () => {
   );
   assert.match(tests, /registerSorafsPinManifestTyped rejects ambiguous response aliases/);
 
-  assert.match(pythonClient, /"manifest_b64"/);
-  assert.match(pythonClient, /"manifestBytes"/);
-  assert.match(pythonClient, /accepts only one of manifest_b64 or manifest_bytes/);
-  assert.match(pythonTests, /"manifestBytes": b"manifest-norito"/);
-  assert.match(pythonTests, /body\["manifest_b64"\]/);
+  assert.match(pythonClient, /"manifest_payload"/);
+  assert.match(pythonClient, /_SORAFS_MAX_MANIFEST_ENCODED_BYTES = 512 \* 1024/);
+  assert.match(pythonClient, /_SORAFS_MAX_ALIAS_PROOF_BYTES = 1024 \* 1024/);
+  assert.match(pythonTests, /"manifest_payload": b"manifest-norito"/);
+  assert.match(pythonTests, /body\["manifest_payload"\]/);
+  assert.match(pythonTests, /rejects_retired_and_unknown_fields/);
 
   assert.match(swiftClient, /public var manifestBase64: String\?/);
   assert.match(swiftClient, /public var manifestBytes: Data\?/);
@@ -485,12 +487,14 @@ test("SoraFS pin-register SDK guard exposes typed JavaScript helpers", () => {
   assert.match(swiftTests, /testRegisterSoraFsPinManifestAcceptsManifestBase64Payload/);
   assert.match(swiftTests, /root\["manifest_b64"\]/);
 
-  assert.match(csharpClient, /NormalizeOptionalSoraFsManifestPayload/);
+  assert.match(csharpClient, /NormalizeRequiredSoraFsManifestPayload/);
+  assert.match(csharpClient, /SoraFsManifestPayloadMaxBytes = 512 \* 1024/);
+  assert.match(csharpClient, /SoraFsAliasProofMaxBytes = 1024 \* 1024/);
   assert.match(csharpClient, /Convert\.ToBase64String\(manifestBytes\)/);
-  assert.match(csharpClient, /Provide either ManifestBase64 or ManifestBytes, not both\./);
-  assert.match(csharpModels, /public string\? ManifestBase64/);
+  assert.match(csharpClient, /Provide either ManifestPayloadBase64 or ManifestBytes, not both\./);
+  assert.match(csharpModels, /public string\? ManifestPayloadBase64/);
   assert.match(csharpModels, /public byte\[\]\? ManifestBytes/);
-  assert.match(csharpModels, /\[JsonPropertyName\("manifest_b64"\)\]/);
-  assert.match(csharpTests, /RegisterSoraFsPinManifestAsyncAcceptsManifestBase64Payload/);
-  assert.match(csharpTests, /GetProperty\("manifest_b64"\)/);
+  assert.match(csharpModels, /\[JsonPropertyName\("manifest_payload"\)\]/);
+  assert.match(csharpTests, /RegisterSoraFsPinManifestAsyncAcceptsCanonicalManifestPayloadBase64/);
+  assert.match(csharpTests, /GetProperty\("manifest_payload"\)/);
 });

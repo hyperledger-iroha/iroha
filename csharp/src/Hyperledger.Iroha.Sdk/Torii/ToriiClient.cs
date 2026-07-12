@@ -24,6 +24,10 @@ public sealed class ToriiClient : IDisposable
     private const string QueryProjectionCompression = "zstd";
     private const int QueryProjectionDefaultPartitionCount = 4096;
     private const int SoraFsManifestPayloadMaxBytes = 512 * 1024;
+    private const int SoraFsManifestPayloadMaxBase64Chars = ((SoraFsManifestPayloadMaxBytes + 2) / 3) * 4;
+    private const int SoraFsAliasProofMaxBytes = 1024 * 1024;
+    private const int SoraFsAliasProofMaxBase64Chars = ((SoraFsAliasProofMaxBytes + 2) / 3) * 4;
+    private const int SoraFsAliasTextMaxChars = 128;
     private const string InvalidUtf8ResponseBody = "<response body is not valid UTF-8>";
     private static readonly string[] QueryRowEnrichmentFields =
     [
@@ -6349,6 +6353,12 @@ public sealed class ToriiClient : IDisposable
 
         if (manifestPayloadBase64 is not null)
         {
+            if (manifestPayloadBase64.Length > SoraFsManifestPayloadMaxBase64Chars)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(ToriiSoraFsPinRegisterRequest.ManifestPayloadBase64),
+                    $"Manifest payload must not exceed {SoraFsManifestPayloadMaxBytes} bytes.");
+            }
             var canonical = NormalizeRequiredBase64(
                 manifestPayloadBase64,
                 nameof(ToriiSoraFsPinRegisterRequest.ManifestPayloadBase64));
@@ -6424,12 +6434,34 @@ public sealed class ToriiClient : IDisposable
     {
         return new ToriiSoraFsPinAlias
         {
-            Namespace = NormalizeExactValue(alias.Namespace, $"{paramName}.{nameof(alias.Namespace)}"),
-            Name = NormalizeExactValue(alias.Name, $"{paramName}.{nameof(alias.Name)}"),
-            ProofBase64 = NormalizeRequiredBase64(
+            Namespace = NormalizeSoraFsAliasText(
+                alias.Namespace,
+                $"{paramName}.{nameof(alias.Namespace)}"),
+            Name = NormalizeSoraFsAliasText(
+                alias.Name,
+                $"{paramName}.{nameof(alias.Name)}"),
+            ProofBase64 = NormalizeBoundedRequiredBase64(
                 alias.ProofBase64,
-                $"{paramName}.{nameof(alias.ProofBase64)}"),
+                $"{paramName}.{nameof(alias.ProofBase64)}",
+                SoraFsAliasProofMaxBytes,
+                SoraFsAliasProofMaxBase64Chars),
         };
+    }
+
+    private static string NormalizeSoraFsAliasText(string? value, string paramName)
+    {
+        var normalized = NormalizeExactValue(value, paramName);
+        if (normalized.Length > SoraFsAliasTextMaxChars
+            || !normalized.All(character =>
+                character is >= 'a' and <= 'z'
+                || character is >= '0' and <= '9'
+                || character is '.' or '-' or '_'))
+        {
+            throw new ArgumentOutOfRangeException(
+                paramName,
+                $"Value must contain 1..{SoraFsAliasTextMaxChars} lowercase ASCII letters, digits, '.', '-', or '_'.");
+        }
+        return normalized;
     }
 
     private static string NormalizeSoraFsStorageClass(ToriiSoraFsStorageClass? storageClass)
@@ -6530,6 +6562,28 @@ public sealed class ToriiClient : IDisposable
             throw new ArgumentException("Value must be canonical base64 text.", paramName);
         }
 
+        return canonical;
+    }
+
+    private static string NormalizeBoundedRequiredBase64(
+        string? value,
+        string paramName,
+        int maximumBytes,
+        int maximumBase64Chars)
+    {
+        if (value is not null && value.Length > maximumBase64Chars)
+        {
+            throw new ArgumentOutOfRangeException(
+                paramName,
+                $"Value must encode at most {maximumBytes} bytes.");
+        }
+        var canonical = NormalizeRequiredBase64(value, paramName);
+        if (Convert.FromBase64String(canonical).Length > maximumBytes)
+        {
+            throw new ArgumentOutOfRangeException(
+                paramName,
+                $"Value must encode at most {maximumBytes} bytes.");
+        }
         return canonical;
     }
 

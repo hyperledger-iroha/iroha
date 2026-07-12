@@ -42,6 +42,8 @@ pub mod sorafs;
 pub mod sorafs_moderation;
 /// Authoritative `SoraFS` orderbook instruction handlers.
 pub mod sorafs_orderbook;
+/// Authoritative `SoraFS` proof-of-personhood issuer and registry handlers.
+pub mod sorafs_pop_registry;
 pub mod space_directory;
 /// Public lane staking instruction handlers.
 pub mod staking;
@@ -80,7 +82,36 @@ fn dispatch_instruction<T: Execute + Clone + 'static>(
         .map(|isi| isi.clone().execute(authority, state_transaction))
 }
 
-const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
+macro_rules! define_instruction_handlers {
+    ($(dispatch_instruction::<$instruction:ty>),* $(,)?) => {
+        const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
+            $(dispatch_instruction::<$instruction>),*
+        ];
+
+        /// Return the concrete type registered by the native dispatcher for `instruction`.
+        ///
+        /// Validation-fee admission uses this matcher as its deny-by-default boundary: adding a
+        /// native handler makes the new instruction visible to the admission classifier, where it
+        /// remains rejected until its DS effect disposition is audited explicitly.
+        pub(crate) fn registered_native_instruction_type_name(
+            instruction: &InstructionBox,
+        ) -> Option<&'static str> {
+            $(
+                if instruction.as_any().downcast_ref::<$instruction>().is_some() {
+                    return Some(core::any::type_name::<$instruction>());
+                }
+            )*
+            None
+        }
+
+        #[cfg(test)]
+        fn registered_native_instruction_type_names() -> Vec<&'static str> {
+            vec![$(core::any::type_name::<$instruction>()),*]
+        }
+    };
+}
+
+define_instruction_handlers! {
     dispatch_instruction::<RegisterPeerWithPop>,
     dispatch_instruction::<RegisterBox>,
     dispatch_instruction::<UnregisterBox>,
@@ -173,8 +204,15 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsOrderbookOrder>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::CancelSorafsOrderbookOrder>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RecordSorafsOrderbookSettlementReceipt>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsPopIssuerPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::CommitSorafsPopCredentialBatch>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::PublishSorafsPopRevocationList>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsModerationPolicy>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::OpenSorafsModerationCase>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsModerationAppeal>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterSorafsModerationJurorEligibility>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::FinalizeSorafsModerationSortition>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::AcceptSorafsModerationJurorAssignment>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ActivateSorafsModerationCase>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsModerationCommit>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RaiseSorafsModerationChallenge>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::ResolveSorafsModerationChallenge>,
@@ -300,7 +338,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudMailboxMessage>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudRuntimeReceipt>,
     dispatch_instruction::<
-        iroha_data_model::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt,
+        iroha_data_model::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt
     >,
     dispatch_instruction::<iroha_data_model::isi::oracle::RegisterOracleFeed>,
     dispatch_instruction::<iroha_data_model::isi::oracle::SubmitOracleObservation>,
@@ -388,7 +426,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::governance::UnregisterCitizen>,
     dispatch_instruction::<iroha_data_model::isi::governance::SlashGovernanceLock>,
     dispatch_instruction::<iroha_data_model::isi::governance::RestituteGovernanceLock>,
-];
+}
 
 pub(crate) fn execute_borrowed_instruction(
     instruction: &InstructionBox,
@@ -425,35 +463,18 @@ mod registry_dispatch_tests {
 
     use super::*;
 
-    fn handler_table_source() -> &'static str {
-        include_str!("mod.rs")
-            .split("const INSTRUCTION_HANDLERS")
-            .nth(1)
-            .and_then(|tail| tail.split("];").next())
-            .expect("handler table source")
-    }
-
-    fn has_dispatch_handler(handler_table: &str, type_name: &str) -> bool {
-        let root_type_name = type_name.split('<').next().unwrap_or(type_name);
-        let leaf = root_type_name
-            .rsplit("::")
-            .next()
-            .expect("type name has at least one segment");
-        let imported = format!("::<{leaf}");
-        let qualified = format!("::{leaf}");
-
-        handler_table.contains(&imported) || handler_table.contains(&qualified)
+    fn has_dispatch_handler(type_name: &str) -> bool {
+        registered_native_instruction_type_names().contains(&type_name)
     }
 
     #[test]
     fn default_instruction_registry_entries_have_core_dispatch_handlers() {
         let registry = iroha_data_model::isi::registry::default();
-        let handler_table = handler_table_source();
         let custom_instruction = std::any::type_name::<CustomInstruction>();
         let missing = registry
             .names()
             .filter(|name| *name != custom_instruction)
-            .filter(|name| !has_dispatch_handler(handler_table, name))
+            .filter(|name| !has_dispatch_handler(name))
             .collect::<BTreeSet<_>>();
 
         assert!(
@@ -465,10 +486,9 @@ mod registry_dispatch_tests {
     #[test]
     fn custom_instruction_is_only_default_registry_entry_without_core_dispatch_handler() {
         let registry = iroha_data_model::isi::registry::default();
-        let handler_table = handler_table_source();
         let missing = registry
             .names()
-            .filter(|name| !has_dispatch_handler(handler_table, name))
+            .filter(|name| !has_dispatch_handler(name))
             .collect::<BTreeSet<_>>();
         let expected = BTreeSet::from([std::any::type_name::<CustomInstruction>()]);
 
@@ -481,7 +501,6 @@ mod registry_dispatch_tests {
     #[test]
     fn custom_instruction_stays_custom_executor_only() {
         let registry = iroha_data_model::isi::registry::default();
-        let handler_table = handler_table_source();
         let custom_instruction = std::any::type_name::<CustomInstruction>();
 
         assert!(
@@ -489,7 +508,7 @@ mod registry_dispatch_tests {
             "custom instructions must remain decodable for custom executors"
         );
         assert!(
-            !has_dispatch_handler(handler_table, custom_instruction),
+            !has_dispatch_handler(custom_instruction),
             "custom instructions must not be executable by the default core dispatcher"
         );
     }
@@ -497,7 +516,6 @@ mod registry_dispatch_tests {
     #[test]
     fn direct_grouped_variants_stay_out_of_default_registry_even_with_handlers() {
         let registry = iroha_data_model::isi::registry::default();
-        let handler_table = handler_table_source();
         let direct_variants = [
             std::any::type_name::<iroha_data_model::isi::register::RegisterPeerWithPop>(),
             std::any::type_name::<Mint<Numeric, Asset>>(),
@@ -520,7 +538,7 @@ mod registry_dispatch_tests {
 
         for name in direct_variants {
             assert!(
-                has_dispatch_handler(handler_table, name),
+                has_dispatch_handler(name),
                 "{name} should remain an internal delegation target"
             );
             assert!(

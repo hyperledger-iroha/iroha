@@ -44,7 +44,7 @@ test('syncOpenApi mirrors specs into multiple version directories', async () => 
   const canonicalManifest = {
     version: 1,
     generated_unix_ms: 123,
-    generator_commit: 'abc',
+    generator_commit: 'ab'.repeat(20),
     artifact: {
       path: 'torii.json',
       bytes: specBytes.length,
@@ -195,7 +195,7 @@ test('syncOpenApi does not advertise stale manifest signatures when unsigned syn
       {
         version: 1,
         generated_unix_ms: 123,
-        generator_commit: 'abc',
+        generator_commit: 'ab'.repeat(20),
         artifact: {
           path: 'versions/2025-q4/torii.json',
           bytes: Buffer.byteLength(staleSpec),

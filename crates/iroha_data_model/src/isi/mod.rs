@@ -1047,13 +1047,48 @@ impl From<crate::isi::sorafs::RecordSorafsOrderbookSettlementReceipt> for Instru
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::sorafs::SetSorafsPopIssuerPolicy> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SetSorafsPopIssuerPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::CommitSorafsPopCredentialBatch> for InstructionBox {
+    fn from(i: crate::isi::sorafs::CommitSorafsPopCredentialBatch) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::PublishSorafsPopRevocationList> for InstructionBox {
+    fn from(i: crate::isi::sorafs::PublishSorafsPopRevocationList) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::sorafs::SetSorafsModerationPolicy> for InstructionBox {
     fn from(i: crate::isi::sorafs::SetSorafsModerationPolicy) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::sorafs::OpenSorafsModerationCase> for InstructionBox {
-    fn from(i: crate::isi::sorafs::OpenSorafsModerationCase) -> Self {
+impl From<crate::isi::sorafs::SubmitSorafsModerationAppeal> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SubmitSorafsModerationAppeal) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::RegisterSorafsModerationJurorEligibility> for InstructionBox {
+    fn from(i: crate::isi::sorafs::RegisterSorafsModerationJurorEligibility) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::FinalizeSorafsModerationSortition> for InstructionBox {
+    fn from(i: crate::isi::sorafs::FinalizeSorafsModerationSortition) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::AcceptSorafsModerationJurorAssignment> for InstructionBox {
+    fn from(i: crate::isi::sorafs::AcceptSorafsModerationJurorAssignment) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::ActivateSorafsModerationCase> for InstructionBox {
+    fn from(i: crate::isi::sorafs::ActivateSorafsModerationCase) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -3968,14 +4003,19 @@ pub mod prelude {
             SetDirectoryRotationPolicy, SubmitDirectoryDraft, UnrevokeResolver,
         },
         sorafs::{
+            AcceptSorafsModerationJurorAssignment, ActivateSorafsModerationCase,
             ApprovePinManifest, BindManifestAlias, CancelSorafsOrderbookOrder,
-            CompleteReplicationOrder, ExpireReplicationOrder, FinalizeSorafsModerationCase,
-            IssueReplicationOrder, OpenSorafsModerationCase, RaiseSorafsModerationChallenge,
-            RecordCapacityTelemetry, RecordSorafsOrderbookSettlementReceipt,
-            RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
-            ResolveSorafsModerationChallenge, RetirePinManifest, SetPricingSchedule,
-            SetSorafsModerationPolicy, SetSorafsOrderbookPolicy, SubmitSorafsModerationCommit,
-            SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder, UpsertProviderCredit,
+            CommitSorafsPopCredentialBatch, CompleteReplicationOrder, ExpireReplicationOrder,
+            FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition,
+            IssueReplicationOrder, PublishSorafsPopRevocationList,
+            RaiseSorafsModerationChallenge, RecordCapacityTelemetry,
+            RecordSorafsOrderbookSettlementReceipt, RegisterCapacityDeclaration,
+            RegisterCapacityDispute, RegisterPinManifest,
+            RegisterSorafsModerationJurorEligibility, ResolveSorafsModerationChallenge,
+            RetirePinManifest, SetPricingSchedule, SetSorafsModerationPolicy,
+            SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy, SubmitSorafsModerationAppeal,
+            SubmitSorafsModerationCommit, SubmitSorafsModerationReveal,
+            SubmitSorafsOrderbookOrder, UpsertProviderCredit,
         },
         space_directory::{
             ExpireSpaceDirectoryManifest, PublishSpaceDirectoryManifest,

@@ -13,7 +13,11 @@ authoritative on-chain moderation ledger, and a local `sorafs_node` ballot
 lifecycle runtime exposed through local Torii JSON endpoints. The on-chain
 ledger persists governance policy snapshots, cases, commitments, reveals,
 payload-free challenges, terminal outcomes, and classified no-show penalty
-records through first-class ISIs and typed queries. Accepted
+records through first-class ISIs and typed queries. Its case-opening path now
+starts with appellant-bound intake, an exact active PoP registry snapshot,
+private Halo2 juror enrollment, deterministic primary/waitlist sortition,
+primary assignment acceptance, and no-show replacement or terminal formation
+failure. The direct case-opening instruction has been removed. Accepted
 local ballot state, durable local challenge records, and event backlog are
 persisted as a validated Norito checkpoint when storage is enabled, and local
 ballot lifecycle and challenge submit/resolve events can also be materialized
@@ -67,22 +71,28 @@ production orchestration, service deployment, and public rollout evidence.
   constant-time ledger counters. Policy, panel, identifier, evidence URI,
   challenge, nonce, lifetime, and penalty values all have hard first-release
   bounds.
-- `SetSorafsModerationPolicy`, `OpenSorafsModerationCase`,
-  `SubmitSorafsModerationCommit`, `RaiseSorafsModerationChallenge`,
-  `ResolveSorafsModerationChallenge`, `SubmitSorafsModerationReveal`, and
-  `FinalizeSorafsModerationCase` implement the consensus-owned lifecycle.
+- `SetSorafsModerationPolicy`, `SubmitSorafsModerationAppeal`,
+  `RegisterSorafsModerationJurorEligibility`,
+  `FinalizeSorafsModerationSortition`,
+  `AcceptSorafsModerationJurorAssignment`,
+  `ActivateSorafsModerationCase`, `SubmitSorafsModerationCommit`,
+  `RaiseSorafsModerationChallenge`, `ResolveSorafsModerationChallenge`,
+  `SubmitSorafsModerationReveal`, and `FinalizeSorafsModerationCase` implement
+  the consensus-owned lifecycle. There is no direct-open instruction that can
+  bypass intake or sortition.
   Block time is the only phase clock; commit and reveal timestamps are
   normalized to block time; canonical juror accounts are bound to transaction
   authority; policy revisions and case policy digests are race-checked; and
   every transition preflights counters and canonical state encoding before any
   mutation. Finalization persists a `quorum_not_met` outcome instead of leaving
   failed-quorum ballots open and atomically emits policy-bound no-show records.
-- Typed `FindSorafsModeration*` queries expose the active policy, case,
-  commitment, reveal, challenge, outcome, no-show, and ledger status through
+- Typed `FindSorafsModeration*` queries expose the active policy, appeal,
+  permissioned juror-eligibility summary, case, commitment, reveal, challenge,
+  outcome, no-show, and ledger status through
   Iroha's existing generic Torii query API. Mutations use the existing signed
   transaction API; no parallel bespoke contract transport or compatibility
-  route is required. `CanManageSorafsModeration` gates policy activation, case
-  opening, challenge resolution, and finalization in the default executor,
+  route is required. `CanManageSorafsModeration` gates policy activation,
+  sortition, activation, challenge resolution, and finalization in the default executor,
   with native permission checks as defense in depth. Commit, reveal, and
   challenge submission remain authenticated public instructions with native
   authority and phase enforcement.
@@ -147,9 +157,12 @@ outcomes.
 
 The production service still targets this flow:
 
-1. The moderation panel service opens an authoritative ledger case with case id, confirmed
-   appeal-deposit custody, policy reference, panel roster hash, quorum rules,
-   and commit/reveal deadlines.
+1. The appellant submits an authoritative intake that binds the decision,
+   single-use proof-token, evidence, single-use deposit-lock, finance, and
+   policy digests plus bounded lifecycle deadlines. The ledger pins the exact active PoP publications;
+   candidates register private membership proofs; deterministic sortition,
+   assignment acceptance, and waitlist failover then activate the case with its
+   roster hash and quorum.
 2. Jurors submit signed transactions carrying canonical commitment envelopes
    during the sealed phase.
 3. A challenge buffer allows roster or duplicate-commitment disputes before
@@ -176,8 +189,13 @@ The production service still targets this flow:
 - Bind local Governance DAG lifecycle and challenge/dispute publication to the
   authoritative ledger outcome and promote it into public IPFS/IPNS rollout
   evidence.
-- Add end-to-end simulations with no-shows, duplicate commits, mismatched
-  reveals, missed quorum, contested challenges, and successful decisions.
+- Add reviewed four-peer deployed simulations with intake and PoP enrollment,
+  restarts, operator retry/reconciliation, evidence access, commit/reveal,
+  decision publication, and settlement. Native tests already cover no-shows,
+  failover/exhaustion, wrong or rotated roots, nullifier replay,
+  biased/duplicate rosters, duplicate commits, mismatched reveals, missed
+  quorum, contested challenges, successful activation/decisions, and atomic
+  rollback.
 - Collect a passing payload-free `commit_reveal` canary through the SFM-4b
   rollout evidence gate after the durable service exists.
 

@@ -13716,9 +13716,11 @@ private enum ToriiNativeAmxWire {
         bytes: Int,
         key: K,
         container: KeyedDecodingContainer<K>,
-        field: String
+        field: String,
+        uppercaseOnly: Bool = false
     ) throws -> String {
-        guard value.count == bytes * 2, value.allSatisfy({ isAsciiHex($0) }) else {
+        guard value.count == bytes * 2,
+              value.allSatisfy({ isAsciiHex($0, uppercaseOnly: uppercaseOnly) }) else {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
                 in: container,
@@ -13739,31 +13741,14 @@ private enum ToriiNativeAmxWire {
         return crc
     }
 
-    static func canonicalHash<K: CodingKey>(
-        _ value: String,
-        key: K,
-        container: KeyedDecodingContainer<K>,
-        field: String
-    ) throws -> String {
-        guard value.hasPrefix("hash:") else {
-            throw DecodingError.dataCorruptedError(
-                forKey: key,
-                in: container,
-                debugDescription: "\(field) must be a canonical Norito hash literal."
-            )
-        }
+    static func isCanonicalHash(_ value: String) -> Bool {
+        guard value.hasPrefix("hash:") else { return false }
         let components = value.dropFirst(5).split(
             separator: "#",
             maxSplits: 1,
             omittingEmptySubsequences: false
         )
-        guard components.count == 2 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: key,
-                in: container,
-                debugDescription: "\(field) is missing its CRC16 checksum."
-            )
-        }
+        guard components.count == 2 else { return false }
         let body = String(components[0])
         let checksum = String(components[1])
         guard body.count == 64,
@@ -13774,9 +13759,19 @@ private enum ToriiNativeAmxWire {
               bodyBytes.count == 32,
               let marker = bodyBytes.last,
               marker & 1 == 1,
-              let parsedChecksum = UInt16(checksum, radix: 16),
-              parsedChecksum == crc16(Array("hash:\(body)".utf8))
-        else {
+              let parsedChecksum = UInt16(checksum, radix: 16) else {
+            return false
+        }
+        return parsedChecksum == crc16(Array("hash:\(body)".utf8))
+    }
+
+    static func canonicalHash<K: CodingKey>(
+        _ value: String,
+        key: K,
+        container: KeyedDecodingContainer<K>,
+        field: String
+    ) throws -> String {
+        guard isCanonicalHash(value) else {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
                 in: container,
@@ -13817,6 +13812,31 @@ private enum ToriiNativeAmxWire {
         return value
     }
 
+    static func u128<K: CodingKey>(
+        _ value: String,
+        key: K,
+        container: KeyedDecodingContainer<K>,
+        field: String
+    ) throws -> String {
+        let canonical = try numeric(
+            value,
+            key: key,
+            container: container,
+            field: field,
+            allowFraction: false
+        )
+        let maximum = "340282366920938463463374607431768211455"
+        guard canonical.count < maximum.count
+                || (canonical.count == maximum.count && canonical <= maximum) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(field) exceeds u128::MAX."
+            )
+        }
+        return canonical
+    }
+
     static func nonEmpty<K: CodingKey>(
         _ value: String,
         key: K,
@@ -13838,10 +13858,28 @@ private enum ToriiNativeAmxWire {
 public enum ToriiNativeAmxPhase: String, Decodable, Sendable, Equatable {
     case prepare
     case commit
+
+    private enum CodingKeys: String, CodingKey { case phase, detail }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = try container.decode(String.self, forKey: .phase)
+        guard container.contains(.detail), try container.decodeNil(forKey: .detail),
+              let value = Self(rawValue: raw) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .phase,
+                in: container,
+                debugDescription: "invalid tagged native AMX phase"
+            )
+        }
+        self = value
+    }
 }
 
 /// Exact identity and route material signed by a native AMX participant committee.
 public struct ToriiNativeAmxAttestationBody: Decodable, Sendable, Equatable {
+    public let round: ToriiSumeragiV2ConsensusRound
+    public let epoch: UInt64
     public let chainIdHash: String
     public let sourceId: String
     public let transactionEntrypointHash: String
@@ -13853,12 +13891,17 @@ public struct ToriiNativeAmxAttestationBody: Decodable, Sendable, Equatable {
     public let participantLaneId: UInt32
     public let participantDataspaceId: UInt64
     public let participantLaneIncarnation: String
+    public let participantValidatorSetHash: String
+    public let participantValidatorCount: UInt32
+    public let participantMinQuorum: UInt32
     public let authorityContextHeight: UInt64
-    public let coordinatorLaneBlockHeight: UInt64
+    public let plannedCoordinatorBlockHeight: UInt64
     public let coordinatorLaneBlockView: UInt64
     public let coordinatorProposalHash: String
 
     private enum CodingKeys: String, CodingKey {
+        case round
+        case epoch
         case chainIdHash = "chain_id_hash"
         case sourceId = "source_id"
         case transactionEntrypointHash = "tx_entrypoint_hash"
@@ -13870,14 +13913,19 @@ public struct ToriiNativeAmxAttestationBody: Decodable, Sendable, Equatable {
         case participantLaneId = "participant_lane_id"
         case participantDataspaceId = "participant_dataspace_id"
         case participantLaneIncarnation = "participant_lane_incarnation"
+        case participantValidatorSetHash = "participant_validator_set_hash"
+        case participantValidatorCount = "participant_validator_count"
+        case participantMinQuorum = "participant_min_quorum"
         case authorityContextHeight = "authority_context_height"
-        case coordinatorLaneBlockHeight = "coordinator_lane_block_height"
+        case plannedCoordinatorBlockHeight = "planned_coordinator_block_height"
         case coordinatorLaneBlockView = "coordinator_lane_block_view"
         case coordinatorProposalHash = "coordinator_proposal_hash"
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        round = try container.decode(ToriiSumeragiV2ConsensusRound.self, forKey: .round)
+        epoch = try container.decode(UInt64.self, forKey: .epoch)
         chainIdHash = try ToriiNativeAmxWire.canonicalHash(
             container.decode(String.self, forKey: .chainIdHash),
             key: .chainIdHash,
@@ -13889,7 +13937,8 @@ public struct ToriiNativeAmxAttestationBody: Decodable, Sendable, Equatable {
             bytes: 32,
             key: .sourceId,
             container: container,
-            field: "native AMX source_id"
+            field: "native AMX source_id",
+            uppercaseOnly: true
         )
         transactionEntrypointHash = try ToriiNativeAmxWire.canonicalHash(
             container.decode(String.self, forKey: .transactionEntrypointHash),
@@ -13920,10 +13969,24 @@ public struct ToriiNativeAmxAttestationBody: Decodable, Sendable, Equatable {
             container: container,
             field: "native AMX participant_lane_incarnation"
         )
+        participantValidatorSetHash = try ToriiNativeAmxWire.canonicalHash(
+            container.decode(String.self, forKey: .participantValidatorSetHash),
+            key: .participantValidatorSetHash,
+            container: container,
+            field: "native AMX participant_validator_set_hash"
+        )
+        participantValidatorCount = try container.decode(
+            UInt32.self,
+            forKey: .participantValidatorCount
+        )
+        participantMinQuorum = try container.decode(
+            UInt32.self,
+            forKey: .participantMinQuorum
+        )
         authorityContextHeight = try container.decode(UInt64.self, forKey: .authorityContextHeight)
-        coordinatorLaneBlockHeight = try container.decode(
+        plannedCoordinatorBlockHeight = try container.decode(
             UInt64.self,
-            forKey: .coordinatorLaneBlockHeight
+            forKey: .plannedCoordinatorBlockHeight
         )
         coordinatorLaneBlockView = try container.decode(
             UInt64.self,
@@ -13935,17 +13998,27 @@ public struct ToriiNativeAmxAttestationBody: Decodable, Sendable, Equatable {
             container: container,
             field: "native AMX coordinator_proposal_hash"
         )
-        guard authorityContextHeight > 0, coordinatorLaneBlockHeight > 0 else {
+        let expectedMinQuorum = participantValidatorCount == 0
+            ? 0
+            : participantValidatorCount - (participantValidatorCount - 1) / 3
+        guard authorityContextHeight > 0,
+              round.height == authorityContextHeight,
+              plannedCoordinatorBlockHeight > 0,
+              participantValidatorCount > 0,
+              participantValidatorCount <= 128,
+              participantMinQuorum == expectedMinQuorum else {
             throw DecodingError.dataCorruptedError(
                 forKey: .authorityContextHeight,
                 in: container,
-                debugDescription: "native AMX authority and lane-block heights must be non-zero."
+                debugDescription: "native AMX v2 round, heights, or participant quorum are invalid."
             )
         }
     }
 
     fileprivate func hasSameIdentity(as other: Self) -> Bool {
-        chainIdHash == other.chainIdHash
+        round == other.round
+            && epoch == other.epoch
+            && chainIdHash == other.chainIdHash
             && sourceId.lowercased() == other.sourceId.lowercased()
             && transactionEntrypointHash == other.transactionEntrypointHash
             && planDigest == other.planDigest
@@ -13955,8 +14028,11 @@ public struct ToriiNativeAmxAttestationBody: Decodable, Sendable, Equatable {
             && participantLaneId == other.participantLaneId
             && participantDataspaceId == other.participantDataspaceId
             && participantLaneIncarnation == other.participantLaneIncarnation
+            && participantValidatorSetHash == other.participantValidatorSetHash
+            && participantValidatorCount == other.participantValidatorCount
+            && participantMinQuorum == other.participantMinQuorum
             && authorityContextHeight == other.authorityContextHeight
-            && coordinatorLaneBlockHeight == other.coordinatorLaneBlockHeight
+            && plannedCoordinatorBlockHeight == other.plannedCoordinatorBlockHeight
             && coordinatorLaneBlockView == other.coordinatorLaneBlockView
             && coordinatorProposalHash == other.coordinatorProposalHash
     }
@@ -13968,14 +14044,16 @@ public struct ToriiNativeAmxAttestationQc: Decodable, Sendable, Equatable {
     public let validatorSetHashVersion: UInt16
     public let validatorSetHash: String
     public let validatorSet: [String]
+    public let validatorSetPops: [[UInt8]]
     public let signersBitmap: [UInt8]
-    public let blsAggregateSignature: String
+    public let blsAggregateSignature: [UInt8]
 
     private enum CodingKeys: String, CodingKey {
         case body
         case validatorSetHashVersion = "validator_set_hash_version"
         case validatorSetHash = "validator_set_hash"
         case validatorSet = "validator_set"
+        case validatorSetPops = "validator_set_pops"
         case signersBitmap = "signers_bitmap"
         case blsAggregateSignature = "bls_aggregate_signature"
     }
@@ -13999,13 +14077,25 @@ public struct ToriiNativeAmxAttestationQc: Decodable, Sendable, Equatable {
         )
         validatorSet = try container.decode([String].self, forKey: .validatorSet)
         guard !validatorSet.isEmpty,
+              validatorSet.count <= 128,
               validatorSet.allSatisfy({ !$0.isEmpty && $0.trimmingCharacters(in: .whitespacesAndNewlines) == $0 }),
-              Set(validatorSet).count == validatorSet.count
+              Set(validatorSet).count == validatorSet.count,
+              validatorSet.count == Int(body.participantValidatorCount),
+              validatorSetHash == body.participantValidatorSetHash
         else {
             throw DecodingError.dataCorruptedError(
                 forKey: .validatorSet,
                 in: container,
                 debugDescription: "native AMX validator_set must be non-empty and unique."
+            )
+        }
+        validatorSetPops = try container.decode([[UInt8]].self, forKey: .validatorSetPops)
+        guard validatorSetPops.count == validatorSet.count,
+              validatorSetPops.allSatisfy({ $0.count == 96 }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .validatorSetPops,
+                in: container,
+                debugDescription: "native AMX validator_set_pops must align one 96-byte proof per validator."
             )
         }
         signersBitmap = try container.decode([UInt8].self, forKey: .signersBitmap)
@@ -14015,7 +14105,7 @@ public struct ToriiNativeAmxAttestationQc: Decodable, Sendable, Equatable {
             ? UInt8(0)
             : signersBitmap.last.map { $0 & ~UInt8((1 << trailingBits) - 1) } ?? 0
         let signerCount = signersBitmap.reduce(0) { $0 + $1.nonzeroBitCount }
-        let requiredQuorum = validatorSet.count - (validatorSet.count - 1) / 3
+        let requiredQuorum = Int(body.participantMinQuorum)
         guard signersBitmap.count == expectedLength,
               outOfRangeBits == 0,
               signerCount >= requiredQuorum
@@ -14026,16 +14116,12 @@ public struct ToriiNativeAmxAttestationQc: Decodable, Sendable, Equatable {
                 debugDescription: "native AMX signer bitmap has invalid length, range, or quorum."
             )
         }
-        blsAggregateSignature = try ToriiNativeAmxWire.exactHex(
-            container.decode(String.self, forKey: .blsAggregateSignature),
-            bytes: 96,
-            key: .blsAggregateSignature,
-            container: container,
-            field: "native AMX BLS aggregate signature"
+        blsAggregateSignature = try container.decode(
+            [UInt8].self,
+            forKey: .blsAggregateSignature
         )
-        guard let signatureBytes = Data(hexString: blsAggregateSignature),
-              signatureBytes.contains(where: { $0 != 0 })
-        else {
+        guard blsAggregateSignature.count == 96,
+              blsAggregateSignature.contains(where: { $0 != 0 }) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .blsAggregateSignature,
                 in: container,
@@ -14049,14 +14135,12 @@ public struct ToriiNativeAmxAttestationQc: Decodable, Sendable, Equatable {
 public struct ToriiNativeAmxLeg: Decodable, Sendable, Equatable {
     public let laneId: UInt32
     public let dataspaceId: UInt64
-    public let laneIncarnation: String
     public let prepareQc: ToriiNativeAmxAttestationQc
     public let commitQc: ToriiNativeAmxAttestationQc
 
     private enum CodingKeys: String, CodingKey {
         case laneId = "lane_id"
         case dataspaceId = "dataspace_id"
-        case laneIncarnation = "lane_incarnation"
         case prepareQc = "prepare_qc"
         case commitQc = "commit_qc"
     }
@@ -14065,12 +14149,6 @@ public struct ToriiNativeAmxLeg: Decodable, Sendable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         laneId = try container.decode(UInt32.self, forKey: .laneId)
         dataspaceId = try container.decode(UInt64.self, forKey: .dataspaceId)
-        laneIncarnation = try ToriiNativeAmxWire.canonicalHash(
-            container.decode(String.self, forKey: .laneIncarnation),
-            key: .laneIncarnation,
-            container: container,
-            field: "native AMX participant lane_incarnation"
-        )
         prepareQc = try container.decode(ToriiNativeAmxAttestationQc.self, forKey: .prepareQc)
         commitQc = try container.decode(ToriiNativeAmxAttestationQc.self, forKey: .commitQc)
         guard prepareQc.body.phase == .prepare,
@@ -14079,9 +14157,9 @@ public struct ToriiNativeAmxLeg: Decodable, Sendable, Equatable {
               prepareQc.validatorSetHashVersion == commitQc.validatorSetHashVersion,
               prepareQc.validatorSetHash == commitQc.validatorSetHash,
               prepareQc.validatorSet == commitQc.validatorSet,
+              prepareQc.validatorSetPops == commitQc.validatorSetPops,
               prepareQc.body.participantLaneId == laneId,
-              prepareQc.body.participantDataspaceId == dataspaceId,
-              prepareQc.body.participantLaneIncarnation == laneIncarnation
+              prepareQc.body.participantDataspaceId == dataspaceId
         else {
             throw DecodingError.dataCorruptedError(
                 forKey: .prepareQc,
@@ -14125,7 +14203,7 @@ public struct ToriiNativeAmxReceipt: Decodable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         version = try container.decode(UInt16.self, forKey: .version)
-        guard version == 1 else {
+        guard version == 2 else {
             throw DecodingError.dataCorruptedError(
                 forKey: .version,
                 in: container,
@@ -14137,7 +14215,8 @@ public struct ToriiNativeAmxReceipt: Decodable, Sendable, Equatable {
             bytes: 32,
             key: .sourceId,
             container: container,
-            field: "native AMX receipt source_id"
+            field: "native AMX receipt source_id",
+            uppercaseOnly: true
         )
         chainIdHash = try ToriiNativeAmxWire.canonicalHash(
             container.decode(String.self, forKey: .chainIdHash),
@@ -14176,26 +14255,38 @@ public struct ToriiNativeAmxReceipt: Decodable, Sendable, Equatable {
             )
         }
         legs = try container.decode([ToriiNativeAmxLeg].self, forKey: .legs)
-        let routeKeys = Set(legs.map { "\($0.laneId):\($0.dataspaceId)" })
+        guard let firstContext = legs.first?.prepareQc.body else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .legs,
+                in: container,
+                debugDescription: "native AMX v2 receipt must contain at least one participant leg."
+            )
+        }
+        let routeKeys = Set(legs.map {
+            "\($0.laneId):\($0.dataspaceId):\($0.prepareQc.body.participantLaneIncarnation)"
+        })
         let entrypointHashes = Set(legs.map { $0.prepareQc.body.transactionEntrypointHash })
-        guard !legs.isEmpty,
+        guard legs.count <= 256,
               routeKeys.count == legs.count,
               entrypointHashes.count == 1,
               legs.allSatisfy({ leg in
                   let body = leg.prepareQc.body
-                  return body.chainIdHash == chainIdHash
+                  return body.round == firstContext.round
+                      && body.epoch == firstContext.epoch
+                      && body.round.height == authorityContextHeight
+                      && body.chainIdHash == chainIdHash
                       && body.sourceId.lowercased() == sourceId.lowercased()
                       && body.planDigest == planDigest
                       && body.coordinatorLaneId == laneId
                       && body.coordinatorDataspaceId == dataspaceId
                       && body.coordinatorLaneIncarnation == laneIncarnation
                       && body.authorityContextHeight == authorityContextHeight
-                      && body.coordinatorLaneBlockHeight == laneBlockHeight
+                      && body.plannedCoordinatorBlockHeight == laneBlockHeight
                       && body.coordinatorLaneBlockView == laneBlockView
                       && body.coordinatorProposalHash == coordinatorProposalHash
                       && (leg.laneId != laneId
                           || leg.dataspaceId != dataspaceId
-                          || leg.laneIncarnation == laneIncarnation)
+                          || body.participantLaneIncarnation == laneIncarnation)
               })
         else {
             throw DecodingError.dataCorruptedError(
@@ -14298,7 +14389,8 @@ public struct ToriiNexusFeeReceipt: Decodable, Sendable, Equatable {
             bytes: 32,
             key: .sourceId,
             container: container,
-            field: "Nexus fee source_id"
+            field: "Nexus fee source_id",
+            uppercaseOnly: true
         )
         dataspaceId = try container.decode(UInt64.self, forKey: .dataspaceId)
         laneId = try container.decode(UInt32.self, forKey: .laneId)
@@ -14350,37 +14442,80 @@ public struct ToriiLaneSettlementReceipt: Decodable, Sendable, Equatable {
             bytes: 32,
             key: .sourceId,
             container: container,
-            field: "lane settlement source_id"
+            field: "lane settlement source_id",
+            uppercaseOnly: true
         )
-        localAmountMicro = try ToriiNativeAmxWire.numeric(
+        localAmountMicro = try ToriiNativeAmxWire.u128(
             container.decode(String.self, forKey: .localAmountMicro),
             key: .localAmountMicro,
             container: container,
-            field: "local_amount_micro",
-            allowFraction: false
+            field: "local_amount_micro"
         )
-        xorDueMicro = try ToriiNativeAmxWire.numeric(
+        xorDueMicro = try ToriiNativeAmxWire.u128(
             container.decode(String.self, forKey: .xorDueMicro),
             key: .xorDueMicro,
             container: container,
-            field: "xor_due_micro",
-            allowFraction: false
+            field: "xor_due_micro"
         )
-        xorAfterHaircutMicro = try ToriiNativeAmxWire.numeric(
+        xorAfterHaircutMicro = try ToriiNativeAmxWire.u128(
             container.decode(String.self, forKey: .xorAfterHaircutMicro),
             key: .xorAfterHaircutMicro,
             container: container,
-            field: "xor_after_haircut_micro",
-            allowFraction: false
+            field: "xor_after_haircut_micro"
         )
-        xorVarianceMicro = try ToriiNativeAmxWire.numeric(
+        xorVarianceMicro = try ToriiNativeAmxWire.u128(
             container.decode(String.self, forKey: .xorVarianceMicro),
             key: .xorVarianceMicro,
             container: container,
-            field: "xor_variance_micro",
-            allowFraction: false
+            field: "xor_variance_micro"
         )
         timestampMs = try container.decode(UInt64.self, forKey: .timestampMs)
+    }
+}
+
+/// Liquidity profile applied to a lane settlement conversion.
+public enum ToriiLaneLiquidityProfile: String, Decodable, Sendable, Equatable {
+    case tier1 = "Tier1"
+    case tier2 = "Tier2"
+    case tier3 = "Tier3"
+
+    private enum CodingKeys: String, CodingKey { case profile, state }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = try container.decode(String.self, forKey: .profile)
+        guard container.contains(.state), try container.decodeNil(forKey: .state),
+              let value = Self(rawValue: raw) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .profile,
+                in: container,
+                debugDescription: "invalid tagged lane liquidity profile"
+            )
+        }
+        self = value
+    }
+}
+
+/// Volatility class applied to a lane settlement conversion.
+public enum ToriiLaneVolatilityClass: String, Decodable, Sendable, Equatable {
+    case stable = "Stable"
+    case elevated = "Elevated"
+    case dislocated = "Dislocated"
+
+    private enum CodingKeys: String, CodingKey { case bucket, state }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = try container.decode(String.self, forKey: .bucket)
+        guard container.contains(.state), try container.decodeNil(forKey: .state),
+              let value = Self(rawValue: raw) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .bucket,
+                in: container,
+                debugDescription: "invalid tagged lane volatility class"
+            )
+        }
+        self = value
     }
 }
 
@@ -14388,9 +14523,9 @@ public struct ToriiLaneSettlementReceipt: Decodable, Sendable, Equatable {
 public struct ToriiLaneSwapMetadata: Decodable, Sendable, Equatable {
     public let epsilonBps: UInt16
     public let twapWindowSeconds: UInt32
-    public let liquidityProfile: String
+    public let liquidityProfile: ToriiLaneLiquidityProfile
     public let twapLocalPerXor: String
-    public let volatilityClass: String
+    public let volatilityClass: ToriiLaneVolatilityClass
 
     private enum CodingKeys: String, CodingKey {
         case epsilonBps = "epsilon_bps"
@@ -14445,34 +14580,39 @@ public struct ToriiLaneSettlementCommitment: Decodable, Sendable, Equatable {
         )
         dataspaceId = try container.decode(UInt64.self, forKey: .dataspaceId)
         transactionCount = try container.decode(UInt64.self, forKey: .transactionCount)
-        totalLocalMicro = try ToriiNativeAmxWire.numeric(
+        totalLocalMicro = try ToriiNativeAmxWire.u128(
             container.decode(String.self, forKey: .totalLocalMicro),
             key: .totalLocalMicro,
             container: container,
-            field: "total_local_micro",
-            allowFraction: false
+            field: "total_local_micro"
         )
-        totalXorDueMicro = try ToriiNativeAmxWire.numeric(
+        totalXorDueMicro = try ToriiNativeAmxWire.u128(
             container.decode(String.self, forKey: .totalXorDueMicro),
             key: .totalXorDueMicro,
             container: container,
-            field: "total_xor_due_micro",
-            allowFraction: false
+            field: "total_xor_due_micro"
         )
-        totalXorAfterHaircutMicro = try ToriiNativeAmxWire.numeric(
+        totalXorAfterHaircutMicro = try ToriiNativeAmxWire.u128(
             container.decode(String.self, forKey: .totalXorAfterHaircutMicro),
             key: .totalXorAfterHaircutMicro,
             container: container,
-            field: "total_xor_after_haircut_micro",
-            allowFraction: false
+            field: "total_xor_after_haircut_micro"
         )
-        totalXorVarianceMicro = try ToriiNativeAmxWire.numeric(
+        totalXorVarianceMicro = try ToriiNativeAmxWire.u128(
             container.decode(String.self, forKey: .totalXorVarianceMicro),
             key: .totalXorVarianceMicro,
             container: container,
-            field: "total_xor_variance_micro",
-            allowFraction: false
+            field: "total_xor_variance_micro"
         )
+        guard container.contains(.swapMetadata) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.swapMetadata,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "lane settlement swap_metadata must be present, including when null."
+                )
+            )
+        }
         swapMetadata = try container.decodeIfPresent(ToriiLaneSwapMetadata.self, forKey: .swapMetadata)
         receipts = try container.decode([ToriiLaneSettlementReceipt].self, forKey: .receipts)
         nexusFeeReceipts = try container.decode([ToriiNexusFeeReceipt].self, forKey: .nexusFeeReceipts)
@@ -14500,30 +14640,58 @@ public struct ToriiLaneSettlementCommitment: Decodable, Sendable, Equatable {
     }
 }
 
-/// Relay status envelope preserving the exact settlement commitment and Native AMX evidence.
+/// FastPQ proof metadata attached to a lane relay envelope.
+public struct ToriiLaneFastpqProofMaterial: Decodable, Sendable, Equatable {
+    public let proofDigest: String
+    public let verifiedAtHeight: UInt64
+
+    private enum CodingKeys: String, CodingKey {
+        case proofDigest = "proof_digest"
+        case verifiedAtHeight = "verified_at_height"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        proofDigest = try ToriiNativeAmxWire.canonicalHash(
+            container.decode(String.self, forKey: .proofDigest),
+            key: .proofDigest,
+            container: container,
+            field: "relay FastPQ proof_digest"
+        )
+        verifiedAtHeight = try container.decode(UInt64.self, forKey: .verifiedAtHeight)
+    }
+}
+
+/// Relay status envelope preserving the exact production lane-relay wire fields.
 public struct ToriiLaneRelayEnvelope: Decodable, Sendable, Equatable {
     public let laneId: UInt32
     public let laneIncarnation: String
     public let dataspaceId: UInt64
     public let blockHeight: UInt64
-    public let blockHash: String
-    public let commitQc: ToriiJSONValue?
+    public let blockHeader: ToriiJSONValue
+    public let qc: ToriiJSONValue?
     public let daCommitmentHash: String?
+    public let laneBlockDescriptorHash: String?
     public let settlementCommitment: ToriiLaneSettlementCommitment
     public let settlementHash: String
     public let rbcBytesTotal: UInt64
+    public let manifestRoot: String?
+    public let fastpqProof: ToriiLaneFastpqProofMaterial?
 
     private enum CodingKeys: String, CodingKey {
         case laneId = "lane_id"
         case laneIncarnation = "lane_incarnation"
         case dataspaceId = "dataspace_id"
         case blockHeight = "block_height"
-        case blockHash = "block_hash"
-        case commitQc = "commit_qc"
+        case blockHeader = "block_header"
+        case qc
         case daCommitmentHash = "da_commitment_hash"
+        case laneBlockDescriptorHash = "lane_block_descriptor_hash"
         case settlementCommitment = "settlement_commitment"
         case settlementHash = "settlement_hash"
         case rbcBytesTotal = "rbc_bytes_total"
+        case manifestRoot = "manifest_root"
+        case fastpqProof = "fastpq_proof"
     }
 
     public init(from decoder: Decoder) throws {
@@ -14537,13 +14705,17 @@ public struct ToriiLaneRelayEnvelope: Decodable, Sendable, Equatable {
         )
         dataspaceId = try container.decode(UInt64.self, forKey: .dataspaceId)
         blockHeight = try container.decode(UInt64.self, forKey: .blockHeight)
-        blockHash = try ToriiNativeAmxWire.canonicalHash(
-            container.decode(String.self, forKey: .blockHash),
-            key: .blockHash,
-            container: container,
-            field: "relay block_hash"
-        )
-        commitQc = try container.decodeIfPresent(ToriiJSONValue.self, forKey: .commitQc)
+        blockHeader = try container.decode(ToriiJSONValue.self, forKey: .blockHeader)
+        guard container.contains(.qc), container.contains(.daCommitmentHash) else {
+            throw DecodingError.keyNotFound(
+                container.contains(.qc) ? CodingKeys.daCommitmentHash : CodingKeys.qc,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "relay qc and da_commitment_hash must be present, including when null."
+                )
+            )
+        }
+        qc = try container.decodeIfPresent(ToriiJSONValue.self, forKey: .qc)
         if let raw = try container.decodeIfPresent(String.self, forKey: .daCommitmentHash) {
             daCommitmentHash = try ToriiNativeAmxWire.canonicalHash(
                 raw,
@@ -14553,6 +14725,16 @@ public struct ToriiLaneRelayEnvelope: Decodable, Sendable, Equatable {
             )
         } else {
             daCommitmentHash = nil
+        }
+        if let raw = try container.decodeIfPresent(String.self, forKey: .laneBlockDescriptorHash) {
+            laneBlockDescriptorHash = try ToriiNativeAmxWire.canonicalHash(
+                raw,
+                key: .laneBlockDescriptorHash,
+                container: container,
+                field: "relay lane_block_descriptor_hash"
+            )
+        } else {
+            laneBlockDescriptorHash = nil
         }
         settlementCommitment = try container.decode(
             ToriiLaneSettlementCommitment.self,
@@ -14565,6 +14747,22 @@ public struct ToriiLaneRelayEnvelope: Decodable, Sendable, Equatable {
             field: "relay settlement_hash"
         )
         rbcBytesTotal = try container.decode(UInt64.self, forKey: .rbcBytesTotal)
+        if let raw = try container.decodeIfPresent(String.self, forKey: .manifestRoot) {
+            manifestRoot = try ToriiNativeAmxWire.exactHex(
+                raw,
+                bytes: 32,
+                key: .manifestRoot,
+                container: container,
+                field: "relay manifest_root",
+                uppercaseOnly: true
+            )
+        } else {
+            manifestRoot = nil
+        }
+        fastpqProof = try container.decodeIfPresent(
+            ToriiLaneFastpqProofMaterial.self,
+            forKey: .fastpqProof
+        )
         guard settlementCommitment.laneId == laneId,
               settlementCommitment.laneIncarnation == laneIncarnation,
               settlementCommitment.dataspaceId == dataspaceId,
@@ -14773,13 +14971,14 @@ public struct ToriiSumeragiV2HeightContextID: Decodable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         var container = try decoder.unkeyedContainer()
-        self.hash = try container.decode(String.self)
-        guard container.isAtEnd else {
+        let hash = try container.decode(String.self)
+        guard container.isAtEnd, ToriiNativeAmxWire.isCanonicalHash(hash) else {
             throw DecodingError.dataCorruptedError(
                 in: container,
-                debugDescription: "height_context_id must contain exactly one hash"
+                debugDescription: "height_context_id must contain exactly one canonical hash"
             )
         }
+        self.hash = hash
     }
 }
 
@@ -14797,9 +14996,9 @@ public struct ToriiSumeragiV2ConsensusRound: Decodable, Sendable, Equatable {
 }
 
 /// The only global Sumeragi v2 quorum-certificate phases.
-public enum ToriiSumeragiV2GlobalPhase: String, Decodable, Sendable {
-    case prepare = "Prepare"
-    case commit = "Commit"
+public enum ToriiSumeragiV2GlobalPhase: String, Decodable, Sendable, Equatable {
+    case prepare
+    case commit
 
     private enum CodingKeys: String, CodingKey {
         case phase
@@ -14838,6 +15037,32 @@ public struct ToriiSumeragiV2BlockSubject: Decodable, Sendable, Equatable {
         case blockHash = "block_hash"
         case payloadHash = "payload_hash"
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let raw = try container.decodeIfPresent(String.self, forKey: .parentBlockHash) {
+            parentBlockHash = try ToriiNativeAmxWire.canonicalHash(
+                raw,
+                key: .parentBlockHash,
+                container: container,
+                field: "Sumeragi v2 parent_block_hash"
+            )
+        } else {
+            parentBlockHash = nil
+        }
+        blockHash = try ToriiNativeAmxWire.canonicalHash(
+            container.decode(String.self, forKey: .blockHash),
+            key: .blockHash,
+            container: container,
+            field: "Sumeragi v2 block_hash"
+        )
+        payloadHash = try ToriiNativeAmxWire.canonicalHash(
+            container.decode(String.self, forKey: .payloadHash),
+            key: .payloadHash,
+            container: container,
+            field: "Sumeragi v2 payload_hash"
+        )
+    }
 }
 
 /// A stable reference to a Sumeragi v2 quorum certificate.
@@ -14858,16 +15083,31 @@ public struct ToriiSumeragiV2TimeoutCertificateRef: Decodable, Sendable, Equatab
         case highestPrepareQC = "highest_prepare_qc"
         case certificateHash = "certificate_hash"
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        round = try container.decode(ToriiSumeragiV2ConsensusRound.self, forKey: .round)
+        highestPrepareQC = try container.decodeIfPresent(
+            ToriiSumeragiV2QuorumCertificateRef.self,
+            forKey: .highestPrepareQC
+        )
+        certificateHash = try ToriiNativeAmxWire.canonicalHash(
+            container.decode(String.self, forKey: .certificateHash),
+            key: .certificateHash,
+            container: container,
+            field: "Sumeragi v2 timeout certificate hash"
+        )
+    }
 }
 
 /// High-level phase of the single authoritative Sumeragi v2 reducer.
-public enum ToriiSumeragiV2StatusPhase: String, Decodable, Sendable {
-    case awaitingProposal = "AwaitingProposal"
-    case reconstructingPayload = "ReconstructingPayload"
-    case validatingPayload = "ValidatingPayload"
-    case prepare = "Prepare"
-    case commit = "Commit"
-    case pendingApply = "PendingApply"
+public enum ToriiSumeragiV2StatusPhase: String, Decodable, Sendable, Equatable {
+    case awaitingProposal = "awaiting_proposal"
+    case reconstructingPayload = "reconstructing_payload"
+    case validatingPayload = "validating_payload"
+    case prepare
+    case commit
+    case pendingApply = "pending_apply"
 
     private enum CodingKeys: String, CodingKey {
         case phase
@@ -14896,13 +15136,13 @@ public enum ToriiSumeragiV2StatusPhase: String, Decodable, Sendable {
 }
 
 /// Local body availability/application state of the Sumeragi v2 reducer.
-public enum ToriiSumeragiV2BodyState: String, Decodable, Sendable {
-    case missing = "Missing"
-    case reconstructing = "Reconstructing"
-    case stored = "Stored"
-    case validated = "Validated"
-    case pendingApply = "PendingApply"
-    case applied = "Applied"
+public enum ToriiSumeragiV2BodyState: String, Decodable, Sendable, Equatable {
+    case missing
+    case reconstructing
+    case stored
+    case validated
+    case pendingApply = "pending_apply"
+    case applied
 
     private enum CodingKeys: String, CodingKey {
         case state
@@ -14931,9 +15171,9 @@ public enum ToriiSumeragiV2BodyState: String, Decodable, Sendable {
 }
 
 /// Consensus mode frozen in an authoritative Sumeragi v2 height context.
-public enum ToriiSumeragiV2ConsensusMode: String, Decodable, Sendable {
-    case permissioned = "Permissioned"
-    case npos = "Npos"
+public enum ToriiSumeragiV2ConsensusMode: String, Decodable, Sendable, Equatable {
+    case permissioned
+    case npos
 
     private enum CodingKeys: String, CodingKey { case mode, details }
 
@@ -14972,7 +15212,7 @@ public struct ToriiSumeragiV2HeightContextStatus: Decodable, Sendable, Equatable
     public let epoch: UInt64
     public let epochEndHeight: UInt64
     public let mode: ToriiSumeragiV2ConsensusMode
-    public let epochSeed: [UInt8]
+    public let epochSeed: String
     public let validatorCount: UInt32
     public let quorum: ToriiSumeragiV2DualQuorum
 
@@ -14990,13 +15230,14 @@ public struct ToriiSumeragiV2HeightContextStatus: Decodable, Sendable, Equatable
         epoch = try container.decode(UInt64.self, forKey: .epoch)
         epochEndHeight = try container.decode(UInt64.self, forKey: .epochEndHeight)
         mode = try container.decode(ToriiSumeragiV2ConsensusMode.self, forKey: .mode)
-        epochSeed = try container.decode([UInt8].self, forKey: .epochSeed)
-        guard epochSeed.count == 32 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .epochSeed, in: container,
-                debugDescription: "Sumeragi v2 epoch seed must contain 32 bytes"
-            )
-        }
+        epochSeed = try ToriiNativeAmxWire.exactHex(
+            container.decode(String.self, forKey: .epochSeed),
+            bytes: 32,
+            key: .epochSeed,
+            container: container,
+            field: "Sumeragi v2 epoch_seed",
+            uppercaseOnly: true
+        )
         validatorCount = try container.decode(UInt32.self, forKey: .validatorCount)
         quorum = try container.decode(ToriiSumeragiV2DualQuorum.self, forKey: .quorum)
     }
@@ -15145,6 +15386,18 @@ public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable, Equatable {
         case operatorStatus = "operator"
     }
 
+    private static func countQuorum(_ validators: UInt32) -> UInt32? {
+        guard validators > 0 else { return nil }
+        return UInt32((UInt64(validators) * 2) / 3 + 1)
+    }
+
+    private static func powerQuorum(_ totalPower: UInt64) -> UInt64? {
+        guard totalPower > 0 else { return nil }
+        let quotient = totalPower / 3
+        let remainder = totalPower % 3
+        return quotient * 2 + (remainder * 2) / 3 + 1
+    }
+
     public init(from decoder: Decoder) throws {
         let dynamic = try decoder.container(keyedBy: ToriiSumeragiV2DynamicCodingKey.self)
         let allowed = Set(CodingKeys.allCases.map(\.rawValue))
@@ -15165,9 +15418,21 @@ public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable, Equatable {
             )
         }
         self.protocolVersion = protocolVersion
-        self.nodeFingerprint = try container.decode(String.self, forKey: .nodeFingerprint)
-        self.buildFingerprint = try container.decode(String.self, forKey: .buildFingerprint)
-        self.configFingerprint = try container.decode(String.self, forKey: .configFingerprint)
+        let nodeFingerprint = try container.decode(String.self, forKey: .nodeFingerprint)
+        let buildFingerprint = try container.decode(String.self, forKey: .buildFingerprint)
+        let configFingerprint = try container.decode(String.self, forKey: .configFingerprint)
+        guard ToriiNativeAmxWire.isCanonicalHash(nodeFingerprint),
+              ToriiNativeAmxWire.isCanonicalHash(buildFingerprint),
+              ToriiNativeAmxWire.isCanonicalHash(configFingerprint) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .nodeFingerprint,
+                in: container,
+                debugDescription: "Sumeragi v2 fingerprints must be canonical Norito hashes"
+            )
+        }
+        self.nodeFingerprint = nodeFingerprint
+        self.buildFingerprint = buildFingerprint
+        self.configFingerprint = configFingerprint
         self.heightContextID = try container.decode(
             ToriiSumeragiV2HeightContextID.self,
             forKey: .heightContextID
@@ -15209,34 +15474,118 @@ public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable, Equatable {
             ToriiSumeragiV2CommitQCStatus.self,
             forKey: .lastCommitQC
         )
-        self.laneSettlementCommitments = try container.decodeIfPresent(
+        self.laneSettlementCommitments = try container.decode(
             [ToriiLaneSettlementCommitment].self,
             forKey: .laneSettlementCommitments
-        ) ?? []
-        self.laneRelayEnvelopes = try container.decodeIfPresent(
+        )
+        self.laneRelayEnvelopes = try container.decode(
             [ToriiLaneRelayEnvelope].self,
             forKey: .laneRelayEnvelopes
-        ) ?? []
-        self.lanePayloadOwnerships = try container.decodeIfPresent(
+        )
+        self.lanePayloadOwnerships = try container.decode(
             [ToriiJSONValue].self,
             forKey: .lanePayloadOwnerships
-        ) ?? []
-        self.committedLaneBlocks = try container.decodeIfPresent(
+        )
+        self.committedLaneBlocks = try container.decode(
             [ToriiJSONValue].self,
             forKey: .committedLaneBlocks
-        ) ?? []
-        self.laneBlockSessions = try container.decodeIfPresent(
+        )
+        self.laneBlockSessions = try container.decode(
             [ToriiJSONValue].self,
             forKey: .laneBlockSessions
-        ) ?? []
-        self.localPeerRemoved = try container.decodeIfPresent(
+        )
+        self.localPeerRemoved = try container.decode(
             Bool.self,
             forKey: .localPeerRemoved
-        ) ?? false
+        )
         self.operatorStatus = try container.decode(
             ToriiSumeragiV2OperatorStatus.self,
             forKey: .operatorStatus
         )
+
+        let context = self.heightContext
+        guard context.validatorCount > 0,
+              context.validatorCount <= 128,
+              context.epochEndHeight >= self.height,
+              let contextCountQuorum = Self.countQuorum(context.validatorCount),
+              context.quorum.minSigners == contextCountQuorum,
+              context.quorum.totalPower >= UInt64(context.validatorCount),
+              self.leader < context.validatorCount else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .heightContext,
+                in: container,
+                debugDescription: "invalid Sumeragi v2 frozen height context or leader"
+            )
+        }
+        if context.mode == .permissioned,
+           context.quorum.totalPower != UInt64(context.validatorCount) {
+            throw DecodingError.dataCorruptedError(
+                forKey: .heightContext,
+                in: container,
+                debugDescription: "permissioned Sumeragi v2 voting power must equal validator count"
+            )
+        }
+        guard self.lastCommittedHeight <= self.height else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .lastCommittedHeight,
+                in: container,
+                debugDescription: "last committed height is ahead of active height"
+            )
+        }
+        if self.lastCommittedHeight == 0 {
+            guard self.lastCommittedSubject == nil, self.lastCommitQC == nil else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .lastCommitQC,
+                    in: container,
+                    debugDescription: "genesis status must not report committed subject or QC"
+                )
+            }
+        } else {
+            guard let subject = self.lastCommittedSubject,
+                  let commit = self.lastCommitQC,
+                  commit.certificate.phase == .commit,
+                  commit.certificate.round.height == self.lastCommittedHeight,
+                  commit.certificate.subject == subject,
+                  commit.validatorCount > 0,
+                  commit.validatorCount <= 128,
+                  commit.signerCount <= commit.validatorCount,
+                  let commitCountQuorum = Self.countQuorum(commit.validatorCount),
+                  commit.minSigners == commitCountQuorum,
+                  commit.signerCount >= commit.minSigners,
+                  commit.signedPower <= commit.totalPower,
+                  commit.totalPower >= UInt64(commit.validatorCount),
+                  let powerQuorum = Self.powerQuorum(commit.totalPower),
+                  commit.signedPower >= powerQuorum else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .lastCommitQC,
+                    in: container,
+                    debugDescription: "invalid Sumeragi v2 durable CommitQC summary"
+                )
+            }
+        }
+
+        let adapter = self.operatorStatus.adapterQueues
+        let queue = self.operatorStatus.txQueue
+        guard adapter.ingressKeys <= adapter.ingressCapacity,
+              adapter.deferredCompletion <= adapter.deferredProgressCapacity,
+              adapter.deferredProgress <= adapter.deferredProgressCapacity,
+              adapter.deferredNormal <= adapter.deferredNormalCapacity,
+              queue.queuedTransactions <= queue.trackedTransactions,
+              queue.trackedTransactions <= queue.capacity,
+              queue.retainedBytes <= queue.maxRetainedBytes,
+              queue.capacity > 0,
+              queue.maxRetainedBytes > 0,
+              self.laneSettlementCommitments.count <= 128,
+              self.laneRelayEnvelopes.count <= 64,
+              self.lanePayloadOwnerships.count <= 128,
+              self.committedLaneBlocks.count <= 128,
+              self.laneBlockSessions.count <= 128 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .operatorStatus,
+                in: container,
+                debugDescription: "Sumeragi v2 operator or lane-observability bounds are invalid"
+            )
+        }
     }
 }
 

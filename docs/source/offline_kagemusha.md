@@ -2212,27 +2212,21 @@ padding for the native privacy result, open-verify envelope, and verifier
 record. The generic 64-byte frame-padding limit is not permission to add
 padding to these 8-byte-aligned types.
 
-Torii offline-v2 redeem ingress routes `/v1/offline/v2/notes/redeem` requests
-that carry `redeem_request_norito_base64`,
-`compact_payment_token_norito_base64`, or
-`projection_verifier_record_norito_base64` through the Kagemusha recursive
-redeem path instead of the retired structured Offline Note V2 redemption parser.
-Production ingress requires a canonical standard-base64
-`KagemushaRecursiveSpendRedeemRequestV1` archive with no surrounding
-whitespace, validates its public binding, and rejects authenticated-account,
-chain-id, asset, requested-amount, and source note commitment mismatches before
-emitting a `RedeemKagemushaRecursive` transaction or settlement response. If
-the optional `amount` or `source_note_commitment` echo fields are present, they
-must be canonical non-empty strings and must match the archive; amount echoes
-must use the exact canonical `Numeric` text, so plus signs, leading zeroes, and
-redundant decimal points are rejected.
-The compact-token and projection-verifier fields are dispatch markers only:
-once `redeem_request_norito_base64` is present, those auxiliary fields must be
-omitted so stale or mismatched client-side token material is not silently
-ignored by Torii.
-Retired Offline Note V2 redemption fields do not act as a fallback once any
-Kagemusha redeem, compact-token, or projection-verifier field is present; mixed
-retired structured and Kagemusha bodies are rejected before archive decoding.
+Torii offline-v2 redeem ingress mounts `/v1/offline/v2/notes/redeem` as a
+strict Kagemusha V2 endpoint. The JSON body must be an object containing
+exactly one non-empty `redeem_request_norito_base64` string and no other fields.
+The value must have no surrounding whitespace, must be canonical standard base64,
+and must decode and re-encode byte-for-byte as a
+`KagemushaRecursiveSpendRedeemRequestV2` Norito archive. Torii validates the
+archive's public binding, signed recipient/device authorization at chain time,
+chain id, registered asset, and live asset scale before emitting a
+`RedeemKagemushaRecursiveV2` transaction. Only Reserved lineage without a lineage witness is admissible;
+semantic lineage and witness-bearing redemption remain disabled and fail closed.
+Retired Offline Note, compact-token, projection-verifier, echo, and unknown fields
+fail closed at the single-field envelope boundary rather than selecting a fallback parser.
+Torii also keeps redemption submission disabled until the chain exposes a canonical atomic operation receipt:
+retries must resolve from that receipt and must never scan request-driven block history
+or combine finality from one transaction with an unrelated anchor.
 Retired structured Offline Note V2 redeem JSON is first-release strict even
 when it is routed to the retired structured parser: it requires the canonical
 `sender_key_certificate`, `backend`, `verifier_key_id`, and

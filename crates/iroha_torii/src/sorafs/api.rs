@@ -30108,6 +30108,28 @@ fn storage_backend_error(err: StorageBackendError) -> Response {
             StatusCode::BAD_REQUEST,
             "chunk profile mismatch between manifest and payload plan",
         ),
+        request_error @ (StorageBackendError::PersistentArtifactTooLarge { .. }
+        | StorageBackendError::PorCommitmentGeometryOverflow { .. }
+        | StorageBackendError::AllocationGeometryOverflow { .. }
+        | StorageBackendError::PdpTree(_)
+        | StorageBackendError::PdpCommitment(_)
+        | StorageBackendError::ManifestContentLengthMismatch) => json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid storage request: {request_error}"),
+        ),
+        StorageBackendError::PdpTreeMemoryExceeded {
+            required,
+            available,
+        } => json_error(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "PDP tree memory budget exceeded (required {required} bytes, available {available} bytes)"
+            ),
+        ),
+        StorageBackendError::PdpUnavailable { manifest_id } => json_error(
+            StatusCode::NOT_FOUND,
+            format!("manifest {manifest_id} has no PDP commitment"),
+        ),
         StorageBackendError::ChunkRoleLengthMismatch { expected, actual } => json_error(
             StatusCode::BAD_REQUEST,
             format!("chunk_roles length {actual} does not match chunk count {expected}"),
@@ -30150,6 +30172,15 @@ fn storage_backend_error(err: StorageBackendError) -> Response {
                 "storage backend state failed integrity validation",
             )
         }
+        pdp_runtime_error @ (StorageBackendError::InvalidPdpSampleWindow { .. }
+        | StorageBackendError::PdpWitness { .. }
+        | StorageBackendError::InvalidSystemTime) => {
+            error!(?pdp_runtime_error, "SoraFS storage backend PDP failure");
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "storage backend PDP operation failed",
+            )
+        }
         StorageBackendError::Io(err) => {
             error!(?err, "SoraFS storage backend I/O error");
             json_error(
@@ -30178,6 +30209,7 @@ fn storage_backend_error(err: StorageBackendError) -> Response {
 mod storage_backend_error_tests {
     use std::time::Duration;
 
+    use sorafs_manifest::pdp::{PdpCommitmentValidationError, PdpMerkleTreeError};
     use sorafs_manifest::retention::RetentionMetadataError;
     use sorafs_node::scheduler::{FetchRateScope, SchedulerAdmissionError};
 
@@ -30225,6 +30257,62 @@ mod storage_backend_error_tests {
             reason: "out-of-bounds chunk range".to_owned(),
         });
         assert_eq!(response.status(), super::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn pdp_request_failures_map_to_bad_request() {
+        for error in [
+            StorageBackendError::PersistentArtifactTooLarge {
+                artifact: "manifest",
+                actual: 2,
+                maximum: 1,
+            },
+            StorageBackendError::PorCommitmentGeometryOverflow {
+                context: "leaf count",
+            },
+            StorageBackendError::AllocationGeometryOverflow {
+                context: "profile handle",
+            },
+            StorageBackendError::PdpTree(PdpMerkleTreeError::EmptyPayload),
+            StorageBackendError::PdpCommitment(PdpCommitmentValidationError::InvalidPayloadLength),
+            StorageBackendError::PdpTreeMemoryExceeded {
+                required: 2,
+                available: 1,
+            },
+            StorageBackendError::ManifestContentLengthMismatch,
+        ] {
+            assert_eq!(
+                storage_backend_error(error).status(),
+                super::StatusCode::BAD_REQUEST
+            );
+        }
+    }
+
+    #[test]
+    fn missing_pdp_commitment_maps_to_not_found() {
+        let response = storage_backend_error(StorageBackendError::PdpUnavailable {
+            manifest_id: "manifest".to_owned(),
+        });
+        assert_eq!(response.status(), super::StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn pdp_runtime_failures_are_opaque_internal_errors() {
+        for error in [
+            StorageBackendError::InvalidPdpSampleWindow {
+                found: 0,
+                maximum: 1,
+            },
+            StorageBackendError::PdpWitness {
+                reason: "/secret/chunk: read failure".to_owned(),
+            },
+            StorageBackendError::InvalidSystemTime,
+        ] {
+            assert_eq!(
+                storage_backend_error(error).status(),
+                super::StatusCode::INTERNAL_SERVER_ERROR
+            );
+        }
     }
 
     #[test]
@@ -30973,6 +31061,8 @@ pub(crate) fn init_cache(
 
 #[cfg(test)]
 mod advert_tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
     use std::{
         io::Write,
         num::NonZeroU64,
@@ -31047,9 +31137,13 @@ mod advert_tests {
         PathDiversityPolicy, PinPolicy, ProviderAdmissionCouncilPolicy,
         ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1, ProviderAdvertBodyV1,
         ProviderAdvertV1, QosHints, REPUTATION_PROVIDER_INPUT_VERSION_V1,
-        REPUTATION_PROVIDER_METRICS_VERSION_V1, RendezvousTopic, ReputationProviderInputV1,
-        ReputationProviderMetricsV1, ReputationReserveStageV1, ReputationWeightsV1,
-        SETTLEMENT_RECEIPT_VERSION_V1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1, SignatureAlgorithm,
+        REPUTATION_PROVIDER_METRICS_VERSION_V1, REPUTATION_SCORING_EVIDENCE_VERSION_V1,
+        REPUTATION_SNAPSHOT_TRUST_POLICY_VERSION_V1, REPUTATION_TRUSTED_SIGNER_VERSION_V1,
+        RendezvousTopic, ReputationProviderInputV1, ReputationProviderMetricsV1,
+        ReputationReserveStageV1, ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1,
+        ReputationSnapshotTrustPolicyV1, ReputationTrustedSignerV1, ReputationWeightsV1,
+        SETTLEMENT_RECEIPT_VERSION_V1, SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
+        SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1, SignatureAlgorithm,
         SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
         SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
         SoraFsAppealFinanceWeeklyRollupV1, StakePointer, build_reputation_snapshot,
@@ -45519,7 +45613,8 @@ mod advert_tests {
     #[test]
     fn reputation_websocket_frames_wrap_events_and_lag_payloads() {
         let snapshot = reputation_snapshot_fixture();
-        let event = ReputationSnapshotEventV1::from_snapshot(9, &snapshot).expect("snapshot event");
+        let event = ReputationSnapshotEventV1::from_snapshot(9, &snapshot.snapshot)
+            .expect("snapshot event");
 
         let frame: Value = norito::json::from_str(&reputation_snapshot_websocket_frame(&event))
             .expect("decode websocket frame");
@@ -45534,7 +45629,7 @@ mod advert_tests {
         assert_eq!(data.get("sequence").and_then(Value::as_u64), Some(9));
         assert_eq!(
             data.get("snapshot_id_hex").and_then(Value::as_str),
-            Some(hex::encode(snapshot.snapshot_id).as_str())
+            Some(hex::encode(snapshot.snapshot.snapshot_id).as_str())
         );
 
         let lagged: Value = norito::json::from_str(&reputation_lagged_websocket_frame(3))

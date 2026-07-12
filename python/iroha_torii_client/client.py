@@ -4036,6 +4036,12 @@ class _SumeragiV2StatusParser:
     """Fail-closed parser for the flattened authoritative v2 JSON projection."""
 
     MAX_VALIDATORS = 128
+    MAX_LANE_SETTLEMENT_COMMITMENTS = 128
+    MAX_LANE_RELAY_ENVELOPES = 64
+    MAX_LANE_PAYLOAD_OWNERSHIPS = 128
+    MAX_COMMITTED_LANE_BLOCKS = 128
+    MAX_LANE_BLOCK_SESSIONS = 128
+    MAX_NATIVE_AMX_PARTICIPANT_LEGS = 255
     MAX_U32 = (1 << 32) - 1
     MAX_U128 = (1 << 128) - 1
 
@@ -4226,10 +4232,36 @@ class _SumeragiV2StatusParser:
         return value
 
     @staticmethod
-    def _array(value: Any, context: str) -> List[Any]:
+    def _array(
+        value: Any,
+        context: str,
+        *,
+        minimum: int = 0,
+        maximum: Optional[int] = None,
+    ) -> List[Any]:
         if not isinstance(value, list):
             raise RuntimeError(f"{context} must be an array")
+        if len(value) < minimum:
+            raise RuntimeError(f"{context} contains fewer than {minimum} items")
+        if maximum is not None and len(value) > maximum:
+            raise RuntimeError(f"{context} exceeds its protocol item bound")
         return value
+
+    @classmethod
+    def _exact_mapping(
+        cls,
+        value: Any,
+        context: str,
+        expected_fields: set[str],
+    ) -> Mapping[str, Any]:
+        record = cls._mapping(value, context)
+        if set(record) != expected_fields:
+            missing = sorted(expected_fields - set(record))
+            unknown = sorted(set(record) - expected_fields)
+            if missing:
+                raise RuntimeError(f"{context} is missing required field {missing[0]}")
+            raise RuntimeError(f"{context} contains unknown field {unknown[0]}")
+        return record
 
     @staticmethod
     def _clone_mapping(value: Any, context: str) -> Dict[str, Any]:
@@ -4280,8 +4312,20 @@ class _SumeragiV2StatusParser:
 
     @classmethod
     def _decimal_u128(cls, value: Any, context: str) -> str:
-        number = cls._unsigned(value, context, maximum=cls.MAX_U128)
-        return str(number)
+        if not isinstance(value, str) or re.fullmatch(r"(?:0|[1-9][0-9]*)", value) is None:
+            raise RuntimeError(f"{context} must be a canonical unsigned decimal string")
+        if int(value, 10) > cls.MAX_U128:
+            raise RuntimeError(f"{context} exceeds u128")
+        return value
+
+    @staticmethod
+    def _numeric(value: Any, context: str) -> str:
+        if (
+            not isinstance(value, str)
+            or re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?", value) is None
+        ):
+            raise RuntimeError(f"{context} must be a canonical non-negative Numeric string")
+        return value
 
     @staticmethod
     def _crc16(tag: str, body: str) -> int:
@@ -4316,9 +4360,19 @@ class _SumeragiV2StatusParser:
 
     @classmethod
     def _byte32(cls, value: Any, context: str) -> str:
-        if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value):
-            return value.lower()
-        raise RuntimeError(f"{context} must contain exactly 32 bytes")
+        if isinstance(value, str) and re.fullmatch(r"[0-9A-F]{64}", value):
+            return value
+        raise RuntimeError(f"{context} must be canonical uppercase 32-byte hex")
+
+    @classmethod
+    def _byte_vector(cls, value: Any, length: int, context: str) -> List[int]:
+        items = cls._array(value, context, minimum=length, maximum=length)
+        result: List[int] = []
+        for index, item in enumerate(items):
+            if isinstance(item, bool) or not isinstance(item, int) or not 0 <= item <= 255:
+                raise RuntimeError(f"{context}[{index}] must be an integer byte")
+            result.append(item)
+        return result
 
     @classmethod
     def _context_id(cls, value: Any, context: str) -> Tuple[str]:
@@ -4350,8 +4404,11 @@ class _SumeragiV2StatusParser:
         context: str,
     ) -> str:
         record = cls._mapping(value, context)
-        if set(record) - {tag, content}:
+        unknown = set(record) - {tag, content}
+        if unknown:
             raise RuntimeError(f"{context} contains an unknown tagged-enum field")
+        if tag not in record:
+            raise RuntimeError(f"{context}.{tag} is required")
         variant = record.get(tag)
         if not isinstance(variant, str) or variant not in allowed:
             raise RuntimeError(f"{context}.{tag} is not a supported v2 variant")
@@ -4565,18 +4622,65 @@ class _SumeragiV2StatusParser:
         context = "sumeragi.lane_settlement_commitments"
         return [
             cls._settlement(entry, context=f"{context}[{index}]")
-            for index, entry in enumerate(cls._array(value, context))
+            for index, entry in enumerate(
+                cls._array(
+                    value,
+                    context,
+                    maximum=cls.MAX_LANE_SETTLEMENT_COMMITMENTS,
+                )
+            )
         ]
 
     @classmethod
     def _settlement(cls, value: Any, *, context: str) -> Dict[str, Any]:
-        record = cls._mapping(value, context)
-        receipts = []
+        record = cls._exact_mapping(
+            value,
+            context,
+            {
+                "block_height",
+                "lane_id",
+                "lane_incarnation",
+                "dataspace_id",
+                "tx_count",
+                "total_local_micro",
+                "total_xor_due_micro",
+                "total_xor_after_haircut_micro",
+                "total_xor_variance_micro",
+                "swap_metadata",
+                "receipts",
+                "nexus_fee_receipts",
+                "native_amx_receipts",
+            },
+        )
+        block_height = cls._unsigned(
+            record.get("block_height"), f"{context}.block_height"
+        )
+        lane_id = cls._unsigned(
+            record.get("lane_id"), f"{context}.lane_id", maximum=cls.MAX_U32
+        )
+        lane_incarnation = cls._nonzero_hash(
+            record.get("lane_incarnation"), f"{context}.lane_incarnation"
+        )
+        dataspace_id = cls._unsigned(
+            record.get("dataspace_id"), f"{context}.dataspace_id"
+        )
+        receipts: List[Dict[str, Any]] = []
         for index, receipt_value in enumerate(
             cls._array(record.get("receipts"), f"{context}.receipts")
         ):
             receipt_context = f"{context}.receipts[{index}]"
-            receipt = cls._mapping(receipt_value, receipt_context)
+            receipt = cls._exact_mapping(
+                receipt_value,
+                receipt_context,
+                {
+                    "source_id",
+                    "local_amount_micro",
+                    "xor_due_micro",
+                    "xor_after_haircut_micro",
+                    "xor_variance_micro",
+                    "timestamp_ms",
+                },
+            )
             receipts.append(
                 {
                     "source_id": cls._byte32(receipt.get("source_id"), f"{receipt_context}.source_id"),
@@ -4592,7 +4696,17 @@ class _SumeragiV2StatusParser:
             swap_metadata = None
         else:
             swap_context = f"{context}.swap_metadata"
-            swap = cls._mapping(swap_value, swap_context)
+            swap = cls._exact_mapping(
+                swap_value,
+                swap_context,
+                {
+                    "epsilon_bps",
+                    "twap_window_seconds",
+                    "liquidity_profile",
+                    "twap_local_per_xor",
+                    "volatility_class",
+                },
+            )
             swap_metadata = {
                 "epsilon_bps": cls._unsigned(
                     swap.get("epsilon_bps"),
@@ -4629,11 +4743,55 @@ class _SumeragiV2StatusParser:
                     "state": None,
                 },
             }
+        nexus_fee_receipts = [
+            cls._nexus_fee_receipt(item, context=f"{context}.nexus_fee_receipts[{index}]")
+            for index, item in enumerate(
+                cls._array(
+                    record.get("nexus_fee_receipts"),
+                    f"{context}.nexus_fee_receipts",
+                )
+            )
+        ]
+        native_amx_receipts = [
+            cls._native_amx_receipt(
+                item,
+                context=f"{context}.native_amx_receipts[{index}]",
+            )
+            for index, item in enumerate(
+                cls._array(
+                    record.get("native_amx_receipts"),
+                    f"{context}.native_amx_receipts",
+                )
+            )
+        ]
+        if len({item["source_id"] for item in nexus_fee_receipts}) != len(
+            nexus_fee_receipts
+        ):
+            raise RuntimeError(f"{context} contains duplicate Nexus fee receipt sources")
+        if len({item["source_id"] for item in native_amx_receipts}) != len(
+            native_amx_receipts
+        ):
+            raise RuntimeError(f"{context} contains duplicate native AMX receipt sources")
+        if any(
+            item["lane_id"] != lane_id
+            or item["dataspace_id"] != dataspace_id
+            or item["block_height"] != block_height
+            for item in nexus_fee_receipts
+        ):
+            raise RuntimeError(f"{context} Nexus fee receipt coordinates do not match")
+        if any(
+            item["lane_id"] != lane_id
+            or item["dataspace_id"] != dataspace_id
+            or item["lane_incarnation"] != lane_incarnation
+            or item["lane_block_height"] != block_height
+            for item in native_amx_receipts
+        ):
+            raise RuntimeError(f"{context} native AMX receipt coordinates do not match")
         return {
-            "block_height": cls._unsigned(record.get("block_height"), f"{context}.block_height"),
-            "lane_id": cls._unsigned(record.get("lane_id"), f"{context}.lane_id", maximum=cls.MAX_U32),
-            "lane_incarnation": cls._nonzero_hash(record.get("lane_incarnation"), f"{context}.lane_incarnation"),
-            "dataspace_id": cls._unsigned(record.get("dataspace_id"), f"{context}.dataspace_id"),
+            "block_height": block_height,
+            "lane_id": lane_id,
+            "lane_incarnation": lane_incarnation,
+            "dataspace_id": dataspace_id,
             "tx_count": cls._unsigned(record.get("tx_count"), f"{context}.tx_count"),
             "total_local_micro": cls._decimal_u128(record.get("total_local_micro"), f"{context}.total_local_micro"),
             "total_xor_due_micro": cls._decimal_u128(record.get("total_xor_due_micro"), f"{context}.total_xor_due_micro"),
@@ -4641,21 +4799,497 @@ class _SumeragiV2StatusParser:
             "total_xor_variance_micro": cls._decimal_u128(record.get("total_xor_variance_micro"), f"{context}.total_xor_variance_micro"),
             "swap_metadata": swap_metadata,
             "receipts": receipts,
-            "nexus_fee_receipts": [
-                cls._clone_mapping(item, f"{context}.nexus_fee_receipts[{index}]")
-                for index, item in enumerate(cls._array(record.get("nexus_fee_receipts"), f"{context}.nexus_fee_receipts"))
-            ],
-            "native_amx_receipts": [
-                cls._clone_mapping(item, f"{context}.native_amx_receipts[{index}]")
-                for index, item in enumerate(cls._array(record.get("native_amx_receipts"), f"{context}.native_amx_receipts"))
-            ],
+            "nexus_fee_receipts": nexus_fee_receipts,
+            "native_amx_receipts": native_amx_receipts,
+        }
+
+    @classmethod
+    def _nexus_fee_schedule(cls, value: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._exact_mapping(
+            value,
+            context,
+            {
+                "tx_bytes_len",
+                "instruction_count",
+                "gas_used",
+                "base_fee",
+                "per_byte_fee",
+                "per_instruction_fee",
+                "per_gas_unit_fee",
+            },
+        )
+        return {
+            "tx_bytes_len": cls._unsigned(
+                record.get("tx_bytes_len"), f"{context}.tx_bytes_len"
+            ),
+            "instruction_count": cls._unsigned(
+                record.get("instruction_count"), f"{context}.instruction_count"
+            ),
+            "gas_used": cls._unsigned(record.get("gas_used"), f"{context}.gas_used"),
+            "base_fee": cls._numeric(record.get("base_fee"), f"{context}.base_fee"),
+            "per_byte_fee": cls._numeric(
+                record.get("per_byte_fee"), f"{context}.per_byte_fee"
+            ),
+            "per_instruction_fee": cls._numeric(
+                record.get("per_instruction_fee"),
+                f"{context}.per_instruction_fee",
+            ),
+            "per_gas_unit_fee": cls._numeric(
+                record.get("per_gas_unit_fee"), f"{context}.per_gas_unit_fee"
+            ),
+        }
+
+    @classmethod
+    def _nexus_fee_receipt(cls, value: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._exact_mapping(
+            value,
+            context,
+            {
+                "version",
+                "source_id",
+                "dataspace_id",
+                "lane_id",
+                "block_height",
+                "payer_account_id",
+                "fee_asset_id",
+                "fee_amount",
+                "schedule",
+            },
+        )
+        version = cls._unsigned(
+            record.get("version"), f"{context}.version", maximum=0xFFFF
+        )
+        if version != 1:
+            raise RuntimeError(f"{context}.version must equal 1")
+        return {
+            "version": version,
+            "source_id": cls._byte32(record.get("source_id"), f"{context}.source_id"),
+            "dataspace_id": cls._unsigned(
+                record.get("dataspace_id"), f"{context}.dataspace_id"
+            ),
+            "lane_id": cls._unsigned(
+                record.get("lane_id"), f"{context}.lane_id", maximum=cls.MAX_U32
+            ),
+            "block_height": cls._unsigned(
+                record.get("block_height"), f"{context}.block_height"
+            ),
+            "payer_account_id": cls._non_empty_string(
+                record.get("payer_account_id"), f"{context}.payer_account_id"
+            ),
+            "fee_asset_id": cls._non_empty_string(
+                record.get("fee_asset_id"), f"{context}.fee_asset_id"
+            ),
+            "fee_amount": cls._numeric(
+                record.get("fee_amount"), f"{context}.fee_amount"
+            ),
+            "schedule": cls._nexus_fee_schedule(
+                record.get("schedule"), context=f"{context}.schedule"
+            ),
+        }
+
+    @classmethod
+    def _native_amx_body(cls, value: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._exact_mapping(
+            value,
+            context,
+            {
+                "round",
+                "epoch",
+                "chain_id_hash",
+                "source_id",
+                "tx_entrypoint_hash",
+                "plan_digest",
+                "phase",
+                "coordinator_lane_id",
+                "coordinator_dataspace_id",
+                "coordinator_lane_incarnation",
+                "participant_lane_id",
+                "participant_dataspace_id",
+                "participant_lane_incarnation",
+                "participant_validator_set_hash",
+                "participant_validator_count",
+                "participant_min_quorum",
+                "authority_context_height",
+                "planned_coordinator_block_height",
+                "coordinator_lane_block_view",
+                "coordinator_proposal_hash",
+            },
+        )
+        round_record = cls._exact_mapping(
+            record.get("round"),
+            f"{context}.round",
+            {"context_id", "height", "view"},
+        )
+        round_value = {
+            "context_id": list(
+                cls._context_id(
+                    round_record.get("context_id"), f"{context}.round.context_id"
+                )
+            ),
+            "height": cls._unsigned(
+                round_record.get("height"), f"{context}.round.height", positive=True
+            ),
+            "view": cls._unsigned(
+                round_record.get("view"), f"{context}.round.view"
+            ),
+        }
+        phase = cls._tagged_content(
+            record.get("phase"),
+            tag="phase",
+            content="detail",
+            allowed={"prepare", "commit"},
+            context=f"{context}.phase",
+        )
+        validator_count = cls._unsigned(
+            record.get("participant_validator_count"),
+            f"{context}.participant_validator_count",
+            positive=True,
+            maximum=cls.MAX_VALIDATORS,
+        )
+        min_quorum = cls._unsigned(
+            record.get("participant_min_quorum"),
+            f"{context}.participant_min_quorum",
+            positive=True,
+            maximum=cls.MAX_VALIDATORS,
+        )
+        expected_quorum = validator_count - (validator_count - 1) // 3
+        authority_height = cls._unsigned(
+            record.get("authority_context_height"),
+            f"{context}.authority_context_height",
+            positive=True,
+        )
+        planned_height = cls._unsigned(
+            record.get("planned_coordinator_block_height"),
+            f"{context}.planned_coordinator_block_height",
+            positive=True,
+        )
+        coordinator_view = cls._unsigned(
+            record.get("coordinator_lane_block_view"),
+            f"{context}.coordinator_lane_block_view",
+        )
+        source_id = cls._byte32(record.get("source_id"), f"{context}.source_id")
+        entrypoint_hash = cls._hash(
+            record.get("tx_entrypoint_hash"), f"{context}.tx_entrypoint_hash"
+        )
+        if (
+            round_value["height"] != authority_height
+            or round_value["view"] != coordinator_view
+            or min_quorum != expected_quorum
+            or entrypoint_hash[5:69] != source_id
+        ):
+            raise RuntimeError(f"{context} contains inconsistent round or quorum fields")
+        return {
+            "round": round_value,
+            "epoch": cls._unsigned(record.get("epoch"), f"{context}.epoch"),
+            "chain_id_hash": cls._hash(
+                record.get("chain_id_hash"), f"{context}.chain_id_hash"
+            ),
+            "source_id": source_id,
+            "tx_entrypoint_hash": entrypoint_hash,
+            "plan_digest": cls._hash(
+                record.get("plan_digest"), f"{context}.plan_digest"
+            ),
+            "phase": {"phase": phase, "detail": None},
+            "coordinator_lane_id": cls._unsigned(
+                record.get("coordinator_lane_id"),
+                f"{context}.coordinator_lane_id",
+                maximum=cls.MAX_U32,
+            ),
+            "coordinator_dataspace_id": cls._unsigned(
+                record.get("coordinator_dataspace_id"),
+                f"{context}.coordinator_dataspace_id",
+            ),
+            "coordinator_lane_incarnation": cls._nonzero_hash(
+                record.get("coordinator_lane_incarnation"),
+                f"{context}.coordinator_lane_incarnation",
+            ),
+            "participant_lane_id": cls._unsigned(
+                record.get("participant_lane_id"),
+                f"{context}.participant_lane_id",
+                maximum=cls.MAX_U32,
+            ),
+            "participant_dataspace_id": cls._unsigned(
+                record.get("participant_dataspace_id"),
+                f"{context}.participant_dataspace_id",
+            ),
+            "participant_lane_incarnation": cls._nonzero_hash(
+                record.get("participant_lane_incarnation"),
+                f"{context}.participant_lane_incarnation",
+            ),
+            "participant_validator_set_hash": cls._hash(
+                record.get("participant_validator_set_hash"),
+                f"{context}.participant_validator_set_hash",
+            ),
+            "participant_validator_count": validator_count,
+            "participant_min_quorum": min_quorum,
+            "authority_context_height": authority_height,
+            "planned_coordinator_block_height": planned_height,
+            "coordinator_lane_block_view": coordinator_view,
+            "coordinator_proposal_hash": cls._nonzero_hash(
+                record.get("coordinator_proposal_hash"),
+                f"{context}.coordinator_proposal_hash",
+            ),
+        }
+
+    @staticmethod
+    def _native_amx_body_identity(body: Mapping[str, Any]) -> Dict[str, Any]:
+        return {key: value for key, value in body.items() if key != "phase"}
+
+    @classmethod
+    def _native_amx_qc(cls, value: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._exact_mapping(
+            value,
+            context,
+            {
+                "body",
+                "validator_set_hash_version",
+                "validator_set_hash",
+                "validator_set",
+                "validator_set_pops",
+                "signers_bitmap",
+                "bls_aggregate_signature",
+            },
+        )
+        body = cls._native_amx_body(record.get("body"), context=f"{context}.body")
+        version = cls._unsigned(
+            record.get("validator_set_hash_version"),
+            f"{context}.validator_set_hash_version",
+            maximum=0xFFFF,
+        )
+        if version != 1:
+            raise RuntimeError(f"{context}.validator_set_hash_version must equal 1")
+        validators = [
+            cls._non_empty_string(item, f"{context}.validator_set[{index}]")
+            for index, item in enumerate(
+                cls._array(
+                    record.get("validator_set"),
+                    f"{context}.validator_set",
+                    minimum=1,
+                    maximum=cls.MAX_VALIDATORS,
+                )
+            )
+        ]
+        if len(set(validators)) != len(validators):
+            raise RuntimeError(f"{context}.validator_set contains duplicates")
+        validator_hash = cls._hash(
+            record.get("validator_set_hash"), f"{context}.validator_set_hash"
+        )
+        expected_quorum = len(validators) - (len(validators) - 1) // 3
+        if (
+            len(validators) != body["participant_validator_count"]
+            or body["participant_min_quorum"] != expected_quorum
+            or validator_hash != body["participant_validator_set_hash"]
+        ):
+            raise RuntimeError(f"{context} committee fields differ from its signed body")
+        pops_raw = cls._array(
+            record.get("validator_set_pops"),
+            f"{context}.validator_set_pops",
+            minimum=len(validators),
+            maximum=len(validators),
+        )
+        pops = [
+            cls._byte_vector(item, 96, f"{context}.validator_set_pops[{index}]")
+            for index, item in enumerate(pops_raw)
+        ]
+        if any(not any(pop) for pop in pops):
+            raise RuntimeError(f"{context}.validator_set_pops contains an all-zero proof")
+        bitmap_length = (len(validators) + 7) // 8
+        bitmap = cls._byte_vector(
+            record.get("signers_bitmap"), bitmap_length, f"{context}.signers_bitmap"
+        )
+        trailing_bits = len(validators) % 8
+        if trailing_bits and bitmap[-1] & ~((1 << trailing_bits) - 1):
+            raise RuntimeError(f"{context}.signers_bitmap addresses an unknown validator")
+        if sum(bin(byte).count("1") for byte in bitmap) < expected_quorum:
+            raise RuntimeError(f"{context}.signers_bitmap does not meet quorum")
+        signature = cls._byte_vector(
+            record.get("bls_aggregate_signature"),
+            96,
+            f"{context}.bls_aggregate_signature",
+        )
+        if not any(signature):
+            raise RuntimeError(f"{context}.bls_aggregate_signature must not be all zeroes")
+        return {
+            "body": body,
+            "validator_set_hash_version": version,
+            "validator_set_hash": validator_hash,
+            "validator_set": validators,
+            "validator_set_pops": pops,
+            "signers_bitmap": bitmap,
+            "bls_aggregate_signature": signature,
+        }
+
+    @classmethod
+    def _native_amx_leg(cls, value: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._exact_mapping(
+            value,
+            context,
+            {"lane_id", "dataspace_id", "prepare_qc", "commit_qc"},
+        )
+        lane_id = cls._unsigned(
+            record.get("lane_id"), f"{context}.lane_id", maximum=cls.MAX_U32
+        )
+        dataspace_id = cls._unsigned(
+            record.get("dataspace_id"), f"{context}.dataspace_id"
+        )
+        prepare = cls._native_amx_qc(
+            record.get("prepare_qc"), context=f"{context}.prepare_qc"
+        )
+        commit = cls._native_amx_qc(
+            record.get("commit_qc"), context=f"{context}.commit_qc"
+        )
+        if prepare["body"]["phase"]["phase"] != "prepare":
+            raise RuntimeError(f"{context}.prepare_qc carries the wrong phase")
+        if commit["body"]["phase"]["phase"] != "commit":
+            raise RuntimeError(f"{context}.commit_qc carries the wrong phase")
+        if cls._native_amx_body_identity(prepare["body"]) != cls._native_amx_body_identity(
+            commit["body"]
+        ):
+            raise RuntimeError(f"{context} prepare and commit identities differ")
+        for field in (
+            "validator_set_hash_version",
+            "validator_set_hash",
+            "validator_set",
+            "validator_set_pops",
+        ):
+            if prepare[field] != commit[field]:
+                raise RuntimeError(f"{context} prepare and commit committees differ")
+        body = prepare["body"]
+        if (
+            body["participant_lane_id"] != lane_id
+            or body["participant_dataspace_id"] != dataspace_id
+        ):
+            raise RuntimeError(f"{context} route differs from its signed body")
+        return {
+            "lane_id": lane_id,
+            "dataspace_id": dataspace_id,
+            "prepare_qc": prepare,
+            "commit_qc": commit,
+        }
+
+    @classmethod
+    def _native_amx_receipt(cls, value: Any, *, context: str) -> Dict[str, Any]:
+        record = cls._exact_mapping(
+            value,
+            context,
+            {
+                "version",
+                "source_id",
+                "chain_id_hash",
+                "plan_digest",
+                "lane_id",
+                "dataspace_id",
+                "lane_incarnation",
+                "authority_context_height",
+                "lane_block_height",
+                "lane_block_view",
+                "coordinator_proposal_hash",
+                "legs",
+            },
+        )
+        version = cls._unsigned(
+            record.get("version"), f"{context}.version", maximum=0xFFFF
+        )
+        if version != 2:
+            raise RuntimeError(f"{context}.version must equal 2")
+        source_id = cls._byte32(record.get("source_id"), f"{context}.source_id")
+        chain_id_hash = cls._hash(
+            record.get("chain_id_hash"), f"{context}.chain_id_hash"
+        )
+        plan_digest = cls._hash(
+            record.get("plan_digest"), f"{context}.plan_digest"
+        )
+        lane_id = cls._unsigned(
+            record.get("lane_id"), f"{context}.lane_id", maximum=cls.MAX_U32
+        )
+        dataspace_id = cls._unsigned(
+            record.get("dataspace_id"), f"{context}.dataspace_id"
+        )
+        lane_incarnation = cls._nonzero_hash(
+            record.get("lane_incarnation"), f"{context}.lane_incarnation"
+        )
+        authority_height = cls._unsigned(
+            record.get("authority_context_height"),
+            f"{context}.authority_context_height",
+            positive=True,
+        )
+        lane_height = cls._unsigned(
+            record.get("lane_block_height"),
+            f"{context}.lane_block_height",
+            positive=True,
+        )
+        lane_view = cls._unsigned(
+            record.get("lane_block_view"), f"{context}.lane_block_view"
+        )
+        proposal_hash = cls._nonzero_hash(
+            record.get("coordinator_proposal_hash"),
+            f"{context}.coordinator_proposal_hash",
+        )
+        legs = [
+            cls._native_amx_leg(item, context=f"{context}.legs[{index}]")
+            for index, item in enumerate(
+                cls._array(
+                    record.get("legs"),
+                    f"{context}.legs",
+                    minimum=1,
+                    maximum=cls.MAX_NATIVE_AMX_PARTICIPANT_LEGS,
+                )
+            )
+        ]
+        route_keys = {
+            (item["lane_id"], item["dataspace_id"])
+            for item in legs
+        }
+        if len(route_keys) != len(legs):
+            raise RuntimeError(f"{context}.legs contains duplicate participant routes")
+        first_body = legs[0]["prepare_qc"]["body"]
+        entrypoint_hash = first_body["tx_entrypoint_hash"]
+        for leg in legs:
+            body = leg["prepare_qc"]["body"]
+            if (
+                body["round"] != first_body["round"]
+                or body["epoch"] != first_body["epoch"]
+                or body["round"]["height"] != authority_height
+                or body["chain_id_hash"] != chain_id_hash
+                or body["source_id"] != source_id
+                or body["tx_entrypoint_hash"] != entrypoint_hash
+                or body["plan_digest"] != plan_digest
+                or body["coordinator_lane_id"] != lane_id
+                or body["coordinator_dataspace_id"] != dataspace_id
+                or body["coordinator_lane_incarnation"] != lane_incarnation
+                or body["authority_context_height"] != authority_height
+                or body["planned_coordinator_block_height"] != lane_height
+                or body["coordinator_lane_block_view"] != lane_view
+                or body["coordinator_proposal_hash"] != proposal_hash
+                or (
+                    leg["lane_id"] == lane_id
+                    and leg["dataspace_id"] == dataspace_id
+                    and body["participant_lane_incarnation"] != lane_incarnation
+                )
+            ):
+                raise RuntimeError(f"{context}.legs contain mismatched signed identities")
+        return {
+            "version": version,
+            "source_id": source_id,
+            "chain_id_hash": chain_id_hash,
+            "plan_digest": plan_digest,
+            "lane_id": lane_id,
+            "dataspace_id": dataspace_id,
+            "lane_incarnation": lane_incarnation,
+            "authority_context_height": authority_height,
+            "lane_block_height": lane_height,
+            "lane_block_view": lane_view,
+            "coordinator_proposal_hash": proposal_hash,
+            "legs": legs,
         }
 
     @classmethod
     def _relays(cls, value: Any) -> List[Dict[str, Any]]:
         context = "sumeragi.lane_relay_envelopes"
         relays: List[Dict[str, Any]] = []
-        for index, relay_value in enumerate(cls._array(value, context)):
+        for index, relay_value in enumerate(
+            cls._array(value, context, maximum=cls.MAX_LANE_RELAY_ENVELOPES)
+        ):
             item_context = f"{context}[{index}]"
             record = cls._mapping(relay_value, item_context)
             lane_id = cls._unsigned(record.get("lane_id"), f"{item_context}.lane_id", maximum=cls.MAX_U32)
@@ -4708,7 +5342,9 @@ class _SumeragiV2StatusParser:
     def _ownerships(cls, value: Any) -> List[Dict[str, Any]]:
         context = "sumeragi.lane_payload_ownerships"
         ownerships: List[Dict[str, Any]] = []
-        for index, ownership_value in enumerate(cls._array(value, context)):
+        for index, ownership_value in enumerate(
+            cls._array(value, context, maximum=cls.MAX_LANE_PAYLOAD_OWNERSHIPS)
+        ):
             item_context = f"{context}[{index}]"
             record = cls._mapping(ownership_value, item_context)
             lane_height = cls._unsigned(record.get("lane_block_height"), f"{item_context}.lane_block_height", positive=True)
@@ -4730,12 +5366,16 @@ class _SumeragiV2StatusParser:
                 cls._non_empty_string(item, f"{item_context}.lane_block_descriptor_validator_set[{offset}]")
                 for offset, item in enumerate(cls._array(record.get("lane_block_descriptor_validator_set"), f"{item_context}.lane_block_descriptor_validator_set"))
             ]
-            if not validators or len(set(validators)) != len(validators):
+            if (
+                not validators
+                or len(validators) > cls.MAX_VALIDATORS
+                or len(set(validators)) != len(validators)
+            ):
                 raise RuntimeError(
                     f"{item_context}.lane_block_descriptor_validator_set must be non-empty and unique"
                 )
-            validator_count = cls._unsigned(record.get("lane_block_descriptor_validator_count"), f"{item_context}.lane_block_descriptor_validator_count", positive=True, maximum=cls.MAX_U32)
-            min_quorum = cls._unsigned(record.get("lane_block_descriptor_min_quorum"), f"{item_context}.lane_block_descriptor_min_quorum", positive=True, maximum=cls.MAX_U32)
+            validator_count = cls._unsigned(record.get("lane_block_descriptor_validator_count"), f"{item_context}.lane_block_descriptor_validator_count", positive=True, maximum=cls.MAX_VALIDATORS)
+            min_quorum = cls._unsigned(record.get("lane_block_descriptor_min_quorum"), f"{item_context}.lane_block_descriptor_min_quorum", positive=True, maximum=cls.MAX_VALIDATORS)
             if validator_count != len(validators) or min_quorum > validator_count:
                 raise RuntimeError(f"{item_context} descriptor quorum does not match its validator set")
             previous_height = cls._unsigned(record.get("previous_lane_block_height"), f"{item_context}.previous_lane_block_height")
@@ -4777,15 +5417,41 @@ class _SumeragiV2StatusParser:
     def _committed_blocks(cls, value: Any) -> List[Dict[str, Any]]:
         context = "sumeragi.committed_lane_blocks"
         blocks: List[Dict[str, Any]] = []
-        for index, block_value in enumerate(cls._array(value, context)):
+        for index, block_value in enumerate(
+            cls._array(value, context, maximum=cls.MAX_COMMITTED_LANE_BLOCKS)
+        ):
             item_context = f"{context}[{index}]"
             record = cls._mapping(block_value, item_context)
-            validator_count = cls._unsigned(record.get("validator_count"), f"{item_context}.validator_count", positive=True, maximum=cls.MAX_U32)
-            min_quorum = cls._unsigned(record.get("min_quorum"), f"{item_context}.min_quorum", positive=True, maximum=cls.MAX_U32)
+            validator_count = cls._unsigned(record.get("validator_count"), f"{item_context}.validator_count", positive=True, maximum=cls.MAX_VALIDATORS)
+            min_quorum = cls._unsigned(record.get("min_quorum"), f"{item_context}.min_quorum", positive=True, maximum=cls.MAX_VALIDATORS)
             prepare_count = cls._unsigned(record.get("prepare_qc_signer_count"), f"{item_context}.prepare_qc_signer_count", maximum=cls.MAX_U32)
             commit_count = cls._unsigned(record.get("commit_qc_signer_count"), f"{item_context}.commit_qc_signer_count", maximum=cls.MAX_U32)
             if min_quorum > validator_count or not (min_quorum <= prepare_count <= validator_count) or not (min_quorum <= commit_count <= validator_count):
                 raise RuntimeError(f"{item_context} carries an impossible certified quorum")
+            execution_status = cls._non_empty_string(
+                record.get("execution_status"), f"{item_context}.execution_status"
+            )
+            executable = cls._boolean(
+                record.get("executable_payload_available"),
+                f"{item_context}.executable_payload_available",
+            )
+            executable_statuses = {
+                "payload_available_awaiting_executor",
+                "payload_recovered_awaiting_state_application",
+                "payload_preflighted_awaiting_state_application",
+                "state_applied_by_canonical_block",
+                "state_applied_by_direct_execution",
+            }
+            allowed_statuses = executable_statuses | {
+                "awaiting_executable_payload",
+                "payload_preflight_rejected_awaiting_state_application",
+                "application_receipt_conflicts_with_preflight",
+                "awaiting_predecessor_application",
+            }
+            if execution_status not in allowed_statuses or executable != (
+                execution_status in executable_statuses
+            ):
+                raise RuntimeError(f"{item_context} carries an invalid execution status")
             blocks.append(
                 {
                     "lane_id": cls._unsigned(record.get("lane_id"), f"{item_context}.lane_id", maximum=cls.MAX_U32),
@@ -4795,8 +5461,8 @@ class _SumeragiV2StatusParser:
                     "lane_block_view": cls._unsigned(record.get("lane_block_view"), f"{item_context}.lane_block_view"),
                     "descriptor_hash": cls._hash(record.get("descriptor_hash"), f"{item_context}.descriptor_hash"),
                     "proposal_hash": cls._hash(record.get("proposal_hash"), f"{item_context}.proposal_hash"),
-                    "execution_status": cls._non_empty_string(record.get("execution_status"), f"{item_context}.execution_status"),
-                    "executable_payload_available": cls._boolean(record.get("executable_payload_available"), f"{item_context}.executable_payload_available"),
+                    "execution_status": execution_status,
+                    "executable_payload_available": executable,
                     "subject_hash": cls._hash(record.get("subject_hash"), f"{item_context}.subject_hash"),
                     "payload_ownership_hash": cls._hash(record.get("payload_ownership_hash"), f"{item_context}.payload_ownership_hash"),
                     "rbc_instance_hash": cls._hash(record.get("rbc_instance_hash"), f"{item_context}.rbc_instance_hash"),
@@ -4813,11 +5479,13 @@ class _SumeragiV2StatusParser:
     def _sessions(cls, value: Any) -> List[Dict[str, Any]]:
         context = "sumeragi.lane_block_sessions"
         sessions: List[Dict[str, Any]] = []
-        for index, session_value in enumerate(cls._array(value, context)):
+        for index, session_value in enumerate(
+            cls._array(value, context, maximum=cls.MAX_LANE_BLOCK_SESSIONS)
+        ):
             item_context = f"{context}[{index}]"
             record = cls._mapping(session_value, item_context)
-            validator_count = cls._unsigned(record.get("validator_count"), f"{item_context}.validator_count", maximum=cls.MAX_U32)
-            min_quorum = cls._unsigned(record.get("min_quorum"), f"{item_context}.min_quorum", maximum=cls.MAX_U32)
+            validator_count = cls._unsigned(record.get("validator_count"), f"{item_context}.validator_count", maximum=cls.MAX_VALIDATORS)
+            min_quorum = cls._unsigned(record.get("min_quorum"), f"{item_context}.min_quorum", maximum=cls.MAX_VALIDATORS)
             prepare_count = cls._unsigned(record.get("prepare_vote_count"), f"{item_context}.prepare_vote_count", maximum=cls.MAX_U32)
             commit_count = cls._unsigned(record.get("commit_vote_count"), f"{item_context}.commit_vote_count", maximum=cls.MAX_U32)
             if validator_count == 0:

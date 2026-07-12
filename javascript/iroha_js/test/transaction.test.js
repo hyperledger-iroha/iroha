@@ -460,20 +460,16 @@ test("submitSignedTransaction ignores state-only terminal fields", async () => {
     jsonData: { status: "Accepted" },
     headers: { "content-type": "application/json" },
   });
-  const statusResponse = createResponse({
-    status: 200,
-    jsonData: {
-      kind: "TransactionStatus",
-      content: {
-        hash: "00".repeat(32),
-        status: {
-          kind: "Committed",
-          content: { state: "Committed" },
-        },
+  const statusPayload = {
+    kind: "TransactionStatus",
+    content: {
+      hash: "00".repeat(32),
+      status: {
+        kind: "Committed",
+        content: { state: "Committed" },
       },
     },
-    headers: { "content-type": "application/json" },
-  });
+  };
   const fetchImpl = async (url) => {
     if (url.endsWith("/v1/node/capabilities")) {
       return createResponse({
@@ -485,7 +481,11 @@ test("submitSignedTransaction ignores state-only terminal fields", async () => {
     if (url.endsWith("/v1/pipeline/transactions")) {
       return submissionResponse;
     }
-    return statusResponse;
+    return createResponse({
+      status: 200,
+      jsonData: statusPayload,
+      headers: { "content-type": "application/json" },
+    });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
@@ -1572,36 +1572,18 @@ function withNativeBinding(binding, fn) {
 }
 
 function createResponse({ status, jsonData = {}, arrayData, textBody, headers }) {
-  return {
-    status,
-    json: async () => jsonData,
-    arrayBuffer: async () => {
-      if (arrayData instanceof ArrayBuffer) {
-        return arrayData;
-      }
-      if (ArrayBuffer.isView(arrayData)) {
-        return arrayData.buffer.slice(
-          arrayData.byteOffset,
-          arrayData.byteOffset + arrayData.byteLength,
-        );
-      }
-      return new TextEncoder().encode(textBody ?? JSON.stringify(jsonData ?? {})).buffer;
-    },
-    text: async () =>
-      typeof textBody === "string" ? textBody : JSON.stringify(jsonData ?? {}),
-    headers: {
-      get(name) {
-        if (!headers) {
-          return null;
-        }
-        const normalized = name.toLowerCase();
-        for (const [key, value] of Object.entries(headers)) {
-          if (key.toLowerCase() === normalized) {
-            return value;
-          }
-        }
-        return null;
-      },
-    },
-  };
+  let body;
+  if (arrayData instanceof ArrayBuffer) {
+    body = arrayData;
+  } else if (ArrayBuffer.isView(arrayData)) {
+    body = new Uint8Array(
+      arrayData.buffer,
+      arrayData.byteOffset,
+      arrayData.byteLength,
+    );
+  } else {
+    body =
+      typeof textBody === "string" ? textBody : JSON.stringify(jsonData ?? {});
+  }
+  return new Response(body, { status, headers });
 }

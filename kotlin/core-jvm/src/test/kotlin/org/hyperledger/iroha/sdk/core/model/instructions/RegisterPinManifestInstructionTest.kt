@@ -132,6 +132,11 @@ class RegisterPinManifestInstructionTest {
             RegisterPinManifestInstruction.AliasBinding.builder()
                 .setName(" docs")
         }
+        for (name in listOf("Docs", "main site", "máin", "a".repeat(129))) {
+            assertFailsWith<IllegalArgumentException> {
+                RegisterPinManifestInstruction.AliasBinding.builder().setName(name)
+            }
+        }
         assertFailsWith<IllegalArgumentException> {
             RegisterPinManifestInstruction.AliasBinding.builder()
                 .setName("docs")

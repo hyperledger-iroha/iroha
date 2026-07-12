@@ -17291,8 +17291,10 @@ mod zk_roots_selector_tests {
             .expect("state should have no other refs")
             .set_pipeline(pipeline);
 
-        let metadata =
-            build_fee_sponsor_metadata_with_default_gas_asset(state.as_ref(), Some("sponsor@cbsi"));
+        let metadata = build_fee_sponsor_metadata_with_default_gas_asset(
+            state.as_ref(),
+            Some("sponsor@boi.is2"),
+        );
         let gas_asset_id = metadata
             .get("gas_asset_id")
             .cloned()
@@ -17303,7 +17305,7 @@ mod zk_roots_selector_tests {
             .and_then(|value| value.try_into_any_norito::<String>().ok());
 
         assert_eq!(gas_asset_id, Some(definition_id.to_string()));
-        assert_eq!(fee_sponsor.as_deref(), Some("sponsor@cbsi"));
+        assert_eq!(fee_sponsor.as_deref(), Some("sponsor@boi.is2"));
     }
 
     #[test]
@@ -17355,7 +17357,7 @@ mod zk_roots_selector_tests {
 
         let metadata = build_multisig_propose_metadata_with_default_gas_asset(
             state.as_ref(),
-            Some("sponsor@cbsi"),
+            Some("sponsor@boi.is2"),
             Some("memo"),
             validation_fee_policy_metadata.as_ref().map(
                 |(version, hash, instruction_index, transfer_entry_index)| {
@@ -22109,12 +22111,11 @@ pub async fn handle_post_contract_call(
 }
 
 /// POST /v1/contracts/call/simulate — execute a public contract entrypoint locally without submission.
-#[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_contract_call_simulate(
+pub fn handle_post_contract_call_simulate(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<ContractCallSimulateDto>,
-) -> Result<impl IntoResponse> {
+) -> Result<Vec<u8>> {
     let ContractCallSimulateDto {
         authority,
         contract_address,
@@ -22199,13 +22200,11 @@ pub async fn handle_post_contract_call_simulate(
         },
     };
 
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    let body = encode_contract_call_simulation_response_bounded(
+        &response,
+        CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+    )?;
+    Ok(body)
 }
 
 /// POST /v1/bridge/proofs/submit — submit a bridge proof derived from a live SCCP bundle.
@@ -22805,60 +22804,51 @@ pub async fn handle_post_bridge_message_submit(
 }
 
 /// POST /v1/contracts/view — execute a read-only contract view entrypoint locally.
-#[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_contract_view(
+pub fn handle_post_contract_view(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<ContractViewDto>,
-) -> Result<impl IntoResponse> {
+) -> Result<(StatusCode, Vec<u8>)> {
     let view = evaluate_contract_view_request(state, req)?;
     let (status, body) = match view {
         Ok(response) => (
             StatusCode::OK,
-            norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
+            encode_contract_view_success_bounded(
+                &response,
+                CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+            )?,
         ),
         Err(response) => (
             StatusCode::UNPROCESSABLE_ENTITY,
-            norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
+            encode_contract_view_error_bounded(&response, CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES)?,
         ),
     };
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    *resp.status_mut() = status;
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok((status, body))
 }
 
 #[cfg(feature = "app_api")]
 /// POST /v1/contracts/view/batch — execute multiple read-only contract view entrypoints locally.
-pub async fn handle_post_contract_view_batch(
+pub fn handle_post_contract_view_batch(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<ContractViewBatchDto>,
-) -> Result<impl IntoResponse> {
+) -> Result<Vec<u8>> {
+    validate_contract_view_batch_request(&req)?;
     let ContractViewBatchDto {
         authority,
         gas_limit,
         items,
     } = req;
-    if items.is_empty() {
-        return Err(conversion_error(
-            "contract view batch must include at least one item".to_owned(),
-        ));
-    }
-
     let default_gas_limit = gas_limit.unwrap_or(100_000);
-    if default_gas_limit == 0 {
-        return Err(conversion_error(
-            "contract view batch gas_limit must be positive".to_owned(),
-        ));
-    }
 
-    let mut response_items = Vec::with_capacity(items.len());
+    let mut body = Vec::with_capacity(CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES.min(16 * 1024));
+    append_contract_simulation_json_literal(
+        &mut body,
+        b"{\"items\":[",
+        CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+    )?;
     let mut all_ok = true;
-    for item in items {
-        let request_id = item.request_id.clone();
+    for (index, item) in items.into_iter().enumerate() {
+        let request_id = item.request_id;
         let item_response = evaluate_contract_view_request(
             Arc::clone(&state),
             ContractViewDto {
@@ -22870,64 +22860,91 @@ pub async fn handle_post_contract_view_batch(
                 gas_limit: item.gas_limit.unwrap_or(default_gas_limit),
             },
         )?;
-
-        let mut object = Map::new();
-        if let Some(request_id) = request_id {
-            object.insert("request_id".into(), Value::from(request_id));
+        if index > 0 {
+            append_contract_simulation_json_literal(
+                &mut body,
+                b",",
+                CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+            )?;
+        }
+        append_contract_simulation_json_literal(
+            &mut body,
+            b"{",
+            CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+        )?;
+        let mut has_field = false;
+        if let Some(request_id) = request_id.as_deref() {
+            append_contract_simulation_json_literal(
+                &mut body,
+                b"\"request_id\":",
+                CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+            )?;
+            append_contract_json_string(
+                &mut body,
+                request_id,
+                CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+            )?;
+            has_field = true;
+        }
+        if has_field {
+            append_contract_simulation_json_literal(
+                &mut body,
+                b",",
+                CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+            )?;
         }
         match item_response {
-            Ok(ok) => {
-                object.insert("ok".into(), Value::Bool(true));
-                object.insert("dataspace".into(), Value::from(ok.dataspace));
-                if let Some(contract_address) = ok.contract_address {
-                    object.insert(
-                        "contract_address".into(),
-                        Value::from(contract_address.to_string()),
-                    );
-                }
-                object.insert("code_hash_hex".into(), Value::from(ok.code_hash_hex));
-                object.insert("abi_hash_hex".into(), Value::from(ok.abi_hash_hex));
-                object.insert("entrypoint".into(), Value::from(ok.entrypoint));
-                object.insert(
-                    "result".into(),
-                    json::parse_value(ok.result.get()).unwrap_or(Value::Null),
-                );
-            }
+            Ok(ok) => append_contract_view_success_fields(
+                &mut body,
+                &ok,
+                CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+            )?,
             Err(err) => {
                 all_ok = false;
-                object.insert("ok".into(), Value::Bool(false));
-                object.insert("dataspace".into(), Value::from(err.dataspace));
-                if let Some(contract_address) = err.contract_address {
-                    object.insert(
-                        "contract_address".into(),
-                        Value::from(contract_address.to_string()),
-                    );
-                }
-                object.insert("code_hash_hex".into(), Value::from(err.code_hash_hex));
-                object.insert("abi_hash_hex".into(), Value::from(err.abi_hash_hex));
-                object.insert("entrypoint".into(), Value::from(err.entrypoint));
-                object.insert("error".into(), Value::from(err.error));
-                if let Some(diag) = err.vm_diagnostic {
-                    object.insert(
-                        "vm_diagnostic".into(),
-                        norito::json::to_value(&diag).unwrap_or(Value::Null),
-                    );
-                }
+                append_contract_view_error_fields(
+                    &mut body,
+                    &err,
+                    CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+                )?;
             }
         }
-        response_items.push(Value::Object(object));
+        append_contract_simulation_json_literal(
+            &mut body,
+            b"}",
+            CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+        )?;
     }
 
-    let mut top = Map::new();
-    top.insert("ok".into(), Value::Bool(all_ok));
-    top.insert("items".into(), Value::Array(response_items));
-    let body = norito::json::to_json_pretty(&Value::Object(top)).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    append_contract_simulation_json_literal(
+        &mut body,
+        if all_ok {
+            b"],\"ok\":true}"
+        } else {
+            b"],\"ok\":false}"
+        },
+        CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+    )?;
+    Ok(body)
+}
+
+/// Validate contract-view batch admission before routing or VM execution.
+pub fn validate_contract_view_batch_request(req: &ContractViewBatchDto) -> Result<()> {
+    if req.items.is_empty() {
+        return Err(conversion_error(
+            "contract view batch must include at least one item".to_owned(),
+        ));
+    }
+    if req.items.len() > CONTRACT_VIEW_BATCH_MAX_ITEMS {
+        return Err(conversion_error(format!(
+            "contract view batch exceeds the {CONTRACT_VIEW_BATCH_MAX_ITEMS}-item limit"
+        )));
+    }
+    if req.gas_limit == Some(0) || req.items.iter().any(|item| item.gas_limit == Some(0)) {
+        return Err(conversion_error(
+            "contract view batch gas_limit values must be positive".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "app_api")]
@@ -23634,7 +23651,7 @@ fn contract_view_error_message(err: &Error) -> String {
 #[cfg(feature = "app_api")]
 struct ContractCallSimulationExecution {
     gas_used: u64,
-    queued_instructions: Vec<norito::json::Value>,
+    queued_instructions: Vec<iroha_data_model::isi::InstructionBox>,
     result: Option<IrohaJson>,
 }
 
@@ -23643,7 +23660,363 @@ struct ContractCallSimulationError {
     message: String,
     vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
     gas_used: u64,
-    queued_instructions: Vec<norito::json::Value>,
+    queued_instructions: Vec<iroha_data_model::isi::InstructionBox>,
+}
+
+/// Canonical server/client ceiling for `/v1/contracts/call/simulate` JSON.
+pub const CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES: usize = 8 * 1024 * 1024;
+/// Maximum number of VM executions admitted by one contract view batch.
+pub const CONTRACT_VIEW_BATCH_MAX_ITEMS: usize = 256;
+
+#[cfg(feature = "app_api")]
+fn append_contract_simulation_json_literal(
+    out: &mut Vec<u8>,
+    literal: &[u8],
+    max_bytes: usize,
+) -> Result<()> {
+    if out.len().saturating_add(literal.len()) > max_bytes {
+        return Err(conversion_error(format!(
+            "contract tooling response exceeds the {max_bytes}-byte JSON limit"
+        )));
+    }
+    out.extend_from_slice(literal);
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_json_string(out: &mut Vec<u8>, value: &str, max_bytes: usize) -> Result<()> {
+    append_contract_simulation_json_literal(out, b"\"", max_bytes)?;
+    let bytes = value.as_bytes();
+    let mut start = 0;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        let escape: Option<&[u8]> = match byte {
+            b'\"' => Some(b"\\\""),
+            b'\\' => Some(b"\\\\"),
+            b'\x08' => Some(b"\\b"),
+            b'\x0c' => Some(b"\\f"),
+            b'\n' => Some(b"\\n"),
+            b'\r' => Some(b"\\r"),
+            b'\t' => Some(b"\\t"),
+            0x00..=0x1f => {
+                if start < index {
+                    append_contract_simulation_json_literal(out, &bytes[start..index], max_bytes)?;
+                }
+                const HEX: &[u8; 16] = b"0123456789abcdef";
+                let encoded = [
+                    b'\\',
+                    b'u',
+                    b'0',
+                    b'0',
+                    HEX[(byte >> 4) as usize],
+                    HEX[(byte & 0xf) as usize],
+                ];
+                append_contract_simulation_json_literal(out, &encoded, max_bytes)?;
+                start = index + 1;
+                None
+            }
+            _ => None,
+        };
+        if let Some(escape) = escape {
+            if start < index {
+                append_contract_simulation_json_literal(out, &bytes[start..index], max_bytes)?;
+            }
+            append_contract_simulation_json_literal(out, escape, max_bytes)?;
+            start = index + 1;
+        }
+    }
+    if start < bytes.len() {
+        append_contract_simulation_json_literal(out, &bytes[start..], max_bytes)?;
+    }
+    append_contract_simulation_json_literal(out, b"\"", max_bytes)
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_json_number<T: core::fmt::Display>(
+    out: &mut Vec<u8>,
+    value: &T,
+    max_bytes: usize,
+) -> Result<()> {
+    let value = value.to_string();
+    append_contract_simulation_json_literal(out, value.as_bytes(), max_bytes)
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_json_optional_string(
+    out: &mut Vec<u8>,
+    value: Option<&str>,
+    max_bytes: usize,
+) -> Result<()> {
+    match value {
+        Some(value) => append_contract_json_string(out, value, max_bytes),
+        None => append_contract_simulation_json_literal(out, b"null", max_bytes),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_json_optional_number<T: core::fmt::Display>(
+    out: &mut Vec<u8>,
+    value: Option<T>,
+    max_bytes: usize,
+) -> Result<()> {
+    match value {
+        Some(value) => append_contract_json_number(out, &value, max_bytes),
+        None => append_contract_simulation_json_literal(out, b"null", max_bytes),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_json_optional_bool(
+    out: &mut Vec<u8>,
+    value: Option<bool>,
+    max_bytes: usize,
+) -> Result<()> {
+    match value {
+        Some(true) => append_contract_simulation_json_literal(out, b"true", max_bytes),
+        Some(false) => append_contract_simulation_json_literal(out, b"false", max_bytes),
+        None => append_contract_simulation_json_literal(out, b"null", max_bytes),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_json_optional_iroha(
+    out: &mut Vec<u8>,
+    value: Option<&IrohaJson>,
+    max_bytes: usize,
+) -> Result<()> {
+    match value {
+        Some(value) => {
+            append_contract_simulation_json_literal(out, value.get().as_bytes(), max_bytes)
+        }
+        None => append_contract_simulation_json_literal(out, b"null", max_bytes),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_vm_diagnostic(
+    out: &mut Vec<u8>,
+    diagnostic: &ContractViewVmDiagnosticDto,
+    max_bytes: usize,
+) -> Result<()> {
+    macro_rules! prefix {
+        ($literal:literal) => {
+            append_contract_simulation_json_literal(out, $literal, max_bytes)?
+        };
+    }
+    prefix!(b"{\"trap_kind\":");
+    append_contract_json_string(out, &diagnostic.trap_kind, max_bytes)?;
+    prefix!(b",\"message\":");
+    append_contract_json_string(out, &diagnostic.message, max_bytes)?;
+    prefix!(b",\"pc\":");
+    append_contract_json_number(out, &diagnostic.pc, max_bytes)?;
+    prefix!(b",\"function\":");
+    append_contract_json_optional_string(out, diagnostic.function.as_deref(), max_bytes)?;
+    prefix!(b",\"source_path\":");
+    append_contract_json_optional_string(out, diagnostic.source_path.as_deref(), max_bytes)?;
+    prefix!(b",\"line\":");
+    append_contract_json_optional_number(out, diagnostic.line, max_bytes)?;
+    prefix!(b",\"column\":");
+    append_contract_json_optional_number(out, diagnostic.column, max_bytes)?;
+    prefix!(b",\"gas_limit\":");
+    append_contract_json_number(out, &diagnostic.gas_limit, max_bytes)?;
+    prefix!(b",\"gas_remaining\":");
+    append_contract_json_number(out, &diagnostic.gas_remaining, max_bytes)?;
+    prefix!(b",\"gas_used\":");
+    append_contract_json_number(out, &diagnostic.gas_used, max_bytes)?;
+    prefix!(b",\"cycles\":");
+    append_contract_json_number(out, &diagnostic.cycles, max_bytes)?;
+    prefix!(b",\"max_cycles\":");
+    append_contract_json_number(out, &diagnostic.max_cycles, max_bytes)?;
+    prefix!(b",\"stack_limit_bytes\":");
+    append_contract_json_number(out, &diagnostic.stack_limit_bytes, max_bytes)?;
+    prefix!(b",\"stack_bytes_used\":");
+    append_contract_json_number(out, &diagnostic.stack_bytes_used, max_bytes)?;
+    prefix!(b",\"entrypoint_pc\":");
+    append_contract_json_optional_number(out, diagnostic.entrypoint_pc, max_bytes)?;
+    prefix!(b",\"current_function\":");
+    append_contract_json_optional_string(out, diagnostic.current_function.as_deref(), max_bytes)?;
+    prefix!(b",\"opcode\":");
+    append_contract_json_optional_number(out, diagnostic.opcode, max_bytes)?;
+    prefix!(b",\"syscall\":");
+    append_contract_json_optional_number(out, diagnostic.syscall, max_bytes)?;
+    prefix!(b",\"predecoded_loaded\":");
+    append_contract_simulation_json_literal(
+        out,
+        if diagnostic.predecoded_loaded {
+            b"true"
+        } else {
+            b"false"
+        },
+        max_bytes,
+    )?;
+    prefix!(b",\"predecoded_hit\":");
+    append_contract_json_optional_bool(out, diagnostic.predecoded_hit, max_bytes)?;
+    append_contract_simulation_json_literal(out, b"}", max_bytes)
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_json_optional_diagnostic(
+    out: &mut Vec<u8>,
+    diagnostic: Option<&ContractViewVmDiagnosticDto>,
+    max_bytes: usize,
+) -> Result<()> {
+    match diagnostic {
+        Some(diagnostic) => append_contract_vm_diagnostic(out, diagnostic, max_bytes),
+        None => append_contract_simulation_json_literal(out, b"null", max_bytes),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn append_bounded_instruction_json(
+    out: &mut Vec<u8>,
+    instruction: &iroha_data_model::isi::InstructionBox,
+    max_bytes: usize,
+) -> Result<()> {
+    // Host admission limits each instruction's canonical representation to a
+    // conservative fraction of this response bound before it is retained.
+    let fragment = norito::json::to_vec(instruction).map_err(|err| {
+        conversion_error(format!("failed to encode simulation instruction: {err}"))
+    })?;
+    append_contract_simulation_json_literal(out, &fragment, max_bytes)
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_view_target_fields(
+    out: &mut Vec<u8>,
+    dataspace: &str,
+    contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
+    code_hash_hex: &str,
+    abi_hash_hex: &str,
+    entrypoint: &str,
+    max_bytes: usize,
+) -> Result<()> {
+    append_contract_simulation_json_literal(out, b",\"dataspace\":", max_bytes)?;
+    append_contract_json_string(out, dataspace, max_bytes)?;
+    append_contract_simulation_json_literal(out, b",\"contract_address\":", max_bytes)?;
+    match contract_address {
+        Some(address) => append_contract_json_string(out, &address.to_string(), max_bytes)?,
+        None => append_contract_simulation_json_literal(out, b"null", max_bytes)?,
+    }
+    append_contract_simulation_json_literal(out, b",\"code_hash_hex\":", max_bytes)?;
+    append_contract_json_string(out, code_hash_hex, max_bytes)?;
+    append_contract_simulation_json_literal(out, b",\"abi_hash_hex\":", max_bytes)?;
+    append_contract_json_string(out, abi_hash_hex, max_bytes)?;
+    append_contract_simulation_json_literal(out, b",\"entrypoint\":", max_bytes)?;
+    append_contract_json_string(out, entrypoint, max_bytes)
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_view_success_fields(
+    out: &mut Vec<u8>,
+    response: &ContractViewResponseDto,
+    max_bytes: usize,
+) -> Result<()> {
+    append_contract_simulation_json_literal(out, b"\"ok\":true", max_bytes)?;
+    append_contract_view_target_fields(
+        out,
+        &response.dataspace,
+        response.contract_address.as_ref(),
+        &response.code_hash_hex,
+        &response.abi_hash_hex,
+        &response.entrypoint,
+        max_bytes,
+    )?;
+    append_contract_simulation_json_literal(out, b",\"result\":", max_bytes)?;
+    append_contract_simulation_json_literal(out, response.result.get().as_bytes(), max_bytes)
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_view_error_fields(
+    out: &mut Vec<u8>,
+    response: &ContractViewErrorResponseDto,
+    max_bytes: usize,
+) -> Result<()> {
+    append_contract_simulation_json_literal(out, b"\"ok\":false", max_bytes)?;
+    append_contract_view_target_fields(
+        out,
+        &response.dataspace,
+        response.contract_address.as_ref(),
+        &response.code_hash_hex,
+        &response.abi_hash_hex,
+        &response.entrypoint,
+        max_bytes,
+    )?;
+    append_contract_simulation_json_literal(out, b",\"error\":", max_bytes)?;
+    append_contract_json_string(out, &response.error, max_bytes)?;
+    append_contract_simulation_json_literal(out, b",\"vm_diagnostic\":", max_bytes)?;
+    append_contract_json_optional_diagnostic(out, response.vm_diagnostic.as_ref(), max_bytes)
+}
+
+#[cfg(feature = "app_api")]
+fn encode_contract_view_success_bounded(
+    response: &ContractViewResponseDto,
+    max_bytes: usize,
+) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(max_bytes.min(16 * 1024));
+    append_contract_simulation_json_literal(&mut out, b"{", max_bytes)?;
+    append_contract_view_success_fields(&mut out, response, max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b"}", max_bytes)?;
+    Ok(out)
+}
+
+#[cfg(feature = "app_api")]
+fn encode_contract_view_error_bounded(
+    response: &ContractViewErrorResponseDto,
+    max_bytes: usize,
+) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(max_bytes.min(16 * 1024));
+    append_contract_simulation_json_literal(&mut out, b"{", max_bytes)?;
+    append_contract_view_error_fields(&mut out, response, max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b"}", max_bytes)?;
+    Ok(out)
+}
+
+#[cfg(feature = "app_api")]
+fn encode_contract_call_simulation_response_bounded(
+    response: &ContractCallSimulateResponseDto,
+    max_bytes: usize,
+) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(max_bytes.min(16 * 1024));
+    append_contract_simulation_json_literal(&mut out, b"{\"ok\":", max_bytes)?;
+    append_contract_simulation_json_literal(
+        &mut out,
+        if response.ok { b"true" } else { b"false" },
+        max_bytes,
+    )?;
+    append_contract_simulation_json_literal(&mut out, b",\"dataspace\":", max_bytes)?;
+    append_contract_json_string(&mut out, &response.dataspace, max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"contract_address\":", max_bytes)?;
+    match response.contract_address.as_ref() {
+        Some(address) => append_contract_json_string(&mut out, &address.to_string(), max_bytes)?,
+        None => append_contract_simulation_json_literal(&mut out, b"null", max_bytes)?,
+    }
+    append_contract_simulation_json_literal(&mut out, b",\"code_hash_hex\":", max_bytes)?;
+    append_contract_json_string(&mut out, &response.code_hash_hex, max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"abi_hash_hex\":", max_bytes)?;
+    append_contract_json_string(&mut out, &response.abi_hash_hex, max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"entrypoint\":", max_bytes)?;
+    append_contract_json_string(&mut out, &response.entrypoint, max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"normalized_payload\":", max_bytes)?;
+    append_contract_json_optional_iroha(&mut out, response.normalized_payload.as_ref(), max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"gas_limit\":", max_bytes)?;
+    append_contract_json_number(&mut out, &response.gas_limit, max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"gas_used\":", max_bytes)?;
+    append_contract_json_number(&mut out, &response.gas_used, max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"queued_instructions\":[", max_bytes)?;
+    for (index, instruction) in response.queued_instructions.iter().enumerate() {
+        if index > 0 {
+            append_contract_simulation_json_literal(&mut out, b",", max_bytes)?;
+        }
+        append_bounded_instruction_json(&mut out, instruction, max_bytes)?;
+    }
+    append_contract_simulation_json_literal(&mut out, b"]", max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"result\":", max_bytes)?;
+    append_contract_json_optional_iroha(&mut out, response.result.as_ref(), max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"error\":", max_bytes)?;
+    append_contract_json_optional_string(&mut out, response.error.as_deref(), max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"vm_diagnostic\":", max_bytes)?;
+    append_contract_json_optional_diagnostic(&mut out, response.vm_diagnostic.as_ref(), max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b"}", max_bytes)?;
+    Ok(out)
 }
 
 #[cfg(feature = "app_api")]
@@ -23673,22 +24046,6 @@ fn map_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> ContractViewVmDiagnos
         predecoded_loaded: diag.context.predecoded_loaded,
         predecoded_hit: diag.context.predecoded_hit,
     }
-}
-
-#[cfg(feature = "app_api")]
-fn render_contract_queued_instructions(
-    queued: &[iroha_data_model::isi::InstructionBox],
-) -> std::result::Result<Vec<norito::json::Value>, ContractCallSimulationError> {
-    queued
-        .iter()
-        .map(norito::json::to_value)
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|err| ContractCallSimulationError {
-            message: format!("failed to serialize queued instructions: {err}"),
-            vm_diagnostic: None,
-            gas_used: 0,
-            queued_instructions: Vec::new(),
-        })
 }
 
 #[cfg(feature = "app_api")]
@@ -23723,6 +24080,9 @@ fn execute_contract_view(
             query_view.accounts_snapshot(),
         )
     };
+    // Views are not allowed to retain any instruction, durable-state write,
+    // FastPQ entry, or completed AXT artifact. Reject before those containers grow.
+    host.set_output_limits(iroha_core::smartcontracts::ivm::host::HostOutputLimits::new(0, 0));
     host.set_crypto_config(Arc::clone(&query_view.crypto));
     host.set_halo2_config(&query_view.zk.halo2);
     host.set_chain_id(&query_view.chain_id);
@@ -23753,6 +24113,13 @@ fn execute_contract_view(
             message: format!("contract view execution failed: {err}"),
             vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
         })?;
+
+    if let Some(violation) = host.output_budget_violation() {
+        return Err(ContractViewExecutionError {
+            message: format!("contract view attempted bounded output: {violation:?}"),
+            vm_diagnostic: None,
+        });
+    }
 
     let queued = host.drain_instructions();
     if !queued.is_empty() {
@@ -23806,6 +24173,18 @@ fn execute_contract_call_simulation(
                 gas_used: 0,
                 queued_instructions: Vec::new(),
             })?;
+    let schema = descriptor
+        .return_type
+        .as_deref()
+        .map(parse_contract_schema_type)
+        .transpose()
+        .map_err(|err| ContractCallSimulationError {
+            message: err.to_string(),
+            vm_diagnostic: None,
+            gas_used: 0,
+            queued_instructions: Vec::new(),
+        })?
+        .unwrap_or(ContractSchemaType::Unit);
     let query_view = state.query_view();
     let mut vm = query_view.ivm.clone();
     let mut host = if let Some(args) = payload {
@@ -23820,6 +24199,21 @@ fn execute_contract_call_simulation(
             query_view.accounts_snapshot(),
         )
     };
+    let max_items = usize::try_from(
+        query_view
+            .world
+            .parameters()
+            .transaction()
+            .max_instructions()
+            .get(),
+    )
+    .unwrap_or(usize::MAX);
+    host.set_output_limits(
+        iroha_core::smartcontracts::ivm::host::HostOutputLimits::new(
+            max_items,
+            CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+        ),
+    );
     host.set_crypto_config(Arc::clone(&query_view.crypto));
     host.set_halo2_config(&query_view.zk.halo2);
     host.set_chain_id(&query_view.chain_id);
@@ -23846,13 +24240,18 @@ fn execute_contract_call_simulation(
         })?;
 
     let run_result = vm.run_with_host(&mut host);
+    if let Some(violation) = host.output_budget_violation() {
+        return Err(ContractCallSimulationError {
+            message: format!("contract call simulation output budget exceeded: {violation:?}"),
+            vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+            gas_used: gas_limit.saturating_sub(vm.gas_remaining),
+            queued_instructions: Vec::new(),
+        });
+    }
     let queued = host.drain_instructions();
     let _durable_state_overlay = host.drain_durable_state_overlay();
     let gas_used = gas_limit.saturating_sub(vm.gas_remaining);
-    let queued_instructions = render_contract_queued_instructions(&queued).map_err(|mut err| {
-        err.gas_used = gas_used;
-        err
-    })?;
+    let queued_instructions = queued;
 
     if let Err(err) = run_result {
         return Err(ContractCallSimulationError {
@@ -23863,29 +24262,20 @@ fn execute_contract_call_simulation(
         });
     }
 
-    let schema = descriptor
-        .return_type
-        .as_deref()
-        .map(parse_contract_schema_type)
-        .transpose()
-        .map_err(|err| ContractCallSimulationError {
-            message: err.to_string(),
-            vm_diagnostic: None,
-            gas_used,
-            queued_instructions: queued_instructions.clone(),
-        })?
-        .unwrap_or(ContractSchemaType::Unit);
     let result = if schema == ContractSchemaType::Unit {
         None
     } else {
-        let (value, _) = decode_contract_view_result_value(&vm, 10, &schema).map_err(|err| {
-            ContractCallSimulationError {
-                message: err.to_string(),
-                vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
-                gas_used,
-                queued_instructions: queued_instructions.clone(),
+        let (value, _) = match decode_contract_view_result_value(&vm, 10, &schema) {
+            Ok(decoded) => decoded,
+            Err(err) => {
+                return Err(ContractCallSimulationError {
+                    message: err.to_string(),
+                    vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+                    gas_used,
+                    queued_instructions,
+                });
             }
-        })?;
+        };
         Some(IrohaJson::from(value))
     };
 
@@ -24068,6 +24458,48 @@ fn normalize_validation_fee_policy_metadata(
             )))
         }
     }
+}
+
+#[cfg(feature = "app_api")]
+fn append_canonical_multisig_validation_fee_marker(
+    instructions: &mut Vec<iroha_data_model::isi::InstructionBox>,
+    validation_fee_policy_metadata: Option<&(u64, String, Option<u64>, Option<u64>)>,
+) -> Result<()> {
+    use iroha_data_model::validation_fee::ValidationFeeMultisigMarkerV1;
+
+    for instruction in instructions.iter() {
+        match ValidationFeeMultisigMarkerV1::parse_instruction(instruction) {
+            Ok(None) => {}
+            Ok(Some(_)) | Err(_) => {
+                return Err(conversion_error(
+                    "multisig propose instructions must not supply a top-level validation-fee marker; provide the validated policy fields and coordinate so Torii can inject the canonical signed marker"
+                        .to_owned(),
+                ));
+            }
+        }
+    }
+
+    let Some((policy_version, policy_hash_hex, Some(instruction_index), transfer_entry_index)) =
+        validation_fee_policy_metadata
+    else {
+        return Ok(());
+    };
+    let policy_hash: [u8; 32] = hex::decode(policy_hash_hex)
+        .map_err(|_| conversion_error("invalid normalized validation-fee policy hash".to_owned()))?
+        .try_into()
+        .map_err(|_| {
+            conversion_error("invalid normalized validation-fee policy hash".to_owned())
+        })?;
+    instructions.push(
+        ValidationFeeMultisigMarkerV1::new(
+            *policy_version,
+            policy_hash,
+            *instruction_index,
+            *transfer_entry_index,
+        )
+        .into_instruction(),
+    );
+    Ok(())
 }
 
 #[cfg(feature = "app_api")]
@@ -26002,10 +26434,59 @@ mod multisig_contract_call_tests {
         assert!(normalize_transaction_memo(Some("  ".to_owned())).is_none());
         assert!(normalize_transaction_memo(None).is_none());
 
-        let metadata = build_multisig_propose_metadata(Some("sponsor@cbsi"), Some("QR invoice 42"));
+        let metadata =
+            build_multisig_propose_metadata(Some("sponsor@boi.is2"), Some("QR invoice 42"));
         let json = metadata_to_json(&metadata);
-        assert_eq!(json["fee_sponsor"].as_str(), Some("sponsor@cbsi"));
+        assert_eq!(json["fee_sponsor"].as_str(), Some("sponsor@boi.is2"));
         assert_eq!(json["memo"].as_str(), Some("QR invoice 42"));
+    }
+
+    #[test]
+    fn multisig_scaffold_injects_canonical_fee_marker_before_proposal_hashing() {
+        use iroha_data_model::{
+            Level,
+            isi::{InstructionBox, Log},
+            validation_fee::ValidationFeeMultisigMarkerV1,
+        };
+
+        let mut instructions = vec![
+            InstructionBox::from(Log::new(Level::INFO, "principal".to_owned())),
+            InstructionBox::from(Log::new(Level::INFO, "fee".to_owned())),
+        ];
+        let unmarked_hash = HashOf::new(&instructions);
+        append_canonical_multisig_validation_fee_marker(
+            &mut instructions,
+            Some(&(1, "ab".repeat(32), Some(1), None)),
+        )
+        .expect("canonical marker injection");
+
+        let marker = ValidationFeeMultisigMarkerV1::parse_instruction(
+            instructions.last().expect("marker instruction"),
+        )
+        .expect("canonical marker parse")
+        .expect("marker present");
+        assert_eq!(marker.policy_version, 1);
+        assert_eq!(marker.policy_hash, [0xabu8; 32]);
+        assert_eq!(marker.instruction_index, 1);
+        assert_eq!(marker.transfer_entry_index, None);
+
+        let marked_hash = HashOf::new(&instructions);
+        assert_ne!(marked_hash, unmarked_hash);
+        let mut tampered = instructions.clone();
+        *tampered.last_mut().expect("marker instruction") =
+            ValidationFeeMultisigMarkerV1::new(1, [0xabu8; 32], 0, None).into_instruction();
+        assert_ne!(
+            HashOf::new(&tampered),
+            marked_hash,
+            "proposal hash must bind policy and exact fee coordinate marker"
+        );
+
+        let err = append_canonical_multisig_validation_fee_marker(
+            &mut instructions,
+            Some(&(1, "ab".repeat(32), Some(1), None)),
+        )
+        .expect_err("caller-supplied top-level marker must not be duplicated");
+        assert!(err.to_string().contains("must not supply a top-level"));
     }
 }
 
@@ -30691,7 +31172,11 @@ pub async fn handle_post_multisig_propose(
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
 
-    let proposal_instructions = instructions;
+    let mut proposal_instructions = instructions;
+    append_canonical_multisig_validation_fee_marker(
+        &mut proposal_instructions,
+        validation_fee_policy_metadata.as_ref(),
+    )?;
     let proposal_hash = HashOf::new(&proposal_instructions);
     let proposal_id = hex::encode(proposal_hash.as_ref());
     let instructions_hash = proposal_id.clone();
@@ -33754,7 +34239,7 @@ pub struct ContractCallSimulateResponseDto {
     /// Gas consumed by the VM run.
     pub gas_used: u64,
     /// Queued instructions produced by the public entrypoint.
-    pub queued_instructions: Vec<norito::json::Value>,
+    pub queued_instructions: Vec<iroha_data_model::isi::InstructionBox>,
     /// Decoded return value when the entrypoint returns a non-unit result.
     #[norito(default)]
     pub result: Option<IrohaJson>,
@@ -60832,6 +61317,14 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             snap.dedup_evictions.proposal_expired_total,
         ),
         json_entry(
+            "lane_block_artifact_capacity_total",
+            snap.dedup_evictions.lane_block_artifact_capacity_total,
+        ),
+        json_entry(
+            "lane_block_artifact_expired_total",
+            snap.dedup_evictions.lane_block_artifact_expired_total,
+        ),
+        json_entry(
             "rbc_ready_capacity_total",
             snap.dedup_evictions.rbc_ready_capacity_total,
         ),
@@ -62611,6 +63104,103 @@ mod status_tests {
                 .get("local_peer_removed")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn v2_status_json_projects_settlement_u128_values_as_decimal_strings_everywhere() {
+        let receipt = LaneSettlementReceipt {
+            source_id: [0xAB; 32],
+            local_amount_micro: u128::MAX,
+            xor_due_micro: u128::MAX - 1,
+            xor_after_haircut_micro: u128::MAX - 2,
+            xor_variance_micro: u128::MAX - 3,
+            timestamp_ms: 42,
+        };
+        let commitment = LaneBlockCommitment {
+            block_height: 1,
+            lane_id: LaneId::new(3),
+            lane_incarnation: Hash::new(b"v2-status-u128-lane-incarnation"),
+            dataspace_id: DataSpaceId::new(9),
+            tx_count: 1,
+            total_local_micro: u128::MAX,
+            total_xor_due_micro: u128::MAX - 1,
+            total_xor_after_haircut_micro: u128::MAX - 2,
+            total_xor_variance_micro: u128::MAX - 3,
+            swap_metadata: None,
+            receipts: vec![receipt],
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        };
+        let header = iroha_data_model::block::BlockHeader::new(
+            core::num::NonZeroU64::new(1).expect("nonzero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let relay = iroha_data_model::nexus::LaneRelayEnvelope::new(
+            header,
+            None,
+            None,
+            commitment.clone(),
+            0,
+        )
+        .expect("construct relay fixture");
+        let snapshot = sumeragi::StatusSnapshot {
+            lane_settlement_commitments: vec![commitment],
+            lane_relay_envelopes: vec![relay],
+            ..Default::default()
+        };
+
+        let payload = norito::json::to_value(&sumeragi_v2_status_json_from_snapshot(
+            authoritative_v2_status_fixture(),
+            snapshot,
+            true,
+            false,
+        ))
+        .expect("serialize v2 status projection");
+        let object = payload.as_object().expect("v2 status object");
+        let top_level = object["lane_settlement_commitments"]
+            .as_array()
+            .and_then(|entries| entries.first())
+            .and_then(Value::as_object)
+            .expect("top-level settlement commitment");
+        assert_eq!(
+            top_level.get("total_local_micro").and_then(Value::as_str),
+            Some(u128::MAX.to_string().as_str())
+        );
+        let receipt = top_level["receipts"]
+            .as_array()
+            .and_then(|entries| entries.first())
+            .and_then(Value::as_object)
+            .expect("top-level settlement receipt");
+        assert_eq!(
+            receipt.get("local_amount_micro").and_then(Value::as_str),
+            Some(u128::MAX.to_string().as_str())
+        );
+        let embedded = object["lane_relay_envelopes"]
+            .as_array()
+            .and_then(|entries| entries.first())
+            .and_then(Value::as_object)
+            .and_then(|relay| relay.get("settlement_commitment"))
+            .and_then(Value::as_object)
+            .expect("relay settlement commitment");
+        assert_eq!(
+            embedded.get("total_local_micro").and_then(Value::as_str),
+            Some(u128::MAX.to_string().as_str())
+        );
+        let embedded_receipt = embedded["receipts"]
+            .as_array()
+            .and_then(|entries| entries.first())
+            .and_then(Value::as_object)
+            .expect("relay settlement receipt");
+        assert_eq!(
+            embedded_receipt
+                .get("local_amount_micro")
+                .and_then(Value::as_str),
+            Some(u128::MAX.to_string().as_str())
         );
     }
 
@@ -65360,11 +65950,122 @@ fn reconcile_sumeragi_status_snapshot_with_world(
 }
 
 #[derive(Debug, crate::json_macros::JsonSerialize)]
+struct LaneSettlementReceiptJson {
+    source_id: [u8; 32],
+    local_amount_micro: String,
+    xor_due_micro: String,
+    xor_after_haircut_micro: String,
+    xor_variance_micro: String,
+    timestamp_ms: u64,
+}
+
+impl From<iroha_data_model::block::consensus::LaneSettlementReceipt> for LaneSettlementReceiptJson {
+    fn from(receipt: iroha_data_model::block::consensus::LaneSettlementReceipt) -> Self {
+        Self {
+            source_id: receipt.source_id,
+            local_amount_micro: receipt.local_amount_micro.to_string(),
+            xor_due_micro: receipt.xor_due_micro.to_string(),
+            xor_after_haircut_micro: receipt.xor_after_haircut_micro.to_string(),
+            xor_variance_micro: receipt.xor_variance_micro.to_string(),
+            timestamp_ms: receipt.timestamp_ms,
+        }
+    }
+}
+
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+struct LaneBlockCommitmentJson {
+    block_height: u64,
+    lane_id: iroha_data_model::nexus::LaneId,
+    lane_incarnation: iroha_crypto::Hash,
+    dataspace_id: iroha_data_model::nexus::DataSpaceId,
+    tx_count: u64,
+    total_local_micro: String,
+    total_xor_due_micro: String,
+    total_xor_after_haircut_micro: String,
+    total_xor_variance_micro: String,
+    #[norito(default)]
+    swap_metadata: Option<iroha_data_model::block::consensus::LaneSwapMetadata>,
+    #[norito(default)]
+    receipts: Vec<LaneSettlementReceiptJson>,
+    #[norito(default)]
+    nexus_fee_receipts: Vec<iroha_data_model::block::consensus::NexusFeeReceipt>,
+    #[norito(default)]
+    native_amx_receipts: Vec<iroha_data_model::block::consensus::NativeAmxReceipt>,
+}
+
+impl From<iroha_data_model::block::consensus::LaneBlockCommitment> for LaneBlockCommitmentJson {
+    fn from(commitment: iroha_data_model::block::consensus::LaneBlockCommitment) -> Self {
+        Self {
+            block_height: commitment.block_height,
+            lane_id: commitment.lane_id,
+            lane_incarnation: commitment.lane_incarnation,
+            dataspace_id: commitment.dataspace_id,
+            tx_count: commitment.tx_count,
+            total_local_micro: commitment.total_local_micro.to_string(),
+            total_xor_due_micro: commitment.total_xor_due_micro.to_string(),
+            total_xor_after_haircut_micro: commitment.total_xor_after_haircut_micro.to_string(),
+            total_xor_variance_micro: commitment.total_xor_variance_micro.to_string(),
+            swap_metadata: commitment.swap_metadata,
+            receipts: commitment.receipts.into_iter().map(Into::into).collect(),
+            nexus_fee_receipts: commitment.nexus_fee_receipts,
+            native_amx_receipts: commitment.native_amx_receipts,
+        }
+    }
+}
+
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+struct LaneRelayEnvelopeJson {
+    lane_id: iroha_data_model::nexus::LaneId,
+    lane_incarnation: iroha_crypto::Hash,
+    dataspace_id: iroha_data_model::nexus::DataSpaceId,
+    block_height: u64,
+    block_header: iroha_data_model::block::BlockHeader,
+    #[norito(default)]
+    qc: Option<iroha_data_model::consensus::Qc>,
+    #[norito(default)]
+    da_commitment_hash:
+        Option<iroha_crypto::HashOf<iroha_data_model::da::commitment::DaCommitmentBundle>>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    lane_block_descriptor_hash: Option<iroha_crypto::Hash>,
+    settlement_commitment: LaneBlockCommitmentJson,
+    settlement_hash: iroha_crypto::HashOf<iroha_data_model::block::consensus::LaneBlockCommitment>,
+    #[norito(default)]
+    rbc_bytes_total: u64,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    manifest_root: Option<[u8; 32]>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    fastpq_proof: Option<iroha_data_model::nexus::LaneFastpqProofMaterial>,
+}
+
+impl From<iroha_data_model::nexus::LaneRelayEnvelope> for LaneRelayEnvelopeJson {
+    fn from(envelope: iroha_data_model::nexus::LaneRelayEnvelope) -> Self {
+        Self {
+            lane_id: envelope.lane_id,
+            lane_incarnation: envelope.lane_incarnation,
+            dataspace_id: envelope.dataspace_id,
+            block_height: envelope.block_height,
+            block_header: envelope.block_header,
+            qc: envelope.qc,
+            da_commitment_hash: envelope.da_commitment_hash,
+            lane_block_descriptor_hash: envelope.lane_block_descriptor_hash,
+            settlement_commitment: envelope.settlement_commitment.into(),
+            settlement_hash: envelope.settlement_hash,
+            rbc_bytes_total: envelope.rbc_bytes_total,
+            manifest_root: envelope.manifest_root,
+            fastpq_proof: envelope.fastpq_proof,
+        }
+    }
+}
+
+#[derive(Debug, crate::json_macros::JsonSerialize)]
 struct SumeragiV2StatusJson {
     #[norito(flatten)]
     authoritative: iroha_data_model::block::consensus_v2::SumeragiV2Status,
-    lane_settlement_commitments: Vec<LaneBlockCommitment>,
-    lane_relay_envelopes: Vec<LaneRelayEnvelope>,
+    lane_settlement_commitments: Vec<LaneBlockCommitmentJson>,
+    lane_relay_envelopes: Vec<LaneRelayEnvelopeJson>,
     lane_payload_ownerships: Vec<iroha_data_model::block::consensus::SumeragiLanePayloadOwnership>,
     committed_lane_blocks: Vec<iroha_data_model::block::consensus::SumeragiCommittedLaneBlock>,
     lane_block_sessions: Vec<iroha_data_model::block::consensus::SumeragiLaneBlockSessionStatus>,
@@ -65378,8 +66079,16 @@ impl From<iroha_data_model::block::consensus_v2::SumeragiV2StatusResponse>
     fn from(response: iroha_data_model::block::consensus_v2::SumeragiV2StatusResponse) -> Self {
         Self {
             authoritative: response.authoritative,
-            lane_settlement_commitments: response.lane_settlement_commitments,
-            lane_relay_envelopes: response.lane_relay_envelopes,
+            lane_settlement_commitments: response
+                .lane_settlement_commitments
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            lane_relay_envelopes: response
+                .lane_relay_envelopes
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             lane_payload_ownerships: response.lane_payload_ownerships,
             committed_lane_blocks: response.committed_lane_blocks,
             lane_block_sessions: response.lane_block_sessions,
@@ -67533,19 +68242,21 @@ mod validation_fee_torii_ingress_tests {
         prelude::*,
         transaction::SignedTransaction,
         validation_fee::{
-            SignedValidationFeePolicyV1, VALIDATION_FEE_INITIAL_MINOR_UNITS,
-            VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
-            VALIDATION_FEE_POLICY_SCHEMA_VERSION, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
-            VALIDATION_FEE_SBD_SCALE, ValidationFeeChargingMode, ValidationFeeGovernanceKeyV1,
-            ValidationFeeGovernanceKeysetV1, ValidationFeePolicyRegistryEntryV1,
+            SignedValidationFeePolicyV1, VALIDATION_FEE_DS_SCALE,
+            VALIDATION_FEE_INITIAL_MINOR_UNITS, VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
+            VALIDATION_FEE_POLICY_HASH_METADATA_KEY, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+            VALIDATION_FEE_POLICY_VERSION_METADATA_KEY, ValidationFeeChargingMode,
+            ValidationFeeGovernanceKeyV1, ValidationFeeGovernanceKeysetV1,
+            ValidationFeeMultisigMarkerV1, ValidationFeePolicyRegistryEntryV1,
             ValidationFeePolicyRegistryV1, ValidationFeePolicySignatureV1, ValidationFeePolicyV1,
         },
     };
+    use iroha_executor_data_model::isi::multisig::MultisigPropose;
     use iroha_primitives::{json::Json, numeric::Numeric};
 
     use super::*;
 
-    const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_SBD_SCALE;
+    const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
     const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = VALIDATION_FEE_INITIAL_MINOR_UNITS;
 
     fn fixture_key_pair(seed: u8, algorithm: Algorithm, context: &'static str) -> KeyPair {
@@ -67695,8 +68406,8 @@ mod validation_fee_torii_ingress_tests {
             genesis_hash,
             policy_version: 1,
             previous_policy_hash: None,
-            sbd_asset_id: fee_asset.to_string(),
-            sbd_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
+            ds_asset_id: fee_asset.to_string(),
+            ds_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
             fee_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
             treasury_account_id: treasury.to_string(),
             charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
@@ -67708,7 +68419,7 @@ mod validation_fee_torii_ingress_tests {
     }
 
     fn validation_fee_policy_asset(policy: &ValidationFeePolicyV1) -> AssetDefinitionId {
-        policy.sbd_asset_id.parse().expect("policy SBD asset id")
+        policy.ds_asset_id.parse().expect("policy DS asset id")
     }
 
     fn validation_fee_policy_treasury(policy: &ValidationFeePolicyV1) -> AccountId {
@@ -67993,6 +68704,114 @@ mod validation_fee_torii_ingress_tests {
         let exact_fee_result =
             validate_single_queued_transaction_in_block(&state, &exact_fee_queue, 4);
         assert_eq!(exact_fee_result, "ok");
+    }
+
+    #[tokio::test]
+    async fn torii_native_multisig_signed_fee_coordinate_resolves_nested_context() {
+        let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
+        let chain_id = Arc::new(state.chain_id.clone());
+        let genesis_hash = commit_empty_genesis_like_block(&state);
+        let gov_1 = ed25519_key_pair(21, "derive validation-fee governance signer one");
+        let gov_2 = ed25519_key_pair(22, "derive validation-fee governance signer two");
+        let policy =
+            validation_fee_policy(&state, fee_asset.clone(), treasury.clone(), genesis_hash);
+        install_validation_fee_policy(&state, &user, policy.clone(), &[&gov_1, &gov_2]);
+        let (multisig, _) = account(4, "derive validation-fee multisig account");
+
+        let proposal = || {
+            MultisigPropose::new(
+                multisig.clone(),
+                vec![
+                    Transfer::asset_numeric(
+                        AssetId::new(fee_asset.clone(), multisig.clone()),
+                        Numeric::new(1, 0),
+                        recipient.clone(),
+                    )
+                    .into(),
+                    Transfer::asset_numeric(
+                        AssetId::new(fee_asset.clone(), multisig.clone()),
+                        policy.fee_amount_numeric(),
+                        treasury.clone(),
+                    )
+                    .into(),
+                    ValidationFeeMultisigMarkerV1::new(
+                        policy.policy_version,
+                        policy.policy_hash().expect("policy hash"),
+                        1,
+                        None,
+                    )
+                    .into_instruction(),
+                ],
+                None,
+            )
+        };
+        let signed = |instructions: Vec<InstructionBox>, coordinate| {
+            TransactionBuilder::new(state.chain_id.clone(), user.clone())
+                .with_instructions(instructions)
+                .with_metadata(metadata_for_policy(&policy, coordinate))
+                .sign(user_key_pair.private_key())
+        };
+
+        let exact_queue = queue();
+        handle_transaction(
+            Arc::clone(&chain_id),
+            Arc::clone(&exact_queue),
+            Arc::clone(&state),
+            signed(vec![proposal().into()], 1),
+        )
+        .await
+        .expect("Torii should enqueue the nested exact-fee proposal");
+        let exact_result = validate_single_queued_transaction_in_block(&state, &exact_queue, 3);
+        assert!(
+            !exact_result.contains("validation-fee admission rejected transaction"),
+            "nested exact fee must pass validation-fee admission: {exact_result}"
+        );
+
+        let wrong_queue = queue();
+        handle_transaction(
+            Arc::clone(&chain_id),
+            Arc::clone(&wrong_queue),
+            Arc::clone(&state),
+            signed(vec![proposal().into()], 0),
+        )
+        .await
+        .expect("Torii should enqueue the nested wrong-coordinate proposal");
+        let wrong_result = validate_single_queued_transaction_in_block(&state, &wrong_queue, 4);
+        assert!(
+            wrong_result.contains("metadata and signed multisig validation-fee marker disagree"),
+            "nested principal coordinate must reject: {wrong_result}"
+        );
+
+        let ambiguous_queue = queue();
+        let xor = AssetDefinitionId::new(
+            DomainId::try_new("fees", "paynet").expect("domain id"),
+            "xor".parse().expect("asset name"),
+        );
+        handle_transaction(
+            chain_id,
+            Arc::clone(&ambiguous_queue),
+            Arc::clone(&state),
+            signed(
+                vec![
+                    proposal().into(),
+                    Transfer::asset_numeric(
+                        AssetId::new(xor, user.clone()),
+                        Numeric::new(1, 0),
+                        recipient.clone(),
+                    )
+                    .into(),
+                ],
+                1,
+            ),
+        )
+        .await
+        .expect("Torii should enqueue the ambiguous-coordinate proposal");
+        let ambiguous_result =
+            validate_single_queued_transaction_in_block(&state, &ambiguous_queue, 5);
+        assert!(
+            ambiguous_result.contains("matches multiple transfer contexts"),
+            "ambiguous nested coordinate must reject: {ambiguous_result}"
+        );
     }
 
     fn test_app_with_active_policy() -> (
@@ -73571,7 +74390,11 @@ struct AccountPermissionListItem {
     payload: norito::json::Value,
 }
 
-/// List permissions granted directly to an account with optional pagination.
+/// List all effective permissions granted to an account with optional pagination.
+///
+/// Effective permissions include both direct account grants and grants inherited from every role
+/// assigned to the account. Security inventory consumers must not treat direct grants alone as the
+/// account's authority.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_account_permissions(
@@ -73622,6 +74445,14 @@ pub async fn handle_v1_account_permissions_with_policy(
                     err.into(),
                 )));
             }
+        }
+        for role_id in world.account_roles_iter(account_id) {
+            let role = world.roles().get(role_id).ok_or_else(|| {
+                Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+                    "account `{account_id}` is assigned missing role `{role_id}`"
+                )))
+            })?;
+            permissions.extend(role.permissions().cloned());
         }
     }
 
@@ -75257,13 +76088,19 @@ mod account_permissions_json_tests {
     };
     use iroha_executor_data_model::permission::{
         account::CanModifyAccountMetadata, nexus::CanPublishSpaceDirectoryManifest,
+        parameter::CanSetParameters,
     };
 
     use super::*;
 
     fn test_state_with_permissions(account_id: &AccountId) -> Arc<CoreState> {
         let account = Account::new(account_id.clone()).build(account_id);
-        let mut world = World::with([], [account], []);
+        let role_id: RoleId = "effective-permission-test".parse().expect("role id");
+        let role = Role::new(role_id.clone(), account_id.clone())
+            .add_permission(CanSetParameters)
+            .build(account_id);
+        let mut world = World::with_assets_and_roles([], [account], [], [], [], [role]);
+        world.grant_role_for_tests(account_id.clone(), role_id);
         let mut permissions = Permissions::new();
         permissions.insert(
             CanModifyAccountMetadata {
@@ -75342,6 +76179,11 @@ mod account_permissions_json_tests {
             manifest_permission["payload"]["dataspace"].as_u64(),
             Some(7)
         );
+
+        items
+            .iter()
+            .find(|item| item["name"].as_str() == Some("CanSetParameters"))
+            .expect("role-inherited permission item");
     }
 }
 

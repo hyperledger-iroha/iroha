@@ -10,29 +10,13 @@ const FIXTURE_RWA_ID =
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities";
 
 function createResponse({ status, jsonData = {}, headers, textBody }) {
-  const headerMap = new Map();
-  if (headers) {
-    for (const [key, value] of Object.entries(headers)) {
-      headerMap.set(key.toLowerCase(), value);
-    }
-  }
-  return {
-    status,
-    headers: {
-      get(name) {
-        return headerMap.get(name.toLowerCase()) ?? null;
-      },
-    },
-    async json() {
-      return jsonData;
-    },
-    async text() {
-      if (textBody !== undefined && textBody !== null) {
-        return String(textBody);
-      }
-      return typeof jsonData === "string" ? jsonData : JSON.stringify(jsonData);
-    },
-  };
+  const body =
+    textBody !== undefined && textBody !== null
+      ? String(textBody)
+      : typeof jsonData === "string"
+        ? jsonData
+        : JSON.stringify(jsonData);
+  return new Response(body, { status, headers });
 }
 
 test("listNfts forwards pagination/sort/filter and validates filter payloads", async () => {

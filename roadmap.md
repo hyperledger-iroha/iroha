@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-09
+Last updated: 2026-07-11
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -404,6 +404,10 @@ proof summary digest, one valid policy digest, one valid provider-roster digest,
 and one valid repair-handoff digest before proof-summary-bound, policy-bound,
 provider-roster-bound, or repair-handoff metadata can satisfy final promotion.
 
+The following direct-WSV paragraphs describe the compatibility/main-loop
+standalone-lane surface; the Sumeragi V2 global-body path does not wait for or
+directly reapply a lane certificate.
+
 Nexus autoscale scale-in now preserves certified standalone lane-block
 progress. Managed retire candidates are skipped when their current
 lane/dataspace has a valid certified lane-block sidecar without a matching
@@ -603,8 +607,12 @@ hydration.
 The independent-lane multi-peer corridor now includes deterministic automatic
 lane creation/retirement, lane-local DA-backed certification, exact global
 merge-QC ordering, compact-carrier sidecar recovery, and transaction inclusion
-proofs. Remaining work is validation and operator rollout evidence for that
-completed production path, not a second direct lane-state application design.
+proofs. Remaining work is four-or-more-peer V2 Nexus validation and operator
+rollout evidence covering global view changes, exact-view merge-carrier
+failover, Kura-before-WSV and certificate-before-receipt restart boundaries,
+and lane retire/recreate/reset cycles, not a second direct lane-state
+application design. `lane_block_view` remains intentionally coupled to the
+locked global proposal view; independently paced lane views are future work.
 
 Kagemusha online-to-offline top-up now has a first-class
 `KagemushaRecursiveSpendTopUpRequestV1` producer path, a chain-side
@@ -3348,13 +3356,18 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   remain enforced for carried bytes. Local RBC plan installation now moves the
   prepared session into the live session map instead of cloning it before
   broadcast, so proposal broadcast plans stop retaining a second copy of the
-  chunk buffers. P2P runtime subscriber/control update channels are now bounded
-  and coalesce to the latest pending update, Sumeragi RBC committed-session
-  cleanup clears payload metric markers and rebroadcast cursors with the live
-  session owner, and Kagemusha Pallas open-envelope archives validate the
-  Norito frame and read the sequence-length prefix before vector decode so
-  count-only frames cannot allocate count-sized vector/offset state. If RSS
-  still climbs during the guarded repro, inspect remaining persistence caches
+  chunk buffers. P2P runtime subscriber registration is now bounded, while each
+  control-update category uses an independent Arc-backed,
+  single-retained-snapshot latest-value slot that overwrites stale pending
+  state. Consensus reconnect intent is generation-tracked across coalescing,
+  peer capabilities remain independent of topology application order, and the
+  actor combines fair control selection with bounded service-message priority
+  and explicit shutdown checks. Sumeragi RBC committed-session cleanup clears
+  payload metric markers and rebroadcast cursors with the live session owner,
+  and Kagemusha Pallas open-envelope archives validate the Norito frame and
+  read the sequence-length prefix before vector decode so count-only frames
+  cannot allocate count-sized vector/offset state. If RSS still climbs during
+  the guarded repro, inspect remaining persistence caches
   and validation/commit inflight owners with the same memory report before
   changing recovery pruning semantics.
 - Kagemusha is now the only active chain implementation for offline payments.
@@ -5454,15 +5467,15 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   - C# source-level shared ABI-7 archive fixture assertions now pin the
     regenerated current `255x1` profile hashes:
     append-bundle
-    `e43ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0`,
+    `42c7b1b0e2dc838a6660b3691e08474bb936fa001e446310930d387b00ba686b`,
     verify-request
-    `d3246057aca2d9d47378af5f058c688f82a8be5abee60235206906a996235f43`,
+    `829be9daba04c4c928a34e1502ad2f1e467853ad2f02cdac0b6735f852fff44e`,
     verify-result
     `67eb9b1f7c89bd842dbfb769bb802c60464fba510b4db0ac4c83bcfbd5626d15`,
     redeem-request
-    `f26396b4ac03d38956dc94fa9bb4ec92c6b8f97b7e993f453d36431cfba67a0d`,
+    `de704684a72f8e79264f62337327395c3ca426cbe26da57fc133aa97f4e240c0`,
     and redeem-instruction
-    `69ff4f0ae0f78c0acbfef9fe91c2ee4087af4f1b1b0ac664a089bf80bf1802c6`.
+    `bcd7306e54db93a09ffb013860adaae223655205d77651201cb49dd3a5d5d980`.
   - The matrix must keep the C# managed decoder and typed preflight coverage for
     non-canonical compact lengths, invalid UTF-8 circuit ids, unsupported proof
     circuit/backend values, empty proof bytes, invalid accumulator domains and
@@ -8697,7 +8710,7 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
 		  SoraFS rows removed and a contract guard preventing active-marker rows
 		  for SoraFS from reappearing. Completed localized root-roadmap
 		  SoraFS/SoraNet portal translation rows use `Completed:` instead of
-		  `TODO:`, and the stale
+		  the unfinished-marker form, and the stale
 		  rollout-gate wording guard now scans canonical plus localized SoraFS
 		  plan mirrors before any `Add fail-closed ... rollout evidence gate`
 		  wording can reappear, so
@@ -11711,6 +11724,23 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `PopIssuedCredentialBundleV1` plus `issue_pop_credential_bundle_ed25519_v1`
   now form a local issuer-publication bundle that checks issuer id/public key,
   root, tree, revocation-list, and revoked-nonce consistency.
+  The repository-owned SFM-4b1 issuer/registry foundation now also ships a
+  predecessor-linked, governance-controlled `PopIssuerPolicyV1`, dedicated
+  management/operator permissions, payload-free credential and nonce
+  commitments, exact signed root and revocation publication records,
+  deterministic audit-chain links, first-class publication ISIs, and typed
+  `FindSorafsPop*` transparency queries. Native execution enforces exact
+  canonical bounded Norito, exact issuer account/key binding, atomic root/list
+  advancement, monotonic predecessor/version rules, strict revocation
+  supersets, nonce-to-credential binding, duplicate/double-revocation
+  rejection, and preflighted counters before mutation. This is consensus-owned
+  registry state through the generic signed transaction/query APIs. The native
+  moderation lifecycle now snapshots these exact active publications and audit
+  anchors, verifies private Halo2 juror membership proofs, retains only
+  privacy-safe proof summaries/nullifiers, and performs deterministic
+  nullifier-ranked panel selection. It is not the still-missing enrollment
+  portal, issuer daemon/HSM integration, juror wallet, dedicated registry
+  facade, or deployed multi-validator evidence.
   `validate_pop_payload_bytes`
   plus `sorafs-validate pop` provide local reference/CI diagnostics, the public
   `sorafs_reference.h` C header now mirrors the PoP selector constants and
@@ -11838,10 +11868,12 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   controls that avoid matching local canary/readback-style names while preserving
   `sorafs-validate pop`, the local issued-credential bundle helper, reference
   SDK/bridge validators, and the fail-closed transcript-digest verifier. The
-  remaining SFM-4b1 work is the privacy-preserving membership proof
-  backend, issuer/registry services, juror client storage and proof generation,
-  moderation sortition/commit-reveal integration, service CLI/API surfaces, and
-  captured deployed rollout evidence that passes this gate;
+  remaining SFM-4b1 work is the issuer daemon and production key management,
+  enrollment and juror-client credential custody/private-proof integration,
+  any required dedicated service CLI/API facade, multi-validator
+  deployment/reconciliation, and captured deployed rollout evidence that
+  passes this gate. The repository-owned authoritative moderation
+  proof-verification/sortition integration is complete;
   SFM-4b2 appeal finance now has deterministic orchestrator pricing/settlement
   helpers, CLI quote/settle/disburse commands, read-only Torii config,
   readiness, and quote endpoints for the baseline pricing formula, and
@@ -12041,16 +12073,25 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   SFM-4b4 now also has an authoritative on-chain moderation ledger in
   `iroha_data_model::sorafs::moderation_ledger` and
   `iroha_core::smartcontracts::isi::sorafs_moderation`. First-class ISIs
-  activate bounded governance policy revisions, open policy-digest-bound cases,
-  accept authority-bound canonical juror commitments and reveals, record and
-  resolve payload-free challenges, and finalize decisions, contested ties,
-  missed-quorum outcomes, or accepted-challenge outcomes. Finalization
-  atomically persists distinct missing-commit and unrevealed-commit penalty
-  records. Typed queries expose policy, case, commitment, reveal, challenge,
-  outcome, no-show, and counter state through the existing generic Torii query
-  surface; `CanManageSorafsModeration` gates privileged transitions while
-  native execution independently enforces permissions, block-time phases,
-  resource bounds, canonical payloads, policy snapshots, and counter safety.
+  activate bounded governance policy revisions; admit authority-bound appeals
+  with independent single-use proof-token and deposit-lock replay indexes;
+  pin exact active PoP root, revocation, issuer-policy, and audit snapshots;
+  verify private Halo2 eligibility proofs; deterministically select unique
+  primary/waitlist jurors by per-credential appeal nullifier; record assignment
+  acceptance; and activate a policy-digest-bound case with deterministic
+  no-show replacement. Insufficient pools and exhausted failover are terminal,
+  replay-safe states, and the direct case-opening instruction has been removed.
+  The existing
+  authority-bound canonical commitments/reveals, payload-free challenges, and
+  finalization then record decisions, contested ties, missed-quorum outcomes,
+  accepted-challenge outcomes, and distinct missing-commit or unrevealed-commit
+  penalties. Typed queries expose policy, appeal, permissioned eligibility,
+  case, commitment, reveal, challenge, outcome, no-show, and counter state
+  through the existing generic Torii query surface;
+  `CanManageSorafsModeration` gates privileged transitions while native
+  execution independently enforces permissions, block-time phases, active-root
+  freshness, exact-canonical bounded payloads, monotonic lifecycle state,
+  deterministic roster recomputation, and preflighted atomic writes.
   The SFM-4b moderation-panel rollout
   evidence gate now validates payload-free appeal intake, sortition roster,
   evidence viewer, operator workflow, juror notifications, commit/reveal,
@@ -12142,14 +12183,14 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   collection planner now validates the schema-closed collection-plan envelope
   plus canonical nested required-kind, threshold, external-evidence,
   checker-backed evidence-contract, and command-step shapes before dry-run
-  output or verifier execution. The rollout-gate static contract now also pins
-  the parent SFM-4b appeal intake service,
-  persisted case lifecycle, panel sortition/roster service, decision
-  publication, portal/jury workflow, durable public decision trail, and
-  deployed moderation-panel promotion routes and nested CLI spellings as
+  output or verifier execution. The rollout-gate static contract now pins the
+  deployed appeal/panel service facade and retry/reconciliation worker,
+  decision publication, portal/jury workflow, durable public decision trail,
+  and deployed moderation-panel promotion routes and nested CLI spellings as
   unshipped with reusable matchers and segment-aware negative controls while
-  preserving the shipped local `ballots*` lifecycle API and adjacent local
-  operator workflow tooling.
+  preserving the native authoritative intake/sortition ISIs and queries,
+  shipped local `ballots*` lifecycle API, and adjacent local operator workflow
+  tooling.
   A checked-in `build_sorafs_moderation_panel_canary.py` helper now
   builds payload-free appeal-intake, sortition, evidence-viewer, operator,
   juror-notification, commit/reveal, decision-publication, settlement,
@@ -19863,8 +19904,8 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
 	  accessors, so malformed in-memory controller keys return
 	  `MalformedPublicKey` or `InvalidPublicKey` on result-returning paths
 	  instead of reaching compatibility invariant accessors. Trusted-peer PoP
-	  config parsing, trusted-roster validation, daemon NPoS validator status
-	  counting, genesis trusted-peer PoP verification, and Torii Sumeragi
+	  config parsing, trusted-roster validation, staged Sumeragi v2 genesis voter
+	  validation, genesis trusted-peer PoP verification, and Torii Sumeragi
 	  BLS-key operator views now also classify BLS-normal keys through checked
 	  accessors, turning malformed in-memory keys into config errors or
 	  non-BLS status entries instead of compatibility accessor panics.

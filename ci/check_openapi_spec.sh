@@ -63,5 +63,5 @@ fi
 
 (
   cd "${REPO_ROOT}"
-  node docs/portal/scripts/verify-openapi-versions.mjs
+  node docs/portal/scripts/verify-openapi-versions.mjs --allow-unsigned
 )

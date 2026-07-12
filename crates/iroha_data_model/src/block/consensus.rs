@@ -963,7 +963,7 @@ pub fn committed_lane_block_status_counts_as_progress(
 }
 
 /// Certified standalone lane-local block summary reported by Sumeragi status.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -3490,7 +3490,7 @@ pub struct SumeragiV1StatusWire {
 }
 
 /// Cached standalone lane-block consensus session status.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)

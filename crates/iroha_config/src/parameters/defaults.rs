@@ -1627,10 +1627,17 @@ pub mod torii {
     pub const PROOF_BURST: Option<u32> = Some(60);
     /// Maximum proof request payload size (bytes).
     pub const PROOF_MAX_BODY_BYTES: Bytes<u64> = Bytes(8 * 1024 * 1024); // 8 MiB
+    /// Maximum proof request bodies buffered concurrently before handler admission.
+    pub const PROOF_BODY_MAX_INFLIGHT: NonZeroUsize = nonzero!(8usize);
     /// Steady-state egress budget for proof responses (bytes/sec). None disables.
     pub const PROOF_EGRESS_BYTES_PER_SEC: Option<u64> = Some(8 * 1024 * 1024); // 8 MiB/s
     /// Burst egress budget for proof responses (bytes).
-    pub const PROOF_EGRESS_BURST_BYTES: Option<u64> = Some(16 * 1024 * 1024); // 16 MiB
+    ///
+    /// The 32 MiB default accommodates the canonical IVM job response ceiling:
+    /// a 16 MiB encoded proved payload plus an 8 MiB proof encoded as base64.
+    pub const PROOF_EGRESS_BURST_BYTES: Option<u64> = Some(32 * 1024 * 1024); // 32 MiB
+    /// Aggregate memory budget for retained `/v1/zk/ivm/prove` job state.
+    pub const ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES: Bytes<u64> = Bytes(128 * 1024 * 1024); // 128 MiB
     /// Maximum page size accepted by proof listing endpoints.
     pub const PROOF_MAX_LIST_LIMIT: u32 = 200;
     /// Wall-clock timeout applied to proof list/count handlers (milliseconds).
@@ -1960,6 +1967,8 @@ pub mod torii {
     ///
     /// This limit applies to `POST /v1/zk/ivm/prove` (non-consensus helper).
     pub const ZK_IVM_PROVE_MAX_QUEUE: usize = 16;
+    /// Wall-clock timeout for synchronous IVM derive/simulation/view tooling.
+    pub const ZK_IVM_TOOLING_TIMEOUT_MS: u64 = 60_000;
     /// TTL (seconds) for `/v1/zk/ivm/prove` job status entries.
     pub const ZK_IVM_PROVE_JOB_TTL_SECS: u64 = 30 * 60; // 30 minutes
     /// Maximum number of `/v1/zk/ivm/prove` job status entries retained in memory.

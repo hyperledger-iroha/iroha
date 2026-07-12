@@ -7,7 +7,10 @@ import {
 import {
   browserTransactionCodec,
   buildBrowserTransferPayload,
+  validateBrowserTransferSignable,
+  type BrowserTransactionSignable,
   type BrowserTransferInput,
+  type ValidatedBrowserTransactionSignable,
 } from "@iroha/iroha-js/transaction-codec";
 
 const codec: NexusTransactionCodec = browserTransactionCodec;
@@ -25,6 +28,10 @@ const input: BrowserTransferInput = {
 const stronglyTypedPayload: Buffer = buildBrowserTransferPayload(input);
 const codecPayload: NexusBytes | NexusTransactionPayloadResult =
   codec.buildTransferPayload(input as unknown as Record<string, unknown>);
+declare const signable: BrowserTransactionSignable;
+const validated: Readonly<ValidatedBrowserTransactionSignable> =
+  validateBrowserTransferSignable(signable);
 
 void stronglyTypedPayload;
 void codecPayload;
+void validated;

@@ -30,15 +30,19 @@ pub use domain::{
 pub use executor::visit_upgrade;
 use iroha_smart_contract::data_model::{
     isi::{
-        ActivatePublicLaneValidator, ApprovePinManifest, BindManifestAlias,
-        CancelSorafsOrderbookOrder, CompleteReplicationOrder, ExitPublicLaneValidator,
-        ExpireReplicationOrder, FinalizeSorafsModerationCase, IssueReplicationOrder,
-        OpenSorafsModerationCase, RaiseSorafsModerationChallenge, RecordCapacityTelemetry,
+        AcceptSorafsModerationJurorAssignment, ActivatePublicLaneValidator,
+        ActivateSorafsModerationCase, ApprovePinManifest, BindManifestAlias,
+        CancelSorafsOrderbookOrder, CommitSorafsPopCredentialBatch, CompleteReplicationOrder,
+        ExitPublicLaneValidator, ExpireReplicationOrder, FinalizeSorafsModerationCase,
+        FinalizeSorafsModerationSortition, IssueReplicationOrder,
+        PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge, RecordCapacityTelemetry,
         RecordSorafsOrderbookSettlementReceipt, RegisterCapacityDeclaration,
         RegisterCapacityDispute, RegisterPeerWithPop, RegisterPinManifest, RegisterProviderOwner,
-        RegisterPublicLaneValidator, RemoveAssetKeyValue, ResolveSorafsModerationChallenge,
-        RetirePinManifest, SetAssetKeyValue, SetLaneRelayEmergencyValidators, SetPricingSchedule,
-        SetSorafsModerationPolicy, SetSorafsOrderbookPolicy, SubmitSorafsModerationCommit,
+        RegisterPublicLaneValidator, RegisterSorafsModerationJurorEligibility,
+        RemoveAssetKeyValue, ResolveSorafsModerationChallenge, RetirePinManifest,
+        SetAssetKeyValue, SetLaneRelayEmergencyValidators, SetPricingSchedule,
+        SetSorafsModerationPolicy, SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
+        SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
         SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder, UnregisterProviderOwner,
         UpsertProviderCredit,
         bridge::RecordBridgeReceipt,
@@ -72,14 +76,19 @@ pub use role::{
 };
 /// Re-export permission-checked `SoraFS` orderbook query visitors.
 pub use sorafs::{
-    visit_find_sorafs_moderation_case, visit_find_sorafs_moderation_challenge,
-    visit_find_sorafs_moderation_commit, visit_find_sorafs_moderation_no_show,
+    visit_find_sorafs_moderation_appeal, visit_find_sorafs_moderation_case,
+    visit_find_sorafs_moderation_challenge, visit_find_sorafs_moderation_commit,
+    visit_find_sorafs_moderation_juror_eligibility, visit_find_sorafs_moderation_no_show,
     visit_find_sorafs_moderation_outcome, visit_find_sorafs_moderation_policy,
     visit_find_sorafs_moderation_reveal, visit_find_sorafs_moderation_status,
     visit_find_sorafs_orderbook_cancellation_by_order_id, visit_find_sorafs_orderbook_order_by_id,
     visit_find_sorafs_orderbook_orders, visit_find_sorafs_orderbook_policy,
     visit_find_sorafs_orderbook_receipt_by_id, visit_find_sorafs_orderbook_receipts,
-    visit_find_sorafs_orderbook_status,
+    visit_find_sorafs_orderbook_status, visit_find_sorafs_pop_audit_digest_by_sequence,
+    visit_find_sorafs_pop_commitment_root_by_version,
+    visit_find_sorafs_pop_credential_commitment_by_digest, visit_find_sorafs_pop_issuer_policy,
+    visit_find_sorafs_pop_registry_status, visit_find_sorafs_pop_revocation_by_nonce_commitment,
+    visit_find_sorafs_pop_revocation_publication_by_version,
 };
 /// Re-export staking visitor helpers used by the default executor.
 pub use staking::{
@@ -393,12 +402,40 @@ impl InstructionDispatch for InstructionBox {
             sorafs::visit_record_orderbook_settlement_receipt(executor, isi);
             return;
         }
+        if let Some(isi) = any.downcast_ref::<SetSorafsPopIssuerPolicy>() {
+            sorafs::visit_set_pop_issuer_policy(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<CommitSorafsPopCredentialBatch>() {
+            sorafs::visit_commit_pop_credential_batch(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<PublishSorafsPopRevocationList>() {
+            sorafs::visit_publish_pop_revocation_list(executor, isi);
+            return;
+        }
         if let Some(isi) = any.downcast_ref::<SetSorafsModerationPolicy>() {
             sorafs::visit_set_moderation_policy(executor, isi);
             return;
         }
-        if let Some(isi) = any.downcast_ref::<OpenSorafsModerationCase>() {
-            sorafs::visit_open_moderation_case(executor, isi);
+        if let Some(isi) = any.downcast_ref::<SubmitSorafsModerationAppeal>() {
+            sorafs::visit_submit_moderation_appeal(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<RegisterSorafsModerationJurorEligibility>() {
+            sorafs::visit_register_moderation_juror_eligibility(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<FinalizeSorafsModerationSortition>() {
+            sorafs::visit_finalize_moderation_sortition(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<AcceptSorafsModerationJurorAssignment>() {
+            sorafs::visit_accept_moderation_juror_assignment(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<ActivateSorafsModerationCase>() {
+            sorafs::visit_activate_moderation_case(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<SubmitSorafsModerationCommit>() {
@@ -550,18 +587,24 @@ pub mod sorafs {
     use iroha_executor_data_model::permission::sorafs::{
         CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
         CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder, CanManageSorafsModeration,
-        CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
-        CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
+        CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer, CanRegisterSorafsProviderOwner,
+        CanRetireSorafsPin, CanSetSorafsPricing, CanUnregisterSorafsProviderOwner,
+        CanUpsertSorafsProviderCredit,
     };
 
     use super::*;
     use iroha_smart_contract::data_model::query::sorafs::prelude::{
-        FindSorafsModerationCase, FindSorafsModerationChallenge, FindSorafsModerationCommit,
-        FindSorafsModerationNoShow, FindSorafsModerationOutcome, FindSorafsModerationPolicy,
-        FindSorafsModerationReveal, FindSorafsModerationStatus,
+        FindSorafsModerationAppeal, FindSorafsModerationCase,
+        FindSorafsModerationChallenge, FindSorafsModerationCommit,
+        FindSorafsModerationJurorEligibility, FindSorafsModerationNoShow,
+        FindSorafsModerationOutcome, FindSorafsModerationPolicy, FindSorafsModerationReveal,
+        FindSorafsModerationStatus,
         FindSorafsOrderbookCancellationByOrderId, FindSorafsOrderbookOrderById,
         FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy, FindSorafsOrderbookReceiptById,
-        FindSorafsOrderbookReceipts, FindSorafsOrderbookStatus,
+        FindSorafsOrderbookReceipts, FindSorafsOrderbookStatus, FindSorafsPopAuditDigestBySequence,
+        FindSorafsPopCommitmentRootByVersion, FindSorafsPopCredentialCommitmentByDigest,
+        FindSorafsPopIssuerPolicy, FindSorafsPopRegistryStatus,
+        FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
     };
 
     fn visit_orderbook_read<V: Execute + Visit + ?Sized>(executor: &mut V) {
@@ -631,11 +674,84 @@ pub mod sorafs {
         visit_orderbook_read(executor);
     }
 
+    /// PoP issuer policy is public transparency state.
+    pub fn visit_find_sorafs_pop_issuer_policy<V: Execute + Visit + ?Sized>(
+        _executor: &mut V,
+        _query: &FindSorafsPopIssuerPolicy,
+    ) {
+    }
+
+    /// Payload-free credential commitments are public transparency state.
+    pub fn visit_find_sorafs_pop_credential_commitment_by_digest<V: Execute + Visit + ?Sized>(
+        _executor: &mut V,
+        _query: &FindSorafsPopCredentialCommitmentByDigest,
+    ) {
+    }
+
+    /// Signed commitment-root publications are public transparency state.
+    pub fn visit_find_sorafs_pop_commitment_root_by_version<V: Execute + Visit + ?Sized>(
+        _executor: &mut V,
+        _query: &FindSorafsPopCommitmentRootByVersion,
+    ) {
+    }
+
+    /// Signed revocation publications are public transparency state.
+    pub fn visit_find_sorafs_pop_revocation_publication_by_version<V: Execute + Visit + ?Sized>(
+        _executor: &mut V,
+        _query: &FindSorafsPopRevocationPublicationByVersion,
+    ) {
+    }
+
+    /// Payload-free revocation commitments are public transparency state.
+    pub fn visit_find_sorafs_pop_revocation_by_nonce_commitment<V: Execute + Visit + ?Sized>(
+        _executor: &mut V,
+        _query: &FindSorafsPopRevocationByNonceCommitment,
+    ) {
+    }
+
+    /// Registry audit links are public transparency state.
+    pub fn visit_find_sorafs_pop_audit_digest_by_sequence<V: Execute + Visit + ?Sized>(
+        _executor: &mut V,
+        _query: &FindSorafsPopAuditDigestBySequence,
+    ) {
+    }
+
+    /// Registry anchors and counters are public transparency state.
+    pub fn visit_find_sorafs_pop_registry_status<V: Execute + Visit + ?Sized>(
+        _executor: &mut V,
+        _query: &FindSorafsPopRegistryStatus,
+    ) {
+    }
+
     /// Authoritative moderation policy is public transparency state.
     pub fn visit_find_sorafs_moderation_policy<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsModerationPolicy,
     ) {
+    }
+
+    /// Appeal intake, pinned roots, and deterministic roster are public transparency state.
+    pub fn visit_find_sorafs_moderation_appeal<V: Execute + Visit + ?Sized>(
+        _executor: &mut V,
+        _query: &FindSorafsModerationAppeal,
+    ) {
+    }
+
+    /// A payload-free eligibility record is visible to its juror and moderation operators.
+    pub fn visit_find_sorafs_moderation_juror_eligibility<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        query: &FindSorafsModerationJurorEligibility,
+    ) {
+        if executor.context().curr_block.is_genesis()
+            || executor.context().authority == query.juror
+            || can_manage_moderation(executor)
+        {
+            return;
+        }
+        deny!(
+            executor,
+            "Can't read another juror's moderation PoP eligibility record"
+        );
     }
 
     /// Authoritative moderation case headers are public transparency state.
@@ -937,6 +1053,55 @@ pub mod sorafs {
         deny!(executor, "Can't record SoraFS orderbook settlement receipt");
     }
 
+    /// Activate a PoP issuer policy when governance permission is present.
+    pub fn visit_set_pop_issuer_policy<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SetSorafsPopIssuerPolicy,
+    ) {
+        if executor.context().curr_block.is_genesis()
+            || CanManageSorafsPopRegistry
+                .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+        deny!(
+            executor,
+            "Can't manage the authoritative SoraFS PoP issuer policy"
+        );
+    }
+
+    /// Commit an issuer-authenticated credential batch when permitted.
+    pub fn visit_commit_pop_credential_batch<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &CommitSorafsPopCredentialBatch,
+    ) {
+        if executor.context().curr_block.is_genesis()
+            || CanOperateSorafsPopIssuer.is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+        deny!(
+            executor,
+            "Can't operate the authoritative SoraFS PoP issuer"
+        );
+    }
+
+    /// Publish a signed revocation-list extension when permitted.
+    pub fn visit_publish_pop_revocation_list<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &PublishSorafsPopRevocationList,
+    ) {
+        if executor.context().curr_block.is_genesis()
+            || CanOperateSorafsPopIssuer.is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+        deny!(
+            executor,
+            "Can't operate the authoritative SoraFS PoP issuer"
+        );
+    }
+
     fn can_manage_moderation<V: Execute + Visit + ?Sized>(executor: &V) -> bool {
         executor.context().curr_block.is_genesis()
             || CanManageSorafsModeration.is_owned_by(&executor.context().authority, executor.host())
@@ -956,17 +1121,55 @@ pub mod sorafs {
         );
     }
 
-    /// Open an authoritative moderation case when the caller is authorised.
-    pub fn visit_open_moderation_case<V: Execute + Visit + ?Sized>(
+    /// Submit an authority-bound appeal intake; native execution checks appellant identity.
+    pub fn visit_submit_moderation_appeal<V: Execute + Visit + ?Sized>(
         executor: &mut V,
-        isi: &OpenSorafsModerationCase,
+        isi: &SubmitSorafsModerationAppeal,
+    ) {
+        execute!(executor, isi);
+    }
+
+    /// Register an authority-bound private PoP eligibility proof.
+    pub fn visit_register_moderation_juror_eligibility<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &RegisterSorafsModerationJurorEligibility,
+    ) {
+        execute!(executor, isi);
+    }
+
+    /// Finalize deterministic panel sortition when the caller is authorised.
+    pub fn visit_finalize_moderation_sortition<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &FinalizeSorafsModerationSortition,
     ) {
         if can_manage_moderation(executor) {
             execute!(executor, isi);
         }
         deny!(
             executor,
-            "Can't manage authoritative SoraFS moderation state"
+            "Can't manage authoritative SoraFS moderation sortition"
+        );
+    }
+
+    /// Accept an authority-bound primary juror assignment.
+    pub fn visit_accept_moderation_juror_assignment<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &AcceptSorafsModerationJurorAssignment,
+    ) {
+        execute!(executor, isi);
+    }
+
+    /// Apply deterministic failover and activate the case when authorised.
+    pub fn visit_activate_moderation_case<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ActivateSorafsModerationCase,
+    ) {
+        if can_manage_moderation(executor) {
+            execute!(executor, isi);
+        }
+        deny!(
+            executor,
+            "Can't activate authoritative SoraFS moderation cases"
         );
     }
 
@@ -1251,6 +1454,8 @@ pub mod domain {
             | AnyPermission::CanCompleteSorafsReplicationOrder(_)
             | AnyPermission::CanSetSorafsPricing(_)
             | AnyPermission::CanManageSorafsModeration(_)
+            | AnyPermission::CanManageSorafsPopRegistry(_)
+            | AnyPermission::CanOperateSorafsPopIssuer(_)
             | AnyPermission::CanUpsertSorafsProviderCredit(_)
             | AnyPermission::CanRegisterSorafsProviderOwner(_)
             | AnyPermission::CanUnregisterSorafsProviderOwner(_)
@@ -1544,6 +1749,8 @@ pub mod account {
             | AnyPermission::CanCompleteSorafsReplicationOrder(_)
             | AnyPermission::CanSetSorafsPricing(_)
             | AnyPermission::CanManageSorafsModeration(_)
+            | AnyPermission::CanManageSorafsPopRegistry(_)
+            | AnyPermission::CanOperateSorafsPopIssuer(_)
             | AnyPermission::CanUpsertSorafsProviderCredit(_)
             | AnyPermission::CanRegisterSorafsProviderOwner(_)
             | AnyPermission::CanUnregisterSorafsProviderOwner(_)
@@ -1782,6 +1989,8 @@ pub mod asset_definition {
             | AnyPermission::CanCompleteSorafsReplicationOrder(_)
             | AnyPermission::CanSetSorafsPricing(_)
             | AnyPermission::CanManageSorafsModeration(_)
+            | AnyPermission::CanManageSorafsPopRegistry(_)
+            | AnyPermission::CanOperateSorafsPopIssuer(_)
             | AnyPermission::CanUpsertSorafsProviderCredit(_)
             | AnyPermission::CanRegisterSorafsProviderOwner(_)
             | AnyPermission::CanUnregisterSorafsProviderOwner(_)
@@ -2992,6 +3201,8 @@ pub mod trigger {
             | AnyPermission::CanCompleteSorafsReplicationOrder(_)
             | AnyPermission::CanSetSorafsPricing(_)
             | AnyPermission::CanManageSorafsModeration(_)
+            | AnyPermission::CanManageSorafsPopRegistry(_)
+            | AnyPermission::CanOperateSorafsPopIssuer(_)
             | AnyPermission::CanUpsertSorafsProviderCredit(_)
             | AnyPermission::CanRegisterSorafsProviderOwner(_)
             | AnyPermission::CanUnregisterSorafsProviderOwner(_)
@@ -3019,7 +3230,8 @@ pub mod trigger {
             sorafs::{
                 CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
                 CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute,
-                CanIssueSorafsReplicationOrder, CanManageSorafsModeration, CanRegisterSorafsPin,
+                CanIssueSorafsReplicationOrder, CanManageSorafsModeration,
+                CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer, CanRegisterSorafsPin,
                 CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
                 CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner,
                 CanUpsertSorafsProviderCredit,
@@ -3065,6 +3277,8 @@ pub mod trigger {
                 AnyPermission::CanIssueSorafsReplicationOrder(CanIssueSorafsReplicationOrder),
                 AnyPermission::CanCompleteSorafsReplicationOrder(CanCompleteSorafsReplicationOrder),
                 AnyPermission::CanManageSorafsModeration(CanManageSorafsModeration),
+                AnyPermission::CanManageSorafsPopRegistry(CanManageSorafsPopRegistry),
+                AnyPermission::CanOperateSorafsPopIssuer(CanOperateSorafsPopIssuer),
                 AnyPermission::CanSetSorafsPricing(CanSetSorafsPricing),
                 AnyPermission::CanUpsertSorafsProviderCredit(CanUpsertSorafsProviderCredit),
                 AnyPermission::CanRegisterSorafsProviderOwner(CanRegisterSorafsProviderOwner),
@@ -3245,38 +3459,51 @@ mod sorafs_permission_tests {
         account::AccountId,
         block::BlockHeader,
         isi::sorafs::{
-            ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder,
-            ExpireReplicationOrder, IssueReplicationOrder, RecordCapacityTelemetry,
+            AcceptSorafsModerationJurorAssignment, ActivateSorafsModerationCase,
+            ApprovePinManifest, BindManifestAlias, CommitSorafsPopCredentialBatch,
+            CompleteReplicationOrder, ExpireReplicationOrder,
+            FinalizeSorafsModerationSortition, IssueReplicationOrder,
+            PublishSorafsPopRevocationList, RecordCapacityTelemetry,
             RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
-            RegisterProviderOwner, RetirePinManifest, SetPricingSchedule,
-            SetSorafsModerationPolicy, SubmitSorafsModerationCommit, UnregisterProviderOwner,
-            UpsertProviderCredit,
+            RegisterProviderOwner, RegisterSorafsModerationJurorEligibility, RetirePinManifest,
+            SetPricingSchedule, SetSorafsModerationPolicy, SetSorafsPopIssuerPolicy,
+            SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
+            UnregisterProviderOwner, UpsertProviderCredit,
         },
         metadata::Metadata,
         permission::Permission as PermissionObject,
         prelude::ValidationFail,
         query::sorafs::prelude::{
+            FindSorafsModerationAppeal, FindSorafsModerationJurorEligibility,
             FindSorafsModerationPolicy, FindSorafsModerationStatus,
             FindSorafsOrderbookCancellationByOrderId, FindSorafsOrderbookOrderById,
             FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy, FindSorafsOrderbookReceiptById,
             FindSorafsOrderbookReceipts, FindSorafsOrderbookStatus,
+            FindSorafsPopAuditDigestBySequence, FindSorafsPopCommitmentRootByVersion,
+            FindSorafsPopCredentialCommitmentByDigest, FindSorafsPopIssuerPolicy,
+            FindSorafsPopRegistryStatus, FindSorafsPopRevocationByNonceCommitment,
+            FindSorafsPopRevocationPublicationByVersion,
         },
         sorafs::{
             capacity::{
                 CapacityDeclarationRecord, CapacityDisputeEvidence, CapacityDisputeId,
                 CapacityDisputeRecord, CapacityTelemetryRecord, ProviderId,
             },
-            moderation_ledger::{MODERATION_LEDGER_POLICY_VERSION_V1, ModerationLedgerPolicyV1},
+            moderation_ledger::{
+                MODERATION_APPEAL_INTAKE_VERSION_V1, MODERATION_LEDGER_POLICY_VERSION_V1,
+                ModerationAppealIntakeV1, ModerationLedgerPolicyV1,
+            },
             pin_registry::{ManifestAliasBinding, ManifestDigest, ReplicationOrderId},
-            prelude::StorageClass,
+            pop_registry::{POP_ISSUER_POLICY_VERSION_V1, PopIssuerPolicyV1},
             pricing::{PricingScheduleRecord, ProviderCreditRecord},
         },
     };
     use iroha_executor_data_model::permission::sorafs::{
         CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
         CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder, CanManageSorafsModeration,
-        CanRegisterSorafsPin, CanRegisterSorafsProviderOwner, CanRetireSorafsPin,
-        CanSetSorafsPricing, CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
+        CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer, CanRegisterSorafsPin,
+        CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
+        CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
 
     use super::*;
@@ -3300,6 +3527,15 @@ mod sorafs_permission_tests {
 
     fn owner_account_id() -> AccountId {
         account_id_from_public_key_hex(OWNER_PUBLIC_KEY)
+    }
+
+    fn authority_public_key_bytes() -> [u8; 32] {
+        let authority = authority_account_id();
+        let (_, bytes) = authority
+            .signatory()
+            .try_to_bytes()
+            .expect("authority public key bytes");
+        bytes.try_into().expect("Ed25519 public key length")
     }
 
     #[derive(Debug)]
@@ -3435,6 +3671,22 @@ mod sorafs_permission_tests {
         )
     }
 
+    fn set_pop_issuer_policy() -> SetSorafsPopIssuerPolicy {
+        SetSorafsPopIssuerPolicy::new(PopIssuerPolicyV1 {
+            version: POP_ISSUER_POLICY_VERSION_V1,
+            revision: 1,
+            predecessor_policy_digest: None,
+            issuer_id: "pop-issuer-sora-foundation".to_owned(),
+            issuer_account: authority_account_id(),
+            issuer_public_key: authority_public_key_bytes(),
+            max_credentials_per_batch: 16,
+            max_revocations_per_publication: 16,
+            max_credential_lifetime_secs: 86_400,
+            max_future_clock_skew_secs: 30,
+            paused: false,
+        })
+    }
+
     fn register_capacity_declaration() -> RegisterCapacityDeclaration {
         RegisterCapacityDeclaration::new(CapacityDeclarationRecord::new(
             sample_provider_id(),
@@ -3525,11 +3777,41 @@ mod sorafs_permission_tests {
             revision: 1,
             predecessor_policy_digest: None,
             max_panel_size: 8,
+            max_candidate_pool_size: 32,
+            max_waitlist_size: 8,
+            max_exclusions_per_case: 16,
             max_total_window_ms: 60_000,
             max_challenges_per_case: 4,
             missing_commit_penalty_points: 10,
             unrevealed_commit_penalty_points: 20,
         })
+    }
+
+    fn moderation_appeal_intake() -> ModerationAppealIntakeV1 {
+        let appellant = authority_account_id();
+        ModerationAppealIntakeV1 {
+            version: MODERATION_APPEAL_INTAKE_VERSION_V1,
+            case_id: "appeal-case".to_owned(),
+            round_id: "round-1".to_owned(),
+            appellant: appellant.clone(),
+            appealed_decision_digest: [0x11; 32],
+            proof_token_digest: [0x12; 32],
+            evidence_bundle_digest: [0x13; 32],
+            appeal_deposit_lock_digest: [0x14; 32],
+            appeal_finance_config_version: "finance-v1".to_owned(),
+            policy_reference: "moderation-v1".to_owned(),
+            evidence_uri: None,
+            panel_size: 3,
+            waitlist_size: 2,
+            quorum: 2,
+            exclusions: vec![appellant],
+            registration_deadline_unix_ms: 1_000,
+            acceptance_deadline_unix_ms: 2_000,
+            commit_deadline_unix_ms: 3_000,
+            challenge_deadline_unix_ms: 4_000,
+            reveal_deadline_unix_ms: 5_000,
+            policy_digest: [0x15; 32],
+        }
     }
 
     fn register_provider_owner() -> RegisterProviderOwner {
@@ -3664,6 +3946,75 @@ mod sorafs_permission_tests {
     );
 
     #[test]
+    fn moderation_appeal_eligibility_and_acceptance_are_public_at_executor_layer() {
+        assert_allowed_without_permission(
+            SubmitSorafsModerationAppeal::new(moderation_appeal_intake()),
+            sorafs::visit_submit_moderation_appeal,
+        );
+        assert_allowed_without_permission(
+            RegisterSorafsModerationJurorEligibility::new(
+                "appeal-case".to_owned(),
+                "round-1".to_owned(),
+                vec![0x01],
+            ),
+            sorafs::visit_register_moderation_juror_eligibility,
+        );
+        assert_allowed_without_permission(
+            AcceptSorafsModerationJurorAssignment::new(
+                "appeal-case".to_owned(),
+                "round-1".to_owned(),
+                [0x02; 32],
+            ),
+            sorafs::visit_accept_moderation_juror_assignment,
+        );
+    }
+
+    sorafs_permission_case!(
+        finalize_moderation_sortition_requires_permission,
+        FinalizeSorafsModerationSortition::new(
+            "appeal-case".to_owned(),
+            "round-1".to_owned(),
+            [0x03; 32],
+            vec![authority_account_id()],
+            Vec::new(),
+        ),
+        CanManageSorafsModeration,
+        sorafs::visit_finalize_moderation_sortition
+    );
+
+    sorafs_permission_case!(
+        activate_moderation_case_requires_permission,
+        ActivateSorafsModerationCase::new(
+            "appeal-case".to_owned(),
+            "round-1".to_owned(),
+            [0x04; 32],
+        ),
+        CanManageSorafsModeration,
+        sorafs::visit_activate_moderation_case
+    );
+
+    sorafs_permission_case!(
+        set_pop_issuer_policy_requires_permission,
+        set_pop_issuer_policy(),
+        CanManageSorafsPopRegistry,
+        sorafs::visit_set_pop_issuer_policy
+    );
+
+    sorafs_permission_case!(
+        commit_pop_credential_batch_requires_permission,
+        CommitSorafsPopCredentialBatch::new(vec![0x01]),
+        CanOperateSorafsPopIssuer,
+        sorafs::visit_commit_pop_credential_batch
+    );
+
+    sorafs_permission_case!(
+        publish_pop_revocations_requires_permission,
+        PublishSorafsPopRevocationList::new(vec![0x01], [1; 32]),
+        CanOperateSorafsPopIssuer,
+        sorafs::visit_publish_pop_revocation_list
+    );
+
+    #[test]
     fn moderation_commit_submission_is_public_at_executor_layer() {
         assert_allowed_without_permission(
             SubmitSorafsModerationCommit::new(vec![0x01]),
@@ -3680,6 +4031,71 @@ mod sorafs_permission_tests {
         assert_allowed_without_permission(
             FindSorafsModerationStatus,
             sorafs::visit_find_sorafs_moderation_status,
+        );
+        assert_allowed_without_permission(
+            FindSorafsModerationAppeal::new(
+                "appeal-case".to_owned(),
+                "round-1".to_owned(),
+            ),
+            sorafs::visit_find_sorafs_moderation_appeal,
+        );
+    }
+
+    #[test]
+    fn moderation_eligibility_query_is_self_or_manager_only() {
+        assert_allowed_without_permission(
+            FindSorafsModerationJurorEligibility::new(
+                "appeal-case".to_owned(),
+                "round-1".to_owned(),
+                authority_account_id(),
+            ),
+            sorafs::visit_find_sorafs_moderation_juror_eligibility,
+        );
+        let other_juror = FindSorafsModerationJurorEligibility::new(
+            "appeal-case".to_owned(),
+            "round-1".to_owned(),
+            owner_account_id(),
+        );
+        assert_denied_without_permission(
+            other_juror.clone(),
+            sorafs::visit_find_sorafs_moderation_juror_eligibility,
+        );
+        assert_allowed_with_permission(
+            other_juror,
+            PermissionObject::from(CanManageSorafsModeration),
+            sorafs::visit_find_sorafs_moderation_juror_eligibility,
+        );
+    }
+
+    #[test]
+    fn pop_registry_transparency_queries_are_public() {
+        assert_allowed_without_permission(
+            FindSorafsPopIssuerPolicy,
+            sorafs::visit_find_sorafs_pop_issuer_policy,
+        );
+        assert_allowed_without_permission(
+            FindSorafsPopCredentialCommitmentByDigest::new([1; 32]),
+            sorafs::visit_find_sorafs_pop_credential_commitment_by_digest,
+        );
+        assert_allowed_without_permission(
+            FindSorafsPopCommitmentRootByVersion::new(1),
+            sorafs::visit_find_sorafs_pop_commitment_root_by_version,
+        );
+        assert_allowed_without_permission(
+            FindSorafsPopRevocationPublicationByVersion::new(1),
+            sorafs::visit_find_sorafs_pop_revocation_publication_by_version,
+        );
+        assert_allowed_without_permission(
+            FindSorafsPopRevocationByNonceCommitment::new([2; 32]),
+            sorafs::visit_find_sorafs_pop_revocation_by_nonce_commitment,
+        );
+        assert_allowed_without_permission(
+            FindSorafsPopAuditDigestBySequence::new(1),
+            sorafs::visit_find_sorafs_pop_audit_digest_by_sequence,
+        );
+        assert_allowed_without_permission(
+            FindSorafsPopRegistryStatus,
+            sorafs::visit_find_sorafs_pop_registry_status,
         );
     }
 

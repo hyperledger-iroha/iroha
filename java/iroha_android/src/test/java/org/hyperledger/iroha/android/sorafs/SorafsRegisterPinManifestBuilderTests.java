@@ -157,6 +157,11 @@ public final class SorafsRegisterPinManifestBuilderTests {
                 .setNamespace("sora")
                 .setProofHex("a1"),
         "padded alias name must fail");
+    for (final String name : new String[] {"Docs", "main site", "máin", repeat("a", 129)}) {
+      expectIllegalArgument(
+          () -> RegisterPinManifestInstruction.AliasBinding.builder().setName(name),
+          "noncanonical alias name must fail");
+    }
     final String oversized = repeat("aa", 1024 * 1024 + 1);
     expectIllegalArgument(
         () ->

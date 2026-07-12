@@ -101,7 +101,7 @@ fn parse_level(event: &Telemetry) -> Option<Level> {
         .fields
         .0
         .iter()
-        .find(|(k, _)| *k == &"level")
+        .find(|(k, _)| *k == "level")
         .map(|(_, v)| v);
     match level_val
         .and_then(|v| v.as_str())
@@ -199,7 +199,7 @@ async fn run(
             .fields
             .0
             .iter()
-            .find(|(k, _)| *k == &"msg")
+            .find(|(k, _)| *k == "msg")
             .and_then(|(_, v)| v.as_str());
         if let Some(k) = kind {
             if let Some(deny) = &settings.deny_kinds {
@@ -246,12 +246,12 @@ fn format_alert(
             "error" | "text" | "warning" => {
                 text = Some(match v {
                     norito::json::Value::String(s) => s.clone(),
-                    _ => v.to_string(),
+                    _ => render_json_value(v),
                 })
             }
             // include small snapshot fields when present
             "connected_peers" | "peers" | "queue_size" => {
-                extra.push(((*k).to_string(), v.to_string()));
+                extra.push(((*k).to_string(), render_json_value(v)));
             }
             _ => {}
         }
@@ -289,6 +289,10 @@ fn format_alert(
         }
     }
     Some(format!("{} {}", prefix, text))
+}
+
+fn render_json_value(value: &norito::json::Value) -> String {
+    norito::json::to_json(value).unwrap_or_else(|error| format!("<invalid JSON value: {error}>"))
 }
 
 #[derive(Clone, Debug, Default)]
@@ -349,7 +353,13 @@ async fn send_message(client: &Client, bot_key: &str, chat_id: &str, text: &str)
         "text": text,
         "disable_web_page_preview": true,
     });
-    let res = client.post(url).json(&body).send().await?;
+    let encoded = norito::json::to_json(&body)?;
+    let res = client
+        .post(url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(encoded)
+        .send()
+        .await?;
     if !res.status().is_success() {
         return Err(eyre!("telegram send failed: {}", res.status()));
     }

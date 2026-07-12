@@ -70,18 +70,18 @@ test("normalizeIdentifierInput rejects malformed emails", () => {
 });
 
 test("normalizes reusable account and asset aliases", () => {
-  assert.equal(normalizeAccountAliasFqn("CBDC@POB.CBSI"), "cbdc@pob.cbsi");
-  assert.equal(normalizeAssetAliasFqn("SBD#POB.CBSI"), "sbd#pob.cbsi");
-  assert.equal(tryNormalizeAccountAliasFqn("bad alias@pob.cbsi"), null);
+  assert.equal(normalizeAccountAliasFqn("TREASURY@BOI.IS2"), "treasury@boi.is2");
+  assert.equal(normalizeAssetAliasFqn("DS#BOI.IS2"), "ds#boi.is2");
+  assert.equal(tryNormalizeAccountAliasFqn("bad alias@boi.is2"), null);
 });
 
 test("rejects malformed account and asset aliases adversarially", () => {
   for (const value of [
-    "banking@@cbsi",
-    "banking@pob.cbsi.extra",
-    " banking @pob.cbsi",
-    "-banking@cbsi",
-    "banking@pob..cbsi",
+    "banking@@is2",
+    "banking@boi.is2.extra",
+    " banking @boi.is2",
+    "-banking@is2",
+    "banking@boi..is2",
   ]) {
     assert.throws(
       () => normalizeAccountAliasFqn(value),
@@ -94,11 +94,11 @@ test("rejects malformed account and asset aliases adversarially", () => {
     );
   }
   for (const value of [
-    "sbd##cbsi",
-    "sbd#pob.cbsi.extra",
-    "sbd#pob..cbsi",
-    "sbd #cbsi",
-    "sbd#-cbsi",
+    "ds##is2",
+    "ds#boi.is2.extra",
+    "ds#boi..is2",
+    "ds #is2",
+    "ds#-is2",
   ]) {
     assert.throws(
       () => normalizeAssetAliasFqn(value),
@@ -138,7 +138,7 @@ test("rejects malformed asset definitions and holdings instead of matching by sh
     "0".repeat(28),
     `${assetId}:metadata`,
     `${assetId}#${accountId}`,
-    "sbd#pob.cbsi",
+    "ds#boi.is2",
     badChecksumAssetId,
   ]) {
     assert.equal(tryNormalizeAssetDefinitionId(value), null, value);
@@ -169,5 +169,5 @@ test("normalizes Torii account references without accepting aliases", () => {
     publicKey: deterministicPublicKey(0x11),
   }).toI105();
   assert.equal(normalizeToriiAccountReference(accountId), accountId);
-  assert.equal(normalizeToriiAccountReference("cbdc@pob.cbsi"), "");
+  assert.equal(normalizeToriiAccountReference("treasury@boi.is2"), "");
 });

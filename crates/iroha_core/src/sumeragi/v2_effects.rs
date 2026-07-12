@@ -49,10 +49,20 @@
 //! Retained files are replay-safe and never turn a durable decision back into
 //! an unfinalized height.
 
-use std::{collections::BTreeMap, fmt, path::Path, sync::Arc, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    path::Path,
+    sync::Arc,
+    time::Instant,
+};
 
 use iroha_crypto::{Hash, HashOf, Signature};
-use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+use iroha_data_model::{
+    block::{BlockHeader, CertifiedMergeLedgerReference, consensus_v2 as wire},
+    merge::MergeLedgerEntry,
+    peer::PeerId,
+};
 
 use super::{
     v2::{AdapterEffect, SignRequest},
@@ -79,6 +89,12 @@ impl EffectWorkId {
     /// Numeric identifier useful for operational correlation.
     pub(crate) const fn get(self) -> u64 {
         self.0
+    }
+
+    /// Construct a stable identifier for cross-module unit fixtures.
+    #[cfg(test)]
+    pub(crate) const fn for_test(value: u64) -> Self {
+        Self(value)
     }
 }
 
@@ -251,6 +267,22 @@ pub(crate) struct BodyValidationTask {
 }
 
 impl BodyValidationTask {
+    /// Construct exact deterministic-validation work for body-store boundary tests.
+    #[cfg(test)]
+    pub(crate) const fn for_test(
+        id: u64,
+        tag: EventTag,
+        durable_receipt: DurableBodyReceipt,
+    ) -> Self {
+        Self {
+            id: EffectWorkId(id),
+            tag,
+            round: durable_receipt.round(),
+            subject: durable_receipt.subject(),
+            durable_receipt,
+        }
+    }
+
     /// Stable work identifier reused by every retry.
     pub(crate) const fn id(&self) -> EffectWorkId {
         self.id
@@ -370,6 +402,8 @@ pub(crate) struct EffectExecutorStatus {
     pub pending_stores: usize,
     /// Outstanding deterministic-validation operations.
     pub pending_validations: usize,
+    /// Validation or application operations waiting for an exact merge sidecar.
+    pub deferred_merge_work: usize,
     /// Outstanding durable application operations.
     pub pending_applications: usize,
     /// Reconstructed bodies waiting for the reducer's StoreBody effect.
@@ -422,6 +456,15 @@ pub(crate) trait V2EffectServices {
     fn cancel_body_store(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error>;
     /// Queue or retransmit deterministic validation of one exact durable body.
     fn enqueue_body_validation(&mut self, task: BodyValidationTask) -> Result<(), Self::Error>;
+    /// Retain a bounded request for the exact certified merge sidecar which
+    /// must be authenticated before validation or decided application retries.
+    fn work_deferred_for_merge_sidecar(
+        &mut self,
+        work_id: EffectWorkId,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        reference: &CertifiedMergeLedgerReference,
+    ) -> Result<(), Self::Error>;
     /// Queue exact decision application and Kura finality persistence. A
     /// repeated task identifier requests an idempotent retry of the same
     /// durable operation.
@@ -461,6 +504,9 @@ pub(crate) trait V2EffectServices {
 pub(crate) enum CompletionDisposition {
     /// The exact tagged completion entered the serialized runtime FIFO.
     Enqueued,
+    /// Validation remains pending until its exact certified merge sidecar is
+    /// fetched, authenticated, and installed for a deterministic retry.
+    Deferred,
     /// The work identifier was already completed or belongs to an old owner.
     Stale,
 }
@@ -796,6 +842,7 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     pending_fetches: BTreeMap<EffectWorkId, PendingFetch>,
     pending_stores: BTreeMap<EffectWorkId, PendingStore>,
     pending_validations: BTreeMap<EffectWorkId, PendingValidation>,
+    deferred_merge_work: BTreeMap<EffectWorkId, HashOf<MergeLedgerEntry>>,
     pending_applications: BTreeMap<EffectWorkId, PendingApply>,
     certified_work: BTreeMap<HashOf<wire::CertifiedBodyRequest>, EffectWorkId>,
     outstanding_requests: OutstandingCertifiedBodyRequests,
@@ -984,6 +1031,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             pending_fetches: BTreeMap::new(),
             pending_stores: BTreeMap::new(),
             pending_validations: BTreeMap::new(),
+            deferred_merge_work: BTreeMap::new(),
             pending_applications: BTreeMap::new(),
             certified_work: BTreeMap::new(),
             outstanding_requests,
@@ -1220,6 +1268,41 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         let round = pending.task.round();
         let subject = pending.task.subject();
+        if let Some(reference) = completion.missing_merge_sidecar() {
+            if !merge_sidecar_reference_matches_validation(&pending.task, reference) {
+                return Err(self.close(
+                    EffectExecutorError::BodyStore(
+                        "deferred merge sidecar reference is not bound to the pending carrier"
+                            .to_owned(),
+                    ),
+                    services,
+                ));
+            }
+            if let Some(existing_hash) = self.deferred_merge_work.get(&completion.work_id()) {
+                if *existing_hash != reference.entry_hash {
+                    return Err(self.close(
+                        EffectExecutorError::BodyStore(
+                            "validation task deferred for two different merge sidecars".to_owned(),
+                        ),
+                        services,
+                    ));
+                }
+                return Ok(CompletionDisposition::Deferred);
+            }
+            if let Err(error) = services.work_deferred_for_merge_sidecar(
+                completion.work_id(),
+                round,
+                subject,
+                reference,
+            ) {
+                return Err(self.close(service_error(error), services));
+            }
+            self.deferred_merge_work
+                .insert(completion.work_id(), reference.entry_hash);
+            self.publish_status(services)
+                .map_err(|error| self.close(error, services))?;
+            return Ok(CompletionDisposition::Deferred);
+        }
         let key = (round, subject);
         let result = if let Some(validated) = completion.validated_receipt().cloned() {
             if validated.durable() != pending.task.durable_receipt() {
@@ -1264,6 +1347,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 ValidationPurpose::LocalProposal { .. } => Ok(()),
             }
         };
+        self.deferred_merge_work.remove(&completion.work_id());
         self.pending_validations.remove(&completion.work_id());
         if let Err(error) = result {
             return Err(self.close(error, services));
@@ -1271,6 +1355,193 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.publish_status(services)
             .map_err(|error| self.close(error, services))?;
         Ok(CompletionDisposition::Enqueued)
+    }
+
+    /// Retry every retained validation or Apply task waiting for one exact
+    /// certified merge entry after authentication and durable installation.
+    ///
+    /// The pending task and work identifier are reused verbatim. A service
+    /// failure leaves the executor fail-closed rather than losing accepted
+    /// durable work intent.
+    pub(crate) fn retry_deferred_merge_sidecar<S: V2EffectServices>(
+        &mut self,
+        entry_hash: HashOf<MergeLedgerEntry>,
+        services: &mut S,
+    ) -> Result<usize, EffectExecutorError> {
+        self.ensure_open()?;
+        let work_ids = self
+            .deferred_merge_work
+            .iter()
+            .filter_map(|(work_id, deferred_hash)| {
+                (*deferred_hash == entry_hash).then_some(*work_id)
+            })
+            .collect::<Vec<_>>();
+        for work_id in &work_ids {
+            if let Some(pending) = self.pending_validations.get(work_id) {
+                if let Err(error) = services.enqueue_body_validation(pending.task.clone()) {
+                    return Err(self.close(service_error(error), services));
+                }
+            } else if let Some(pending) = self.pending_applications.get(work_id) {
+                if let Err(error) = services.enqueue_apply(pending.task.clone()) {
+                    return Err(self.close(service_error(error), services));
+                }
+            } else {
+                return Err(self.close(
+                    EffectExecutorError::Contract(
+                        "deferred merge sidecar has no pending validation or application task"
+                            .to_owned(),
+                    ),
+                    services,
+                ));
+            }
+            self.deferred_merge_work.remove(work_id);
+        }
+        if !work_ids.is_empty() {
+            self.publish_status(services)
+                .map_err(|error| self.close(error, services))?;
+        }
+        Ok(work_ids.len())
+    }
+
+    /// Terminally reject every retained task which references one uniquely
+    /// invalid certified merge entry. A decided Apply waiter fails closed.
+    ///
+    /// Transport failures and unavailable holders must not call this method;
+    /// those conditions remain recoverable and keep the exact task pending.
+    pub(crate) fn reject_deferred_merge_sidecar<S: V2EffectServices>(
+        &mut self,
+        entry_hash: HashOf<MergeLedgerEntry>,
+        reason: impl Into<String>,
+        services: &mut S,
+    ) -> Result<usize, EffectExecutorError> {
+        self.ensure_open()?;
+        let work_ids = self
+            .deferred_merge_work
+            .iter()
+            .filter_map(|(work_id, deferred_hash)| {
+                (*deferred_hash == entry_hash).then_some(*work_id)
+            })
+            .collect::<Vec<_>>();
+        let reason = reason.into();
+        if let Some(pending) = work_ids
+            .iter()
+            .find_map(|work_id| self.pending_applications.get(work_id))
+        {
+            let certificate = pending.task.certificate().clone();
+            let subject = pending.task.subject();
+            if let Err(error) = services.report_invalid_certified_body(subject, certificate) {
+                return Err(self.close(service_error(error), services));
+            }
+            return Err(self.close(
+                EffectExecutorError::BodyStore(format!(
+                    "decided body references an invalid certified merge sidecar: {reason}"
+                )),
+                services,
+            ));
+        }
+        for work_id in &work_ids {
+            let Some(pending) = self.pending_validations.get(work_id) else {
+                return Err(self.close(
+                    EffectExecutorError::Contract(
+                        "deferred merge sidecar has no pending validation task".to_owned(),
+                    ),
+                    services,
+                ));
+            };
+            let tag = pending.task.tag();
+            self.complete_body_validation(
+                BodyValidationCompletion::Rejected {
+                    work_id: *work_id,
+                    tag,
+                    reason: reason.clone(),
+                },
+                services,
+            )?;
+        }
+        Ok(work_ids.len())
+    }
+
+    /// Retain a decided Apply task when its previously validated merge sidecar
+    /// must be recovered again (for example after a safe losing-view prune).
+    pub(crate) fn defer_application_for_merge_sidecar<S: V2EffectServices>(
+        &mut self,
+        work_id: EffectWorkId,
+        reference: &CertifiedMergeLedgerReference,
+        services: &mut S,
+    ) -> Result<CompletionDisposition, EffectExecutorError> {
+        self.ensure_open()?;
+        let Some(pending) = self.pending_applications.get(&work_id) else {
+            return Ok(CompletionDisposition::Stale);
+        };
+        let round = pending.task.certificate().round;
+        let subject = pending.task.subject();
+        if !merge_sidecar_reference_matches_carrier(round, subject, reference) {
+            return Err(self.close(
+                EffectExecutorError::BodyStore(
+                    "deferred Apply merge sidecar is not bound to the decided carrier".to_owned(),
+                ),
+                services,
+            ));
+        }
+        if let Some(existing_hash) = self.deferred_merge_work.get(&work_id) {
+            if *existing_hash != reference.entry_hash {
+                return Err(self.close(
+                    EffectExecutorError::BodyStore(
+                        "Apply task deferred for two different merge sidecars".to_owned(),
+                    ),
+                    services,
+                ));
+            }
+            return Ok(CompletionDisposition::Deferred);
+        }
+        if let Err(error) =
+            services.work_deferred_for_merge_sidecar(work_id, round, subject, reference)
+        {
+            return Err(self.close(service_error(error), services));
+        }
+        self.deferred_merge_work
+            .insert(work_id, reference.entry_hash);
+        self.publish_status(services)
+            .map_err(|error| self.close(error, services))?;
+        Ok(CompletionDisposition::Deferred)
+    }
+
+    /// Reject one registration-time deferral without affecting another body
+    /// that merely claimed the same entry hash with different metadata.
+    pub(crate) fn reject_deferred_merge_sidecar_work<S: V2EffectServices>(
+        &mut self,
+        work_id: EffectWorkId,
+        reason: impl Into<String>,
+        services: &mut S,
+    ) -> Result<CompletionDisposition, EffectExecutorError> {
+        self.ensure_open()?;
+        if !self.deferred_merge_work.contains_key(&work_id) {
+            return Ok(CompletionDisposition::Stale);
+        }
+        if self.pending_applications.contains_key(&work_id) {
+            return Err(self.close(
+                EffectExecutorError::BodyStore(
+                    "decided Apply task could not register its certified merge sidecar".to_owned(),
+                ),
+                services,
+            ));
+        }
+        let Some(pending) = self.pending_validations.get(&work_id) else {
+            return Err(self.close(
+                EffectExecutorError::Contract(
+                    "deferred merge sidecar has no pending validation task".to_owned(),
+                ),
+                services,
+            ));
+        };
+        self.complete_body_validation(
+            BodyValidationCompletion::Rejected {
+                work_id,
+                tag: pending.task.tag(),
+                reason: reason.into(),
+            },
+            services,
+        )
     }
 
     /// Fail closed when the asynchronous body-store/validation worker cannot
@@ -1414,6 +1685,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Err(self.close(runtime_enqueue_error(error), services));
         }
         self.pending_applications.remove(&completion.work_id);
+        self.deferred_merge_work.remove(&completion.work_id);
         self.finality_completion = Some(FinalityCompletion {
             receipt: completion.receipt,
             artifact: completion.artifact,
@@ -1432,12 +1704,61 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             pending_fetches: self.pending_fetches.len(),
             pending_stores: self.pending_stores.len(),
             pending_validations: self.pending_validations.len(),
+            deferred_merge_work: self.deferred_merge_work.len(),
             pending_applications: self.pending_applications.len(),
             ready_bodies: self.ready_bodies.len(),
             ready_body_bytes: self.ready_body_bytes,
             pending_store_bytes: self.pending_store_bytes,
             queued_runtime_completions: self.runtime.queued_commands(),
         }
+    }
+
+    /// Exact carrier block hashes still owned by retained missing-sidecar work.
+    pub(crate) fn deferred_merge_sidecar_blocks(&self) -> BTreeSet<HashOf<BlockHeader>> {
+        self.deferred_merge_work
+            .keys()
+            .filter_map(|work_id| {
+                self.pending_validations
+                    .get(work_id)
+                    .map(|pending| pending.task.subject().block_hash)
+                    .or_else(|| {
+                        self.pending_applications
+                            .get(work_id)
+                            .map(|pending| pending.task.subject().block_hash)
+                    })
+            })
+            .collect()
+    }
+
+    /// Return whether the executor still owns this exact deferred validation.
+    pub(crate) fn retains_deferred_merge_sidecar(
+        &self,
+        work_id: EffectWorkId,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        entry_hash: HashOf<MergeLedgerEntry>,
+    ) -> bool {
+        self.deferred_merge_work.get(&work_id) == Some(&entry_hash)
+            && (self
+                .pending_validations
+                .get(&work_id)
+                .is_some_and(|pending| {
+                    pending.task.round() == round && pending.task.subject() == subject
+                })
+                || self
+                    .pending_applications
+                    .get(&work_id)
+                    .is_some_and(|pending| {
+                        pending.task.certificate().round == round
+                            && pending.task.subject() == subject
+                    }))
+    }
+
+    /// Return whether this retained missing-sidecar dependency belongs to the
+    /// uniquely decided Apply task rather than speculative validation work.
+    pub(crate) fn deferred_merge_sidecar_is_decided(&self, work_id: EffectWorkId) -> bool {
+        self.deferred_merge_work.contains_key(&work_id)
+            && self.pending_applications.contains_key(&work_id)
     }
 
     /// Borrow the durable finality values returned by Kura after application.
@@ -1592,6 +1913,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 return Err(EffectExecutorError::Contract(
                     "conflicting retransmission for one body-fetch round/subject".to_owned(),
                 ));
+            }
+            if self.deferred_merge_work.contains_key(&existing.task.id()) {
+                return Ok(());
             }
             return services
                 .enqueue_body_fetch(existing.task.clone())
@@ -1881,6 +2205,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     "conflicting validation retry for one durable body".to_owned(),
                 ));
             }
+            if self.deferred_merge_work.contains_key(&existing.task.id()) {
+                return Ok(());
+            }
             return services
                 .enqueue_body_validation(existing.task.clone())
                 .map_err(service_error);
@@ -1930,6 +2257,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 return Err(EffectExecutorError::Contract(
                     "conflicting Apply retransmission for one height".to_owned(),
                 ));
+            }
+            if self.deferred_merge_work.contains_key(&existing.task.id()) {
+                return Ok(());
             }
             return services
                 .enqueue_apply(existing.task.clone())
@@ -2054,6 +2384,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ));
         }
 
+        let protected_validation = certificate
+            .highest_prepare_qc()
+            .map(|highest| (highest.round, highest.subject));
+
         let stale = self
             .pending_signatures
             .iter()
@@ -2062,6 +2396,24 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         for id in stale {
             services.cancel_consensus_sign(id).map_err(service_error)?;
             self.pending_signatures.remove(&id);
+        }
+
+        // A durable exact body can be revalidated if a late certificate later
+        // proves it relevant. Until then, only the subject protected by this
+        // TC's selected high PrepareQC may retain asynchronous validation and
+        // merge-sidecar reservations across the certified view transition.
+        let stale = self
+            .pending_validations
+            .iter()
+            .filter_map(|(id, pending)| {
+                (pending.task.round().view < tag.view()
+                    && Some((pending.task.round(), pending.task.subject())) != protected_validation)
+                    .then_some(*id)
+            })
+            .collect::<Vec<_>>();
+        for id in stale {
+            self.deferred_merge_work.remove(&id);
+            self.pending_validations.remove(&id);
         }
 
         let stale = self
@@ -2254,6 +2606,29 @@ fn store_completion_matches(
         && receipt.manifest_hash() == HashOf::new(manifest)
 }
 
+fn merge_sidecar_reference_matches_validation(
+    task: &BodyValidationTask,
+    reference: &CertifiedMergeLedgerReference,
+) -> bool {
+    merge_sidecar_reference_matches_carrier(task.round(), task.subject(), reference)
+}
+
+fn merge_sidecar_reference_matches_carrier(
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+    reference: &CertifiedMergeLedgerReference,
+) -> bool {
+    let certificate = &reference.merge_qc;
+    reference.version == 1
+        && reference.encoded_len != 0
+        && reference.epoch_id == certificate.epoch_id
+        && certificate.carrier_height == round.height
+        // A locked body may be re-proposed in a later wire round. Its compact
+        // reference must retain the immutable original carrier view.
+        && certificate.view <= round.view
+        && subject.parent_block_hash == Some(certificate.carrier_parent_hash)
+}
+
 fn verify_pending_kura_apply_parts(
     context: &wire::HeightContext,
     decision: Option<(wire::ConsensusRound, wire::BlockSubject)>,
@@ -2313,6 +2688,7 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
         block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire},
+        merge::MergeQuorumCertificate,
         peer::PeerId,
     };
     use tempfile::TempDir;
@@ -2466,6 +2842,12 @@ mod tests {
         store_tasks: Vec<BodyStoreTask>,
         cancelled_stores: Vec<EffectWorkId>,
         validation_tasks: Vec<BodyValidationTask>,
+        deferred_merge_sidecars: Vec<(
+            EffectWorkId,
+            wire::ConsensusRound,
+            wire::BlockSubject,
+            CertifiedMergeLedgerReference,
+        )>,
         apply_tasks: Vec<ApplyTask>,
         entered_views: Vec<EventTag>,
         equivocations: Vec<wire::SumeragiV2Equivocation>,
@@ -2593,6 +2975,19 @@ mod tests {
         fn enqueue_body_validation(&mut self, task: BodyValidationTask) -> Result<(), Self::Error> {
             self.check("validation")?;
             self.validation_tasks.push(task);
+            Ok(())
+        }
+
+        fn work_deferred_for_merge_sidecar(
+            &mut self,
+            work_id: EffectWorkId,
+            round: wire::ConsensusRound,
+            subject: wire::BlockSubject,
+            reference: &CertifiedMergeLedgerReference,
+        ) -> Result<(), Self::Error> {
+            self.check("merge-sidecar")?;
+            self.deferred_merge_sidecars
+                .push((work_id, round, subject, reference.clone()));
             Ok(())
         }
 
@@ -2834,6 +3229,69 @@ mod tests {
         }
     }
 
+    fn pending_merge_validation(
+        fixture: &Fixture,
+    ) -> (
+        PendingValidation,
+        CertifiedMergeLedgerReference,
+        HashOf<MergeLedgerEntry>,
+    ) {
+        let parent_hash = HashOf::from_untyped_unchecked(Hash::new(b"merge carrier parent"));
+        let round = round(&fixture.context, 3);
+        let subject = wire::BlockSubject {
+            parent_block_hash: Some(parent_hash),
+            ..fixture.manifest.subject
+        };
+        let durable_receipt = DurableBodyReceipt::for_test(
+            fixture.context.id(),
+            round,
+            subject,
+            HashOf::new(&fixture.manifest),
+        );
+        let task = BodyValidationTask {
+            id: EffectWorkId(77),
+            tag: tag(3),
+            round,
+            subject,
+            durable_receipt,
+        };
+        let entry_hash = HashOf::from_untyped_unchecked(Hash::new(b"certified merge entry"));
+        let reference = CertifiedMergeLedgerReference {
+            version: 1,
+            entry_hash,
+            encoded_len: 512,
+            epoch_id: 9,
+            execution_batch_hash: None,
+            entrypoint_count: None,
+            entrypoint_merkle_root: None,
+            result_merkle_root: None,
+            base_state_height: None,
+            base_state_hash: None,
+            merge_qc: MergeQuorumCertificate::new(
+                2,
+                9,
+                round.height,
+                parent_hash,
+                Hash::new(b"chain id"),
+                1,
+                HashOf::new(&Vec::<PeerId>::new()),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Hash::new(b"merge certificate message"),
+            ),
+        };
+        (
+            PendingValidation {
+                task,
+                purpose: ValidationPurpose::Reducer,
+            },
+            reference,
+            entry_hash,
+        )
+    }
+
     fn complete_local_proposal_chain(
         executor: &mut V2EffectExecutor<FakeRuntime>,
         services: &mut FakeServices,
@@ -2974,6 +3432,413 @@ mod tests {
             CompletionDisposition::Stale
         );
         assert!(!executor.status().fail_closed);
+    }
+
+    #[test]
+    fn missing_merge_sidecar_retains_exact_validation_until_retry() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let (pending, reference, entry_hash) = pending_merge_validation(&fixture);
+        let work_id = pending.task.id();
+        let tag = pending.task.tag();
+        let durable = pending.task.durable_receipt().clone();
+        let round = pending.task.round();
+        let subject = pending.task.subject();
+        let task = pending.task.clone();
+        executor.pending_validations.insert(work_id, pending);
+
+        let completion = BodyValidationCompletion::DeferredMergeSidecar {
+            work_id,
+            tag,
+            reference: reference.clone(),
+        };
+        assert_eq!(
+            executor
+                .complete_body_validation(completion.clone(), &mut services)
+                .expect("defer validation for exact merge sidecar"),
+            CompletionDisposition::Deferred
+        );
+        assert_eq!(executor.pending_validations.len(), 1);
+        assert_eq!(executor.status().deferred_merge_work, 1);
+        assert_eq!(
+            services.deferred_merge_sidecars,
+            vec![(work_id, round, subject, reference.clone())]
+        );
+        assert!(executor.runtime.completions.is_empty());
+        assert!(services.rejected_validations.is_empty());
+
+        assert_eq!(
+            executor
+                .complete_body_validation(completion, &mut services)
+                .expect("duplicate deferral is idempotent"),
+            CompletionDisposition::Deferred
+        );
+        assert_eq!(services.deferred_merge_sidecars.len(), 1);
+
+        let unrelated_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"unrelated certified merge entry"));
+        assert_eq!(
+            executor
+                .retry_deferred_merge_sidecar(unrelated_hash, &mut services)
+                .expect("unrelated sidecar completion is ignored"),
+            0
+        );
+        assert_eq!(executor.status().deferred_merge_work, 1);
+        assert_eq!(
+            executor
+                .retry_deferred_merge_sidecar(entry_hash, &mut services)
+                .expect("retry exact deferred validation"),
+            1
+        );
+        assert_eq!(executor.status().deferred_merge_work, 0);
+        assert_eq!(services.validation_tasks.last(), Some(&task));
+        assert_eq!(executor.pending_validations.len(), 1);
+
+        assert_eq!(
+            executor
+                .complete_body_validation(
+                    BodyValidationCompletion::Validated {
+                        work_id,
+                        tag,
+                        receipt: ValidatedBodyReceipt::for_test(durable),
+                    },
+                    &mut services,
+                )
+                .expect("complete exact retried validation"),
+            CompletionDisposition::Enqueued
+        );
+        assert!(executor.pending_validations.is_empty());
+        assert!(matches!(
+            executor.runtime.completions.last(),
+            Some(RuntimeCompletion::ValidationSucceeded(
+                completion_tag,
+                completion_round,
+                completion_subject,
+                _
+            )) if *completion_tag == tag
+                && *completion_round == round
+                && *completion_subject == subject
+        ));
+    }
+
+    #[test]
+    fn uniquely_invalid_merge_sidecar_terminally_rejects_exact_deferred_work() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let (pending, reference, entry_hash) = pending_merge_validation(&fixture);
+        let work_id = pending.task.id();
+        let tag = pending.task.tag();
+        let round = pending.task.round();
+        let subject = pending.task.subject();
+        executor.pending_validations.insert(work_id, pending);
+        executor
+            .complete_body_validation(
+                BodyValidationCompletion::DeferredMergeSidecar {
+                    work_id,
+                    tag,
+                    reference,
+                },
+                &mut services,
+            )
+            .expect("defer validation");
+
+        let unrelated_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"unrelated certified merge entry"));
+        assert_eq!(
+            executor
+                .reject_deferred_merge_sidecar(
+                    unrelated_hash,
+                    "invalid unrelated entry",
+                    &mut services
+                )
+                .expect("ignore unrelated rejection"),
+            0
+        );
+        assert_eq!(executor.pending_validations.len(), 1);
+        assert_eq!(
+            executor
+                .reject_deferred_merge_sidecar(entry_hash, "invalid certified entry", &mut services)
+                .expect("reject exact deferred entry"),
+            1
+        );
+        assert!(executor.pending_validations.is_empty());
+        assert_eq!(executor.status().deferred_merge_work, 0);
+        assert_eq!(
+            services.rejected_validations,
+            vec!["invalid certified entry".to_owned()]
+        );
+        assert!(matches!(
+            executor.runtime.completions.last(),
+            Some(RuntimeCompletion::ValidationFailed(
+                completion_tag,
+                completion_round,
+                completion_subject
+            )) if *completion_tag == tag
+                && *completion_round == round
+                && *completion_subject == subject
+        ));
+    }
+
+    #[test]
+    fn conflicting_reference_registration_rejects_only_its_exact_work_id() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let (first, first_reference, entry_hash) = pending_merge_validation(&fixture);
+        let first_id = first.task.id();
+        let mut second = first.clone();
+        second.task.id = EffectWorkId(78);
+        second.task.subject.block_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"conflicting second carrier"));
+        second.task.durable_receipt = DurableBodyReceipt::for_test(
+            fixture.context.id(),
+            second.task.round,
+            second.task.subject,
+            HashOf::new(&fixture.manifest),
+        );
+        let second_id = second.task.id();
+        let mut second_reference = first_reference.clone();
+        second_reference.encoded_len += 1;
+        executor.pending_validations.insert(first_id, first);
+        executor
+            .pending_validations
+            .insert(second_id, second.clone());
+
+        for (work_id, tag, reference) in [
+            (first_id, tag(3), first_reference),
+            (second_id, tag(3), second_reference),
+        ] {
+            executor
+                .complete_body_validation(
+                    BodyValidationCompletion::DeferredMergeSidecar {
+                        work_id,
+                        tag,
+                        reference,
+                    },
+                    &mut services,
+                )
+                .expect("retain independently keyed deferral");
+        }
+        assert_eq!(executor.status().deferred_merge_work, 2);
+
+        assert_eq!(
+            executor
+                .reject_deferred_merge_sidecar_work(
+                    second_id,
+                    "conflicting compact reference metadata",
+                    &mut services,
+                )
+                .expect("reject only conflicting registration"),
+            CompletionDisposition::Enqueued
+        );
+        assert!(!executor.pending_validations.contains_key(&second_id));
+        assert!(executor.pending_validations.contains_key(&first_id));
+        assert_eq!(
+            executor.deferred_merge_work.get(&first_id),
+            Some(&entry_hash)
+        );
+        assert_eq!(executor.status().deferred_merge_work, 1);
+    }
+
+    #[test]
+    fn decided_apply_retries_after_exact_merge_sidecar_recovery() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let (pending_validation, reference, entry_hash) = pending_merge_validation(&fixture);
+        let work_id = EffectWorkId(91);
+        let mut certificate = fixture.qc(wire::GlobalPhase::Commit);
+        certificate.round = pending_validation.task.round();
+        certificate.subject = pending_validation.task.subject();
+        let task = ApplyTask {
+            id: work_id,
+            tag: pending_validation.task.tag(),
+            subject: pending_validation.task.subject(),
+            certificate,
+            validated_receipt: ValidatedBodyReceipt::for_test(
+                pending_validation.task.durable_receipt().clone(),
+            ),
+        };
+        executor
+            .pending_applications
+            .insert(work_id, PendingApply { task: task.clone() });
+
+        assert_eq!(
+            executor
+                .defer_application_for_merge_sidecar(work_id, &reference, &mut services)
+                .expect("defer decided apply"),
+            CompletionDisposition::Deferred
+        );
+        assert_eq!(executor.status().deferred_merge_work, 1);
+        assert_eq!(services.apply_tasks.len(), 0);
+        assert_eq!(
+            executor
+                .retry_deferred_merge_sidecar(entry_hash, &mut services)
+                .expect("retry decided apply after sidecar persistence"),
+            1
+        );
+        assert_eq!(
+            services.apply_tasks.last().map(ApplyTask::id),
+            Some(work_id)
+        );
+        assert_eq!(executor.status().deferred_merge_work, 0);
+        assert!(executor.pending_applications.contains_key(&work_id));
+    }
+
+    #[test]
+    fn deferred_merge_sidecar_must_match_carrier_height_parent_and_round_ceiling() {
+        for mismatch in 0..3 {
+            let fixture = Fixture::new();
+            let mut executor = fixture.executor(EffectQueueConfig::default());
+            let mut services = fixture.services();
+            let (pending, mut reference, _) = pending_merge_validation(&fixture);
+            let work_id = pending.task.id();
+            let tag = pending.task.tag();
+            match mismatch {
+                0 => {
+                    reference.merge_qc.carrier_height =
+                        reference.merge_qc.carrier_height.saturating_add(1);
+                }
+                1 => {
+                    reference.merge_qc.carrier_parent_hash = HashOf::from_untyped_unchecked(
+                        Hash::new(b"different merge carrier parent"),
+                    );
+                }
+                2 => {
+                    reference.merge_qc.view = pending.task.round().view.saturating_add(1);
+                }
+                _ => unreachable!(),
+            }
+            executor.pending_validations.insert(work_id, pending);
+            assert!(matches!(
+                executor.complete_body_validation(
+                    BodyValidationCompletion::DeferredMergeSidecar {
+                        work_id,
+                        tag,
+                        reference,
+                    },
+                    &mut services,
+                ),
+                Err(EffectExecutorError::BodyStore(_))
+            ));
+            assert!(executor.status().fail_closed);
+            assert_eq!(executor.pending_validations.len(), 1);
+            assert_eq!(executor.status().deferred_merge_work, 0);
+            assert!(services.deferred_merge_sidecars.is_empty());
+            assert!(executor.runtime.completions.is_empty());
+        }
+    }
+
+    #[test]
+    fn certified_view_prunes_unprotected_merge_sidecar_work_but_keeps_high_qc_subject() {
+        for protected in [false, true] {
+            let fixture = Fixture::new();
+            let mut executor = fixture.executor(EffectQueueConfig::default());
+            let mut services = fixture.services();
+            let (pending, reference, entry_hash) = pending_merge_validation(&fixture);
+            let work_id = pending.task.id();
+            let subject = pending.task.subject();
+            let round = pending.task.round();
+            let completion_tag = pending.task.tag();
+            executor.pending_validations.insert(work_id, pending);
+            executor
+                .complete_body_validation(
+                    BodyValidationCompletion::DeferredMergeSidecar {
+                        work_id,
+                        tag: completion_tag,
+                        reference,
+                    },
+                    &mut services,
+                )
+                .expect("defer exact prior-view work");
+
+            let mut timeout = timeout_at_view(&fixture, round.view);
+            if protected {
+                let mut highest = fixture.qc(wire::GlobalPhase::Prepare);
+                highest.round = round;
+                highest.subject = subject;
+                timeout.groups[0].highest_prepare_qc = Some(highest);
+            }
+            executor
+                .install_view(tag(round.view + 1), timeout, &mut services)
+                .expect("install certified next view");
+
+            assert_eq!(
+                executor.retains_deferred_merge_sidecar(work_id, round, subject, entry_hash),
+                protected
+            );
+            assert_eq!(
+                executor.pending_validations.contains_key(&work_id),
+                protected
+            );
+            assert_eq!(
+                executor.status().deferred_merge_work,
+                if protected { 1 } else { 0 }
+            );
+        }
+    }
+
+    #[test]
+    fn certified_view_protects_only_the_exact_high_qc_round_for_one_subject() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let (first, reference, entry_hash) = pending_merge_validation(&fixture);
+        let first_id = first.task.id();
+        let subject = first.task.subject();
+        let first_round = first.task.round();
+        let second_round = round(&fixture.context, first_round.view + 1);
+        let second_id = EffectWorkId(79);
+        let mut second = first.clone();
+        second.task.id = second_id;
+        second.task.tag = tag(second_round.view);
+        second.task.round = second_round;
+        second.task.durable_receipt = DurableBodyReceipt::for_test(
+            fixture.context.id(),
+            second_round,
+            subject,
+            HashOf::new(&fixture.manifest),
+        );
+        executor.pending_validations.insert(first_id, first);
+        executor.pending_validations.insert(second_id, second);
+
+        for (work_id, completion_tag) in [(first_id, tag(3)), (second_id, tag(4))] {
+            executor
+                .complete_body_validation(
+                    BodyValidationCompletion::DeferredMergeSidecar {
+                        work_id,
+                        tag: completion_tag,
+                        reference: reference.clone(),
+                    },
+                    &mut services,
+                )
+                .expect("defer same-subject validation round");
+        }
+
+        let mut timeout = timeout_at_view(&fixture, second_round.view);
+        let mut highest = fixture.qc(wire::GlobalPhase::Prepare);
+        highest.round = second_round;
+        highest.subject = subject;
+        timeout.groups[0].highest_prepare_qc = Some(highest);
+        executor
+            .install_view(tag(second_round.view + 1), timeout, &mut services)
+            .expect("install certified view with exact high PrepareQC");
+
+        assert!(!executor.retains_deferred_merge_sidecar(
+            first_id,
+            first_round,
+            subject,
+            entry_hash
+        ));
+        assert!(executor.retains_deferred_merge_sidecar(
+            second_id,
+            second_round,
+            subject,
+            entry_hash
+        ));
+        assert_eq!(executor.status().deferred_merge_work, 1);
     }
 
     #[test]

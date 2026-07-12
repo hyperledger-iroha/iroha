@@ -13,12 +13,13 @@ change consensus state or authorize a signature.
 
 ## Frozen height context
 
-Every message is bound to a `HeightContextId`. The hashed context contains:
+Every global consensus message is bound to a `HeightContextId`. The hashed context contains:
 
 - chain and protocol identifiers;
 - height, epoch, and the previous height's CommitQC;
 - the ordered voting roster and every validator's voting power;
-- the complete Nexus/AMX consensus context and DA layout;
+- the complete Nexus/AMX consensus context and DA layout, including the canonical active-lane
+  lifecycle map of `(lane_id, incarnation, activation_height)` tuples sorted by lane id;
 - the epoch leader seed and quorum policy.
 
 The frozen voting roster is capped by protocol at 128 validators. This is not a local tuning knob:
@@ -40,8 +41,9 @@ view-zero leader is also cryptographically verified before reducer admission.
 
 Genesis carries this projection as `sumeragi_v2.nexus_amx_context_hash`. The canonical projection
 binds the validated lane and dataspace catalogs, routing, staking, fees, AXT, lane fusion and
-autoscaling, DA policy, deterministic AMX budgets, and the ordered active public-lane validator
-records. Local paths, worker counts, caches, and telemetry are deliberately excluded. An unsigned
+autoscaling, DA policy, deterministic AMX budgets, the ordered active public-lane validator
+records, and each active lane's incarnation plus activation height. Local paths, worker counts,
+caches, and telemetry are deliberately excluded. An unsigned
 deployment template whose final roster is not known carries the config-only projection. `kagami
 genesis sign` stages the complete genesis transaction, including validator activation, then
 replaces the projection and consensus fingerprint with the exact staged values before it emits a
@@ -88,6 +90,11 @@ the same chain configuration without voting. Worker counts, local scheduling bud
 caches, and telemetry are also local-only. The DA encoding, chunk geometry, maximum chunk count,
 and Nexus/AMX commitment are already signed into the `HeightContext`; mutable RBC configuration is
 not a second source of those values.
+
+A native AMX route plan is capped at 256 total legs including its single coordinator, so a receipt
+can carry at most 255 participant legs. Request validation, block admission, and certified merge
+replay apply that same coordinator-inclusive boundary; a 256-participant receipt is rejected before
+committee or aggregate-signature work.
 
 For authoritative NPoS validity, `sumeragi_npos_parameters` must exist in committed world state.
 Genesis builders emit it for NPoS chains. VRF scheduling, evidence attribution, and slashing delay
@@ -225,9 +232,81 @@ sync remain transport mechanisms. Chunk signatures bind epoch, height, view, con
 subject, payload root, encoding, chunk index, and total chunk count, preventing replay or mixed
 reconstruction.
 
-Lane-local RBC commitments and lane Prepare/Commit certificates are separate block-validity inputs
-and are unchanged. Missing lane or AMX work is fetched or requeued; it cannot prevent an honest
-leader from proposing an empty heartbeat block.
+Lane-local work is released only after the reducer installs a PrepareQC lock for one exact global
+body. Validators reconstruct the lane proposals from that durable body and then form lane
+Prepare/Commit certificates asynchronously; a losing or merely advertised global proposal cannot
+advance a lane. Global application therefore does not wait for the lane CommitQC. Before the next
+lane-local height becomes eligible, Kura must durably hold the exact lane certificate and either an
+application receipt bound to the canonical global block and its transaction results while those
+results are retained, or the exact hash-only snapshot anchor after compaction. Restart repairs the
+narrow full-body certificate-before-receipt crash boundary from those canonical artifacts.
+
+Fast global finality does not reset unfinished canonical lane consensus. At each global-height
+boundary the runner carries only the bounded lane-session cache whose proposal identity matches the
+exact Kura ownership artifact, whose incarnation remains active in the successor context, and whose
+lane-local height has neither an application receipt nor a hash-only snapshot anchor. Matching
+remote votes, a PrepareQC, pending certificate broadcasts, and signer commit locks survive intact;
+the advisory global-block hint is normalized to Kura's exact anchor. Unanchored proposal siblings,
+orphan evidence, applied slots, and inactive incarnations are pruned, while a quorum-certified
+identity that conflicts with the canonical recovered proposal stops rollover before mutation. The
+successor reapplies its configured ordinary-session bound without evicting protected commit evidence.
+
+A complete lane session whose exact carrier is durable in Kura but not yet committed in WSV is a
+deferred apply boundary, not a fatal certificate error. It remains in the bounded retry queue. The
+runner attempts idempotent certificate-and-receipt persistence during every actor loop as well as at
+terminal height rollover, so the session is published immediately after State reaches the carrier
+and is then excluded from successor rollover.
+
+The inverse crash boundary is also authenticated explicitly. If Kura contains the exact global
+lane body and ownership sidecars but WSV commit did not finish, restart does not rerun mutable lane
+planning. Recovery verifies the canonical block hash, exact ownership sidecars, active route and
+incarnation, QC tag, committee, expected global leader, replay material, and applied-or-snapshot
+predecessor, then still runs the normal complete block validator. Any drift fails closed. Missing
+lane or AMX work is fetched or requeued, and an honest leader can still propose an empty heartbeat
+when no transaction work is ready.
+
+Merge-committee certificates are likewise not applied out of band. A complete certificate is
+stored as a hash-addressed Kura sidecar bound to one global height, parent, and view. The matching
+V2 proposal carries a compact certified reference, binds the certified execution batch to the
+carrier application header and ledger time, and defers ordinary queue work at or after that time
+or duplicating a certified batch entrypoint. Block validation resolves and revalidates the exact
+sidecar, and Kura commits the carrier block and merge-log record in the same global order, with
+rollback and restart reconciliation coupled to block persistence. Old-view sidecars and signatures
+cannot be rebound to a later-view proposal; an earlier-view global block that already reaches a
+CommitQC remains decisive only with its exact earlier-view carrier.
+
+If that exact sidecar is absent during deterministic body validation or later decided application,
+the exact work identifier is retained rather than converted into a permanent rejection. The node
+requests fixed-boundary, hash-addressed chunks only from the merge QC's authenticated signer set,
+validates the canonical full entry against the compact reference and current global order, persists
+it in Kura, and retries the same durable work. Before allocating a fetch, compact-QC preflight
+requires the exact frozen roster, chain digest, hard count/byte caps, dual quorum, canonical signer
+PoPs, and a valid aggregate signature. Inbound sessions are keyed by both entry hash and the full
+reference digest, so attacker-first conflicting length or execution metadata cannot poison an
+honest decided body with the same claimed hash. Ordinary validation traffic leaves global and
+per-holder session/byte headroom for the uniquely decided Apply dependency, and idle requests resume
+strictly after a fairness cursor. A full outbound queue is detected before cryptographic preflight;
+successful authentication is cached by the canonical QC identity for this height, while every
+unsigned reference variant still reruns cheap shape and carrier checks. Returning an unsent request
+to the idle set restores its holder cursor and timeout attempt count because no network attempt
+occurred. Sidecar traffic otherwise has reserved, fairly drained capacity; active bounded responses
+do not expire merely because a protocol-sized transfer spans many ticks. Capacity pressure,
+transient Kura publication failure, and holder outages remain retryable. Registration failures
+reject only their exact body/work tuple, while hash-wide rejection requires a fully decoded
+reference-matching entry.
+
+On a certified view transition, deferred work not protected by the exact round and subject of the
+TC's selected high PrepareQC is released from the executor and transport. Kura cleanup is cached by
+certified carrier-state transition rather than rescanning its bounded store on every actor loop.
+With neither a lock nor a durable decision, Kura retains only entries eligible for the new exact
+carrier round; the initial directive installs that retention before ingress opens. With a lock or
+durable decision, cleanup waits for the durable body and retains only its exact compact reference,
+including an immutable earlier origin view. A durable decision also stops new merge-candidate
+production. Locked-body insertion validates the complete next lane-session cache before deleting
+losing durable sidecars, and already-quorate merge candidates retry Kura publication on the normal
+retransmission cadence. Finalized height rollover removes all remaining losing sidecars. This keeps
+the in-memory and durable caps live without deleting an entry that a delayed decisive CommitQC can
+still require.
 
 ## Finalized membership and lane observability
 
@@ -245,15 +324,38 @@ its `authoritative` field contains the same reducer status and its lane vectors 
 `local_peer_removed` flag are identical to the JSON projection. Nexus-disabled nodes return all
 lane-detail arrays empty. The OpenAPI schema requires the lane arrays plus the local-removal flag so
 route probes and operators do not mistake a missing projection for lane progress.
+The response and producer caches enforce protocol resource caps: at most 128 settlement
+commitments, 64 relay envelopes, 128 payload-ownership records, 128 committed-lane summaries, and
+128 live lane-block sessions. Oversized typed or JSON responses fail closed instead of turning
+operator status into an unbounded allocation surface.
 
 The authoritative snapshot also carries the active frozen epoch, epoch end, consensus mode, raw
 32-byte leader seed, validator count, and dual-quorum parameters. Its latest durable CommitQC
 summary is evaluated under that certificate's own retained height context, including exact signer
 and voting-power totals across an epoch boundary. Local diagnostics are kept in a separate
 `operator` member: process-monotonic v2 view-install and busy-deferral counters, bounded adapter
-queue occupancy, and an exact transaction-queue pressure sample. Torii and the Rust client reject
+queue occupancy, and an exact transaction-queue pressure sample. The shared typed validator rejects
+payload-ownership rows whose canonical replay hashes do not recompute, committed-lane rows with
+unknown execution labels, mismatched payload-availability flags, or impossible certified quorums,
+and live session rows with impossible vote/quorum counts. Torii and the Rust client also reject
 impossible queue bounds, inconsistent commit identity, unsupported protocol versions, and commit
 summaries that do not satisfy both frozen quorum dimensions.
+
+The JSON projection follows the Norito JSON contract exactly. Fixed byte arrays such as
+`height_context.epoch_seed`, settlement `source_id`, and relay `manifest_root` are uppercase hex
+strings of the exact byte width; they are not JSON byte arrays. Unit enums remain tagged objects:
+for example mode is `{"mode":"permissioned","details":null}`, reducer phase is
+`{"phase":"prepare","details":null}`, and body state is
+`{"state":"validated","details":null}`. Settlement `u128` totals and receipt amounts are
+projected as canonical unsigned decimal strings (zero is `"0"`; signs, whitespace, and leading
+zeroes are rejected) so JavaScript clients do not lose precision. Liquidity and volatility use
+their declared Norito tags, for example `{"profile":"Tier1","state":null}` and
+`{"bucket":"Stable","state":null}`.
+
+Each `lane_relay_envelopes` entry exposes the actual relay record: `block_header`, nullable `qc`,
+nullable `da_commitment_hash`, its settlement commitment and hash, and RBC byte total. Optional
+`lane_block_descriptor_hash`, uppercase-hex `manifest_root`, and `fastpq_proof` are omitted when
+absent. The JSON wire does not contain the retired synthetic `block_hash` or `commit_qc` keys.
 
 ## Safety WAL
 

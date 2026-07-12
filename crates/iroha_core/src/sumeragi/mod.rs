@@ -3139,6 +3139,34 @@ mod tests {
     }
 
     #[test]
+    fn lane_block_artifact_dedup_window_is_short_and_non_sliding() {
+        let mut cache = BlockPayloadDedupCache::new(4, BLOCK_PAYLOAD_DEDUP_CACHE_TTL);
+        let t0 = Instant::now();
+        let key = BlockPayloadDedupKey::LaneBlockArtifact {
+            artifact_hash: Hash::new(b"fixed-window-lane-artifact"),
+        };
+
+        assert!(cache.insert(key, t0).inserted);
+        assert!(
+            !cache
+                .insert(
+                    key,
+                    t0 + LANE_BLOCK_ARTIFACT_DEDUP_CACHE_TTL - Duration::from_millis(1),
+                )
+                .inserted,
+            "an exact retry inside the lane-artifact window must be suppressed"
+        );
+        let after_original_window =
+            t0 + LANE_BLOCK_ARTIFACT_DEDUP_CACHE_TTL + Duration::from_millis(1);
+        let outcome = cache.insert(key, after_original_window);
+        assert!(
+            outcome.inserted,
+            "duplicates must not slide the deadline and suppress post-prune recovery forever"
+        );
+        assert_eq!(outcome.evicted_expired, 1);
+    }
+
+    #[test]
     fn block_payload_dedup_partitions_by_kind() {
         let mut cache = BlockPayloadDedupCache::new(2, Duration::from_secs(30));
         let now = Instant::now();
@@ -5552,6 +5580,125 @@ mod tests {
             LaneBlockQueueFixture::Qc,
             true,
         );
+    }
+
+    fn assert_exact_duplicate_lane_block_artifact_does_not_wait_on_full_queue(
+        fixture: LaneBlockQueueFixture,
+    ) {
+        const CAP: usize = 1;
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+        let target_rx = match fixture.queue_kind() {
+            status::WorkerQueueKind::Votes => &vote_rx,
+            status::WorkerQueueKind::Blocks => &block_rx,
+            other => panic!("unexpected lane-block queue kind: {other:?}"),
+        };
+
+        let original = fixture.message();
+        let original_sender = checked_peer();
+        assert!(
+            handle.try_incoming_block_message_from(original_sender.clone(), original.clone()),
+            "first lane-block artifact should fill its target ingress queue"
+        );
+
+        // The retransmit may arrive through a different peer because lane artifacts are relayed.
+        // Its encoded artifact bytes, not its transport source, define an exact duplicate.
+        let relay_sender = checked_peer();
+        let (done_tx, done_rx) = mpsc::channel();
+        let handle_clone = handle.clone();
+        let duplicate = original.clone();
+        let relay_sender_clone = relay_sender.clone();
+        let join = std::thread::spawn(move || {
+            let accepted =
+                handle_clone.try_incoming_block_message_from(relay_sender_clone, duplicate);
+            let _ = done_tx.send(accepted);
+        });
+
+        let duplicate_accepted = match done_rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(accepted) => accepted,
+            Err(err) => {
+                // Ensure a regression fails cleanly instead of leaving a blocked test thread.
+                let _ = target_rx
+                    .recv()
+                    .expect("drain target queue to release duplicate sender");
+                let accepted = done_rx
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("duplicate sender should finish after target queue drains");
+                join.join().expect("join duplicate lane-block sender");
+                panic!(
+                    "exact duplicate lane-block artifact blocked on a full queue: {err}; \
+                     accepted after drain={accepted}"
+                );
+            }
+        };
+        join.join().expect("join duplicate lane-block sender");
+        assert!(
+            !duplicate_accepted,
+            "exact duplicate lane-block artifact must be rejected before enqueue"
+        );
+
+        for _ in 0..(TEST_CHANNEL_CAP * 4) {
+            assert!(
+                !handle.try_incoming_block_message_from(relay_sender.clone(), original.clone()),
+                "periodic exact retransmits must not consume additional queue capacity"
+            );
+        }
+
+        let received = target_rx
+            .try_recv()
+            .expect("only the first lane-block artifact should remain queued");
+        assert_eq!(received.sender, Some(original_sender));
+        assert!(fixture.matches(&received.message));
+        assert!(
+            target_rx.try_recv().is_err(),
+            "duplicate must not be queued"
+        );
+
+        let distinct = fixture.message();
+        assert!(
+            handle.try_incoming_block_message_from(relay_sender.clone(), distinct),
+            "a distinct lane-block artifact must not be suppressed"
+        );
+        let received = target_rx
+            .try_recv()
+            .expect("distinct lane-block artifact should be queued");
+        assert_eq!(received.sender, Some(relay_sender));
+        assert!(fixture.matches(&received.message));
+    }
+
+    #[test]
+    fn exact_duplicate_lane_block_artifacts_do_not_fill_block_or_vote_ingress() {
+        for fixture in [
+            LaneBlockQueueFixture::Proposal,
+            LaneBlockQueueFixture::Vote,
+            LaneBlockQueueFixture::Qc,
+        ] {
+            assert_exact_duplicate_lane_block_artifact_does_not_wait_on_full_queue(fixture);
+        }
     }
 
     #[test]
@@ -13023,13 +13170,20 @@ enum BlockPayloadDedupKey {
         idx: u32,
         bytes_hash: CryptoHash,
     },
+    LaneBlockArtifact {
+        artifact_hash: CryptoHash,
+    },
 }
 
 const VOTE_DEDUP_CACHE_CAP: usize = 8192;
 const VOTE_DEDUP_CACHE_TTL: Duration = Duration::from_secs(60);
 const BLOCK_PAYLOAD_DEDUP_CACHE_CAP: usize = 8192;
 const BLOCK_PAYLOAD_DEDUP_CACHE_TTL: Duration = Duration::from_secs(120);
-const BLOCK_PAYLOAD_DEDUP_KIND_COUNT: usize = 11;
+/// Exact lane artifacts are replayed on a bounded cadence for liveness. Keep a
+/// short, fixed (non-sliding) dedup window so a session pruned during a view
+/// change can accept byte-identical votes/QCs again after Kura reconstruction.
+const LANE_BLOCK_ARTIFACT_DEDUP_CACHE_TTL: Duration = Duration::from_secs(2);
+const BLOCK_PAYLOAD_DEDUP_KIND_COUNT: usize = 12;
 const BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND: usize =
     if BLOCK_PAYLOAD_DEDUP_CACHE_CAP / BLOCK_PAYLOAD_DEDUP_KIND_COUNT == 0 {
         1
@@ -13145,6 +13299,18 @@ fn push_optional_hash(buf: &mut Vec<u8>, hash: Option<CryptoHash>) {
     }
 }
 
+fn lane_block_artifact_dedup_key(message: &BlockMessage) -> Option<BlockPayloadDedupKey> {
+    matches!(
+        message,
+        BlockMessage::LaneBlockProposal(_)
+            | BlockMessage::LaneBlockVote(_)
+            | BlockMessage::LaneBlockQc(_)
+    )
+    .then(|| BlockPayloadDedupKey::LaneBlockArtifact {
+        artifact_hash: CryptoHash::new(message.encode()),
+    })
+}
+
 #[derive(Debug)]
 struct DedupEntry {
     last_seen: Instant,
@@ -13196,6 +13362,34 @@ where
             entry.last_seen = now;
             self.entries.insert(key.clone(), entry);
             self.lru.insert((order, key));
+            return DedupInsertOutcome {
+                inserted: false,
+                evicted_capacity: 0,
+                evicted_expired,
+            };
+        }
+
+        let evicted_capacity = self.evict_capacity();
+        let order = self.next_order();
+        self.entries.insert(
+            key.clone(),
+            DedupEntry {
+                last_seen: now,
+                order,
+            },
+        );
+        self.lru.insert((order, key));
+        DedupInsertOutcome {
+            inserted: true,
+            evicted_capacity,
+            evicted_expired,
+        }
+    }
+
+    /// Insert under a fixed suppression window that duplicate arrivals do not extend.
+    fn insert_fixed_window(&mut self, key: T, now: Instant) -> DedupInsertOutcome {
+        let evicted_expired = self.evict_expired(now);
+        if self.entries.contains_key(&key) {
             return DedupInsertOutcome {
                 inserted: false,
                 evicted_capacity: 0,
@@ -13314,6 +13508,7 @@ struct BlockPayloadDedupCache {
     fetch_pending_block: DedupCache<BlockPayloadDedupKey>,
     certified_block_fetch: DedupCache<BlockPayloadDedupKey>,
     rbc_chunk: DedupCache<BlockPayloadDedupKey>,
+    lane_block_artifact: DedupCache<BlockPayloadDedupKey>,
 }
 
 impl BlockPayloadDedupCache {
@@ -13330,6 +13525,10 @@ impl BlockPayloadDedupCache {
             fetch_pending_block: DedupCache::new(cap_per_kind, ttl),
             certified_block_fetch: DedupCache::new(cap_per_kind, ttl),
             rbc_chunk: DedupCache::new(cap_per_kind, ttl),
+            lane_block_artifact: DedupCache::new(
+                cap_per_kind,
+                ttl.min(LANE_BLOCK_ARTIFACT_DEDUP_CACHE_TTL),
+            ),
         }
     }
 
@@ -13355,6 +13554,9 @@ impl BlockPayloadDedupCache {
                 self.certified_block_fetch.insert(key, now)
             }
             BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.insert(key, now),
+            BlockPayloadDedupKey::LaneBlockArtifact { .. } => {
+                self.lane_block_artifact.insert_fixed_window(key, now)
+            }
         }
     }
 
@@ -13376,6 +13578,7 @@ impl BlockPayloadDedupCache {
                 self.certified_block_fetch.remove(key)
             }
             BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.remove(key),
+            BlockPayloadDedupKey::LaneBlockArtifact { .. } => self.lane_block_artifact.remove(key),
         }
     }
 
@@ -13402,6 +13605,9 @@ impl BlockPayloadDedupCache {
                 self.certified_block_fetch.contains(key)
             }
             BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.contains(key),
+            BlockPayloadDedupKey::LaneBlockArtifact { .. } => {
+                self.lane_block_artifact.contains(key)
+            }
         }
     }
 
@@ -13418,6 +13624,7 @@ impl BlockPayloadDedupCache {
         self.fetch_pending_block.clear();
         self.certified_block_fetch.clear();
         self.rbc_chunk.clear();
+        self.lane_block_artifact.clear();
     }
 
     #[cfg(test)]
@@ -13433,6 +13640,7 @@ impl BlockPayloadDedupCache {
             + self.fetch_pending_block.len()
             + self.certified_block_fetch.len()
             + self.rbc_chunk.len()
+            + self.lane_block_artifact.len()
     }
 
     #[cfg(test)]
@@ -13454,6 +13662,7 @@ impl BlockPayloadDedupCache {
                 self.certified_block_fetch.len()
             }
             BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.len(),
+            BlockPayloadDedupKey::LaneBlockArtifact { .. } => self.lane_block_artifact.len(),
         }
     }
 }
@@ -13890,6 +14099,9 @@ impl SumeragiHandle {
                 status::DedupEvictionKind::BlockBodyResponse
             }
             BlockPayloadDedupKey::RbcChunk { .. } => status::DedupEvictionKind::RbcChunk,
+            BlockPayloadDedupKey::LaneBlockArtifact { .. } => {
+                status::DedupEvictionKind::LaneBlockArtifact
+            }
         };
         let mut guard = lock_block_payload_dedup_cache(&self.block_payload_dedup);
         let outcome = guard.insert(key, Instant::now());
@@ -13918,48 +14130,12 @@ impl SumeragiHandle {
     /// Enqueue an incoming block message without blocking the caller.
     /// Returns `true` if the message was accepted by the queue.
     ///
-    /// Note: this is a best-effort enqueue that drops messages when queues are saturated
-    /// to avoid stalling upstream relays. Block-sync updates and critical payload messages
-    /// (block creation, exact body repair, proposals, RBC INIT, and RBC chunks),
-    /// certified-block fetches, consensus-priority/commit-QC-only pending-block fetches,
-    /// standalone lane-block proposal/vote/QC evidence, plus RBC READY/DELIVER and QC
-    /// votes/certificates, always use blocking semantics because dropping them can stall
-    /// consensus or lane-block recovery.
+    /// Note: this is a best-effort enqueue for messages that tolerate queue
+    /// saturation. [`BlockMessage::requires_blocking_ingress`] is the canonical
+    /// classification for liveness-critical consensus and recovery artifacts.
     pub fn try_incoming_block_message(&self, msg: BlockMessage) -> bool {
         let msg = msg.normalize();
-        let blocking = msg.v2_requires_blocking_ingress()
-            || matches!(
-                &msg,
-                BlockMessage::BlockSyncUpdate(_)
-                    | BlockMessage::BlockCreated(_)
-                    | BlockMessage::BlockBodyResponse(_)
-                    | BlockMessage::FetchBlockBody(_)
-                    | BlockMessage::CertifiedBlockFetch(_)
-                    | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
-                        priority: Some(message::FetchPendingBlockPriority::Consensus),
-                        ..
-                    })
-                    | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
-                        commit_qc_only: Some(true),
-                        ..
-                    })
-                    | BlockMessage::Proposal(_)
-                    | BlockMessage::LaneBlockProposal(_)
-                    | BlockMessage::LaneExecutablePayload(_)
-                    | BlockMessage::LaneExecutablePayloadHandoff(_)
-                    | BlockMessage::LaneBlockNewViewVote(_)
-                    | BlockMessage::LaneBlockNewViewCertificate(_)
-                    | BlockMessage::LaneBlockVote(_)
-                    | BlockMessage::LaneBlockQc(_)
-                    | BlockMessage::QcVote(_)
-                    | BlockMessage::Qc(_)
-                    | BlockMessage::VrfCommit(_)
-                    | BlockMessage::VrfReveal(_)
-                    | BlockMessage::RbcInit(_)
-                    | BlockMessage::RbcChunk(_)
-                    | BlockMessage::RbcReady(_)
-                    | BlockMessage::RbcDeliver(_)
-            );
+        let blocking = msg.requires_blocking_ingress();
         let mode = if blocking {
             IngressMode::Blocking
         } else {
@@ -13972,39 +14148,7 @@ impl SumeragiHandle {
     /// Returns `true` if the message was accepted by the queue.
     pub fn try_incoming_block_message_from(&self, sender: PeerId, msg: BlockMessage) -> bool {
         let msg = msg.normalize();
-        let blocking = msg.v2_requires_blocking_ingress()
-            || matches!(
-                &msg,
-                BlockMessage::BlockSyncUpdate(_)
-                    | BlockMessage::BlockCreated(_)
-                    | BlockMessage::BlockBodyResponse(_)
-                    | BlockMessage::FetchBlockBody(_)
-                    | BlockMessage::CertifiedBlockFetch(_)
-                    | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
-                        priority: Some(message::FetchPendingBlockPriority::Consensus),
-                        ..
-                    })
-                    | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
-                        commit_qc_only: Some(true),
-                        ..
-                    })
-                    | BlockMessage::Proposal(_)
-                    | BlockMessage::LaneBlockProposal(_)
-                    | BlockMessage::LaneExecutablePayload(_)
-                    | BlockMessage::LaneExecutablePayloadHandoff(_)
-                    | BlockMessage::LaneBlockNewViewVote(_)
-                    | BlockMessage::LaneBlockNewViewCertificate(_)
-                    | BlockMessage::LaneBlockVote(_)
-                    | BlockMessage::LaneBlockQc(_)
-                    | BlockMessage::QcVote(_)
-                    | BlockMessage::Qc(_)
-                    | BlockMessage::VrfCommit(_)
-                    | BlockMessage::VrfReveal(_)
-                    | BlockMessage::RbcInit(_)
-                    | BlockMessage::RbcChunk(_)
-                    | BlockMessage::RbcReady(_)
-                    | BlockMessage::RbcDeliver(_)
-            );
+        let blocking = msg.requires_blocking_ingress();
         let mode = if blocking {
             IngressMode::Blocking
         } else {
@@ -14292,13 +14436,48 @@ impl SumeragiHandle {
                     mode,
                 )
             }
-            BlockMessage::LaneBlockVote(vote) => enqueue_with_mode(
-                &self.votes,
-                InboundBlockMessage::new(BlockMessage::LaneBlockVote(vote), sender),
-                "LaneBlockVote",
-                status::WorkerQueueKind::Votes,
-                mode,
-            ),
+            lane_message @ (BlockMessage::LaneBlockProposal(_)
+            | BlockMessage::LaneBlockVote(_)
+            | BlockMessage::LaneBlockQc(_)) => {
+                let (tx, kind, queue) = match &lane_message {
+                    BlockMessage::LaneBlockVote(_) => {
+                        (&self.votes, "LaneBlockVote", status::WorkerQueueKind::Votes)
+                    }
+                    BlockMessage::LaneBlockProposal(_) => (
+                        &self.block,
+                        "LaneBlockProposal",
+                        status::WorkerQueueKind::Blocks,
+                    ),
+                    BlockMessage::LaneBlockQc(_) => {
+                        (&self.block, "LaneBlockQc", status::WorkerQueueKind::Blocks)
+                    }
+                    _ => unreachable!("lane-block match arm only accepts lane artifacts"),
+                };
+                let dedup_key = lane_block_artifact_dedup_key(&lane_message)
+                    .expect("lane-block match arm must produce a dedup key");
+                if !self.dedup_block_payload(dedup_key) {
+                    iroha_logger::debug!(
+                        kind,
+                        "dropping exact duplicate lane-block artifact from network"
+                    );
+                    return false;
+                }
+                // Lane sessions intentionally retransmit unresolved proposal/vote/QC evidence on
+                // a bounded actor cadence. Suppress exact retransmissions before a blocking
+                // enqueue so a stalled session cannot fill the shared block or vote ingress queue
+                // and starve the body/QC repair needed to finish that session.
+                let accepted = enqueue_with_mode(
+                    tx,
+                    InboundBlockMessage::new(lane_message, sender),
+                    kind,
+                    queue,
+                    mode,
+                );
+                if !accepted {
+                    self.release_block_payload_dedup(&dedup_key);
+                }
+                accepted
+            }
             BlockMessage::LaneBlockNewViewVote(vote) => enqueue_with_mode(
                 &self.votes,
                 InboundBlockMessage::new(BlockMessage::LaneBlockNewViewVote(vote), sender),

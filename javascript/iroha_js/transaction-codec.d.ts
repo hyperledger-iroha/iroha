@@ -41,6 +41,19 @@ export interface BrowserTransactionSignable {
   signatureAlgorithm?: "ed25519" | 0;
 }
 
+export interface BrowserTransactionSignableConstraints {
+  authority?: string | null;
+  signingPublicKey?: BrowserTransactionBytes | string | null;
+}
+
+export interface ValidatedBrowserTransactionSignable {
+  payloadBytes: Buffer;
+  payloadHashHex: string;
+  authority: string;
+  signingPublicKey: Buffer;
+  signatureAlgorithm: "ed25519";
+}
+
 export interface BrowserTransactionSignatureObject {
   algorithm?: "ed25519" | 0;
   alg?: "ed25519" | 0;
@@ -69,6 +82,11 @@ export function browserTransactionPayloadHashHex(
   payloadBytes: BrowserTransactionBytes,
 ): string;
 
+export function validateBrowserTransferSignable(
+  signable: BrowserTransactionSignable,
+  constraints?: BrowserTransactionSignableConstraints,
+): Readonly<ValidatedBrowserTransactionSignable>;
+
 export function finalizeBrowserSignedTransaction(
   signable: BrowserTransactionSignable,
   signature: BrowserTransactionSignature,
@@ -83,4 +101,5 @@ export const browserTransactionCodec: Readonly<NexusTransactionCodec> & Readonly
   buildTransferPayload: typeof buildBrowserTransferPayload;
   payloadHashHex: typeof browserTransactionPayloadHashHex;
   finalizeSignedTransaction: typeof finalizeBrowserSignedTransaction;
+  validateSignable: typeof validateBrowserTransferSignable;
 }>;

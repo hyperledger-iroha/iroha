@@ -374,7 +374,7 @@ test("NexusAppClient runs connect approval, wallet signature, finalize, submit, 
       },
       awaitApproval() {
         return {
-          accountId: "approved-account-i105",
+          accountId: fixture.transfer_input.authority,
         };
       },
       requestSignature(_session, signable) {
@@ -384,7 +384,7 @@ test("NexusAppClient runs connect approval, wallet signature, finalize, submit, 
     },
     transactionCodec: {
       buildTransferPayload(input) {
-        assert.equal(input.authority, "approved-account-i105");
+        assert.equal(input.authority, fixture.transfer_input.authority);
         return payloadBytes;
       },
       finalizeSignedTransaction(signable, signature, signingPublicKey) {
@@ -411,7 +411,7 @@ test("NexusAppClient runs connect approval, wallet signature, finalize, submit, 
   const receipt = await client.transferWithWallet(
     approval.session,
     {
-      sourceAssetHoldingId: "asset#approved-account-i105",
+      sourceAssetHoldingId: fixture.transfer_input.source_asset_id,
       quantity: "1",
       destinationAccountId: "destination-i105",
     },
@@ -425,12 +425,117 @@ test("NexusAppClient runs connect approval, wallet signature, finalize, submit, 
   assert.deepEqual(waited, [hashHex]);
 });
 
+test("NexusAppClient accepts the complete default browser Connect approval proof", async () => {
+  const walletPublicKey = Buffer.alloc(32, 0xa5);
+  const approvalSignature = Buffer.alloc(64, 0x5a);
+  const appSession = {
+    waitForApproval() {
+      return {
+        accountId: fixture.transfer_input.authority,
+        walletPublicKey,
+        signature: approvalSignature,
+      };
+    },
+  };
+  const client = new NexusAppClient();
+
+  const approval = await client.awaitApproval({
+    sid: "sid-browser-proof",
+    appSession,
+  });
+
+  assert.equal(approval.accountId, fixture.transfer_input.authority);
+  assert.deepEqual(approval.signingPublicKey, fixturePublicKey);
+  assert.notDeepEqual(approval.signingPublicKey, walletPublicKey);
+  assert.equal(approval.session.appSession, appSession);
+  assert.equal(approval.session.approvedAccountId, fixture.transfer_input.authority);
+  assert.deepEqual(approval.session.signingPublicKey, fixturePublicKey);
+});
+
+test("NexusAppClient keeps browser approval proofs strict and transport-local", async () => {
+  const validProof = {
+    accountId: fixture.transfer_input.authority,
+    walletPublicKey: Buffer.alloc(32, 0xa5),
+    signature: Buffer.alloc(64, 0x5a),
+  };
+  const missingWalletKey = { ...validProof };
+  delete missingWalletKey.walletPublicKey;
+  const missingSignature = { ...validProof };
+  delete missingSignature.signature;
+  const malformedProofs = [
+    missingWalletKey,
+    { ...validProof, walletPublicKey: Buffer.alloc(31) },
+    missingSignature,
+    { ...validProof, signature: Buffer.alloc(63) },
+    { ...validProof, unsupported: true },
+  ];
+  for (const [index, proof] of malformedProofs.entries()) {
+    const client = new NexusAppClient();
+    await assert.rejects(
+      () =>
+        client.awaitApproval({
+          sid: `sid-malformed-browser-proof-${index}`,
+          appSession: {
+            waitForApproval() {
+              return proof;
+            },
+          },
+        }),
+      (error) =>
+        error instanceof NexusAppError && error.code === "invalid_wallet_approval",
+    );
+  }
+
+  let accessorGets = 0;
+  const accessorProof = {
+    accountId: validProof.accountId,
+    signature: validProof.signature,
+  };
+  Object.defineProperty(accessorProof, "walletPublicKey", {
+    enumerable: true,
+    get() {
+      accessorGets += 1;
+      return validProof.walletPublicKey;
+    },
+  });
+  await assert.rejects(
+    () =>
+      new NexusAppClient().awaitApproval({
+        sid: "sid-accessor-browser-proof",
+        appSession: {
+          waitForApproval() {
+            return accessorProof;
+          },
+        },
+      }),
+    (error) =>
+      error instanceof NexusAppError && error.code === "invalid_wallet_approval",
+  );
+  assert.equal(accessorGets, 0);
+
+  let customApprovalCalls = 0;
+  const customTransportClient = new NexusAppClient({
+    connectTransport: {
+      awaitApproval() {
+        customApprovalCalls += 1;
+        return validProof;
+      },
+    },
+  });
+  await assert.rejects(
+    () => customTransportClient.awaitApproval({ sid: "sid-custom-proof-boundary" }),
+    (error) =>
+      error instanceof NexusAppError && error.code === "invalid_wallet_approval",
+  );
+  assert.equal(customApprovalCalls, 1);
+});
+
 test("NexusAppClient accepts raw wallet signature byte inputs", async () => {
   const payloadBytes = fixturePayloadBytes;
   const signable = {
     payloadBytes,
     payloadHashHex: nexusPayloadHashHex(payloadBytes),
-    authority: "account-i105",
+    authority: fixture.transfer_input.authority,
     signingPublicKey: fixturePublicKey,
     signatureAlgorithm: "ed25519",
   };
@@ -469,6 +574,335 @@ test("NexusAppClient accepts raw wallet signature byte inputs", async () => {
   assert.deepEqual(finalizedSignature, walletSignature);
   assert.deepEqual(receipt.signedTransaction, signedTransaction);
   assert.deepEqual(submittedPayload, signedTransaction);
+});
+
+test("NexusAppClient validates and detaches canonical signables before every signer callback", async () => {
+  const signable = fixtureSignable();
+  const originalPayload = Buffer.from(signable.payloadBytes);
+  const originalPublicKey = Buffer.from(signable.signingPublicKey);
+  let callbackCalls = 0;
+  const client = new NexusAppClient({
+    authority: fixture.transfer_input.authority,
+    signingPublicKey: fixturePublicKey,
+    connectTransport: {
+      requestSignature(_session, received) {
+        callbackCalls += 1;
+        assert.notStrictEqual(received.payloadBytes, signable.payloadBytes);
+        assert.notStrictEqual(received.signingPublicKey, signable.signingPublicKey);
+        assert.deepEqual(received.payloadBytes, originalPayload);
+        assert.deepEqual(received.signingPublicKey, originalPublicKey);
+        received.payloadBytes.fill(0);
+        received.signingPublicKey.fill(0);
+        return fixtureWalletSignature;
+      },
+    },
+  });
+  const session = {
+    sid: "sid-canonical",
+    approvedAccountId: fixture.transfer_input.authority,
+    signingPublicKey: fixturePublicKey,
+  };
+  const signature = await client.requestSignature(session, signable);
+  assert.deepEqual(signature.signature, fixtureWalletSignature);
+  assert.equal(callbackCalls, 1);
+  assert.deepEqual(signable.payloadBytes, originalPayload);
+  assert.deepEqual(signable.signingPublicKey, originalPublicKey);
+
+  const malformedPayload = Buffer.from(fixturePayloadBytes);
+  malformedPayload[0] ^= 0xff;
+  const destinationAccount = fixture.transfer_input.destination_account_id;
+  for (const [label, candidate, candidateSession] of [
+    [
+      "wrong hash",
+      fixtureSignable({ payloadHashHex: "d".repeat(64) }),
+      session,
+    ],
+    [
+      "noncanonical payload bytes",
+      fixtureSignable({
+        payloadBytes: malformedPayload,
+        payloadHashHex: nexusPayloadHashHex(malformedPayload),
+      }),
+      session,
+    ],
+    [
+      "wrong asserted authority",
+      fixtureSignable({ authority: destinationAccount }),
+      session,
+    ],
+    [
+      "wrong signable key",
+      fixtureSignable({ signingPublicKey: Buffer.alloc(32, 0x7f) }),
+      session,
+    ],
+    [
+      "wrong approved account",
+      fixtureSignable(),
+      {
+        sid: "sid-wrong-account",
+        approvedAccountId: destinationAccount,
+      },
+    ],
+    [
+      "wrong approved key",
+      fixtureSignable(),
+      {
+        sid: "sid-wrong-key",
+        approvedAccountId: fixture.transfer_input.authority,
+        signingPublicKey: Buffer.alloc(32, 0x7f),
+      },
+    ],
+    [
+      "oversized approved account",
+      fixtureSignable(),
+      {
+        sid: "sid-oversized-account",
+        approvedAccountId: "x".repeat(1_000_000),
+      },
+    ],
+  ]) {
+    let injectedCalls = 0;
+    let appSessionCalls = 0;
+    const adversarial = new NexusAppClient({
+      connectTransport: {
+        requestSignature() {
+          injectedCalls += 1;
+          return undefined;
+        },
+      },
+    });
+    await assert.rejects(
+      () =>
+        adversarial.requestSignature(
+          {
+            ...candidateSession,
+            appSession: {
+              signTransaction() {
+                appSessionCalls += 1;
+                return fixtureWalletSignature;
+              },
+            },
+          },
+          candidate,
+        ),
+      Error,
+      label,
+    );
+    assert.equal(injectedCalls, 0, `${label} must not invoke configured signer`);
+    assert.equal(appSessionCalls, 0, `${label} must not invoke app-session signer`);
+  }
+});
+
+test("NexusAppClient rejects conflicting Connect approval and transfer alias families", async () => {
+  const destinationAccount = fixture.transfer_input.destination_account_id;
+  let signerCalls = 0;
+  const signerClient = new NexusAppClient({
+    connectTransport: {
+      requestSignature() {
+        signerCalls += 1;
+        return fixtureWalletSignature;
+      },
+    },
+  });
+  await assert.rejects(
+    () =>
+      signerClient.requestSignature(
+        {
+          sid: "sid-conflict",
+          approvedAccountId: fixture.transfer_input.authority,
+          approved_account: destinationAccount,
+          signingPublicKey: fixturePublicKey,
+        },
+        fixtureSignable(),
+      ),
+    (error) =>
+      error instanceof NexusAppError && error.code === "invalid_connect_session",
+  );
+  assert.equal(signerCalls, 0);
+
+  await assert.rejects(
+    () =>
+      signerClient.requestSignature(
+        {
+          sid: "sid-key-conflict",
+          approvedAccountId: fixture.transfer_input.authority,
+          signingPublicKey: fixturePublicKey,
+          signing_public_key: Buffer.alloc(32, 0x7f),
+        },
+        fixtureSignable(),
+      ),
+    (error) =>
+      error instanceof NexusAppError && error.code === "invalid_connect_session",
+  );
+  assert.equal(signerCalls, 0);
+
+  for (const returnedSession of [
+    {
+      sid: "sid-uri-conflict",
+      walletLaunchUri: "iroha://wallet-a",
+      wallet_uri: "iroha://wallet-b",
+    },
+    {
+      sid: "sid-token-conflict",
+      tokenApp: "token-a",
+      token_app: "token-b",
+    },
+  ]) {
+    const sessionClient = new NexusAppClient({
+      connectTransport: {
+        startConnect() {
+          return returnedSession;
+        },
+      },
+    });
+    await assert.rejects(
+      () => sessionClient.startConnect({ sid: returnedSession.sid }),
+      (error) =>
+        error instanceof NexusAppError && error.code === "invalid_connect_session",
+    );
+  }
+
+  const approvalClient = new NexusAppClient({
+    connectTransport: {
+      awaitApproval() {
+        return {
+          accountId: fixture.transfer_input.authority,
+          account_id: destinationAccount,
+          signingPublicKey: fixturePublicKey,
+        };
+      },
+    },
+  });
+  await assert.rejects(
+    () => approvalClient.awaitApproval({ sid: "sid-approval-conflict" }),
+    (error) =>
+      error instanceof NexusAppError && error.code === "invalid_wallet_approval",
+  );
+
+  const approvalKeyClient = new NexusAppClient({
+    connectTransport: {
+      awaitApproval() {
+        return {
+          accountId: fixture.transfer_input.authority,
+          signingPublicKey: fixturePublicKey,
+          signing_public_key: Buffer.alloc(32, 0x7f),
+        };
+      },
+    },
+  });
+  await assert.rejects(
+    () => approvalKeyClient.awaitApproval({ sid: "sid-approval-key-conflict" }),
+    (error) =>
+      error instanceof NexusAppError && error.code === "invalid_wallet_approval",
+  );
+
+  assert.throws(
+    () =>
+      new NexusAppClient({
+        authority: fixture.transfer_input.authority,
+        accountId: destinationAccount,
+      }),
+    (error) => error instanceof NexusAppError && error.code === "invalid_config",
+  );
+
+  const equivalentSession = await new NexusAppClient({
+    connectTransport: {
+      startConnect() {
+        return {
+          sid: "sid-equivalent",
+          walletLaunchUri: "iroha://wallet",
+          wallet_uri: "iroha://wallet",
+          tokenApp: "token",
+          token_app: "token",
+          signingPublicKey: fixturePublicKey,
+          signing_public_key: Buffer.from(fixturePublicKey),
+        };
+      },
+    },
+  }).startConnect({ sid: "sid-equivalent" });
+  assert.equal(equivalentSession.walletLaunchUri, "iroha://wallet");
+  assert.equal(equivalentSession.tokenApp, "token");
+  assert.deepEqual(equivalentSession.signingPublicKey, fixturePublicKey);
+
+  const equivalentApproval = await new NexusAppClient({
+    authority: fixture.transfer_input.authority,
+    accountId: fixture.transfer_input.authority,
+    connectTransport: {
+      awaitApproval() {
+        return {
+          accountId: fixture.transfer_input.authority,
+          account_id: fixture.transfer_input.authority,
+          signingPublicKey: fixturePublicKey,
+          signing_public_key: Buffer.from(fixturePublicKey),
+        };
+      },
+    },
+  }).awaitApproval({ sid: "sid-equivalent-approval" });
+  assert.equal(equivalentApproval.accountId, fixture.transfer_input.authority);
+  assert.deepEqual(equivalentApproval.signingPublicKey, fixturePublicKey);
+
+  let codecCalls = 0;
+  const draft = new NexusAppClient({
+    chainId: fixture.transfer_input.chain_id,
+    authority: fixture.transfer_input.authority,
+    signingPublicKey: fixturePublicKey,
+    transactionCodec: {
+      buildTransferPayload() {
+        codecCalls += 1;
+        return fixturePayloadBytes;
+      },
+    },
+  });
+  for (const [label, input] of [
+    [
+      "authority",
+      {
+        authority: fixture.transfer_input.authority,
+        accountId: destinationAccount,
+        sourceAssetHoldingId: fixture.transfer_input.source_asset_id,
+        quantity: "1",
+        destinationAccountId: destinationAccount,
+      },
+    ],
+    [
+      "source asset",
+      {
+        sourceAssetHoldingId: fixture.transfer_input.source_asset_id,
+        sourceAssetId: `other#${fixture.transfer_input.authority}`,
+        quantity: "1",
+        destinationAccountId: destinationAccount,
+      },
+    ],
+    [
+      "destination",
+      {
+        sourceAssetHoldingId: fixture.transfer_input.source_asset_id,
+        quantity: "1",
+        destinationAccountId: destinationAccount,
+        to: fixture.transfer_input.authority,
+      },
+    ],
+  ]) {
+    assert.throws(
+      () => draft.buildTransferDraft(input),
+      (error) =>
+        error instanceof NexusAppError && error.code === "invalid_transfer_input",
+      label,
+    );
+  }
+  assert.equal(codecCalls, 0, "conflicting draft aliases must fail before codec callbacks");
+
+  const equivalent = draft.buildTransferDraft({
+    authority: fixture.transfer_input.authority,
+    accountId: fixture.transfer_input.authority,
+    sourceAssetHoldingId: fixture.transfer_input.source_asset_id,
+    sourceAssetId: fixture.transfer_input.source_asset_id,
+    quantity: fixture.transfer_input.quantity,
+    destinationAccountId: destinationAccount,
+    destination: destinationAccount,
+  });
+  assert.deepEqual(equivalent.signable.payloadBytes, fixturePayloadBytes);
+  assert.equal(codecCalls, 1, "equivalent aliases remain compatible");
 });
 
 test("NexusAppClient independently verifies finalized bytes and hash aliases", async () => {
@@ -700,7 +1134,7 @@ test("NexusAppClient accepts exact numeric and string Ed25519 signature algorith
   const submitted = [];
   const client = new NexusAppClient({
     chainId: "test-chain",
-    authority: "account-i105",
+    authority: fixture.transfer_input.authority,
     signingPublicKey: fixturePublicKey,
     transactionCodec: {
       buildTransferPayload() {
@@ -723,7 +1157,7 @@ test("NexusAppClient accepts exact numeric and string Ed25519 signature algorith
     {
       payloadBytes: payload,
       payloadHashHex: nexusPayloadHashHex(payload),
-      authority: "account-i105",
+      authority: fixture.transfer_input.authority,
       signingPublicKey: fixturePublicKey,
       signatureAlgorithm: "0",
     },
@@ -840,23 +1274,23 @@ test("NexusAppClient accepts shared approvedAccount session field", async () => 
   await client.transferWithWallet(
     {
       sid: "sid-1",
-      approvedAccount: "approved-account-i105",
+      approvedAccount: fixture.transfer_input.authority,
       signingPublicKey: fixturePublicKey,
     },
     {
-      sourceAssetHoldingId: "asset#approved-account-i105",
+      sourceAssetHoldingId: fixture.transfer_input.source_asset_id,
       quantity: "1",
       destinationAccountId: "destination-i105",
     },
     { wait: false },
   );
 
-  assert.equal(requestedAuthority, "approved-account-i105");
+  assert.equal(requestedAuthority, fixture.transfer_input.authority);
 });
 
 test("NexusAppClient rejects invalid signature lengths", async () => {
   const client = new NexusAppClient({
-    signingPublicKey: Buffer.alloc(32, 1),
+    signingPublicKey: fixturePublicKey,
     transactionCodec: {
       finalizeSignedTransaction() {
         throw new Error("should not finalize");
@@ -892,7 +1326,7 @@ test("NexusAppClient rejects invalid signature lengths", async () => {
         {
           payloadBytes: fixturePayloadBytes,
           payloadHashHex: nexusPayloadHashHex(fixturePayloadBytes),
-          authority: "account-i105",
+          authority: fixture.transfer_input.authority,
           signingPublicKey: fixturePublicKey,
           signatureAlgorithm: "ed25519",
         },
@@ -908,7 +1342,7 @@ test("NexusAppClient rejects Torii hash mismatches and maps submit/status failur
   const signable = {
     payloadBytes: fixturePayloadBytes,
     payloadHashHex: nexusPayloadHashHex(fixturePayloadBytes),
-    authority: "account-i105",
+    authority: fixture.transfer_input.authority,
     signingPublicKey: fixturePublicKey,
     signatureAlgorithm: "ed25519",
   };
@@ -1023,4 +1457,209 @@ test("NexusAppClient conflict-checks all Torii hash aliases before waiting", asy
   );
   assert.equal(receipt.signedTransactionHashHex, canonicalHash);
   assert.deepEqual(equivalent.calls, { finalized: 1, submitted: 1, waited: 1 });
+});
+
+test("NexusAppClient aborts after finalization without submitting", async () => {
+  const controller = new AbortController();
+  const reason = new Error("cancelled-during-finalization");
+  const harness = finalizationHarness(() => {
+    controller.abort(reason);
+    return {
+      signedTransaction: fixtureSignedTransaction,
+      hashHex: fixtureSignedTransactionHashHex,
+    };
+  });
+
+  await assert.rejects(
+    () =>
+      harness.client.finalizeAndSubmit(
+        fixtureSignable(),
+        fixtureWalletSignature,
+        { signal: controller.signal },
+      ),
+    (error) => {
+      assert.ok(error instanceof NexusAppError);
+      assert.equal(error.code, "status_wait_failed");
+      assert.equal(error.cause, reason);
+      return true;
+    },
+  );
+  assert.deepEqual(harness.calls, { finalized: 1, submitted: 0, waited: 0 });
+});
+
+test("NexusAppClient preserves falsey abort reasons", async () => {
+  for (const reason of [0, false, "", null]) {
+    const controller = new AbortController();
+    controller.abort(reason);
+    const harness = finalizationHarness({
+      signedTransaction: fixtureSignedTransaction,
+      hashHex: fixtureSignedTransactionHashHex,
+    });
+
+    await assert.rejects(
+      () =>
+        harness.client.finalizeAndSubmit(
+          fixtureSignable(),
+          fixtureWalletSignature,
+          { signal: controller.signal },
+        ),
+      (error) => {
+        assert.ok(error instanceof NexusAppError);
+        assert.equal(error.code, "status_wait_failed");
+        assert.equal(error.cause, reason);
+        return true;
+      },
+    );
+    assert.deepEqual(harness.calls, { finalized: 0, submitted: 0, waited: 0 });
+  }
+});
+
+test("NexusAppClient trusts intrinsic AbortSignal state over hostile shadows", async () => {
+  const controller = new AbortController();
+  const reason = new Error("intrinsic abort must stop Nexus submission");
+  controller.abort(reason);
+  Object.defineProperties(controller.signal, {
+    aborted: { value: false },
+    reason: { value: undefined },
+    addEventListener: { value() {} },
+    removeEventListener: { value() {} },
+  });
+  const harness = finalizationHarness({
+    signedTransaction: fixtureSignedTransaction,
+    hashHex: fixtureSignedTransactionHashHex,
+  });
+
+  await assert.rejects(
+    () =>
+      harness.client.finalizeAndSubmit(
+        fixtureSignable(),
+        fixtureWalletSignature,
+        { signal: controller.signal },
+      ),
+    (error) => {
+      assert.ok(error instanceof NexusAppError);
+      assert.equal(error.code, "status_wait_failed");
+      assert.equal(error.cause, reason);
+      return true;
+    },
+  );
+  assert.deepEqual(harness.calls, { finalized: 0, submitted: 0, waited: 0 });
+});
+
+test("NexusAppClient reads the submit callback once before its final abort check", async () => {
+  const controller = new AbortController();
+  let submitReads = 0;
+  let submissions = 0;
+  const toriiClient = {};
+  Object.defineProperty(toriiClient, "submitTransaction", {
+    get() {
+      submitReads += 1;
+      if (submitReads > 1) {
+        controller.abort(new Error("submit callback was read twice"));
+      }
+      return async function submitTransaction() {
+        assert.equal(this, toriiClient);
+        submissions += 1;
+        return { hashHex: fixtureSignedTransactionHashHex };
+      };
+    },
+  });
+  const client = new NexusAppClient({
+    signingPublicKey: fixturePublicKey,
+    transactionCodec: {
+      finalizeSignedTransaction() {
+        return {
+          signedTransaction: fixtureSignedTransaction,
+          hashHex: fixtureSignedTransactionHashHex,
+        };
+      },
+    },
+    toriiClient,
+  });
+
+  const receipt = await client.finalizeAndSubmit(
+    fixtureSignable(),
+    fixtureWalletSignature,
+    { signal: controller.signal },
+  );
+
+  assert.equal(submitReads, 1);
+  assert.equal(submissions, 1);
+  assert.equal(controller.signal.aborted, false);
+  assert.equal(receipt.signedTransactionHashHex, fixtureSignedTransactionHashHex);
+});
+
+test("NexusAppClient prevalidates all wait options before Torii side effects", async () => {
+  const aborted = new AbortController();
+  aborted.abort(new Error("cancelled-before-submit"));
+  const invalidOptions = [
+    { successStatuses: new Array(33).fill("Committed") },
+    { failureStatuses: new Array(33).fill("Rejected") },
+    { successStatuses: ["Done"], failureStatuses: ["Done"] },
+    { intervalMs: -1 },
+    { timeoutMs: Number.MAX_SAFE_INTEGER + 1 },
+    { maxAttempts: 0 },
+    { scope: "remote" },
+    { onStatus: "not-a-callback" },
+    { signal: { aborted: false } },
+    { signal: aborted.signal },
+    { wait: "yes" },
+  ];
+  for (const options of invalidOptions) {
+    const harness = finalizationHarness({
+      signedTransaction: fixtureSignedTransaction,
+      hashHex: fixtureSignedTransactionHashHex,
+    });
+    await assert.rejects(
+      () =>
+        harness.client.finalizeAndSubmit(
+          fixtureSignable(),
+          fixtureWalletSignature,
+          options,
+        ),
+      Error,
+      JSON.stringify(options),
+    );
+    assert.deepEqual(
+      harness.calls,
+      { finalized: 0, submitted: 0, waited: 0 },
+      "invalid wait options must fail before finalizer, submit, and wait callbacks",
+    );
+  }
+
+  let observedOptions = null;
+  const compatible = new NexusAppClient({
+    signingPublicKey: fixturePublicKey,
+    transactionCodec: {
+      finalizeSignedTransaction() {
+        return {
+          signedTransaction: fixtureSignedTransaction,
+          hashHex: fixtureSignedTransactionHashHex,
+        };
+      },
+    },
+    toriiClient: {
+      async submitTransaction() {
+        return { hashHex: fixtureSignedTransactionHashHex };
+      },
+      async waitForTransactionStatus(_hashHex, options) {
+        observedOptions = options;
+        return { status: "Committed" };
+      },
+    },
+  });
+  await compatible.finalizeAndSubmit(
+    fixtureSignable(),
+    fixtureWalletSignature,
+    {
+      successStatuses: ["Committed", "Applied"],
+      failureStatuses: ["Rejected"],
+    },
+  );
+  assert.ok(Array.isArray(observedOptions.successStatuses));
+  assert.ok(Array.isArray(observedOptions.failureStatuses));
+  assert.ok(Object.isFrozen(observedOptions.successStatuses));
+  assert.ok(Object.isFrozen(observedOptions.failureStatuses));
+  assert.deepEqual(observedOptions.successStatuses, ["Committed", "Applied"]);
+  assert.deepEqual(observedOptions.failureStatuses, ["Rejected"]);
 });

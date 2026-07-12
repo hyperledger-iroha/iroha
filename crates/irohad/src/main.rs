@@ -86,7 +86,6 @@ use iroha_core::{
     },
 };
 use iroha_crypto::{Algorithm, Hash, HashOf};
-use iroha_data_model::nexus::{PublicLaneValidatorRecord, PublicLaneValidatorStatus};
 use iroha_data_model::query::{self as dm_query, ErasedIterQuery};
 use iroha_data_model::{block::decode_framed_signed_block, prelude::*, transaction::Executable};
 use iroha_data_model::{
@@ -3261,7 +3260,7 @@ impl NetworkRelayShared {
                 let sender = peer.id().clone();
                 let sumeragi = self.sumeragi.clone();
                 let msg = (*data).into_message();
-                if sumeragi_block_message_requires_blocking(&msg) {
+                if msg.requires_blocking_ingress() {
                     let handle = tokio::task::spawn_blocking(move || {
                         sumeragi.incoming_block_message_from(sender, msg);
                     });
@@ -3470,6 +3469,8 @@ impl NetworkRelayShared {
         msg: &iroha_core::sumeragi::message::BlockMessage,
     ) -> (&'static str, Option<u64>, Option<u64>) {
         use iroha_core::sumeragi::message::BlockMessage::*;
+        use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
+
         match msg {
             BlockCreated(block) => {
                 let header = block.block.header();
@@ -3605,29 +3606,73 @@ impl NetworkRelayShared {
                 )
             }
             KuraReplicaAdvert(advert) => ("KuraReplicaAdvert", Some(advert.height), None),
-            V2(message) => {
-                use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
-
-                let round = match &message.payload {
-                    ConsensusMessageV2Payload::Proposal(value) => Some(value.round),
-                    ConsensusMessageV2Payload::Vote(value) => Some(value.round),
-                    ConsensusMessageV2Payload::QuorumCertificate(value) => Some(value.round),
-                    ConsensusMessageV2Payload::TimeoutVote(value) => Some(value.round),
-                    ConsensusMessageV2Payload::TimeoutCertificate(value) => Some(value.round),
-                    ConsensusMessageV2Payload::PayloadManifest(value) => Some(value.round),
-                    ConsensusMessageV2Payload::CertifiedBodyRequest(value) => Some(value.round),
-                    ConsensusMessageV2Payload::CertifiedBodyResponse(value) => {
-                        Some(value.manifest.round)
-                    }
-                    ConsensusMessageV2Payload::PayloadChunk(_)
-                    | ConsensusMessageV2Payload::CommitCertificateRequest(_)
-                    | ConsensusMessageV2Payload::CommitCertificateResponse(_) => None,
-                };
-                match round {
-                    Some(round) => ("SumeragiV2", Some(round.height), Some(round.view)),
-                    None => ("SumeragiV2", None, None),
+            V2(message) => match &message.payload {
+                ConsensusMessageV2Payload::Proposal(value) => (
+                    "SumeragiV2Proposal",
+                    Some(value.round.height),
+                    Some(value.round.view),
+                ),
+                ConsensusMessageV2Payload::Vote(value) => {
+                    let label = match value.phase {
+                        iroha_data_model::block::consensus_v2::GlobalPhase::Prepare => {
+                            "SumeragiV2PrepareVote"
+                        }
+                        iroha_data_model::block::consensus_v2::GlobalPhase::Commit => {
+                            "SumeragiV2CommitVote"
+                        }
+                    };
+                    (label, Some(value.round.height), Some(value.round.view))
                 }
-            }
+                ConsensusMessageV2Payload::QuorumCertificate(value) => {
+                    let label = match value.phase {
+                        iroha_data_model::block::consensus_v2::GlobalPhase::Prepare => {
+                            "SumeragiV2PrepareCertificate"
+                        }
+                        iroha_data_model::block::consensus_v2::GlobalPhase::Commit => {
+                            "SumeragiV2CommitCertificate"
+                        }
+                    };
+                    (label, Some(value.round.height), Some(value.round.view))
+                }
+                ConsensusMessageV2Payload::TimeoutVote(value) => (
+                    "SumeragiV2TimeoutVote",
+                    Some(value.round.height),
+                    Some(value.round.view),
+                ),
+                ConsensusMessageV2Payload::TimeoutCertificate(value) => (
+                    "SumeragiV2TimeoutCertificate",
+                    Some(value.round.height),
+                    Some(value.round.view),
+                ),
+                ConsensusMessageV2Payload::PayloadManifest(value) => (
+                    "SumeragiV2PayloadManifest",
+                    Some(value.round.height),
+                    Some(value.round.view),
+                ),
+                ConsensusMessageV2Payload::PayloadChunk(_) => {
+                    ("SumeragiV2PayloadChunk", None, None)
+                }
+                ConsensusMessageV2Payload::CertifiedBodyRequest(value) => (
+                    "SumeragiV2CertifiedBodyRequest",
+                    Some(value.round.height),
+                    Some(value.round.view),
+                ),
+                ConsensusMessageV2Payload::CertifiedBodyResponse(value) => (
+                    "SumeragiV2CertifiedBodyResponse",
+                    Some(value.manifest.round.height),
+                    Some(value.manifest.round.view),
+                ),
+                ConsensusMessageV2Payload::CommitCertificateRequest(request) => (
+                    "SumeragiV2CommitCertificateRequest",
+                    Some(request.height),
+                    None,
+                ),
+                ConsensusMessageV2Payload::CommitCertificateResponse(response) => (
+                    "SumeragiV2CommitCertificateResponse",
+                    Some(response.certificate.round.height),
+                    Some(response.certificate.round.view),
+                ),
+            },
         }
     }
 
@@ -3810,55 +3855,6 @@ where
     enqueue(msg);
 }
 
-fn sumeragi_block_message_requires_blocking(
-    msg: &iroha_core::sumeragi::message::BlockMessage,
-) -> bool {
-    use iroha_core::sumeragi::message::BlockMessage;
-
-    msg.v2_requires_blocking_ingress()
-        || matches!(
-            msg,
-            BlockMessage::BlockSyncUpdate(_)
-                | BlockMessage::BlockCreated(_)
-                | BlockMessage::BlockBodyResponse(_)
-                | BlockMessage::FetchBlockBody(_)
-                | BlockMessage::Proposal(_)
-                | BlockMessage::FetchPendingBlock(
-                    iroha_core::sumeragi::message::FetchPendingBlock {
-                        priority: Some(
-                            iroha_core::sumeragi::message::FetchPendingBlockPriority::Consensus
-                        ),
-                        ..
-                    }
-                )
-                | BlockMessage::FetchPendingBlock(
-                    iroha_core::sumeragi::message::FetchPendingBlock {
-                        commit_qc_only: Some(true),
-                        ..
-                    }
-                )
-                | BlockMessage::LaneBlockProposal(_)
-                | BlockMessage::LaneExecutablePayload(_)
-                | BlockMessage::LaneExecutablePayloadHandoff(_)
-                | BlockMessage::LaneBlockNewViewVote(_)
-                | BlockMessage::LaneBlockNewViewCertificate(_)
-                | BlockMessage::LaneBlockVote(_)
-                | BlockMessage::LaneBlockQc(_)
-                | BlockMessage::QcVote(_)
-                | BlockMessage::Qc(_)
-                | BlockMessage::VrfCommit(_)
-                | BlockMessage::VrfReveal(_)
-                | BlockMessage::CertifiedBlockFetch(_)
-                | BlockMessage::RbcInit(_)
-                | BlockMessage::RbcInitRequest(_)
-                | BlockMessage::RbcChunkRequest(_)
-                | BlockMessage::RbcChunk(_)
-                | BlockMessage::RbcChunkCompact(_)
-                | BlockMessage::RbcReady(_)
-                | BlockMessage::RbcDeliver(_)
-        )
-}
-
 #[cfg(test)]
 mod network_relay_tests {
     use std::{
@@ -3919,8 +3915,7 @@ mod network_relay_tests {
         RelayIngressLoopExit, RelayQueuedWork, RelayReceiverKind, RelayWorkItem,
         drive_network_relay_ingress, enqueue_sumeragi_block_message, pow_update_payload,
         relay_safety_turn_available, rollback_relay_control_admission,
-        sumeragi_block_message_requires_blocking, try_enqueue_relay_work_with_admission,
-        try_recv_relay_worker_background_after_high_burst,
+        try_enqueue_relay_work_with_admission, try_recv_relay_worker_background_after_high_burst,
     };
 
     fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
@@ -3960,22 +3955,23 @@ mod network_relay_tests {
     }
 
     #[test]
-    fn sumeragi_block_message_requires_blocking_matches_expected_variants() {
+    fn block_message_blocking_ingress_policy_matches_expected_variants() {
         let signed = signed_block_for_test();
         let created =
             BlockMessage::BlockCreated(iroha_core::sumeragi::message::BlockCreated::from(&signed));
-        assert!(sumeragi_block_message_requires_blocking(&created));
+        assert!(created.requires_blocking_ingress());
         let requester = PeerId::new(KeyPair::random().public_key().clone());
-        assert!(sumeragi_block_message_requires_blocking(
-            &BlockMessage::FetchBlockBody(iroha_core::sumeragi::message::FetchBlockBody {
+        assert!(
+            BlockMessage::FetchBlockBody(iroha_core::sumeragi::message::FetchBlockBody {
                 requester,
                 block_hash: signed.hash(),
                 height: signed.header().height().get(),
                 view: signed.header().view_change_index(),
             })
-        ));
-        assert!(sumeragi_block_message_requires_blocking(
-            &BlockMessage::BlockBodyResponse(iroha_core::sumeragi::message::BlockBodyResponse {
+            .requires_blocking_ingress()
+        );
+        assert!(
+            BlockMessage::BlockBodyResponse(iroha_core::sumeragi::message::BlockBodyResponse {
                 block_hash: signed.hash(),
                 height: signed.header().height().get(),
                 view: signed.header().view_change_index(),
@@ -3983,45 +3979,55 @@ mod network_relay_tests {
                     iroha_core::sumeragi::message::BlockCreated::from(&signed),
                 ),
             })
-        ));
+            .requires_blocking_ingress()
+        );
 
-        assert!(sumeragi_block_message_requires_blocking(
-            &BlockMessage::LaneBlockProposal(sample_lane_block_proposal())
-        ));
-        assert!(sumeragi_block_message_requires_blocking(
-            &BlockMessage::LaneExecutablePayload(sample_lane_executable_payload())
-        ));
-        assert!(sumeragi_block_message_requires_blocking(
-            &BlockMessage::LaneExecutablePayloadHandoff(sample_lane_executable_payload_handoff())
-        ));
-        assert!(sumeragi_block_message_requires_blocking(
-            &BlockMessage::LaneBlockNewViewVote(sample_lane_block_new_view_vote())
-        ));
-        assert!(sumeragi_block_message_requires_blocking(
-            &BlockMessage::LaneBlockNewViewCertificate(sample_lane_block_new_view_certificate())
-        ));
-        assert!(sumeragi_block_message_requires_blocking(
-            &BlockMessage::LaneBlockVote(sample_lane_block_vote(Phase::Prepare))
-        ));
-        assert!(sumeragi_block_message_requires_blocking(
-            &BlockMessage::LaneBlockQc(sample_lane_block_qc(Phase::Commit))
-        ));
-        assert!(sumeragi_block_message_requires_blocking(
-            &BlockMessage::VrfCommit(iroha_core::sumeragi::consensus::VrfCommit {
+        assert!(
+            BlockMessage::LaneBlockProposal(sample_lane_block_proposal())
+                .requires_blocking_ingress()
+        );
+        assert!(
+            BlockMessage::LaneExecutablePayload(sample_lane_executable_payload())
+                .requires_blocking_ingress()
+        );
+        assert!(
+            BlockMessage::LaneExecutablePayloadHandoff(sample_lane_executable_payload_handoff())
+                .requires_blocking_ingress()
+        );
+        assert!(
+            BlockMessage::LaneBlockNewViewVote(sample_lane_block_new_view_vote())
+                .requires_blocking_ingress()
+        );
+        assert!(
+            BlockMessage::LaneBlockNewViewCertificate(sample_lane_block_new_view_certificate())
+                .requires_blocking_ingress()
+        );
+        assert!(
+            BlockMessage::LaneBlockVote(sample_lane_block_vote(Phase::Prepare))
+                .requires_blocking_ingress()
+        );
+        assert!(
+            BlockMessage::LaneBlockQc(sample_lane_block_qc(Phase::Commit))
+                .requires_blocking_ingress()
+        );
+        assert!(
+            BlockMessage::VrfCommit(iroha_core::sumeragi::consensus::VrfCommit {
                 epoch: 1,
                 commitment: [0xA1; 32],
                 signer: 0,
                 bls_sig: vec![0xA2],
             })
-        ));
-        assert!(sumeragi_block_message_requires_blocking(
-            &BlockMessage::VrfReveal(iroha_core::sumeragi::consensus::VrfReveal {
+            .requires_blocking_ingress()
+        );
+        assert!(
+            BlockMessage::VrfReveal(iroha_core::sumeragi::consensus::VrfReveal {
                 epoch: 1,
                 reveal: [0xB1; 32],
                 signer: 0,
                 bls_sig: vec![0xB2],
             })
-        ));
+            .requires_blocking_ingress()
+        );
 
         let init = BlockMessage::RbcInit(RbcInit {
             block_hash: signed.hash(),
@@ -4046,7 +4052,7 @@ mod network_relay_tests {
                 .expect("signed block has signature")
                 .clone(),
         });
-        assert!(sumeragi_block_message_requires_blocking(&init));
+        assert!(init.requires_blocking_ingress());
 
         let chunk = iroha_core::sumeragi::consensus::RbcChunk {
             block_hash: signed.hash(),
@@ -4056,12 +4062,8 @@ mod network_relay_tests {
             idx: 0,
             bytes: vec![0x55],
         };
-        assert!(sumeragi_block_message_requires_blocking(
-            &BlockMessage::RbcChunk(chunk.clone())
-        ));
-        assert!(sumeragi_block_message_requires_blocking(
-            &BlockMessage::from_rbc_chunk(chunk)
-        ));
+        assert!(BlockMessage::RbcChunk(chunk.clone()).requires_blocking_ingress());
+        assert!(BlockMessage::from_rbc_chunk(chunk).requires_blocking_ingress());
 
         let requester = PeerId::new(KeyPair::random().public_key().clone());
         let fetch = FetchPendingBlock {
@@ -4073,9 +4075,7 @@ mod network_relay_tests {
             requester_roster_proof_known: None,
             commit_qc_only: Some(true),
         };
-        assert!(sumeragi_block_message_requires_blocking(
-            &BlockMessage::FetchPendingBlock(fetch)
-        ));
+        assert!(BlockMessage::FetchPendingBlock(fetch).requires_blocking_ingress());
 
         let background_fetch = FetchPendingBlock {
             requester: PeerId::new(KeyPair::random().public_key().clone()),
@@ -4086,9 +4086,7 @@ mod network_relay_tests {
             requester_roster_proof_known: None,
             commit_qc_only: None,
         };
-        assert!(!sumeragi_block_message_requires_blocking(
-            &BlockMessage::FetchPendingBlock(background_fetch)
-        ));
+        assert!(!BlockMessage::FetchPendingBlock(background_fetch).requires_blocking_ingress());
 
         let advert = ConsensusParamsAdvert {
             collectors_k: 1,
@@ -4096,7 +4094,7 @@ mod network_relay_tests {
             membership: None,
         };
         let params = BlockMessage::ConsensusParams(advert);
-        assert!(!sumeragi_block_message_requires_blocking(&params));
+        assert!(!params.requires_blocking_ingress());
 
         let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
             b"irohad-v2-ingress-context",
@@ -4130,8 +4128,8 @@ mod network_relay_tests {
                 signature: vec![2],
             }),
         ));
-        assert!(sumeragi_block_message_requires_blocking(&control));
-        assert!(!sumeragi_block_message_requires_blocking(&chunk));
+        assert!(control.requires_blocking_ingress());
+        assert!(!chunk.requires_blocking_ingress());
         let control_message = sumeragi_msg(control);
         let control_policy = ConsensusIngressLimiter::ingress_policy(&control_message);
         assert_eq!(control_policy.rate_class, Some(IngressRateClass::Critical));
@@ -4671,6 +4669,27 @@ mod network_relay_tests {
     }
 
     #[test]
+    fn sumeragi_v2_ingress_policy_and_metadata_match_payload_kind() {
+        let chunk = v2_payload_chunk_block_message();
+        let chunk_policy = ConsensusIngressLimiter::ingress_policy(&sumeragi_msg(chunk.clone()));
+        assert_eq!(chunk_policy.rate_class, Some(IngressRateClass::Bulk));
+        assert_eq!(
+            NetworkRelayShared::block_message_meta(&chunk),
+            ("SumeragiV2PayloadChunk", None, None)
+        );
+
+        let request = sumeragi_v2_commit_certificate_request();
+        assert!(!request.requires_blocking_ingress());
+        let request_policy =
+            ConsensusIngressLimiter::ingress_policy(&sumeragi_msg(request.clone()));
+        assert_eq!(request_policy.rate_class, Some(IngressRateClass::Limited));
+        assert_eq!(
+            NetworkRelayShared::block_message_meta(&request),
+            ("SumeragiV2CommitCertificateRequest", Some(9), None)
+        );
+    }
+
+    #[test]
     fn pow_broadcast_match_detects_exact_match() {
         let summary = SoranetHandshakePowSummary {
             required: true,
@@ -4959,6 +4978,26 @@ mod network_relay_tests {
                 sender: 0,
                 signature: vec![0x67],
             }),
+        ))
+    }
+
+    fn sumeragi_v2_commit_certificate_request() -> BlockMessage {
+        let requester = PeerId::new(KeyPair::random().public_key().clone());
+        BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::CommitCertificateRequest(
+                wire::CommitCertificateRequest {
+                    protocol_version: wire::PROTOCOL_VERSION,
+                    chain_id: "00000000-0000-0000-0000-000000000000"
+                        .parse()
+                        .expect("valid chain id"),
+                    context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                        b"irohad-v2-context",
+                    ))),
+                    height: 9,
+                    requester,
+                    signature: vec![0xCC],
+                },
+            ),
         ))
     }
 
@@ -5765,11 +5804,11 @@ mod network_relay_tests {
     fn block_message_meta_reports_v2_round_when_available() {
         assert_eq!(
             NetworkRelayShared::block_message_meta(&v2_vote_block_message()),
-            ("SumeragiV2", Some(5), Some(7))
+            ("SumeragiV2PrepareVote", Some(5), Some(7))
         );
         assert_eq!(
             NetworkRelayShared::block_message_meta(&v2_payload_chunk_block_message()),
-            ("SumeragiV2", None, None)
+            ("SumeragiV2PayloadChunk", None, None)
         );
     }
 
@@ -6365,6 +6404,13 @@ fn checkpointed_snapshot_catchup_prune_height(
         .then_some(latest_checkpoint_height)
 }
 
+fn hard_fork_snapshot_bootstrap_prune_height(
+    state_height: usize,
+    block_count: usize,
+) -> Option<u64> {
+    (block_count > state_height).then(|| u64::try_from(state_height).ok())?
+}
+
 #[cfg(test)]
 mod snapshot_read_error_tests {
     use super::*;
@@ -6551,6 +6597,22 @@ mod snapshot_read_error_tests {
     }
 
     #[test]
+    fn hard_fork_snapshot_bootstrap_prune_height_drops_untrusted_suffix() {
+        assert_eq!(
+            hard_fork_snapshot_bootstrap_prune_height(23_485, 23_486),
+            Some(23_485)
+        );
+        assert_eq!(
+            hard_fork_snapshot_bootstrap_prune_height(23_485, 23_485),
+            None
+        );
+        assert_eq!(
+            hard_fork_snapshot_bootstrap_prune_height(23_486, 23_485),
+            None
+        );
+    }
+
+    #[test]
     fn startup_nexus_merge_preserves_snapshot_topology_and_cooldown_only() {
         use std::num::{NonZeroU32, NonZeroU64};
 
@@ -6713,16 +6775,20 @@ impl Iroha {
             }
         });
 
-        let (kura, mut block_count) = Kura::new(&config.kura, &config.nexus.lane_config)
-            .map_err(|err| {
-                let resolved = config.kura.store_dir.resolve_relative_path();
-                Report::new(err).attach(format!(
-                    "failed to initialize Kura for store_dir {} (raw {})",
-                    resolved.display(),
-                    config.kura.store_dir.value().display(),
-                ))
-            })
-            .change_context(StartError::InitKura)?;
+        let (kura, mut block_count) = Kura::new_with_configured_lane_catalog(
+            &config.kura,
+            &config.nexus.lane_config,
+            &config.nexus.configured_lane_catalog,
+        )
+        .map_err(|err| {
+            let resolved = config.kura.store_dir.resolve_relative_path();
+            Report::new(err).attach(format!(
+                "failed to initialize Kura for store_dir {} (raw {})",
+                resolved.display(),
+                config.kura.store_dir.value().display(),
+            ))
+        })
+        .change_context(StartError::InitKura)?;
         kura.configure_fastpq_proof_sidecar_limits(&config.zk.fastpq);
         let child = Kura::start(kura.clone(), supervisor.shutdown_signal());
         supervisor.monitor(child);
@@ -6928,6 +6994,20 @@ impl Iroha {
             let snapshot_hashes = state.committed_block_hashes_snapshot();
             kura.hard_fork_extend_hash_only_from_snapshot(&snapshot_hashes)
                 .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+            if let Some(prune_height) =
+                hard_fork_snapshot_bootstrap_prune_height(state.committed_height(), block_count.0)
+            {
+                iroha_logger::warn!(
+                    state_height = state.committed_height(),
+                    block_count = block_count.0,
+                    prune_height,
+                    "hard-fork snapshot bootstrap: pruning untrusted Kura suffix above loaded snapshot before replay"
+                );
+                kura.prune_to_height(prune_height)
+                    .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+                block_count.0 = usize::try_from(prune_height)
+                    .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+            }
             if state.committed_height() > block_count.0 {
                 block_count.0 = state.committed_height();
                 iroha_logger::warn!(
@@ -11646,56 +11726,6 @@ fn compute_consensus_handshake_caps(
     })
 }
 
-fn npos_validator_status_counts<'a>(
-    validators: impl IntoIterator<Item = &'a PublicLaneValidatorRecord> + 'a,
-) -> (usize, usize, usize, usize) {
-    let mut active_bls = 0usize;
-    let mut active_total = 0usize;
-    let mut pending = 0usize;
-    let mut total = 0usize;
-    for record in validators {
-        total = total.saturating_add(1);
-        match record.status {
-            PublicLaneValidatorStatus::Active => {
-                active_total = active_total.saturating_add(1);
-                if let Some(pk) = record.validator.try_signatory()
-                    && matches!(pk.try_algorithm(), Ok(Algorithm::BlsNormal))
-                {
-                    active_bls = active_bls.saturating_add(1);
-                }
-            }
-            PublicLaneValidatorStatus::PendingActivation(_) => {
-                pending = pending.saturating_add(1);
-            }
-            _ => {}
-        }
-    }
-    (active_bls, active_total, pending, total)
-}
-
-fn effective_npos_validator_status_counts(state: &State) -> (usize, usize, usize, usize) {
-    let raw_counts = {
-        let world = state.world_view();
-        npos_validator_status_counts(
-            world
-                .public_lane_validators()
-                .iter()
-                .map(|(_, record)| record),
-        )
-    };
-    let Some(roster) = state.epoch_validator_peer_ids_fast(0) else {
-        return raw_counts;
-    };
-    let active_total = roster.len();
-    let active_bls = roster
-        .iter()
-        .filter(|peer| matches!(peer.public_key().try_algorithm(), Ok(Algorithm::BlsNormal)))
-        .count();
-    let pending = raw_counts.2;
-    let total = raw_counts.3.max(active_total.saturating_add(pending));
-    (active_bls, active_total, pending, total)
-}
-
 #[allow(clippy::too_many_lines)]
 fn verify_genesis_metadata(
     genesis: &GenesisBlock,
@@ -12408,59 +12438,6 @@ mod tests {
             let scaled = cfg.scaled(2);
             assert_eq!(scaled.rate_per_sec.get(), 4);
             assert_eq!(scaled.burst.get(), 6);
-        }
-    }
-
-    mod npos_validator_counts {
-        use super::*;
-        use iroha_crypto::{Algorithm, KeyPair};
-        use iroha_data_model::{
-            account::AccountId,
-            metadata::Metadata,
-            nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
-        };
-        use iroha_primitives::numeric::Numeric;
-
-        fn record_with_status(
-            status: PublicLaneValidatorStatus,
-            algorithm: Algorithm,
-        ) -> PublicLaneValidatorRecord {
-            let keypair = KeyPair::random_with_algorithm(algorithm);
-            let account_id = AccountId::new(keypair.public_key().clone());
-            let stake = Numeric::from(10_u64);
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator: account_id.clone(),
-                peer_id: PeerId::from(keypair.public_key().clone()),
-                stake_account: account_id,
-                total_stake: stake.clone(),
-                self_stake: stake,
-                metadata: Metadata::default(),
-                status,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            }
-        }
-
-        #[test]
-        fn tracks_active_bls_validators() {
-            let active_bls =
-                record_with_status(PublicLaneValidatorStatus::Active, Algorithm::BlsNormal);
-            let active_ed =
-                record_with_status(PublicLaneValidatorStatus::Active, Algorithm::Ed25519);
-            let pending = record_with_status(
-                PublicLaneValidatorStatus::PendingActivation(0),
-                Algorithm::BlsNormal,
-            );
-
-            let (active_bls_count, active_total, pending_count, total) =
-                npos_validator_status_counts([&active_bls, &active_ed, &pending]);
-
-            assert_eq!(active_bls_count, 1);
-            assert_eq!(active_total, 2);
-            assert_eq!(pending_count, 1);
-            assert_eq!(total, 3);
         }
     }
 
