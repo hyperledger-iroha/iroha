@@ -28,7 +28,10 @@ use iroha_data_model::{
             KagemushaTransfer, RedeemKagemushaRecursiveV2, TopUpKagemushaRecursive,
             TopUpKagemushaRecursiveV2,
         },
-        settlement::{DvpIsi, PvpIsi, SettlementInstructionBox},
+        settlement::{
+            DvpIsi, FxCorridorPolicy, FxCorridorPolicyRegistry, PvpIsi, SetFxCorridorPolicy,
+            SettleFxCorridor, SettlementInstructionBox,
+        },
         smart_contract_code::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
             RegisterSmartContractCode,
@@ -215,7 +218,7 @@ impl RoutingPlan {
 }
 
 /// Deterministic routing resolution failure against configured Nexus catalogs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum RoutingResolveError {
     /// lane {lane_id} is not present in the lane catalog
     #[error("lane {lane_id} is not present in the lane catalog")]
@@ -293,6 +296,24 @@ pub enum RoutingResolveError {
         /// Conflicting dataspace-routed write target found in the transaction.
         second_dataspace_id: DataSpaceId,
     },
+    /// FX corridor routing requires a world snapshot containing governed policy state.
+    #[error("FX corridor policy `{policy_id}` cannot be routed without governed policy state")]
+    FxCorridorPolicyStateUnavailable {
+        /// Policy selected by the settlement instruction.
+        policy_id: Name,
+    },
+    /// The protected FX corridor policy registry has not been initialized.
+    #[error("the protected FX corridor policy registry is missing")]
+    FxCorridorPolicyRegistryMissing,
+    /// The protected FX corridor policy registry payload is malformed.
+    #[error("the protected FX corridor policy registry is malformed")]
+    FxCorridorPolicyRegistryMalformed,
+    /// The selected FX corridor policy does not exist.
+    #[error("FX corridor policy `{policy_id}` was not found")]
+    FxCorridorPolicyNotFound {
+        /// Policy selected by the settlement instruction.
+        policy_id: Name,
+    },
     /// provided routing plan does not match the current Nexus routing policy
     #[error("provided routing plan does not match the current Nexus routing policy")]
     StaleRoutingPlan,
@@ -316,6 +337,10 @@ impl RoutingResolveError {
             Self::ConflictingTransactionDataspaceTargets { .. } => {
                 "conflicting_transaction_dataspace_targets"
             }
+            Self::FxCorridorPolicyStateUnavailable { .. } => "fx_corridor_policy_state_unavailable",
+            Self::FxCorridorPolicyRegistryMissing => "fx_corridor_policy_registry_missing",
+            Self::FxCorridorPolicyRegistryMalformed => "fx_corridor_policy_registry_malformed",
+            Self::FxCorridorPolicyNotFound { .. } => "fx_corridor_policy_not_found",
             Self::StaleRoutingPlan => "stale_routing_plan",
         }
     }
@@ -871,7 +896,10 @@ fn dataspace_scoped_permission_routing_decision_with_world<W: WorldReadOnly>(
 fn settlement_routing_decision_without_catalog(
     tx: &AcceptedTransaction<'_>,
 ) -> Option<RoutingDecision> {
-    let dataspace_id = settlement_transaction_dataspace_target(tx, None, None)?;
+    if transaction_contains_fx_corridor_settlement(tx) {
+        return Some(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+    }
+    let dataspace_id = settlement_transaction_dataspace_target(tx, None, None).ok()??;
     (dataspace_id == DataSpaceId::UNIVERSAL)
         .then(|| RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
 }
@@ -883,7 +911,7 @@ fn settlement_routing_decision(
     state_view: Option<&StateView<'_>>,
 ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
     let Some(dataspace_id) =
-        settlement_transaction_dataspace_target(tx, Some(dataspace_catalog), state_view)
+        settlement_transaction_dataspace_target(tx, Some(dataspace_catalog), state_view)?
     else {
         return Ok(None);
     };
@@ -902,7 +930,8 @@ fn settlement_routing_decision_with_world<W: WorldReadOnly>(
         Some(dataspace_catalog),
         world,
         ledger_time_ms,
-    ) else {
+    )?
+    else {
         return Ok(None);
     };
     canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog).map(Some)
@@ -937,6 +966,36 @@ fn settlement_pair_dataspace_target(
         (Some(dataspace), None) | (None, Some(dataspace)) => Some(dataspace),
         (None, None) => None,
     }
+}
+
+fn fx_corridor_policy_with_world<W: WorldReadOnly>(
+    world: &W,
+    policy_id: &Name,
+) -> Result<FxCorridorPolicy, RoutingResolveError> {
+    let custom = world
+        .parameters()
+        .custom()
+        .get(&FxCorridorPolicyRegistry::parameter_id())
+        .ok_or(RoutingResolveError::FxCorridorPolicyRegistryMissing)?;
+    FxCorridorPolicyRegistry::from_custom_parameter(custom)
+        .map_err(|_| RoutingResolveError::FxCorridorPolicyRegistryMalformed)?
+        .ok_or(RoutingResolveError::FxCorridorPolicyRegistryMalformed)?
+        .get(policy_id)
+        .cloned()
+        .ok_or_else(|| RoutingResolveError::FxCorridorPolicyNotFound {
+            policy_id: policy_id.clone(),
+        })
+}
+
+fn fx_corridor_policy_with_state(
+    state_view: Option<&StateView<'_>>,
+    policy_id: &Name,
+) -> Result<FxCorridorPolicy, RoutingResolveError> {
+    let state_view =
+        state_view.ok_or_else(|| RoutingResolveError::FxCorridorPolicyStateUnavailable {
+            policy_id: policy_id.clone(),
+        })?;
+    fx_corridor_policy_with_world(state_view.world(), policy_id)
 }
 
 fn asset_id_explicit_dataspace_target(
@@ -1101,9 +1160,9 @@ fn settlement_transaction_dataspace_target(
     tx: &AcceptedTransaction<'_>,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
-) -> Option<DataSpaceId> {
+) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     let Some(executable) = transaction_executable(tx) else {
-        return None;
+        return Ok(None);
     };
     let mut target_dataspace = None;
 
@@ -1116,7 +1175,7 @@ fn settlement_transaction_dataspace_target(
                         &**instruction,
                         dataspace_catalog,
                         state_view,
-                    ),
+                    )?,
                 );
             }
         }
@@ -1129,13 +1188,13 @@ fn settlement_transaction_dataspace_target(
                         &**instruction,
                         dataspace_catalog,
                         state_view,
-                    ),
+                    )?,
                 );
             }
         }
     }
 
-    target_dataspace
+    Ok(target_dataspace)
 }
 
 fn settlement_transaction_dataspace_target_with_world<W: WorldReadOnly>(
@@ -1143,9 +1202,9 @@ fn settlement_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
     ledger_time_ms: Option<u64>,
-) -> Option<DataSpaceId> {
+) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     let Some(executable) = transaction_executable(tx) else {
-        return None;
+        return Ok(None);
     };
     let mut target_dataspace = None;
 
@@ -1159,7 +1218,7 @@ fn settlement_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                         dataspace_catalog,
                         world,
                         ledger_time_ms,
-                    ),
+                    )?,
                 );
             }
         }
@@ -1173,24 +1232,24 @@ fn settlement_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                         dataspace_catalog,
                         world,
                         ledger_time_ms,
-                    ),
+                    )?,
                 );
             }
         }
     }
 
-    target_dataspace
+    Ok(target_dataspace)
 }
 
 fn instruction_settlement_dataspace_target(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
-) -> Option<DataSpaceId> {
+) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     let any = instruction.as_any();
 
     if let Some(dvp) = any.downcast_ref::<DvpIsi>() {
-        return settlement_pair_dataspace_target(
+        return Ok(settlement_pair_dataspace_target(
             asset_balance_definition_dataspace_target(
                 dvp.delivery_leg().asset_definition_id(),
                 dataspace_catalog,
@@ -1201,11 +1260,11 @@ fn instruction_settlement_dataspace_target(
                 dataspace_catalog,
                 state_view,
             ),
-        );
+        ));
     }
 
     if let Some(pvp) = any.downcast_ref::<PvpIsi>() {
-        return settlement_pair_dataspace_target(
+        return Ok(settlement_pair_dataspace_target(
             asset_balance_definition_dataspace_target(
                 pvp.primary_leg().asset_definition_id(),
                 dataspace_catalog,
@@ -1216,11 +1275,23 @@ fn instruction_settlement_dataspace_target(
                 dataspace_catalog,
                 state_view,
             ),
-        );
+        ));
+    }
+
+    if any.downcast_ref::<SetFxCorridorPolicy>().is_some() {
+        return Ok(Some(DataSpaceId::UNIVERSAL));
+    }
+
+    if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
+        let policy = fx_corridor_policy_with_state(state_view, &fx.policy_id)?;
+        return Ok(settlement_pair_dataspace_target(
+            Some(policy.source_dataspace),
+            Some(policy.destination_dataspace),
+        ));
     }
 
     if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>() {
-        return match settlement {
+        return Ok(match settlement {
             SettlementInstructionBox::Dvp(dvp) => settlement_pair_dataspace_target(
                 asset_balance_definition_dataspace_target(
                     dvp.delivery_leg().asset_definition_id(),
@@ -1245,10 +1316,18 @@ fn instruction_settlement_dataspace_target(
                     state_view,
                 ),
             ),
-        };
+            SettlementInstructionBox::SetFxCorridorPolicy(_) => Some(DataSpaceId::UNIVERSAL),
+            SettlementInstructionBox::SettleFxCorridor(fx) => {
+                let policy = fx_corridor_policy_with_state(state_view, &fx.policy_id)?;
+                settlement_pair_dataspace_target(
+                    Some(policy.source_dataspace),
+                    Some(policy.destination_dataspace),
+                )
+            }
+        });
     }
 
-    None
+    Ok(None)
 }
 
 fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
@@ -1256,11 +1335,11 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
     ledger_time_ms: Option<u64>,
-) -> Option<DataSpaceId> {
+) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     let any = instruction.as_any();
 
     if let Some(dvp) = any.downcast_ref::<DvpIsi>() {
-        return settlement_pair_dataspace_target(
+        return Ok(settlement_pair_dataspace_target(
             asset_balance_definition_dataspace_target_with_world(
                 dvp.delivery_leg().asset_definition_id(),
                 dataspace_catalog,
@@ -1273,11 +1352,11 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
                 world,
                 ledger_time_ms,
             ),
-        );
+        ));
     }
 
     if let Some(pvp) = any.downcast_ref::<PvpIsi>() {
-        return settlement_pair_dataspace_target(
+        return Ok(settlement_pair_dataspace_target(
             asset_balance_definition_dataspace_target_with_world(
                 pvp.primary_leg().asset_definition_id(),
                 dataspace_catalog,
@@ -1290,11 +1369,23 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
                 world,
                 ledger_time_ms,
             ),
-        );
+        ));
+    }
+
+    if any.downcast_ref::<SetFxCorridorPolicy>().is_some() {
+        return Ok(Some(DataSpaceId::UNIVERSAL));
+    }
+
+    if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
+        let policy = fx_corridor_policy_with_world(world, &fx.policy_id)?;
+        return Ok(settlement_pair_dataspace_target(
+            Some(policy.source_dataspace),
+            Some(policy.destination_dataspace),
+        ));
     }
 
     if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>() {
-        return match settlement {
+        return Ok(match settlement {
             SettlementInstructionBox::Dvp(dvp) => settlement_pair_dataspace_target(
                 asset_balance_definition_dataspace_target_with_world(
                     dvp.delivery_leg().asset_definition_id(),
@@ -1323,10 +1414,37 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
                     ledger_time_ms,
                 ),
             ),
-        };
+            SettlementInstructionBox::SetFxCorridorPolicy(_) => Some(DataSpaceId::UNIVERSAL),
+            SettlementInstructionBox::SettleFxCorridor(fx) => {
+                let policy = fx_corridor_policy_with_world(world, &fx.policy_id)?;
+                settlement_pair_dataspace_target(
+                    Some(policy.source_dataspace),
+                    Some(policy.destination_dataspace),
+                )
+            }
+        });
     }
 
-    None
+    Ok(None)
+}
+
+fn transaction_contains_fx_corridor_settlement(tx: &AcceptedTransaction<'_>) -> bool {
+    let Some(executable) = transaction_executable(tx) else {
+        return false;
+    };
+    let contains = |instruction: &InstructionBox| {
+        let any = instruction.as_any();
+        any.downcast_ref::<SettleFxCorridor>().is_some()
+            || matches!(
+                any.downcast_ref::<SettlementInstructionBox>(),
+                Some(SettlementInstructionBox::SettleFxCorridor(_))
+            )
+    };
+    match executable {
+        Executable::Instructions(instructions) => instructions.iter().any(contains),
+        Executable::IvmProved(proved) => proved.overlay.iter().any(contains),
+        Executable::ContractCall(_) | Executable::Ivm(_) => false,
+    }
 }
 
 fn transaction_executable<'tx>(tx: &'tx AcceptedTransaction<'tx>) -> Option<&'tx Executable> {
@@ -1772,6 +1890,23 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
     );
 
     let any = instruction.as_any();
+    let fx_instruction = any.downcast_ref::<SettleFxCorridor>().or_else(|| {
+        any.downcast_ref::<SettlementInstructionBox>()
+            .and_then(|settlement| match settlement {
+                SettlementInstructionBox::SettleFxCorridor(fx) => Some(fx),
+                SettlementInstructionBox::Dvp(_)
+                | SettlementInstructionBox::Pvp(_)
+                | SettlementInstructionBox::SetFxCorridorPolicy(_) => None,
+            })
+    });
+    if let Some(fx) = fx_instruction {
+        if let Ok(policy) = fx_corridor_policy_with_world(world, &fx.policy_id) {
+            insert_native_amx_participant(dataspaces, Some(policy.source_dataspace));
+            insert_native_amx_participant(dataspaces, Some(policy.destination_dataspace));
+        }
+        return;
+    }
+
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
         if let TransferBox::Asset(transfer) = transfer {
             collect_asset_balance_native_amx_participants(
@@ -3106,6 +3241,17 @@ fn instruction_transaction_target_requires_universal_coordinator(
 ) -> bool {
     let any = instruction.as_any();
 
+    if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
+        return fx_corridor_policy_with_state(state_view, &fx.policy_id)
+            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace);
+    }
+    if let Some(SettlementInstructionBox::SettleFxCorridor(fx)) =
+        any.downcast_ref::<SettlementInstructionBox>()
+    {
+        return fx_corridor_policy_with_state(state_view, &fx.policy_id)
+            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace);
+    }
+
     if let Some(transfer) = any.downcast_ref::<TransferBox>()
         && let TransferBox::Asset(transfer) = transfer
     {
@@ -3254,6 +3400,17 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
     ledger_time_ms: Option<u64>,
 ) -> bool {
     let any = instruction.as_any();
+
+    if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
+        return fx_corridor_policy_with_world(world, &fx.policy_id)
+            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace);
+    }
+    if let Some(SettlementInstructionBox::SettleFxCorridor(fx)) =
+        any.downcast_ref::<SettlementInstructionBox>()
+    {
+        return fx_corridor_policy_with_world(world, &fx.policy_id)
+            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace);
+    }
 
     if let Some(transfer) = any.downcast_ref::<TransferBox>()
         && let TransferBox::Asset(transfer) = transfer
@@ -3612,6 +3769,16 @@ fn asset_definition_target_from_parts_with_world<W: WorldReadOnly>(
 fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instruction) -> bool {
     let any = instruction.as_any();
 
+    if any.downcast_ref::<SettleFxCorridor>().is_some() {
+        return true;
+    }
+
+    if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>()
+        && matches!(settlement, SettlementInstructionBox::SettleFxCorridor(_))
+    {
+        return true;
+    }
+
     if let Some(multisig) = multisig_instruction(instruction) {
         return match multisig {
             MultisigInstructionBox::Propose(_) | MultisigInstructionBox::Approve(_) => true,
@@ -3687,6 +3854,8 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
                         .asset_definition_id()
                         .is_opaque_canonical()
             }
+            SettlementInstructionBox::SetFxCorridorPolicy(_) => false,
+            SettlementInstructionBox::SettleFxCorridor(_) => true,
         };
     }
 

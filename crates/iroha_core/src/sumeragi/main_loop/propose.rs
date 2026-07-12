@@ -6067,7 +6067,12 @@ impl Actor {
                         &routing_batch,
                         &nexus,
                         proposal_height,
-                        |key| world_view.sccp_outbound_messages().get(key).is_some(),
+                        |key| {
+                            world_view
+                                .sccp_outbound_message_locator()
+                                .get(&key.message_id)
+                                .is_some()
+                        },
                     )?
                     .is_empty()
                 };

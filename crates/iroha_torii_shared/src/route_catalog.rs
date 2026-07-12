@@ -5136,6 +5136,74 @@ mod tests {
     }
 
     #[test]
+    fn canonical_path_grammar_rejects_crud_read_operation_segments() {
+        for descriptor in [
+            RouteDescriptor::new(
+                "test.resources_list_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/list",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+            RouteDescriptor::new(
+                "test.resources_get_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/get",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+            RouteDescriptor::new(
+                "test.resources_list_get",
+                HttpMethod::Get,
+                "/v1/tests/resources/list",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+            RouteDescriptor::new(
+                "test.resources_list_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/list/details",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+            RouteDescriptor::new(
+                "test.resources_query_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/list",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+        ] {
+            assert_eq!(
+                validate_path(&descriptor),
+                Err("static path segment uses a forbidden transport or CRUD word")
+            );
+        }
+
+        for descriptor in [
+            RouteDescriptor::new(
+                "test.resources_json_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/json",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+            RouteDescriptor::new(
+                "test.resources_sse_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/sse",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+        ] {
+            assert_eq!(
+                validate_path(&descriptor),
+                Err("static path segment uses a forbidden transport word")
+            );
+        }
+    }
+
+    #[test]
     fn wildcard_and_protocol_exceptions_must_be_explicit() {
         let wildcard = RouteDescriptor::new(
             "test.wildcard",

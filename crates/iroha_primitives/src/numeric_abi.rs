@@ -413,14 +413,16 @@ fn validate_frame_header(
 
 fn validate_frame(frame: &[u8], schema: [u8; 16], maximum: usize) -> Result<(), NumericAbiError> {
     validate_frame_header(frame, schema, maximum)?;
-    let expected_checksum = u64::from_le_bytes(
+    let checksum = u64::from_le_bytes(
         frame[31..39]
             .try_into()
             .expect("fixed header length was checked"),
     );
-    let actual_checksum = norito::core::hardware_crc64(&frame[NUMERIC_FRAME_HEADER_BYTES_V1..]);
-    if actual_checksum != expected_checksum {
-        return Err(NumericAbiError::Norito("checksum mismatch".to_owned()));
+    let body = &frame[NUMERIC_FRAME_HEADER_BYTES_V1..];
+    if norito::core::hardware_crc64(body) != checksum {
+        return Err(NumericAbiError::Norito(
+            NoritoError::ChecksumMismatch.to_string(),
+        ));
     }
     Ok(())
 }
@@ -713,6 +715,30 @@ mod tests {
         let quantity = QuantityValueV1::new("12.50".parse().expect("quantity"));
         let quantity_frame = quantity.encode_frame().expect("encode quantity");
         assert_eq!(QuantityValueV1::decode_frame(&quantity_frame), Ok(quantity));
+    }
+
+    #[test]
+    fn frame_validation_does_not_leak_norito_layout_state() {
+        norito::core::reset_decode_state();
+        let marker = String::from("missing");
+        let expected = norito::to_bytes(&marker).expect("encode marker before numeric decode");
+        let frame = IntValueV1::try_new(BigInt::from_i128(7))
+            .expect("bounded integer")
+            .encode_frame()
+            .expect("encode integer frame");
+
+        IntValueV1::decode_frame(&frame).expect("decode integer frame");
+
+        assert_eq!(
+            norito::core::effective_decode_flags(),
+            None,
+            "numeric validation must not retain its zero-layout frame context"
+        );
+        assert_eq!(
+            norito::to_bytes(&marker).expect("encode marker after numeric decode"),
+            expected,
+            "numeric validation must not alter the next canonical encoding"
+        );
     }
 
     #[test]

@@ -18,6 +18,24 @@ use super::SccpNativeTrustAnchorV1;
 /// supported SDK, including runtimes whose JSON number type is IEEE-754 binary64.
 pub const SCCP_V1_JSON_SAFE_INTEGER_MAX: u64 = (1_u64 << 53) - 1;
 
+/// Maximum canonical SCCP application-payload bytes retained in one outbound record.
+///
+/// This consensus-visible bound is shared by transaction admission, durable state, and
+/// protocol-native proof admission. Keeping the canonical payload in the authoritative outbox
+/// record lets APIs project recent messages without reopening historical block bodies. V1 has
+/// four variable fields individually capped at 256 bytes; 4 KiB deliberately leaves fixed-layout
+/// and framing headroom while rejecting payload amplification far above the closed V1 surface.
+pub const SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1: usize = 4 * 1024;
+
+/// Maximum successful outbound SCCP messages committed by one block.
+///
+/// Commitment indices are consensus-visible and must be cheap to validate and reconstruct from
+/// durable state. The bound matches the first-release default consensus-v2 transaction cap while
+/// also limiting blocks whose transactions contain multiple SCCP instructions. A transaction
+/// that would exceed this bound is rejected atomically, so failed execution never consumes an
+/// index.
+pub const SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1: u32 = 512;
+
 /// A supported SCCP network profile for the V1 wire format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -334,6 +352,8 @@ impl SccpOutboundMessageKeyV1 {
 pub struct SccpOutboundMessageIndexKeyV1 {
     /// Local SORA block height containing the recorded message.
     pub recorded_at_height: u64,
+    /// Zero-based position in the block header's SCCP commitment Merkle tree.
+    pub commitment_index: u32,
     /// Exact SORA-to-external lane of the replay key.
     pub lane: SccpLaneIdV1,
     /// Globally unique lane-bound SCCP message identifier.
@@ -343,12 +363,40 @@ pub struct SccpOutboundMessageIndexKeyV1 {
 impl SccpOutboundMessageIndexKeyV1 {
     /// Build an ordered locator from one authoritative replay key and record.
     #[must_use]
-    pub fn new(key: SccpOutboundMessageKeyV1, record: SccpOutboundMessageRecordV1) -> Option<Self> {
+    pub fn new(
+        key: SccpOutboundMessageKeyV1,
+        record: &SccpOutboundPendingMessageRecordV1,
+    ) -> Option<Self> {
         if !record.is_well_formed_for_key(&key) {
             return None;
         }
+        Self::from_descriptor(key, record.descriptor())
+    }
+
+    /// Build an ordered locator from one accepted terminal proof record.
+    #[must_use]
+    pub fn from_terminal(
+        key: SccpOutboundMessageKeyV1,
+        record: &SccpOutboundProofRecordV1,
+    ) -> Option<Self> {
+        if !record.is_well_formed_for_key(&key) {
+            return None;
+        }
+        Self::from_descriptor(key, record.descriptor())
+    }
+
+    /// Build an ordered locator from a validated fixed descriptor.
+    #[must_use]
+    pub fn from_descriptor(
+        key: SccpOutboundMessageKeyV1,
+        descriptor: SccpOutboundMessageDescriptorV1,
+    ) -> Option<Self> {
+        if !descriptor.is_well_formed_for_key(&key) {
+            return None;
+        }
         Some(Self {
-            recorded_at_height: record.recorded_at_height,
+            recorded_at_height: descriptor.recorded_at_height,
+            commitment_index: descriptor.commitment_index,
             lane: key.lane,
             message_id: key.message_id,
         })
@@ -365,12 +413,34 @@ impl SccpOutboundMessageIndexKeyV1 {
     pub const fn range_start_at_or_before(height: u64) -> Self {
         Self {
             recorded_at_height: height,
+            commitment_index: 0,
             lane: SccpLaneIdV1 {
                 source: SccpNetworkV1::SoraTaira,
                 target: SccpNetworkV1::EthereumMainnet,
             },
             message_id: [0; 32],
         }
+    }
+
+    /// Return the lower bound immediately after one commitment position at `height`.
+    ///
+    /// This is a search-only pagination sentinel. In particular, advancing after index 511
+    /// produces index 512 so a forward range begins at the next older height; that sentinel is
+    /// intentionally not persistable.
+    #[must_use]
+    pub const fn range_start_after(height: u64, commitment_index: u32) -> Option<Self> {
+        if height == 0 || commitment_index >= SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 {
+            return None;
+        }
+        Some(Self {
+            recorded_at_height: height,
+            commitment_index: commitment_index + 1,
+            lane: SccpLaneIdV1 {
+                source: SccpNetworkV1::SoraTaira,
+                target: SccpNetworkV1::EthereumMainnet,
+            },
+            message_id: [0; 32],
+        })
     }
 
     /// Return the authoritative composite replay key named by this locator.
@@ -385,7 +455,9 @@ impl SccpOutboundMessageIndexKeyV1 {
     /// Return whether the locator has a valid height and outbound replay key.
     #[must_use]
     pub fn is_well_formed(self) -> bool {
-        self.recorded_at_height != 0 && self.message_key().is_well_formed()
+        self.recorded_at_height != 0
+            && self.commitment_index < SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
+            && self.message_key().is_well_formed()
     }
 }
 
@@ -394,6 +466,7 @@ impl Ord for SccpOutboundMessageIndexKeyV1 {
         other
             .recorded_at_height
             .cmp(&self.recorded_at_height)
+            .then_with(|| self.commitment_index.cmp(&other.commitment_index))
             .then_with(|| self.lane.cmp(&other.lane))
             .then_with(|| self.message_id.cmp(&other.message_id))
     }
@@ -405,7 +478,7 @@ impl PartialOrd for SccpOutboundMessageIndexKeyV1 {
     }
 }
 
-/// Durable admission evidence for a SORA-origin outbound SCCP message.
+/// Fixed replay and discovery descriptor retained for every outbound SCCP message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -414,7 +487,7 @@ impl PartialOrd for SccpOutboundMessageIndexKeyV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
-pub struct SccpOutboundMessageRecordV1 {
+pub struct SccpOutboundMessageDescriptorV1 {
     /// Governed destination binding authenticated at record admission.
     pub destination_binding_hash: [u8; 32],
     /// Immutable governed route configuration, including typed settlement.
@@ -423,10 +496,78 @@ pub struct SccpOutboundMessageRecordV1 {
     pub payload_hash: [u8; 32],
     /// Local SORA block height at which the message was recorded.
     pub recorded_at_height: u64,
+    /// Zero-based position authenticated by that block's SCCP commitment root.
+    pub commitment_index: u32,
 }
 
-impl SccpOutboundMessageRecordV1 {
-    /// Return whether both distinct commitments and the admission height are nonzero.
+impl SccpOutboundMessageDescriptorV1 {
+    /// Return whether the descriptor and replay key use four distinct nonzero hash roles.
+    #[must_use]
+    pub fn is_well_formed_for_key(&self, key: &SccpOutboundMessageKeyV1) -> bool {
+        nonzero(&self.destination_binding_hash)
+            && nonzero(&self.route_configuration_hash)
+            && nonzero(&self.payload_hash)
+            && self.destination_binding_hash != self.payload_hash
+            && self.destination_binding_hash != self.route_configuration_hash
+            && self.route_configuration_hash != self.payload_hash
+            && self.recorded_at_height != 0
+            && self.commitment_index < SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
+            && key.is_well_formed()
+            && key.message_id != self.destination_binding_hash
+            && key.message_id != self.route_configuration_hash
+            && key.message_id != self.payload_hash
+    }
+}
+
+/// Payload-bearing pending admission evidence for a SORA-origin outbound SCCP message.
+///
+/// The record is removed as soon as its destination proof is accepted. Its fixed descriptor
+/// moves to [`SccpOutboundProofRecordV1`], while Kura's immutable finalized-height archive keeps
+/// the canonical payload available for historical proof serving.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+pub struct SccpOutboundPendingMessageRecordV1 {
+    /// Governed destination binding authenticated at record admission.
+    pub destination_binding_hash: [u8; 32],
+    /// Immutable governed route configuration, including typed settlement.
+    pub route_configuration_hash: [u8; 32],
+    /// Hash of the exact canonical SCCP payload admitted for the key.
+    pub payload_hash: [u8; 32],
+    /// Exact canonical SCCP payload admitted for this authoritative outbox entry.
+    ///
+    /// Core admission and snapshot hydration revalidate these bytes against the lane, context,
+    /// message identifier, and payload hash. The data-model layer enforces the shared storage
+    /// bound without duplicating SCCP semantic decoding.
+    pub payload_bytes: Vec<u8>,
+    /// Local SORA block height at which the message was recorded.
+    pub recorded_at_height: u64,
+    /// Zero-based position authenticated by that block's SCCP commitment root.
+    pub commitment_index: u32,
+}
+
+impl SccpOutboundPendingMessageRecordV1 {
+    /// Return the fixed replay descriptor shared with the terminal proof record.
+    #[must_use]
+    pub const fn descriptor(&self) -> SccpOutboundMessageDescriptorV1 {
+        SccpOutboundMessageDescriptorV1 {
+            destination_binding_hash: self.destination_binding_hash,
+            route_configuration_hash: self.route_configuration_hash,
+            payload_hash: self.payload_hash,
+            recorded_at_height: self.recorded_at_height,
+            commitment_index: self.commitment_index,
+        }
+    }
+
+    /// Return whether commitment roles are distinct and payload evidence is nonempty and bounded.
+    ///
+    /// This predicate is deliberately structural. Nodes must additionally perform canonical SCCP
+    /// decode/re-encode and lane-bound identity validation before admitting untrusted records.
     #[must_use]
     pub fn is_well_formed(&self) -> bool {
         nonzero(&self.destination_binding_hash)
@@ -436,16 +577,68 @@ impl SccpOutboundMessageRecordV1 {
             && self.destination_binding_hash != self.route_configuration_hash
             && self.route_configuration_hash != self.payload_hash
             && self.recorded_at_height != 0
+            && self.commitment_index < SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
+            && !self.payload_bytes.is_empty()
+            && self.payload_bytes.len() <= SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1
     }
 
-    /// Return whether this record and replay key use three distinct nonzero hash roles.
+    /// Return whether this bounded record and replay key use four distinct nonzero hash roles.
     #[must_use]
     pub fn is_well_formed_for_key(&self, key: &SccpOutboundMessageKeyV1) -> bool {
-        self.is_well_formed()
-            && key.is_well_formed()
-            && key.message_id != self.destination_binding_hash
-            && key.message_id != self.route_configuration_hash
-            && key.message_id != self.payload_hash
+        self.is_well_formed() && self.descriptor().is_well_formed_for_key(key)
+    }
+}
+
+/// Consensus-state usage of payload-bearing pending SCCP outbox entries.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+pub struct SccpOutboundPendingUsageV1 {
+    /// Number of payload-bearing pending messages.
+    pub message_count: u64,
+    /// Sum of their exact canonical payload byte lengths.
+    pub payload_bytes: u64,
+}
+
+impl SccpOutboundPendingUsageV1 {
+    /// Add one nonempty payload using checked arithmetic.
+    #[must_use]
+    pub fn checked_add_payload(self, payload_len: usize) -> Option<Self> {
+        let payload_len = u64::try_from(payload_len).ok()?;
+        if payload_len == 0 {
+            return None;
+        }
+        Some(Self {
+            message_count: self.message_count.checked_add(1)?,
+            payload_bytes: self.payload_bytes.checked_add(payload_len)?,
+        })
+    }
+
+    /// Remove one exact nonempty payload using checked arithmetic.
+    #[must_use]
+    pub fn checked_remove_payload(self, payload_len: usize) -> Option<Self> {
+        let payload_len = u64::try_from(payload_len).ok()?;
+        if payload_len == 0 {
+            return None;
+        }
+        Some(Self {
+            message_count: self.message_count.checked_sub(1)?,
+            payload_bytes: self.payload_bytes.checked_sub(payload_len)?,
+        })
+    }
+
+    /// Return whether zero/nonzero counters can describe a set of nonempty payloads.
+    #[must_use]
+    pub const fn is_structurally_valid(self) -> bool {
+        (self.message_count == 0 && self.payload_bytes == 0)
+            || (self.message_count != 0 && self.payload_bytes >= self.message_count)
     }
 }
 
@@ -476,11 +669,25 @@ pub struct SccpOutboundProofRecordV1 {
     pub destination_proof_commitment: [u8; 32],
     /// Finalized Taira height containing the authoritative outbound message.
     pub finality_height: u64,
+    /// Zero-based position authenticated by the finalized block's SCCP commitment root.
+    pub commitment_index: u32,
     /// Local Taira height at which proof admission was committed.
     pub accepted_at_height: u64,
 }
 
 impl SccpOutboundProofRecordV1 {
+    /// Return the fixed descriptor retained after pending payload removal.
+    #[must_use]
+    pub const fn descriptor(self) -> SccpOutboundMessageDescriptorV1 {
+        SccpOutboundMessageDescriptorV1 {
+            destination_binding_hash: self.destination_binding_hash,
+            route_configuration_hash: self.route_configuration_hash,
+            payload_hash: self.payload_hash,
+            recorded_at_height: self.finality_height,
+            commitment_index: self.commitment_index,
+        }
+    }
+
     /// Return whether every commitment and both heights are nonzero and every
     /// hash role is distinct from the lane-bound message identifier.
     #[must_use]
@@ -495,8 +702,10 @@ impl SccpOutboundProofRecordV1 {
         ];
         key.is_well_formed()
             && self.finality_height != 0
+            && self.commitment_index < SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
             && self.accepted_at_height != 0
             && self.accepted_at_height >= self.finality_height
+            && self.descriptor().is_well_formed_for_key(key)
             && hashes.iter().all(nonzero)
             && hashes
                 .iter()
@@ -902,12 +1111,14 @@ mod tests {
         }
     }
 
-    fn outbound_record() -> SccpOutboundMessageRecordV1 {
-        SccpOutboundMessageRecordV1 {
+    fn outbound_record() -> SccpOutboundPendingMessageRecordV1 {
+        SccpOutboundPendingMessageRecordV1 {
             destination_binding_hash: [15; 32],
             route_configuration_hash: [16; 32],
             payload_hash: [17; 32],
+            payload_bytes: vec![0x91],
             recorded_at_height: 10,
+            commitment_index: 0,
         }
     }
 
@@ -919,6 +1130,7 @@ mod tests {
             finality_block_hash: [19; 32],
             destination_proof_commitment: [20; 32],
             finality_height: 10,
+            commitment_index: 0,
             accepted_at_height: 11,
         }
     }
@@ -1311,21 +1523,33 @@ mod tests {
         assert!(record.is_well_formed_for_key(&key));
 
         for hostile in [
-            SccpOutboundMessageRecordV1 {
+            SccpOutboundPendingMessageRecordV1 {
                 destination_binding_hash: [0; 32],
-                ..record
+                ..record.clone()
             },
-            SccpOutboundMessageRecordV1 {
+            SccpOutboundPendingMessageRecordV1 {
                 route_configuration_hash: record.destination_binding_hash,
-                ..record
+                ..record.clone()
             },
-            SccpOutboundMessageRecordV1 {
+            SccpOutboundPendingMessageRecordV1 {
                 payload_hash: record.route_configuration_hash,
-                ..record
+                ..record.clone()
             },
-            SccpOutboundMessageRecordV1 {
+            SccpOutboundPendingMessageRecordV1 {
                 recorded_at_height: 0,
-                ..record
+                ..record.clone()
+            },
+            SccpOutboundPendingMessageRecordV1 {
+                commitment_index: SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
+                ..record.clone()
+            },
+            SccpOutboundPendingMessageRecordV1 {
+                payload_bytes: Vec::new(),
+                ..record.clone()
+            },
+            SccpOutboundPendingMessageRecordV1 {
+                payload_bytes: vec![0x91; SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1 + 1],
+                ..record.clone()
             },
         ] {
             assert!(!hostile.is_well_formed_for_key(&key), "{hostile:?}");
@@ -1344,20 +1568,72 @@ mod tests {
             SccpOutboundMessageKeyV1::new(outbound_lane(SccpNetworkV1::TronMainnet), [18; 32])
                 .expect("valid key");
         let record = outbound_record();
-        let index = SccpOutboundMessageIndexKeyV1::new(key, record).expect("valid ordered index");
+        let index = SccpOutboundMessageIndexKeyV1::new(key, &record).expect("valid ordered index");
         assert_eq!(index.recorded_at_height, record.recorded_at_height);
+        assert_eq!(index.commitment_index, record.commitment_index);
         assert_eq!(index.message_key(), key);
         assert!(index.is_well_formed());
+        assert_eq!(
+            SccpOutboundMessageIndexKeyV1::from_terminal(key, &outbound_proof_record()),
+            Some(index),
+            "moving a message to terminal replay state must preserve its ordered locator"
+        );
 
         assert!(
             SccpOutboundMessageIndexKeyV1::new(
                 key,
-                SccpOutboundMessageRecordV1 {
+                &SccpOutboundPendingMessageRecordV1 {
                     recorded_at_height: 0,
-                    ..record
+                    ..record.clone()
                 },
             )
             .is_none()
+        );
+    }
+
+    #[test]
+    fn pending_usage_arithmetic_is_exact_and_fail_closed() {
+        let empty = SccpOutboundPendingUsageV1::default();
+        assert!(empty.is_structurally_valid());
+        assert_eq!(empty.checked_add_payload(0), None);
+
+        let one = empty.checked_add_payload(17).expect("add one payload");
+        assert_eq!(one.message_count, 1);
+        assert_eq!(one.payload_bytes, 17);
+        assert!(one.is_structurally_valid());
+        assert_eq!(one.checked_remove_payload(17), Some(empty));
+        assert_eq!(one.checked_remove_payload(0), None);
+        assert_eq!(one.checked_remove_payload(18), None);
+
+        assert_eq!(
+            SccpOutboundPendingUsageV1 {
+                message_count: u64::MAX,
+                payload_bytes: 1,
+            }
+            .checked_add_payload(1),
+            None
+        );
+        assert_eq!(
+            SccpOutboundPendingUsageV1 {
+                message_count: 1,
+                payload_bytes: u64::MAX,
+            }
+            .checked_add_payload(1),
+            None
+        );
+        assert!(
+            !SccpOutboundPendingUsageV1 {
+                message_count: 0,
+                payload_bytes: 1,
+            }
+            .is_structurally_valid()
+        );
+        assert!(
+            !SccpOutboundPendingUsageV1 {
+                message_count: 2,
+                payload_bytes: 1,
+            }
+            .is_structurally_valid()
         );
     }
 
@@ -1402,6 +1678,10 @@ mod tests {
                 ..record
             },
             SccpOutboundProofRecordV1 {
+                commitment_index: SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
+                ..record
+            },
+            SccpOutboundProofRecordV1 {
                 accepted_at_height: record.finality_height - 1,
                 ..record
             },
@@ -1432,24 +1712,25 @@ mod tests {
     fn ordered_outbound_index_seeks_newest_at_or_before_height() {
         use std::collections::BTreeSet;
 
-        let index_at = |height: u64, target: SccpNetworkV1, id: u8| {
+        let index_at = |height: u64, commitment_index: u32, target: SccpNetworkV1, id: u8| {
             let key = SccpOutboundMessageKeyV1::new(outbound_lane(target), [id; 32])
                 .expect("valid outbound key");
             SccpOutboundMessageIndexKeyV1::new(
                 key,
-                SccpOutboundMessageRecordV1 {
+                &SccpOutboundPendingMessageRecordV1 {
                     recorded_at_height: height,
+                    commitment_index,
                     ..outbound_record()
                 },
             )
             .expect("valid ordered index")
         };
         let entries = BTreeSet::from([
-            index_at(1, SccpNetworkV1::EthereumMainnet, 1),
-            index_at(40, SccpNetworkV1::TronMainnet, 2),
-            index_at(40, SccpNetworkV1::EthereumMainnet, 3),
-            index_at(41, SccpNetworkV1::BscMainnet, 4),
-            index_at(u64::MAX, SccpNetworkV1::EthereumMainnet, 5),
+            index_at(1, 0, SccpNetworkV1::EthereumMainnet, 1),
+            index_at(40, 1, SccpNetworkV1::EthereumMainnet, 2),
+            index_at(40, 0, SccpNetworkV1::TronMainnet, 3),
+            index_at(41, 0, SccpNetworkV1::BscMainnet, 4),
+            index_at(u64::MAX, 0, SccpNetworkV1::EthereumMainnet, 5),
         ]);
 
         assert_eq!(
@@ -1471,11 +1752,41 @@ mod tests {
                 .collect::<Vec<_>>(),
             [40, 40, 1]
         );
-        assert_eq!(selected[0].lane.target, SccpNetworkV1::EthereumMainnet);
-        assert_eq!(selected[1].lane.target, SccpNetworkV1::TronMainnet);
+        assert_eq!(selected[0].commitment_index, 0);
+        assert_eq!(selected[0].lane.target, SccpNetworkV1::TronMainnet);
+        assert_eq!(selected[1].commitment_index, 1);
+        assert_eq!(selected[1].lane.target, SccpNetworkV1::EthereumMainnet);
         assert!(
             !SccpOutboundMessageIndexKeyV1::range_start_at_or_before(40).is_well_formed(),
             "range sentinel must never be a persistable index entry"
+        );
+        let after_first =
+            SccpOutboundMessageIndexKeyV1::range_start_after(40, 0).expect("valid compound cursor");
+        assert_eq!(after_first.commitment_index, 1);
+        assert_eq!(
+            entries
+                .range(after_first..)
+                .next()
+                .map(|entry| (entry.recorded_at_height, entry.commitment_index)),
+            Some((40, 1))
+        );
+        let after_last = SccpOutboundMessageIndexKeyV1::range_start_after(
+            40,
+            SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 - 1,
+        )
+        .expect("last valid position has an older-height sentinel");
+        assert_eq!(
+            after_last.commitment_index,
+            SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
+        );
+        assert!(!after_last.is_well_formed());
+        assert!(SccpOutboundMessageIndexKeyV1::range_start_after(0, 0).is_none());
+        assert!(
+            SccpOutboundMessageIndexKeyV1::range_start_after(
+                40,
+                SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
+            )
+            .is_none()
         );
     }
 

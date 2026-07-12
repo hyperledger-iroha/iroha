@@ -14,7 +14,7 @@ import java.util.Set;
 public final class PipelineStatusOptions {
 
   private static final List<String> DEFAULT_SUCCESS =
-      Collections.unmodifiableList(Arrays.asList("Approved", "Committed", "Applied"));
+      Collections.singletonList("Applied");
   private static final List<String> DEFAULT_FAILURE =
       Collections.unmodifiableList(Arrays.asList("Rejected", "Expired"));
 

@@ -501,6 +501,27 @@ export interface ProposeMultisigExecuteTriggerOptions
 export interface MultisigAccountSelector {
   multisigAccountId?: string;
   multisigAccountAlias?: string;
+  multisig_account_id?: string;
+  multisig_account_alias?: string;
+}
+
+export type MultisigProposalStatus =
+  | "COLLECTING_SIGNATURES"
+  | "FINALIZED"
+  | "CANCELED"
+  | "EXPIRED";
+
+export interface MultisigProposalsQueryRequest extends MultisigAccountSelector {
+  status?: ReadonlyArray<MultisigProposalStatus>;
+  cursor?: string | null;
+  limit?: number | string | bigint | null;
+}
+
+export interface MultisigProposalLookupRequest extends MultisigAccountSelector {
+  proposalId?: string | null;
+  instructionsHash?: string | null;
+  proposal_id?: string | null;
+  instructions_hash?: string | null;
 }
 
 export type MultisigProposeInstructionInput =
@@ -671,15 +692,20 @@ export interface MultisigSpecResponse {
 export interface MultisigProposalEntry {
   proposal_id: string;
   instructions_hash: string;
+  operation_type: string;
+  intent: JsonValue | null;
   proposal: JsonValue;
+  status: MultisigProposalStatus;
+  terminal_at_ms: number | null;
 }
 
-export interface MultisigProposalListResponse {
+export interface MultisigProposalsQueryResponse {
   resolved_multisig_account_id: string;
   proposals: ReadonlyArray<MultisigProposalEntry>;
+  next_cursor: string | null;
 }
 
-export interface MultisigProposalGetResponse extends MultisigProposalEntry {
+export interface MultisigProposalLookupResponse extends MultisigProposalEntry {
   resolved_multisig_account_id: string;
 }
 
@@ -764,6 +790,10 @@ export interface SccpRegistryLimits {
   readonly max_retained_native_trust_anchors_per_lane: 4096;
 }
 export interface SccpResourceLimits {
+  readonly max_outbound_messages_per_block: 512;
+  readonly max_outbound_message_payload_bytes: 4096;
+  readonly max_pending_outbound_messages: number;
+  readonly max_pending_outbound_payload_bytes: number;
   readonly max_proofs_per_transaction: number;
   readonly max_proofs_per_block: number;
   readonly max_proof_bytes_per_proof: number;
@@ -911,8 +941,9 @@ export interface SccpTransferProjectionV1 {
   readonly route_id: SccpCanonicalTextValueV1;
 }
 export interface SccpPayloadProjectionV1 { readonly Transfer: SccpTransferProjectionV1; }
-export interface SccpRecentMessage { readonly height: number; readonly message_id_hex: string; readonly kind: "transfer"; readonly source_profile: "sora-taira"; readonly target_profile: Exclude<SccpNetworkProfile, "sora-taira">; readonly destination_binding_hash: string; readonly route_configuration_hash: string; readonly target_domain: 1 | 2 | 5; readonly asset_id: string | null; readonly route_id: string | null; readonly recipient: string | null; readonly amount: string; readonly payload_projection: SccpPayloadProjectionV1; readonly links: Readonly<{ bundle_path: string; proof_request_path: string }>; }
-export interface SccpRecentMessages { readonly items: readonly SccpRecentMessage[]; }
+export interface SccpRecentMessage { readonly height: number; readonly commitment_index: number; readonly message_id_hex: string; readonly kind: "transfer"; readonly source_profile: "sora-taira"; readonly target_profile: Exclude<SccpNetworkProfile, "sora-taira">; readonly destination_binding_hash: string; readonly route_configuration_hash: string; readonly target_domain: 1 | 2 | 5; readonly asset_id: string | null; readonly route_id: string | null; readonly recipient: string | null; readonly amount: string; readonly payload_projection: SccpPayloadProjectionV1; readonly links: Readonly<{ bundle_path: string; proof_request_path: string }>; }
+export interface SccpRecentCursor { readonly from: number; readonly after_index: number; }
+export interface SccpRecentMessages { readonly items: readonly SccpRecentMessage[]; readonly next: SccpRecentCursor | null; }
 export interface SccpMessageBundle { readonly version: 1; readonly commitment_root: string; readonly commitment: Readonly<Record<string, unknown>>; readonly merkle_proof: Readonly<Record<string, unknown>>; readonly payload: Readonly<{ Transfer: Readonly<Record<string, unknown>> }>; readonly finality_proof: string; }
 export interface SccpMessagePublicInputsV1 { readonly version: 1; readonly message_id: string; readonly payload_hash: string; readonly target_domain: 1 | 2 | 5; readonly commitment_root: string; readonly finality_height: string; readonly finality_block_hash: string; }
 export type SccpDestinationProofBackendV1 =
@@ -5078,14 +5109,15 @@ type NoritoRuntimeNamespaceExport =
   | "noritoEncodeMultisigContractCallProposeRequest"
   | "noritoEncodeMultisigProposeRequest"
   | "noritoEncodePrivacyProofEnvelope"
-  | "noritoEncodeTransactionPayloadBatch";
+  | "noritoEncodeTransactionPayloadBatch"
+  | "validateNoritoFrame";
 
 type CryptoRuntimeNamespaceExport =
     "CRYPTO_ALGORITHMS"
   | "KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS"
   | "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES"
   | "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1"
-  | "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1"
+  | "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2"
   | "KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME"
   | "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND"
   | "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1"
@@ -5176,6 +5208,7 @@ type CryptoRuntimeNamespaceExport =
   | "isKagemushaRecursiveSpendLineageProofCircuitId"
   | "isKagemushaRecursiveSpendNativeAvailable"
   | "isKagemushaRecursiveSpendTopUpNativeAvailable"
+  | "isKagemushaSpendAgainMode"
   | "isPrivacyNativeAvailable"
   | "isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId"
   | "isSupportedKagemushaRecursiveSpendAppendProofTransition"
@@ -5213,7 +5246,6 @@ type CryptoRuntimeNamespaceExport =
   | "normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId"
   | "normalizeRecoveryPhrase"
   | "preferredKagemushaOfflineSpendMode"
-  | "preferredKagemushaOfflineSpendModeForCapabilities"
   | "preferredKagemushaRecursiveSpendAppendOutputProofCircuitId"
   | "privacyBuildProofV1"
   | "privacyCapabilitiesV1"
@@ -6459,38 +6491,310 @@ export interface SubscriptionActionResponse {
 
 export type OfflineByteArray = ReadonlyArray<number>;
 export type OfflineJsonUnsignedInteger = number | bigint;
-
+export type OfflineAssetScale =
+  | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14
+  | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28
+  | 0n | 1n | 2n | 3n | 4n | 5n | 6n | 7n | 8n | 9n | 10n | 11n | 12n
+  | 13n | 14n | 15n | 16n | 17n | 18n | 19n | 20n | 21n | 22n | 23n
+  | 24n | 25n | 26n | 27n | 28n;
+export type OfflineFixed32Bytes = readonly [
+  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number,
+];
+export type OfflineFixed8Bytes = readonly [
+  number, number, number, number, number, number, number, number,
+];
 export interface OfflineScaledAmountJson {
   atomic_units: OfflineJsonUnsignedInteger;
-  scale: OfflineJsonUnsignedInteger;
+  scale: OfflineAssetScale;
 }
 
-export interface OfflineAuthorizationJson extends Record<string, unknown> {
-  operation_id: OfflineByteArray;
+export interface OfflineVerifierKeyIdJson {
+  backend: string;
+  name: string;
 }
 
-export interface OfflineTopUpRequestJson extends Record<string, unknown> {
+export interface OfflineSpendableNoteJson {
+  chain_id: string;
+  asset: string;
+  note_commitment: OfflineFixed32Bytes;
+  spend_nullifier: OfflineFixed32Bytes;
+  amount: OfflineScaledAmountJson;
+}
+
+export interface OfflineAuthorizationJson {
+  authority: string;
+  device_id: string;
+  operation_id: OfflineFixed32Bytes;
+  issued_at_ms: OfflineJsonUnsignedInteger;
+  expires_at_ms: OfflineJsonUnsignedInteger;
+  nonce: OfflineFixed32Bytes;
+  payload_digest: OfflineFixed32Bytes;
+  app_attest_evidence_sha256?: OfflineFixed32Bytes | null;
+  app_attest_evidence?: OfflineByteArray | null;
+  signature: string;
+}
+
+export interface OfflineProofBoxJson {
+  backend: string;
+  bytes: OfflineByteArray;
+}
+
+export interface OfflineVerifyingKeyJson {
+  backend: string;
+  bytes: OfflineByteArray;
+}
+
+export type OfflineProofBackend =
+  | "halo2-ipa-pasta"
+  | "halo2-bn254"
+  | "groth16"
+  | "stark"
+  | "unsupported"
+  | "halo2-ipa-orchard"
+  | "groth16-bls12-377"
+  | "fcmp-plus-plus-curve-tree"
+  | "lattice-pcs-sis"
+  | "miden-stark"
+  | "aztec-plonkish-private-kernel"
+  | "pq-masp-stark-fri"
+  | "anonymous-pgc"
+  | "verange"
+  | "zkat"
+  | "recursive-anonymous-admission"
+  | "vega-existing-credential-zk"
+  | "silent-threshold-anoncred"
+  | "zk-x509"
+  | "sis-with-hints";
+
+export type OfflineVerifierStatus = "Proposed" | "Active" | "Withdrawn";
+
+export interface OfflineMerkleProofJson {
+  leaf_index: OfflineJsonUnsignedInteger;
+  audit_path: ReadonlyArray<string | null>;
+}
+
+export interface OfflineLanePrivacyMerkleWitnessJson {
+  leaf: OfflineFixed32Bytes;
+  proof: OfflineMerkleProofJson;
+}
+
+export interface OfflineLanePrivacySnarkWitnessJson {
+  public_inputs: string;
+  proof: string;
+}
+
+export type OfflineLanePrivacyWitnessJson =
+  | { kind: "merkle"; payload: OfflineLanePrivacyMerkleWitnessJson }
+  | { kind: "snark"; payload: OfflineLanePrivacySnarkWitnessJson };
+
+export interface OfflineLanePrivacyProofJson {
+  commitment_id: readonly [number];
+  witness: OfflineLanePrivacyWitnessJson;
+}
+
+export interface OfflineProofAttachmentJson {
+  backend: string;
+  proof: OfflineProofBoxJson;
+  vk_ref: OfflineVerifierKeyIdJson;
+  vk_commitment?: OfflineFixed32Bytes | null;
+  envelope_hash?: OfflineFixed32Bytes | null;
+  lane_privacy?: OfflineLanePrivacyProofJson | null;
+}
+
+export interface OfflineVerifiedFoldStepJson {
+  root_before: OfflineFixed32Bytes;
+  input_nullifiers: ReadonlyArray<OfflineFixed32Bytes>;
+  output_commitments: ReadonlyArray<OfflineFixed32Bytes>;
+  root_after: OfflineFixed32Bytes;
+  attachment: OfflineProofAttachmentJson;
+  verifier_key: OfflineVerifyingKeyJson;
+}
+
+export interface OfflineVerifiedFoldBundleJson {
+  chain_id: string;
+  asset: string;
+  steps: ReadonlyArray<OfflineVerifiedFoldStepJson>;
+}
+
+export interface OfflineVerifyingKeyRecordJson {
+  version: OfflineJsonUnsignedInteger;
+  circuit_id: string;
+  owner_manifest_id?: string | null;
+  namespace: string;
+  backend: OfflineProofBackend;
+  curve: string;
+  public_inputs_schema_hash: OfflineFixed32Bytes;
+  commitment: OfflineFixed32Bytes;
+  vk_len: OfflineJsonUnsignedInteger;
+  max_proof_bytes: OfflineJsonUnsignedInteger;
+  gas_schedule_id?: string | null;
+  metadata_uri_cid?: string | null;
+  vk_bytes_cid?: string | null;
+  activation_height?: OfflineJsonUnsignedInteger | null;
+  withdraw_height?: OfflineJsonUnsignedInteger | null;
+  key?: OfflineVerifyingKeyJson | null;
+  status: OfflineVerifierStatus;
+}
+
+export interface OfflineVerifiedFoldVerifierRecordJson {
+  id: OfflineVerifierKeyIdJson;
+  record: OfflineVerifyingKeyRecordJson;
+}
+
+export interface OfflineVerifiedFoldRecordBundleJson {
+  bundle: OfflineVerifiedFoldBundleJson;
+  verifier_records: ReadonlyArray<OfflineVerifiedFoldVerifierRecordJson>;
+}
+
+export interface OfflineTopUpRequestJson {
   asset: string;
   amount: OfflineScaledAmountJson;
-  current_note: Record<string, unknown>;
-  record_bundle: Record<string, unknown>;
+  current_note: OfflineSpendableNoteJson;
+  record_bundle: OfflineVerifiedFoldRecordBundleJson;
   pallas_open_envelopes_archive: OfflineByteArray;
   artifact_generation: string;
-  operation_id: OfflineByteArray;
+  operation_id: OfflineFixed32Bytes;
   authorization: OfflineAuthorizationJson;
 }
 
-export interface OfflineRedeemRequestJson extends Record<string, unknown> {
-  bundle: Record<string, unknown>;
+export interface OfflineTopUpAnchorReferenceJson {
+  topup_operation_id: OfflineFixed32Bytes;
+  anchor_digest: OfflineFixed32Bytes;
+}
+
+export interface OfflineBranchPathJson {
+  lineage_root: OfflineFixed32Bytes;
+  depth: OfflineJsonUnsignedInteger;
+  path_bits: OfflineFixed8Bytes;
+}
+
+export interface OfflineBranchClaimJson {
+  path: OfflineBranchPathJson;
+  transition_tags: string;
+}
+
+export type OfflineLineageModeJson = {
+  mode: "reserved" | "semantic";
+  value?: null;
+};
+
+export interface OfflineSpendBranchJson {
+  branch: "recipient" | "change";
+  value?: null;
+}
+
+export interface OfflinePeerSplitTransitionJson {
+  binding_digest: OfflineFixed32Bytes;
+  branch: OfflineSpendBranchJson;
+  recipient_request_digest: OfflineFixed32Bytes;
+  operation_id: OfflineFixed32Bytes;
+  parent_max_proof_step_count: OfflineJsonUnsignedInteger;
+  parent_max_peer_hop_count: OfflineJsonUnsignedInteger;
+}
+
+export interface OfflineRedemptionChangeTransitionJson {
+  binding_digest: OfflineFixed32Bytes;
+  parent_bundle_digest: OfflineFixed32Bytes;
+  operation_id: OfflineFixed32Bytes;
+  parent_proof_step_count: OfflineJsonUnsignedInteger;
+  parent_peer_hop_count: OfflineJsonUnsignedInteger;
+}
+
+export type OfflineRecursiveSpendTransitionJson =
+  | { transition: "peer_split"; value: OfflinePeerSplitTransitionJson }
+  | { transition: "redemption_change"; value: OfflineRedemptionChangeTransitionJson };
+
+export interface OfflineRecursiveSpendStatementJson {
+  chain_id: string;
+  asset: string;
+  asset_scale: OfflineAssetScale;
+  final_root: OfflineFixed32Bytes;
+  topup_anchor_refs: ReadonlyArray<OfflineTopUpAnchorReferenceJson>;
+  proof_step_count: OfflineJsonUnsignedInteger;
+  peer_hop_count: OfflineJsonUnsignedInteger;
+  current_note: OfflineSpendableNoteJson;
+  branch_claims: ReadonlyArray<OfflineBranchClaimJson>;
+  transition?: OfflineRecursiveSpendTransitionJson | null;
+  artifact_generation: string;
+  lineage_mode: OfflineLineageModeJson;
+  verifier_key_id: OfflineVerifierKeyIdJson;
+}
+
+export interface OfflineRecursiveSpendProofJson {
+  verifier_key_id: OfflineVerifierKeyIdJson;
+  public_statement_digest: OfflineFixed32Bytes;
+  proof: OfflineProofBoxJson;
+}
+
+export interface OfflineRecursiveSpendBundleJson {
+  statement: OfflineRecursiveSpendStatementJson;
+  recursive_proof: OfflineRecursiveSpendProofJson;
+}
+
+export interface OfflineUnshieldPublicInputsJson {
+  input_commitment_0: OfflineFixed32Bytes;
+  input_commitment_1: OfflineFixed32Bytes;
+  nullifier_0: OfflineFixed32Bytes;
+  nullifier_1: OfflineFixed32Bytes;
+  change_output_commitment: OfflineFixed32Bytes;
+  root: OfflineFixed32Bytes;
+  public_amount: OfflineFixed32Bytes;
+  asset_tag: OfflineFixed32Bytes;
+  chain_tag: OfflineFixed32Bytes;
+}
+
+export interface OfflineRedemptionIntentJson {
+  chain_id: string;
+  asset: string;
+  input_note: OfflineSpendableNoteJson;
+  parent_branch_claims: ReadonlyArray<OfflineBranchClaimJson>;
+  parent_topup_anchor_refs: ReadonlyArray<OfflineTopUpAnchorReferenceJson>;
+  parent_proof_step_count: OfflineJsonUnsignedInteger;
+  parent_peer_hop_count: OfflineJsonUnsignedInteger;
+  parent_bundle_digest: OfflineFixed32Bytes;
+  input_root: OfflineFixed32Bytes;
+  recipient: string;
+  public_amount: OfflineScaledAmountJson;
+  change_output?: OfflineSpendableNoteJson | null;
+  change_artifact_generation?: string | null;
+  unshield_public_inputs: OfflineUnshieldPublicInputsJson;
+  unshield_public_inputs_digest: OfflineFixed32Bytes;
+  operation_id: OfflineFixed32Bytes;
+}
+
+export interface OfflineLineageWitnessJson {
+  nodes: ReadonlyArray<OfflineLineageNodeJson>;
+  final_bundle_digest: OfflineFixed32Bytes;
+}
+
+export interface OfflineLineageNodeJson {
+  result_bundle_digest: OfflineFixed32Bytes;
+  parent_bundle_digests: ReadonlyArray<OfflineFixed32Bytes>;
+  proof_step_count: OfflineJsonUnsignedInteger;
+  verified_at_block_height: OfflineJsonUnsignedInteger;
+  transition_archive: OfflineByteArray;
+}
+
+export interface OfflineRedeemChangeJson {
+  output: OfflineSpendableNoteJson;
+  branch_claims: ReadonlyArray<OfflineBranchClaimJson>;
+  bundle: OfflineRecursiveSpendBundleJson;
+}
+
+export interface OfflineRedeemRequestJson {
+  bundle: OfflineRecursiveSpendBundleJson;
   recipient: string;
   amount: OfflineScaledAmountJson;
-  redeem_proof: Record<string, unknown>;
-  redemption: Record<string, unknown>;
-  lineage_witness?: Record<string, unknown> | null;
-  lineage_verifier_record: Record<string, unknown>;
-  offline_change?: Record<string, unknown> | null;
+  redeem_proof: OfflineProofAttachmentJson;
+  redemption: OfflineRedemptionIntentJson;
+  lineage_witness?: OfflineLineageWitnessJson | null;
+  lineage_verifier_record: OfflineVerifyingKeyRecordJson;
+  offline_change?: OfflineRedeemChangeJson | null;
   block_height: OfflineJsonUnsignedInteger;
-  operation_id: OfflineByteArray;
+  operation_id: OfflineFixed32Bytes;
   authorization: OfflineAuthorizationJson;
 }
 
@@ -6499,10 +6803,33 @@ export interface ToriiOfflineReadinessBlocker {
   message: string;
 }
 
+export interface ToriiOfflineVerifierId {
+  backend: string;
+  name: string;
+}
+
+export interface ToriiOfflineActiveTransferVerifier {
+  id: ToriiOfflineVerifierId;
+  version: number;
+  circuit_id: string;
+  commitment: string;
+  public_inputs_schema_hash: string;
+  max_proof_bytes: number;
+  activation_height: number | bigint;
+  withdrawal_height: number | bigint | null;
+}
+
+export type ToriiOfflineActiveTopUpShieldVerifier =
+  ToriiOfflineActiveTransferVerifier;
+
 export interface ToriiOfflineReadinessResponse {
   asset_definition_id: string;
+  /** Authoritative live u32 scale; values above 28 accompany asset_scale_unsupported. */
+  asset_scale: number | null;
   evaluated_block_height: number | bigint;
   evaluated_block_hash: string;
+  active_transfer_verifier: ToriiOfflineActiveTransferVerifier | null;
+  active_topup_shield_verifier: ToriiOfflineActiveTopUpShieldVerifier | null;
   ready: boolean;
   blockers: ToriiOfflineReadinessBlocker[];
 }
@@ -6526,11 +6853,73 @@ export interface OfflineOperationReference {
   submitted_at_ms: number | bigint;
 }
 
+export interface OfflineTopUpAnchor {
+  version: 2 | 2n;
+  chain_id: string;
+  payer: string;
+  asset: string;
+  asset_scale: OfflineAssetScale;
+  amount: OfflineScaledAmountJson;
+  initial_root: OfflineFixed32Bytes;
+  finalized_root: OfflineFixed32Bytes;
+  topup_anchor_nullifiers:
+    | readonly [OfflineFixed32Bytes]
+    | readonly [OfflineFixed32Bytes, OfflineFixed32Bytes];
+  current_note: OfflineSpendableNoteJson;
+  topup_operation_id: OfflineFixed32Bytes;
+  transfer_verifier_id: OfflineVerifierKeyIdJson;
+  transfer_verifier_commitment: OfflineFixed32Bytes;
+  artifact_generation: string;
+  finalized_height: OfflineJsonUnsignedInteger;
+  finalized_tx_hash: OfflineFixed32Bytes;
+  anchor_digest: OfflineFixed32Bytes;
+}
+
+export interface OfflineTopUpFinalityProofAnchor {
+  topup_operation_id: OfflineFixed32Bytes;
+  anchor_digest: OfflineFixed32Bytes;
+}
+
+export interface OfflineTopUpFinalityHeightContextBinding {
+  height: OfflineJsonUnsignedInteger;
+  /** Remaining consensus context is opaque and consumed by the native verifier. */
+  readonly [key: string]: unknown;
+}
+
+export interface OfflineTopUpFinalityRoundBinding {
+  height: OfflineJsonUnsignedInteger;
+  /** Remaining round fields are opaque and consumed by the native verifier. */
+  readonly [key: string]: unknown;
+}
+
+export interface OfflineTopUpFinalityCertificateBinding {
+  round: OfflineTopUpFinalityRoundBinding;
+  /** Remaining certificate fields are opaque and consumed by the native verifier. */
+  readonly [key: string]: unknown;
+}
+
+export interface OfflineTopUpFinalityCommitQcBinding {
+  height_context: OfflineTopUpFinalityHeightContextBinding;
+  certificate: OfflineTopUpFinalityCertificateBinding;
+  /** Remaining QC fields are opaque and consumed by the native verifier. */
+  readonly [key: string]: unknown;
+}
+
+export interface OfflineTopUpFinalityProof {
+  version: 1 | 1n;
+  anchor: OfflineTopUpFinalityProofAnchor;
+  commit_qc: OfflineTopUpFinalityCommitQcBinding;
+  anchor_path: Readonly<Record<string, unknown>>;
+  /** Future proof fields are preserved for the native verifier. */
+  readonly [key: string]: unknown;
+}
+
 export interface OfflineTopUpResult {
   transaction_hash: string;
   finalized_block_height: number | bigint;
   server_time_ms: number | bigint;
-  anchor: Record<string, unknown>;
+  anchor: OfflineTopUpAnchor;
+  finality_proof: OfflineTopUpFinalityProof;
 }
 
 export interface OfflineRedeemResult {
@@ -8951,10 +9340,10 @@ export interface ContractEntrypointKindRecord {
 
 export type ContractEntrypointValueKindName =
   | "Int"
-  | "U128"
+  | "Decimal"
+  | "Quantity"
   | "Bool"
   | "String"
-  | "Amount"
   | "Json"
   | "Name"
   | "AccountId"
@@ -11219,37 +11608,17 @@ export declare class ToriiBrowserClient {
     options?: Record<string, unknown>,
   ): Promise<unknown>;
   getMultisigSpec(
-    selector: Record<string, unknown>,
+    selector: MultisigAccountSelector,
     options?: Record<string, unknown>,
-  ): Promise<unknown>;
-  listMultisigProposals(
-    selector: Record<string, unknown>,
+  ): Promise<MultisigSpecResponse>;
+  queryMultisigProposals(
+    selector: MultisigProposalsQueryRequest,
     options?: Record<string, unknown>,
-  ): Promise<unknown>;
-  getMultisigProposal(
-    request: Record<string, unknown>,
+  ): Promise<MultisigProposalsQueryResponse>;
+  lookupMultisigProposal(
+    request: MultisigProposalLookupRequest,
     options?: Record<string, unknown>,
-  ): Promise<unknown>;
-  getMultisigProposal(
-    accountId: string,
-    proposalId: string,
-    options?: Record<string, unknown>,
-  ): Promise<unknown>;
-  listMultisigApprovals(
-    request?: Record<string, unknown>,
-    options?: Record<string, unknown>,
-  ): Promise<unknown>;
-  getMultisigApproval(
-    request: Record<string, unknown>,
-    options?: Record<string, unknown>,
-  ): Promise<unknown>;
-  listPendingMultisigApprovals(
-    options?: Record<string, unknown>,
-  ): Promise<unknown>;
-  getPendingMultisigApproval(
-    operationId: string,
-    options?: Record<string, unknown>,
-  ): Promise<unknown>;
+  ): Promise<MultisigProposalLookupResponse>;
   submitMultisigPropose(
     request: Record<string, unknown>,
     options?: Record<string, unknown>,
@@ -11864,6 +12233,7 @@ export declare class ToriiClient {
   ): Promise<Uint8Array>;
   getSccpRecentMessages(options?: {
     from?: number;
+    after_index?: number;
     limit?: number;
     signal?: AbortSignal;
   }): Promise<ToriiSccpRecentMessages>;
@@ -12399,17 +12769,14 @@ export declare class ToriiClient {
     request: MultisigAccountSelector,
     options?: { signal?: AbortSignal },
   ): Promise<MultisigSpecResponse>;
-  listMultisigProposals(
-    request: MultisigAccountSelector,
+  queryMultisigProposals(
+    request: MultisigProposalsQueryRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<MultisigProposalListResponse>;
-  getMultisigProposal(
-    request: MultisigAccountSelector & {
-      proposalId?: string | null;
-      instructionsHash?: string | null;
-    },
+  ): Promise<MultisigProposalsQueryResponse>;
+  lookupMultisigProposal(
+    request: MultisigProposalLookupRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<MultisigProposalGetResponse>;
+  ): Promise<MultisigProposalLookupResponse>;
   getContractManifest(
     codeHashHex: string,
   ): Promise<ContractManifestRecord | null>;
@@ -12721,8 +13088,8 @@ export function deriveConfidentialNullifierV2(input: {
 }): { nullifier: Buffer; nullifierHex: string };
 
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1: "recursive_compact_v1";
-export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: "recursive_spend_v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 6;
+export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2: "recursive_spend_v2";
+export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 18;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 7;
 export const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 15;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1: "kagemusha-recursive-compact-v1";
@@ -12763,9 +13130,7 @@ export class KagemushaRecursiveSpendRequestCodecError extends Error {
   readonly field: string;
   constructor(kind: string, field: string, message?: string);
 }
-export type KagemushaOfflineSpendMode =
-  | "recursive_compact_v1"
-  | "recursive_spend_v1";
+export type KagemushaOfflineSpendMode = "recursive_spend_v2";
 export type KagemushaRecursiveSpendLineageKeyArtifactOpeningLen =
   | 2
   | 4
@@ -12791,13 +13156,11 @@ export interface KagemushaRecursiveSpendLineageKeyArtifacts {
 }
 export function preferredKagemushaOfflineSpendMode(): KagemushaOfflineSpendMode | null;
 export function preferredKagemushaOfflineSpendMode(
-  recursiveCompactAvailable: boolean,
-  recursiveSpendAvailable: boolean,
+  pastaCycleV3BackendAvailable: boolean,
 ): KagemushaOfflineSpendMode | null;
-export function preferredKagemushaOfflineSpendModeForCapabilities(
-  recursiveCompactAvailable: boolean,
-  recursiveSpendAvailable: boolean,
-): KagemushaOfflineSpendMode | null;
+export function isKagemushaSpendAgainMode(
+  value: unknown,
+): value is KagemushaOfflineSpendMode;
 export function canRedeemKagemushaRecursiveSpendWitnessless(
   proofCircuitId: string,
   hopCount: number,

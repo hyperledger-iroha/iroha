@@ -544,7 +544,7 @@ pub use routing::{
     DeployContractBundleReceiptDto, DeployContractDto, EvidenceListQuery, EvidenceSubmitRequestDto,
     KaigiRelayDetailDto, KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto,
     KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto,
-    MultisigCancelRequestDto, MultisigProposalsGetRequestDto, MultisigProposalsListRequestDto,
+    MultisigCancelRequestDto, MultisigProposalLookupRequestDto, MultisigProposalsQueryRequestDto,
     PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto, ProofApiLimits, ProofFindByIdQueryDto,
     ProofListQuery, RegisterPinManifestDto, RegisterPinManifestResponseDto, SetContractAliasDto,
     SetContractAliasResponseDto, SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto,
@@ -3135,12 +3135,13 @@ async fn enforce_preauth(
             let mut response = utils::respond_with_status_and_format(
                 status,
                 payload,
-                utils::current_response_format(),
+                early_rejection_response_format(req.headers()),
             );
             response.headers_mut().insert(
                 axum::http::header::RETRY_AFTER,
                 HeaderValue::from_static("1"),
             );
+            append_vary_accept(response.headers_mut());
             Ok(response)
         }
     }
@@ -3509,6 +3510,270 @@ mod preauth_connection_lifetime_tests {
         let response = router.oneshot(single).await.expect("single-token response");
         assert_eq!(response.status(), StatusCode::OK);
     }
+
+    #[tokio::test]
+    async fn offline_command_authentication_precedes_media_and_idempotency_validation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        async fn error_code(response: Response) -> String {
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("collect typed error response")
+                .to_bytes();
+            let envelope: ErrorEnvelope =
+                norito::json::from_slice(&body).expect("decode typed error response");
+            envelope.code().to_owned()
+        }
+
+        let mut app = app_with_scheme_cap("http");
+        let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
+        state.require_api_token = true;
+        state.api_tokens_set = Arc::new(HashSet::from(["valid-token".to_owned()]));
+
+        let handler_calls = Arc::new(AtomicUsize::new(0));
+        let router = Router::new()
+            .route(
+                route_catalog::offline::TOP_UP.path(),
+                axum::routing::post({
+                    let handler_calls = Arc::clone(&handler_calls);
+                    move || {
+                        let handler_calls = Arc::clone(&handler_calls);
+                        async move {
+                            handler_calls.fetch_add(1, Ordering::SeqCst);
+                            StatusCode::OK
+                        }
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_offline_command_prebody_admission,
+            ))
+            .layer(axum::middleware::from_fn(capture_response_format))
+            .layer(axum::middleware::from_fn(coalesce_accept_headers))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_api_token,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_preauth,
+            ))
+            .layer(axum::middleware::from_fn(enforce_typed_error_contract));
+
+        let offline_request =
+            |token_count: usize, content_type: &'static str, accept: &'static str| {
+                let mut request = Request::builder()
+                    .method(axum::http::Method::POST)
+                    .uri(route_catalog::offline::TOP_UP.path())
+                    .header(header::ACCEPT, accept)
+                    .header(header::CONTENT_TYPE, content_type)
+                    .body(Body::from("{malformed-json"))
+                    .expect("offline command request");
+                request
+                    .extensions_mut()
+                    .insert(MatchedRouteMetadata::from_descriptor(
+                        route_catalog::offline::TOP_UP,
+                    ));
+                for _ in 0..token_count {
+                    request
+                        .headers_mut()
+                        .append(HEADER_API_TOKEN, HeaderValue::from_static("valid-token"));
+                }
+                request
+            };
+
+        let occupying_guard = app
+            .acquire_preauth(None, ConnScheme::Http)
+            .await
+            .expect("occupy the HTTP pre-auth slot");
+        let at_capacity = router
+            .clone()
+            .oneshot(offline_request(
+                0,
+                "application/json; charset==utf-8",
+                "application/json;q=2",
+            ))
+            .await
+            .expect("pre-auth capacity response");
+        assert_eq!(at_capacity.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(error_code(at_capacity).await, "preauth_scheme_capacity");
+        drop(occupying_guard);
+
+        let missing = router
+            .clone()
+            .oneshot(offline_request(
+                0,
+                "application/json; charset==utf-8",
+                "application/json;q=2",
+            ))
+            .await
+            .expect("missing-token response");
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+        assert!(missing.headers().contains_key(header::WWW_AUTHENTICATE));
+        assert_eq!(error_code(missing).await, "api_token_required");
+
+        let mut missing_with_duplicate_content_type =
+            offline_request(0, "application/json", "application/json");
+        missing_with_duplicate_content_type.headers_mut().append(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/x-norito"),
+        );
+        let missing = router
+            .clone()
+            .oneshot(missing_with_duplicate_content_type)
+            .await
+            .expect("missing-token duplicate-Content-Type response");
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(error_code(missing).await, "api_token_required");
+
+        let duplicate = router
+            .clone()
+            .oneshot(offline_request(
+                2,
+                "application/json; charset==utf-8",
+                "application/json;q=2",
+            ))
+            .await
+            .expect("duplicate-token response");
+        assert_eq!(duplicate.status(), StatusCode::UNAUTHORIZED);
+        assert!(duplicate.headers().contains_key(header::WWW_AUTHENTICATE));
+        assert_eq!(error_code(duplicate).await, "api_token_required");
+
+        let invalid_accept = router
+            .clone()
+            .oneshot(offline_request(
+                1,
+                "application/json",
+                "application/json;q=2",
+            ))
+            .await
+            .expect("invalid-Accept response");
+        assert_eq!(invalid_accept.status(), StatusCode::NOT_ACCEPTABLE);
+        assert_eq!(error_code(invalid_accept).await, "response_not_acceptable");
+
+        let mut non_ascii_accept = offline_request(1, "application/json", "application/json");
+        non_ascii_accept.headers_mut().append(
+            header::ACCEPT,
+            HeaderValue::from_bytes(&[0xff]).expect("opaque Accept fixture"),
+        );
+        let invalid_accept = router
+            .clone()
+            .oneshot(non_ascii_accept)
+            .await
+            .expect("non-ASCII Accept response");
+        assert_eq!(invalid_accept.status(), StatusCode::NOT_ACCEPTABLE);
+        assert_eq!(error_code(invalid_accept).await, "response_not_acceptable");
+
+        let mut duplicate_content_type = offline_request(1, "application/json", "application/json");
+        duplicate_content_type.headers_mut().append(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        let invalid_content_type = router
+            .clone()
+            .oneshot(duplicate_content_type)
+            .await
+            .expect("duplicate-Content-Type response");
+        assert_eq!(invalid_content_type.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            error_code(invalid_content_type).await,
+            "request_content_type_invalid"
+        );
+
+        let mut non_ascii_content_type = offline_request(1, "application/json", "application/json");
+        non_ascii_content_type.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_bytes(&[0xff]).expect("opaque Content-Type fixture"),
+        );
+        let invalid_content_type = router
+            .clone()
+            .oneshot(non_ascii_content_type)
+            .await
+            .expect("non-ASCII Content-Type response");
+        assert_eq!(invalid_content_type.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            error_code(invalid_content_type).await,
+            "request_content_type_invalid"
+        );
+
+        let missing_idempotency_key = router
+            .oneshot(offline_request(1, "application/json", "application/json"))
+            .await
+            .expect("missing-idempotency-key response");
+        assert_eq!(missing_idempotency_key.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            error_code(missing_idempotency_key).await,
+            "idempotency_key_missing"
+        );
+        assert_eq!(
+            handler_calls.load(Ordering::SeqCst),
+            0,
+            "admission failures must not invoke a handler or consume its body extractor"
+        );
+    }
+}
+
+fn api_token_rejection(app: &AppState, headers: &HeaderMap) -> Option<Response> {
+    if !app.require_api_token {
+        return None;
+    }
+    let format = early_rejection_response_format(headers);
+    if app.api_tokens_set.is_empty() {
+        let payload = ErrorEnvelope::new(
+            "api_token_unavailable",
+            "Torii requires an API token, but no tokens are configured.",
+        )
+        .with_details(ErrorDetails {
+            retry_after_seconds: Some(1),
+            ..Default::default()
+        });
+        let mut response =
+            utils::respond_with_status_and_format(StatusCode::SERVICE_UNAVAILABLE, payload, format);
+        response.headers_mut().insert(
+            axum::http::header::RETRY_AFTER,
+            HeaderValue::from_static("1"),
+        );
+        append_vary_accept(response.headers_mut());
+        return Some(response);
+    }
+    let mut token_values = headers.get_all(HEADER_API_TOKEN).iter();
+    let valid = token_values
+        .next()
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|token| app.api_tokens_set.contains(token))
+        && token_values.next().is_none();
+    if valid {
+        return None;
+    }
+
+    let mut response = utils::respond_with_status_and_format(
+        StatusCode::UNAUTHORIZED,
+        ErrorEnvelope::new(
+            "api_token_required",
+            "A valid Torii API token is required for this request.",
+        ),
+        format,
+    );
+    response.headers_mut().insert(
+        axum::http::header::WWW_AUTHENTICATE,
+        HeaderValue::from_static("IrohaApiToken realm=\"torii\""),
+    );
+    append_vary_accept(response.headers_mut());
+    Some(response)
+}
+
+async fn enforce_api_token(
+    State(app): State<SharedAppState>,
+    req: axum::http::Request<Body>,
+    next: Next,
+) -> Result<axum::response::Response, Infallible> {
+    if let Some(response) = api_token_rejection(&app, req.headers()) {
+        return Ok(response);
+    }
+    Ok(next.run(req).await)
 }
 
 #[cfg(feature = "app_api")]
@@ -3527,6 +3792,7 @@ const fn canonical_base64_max_len(decoded_len: usize) -> usize {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SccpSubmitIngressPolicy {
     rate_limit_hint: &'static str,
+    rate_limit_cost: u64,
     telemetry_label: &'static str,
     max_body_bytes: usize,
 }
@@ -3536,6 +3802,34 @@ struct SccpSubmitIngressPolicy {
 struct SccpSubmitIngressState {
     app: SharedAppState,
     operator_max_body_bytes: usize,
+}
+
+#[cfg(feature = "app_api")]
+struct SccpSubmitAdmission {
+    work: parking_lot::Mutex<Option<SccpSubmitWork>>,
+}
+
+#[cfg(feature = "app_api")]
+struct SccpSubmitWork {
+    permit: QueryAdmissionPermit,
+    body: axum::body::Bytes,
+}
+
+#[cfg(feature = "app_api")]
+impl SccpSubmitAdmission {
+    fn new(permit: QueryAdmissionPermit, body: axum::body::Bytes) -> Self {
+        Self {
+            work: parking_lot::Mutex::new(Some(SccpSubmitWork { permit, body })),
+        }
+    }
+
+    fn take(&self) -> Result<SccpSubmitWork, Error> {
+        self.work.lock().take().ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                "SCCP submission body and admission permit were already consumed".to_owned(),
+            ))
+        })
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -3549,6 +3843,13 @@ enum SccpSubmitBodyReadError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SccpSubmitContentLengthError {
     TooLarge,
+    Invalid,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SccpSubmitContentTypeError {
+    Unsupported,
     Invalid,
 }
 
@@ -3574,6 +3875,7 @@ fn sccp_submit_ingress_policy(path: &str) -> Option<SccpSubmitIngressPolicy> {
     };
     Some(SccpSubmitIngressPolicy {
         rate_limit_hint,
+        rate_limit_cost: FINALITY_HEAVY_QUERY_RATE_COST,
         telemetry_label,
         max_body_bytes,
     })
@@ -3638,13 +3940,70 @@ fn validate_sccp_submit_content_length(
         .map_err(|_| SccpSubmitContentLengthError::TooLarge)
 }
 
-/// Authenticate, rate-limit, and size-bound SCCP submissions before JSON extraction.
+#[cfg(feature = "app_api")]
+fn validate_sccp_submit_content_type(
+    headers: &axum::http::HeaderMap,
+) -> Result<(), SccpSubmitContentTypeError> {
+    use axum::http::header::CONTENT_TYPE;
+
+    let mut values = headers.get_all(CONTENT_TYPE).iter();
+    let value = values
+        .next()
+        .ok_or(SccpSubmitContentTypeError::Unsupported)?;
+    if values.next().is_some() {
+        return Err(SccpSubmitContentTypeError::Invalid);
+    }
+    let raw = value
+        .to_str()
+        .map_err(|_| SccpSubmitContentTypeError::Invalid)?;
+    if !raw.is_ascii() || raw.bytes().any(|byte| byte.is_ascii_control()) {
+        return Err(SccpSubmitContentTypeError::Invalid);
+    }
+    let mut parts = raw.split(';');
+    let media_type = parts.next().unwrap_or_default().trim();
+    // Unlike general Torii JSON extractors, the closed SCCP submission contract deliberately
+    // accepts only the registered `application/json` media type, not arbitrary `+json` profiles.
+    if !media_type.eq_ignore_ascii_case("application/json") {
+        return Err(SccpSubmitContentTypeError::Unsupported);
+    }
+
+    let mut charset_seen = false;
+    for parameter in parts {
+        let parameter = parameter.trim();
+        let Some((name, value)) = parameter.split_once('=') else {
+            return Err(SccpSubmitContentTypeError::Invalid);
+        };
+        if !name.trim().eq_ignore_ascii_case("charset") {
+            return Err(SccpSubmitContentTypeError::Unsupported);
+        }
+        if charset_seen {
+            return Err(SccpSubmitContentTypeError::Invalid);
+        }
+        charset_seen = true;
+        let value = value.trim();
+        let charset = if value.starts_with('"') || value.ends_with('"') {
+            value
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .ok_or(SccpSubmitContentTypeError::Invalid)?
+        } else {
+            value
+        };
+        if !charset.eq_ignore_ascii_case("utf-8") {
+            return Err(SccpSubmitContentTypeError::Unsupported);
+        }
+    }
+    Ok(())
+}
+
+/// Authenticate, rate-limit, and resource-bound SCCP submissions before JSON extraction.
 ///
 /// This middleware intentionally owns the sole network-body read for these two proof-bearing
-/// endpoints. Rejected authentication and exhausted rate-limit requests therefore never poll the
-/// request body. Malformed, ambiguous, or oversized declared lengths reject before polling;
-/// accepted chunked bodies remain bounded without `Content-Length`, and declared lengths must
-/// match the bytes restored for the downstream JSON extractor.
+/// endpoints. Authentication, exact JSON media type, rate, declared-length, and body-buffer
+/// admission failures therefore never poll the request body. Admitted reads have both an absolute
+/// byte cap and deadline; only a completed body can reserve general/heavy query execution. Accepted
+/// chunked bodies remain bounded without `Content-Length`, and declared lengths must match the bytes
+/// restored for the downstream JSON extractor.
 #[cfg(feature = "app_api")]
 async fn enforce_sccp_submit_ingress(
     State(ingress): State<SccpSubmitIngressState>,
@@ -3653,16 +4012,36 @@ async fn enforce_sccp_submit_ingress(
 ) -> Result<axum::response::Response, Infallible> {
     use axum::response::IntoResponse as _;
 
+    if req.method() != axum::http::Method::POST {
+        return Ok(next.run(req).await);
+    }
     let app = &ingress.app;
     let Some(policy) = sccp_submit_ingress_policy(req.uri().path()) else {
         return Ok((StatusCode::NOT_FOUND, "unknown SCCP submission endpoint").into_response());
     };
     let max_body_bytes = policy.max_body_bytes.min(ingress.operator_max_body_bytes);
 
-    if let Err(error) = validate_api_token(&app, req.headers()) {
+    if let Err(error) = validate_api_token(app.as_ref(), req.headers()) {
         app.telemetry
             .with_metrics(|metrics| metrics.inc_torii_contract_error(policy.telemetry_label));
         return Ok(error.into_response());
+    }
+
+    if let Err(error) = validate_sccp_submit_content_type(req.headers()) {
+        app.telemetry
+            .with_metrics(|metrics| metrics.inc_torii_contract_error(policy.telemetry_label));
+        return Ok(match error {
+            SccpSubmitContentTypeError::Unsupported => (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "SCCP submissions require Content-Type application/json with optional charset=utf-8",
+            )
+                .into_response(),
+            SccpSubmitContentTypeError::Invalid => (
+                StatusCode::BAD_REQUEST,
+                "invalid or ambiguous SCCP submission Content-Type",
+            )
+                .into_response(),
+        });
     }
 
     let remote_ip = req
@@ -3675,7 +4054,11 @@ async fn enforce_sccp_submit_ingress(
         policy.rate_limit_hint,
         app.api_token_enforced(),
     );
-    if !app.deploy_rate_limiter.allow(&key).await {
+    if !app
+        .deploy_rate_limiter
+        .allow_cost_capped_to_burst(&key, policy.rate_limit_cost)
+        .await
+    {
         app.telemetry
             .with_metrics(|metrics| metrics.inc_torii_contract_throttle(policy.telemetry_label));
         return Ok(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -3709,10 +4092,28 @@ async fn enforce_sccp_submit_ingress(
             }
         };
 
-    let (parts, body) = req.into_parts();
-    let body = match collect_sccp_submit_body(body, max_body_bytes).await {
-        Ok(body) => body,
-        Err(error) => {
+    let body_permit = match app.proof_body_inflight.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            app.telemetry.with_metrics(|metrics| {
+                metrics.inc_torii_contract_throttle(policy.telemetry_label)
+            });
+            return Ok(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            ))
+            .into_response());
+        }
+    };
+
+    let (mut parts, body) = req.into_parts();
+    let body = match tokio::time::timeout(
+        app.proof_limits.body_read_timeout,
+        collect_sccp_submit_body(body, max_body_bytes),
+    )
+    .await
+    {
+        Ok(Ok(body)) => body,
+        Ok(Err(error)) => {
             app.telemetry
                 .with_metrics(|metrics| metrics.inc_torii_contract_error(policy.telemetry_label));
             return Ok(match error {
@@ -3731,6 +4132,15 @@ async fn enforce_sccp_submit_ingress(
                     .into_response(),
             });
         }
+        Err(_) => {
+            app.telemetry
+                .with_metrics(|metrics| metrics.inc_torii_contract_error(policy.telemetry_label));
+            return Ok((
+                StatusCode::REQUEST_TIMEOUT,
+                "SCCP submission body was not completed before the absolute read deadline",
+            )
+                .into_response());
+        }
     };
     if declared_content_length.is_some_and(|declared| declared != body.len()) {
         app.telemetry
@@ -3741,58 +4151,22 @@ async fn enforce_sccp_submit_ingress(
         )
             .into_response());
     }
+
+    let admission = match acquire_query_admission(app.as_ref(), true).await {
+        Ok(admission) => Arc::new(SccpSubmitAdmission::new(
+            admission.with_body_permit(body_permit),
+            body.clone(),
+        )),
+        Err(error) => {
+            app.telemetry.with_metrics(|metrics| {
+                metrics.inc_torii_contract_throttle(policy.telemetry_label)
+            });
+            return Ok(error.into_response());
+        }
+    };
+    parts.extensions.insert(admission);
     let request = axum::http::Request::from_parts(parts, Body::from(body));
     Ok(next.run(request).await)
-}
-
-fn api_token_rejection(app: &AppState, headers: &HeaderMap) -> Option<Response> {
-    if !app.require_api_token {
-        return None;
-    }
-    if app.api_tokens_set.is_empty() {
-        return Some(utils::respond_with_status_and_format(
-            StatusCode::SERVICE_UNAVAILABLE,
-            ErrorEnvelope::new(
-                "api_token_unavailable",
-                "Torii requires an API token, but no tokens are configured.",
-            ),
-            utils::current_response_format(),
-        ));
-    }
-    let mut token_values = headers.get_all(HEADER_API_TOKEN).iter();
-    let valid = token_values
-        .next()
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|token| app.api_tokens_set.contains(token))
-        && token_values.next().is_none();
-    if valid {
-        return None;
-    }
-
-    let mut response = utils::respond_with_status_and_format(
-        StatusCode::UNAUTHORIZED,
-        ErrorEnvelope::new(
-            "api_token_required",
-            "A valid Torii API token is required for this request.",
-        ),
-        utils::current_response_format(),
-    );
-    response.headers_mut().insert(
-        axum::http::header::WWW_AUTHENTICATE,
-        HeaderValue::from_static("IrohaApiToken realm=\"torii\""),
-    );
-    Some(response)
-}
-
-async fn enforce_api_token(
-    State(app): State<SharedAppState>,
-    req: axum::http::Request<Body>,
-    next: Next,
-) -> Result<axum::response::Response, Infallible> {
-    if let Some(response) = api_token_rejection(&app, req.headers()) {
-        return Ok(response);
-    }
-    Ok(next.run(req).await)
 }
 
 #[cfg(feature = "app_api")]
@@ -4105,6 +4479,22 @@ fn content_type_header_error(headers: &HeaderMap) -> Option<&'static str> {
         .then_some("Content-Type is not valid ASCII.")
 }
 
+/// Select the best representation for a rejection which deliberately runs
+/// before strict Accept validation. Authentication and capacity errors take
+/// precedence over malformed or unacceptable media preferences; valid media
+/// preferences are still honored, while invalid input receives deterministic
+/// JSON so the original rejection cannot be hidden by a secondary 406.
+fn early_rejection_response_format(headers: &HeaderMap) -> ResponseFormat {
+    let combined = match coalesced_accept_header(headers) {
+        Ok(combined) => combined,
+        Err(_) => return ResponseFormat::Json,
+    };
+    let accept = combined
+        .as_ref()
+        .or_else(|| headers.get(axum::http::header::ACCEPT));
+    utils::negotiate_response_format(accept).unwrap_or(ResponseFormat::Json)
+}
+
 async fn coalesce_accept_headers(
     mut req: axum::http::Request<Body>,
     next: Next,
@@ -4164,6 +4554,13 @@ fn has_dot_segment(path: &str) -> bool {
     })
 }
 
+fn has_percent_encoded_offline_operation_id(path: &str) -> bool {
+    const PREFIX: &str = "/v1/offline/operations/";
+
+    path.strip_prefix(PREFIX)
+        .is_some_and(|operation_id| !operation_id.contains('/') && operation_id.contains('%'))
+}
+
 async fn enforce_strict_request_target(
     req: axum::http::Request<Body>,
     next: Next,
@@ -4173,6 +4570,7 @@ async fn enforce_strict_request_target(
         || path.contains('\\')
         || has_percent_encoded_separator(path)
         || has_dot_segment(path)
+        || has_percent_encoded_offline_operation_id(path)
     {
         Some((
             StatusCode::BAD_REQUEST,
@@ -4203,6 +4601,49 @@ async fn enforce_strict_request_target(
     let mut response =
         utils::respond_with_status_and_format(status, ErrorEnvelope::new(code, message), format);
     append_vary_accept(response.headers_mut());
+    Ok(response)
+}
+
+async fn enforce_offline_cache_policy(
+    req: axum::http::Request<Body>,
+    next: Next,
+) -> Result<axum::response::Response, Infallible> {
+    const OPERATION_PREFIX: &str = "/v1/offline/operations/";
+    const READINESS_PATH: &str = "/v1/offline/readiness";
+    const TOP_UP_PATH: &str = "/v1/offline/top-up";
+    const REDEEM_PATH: &str = "/v1/offline/redeem";
+
+    let route = req.extensions().get::<MatchedRouteMetadata>();
+    let operation_status = route.is_some_and(|route| {
+        route.stable_route_id() == route_catalog::offline::OPERATION.stable_route_id()
+    }) || req.uri().path().starts_with(OPERATION_PREFIX);
+    let readiness = route.is_some_and(|route| {
+        route.stable_route_id() == route_catalog::offline::READINESS.stable_route_id()
+    }) || req.uri().path() == READINESS_PATH
+        || req.uri().path().starts_with("/v1/offline/readiness/");
+    let command = route.is_some_and(|route| {
+        let id = route.stable_route_id();
+        id == route_catalog::offline::TOP_UP.stable_route_id()
+            || id == route_catalog::offline::REDEEM.stable_route_id()
+    }) || matches!(req.uri().path(), TOP_UP_PATH | REDEEM_PATH);
+    let mut response = next.run(req).await;
+    let policy = if operation_status || command {
+        Some("no-store")
+    } else if readiness {
+        if matches!(response.status(), StatusCode::OK | StatusCode::NOT_MODIFIED) {
+            Some("private, max-age=0, must-revalidate")
+        } else {
+            Some("no-store")
+        }
+    } else {
+        None
+    };
+    if let Some(policy) = policy {
+        response.headers_mut().insert(
+            axum::http::header::CACHE_CONTROL,
+            HeaderValue::from_static(policy),
+        );
+    }
     Ok(response)
 }
 
@@ -4259,6 +4700,16 @@ async fn capture_response_format(
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
     let accept = req.headers().get(axum::http::header::ACCEPT).cloned();
+    let allows_native_response = req
+        .extensions()
+        .get::<MatchedRouteMetadata>()
+        .and_then(MatchedRouteMetadata::surface)
+        .is_some_and(|surface| {
+            matches!(
+                surface,
+                route_catalog::ApiSurface::Diagnostic | route_catalog::ApiSurface::Protocol
+            )
+        });
     let safe_method = matches!(
         req.method(),
         &axum::http::Method::GET
@@ -4269,14 +4720,15 @@ async fn capture_response_format(
     let (format, deferred_native_negotiation) =
         match utils::negotiate_response_format(accept.as_ref()) {
             Ok(format) => (format, false),
-            Err(mut response) if !safe_method => {
+            Err(mut response) if !safe_method || !allows_native_response => {
                 append_vary_accept(response.headers_mut());
                 return Ok(response);
             }
-            // A safe request may target SSE, Prometheus, health text, a raw blob, or
-            // hosted content. Let the handler select its actual media type, while
-            // keeping JSON as the finite representation for authentication and
-            // establishment errors that occur before a native response starts.
+            // Only catalogued diagnostic/protocol routes may defer typed
+            // negotiation so SSE, Prometheus, health text, raw blobs, and
+            // hosted content can select their native media type. Public and
+            // operator routes fail before handler execution, including safe
+            // conditional requests which could otherwise turn 406 into 304.
             Err(_) => (ResponseFormat::Json, true),
         };
     let mut response = utils::with_current_response_format(format, next.run(req)).await;
@@ -4396,20 +4848,108 @@ fn retry_after_seconds(headers: &HeaderMap) -> u64 {
         .unwrap_or(1)
 }
 
+fn retain_valid_error_detail(value: &mut Option<String>) {
+    if value
+        .as_deref()
+        .is_some_and(|value| !utils::is_valid_error_detail_text(value))
+    {
+        *value = None;
+    }
+}
+
+fn axt_error_details_is_empty(details: &AxtErrorDetails) -> bool {
+    details.code.is_none()
+        && details.reason.is_none()
+        && details.snapshot_version.is_none()
+        && details.dataspace.is_none()
+        && details.lane.is_none()
+        && details.next_min_handle_era.is_none()
+        && details.next_min_sub_nonce.is_none()
+}
+
+fn sanitize_error_details(details: &mut ErrorDetails) {
+    retain_valid_error_detail(&mut details.layer);
+    if details
+        .reject_code
+        .as_deref()
+        .is_some_and(|code| !utils::is_valid_reject_code(code))
+    {
+        details.reject_code = None;
+    }
+    if details.queue.as_ref().is_some_and(|queue| {
+        !matches!(queue.state.as_str(), "healthy" | "saturated")
+            || queue.saturated != (queue.state == "saturated")
+    }) {
+        details.queue = None;
+    }
+    retain_valid_error_detail(&mut details.endpoint);
+    if details
+        .endpoint
+        .as_deref()
+        .is_some_and(|endpoint| endpoint.contains('?') || endpoint.contains('#'))
+    {
+        details.endpoint = None;
+    }
+    retain_valid_error_detail(&mut details.field);
+    retain_valid_error_detail(&mut details.expected);
+    retain_valid_error_detail(&mut details.actual);
+    retain_valid_error_detail(&mut details.profile);
+    retain_valid_error_detail(&mut details.tx_hash);
+    retain_valid_error_detail(&mut details.last_status);
+    retain_valid_error_detail(&mut details.hint);
+    if let Some(axt) = details.axt.as_mut() {
+        if axt
+            .code
+            .as_deref()
+            .is_some_and(|code| !utils::is_valid_reject_code(code))
+        {
+            axt.code = None;
+        }
+        retain_valid_error_detail(&mut axt.reason);
+        if axt_error_details_is_empty(axt) {
+            details.axt = None;
+        }
+    }
+}
+
 fn canonical_error_response(
     mut parts: axum::http::response::Parts,
     mut envelope: ErrorEnvelope,
     format: ResponseFormat,
     head_only: bool,
 ) -> AxResponse {
-    if !utils::is_valid_error_code(envelope.code()) {
+    parts.headers.remove("x-iroha-stream-error");
+    parts.extensions.remove::<ReviewedProtocolNativeError>();
+    if parts.status == StatusCode::INTERNAL_SERVER_ERROR {
+        envelope = ErrorEnvelope::new(
+            "internal_server_error",
+            "Torii could not complete the request.",
+        );
+        for name in [
+            "x-iroha-reject-code",
+            "x-iroha-axt-code",
+            "x-iroha-axt-reason",
+            "x-iroha-axt-snapshot-version",
+            "x-iroha-axt-dataspace",
+            "x-iroha-axt-lane",
+            "x-iroha-axt-next-handle-era",
+            "x-iroha-axt-next-sub-nonce",
+            "x-iroha-queue-depth",
+            "x-iroha-queue-capacity",
+            "x-iroha-queue-state",
+        ] {
+            parts.headers.remove(name);
+        }
+    } else if !utils::is_valid_error_code(envelope.code()) {
         let rejected_code = std::mem::take(&mut envelope.code);
         let (code, message) = generic_error_for_status(parts.status);
         envelope.code = code.to_owned();
         envelope.message = message.to_owned();
-        let details = envelope.details.get_or_insert_with(Default::default);
-        if details.reject_code.is_none() {
-            details.reject_code = Some(rejected_code);
+        if utils::is_valid_reject_code(&rejected_code) {
+            let details = envelope.details.get_or_insert_with(Default::default);
+            if details.reject_code.is_none() {
+                details.reject_code = Some(rejected_code);
+            }
         }
     }
     if !utils::is_valid_error_message(envelope.message()) {
@@ -4427,6 +4967,9 @@ fn canonical_error_response(
         if let Ok(value) = HeaderValue::from_str(&seconds.to_string()) {
             parts.headers.insert(axum::http::header::RETRY_AFTER, value);
         }
+    }
+    if let Some(details) = envelope.details.as_mut() {
+        sanitize_error_details(details);
     }
     if envelope
         .details
@@ -4488,6 +5031,64 @@ fn canonical_error_response(
     )
 }
 
+/// Explicit marker for a reviewed protocol-native error response.
+///
+/// Adding a variant requires an exact route, status, media-type, and public
+/// error-header entry in [`reviewed_protocol_native_error_code`]. Unmarked
+/// failures always use [`ErrorEnvelope`], including failures from other
+/// protocol-surface handlers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReviewedProtocolNativeError {
+    /// SSE event explaining that this live stream cannot resume from a cursor.
+    StreamResumeUnsupported,
+}
+
+fn response_boundary_accept_header(
+    headers: &HeaderMap,
+) -> Result<Option<HeaderValue>, &'static str> {
+    match coalesced_accept_header(headers)? {
+        Some(combined) => Ok(Some(combined)),
+        None => Ok(headers.get(axum::http::header::ACCEPT).cloned()),
+    }
+}
+
+fn reviewed_protocol_native_error_code(
+    route: Option<&MatchedRouteMetadata>,
+    response: &AxResponse,
+) -> Option<&'static str> {
+    let marker = response.extensions().get::<ReviewedProtocolNativeError>()?;
+    let route = route.filter(|route| {
+        route.surface() == Some(iroha_torii_shared::route_catalog::ApiSurface::Protocol)
+    })?;
+    let content_type = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)?
+        .to_str()
+        .ok()?
+        .split(';')
+        .next()
+        .map(str::trim)?;
+
+    match marker {
+        ReviewedProtocolNativeError::StreamResumeUnsupported
+            if response.status() == StatusCode::BAD_REQUEST
+                && content_type.eq_ignore_ascii_case("text/event-stream")
+                && response
+                    .headers()
+                    .get("x-iroha-stream-error")
+                    .and_then(|value| value.to_str().ok())
+                    == Some("stream_resume_unsupported")
+                && (route.stable_route_id()
+                    == route_catalog::streaming::EVENTS_SSE.stable_route_id()
+                    || route.stable_route_id()
+                        == route_catalog::streaming::CONTRACT_EVENTS_SSE.stable_route_id()) =>
+        {
+            Some("stream_resume_unsupported")
+        }
+        _ => None,
+    }
+}
+
 /// Enforce one finite error contract at the HTTP response boundary.
 ///
 /// Ordinary public, operator, diagnostic, router, and middleware failures are
@@ -4502,48 +5103,73 @@ async fn enforce_typed_error_contract(
     use axum::body::HttpBody as _;
 
     let method = req.method().clone();
-    let accept = req.headers().get(axum::http::header::ACCEPT).cloned();
-    let surface = req
-        .extensions()
-        .get::<MatchedRouteMetadata>()
-        .and_then(MatchedRouteMetadata::surface);
+    let accept = response_boundary_accept_header(req.headers());
+    let route = req.extensions().get::<MatchedRouteMetadata>().cloned();
     let mut response = next.run(req).await;
     let status = response.status();
     if !status.is_client_error() && !status.is_server_error() {
         return Ok(response);
     }
 
+    if let Some(code) = reviewed_protocol_native_error_code(route.as_ref(), &response) {
+        let content_type = response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        let native_accept = accept
+            .as_ref()
+            .map_err(|message| {
+                utils::respond_with_status_and_format(
+                    StatusCode::NOT_ACCEPTABLE,
+                    ErrorEnvelope::new("response_not_acceptable", *message),
+                    ResponseFormat::Json,
+                )
+            })
+            .and_then(|accept| {
+                utils::ensure_response_media_type_acceptable(accept.as_ref(), content_type)
+            });
+        match native_accept {
+            Ok(()) => {
+                response
+                    .extensions_mut()
+                    .remove::<ReviewedProtocolNativeError>();
+                response
+                    .extensions_mut()
+                    .insert(utils::HttpErrorCode::new(code));
+                append_vary_accept(response.headers_mut());
+                return Ok(response);
+            }
+            Err(mut rejection) => {
+                rejection
+                    .extensions_mut()
+                    .remove::<ReviewedProtocolNativeError>();
+                rejection.headers_mut().remove("x-iroha-stream-error");
+                append_vary_accept(rejection.headers_mut());
+                response = rejection;
+            }
+        }
+    }
+
+    response
+        .extensions_mut()
+        .remove::<ReviewedProtocolNativeError>();
+    response.headers_mut().remove("x-iroha-stream-error");
     let typed_format = response
         .headers()
         .get(axum::http::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .and_then(utils::typed_response_format_for_content_type);
-    let has_native_media = response
-        .headers()
-        .get(axum::http::header::CONTENT_TYPE)
-        .is_some();
-    if surface == Some(route_catalog::ApiSurface::Protocol)
-        && typed_format.is_none()
-        && has_native_media
-    {
-        if response
-            .extensions()
-            .get::<utils::HttpErrorCode>()
-            .is_none()
-        {
-            response
-                .extensions_mut()
-                .insert(utils::HttpErrorCode::new("protocol_native_error"));
-        }
-        return Ok(response);
-    }
 
     // Content-Type controls decoding only. The request's Accept negotiation is
-    // authoritative for the representation emitted by this boundary. When
-    // negotiation itself fails, JSON is the deterministic representation of
-    // the resulting/unavoidable error because no requested format exists.
-    let negotiated_format =
-        utils::negotiate_response_format(accept.as_ref()).unwrap_or(ResponseFormat::Json);
+    // authoritative for the representation emitted by this boundary. A
+    // malformed/coalescing-failed or unsupported Accept value uses JSON for
+    // the unavoidable negotiation error because no requested format exists.
+    let negotiated_format = accept
+        .as_ref()
+        .ok()
+        .and_then(|accept| utils::negotiate_response_format(accept.as_ref()).ok())
+        .unwrap_or(ResponseFormat::Json);
     let (parts, body) = response.into_parts();
     let bytes = axum::body::to_bytes(body, MAX_TYPED_ERROR_BODY_BYTES)
         .await
@@ -5066,6 +5692,22 @@ mod strict_request_target_tests {
             .layer(axum::middleware::from_fn(enforce_strict_request_target))
     }
 
+    fn offline_operation_test_router(counter: Arc<AtomicUsize>) -> Router {
+        Router::new()
+            .route(
+                route_catalog::offline::OPERATION.path(),
+                get(move || {
+                    let counter = Arc::clone(&counter);
+                    async move {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::NO_CONTENT
+                    }
+                }),
+            )
+            .fallback(|| async { StatusCode::NOT_FOUND })
+            .layer(axum::middleware::from_fn(enforce_strict_request_target))
+    }
+
     fn catalog_cutover_test_router(counter: Arc<AtomicUsize>) -> Router {
         let mount = |counter: Arc<AtomicUsize>| {
             axum::routing::post(move || {
@@ -5088,7 +5730,22 @@ mod strict_request_target_tests {
                 mount(Arc::clone(&counter)),
             )
             .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST
+                    .path(),
+                mount(Arc::clone(&counter)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST
+                    .path(),
+                mount(Arc::clone(&counter)),
+            )
+            .route(
                 route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST
+                    .path(),
+                mount(Arc::clone(&counter)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST
                     .path(),
                 mount(Arc::clone(&counter)),
             )
@@ -5187,6 +5844,48 @@ mod strict_request_target_tests {
     }
 
     #[tokio::test]
+    async fn offline_operation_id_rejects_percent_encoded_alias_before_handler_execution() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let router = offline_operation_test_router(Arc::clone(&counter));
+        let canonical_id = "11".repeat(32);
+        let encoded_id = format!("%31{}", &canonical_id[1..]);
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/offline/operations/{encoded_id}"))
+                    .header(header::ACCEPT, "application/json")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect response")
+            .to_bytes();
+        let envelope: ErrorEnvelope = norito::json::from_slice(&body).expect("typed JSON error");
+        assert_eq!(envelope.code(), "request_path_invalid");
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/offline/operations/{canonical_id}"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn sorafs_root_and_stream_paths_reject_retired_and_normalized_aliases() {
         let counter = Arc::new(AtomicUsize::new(0));
         let router = sorafs_test_router(Arc::clone(&counter));
@@ -5251,7 +5950,10 @@ mod strict_request_target_tests {
         for retired_path in [
             "/v1/multisig/proposals/list",
             "/v1/multisig/proposals/get",
+            "/v1/multisig/approvals/list",
+            "/v1/multisig/approvals/get",
             "/v1/multisig/approvals/list_for_authority",
+            "/v1/multisig/approvals/get_for_authority",
             "/v1/controls/asset-transfer/get",
         ] {
             let response = router
@@ -5272,7 +5974,10 @@ mod strict_request_target_tests {
         for canonical_path in [
             "/v1/multisig/proposals/query",
             "/v1/multisig/proposals/lookup",
+            "/v1/multisig/approvals/query",
+            "/v1/multisig/approvals/lookup",
             "/v1/multisig/approvals/query-for-authority",
+            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/controls/asset-transfer/query",
         ] {
             let response = router
@@ -5292,12 +5997,13 @@ mod strict_request_target_tests {
                 "{canonical_path}"
             );
         }
-        assert_eq!(counter.load(Ordering::SeqCst), 4);
+        assert_eq!(counter.load(Ordering::SeqCst), 7);
 
         for adversarial_path in [
             "/v1/multisig/proposals//query",
             "/v1/multisig/proposals/%2fquery",
             "/v1/multisig/proposals/query/",
+            "/v1/multisig/proposals/list/",
         ] {
             let response = router
                 .clone()
@@ -5318,7 +6024,169 @@ mod strict_request_target_tests {
                 "{adversarial_path}"
             );
         }
-        assert_eq!(counter.load(Ordering::SeqCst), 4);
+        assert_eq!(counter.load(Ordering::SeqCst), 7);
+    }
+}
+
+#[cfg(test)]
+mod offline_cache_policy_tests {
+    use axum::{
+        Router,
+        body::Body,
+        extract::Path,
+        http::{Request, StatusCode, header},
+        response::IntoResponse as _,
+        routing::{get, post},
+    };
+    use tower::ServiceExt as _;
+
+    use super::enforce_offline_cache_policy;
+
+    #[tokio::test]
+    async fn every_operation_status_outcome_is_no_store() {
+        let router = Router::new()
+            .route(
+                "/v1/offline/operations/{operation_id}",
+                get(|Path(operation_id): Path<String>| async move {
+                    match operation_id.as_str() {
+                        "invalid" => StatusCode::BAD_REQUEST,
+                        "missing" => StatusCode::NOT_FOUND,
+                        "inconsistent" => StatusCode::SERVICE_UNAVAILABLE,
+                        _ => StatusCode::OK,
+                    }
+                }),
+            )
+            .route(
+                "/v1/offline/readiness",
+                get(|headers: axum::http::HeaderMap| async move {
+                    if headers.contains_key("x-ready") {
+                        (
+                            [(header::CACHE_CONTROL, "public, max-age=86400")],
+                            StatusCode::OK,
+                        )
+                            .into_response()
+                    } else {
+                        (
+                            [(header::CACHE_CONTROL, "public, max-age=86400")],
+                            StatusCode::BAD_REQUEST,
+                        )
+                            .into_response()
+                    }
+                }),
+            )
+            .route(
+                "/v1/offline/top-up",
+                post(|| async {
+                    (
+                        [(header::CACHE_CONTROL, "public, max-age=86400")],
+                        StatusCode::ACCEPTED,
+                    )
+                }),
+            )
+            .route(
+                "/v1/offline/redeem",
+                post(|| async {
+                    (
+                        [(header::CACHE_CONTROL, "public, max-age=86400")],
+                        StatusCode::SERVICE_UNAVAILABLE,
+                    )
+                }),
+            )
+            .route("/health", get(|| async { StatusCode::NOT_FOUND }))
+            .layer(axum::middleware::from_fn(enforce_offline_cache_policy));
+
+        for (operation_id, status) in [
+            ("known", StatusCode::OK),
+            ("invalid", StatusCode::BAD_REQUEST),
+            ("missing", StatusCode::NOT_FOUND),
+            ("inconsistent", StatusCode::SERVICE_UNAVAILABLE),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/v1/offline/operations/{operation_id}"))
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), status, "operation_id={operation_id}");
+            assert_eq!(
+                response.headers().get(header::CACHE_CONTROL),
+                Some(&axum::http::HeaderValue::from_static("no-store")),
+                "operation_id={operation_id}"
+            );
+        }
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/offline/readiness?asset_definition_id=missing")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&axum::http::HeaderValue::from_static("no-store"))
+        );
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/offline/readiness?asset_definition_id=known")
+                    .header("x-ready", "1")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&axum::http::HeaderValue::from_static(
+                "private, max-age=0, must-revalidate"
+            ))
+        );
+
+        for (path, status) in [
+            ("/v1/offline/top-up", StatusCode::ACCEPTED),
+            ("/v1/offline/redeem", StatusCode::SERVICE_UNAVAILABLE),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(axum::http::Method::POST)
+                        .uri(path)
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), status, "path={path}");
+            assert_eq!(
+                response.headers().get(header::CACHE_CONTROL),
+                Some(&axum::http::HeaderValue::from_static("no-store")),
+                "path={path}"
+            );
+        }
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert!(response.headers().get(header::CACHE_CONTROL).is_none());
     }
 }
 
@@ -5413,6 +6281,22 @@ mod response_negotiation_middleware_tests {
         )
     }
 
+    fn native_request(
+        path: &str,
+        accept: &str,
+        route: iroha_torii_shared::route_catalog::RouteDescriptor,
+    ) -> Request<Body> {
+        let mut request = Request::builder()
+            .uri(path)
+            .header(header::ACCEPT, accept)
+            .body(Body::empty())
+            .expect("request");
+        request
+            .extensions_mut()
+            .insert(MatchedRouteMetadata::from_descriptor(route));
+        request
+    }
+
     #[tokio::test]
     async fn safe_protocol_native_media_bypasses_typed_negotiation() {
         let router = Router::new()
@@ -5430,31 +6314,47 @@ mod response_negotiation_middleware_tests {
             )
             .layer(axum::middleware::from_fn(capture_response_format));
 
-        for (path, accept, expected_content_type) in [
-            ("/events", "text/event-stream", "text/event-stream"),
-            ("/events", "text/*", "text/event-stream"),
+        for (path, accept, expected_content_type, route) in [
+            (
+                "/events",
+                "text/event-stream",
+                "text/event-stream",
+                route_catalog::streaming::EVENTS_SSE,
+            ),
+            (
+                "/events",
+                "text/*",
+                "text/event-stream",
+                route_catalog::streaming::EVENTS_SSE,
+            ),
             (
                 "/events",
                 "application/json;q=0.2, text/event-stream;q=0.8",
                 "text/event-stream",
+                route_catalog::streaming::EVENTS_SSE,
             ),
-            ("/metrics", "text/plain", "text/plain; version=0.0.4"),
-            ("/metrics", "*/*", "text/plain; version=0.0.4"),
+            (
+                "/metrics",
+                "text/plain",
+                "text/plain; version=0.0.4",
+                route_catalog::diagnostic::METRICS,
+            ),
+            (
+                "/metrics",
+                "*/*",
+                "text/plain; version=0.0.4",
+                route_catalog::diagnostic::METRICS,
+            ),
             (
                 "/blob",
                 "application/octet-stream",
                 "application/octet-stream",
+                route_catalog::content_directory::CONTENT,
             ),
         ] {
             let response = router
                 .clone()
-                .oneshot(
-                    Request::builder()
-                        .uri(path)
-                        .header(header::ACCEPT, accept)
-                        .body(Body::empty())
-                        .expect("request"),
-                )
+                .oneshot(native_request(path, accept, route))
                 .await
                 .expect("response");
             assert_eq!(response.status(), StatusCode::OK, "path={path}");
@@ -5491,13 +6391,11 @@ mod response_negotiation_middleware_tests {
         ] {
             let response = router
                 .clone()
-                .oneshot(
-                    Request::builder()
-                        .uri("/events")
-                        .header(header::ACCEPT, accept)
-                        .body(Body::empty())
-                        .expect("request"),
-                )
+                .oneshot(native_request(
+                    "/events",
+                    accept,
+                    route_catalog::streaming::EVENTS_SSE,
+                ))
                 .await
                 .expect("response");
             assert_eq!(
@@ -5529,6 +6427,40 @@ mod response_negotiation_middleware_tests {
     }
 
     #[tokio::test]
+    async fn public_conditional_get_rejects_unacceptable_media_before_a_304_handler() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let handler_calls = Arc::clone(&calls);
+        let router = Router::new()
+            .route(
+                "/readiness",
+                get(move || {
+                    let calls = Arc::clone(&handler_calls);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::NOT_MODIFIED
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn(capture_response_format));
+        let mut request = Request::builder()
+            .uri("/readiness")
+            .header(header::ACCEPT, "image/png")
+            .header(header::IF_NONE_MATCH, "\"stale-validator\"")
+            .body(Body::empty())
+            .expect("request");
+        request
+            .extensions_mut()
+            .insert(MatchedRouteMetadata::from_descriptor(
+                route_catalog::offline::READINESS,
+            ));
+
+        let response = router.oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(response.headers().get(header::VARY).is_some());
+    }
+
+    #[tokio::test]
     async fn protocol_stream_establishment_errors_remain_typed_json() {
         let router = Router::new()
             .route(
@@ -5549,13 +6481,11 @@ mod response_negotiation_middleware_tests {
         ] {
             let response = router
                 .clone()
-                .oneshot(
-                    Request::builder()
-                        .uri("/events")
-                        .header(header::ACCEPT, accept)
-                        .body(Body::empty())
-                        .expect("request"),
-                )
+                .oneshot(native_request(
+                    "/events",
+                    accept,
+                    route_catalog::streaming::EVENTS_SSE,
+                ))
                 .await
                 .expect("response");
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{accept}");
@@ -6008,6 +6938,72 @@ mod typed_error_contract_tests {
     }
 
     #[tokio::test]
+    async fn syntactically_valid_internal_errors_are_redacted_for_every_representation() {
+        const MARKER: &str = "private_internal_marker_7f40";
+        let router = Router::new()
+            .route(
+                "/json-internal",
+                get(|| async {
+                    let mut response = utils::respond_with_status_and_format(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        ErrorEnvelope::new("private_internal_marker", MARKER).with_details(
+                            ErrorDetails {
+                                hint: Some(MARKER.to_owned()),
+                                ..Default::default()
+                            },
+                        ),
+                        ResponseFormat::Json,
+                    );
+                    response.headers_mut().insert(
+                        HeaderName::from_static("x-iroha-reject-code"),
+                        HeaderValue::from_static("PRIVATE:MARKER"),
+                    );
+                    response
+                }),
+            )
+            .route(
+                "/norito-internal",
+                get(|| async {
+                    utils::respond_with_status_and_format(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        ErrorEnvelope::new("private_internal_marker", MARKER),
+                        ResponseFormat::Norito,
+                    )
+                }),
+            )
+            .layer(axum::middleware::from_fn(enforce_typed_error_contract));
+
+        for (path, accept) in [
+            ("/json-internal", "application/json"),
+            ("/norito-internal", utils::NORITO_MIME_TYPE),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .header(header::ACCEPT, accept)
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            assert!(!response.headers().contains_key("x-iroha-reject-code"));
+            let body = body_bytes(response).await;
+            assert!(!String::from_utf8_lossy(&body).contains(MARKER));
+            let envelope: ErrorEnvelope = if accept == "application/json" {
+                norito::json::from_slice(&body).expect("decode JSON internal error")
+            } else {
+                norito::decode_from_bytes(&body).expect("decode Norito internal error")
+            };
+            assert_eq!(envelope.code(), "internal_server_error");
+            assert_eq!(envelope.message(), "Torii could not complete the request.");
+            assert!(envelope.details.is_none());
+        }
+    }
+
+    #[tokio::test]
     async fn unknown_error_members_are_discarded_at_the_response_boundary() {
         let router = with_error_contract(Router::new().route(
             "/unknown-members",
@@ -6069,6 +7065,70 @@ mod typed_error_contract_tests {
             envelope.details.and_then(|details| details.reject_code),
             Some("PRTRY:BAD".to_owned())
         );
+    }
+
+    #[tokio::test]
+    async fn error_boundary_discards_unbounded_or_unsafe_detail_text() {
+        let oversized = "x".repeat(utils::MAX_ERROR_DETAIL_CHARACTERS + 1);
+        let unsafe_code = format!("private\n{oversized}");
+        let router = with_error_contract(Router::new().route(
+            "/unsafe-details",
+            get(move || {
+                let unsafe_code = unsafe_code.clone();
+                let oversized = oversized.clone();
+                async move {
+                    utils::respond_with_status_and_format(
+                        StatusCode::BAD_REQUEST,
+                        ErrorEnvelope::new(
+                            unsafe_code,
+                            "m".repeat(utils::MAX_ERROR_MESSAGE_CHARACTERS + 1),
+                        )
+                        .with_details(ErrorDetails {
+                            layer: Some("private\nlayer".to_owned()),
+                            reject_code: Some("secret/code".to_owned()),
+                            queue: Some(QueueErrorSnapshot {
+                                state: "secret-state".to_owned(),
+                                queued: 1,
+                                capacity: 1,
+                                saturated: true,
+                            }),
+                            endpoint: Some("/v1/private?token=secret".to_owned()),
+                            field: Some(oversized),
+                            expected: Some("secret\0expected".to_owned()),
+                            actual: Some(" secret".to_owned()),
+                            profile: Some("secret\nprofile".to_owned()),
+                            tx_hash: Some("secret\u{85}hash".to_owned()),
+                            last_status: Some("secret\rstatus".to_owned()),
+                            hint: Some("secret\thint".to_owned()),
+                            axt: Some(AxtErrorDetails {
+                                code: Some("secret/code".to_owned()),
+                                reason: Some("secret\nreason".to_owned()),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        }),
+                        ResponseFormat::Json,
+                    )
+                }
+            }),
+        ));
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/unsafe-details")
+                    .header(header::ACCEPT, "application/json")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let body = body_bytes(response).await;
+        assert!(!String::from_utf8_lossy(&body).contains("secret"));
+        let envelope: ErrorEnvelope =
+            norito::json::from_slice(&body).expect("decode canonical JSON error");
+        assert_eq!(envelope.code(), "bad_request");
+        assert_eq!(envelope.message(), "The request is invalid.");
+        assert!(envelope.details.is_none());
     }
 
     #[tokio::test]
@@ -6269,21 +7329,34 @@ mod typed_error_contract_tests {
         }
     }
 
+    fn reviewed_sse_error_response() -> Response {
+        let mut response = Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(header::CONTENT_TYPE, "text/event-stream")
+            .header("x-iroha-stream-error", "stream_resume_unsupported")
+            .body(Body::from("reviewed resume rejection"))
+            .expect("native response");
+        response
+            .extensions_mut()
+            .insert(ReviewedProtocolNativeError::StreamResumeUnsupported);
+        response
+    }
+
     #[tokio::test]
-    async fn reviewed_protocol_native_error_body_is_preserved() {
+    async fn unmarked_protocol_error_cannot_bypass_typed_boundary() {
         let router = with_error_contract(Router::new().route(
             "/native",
             get(|| async {
                 Response::builder()
                     .status(StatusCode::BAD_GATEWAY)
                     .header(header::CONTENT_TYPE, "text/plain")
-                    .body(Body::from("upstream protocol error"))
+                    .body(Body::from("upstream protocol secret"))
                     .expect("native response")
             }),
         ));
         let mut request = Request::builder()
             .uri("/native")
-            .header(header::ACCEPT, "text/plain")
+            .header(header::ACCEPT, "application/json")
             .body(Body::empty())
             .expect("request");
         request
@@ -6292,17 +7365,93 @@ mod typed_error_contract_tests {
                 route_catalog::sorafs::CID_ROOT,
             ));
         let response = router.oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body = body_bytes(response).await;
+        assert!(!String::from_utf8_lossy(&body).contains("secret"));
+        let envelope: ErrorEnvelope =
+            norito::json::from_slice(&body).expect("decode canonical error");
+        assert_eq!(envelope.code(), "bad_gateway");
+    }
+
+    #[tokio::test]
+    async fn exact_reviewed_sse_error_is_preserved_and_accept_checked() {
+        let router = with_error_contract(
+            Router::new().route("/native", get(|| async { reviewed_sse_error_response() })),
+        );
+        let request = |accept: &'static str| {
+            let mut request = Request::builder()
+                .uri("/native")
+                .header(header::ACCEPT, accept)
+                .body(Body::empty())
+                .expect("request");
+            request
+                .extensions_mut()
+                .insert(MatchedRouteMetadata::from_descriptor(
+                    route_catalog::streaming::EVENTS_SSE,
+                ));
+            request
+        };
+
+        let response = router
+            .clone()
+            .oneshot(request("text/event-stream"))
+            .await
+            .expect("reviewed response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             response
                 .extensions()
                 .get::<utils::HttpErrorCode>()
                 .map(utils::HttpErrorCode::as_str),
-            Some("protocol_native_error")
+            Some("stream_resume_unsupported")
+        );
+        assert!(
+            response
+                .extensions()
+                .get::<ReviewedProtocolNativeError>()
+                .is_none()
         );
         assert_eq!(
             body_bytes(response).await.as_ref(),
-            b"upstream protocol error"
+            b"reviewed resume rejection"
         );
+
+        let response = router
+            .oneshot(request("image/png"))
+            .await
+            .expect("native negotiation rejection");
+        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+        assert!(response.headers().get("x-iroha-stream-error").is_none());
+        let body = body_bytes(response).await;
+        assert!(!String::from_utf8_lossy(&body).contains("reviewed resume rejection"));
+        let envelope: ErrorEnvelope =
+            norito::json::from_slice(&body).expect("decode native negotiation rejection");
+        assert_eq!(envelope.code(), "response_not_acceptable");
+    }
+
+    #[tokio::test]
+    async fn reviewed_marker_is_route_bound() {
+        let router = with_error_contract(
+            Router::new().route("/native", get(|| async { reviewed_sse_error_response() })),
+        );
+        let mut request = Request::builder()
+            .uri("/native")
+            .header(header::ACCEPT, "application/json")
+            .body(Body::empty())
+            .expect("request");
+        request
+            .extensions_mut()
+            .insert(MatchedRouteMetadata::from_descriptor(
+                route_catalog::sorafs::CID_ROOT,
+            ));
+        let response = router.oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response.headers().get("x-iroha-stream-error").is_none());
+        let body = body_bytes(response).await;
+        assert!(!String::from_utf8_lossy(&body).contains("reviewed resume rejection"));
+        let envelope: ErrorEnvelope =
+            norito::json::from_slice(&body).expect("decode canonical error");
+        assert_eq!(envelope.code(), "bad_request");
     }
 }
 
@@ -6436,10 +7585,6 @@ async fn check_access_with_rate_limiter(
 }
 
 fn validate_api_token(app: &AppState, headers: &axum::http::HeaderMap) -> Result<(), Error> {
-    let token_hdr = headers
-        .get(HEADER_API_TOKEN)
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
     if app.require_api_token {
         if app.api_tokens_set.is_empty() {
             return Err(Error::Query(
@@ -6448,9 +7593,12 @@ fn validate_api_token(app: &AppState, headers: &axum::http::HeaderMap) -> Result
                 ),
             ));
         }
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
+        let mut values = headers.get_all(HEADER_API_TOKEN).iter();
+        let ok = values
+            .next()
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|token| app.api_tokens_set.contains(token))
+            && values.next().is_none();
         if !ok {
             return Err(Error::Query(
                 iroha_data_model::ValidationFail::NotPermitted(
@@ -6491,53 +7639,75 @@ async fn check_access_enforced_with_cost(
     Ok(())
 }
 
-struct QueryAdmissionPermit {
+/// Owned general, optional heavy-query, and optional body permits retained through physical work.
+pub(crate) struct QueryAdmissionPermit {
     _query: tokio::sync::OwnedSemaphorePermit,
     _heavy: Option<tokio::sync::OwnedSemaphorePermit>,
+    _body: Option<tokio::sync::OwnedSemaphorePermit>,
+}
+
+impl QueryAdmissionPermit {
+    #[cfg(feature = "app_api")]
+    fn with_body_permit(mut self, permit: tokio::sync::OwnedSemaphorePermit) -> Self {
+        self._body = Some(permit);
+        self
+    }
 }
 
 async fn acquire_query_admission(
     app: &AppState,
     heavy: bool,
 ) -> Result<QueryAdmissionPermit, Error> {
-    async fn acquire_one(
-        semaphore: Arc<tokio::sync::Semaphore>,
-        timeout: Duration,
-    ) -> Result<tokio::sync::OwnedSemaphorePermit, Error> {
-        let acquire = semaphore.acquire_owned();
-        let permit = if timeout.is_zero() {
-            acquire.await.map_err(|_| {
-                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-                ))
-            })?
-        } else {
-            tokio::time::timeout(timeout, acquire)
-                .await
-                .map_err(|_| {
-                    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                        iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-                    ))
-                })?
-                .map_err(|_| {
-                    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                        iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-                    ))
-                })?
-        };
-        Ok(permit)
+    fn capacity_limit() -> Error {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        ))
     }
 
-    let query = acquire_one(app.query_inflight.clone(), app.query_queue_timeout).await?;
-    let heavy = if heavy {
-        Some(acquire_one(app.query_heavy_inflight.clone(), app.query_queue_timeout).await?)
-    } else {
-        None
+    if app.query_queue_timeout.is_zero() {
+        let heavy = heavy
+            .then(|| app.query_heavy_inflight.clone().try_acquire_owned())
+            .transpose()
+            .map_err(|_| capacity_limit())?;
+        let query = app
+            .query_inflight
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| capacity_limit())?;
+        return Ok(QueryAdmissionPermit {
+            _query: query,
+            _heavy: heavy,
+            _body: None,
+        });
+    }
+
+    let acquire = async {
+        let heavy = if heavy {
+            Some(
+                app.query_heavy_inflight
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| capacity_limit())?,
+            )
+        } else {
+            None
+        };
+        let query = app
+            .query_inflight
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| capacity_limit())?;
+        Ok(QueryAdmissionPermit {
+            _query: query,
+            _heavy: heavy,
+            _body: None,
+        })
     };
-    Ok(QueryAdmissionPermit {
-        _query: query,
-        _heavy: heavy,
-    })
+    tokio::time::timeout(app.query_queue_timeout, acquire)
+        .await
+        .map_err(|_| capacity_limit())?
 }
 
 fn rate_limit_key(
@@ -6569,12 +7739,22 @@ async fn rate_limit_requests_with_cost(
     key: &str,
     cost: u64,
 ) -> Result<(), Error> {
-    if !limits::allow_cost_conditionally(&app.rate_limiter, key, cost.max(1), true).await {
+    if !app
+        .rate_limiter
+        .allow_cost_capped_to_burst(key, cost.max(1))
+        .await
+    {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
     Ok(())
+}
+
+fn negotiate_heavy_query_response_format(
+    headers: &axum::http::HeaderMap,
+) -> std::result::Result<utils::ResponseFormat, AxResponse> {
+    utils::negotiate_response_format(headers.get(axum::http::header::ACCEPT))
 }
 
 const FINALITY_HEAVY_QUERY_RATE_COST: u64 = 8;
@@ -7085,6 +8265,38 @@ async fn enforce_proof_egress(
         endpoint: hint,
         retry_after_secs,
     })
+}
+
+/// Charge the exact bytes of an internally buffered proof response before it
+/// is handed to Hyper. Collecting here also makes the accounting invariant
+/// independent of HTTP body size-hint implementations.
+async fn proof_response_with_exact_egress(
+    app: &AppState,
+    headers: &axum::http::HeaderMap,
+    remote: Option<IpAddr>,
+    hint: &'static str,
+    response: axum::response::Response,
+    enforce_rate: bool,
+) -> Result<axum::response::Response, Error> {
+    let (parts, body) = response.into_parts();
+    let body = axum::body::to_bytes(body, usize::MAX).await.map_err(|error| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "failed to collect buffered {hint} proof response for exact egress accounting: {error}"
+        )))
+    })?;
+    enforce_proof_egress(
+        app,
+        headers,
+        remote,
+        hint,
+        u64::try_from(body.len()).unwrap_or(u64::MAX),
+        enforce_rate,
+    )
+    .await?;
+    Ok(axum::response::Response::from_parts(
+        parts,
+        axum::body::Body::from(body),
+    ))
 }
 
 async fn proof_json_response_with_egress<T>(
@@ -9438,6 +10650,7 @@ async fn handler_repo_agreements_query(
 
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+#[norito(deny_unknown_fields)]
 struct OfflineKagemushaReadinessQuery {
     asset_definition_id: String,
 }
@@ -9451,34 +10664,241 @@ fn offline_kagemusha_readiness_error(message: impl Into<String>) -> Error {
 }
 
 #[cfg(feature = "app_api")]
-fn offline_kagemusha_readiness_verifier_available(
+fn offline_kagemusha_readiness_verifier_record(
     world: &impl WorldReadOnly,
     block_height: u64,
     circuit_id: &str,
     role: &str,
-) -> Result<bool, Error> {
-    let selected = world
-        .verifying_keys_by_circuit()
-        .iter()
-        .filter(|((registered_circuit_id, _), _)| registered_circuit_id == circuit_id)
-        .filter_map(|((_, version), id)| {
-            world
-                .verifying_keys()
-                .get(id)
-                .filter(|record| record.version == *version && record.is_active_at(block_height))
-                .map(|record| (*version, id.clone(), record.clone()))
-        })
-        .max_by_key(|(version, _, _)| *version);
-    let Some((_, _, record)) = selected else {
-        return Ok(false);
-    };
-    if record.circuit_id != circuit_id {
-        return Err(offline_kagemusha_readiness_error(format!(
-            "active {role} verifier index points at circuit `{}` instead of `{circuit_id}`",
-            record.circuit_id
-        )));
+) -> Result<Option<iroha_torii_shared::offline_api::OfflineActiveTransferVerifier>, Error> {
+    let mut selected = None;
+    for ((registered_circuit_id, indexed_version), id) in world.verifying_keys_by_circuit().iter() {
+        if registered_circuit_id != circuit_id {
+            continue;
+        }
+        let record = world.verifying_keys().get(id).ok_or_else(|| {
+            offline_kagemusha_readiness_error(format!(
+                "{role} verifier index version {indexed_version} points at missing key `{}/{}`",
+                id.backend, id.name
+            ))
+        })?;
+        if record.version != *indexed_version {
+            return Err(offline_kagemusha_readiness_error(format!(
+                "{role} verifier index version {indexed_version} points at record version {}",
+                record.version
+            )));
+        }
+        if record.circuit_id != circuit_id {
+            return Err(offline_kagemusha_readiness_error(format!(
+                "{role} verifier index points at circuit `{}` instead of `{circuit_id}`",
+                record.circuit_id
+            )));
+        }
+        if !id.is_portable_registry_id() {
+            return Err(offline_kagemusha_readiness_error(format!(
+                "{role} verifier index contains a non-portable key id"
+            )));
+        }
+        if record.commitment == [0; 32]
+            || record.public_inputs_schema_hash == [0; 32]
+            || record.max_proof_bytes == 0
+        {
+            return Err(offline_kagemusha_readiness_error(format!(
+                "{role} verifier record is missing required proof metadata"
+            )));
+        }
+        if record.is_active_at(block_height)
+            && selected
+                .as_ref()
+                .is_none_or(|(version, _, _)| indexed_version > version)
+        {
+            selected = Some((*indexed_version, id, record));
+        }
     }
-    Ok(true)
+
+    Ok(selected.map(|(_, id, record)| {
+        iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
+            id: iroha_torii_shared::offline_api::OfflineVerifierId {
+                backend: id.backend.as_str().to_owned(),
+                name: id.name.clone(),
+            },
+            version: record.version,
+            circuit_id: record.circuit_id.clone(),
+            commitment: hex::encode(record.commitment),
+            public_inputs_schema_hash: hex::encode(record.public_inputs_schema_hash),
+            max_proof_bytes: record.max_proof_bytes,
+            activation_height: record.activation_height.unwrap_or(0),
+            withdrawal_height: record.withdraw_height,
+        }
+    }))
+}
+
+#[cfg(feature = "app_api")]
+fn offline_kagemusha_asset_transfer_verifier_record(
+    world: &impl WorldReadOnly,
+    asset: &AssetDefinitionId,
+    block_height: u64,
+) -> Result<Option<iroha_torii_shared::offline_api::OfflineActiveTransferVerifier>, Error> {
+    let Some(zk_asset) = world.zk_assets().get(asset) else {
+        return Ok(None);
+    };
+    let Some(binding) = zk_asset.vk_transfer.as_ref() else {
+        return Ok(None);
+    };
+    let record = world.verifying_keys().get(&binding.id).ok_or_else(|| {
+        offline_kagemusha_readiness_error(format!(
+            "asset-bound transfer verifier `{}/{}` is missing from the registry",
+            binding.id.backend, binding.id.name
+        ))
+    })?;
+    let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+    let expected_schema_hash: [u8; 32] = iroha_crypto::Hash::new(
+        iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+    )
+    .into();
+    if record.circuit_id != circuit_id
+        || record.namespace != iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE
+        || record.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta
+        || record.curve != "pallas"
+        || binding.commitment == [0; 32]
+        || binding.commitment != record.commitment
+        || !binding.id.is_portable_registry_id()
+        || record.public_inputs_schema_hash != expected_schema_hash
+        || record.max_proof_bytes == 0
+    {
+        return Err(offline_kagemusha_readiness_error(
+            "asset-bound transfer verifier metadata is inconsistent with Kagemusha",
+        ));
+    }
+    let circuit_key = (record.circuit_id.clone(), record.version);
+    if world.verifying_keys_by_circuit().get(&circuit_key) != Some(&binding.id) {
+        return Err(offline_kagemusha_readiness_error(
+            "asset-bound transfer verifier is not the active registry entry for its circuit version",
+        ));
+    }
+    let Some(verifier_key) = record.key.as_ref() else {
+        return Err(offline_kagemusha_readiness_error(
+            "asset-bound transfer verifier key is not available inline",
+        ));
+    };
+    if verifier_key.backend.as_str() != iroha_core::zk::ZK_BACKEND_HALO2_IPA
+        || verifier_key.bytes.is_empty()
+        || u32::try_from(verifier_key.bytes.len()).ok() != Some(record.vk_len)
+        || iroha_core::zk::hash_vk(verifier_key) != record.commitment
+    {
+        return Err(offline_kagemusha_readiness_error(
+            "asset-bound transfer verifier key material is inconsistent",
+        ));
+    }
+    iroha_core::zk::confidential_v2::ensure_confidential_transfer_v2_canonical_vk_box(verifier_key)
+        .map_err(|error| {
+            offline_kagemusha_readiness_error(format!(
+                "asset-bound transfer verifier is not canonical: {error}"
+            ))
+        })?;
+    if !record.is_active_at(block_height) {
+        return Ok(None);
+    }
+
+    Ok(Some(
+        iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
+            id: iroha_torii_shared::offline_api::OfflineVerifierId {
+                backend: binding.id.backend.as_str().to_owned(),
+                name: binding.id.name.clone(),
+            },
+            version: record.version,
+            circuit_id: record.circuit_id.clone(),
+            commitment: hex::encode(record.commitment),
+            public_inputs_schema_hash: hex::encode(record.public_inputs_schema_hash),
+            max_proof_bytes: record.max_proof_bytes,
+            activation_height: record.activation_height.unwrap_or(0),
+            withdrawal_height: record.withdraw_height,
+        },
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn offline_kagemusha_asset_topup_shield_verifier_record(
+    world: &impl WorldReadOnly,
+    asset: &AssetDefinitionId,
+    block_height: u64,
+) -> Result<Option<iroha_torii_shared::offline_api::OfflineActiveTopUpShieldVerifier>, Error> {
+    let Some(zk_asset) = world.zk_assets().get(asset) else {
+        return Ok(None);
+    };
+    let Some(binding) = zk_asset.vk_shield.as_ref() else {
+        return Ok(None);
+    };
+    let record = world.verifying_keys().get(&binding.id).ok_or_else(|| {
+        offline_kagemusha_readiness_error(format!(
+            "asset-bound top-up shield verifier `{}/{}` is missing from the registry",
+            binding.id.backend, binding.id.name
+        ))
+    })?;
+    let circuit_id = iroha_core::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID;
+    let expected_schema_hash: [u8; 32] = iroha_crypto::Hash::new(
+        iroha_core::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
+    )
+    .into();
+    if record.circuit_id != circuit_id
+        || record.namespace != iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE
+        || record.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta
+        || record.curve != "pallas"
+        || binding.commitment == [0; 32]
+        || binding.commitment != record.commitment
+        || !binding.id.is_portable_registry_id()
+        || record.public_inputs_schema_hash != expected_schema_hash
+        || record.max_proof_bytes == 0
+    {
+        return Err(offline_kagemusha_readiness_error(
+            "asset-bound top-up shield verifier metadata is inconsistent with Kagemusha",
+        ));
+    }
+    let circuit_key = (record.circuit_id.clone(), record.version);
+    if world.verifying_keys_by_circuit().get(&circuit_key) != Some(&binding.id) {
+        return Err(offline_kagemusha_readiness_error(
+            "asset-bound top-up shield verifier is not the active registry entry for its circuit version",
+        ));
+    }
+    let Some(verifier_key) = record.key.as_ref() else {
+        return Err(offline_kagemusha_readiness_error(
+            "asset-bound top-up shield verifier key is not available inline",
+        ));
+    };
+    if verifier_key.backend.as_str() != iroha_core::zk::ZK_BACKEND_HALO2_IPA
+        || verifier_key.bytes.is_empty()
+        || u32::try_from(verifier_key.bytes.len()).ok() != Some(record.vk_len)
+        || iroha_core::zk::hash_vk(verifier_key) != record.commitment
+    {
+        return Err(offline_kagemusha_readiness_error(
+            "asset-bound top-up shield verifier key material is inconsistent",
+        ));
+    }
+    iroha_core::zk::confidential_v2::ensure_kagemusha_topup_shield_v2_canonical_vk_box(
+        verifier_key,
+    )
+    .map_err(|error| {
+        offline_kagemusha_readiness_error(format!(
+            "asset-bound top-up shield verifier is not canonical: {error}"
+        ))
+    })?;
+    if !record.is_active_at(block_height) {
+        return Ok(None);
+    }
+    Ok(Some(
+        iroha_torii_shared::offline_api::OfflineActiveTopUpShieldVerifier {
+            id: iroha_torii_shared::offline_api::OfflineVerifierId {
+                backend: binding.id.backend.as_str().to_owned(),
+                name: binding.id.name.clone(),
+            },
+            version: record.version,
+            circuit_id: record.circuit_id.clone(),
+            commitment: hex::encode(record.commitment),
+            public_inputs_schema_hash: hex::encode(record.public_inputs_schema_hash),
+            max_proof_bytes: record.max_proof_bytes,
+            activation_height: record.activation_height.unwrap_or(0),
+            withdrawal_height: record.withdraw_height,
+        },
+    ))
 }
 
 #[cfg(feature = "app_api")]
@@ -9493,15 +10913,52 @@ fn offline_readiness_blocker(
 }
 
 #[cfg(feature = "app_api")]
+fn encode_offline_readiness_representation(
+    payload: &iroha_torii_shared::offline_api::OfflineReadiness,
+    format: crate::utils::ResponseFormat,
+) -> Result<(&'static str, Vec<u8>), Error> {
+    match format {
+        crate::utils::ResponseFormat::Json => norito::json::to_vec(payload)
+            .map(|bytes| ("application/json", bytes))
+            .map_err(|source| Error::SerializationFailure {
+                context: "offline_readiness",
+                source: Box::new(source),
+            }),
+        crate::utils::ResponseFormat::Norito => norito::to_bytes(payload)
+            .map(|bytes| (crate::utils::NORITO_MIME_TYPE, bytes))
+            .map_err(|source| Error::SerializationFailure {
+                context: "offline_readiness",
+                source: Box::new(source),
+            }),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn strong_etag_for_representation(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+
+    format!("\"{}\"", hex::encode(sha2::Sha256::digest(bytes)))
+}
+
+#[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_offline_readiness(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
-    crate::NoritoQuery(query): crate::NoritoQuery<OfflineKagemushaReadinessQuery>,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    crate::NoritoStringQuery(query): crate::NoritoStringQuery<OfflineKagemushaReadinessQuery>,
 ) -> Result<AxResponse, Error> {
-    let asset_definition_id = parse_asset_definition_id(&app, &query.asset_definition_id)?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/readiness").await?;
     let state_view = app.state.view();
     let world = state_view.world();
+    let alias_observation_time_ms = state_view.latest_block().map_or(0, |block| {
+        u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+    });
+    let asset_definition_id = parse_offline_readiness_asset_definition_id(
+        world,
+        alias_observation_time_ms,
+        &query.asset_definition_id,
+    )?;
     let asset_definition =
         world
             .asset_definition(&asset_definition_id)
@@ -9517,41 +10974,49 @@ async fn handler_offline_readiness(
         )
     })?;
     let evaluated_block_hash = hex::encode(block_hash.as_ref().as_ref());
-    let transfer = offline_kagemusha_readiness_verifier_available(
+    let transfer = offline_kagemusha_asset_transfer_verifier_record(
         world,
+        &asset_definition_id,
         block_height,
-        iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
     )?;
-    let unshield = offline_kagemusha_readiness_verifier_available(
+    let topup_shield = offline_kagemusha_asset_topup_shield_verifier_record(
+        world,
+        &asset_definition_id,
+        block_height,
+    )?;
+    let unshield = offline_kagemusha_readiness_verifier_record(
         world,
         block_height,
         iroha_core::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
         iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
-    )?;
-    let lineage_init = offline_kagemusha_readiness_verifier_available(
+    )?
+    .is_some();
+    let lineage_init = offline_kagemusha_readiness_verifier_record(
         world,
         block_height,
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
         iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_LINEAGE_INIT_V2,
-    )?;
-    let lineage_append = offline_kagemusha_readiness_verifier_available(
+    )?
+    .is_some();
+    let lineage_append = offline_kagemusha_readiness_verifier_record(
         world,
         block_height,
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_APPEND_PROOF_CIRCUIT_ID_V2,
         iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_LINEAGE_APPEND_V2,
-    )?;
-    let redeem_change = offline_kagemusha_readiness_verifier_available(
+    )?
+    .is_some();
+    let redeem_change = offline_kagemusha_readiness_verifier_record(
         world,
         block_height,
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_REDEEM_CHANGE_PROOF_CIRCUIT_ID_V2,
         iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_REDEEM_CHANGE_V2,
-    )?;
+    )?
+    .is_some();
     let proof_backend_available =
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE;
-    // TODO(kagemusha-v2-release): Source these from the audited native
-    // capability archive and active signed-artifact registry only once the
-    // backend is available. Hard-coded false keeps readiness fail-closed today.
+    // Release invariant: the current build has no authenticated native
+    // capability archive or active signed-artifact registry authority, so
+    // readiness must remain fail-closed for both gates.
     let witnessless_reserved_lineage_supported = false;
     let artifacts_ready = false;
     let mut blockers = Vec::new();
@@ -9582,9 +11047,14 @@ async fn handler_offline_readiness(
     }
     for (available, code, message) in [
         (
-            transfer,
+            transfer.is_some(),
             "transfer_verifier_unavailable",
             "The transfer verifier is not active at the evaluated block.",
+        ),
+        (
+            topup_shield.is_some(),
+            "topup_shield_verifier_unavailable",
+            "The top-up shield verifier is not active at the evaluated block.",
         ),
         (
             unshield,
@@ -9631,24 +11101,18 @@ async fn handler_offline_readiness(
     }
     let payload = iroha_torii_shared::offline_api::OfflineReadiness {
         asset_definition_id: asset_definition_id.to_string(),
+        asset_scale,
         evaluated_block_height: block_height,
         evaluated_block_hash,
+        active_transfer_verifier: transfer,
+        active_topup_shield_verifier: topup_shield,
         ready: blockers.is_empty(),
         blockers,
     };
     let response_format = crate::utils::current_response_format();
-    let etag_payload = norito::to_bytes(&payload).map_err(|error| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "failed to encode offline readiness validator: {error}"
-        )))
-    })?;
-    let mut etag_hasher = sha2::Sha256::new();
-    etag_hasher.update(match response_format {
-        crate::utils::ResponseFormat::Json => b"application/json".as_slice(),
-        crate::utils::ResponseFormat::Norito => b"application/x-norito".as_slice(),
-    });
-    etag_hasher.update(etag_payload);
-    let etag = format!("\"{}\"", hex::encode(etag_hasher.finalize()));
+    let (content_type, representation) =
+        encode_offline_readiness_representation(&payload, response_format)?;
+    let etag = strong_etag_for_representation(&representation);
     let cache_control = axum::http::HeaderValue::from_static("private, max-age=0, must-revalidate");
     if headers
         .get(axum::http::header::IF_NONE_MATCH)
@@ -9675,7 +11139,11 @@ async fn handler_offline_readiness(
         append_vary_accept(response.headers_mut());
         return Ok(response);
     }
-    let mut response = crate::utils::respond_with_format(payload, response_format);
+    let mut response = axum::http::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header(axum::http::header::CONTENT_TYPE, content_type)
+        .body(axum::body::Body::from(representation))
+        .expect("build pre-encoded offline readiness response");
     response
         .headers_mut()
         .insert(axum::http::header::CACHE_CONTROL, cache_control);
@@ -9690,13 +11158,193 @@ async fn handler_offline_readiness(
 
 #[cfg(all(test, feature = "app_api"))]
 mod offline_kagemusha_readiness_tests {
-    use super::offline_readiness_blocker;
+    use iroha_data_model::{asset::AssetDefinitionId, domain::DomainId};
+
+    use super::{
+        encode_offline_readiness_representation, offline_kagemusha_asset_transfer_verifier_record,
+        offline_kagemusha_readiness_verifier_record, offline_readiness_blocker,
+        strong_etag_for_representation,
+    };
+
+    fn transfer_verifier_state(
+        record_version: u32,
+        indexed_version: u32,
+        max_proof_bytes: u32,
+        activation_height: Option<u64>,
+        withdrawal_height: Option<u64>,
+    ) -> iroha_core::state::State {
+        use iroha_data_model::{
+            confidential::ConfidentialStatus,
+            proof::{VerifyingKeyId, VerifyingKeyRecord},
+            zk::BackendTag,
+        };
+
+        let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+        let id = VerifyingKeyId::new("halo2/ipa", "readiness-transfer");
+        let mut record = VerifyingKeyRecord::new_with_owner(
+            record_version,
+            circuit_id,
+            Some("offline-cash".to_owned()),
+            iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
+            BackendTag::Halo2IpaPasta,
+            "pallas",
+            [0x22; 32],
+            [0x33; 32],
+        );
+        record.status = ConfidentialStatus::Active;
+        record.activation_height = activation_height;
+        record.withdraw_height = withdrawal_height;
+        record.max_proof_bytes = max_proof_bytes;
+
+        let mut world = iroha_core::state::World::new();
+        world
+            .verifying_keys_mut_for_testing()
+            .insert(id.clone(), record);
+        world
+            .verifying_keys_by_circuit_mut_for_testing()
+            .insert((circuit_id.to_owned(), indexed_version), id);
+        iroha_core::state::State::new_for_testing(
+            world,
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        )
+    }
 
     #[test]
     fn readiness_blockers_have_stable_codes() {
         let blocker = offline_readiness_blocker("proof_backend_unavailable", "unavailable");
         assert_eq!(blocker.code, "proof_backend_unavailable");
         assert_eq!(blocker.message, "unavailable");
+    }
+
+    #[test]
+    fn readiness_etag_hashes_the_exact_selected_representation() {
+        let payload = iroha_torii_shared::offline_api::OfflineReadiness {
+            asset_definition_id: "xor#wonderland".to_owned(),
+            asset_scale: Some(9),
+            evaluated_block_height: 7,
+            evaluated_block_hash: "11".repeat(32),
+            active_transfer_verifier: None,
+            active_topup_shield_verifier: None,
+            ready: false,
+            blockers: vec![
+                offline_readiness_blocker(
+                    "transfer_verifier_unavailable",
+                    "The transfer verifier is unavailable.",
+                ),
+                offline_readiness_blocker(
+                    "proof_backend_unavailable",
+                    "The proof backend is unavailable.",
+                ),
+            ],
+        };
+        let (json_content_type, json) =
+            encode_offline_readiness_representation(&payload, crate::utils::ResponseFormat::Json)
+                .expect("encode JSON");
+        let (norito_content_type, norito) =
+            encode_offline_readiness_representation(&payload, crate::utils::ResponseFormat::Norito)
+                .expect("encode Norito");
+        assert_eq!(json_content_type, "application/json");
+        assert_eq!(norito_content_type, crate::utils::NORITO_MIME_TYPE);
+        assert_ne!(json, norito);
+        assert_ne!(
+            strong_etag_for_representation(&json),
+            strong_etag_for_representation(&norito)
+        );
+
+        let mut changed_json = json.clone();
+        changed_json.push(b' ');
+        assert_ne!(
+            strong_etag_for_representation(&json),
+            strong_etag_for_representation(&changed_json),
+            "a strong validator must change whenever representation octets change"
+        );
+    }
+
+    #[test]
+    fn readiness_exposes_the_exact_active_transfer_verifier_window() {
+        let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+        let state = transfer_verifier_state(7, 7, 4096, Some(5), Some(10));
+        let view = state.view();
+
+        let selected = offline_kagemusha_readiness_verifier_record(
+            &view.world,
+            9,
+            circuit_id,
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
+        )
+        .expect("evaluate transfer verifier")
+        .expect("verifier is active before withdrawal");
+        assert_eq!(selected.id.backend, "halo2/ipa");
+        assert_eq!(selected.id.name, "readiness-transfer");
+        assert_eq!(selected.version, 7);
+        assert_eq!(selected.circuit_id, circuit_id);
+        assert_eq!(selected.commitment, "33".repeat(32));
+        assert_eq!(selected.public_inputs_schema_hash, "22".repeat(32));
+        assert_eq!(selected.max_proof_bytes, 4096);
+        assert_eq!(selected.activation_height, 5);
+        assert_eq!(selected.withdrawal_height, Some(10));
+
+        assert!(
+            offline_kagemusha_readiness_verifier_record(
+                &view.world,
+                10,
+                circuit_id,
+                iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
+            )
+            .expect("evaluate at the exclusive withdrawal bound")
+            .is_none(),
+            "the registry withdrawal height is exclusive"
+        );
+    }
+
+    #[test]
+    fn readiness_does_not_substitute_a_global_verifier_for_the_asset_binding() {
+        let state = transfer_verifier_state(7, 7, 4096, None, None);
+        let view = state.view();
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+            "xor".parse().expect("asset name"),
+        );
+
+        assert!(
+            offline_kagemusha_asset_transfer_verifier_record(&view.world, &asset, 9)
+                .expect("evaluate asset-bound transfer verifier")
+                .is_none(),
+            "a globally active circuit is not the verifier selected by an unbound asset"
+        );
+    }
+
+    #[test]
+    fn readiness_rejects_a_stale_verifier_index_version() {
+        let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+        let state = transfer_verifier_state(7, 8, 4096, None, None);
+        let view = state.view();
+
+        let error = offline_kagemusha_readiness_verifier_record(
+            &view.world,
+            9,
+            circuit_id,
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
+        )
+        .expect_err("a stale index must fail closed instead of hiding the inconsistency");
+        assert!(format!("{error:?}").contains("record version 7"));
+    }
+
+    #[test]
+    fn readiness_rejects_an_active_verifier_without_proof_metadata() {
+        let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+        let state = transfer_verifier_state(7, 7, 0, None, None);
+        let view = state.view();
+
+        let error = offline_kagemusha_readiness_verifier_record(
+            &view.world,
+            9,
+            circuit_id,
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
+        )
+        .expect_err("an unusable active verifier record must fail closed");
+        assert!(format!("{error:?}").contains("missing required proof metadata"));
     }
 }
 
@@ -9705,12 +11353,10 @@ mod offline_kagemusha_readiness_tests {
 async fn handler_offline_redeem(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(request): crate::utils::extractors::NoritoJson<
         iroha_torii_shared::offline_api::OfflineRedeemRequest,
     >,
 ) -> Result<AxResponse, Error> {
-    check_access(&app, &headers, Some(remote.ip()), "v1/offline/redeem").await?;
     offline_v2_issuer::handle_redeem(app, &headers, request).await
 }
 
@@ -9719,13 +11365,55 @@ async fn handler_offline_redeem(
 async fn handler_offline_top_up(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(request): crate::utils::extractors::NoritoJson<
         iroha_torii_shared::offline_api::OfflineTopUpRequest,
     >,
 ) -> Result<AxResponse, Error> {
-    check_access(&app, &headers, Some(remote.ip()), "v1/offline/top-up").await?;
     offline_v2_issuer::handle_top_up(app, &headers, request).await
+}
+
+#[cfg(feature = "app_api")]
+async fn enforce_offline_command_prebody_admission(
+    State(app): State<SharedAppState>,
+    req: axum::http::Request<Body>,
+    next: Next,
+) -> Result<AxResponse, Infallible> {
+    let route_hint = req
+        .extensions()
+        .get::<MatchedRouteMetadata>()
+        .and_then(|route| match route.stable_route_id() {
+            id if id == route_catalog::offline::TOP_UP.stable_route_id() => {
+                Some("v1/offline/top-up")
+            }
+            id if id == route_catalog::offline::REDEEM.stable_route_id() => {
+                Some("v1/offline/redeem")
+            }
+            _ => None,
+        });
+    let Some(route_hint) = route_hint else {
+        return Ok(next.run(req).await);
+    };
+    let transport_remote = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|connect| connect.0.ip());
+    let remote = limits::ingress_remote_ip(
+        req.headers(),
+        transport_remote,
+        app.trusted_proxy_nets.as_ref(),
+    );
+    let mut headers = req.headers().clone();
+    headers.remove(limits::REMOTE_ADDR_HEADER);
+    if let Err(error) = check_access(&app, &headers, remote, route_hint).await {
+        return Ok(error.into_response());
+    }
+    if let Err(response) = crate::utils::typed_request_content_format(&headers) {
+        return Ok(response);
+    }
+    if let Err(error) = offline_v2_issuer::validate_command_headers_before_body(&headers) {
+        return Ok(error.into_response());
+    }
+    Ok(next.run(req).await)
 }
 
 #[cfg(feature = "app_api")]
@@ -10276,10 +11964,12 @@ fn parse_kaigi_call_id(raw: &str) -> Result<iroha_data_model::kaigi::KaigiId, Er
 }
 
 #[cfg(feature = "app_api")]
-fn parse_asset_definition_id(app: &AppState, raw: &str) -> Result<AssetDefinitionId, Error> {
+fn parse_asset_definition_id_in_world(
+    world: &impl WorldReadOnly,
+    alias_observation_time_ms: u64,
+    raw: &str,
+) -> Result<AssetDefinitionId, Error> {
     let trimmed = raw.trim();
-    let world = app.state.world_view();
-    let now_ms = routing::asset_alias_observation_time_ms(app.state.as_ref());
     if trimmed.is_empty() {
         return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
     }
@@ -10294,12 +11984,56 @@ fn parse_asset_definition_id(app: &AppState, raw: &str) -> Result<AssetDefinitio
     let alias = AssetDefinitionAlias::from_str(trimmed)
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
     world
-        .asset_definition_id_by_alias_at(&alias, now_ms)
+        .asset_definition_id_by_alias_at(&alias, alias_observation_time_ms)
         .ok_or_else(|| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::NotFound,
             ))
         })
+}
+
+#[cfg(feature = "app_api")]
+fn parse_asset_definition_id(app: &AppState, raw: &str) -> Result<AssetDefinitionId, Error> {
+    let world = app.state.world_view();
+    parse_asset_definition_id_in_world(
+        &world,
+        routing::asset_alias_observation_time_ms(app.state.as_ref()),
+        raw,
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn parse_offline_readiness_asset_definition_id(
+    world: &impl WorldReadOnly,
+    alias_observation_time_ms: u64,
+    raw: &str,
+) -> Result<AssetDefinitionId, Error> {
+    if raw.is_empty() || raw.trim() != raw {
+        return Err(Error::AppQueryValidation {
+            code: "asset_definition_id_invalid",
+            message: "asset_definition_id must use an exact canonical asset address or alias spelling without surrounding whitespace."
+                .to_owned(),
+        });
+    }
+
+    match parse_asset_definition_id_in_world(world, alias_observation_time_ms, raw) {
+        Ok(id) => Ok(id),
+        Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)) => {
+            Err(Error::AppQueryValidation {
+                code: "asset_definition_id_invalid",
+                message: "asset_definition_id is not a valid canonical asset address or alias."
+                    .to_owned(),
+            })
+        }
+        Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        ))) => Err(Error::AppNotFound {
+            code: "asset_definition_not_found",
+            message: "The requested asset definition is not registered at the evaluated block."
+                .to_owned(),
+        }),
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -20047,9 +21781,7 @@ fn contract_view_json_bytes_response(status: StatusCode, body: Vec<u8>) -> Respo
 fn error_response_with_format(error: Error, format: ResponseFormat) -> Response {
     let status = error.status_code();
     let envelope = match error {
-        Error::Query(err) => {
-            ErrorEnvelope::new("query_validation_failed", validation_fail_message(&err))
-        }
+        Error::Query(err) => public_validation_fail_envelope(&err, status),
         other => other.into_envelope(),
     };
     crate::utils::respond_with_status_and_format(status, envelope, format)
@@ -30074,6 +31806,17 @@ struct CanonicalStreamAdmission {
 }
 
 #[cfg(feature = "app_api")]
+fn canonical_stream_rate_limit_key(
+    headers: &axum::http::HeaderMap,
+    remote_ip: Option<IpAddr>,
+    route: iroha_torii_shared::route_catalog::RouteDescriptor,
+    use_api_token: bool,
+) -> String {
+    let principal = limits::key_from_headers(headers, remote_ip, None, use_api_token);
+    format!("stream:{}:{principal}", route.stable_route_id())
+}
+
+#[cfg(feature = "app_api")]
 async fn enforce_canonical_stream_admission(
     State(admission): State<CanonicalStreamAdmission>,
     req: axum::http::Request<Body>,
@@ -30088,10 +31831,10 @@ async fn enforce_canonical_stream_admission(
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|connect_info| connect_info.0.ip());
     if !limits::is_allowed_by_cidr(req.headers(), remote_ip, &admission.app.allow_nets) {
-        let key = rate_limit_key(
+        let key = canonical_stream_rate_limit_key(
             req.headers(),
             remote_ip,
-            admission.route.stable_route_id(),
+            admission.route,
             admission.app.api_token_enforced(),
         );
         if !admission.app.rate_limiter.allow(&key).await {
@@ -30228,6 +31971,28 @@ mod canonical_stream_handshake_tests {
                 enforce_canonical_stream_admission,
             )),
         )
+    }
+
+    fn stream_syntax_request(
+        route: iroha_torii_shared::route_catalog::RouteDescriptor,
+        probe: &Arc<AtomicUsize>,
+        token: Option<&str>,
+        remote: Option<std::net::SocketAddr>,
+    ) -> Request<Body> {
+        let mut builder = Request::builder().uri(route.path());
+        if let Some(token) = token {
+            builder = builder.header(HEADER_API_TOKEN, token);
+        }
+        let mut request = builder.body(Body::empty()).expect("stream syntax request");
+        request
+            .extensions_mut()
+            .insert(SyntaxProbe(Arc::clone(probe)));
+        if let Some(remote) = remote {
+            request
+                .extensions_mut()
+                .insert(axum::extract::ConnectInfo(remote));
+        }
+        request
     }
 
     fn gated_event_websocket_router(app: SharedAppState) -> Router {
@@ -30478,6 +32243,138 @@ mod canonical_stream_handshake_tests {
             );
         }
         assert_eq!(limited_app.events.receiver_count(), receivers_before);
+    }
+
+    #[tokio::test]
+    async fn stream_token_rate_limit_buckets_are_isolated_by_route() {
+        let mut app = crate::mk_app_state_for_tests();
+        let state = Arc::get_mut(&mut app).expect("unique app state");
+        state.require_api_token = true;
+        state.api_tokens_set = Arc::new(HashSet::from(["stream-secret".to_owned()]));
+        state.rate_limiter = limits::RateLimiter::new_per_minute(Some(1), Some(1));
+
+        let events_route = route_catalog::streaming::EVENTS_SSE;
+        let contracts_route = route_catalog::streaming::CONTRACT_EVENTS_SSE;
+        let events = gated_syntax_router(Arc::clone(&app), events_route);
+        let contracts = gated_syntax_router(Arc::clone(&app), contracts_route);
+        let syntax_calls = Arc::new(AtomicUsize::new(0));
+
+        for (router, route, remote, expected_status, expected_calls) in [
+            (
+                &events,
+                events_route,
+                std::net::SocketAddr::from(([203, 0, 113, 10], 1010)),
+                StatusCode::BAD_REQUEST,
+                1,
+            ),
+            (
+                &contracts,
+                contracts_route,
+                std::net::SocketAddr::from(([203, 0, 113, 11], 1011)),
+                StatusCode::BAD_REQUEST,
+                2,
+            ),
+            (
+                &events,
+                events_route,
+                std::net::SocketAddr::from(([203, 0, 113, 12], 1012)),
+                StatusCode::TOO_MANY_REQUESTS,
+                2,
+            ),
+            (
+                &contracts,
+                contracts_route,
+                std::net::SocketAddr::from(([203, 0, 113, 13], 1013)),
+                StatusCode::TOO_MANY_REQUESTS,
+                2,
+            ),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(stream_syntax_request(
+                    route,
+                    &syntax_calls,
+                    Some("stream-secret"),
+                    Some(remote),
+                ))
+                .await
+                .expect("token-scoped stream admission response");
+            assert_eq!(response.status(), expected_status, "route={}", route.path());
+            assert_eq!(
+                syntax_calls.load(Ordering::SeqCst),
+                expected_calls,
+                "route={}",
+                route.path()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_connect_info_rate_limit_buckets_are_isolated_by_route() {
+        let mut app = crate::mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .rate_limiter = limits::RateLimiter::new_per_minute(Some(1), Some(1));
+
+        let events_route = route_catalog::streaming::EVENTS_SSE;
+        let contracts_route = route_catalog::streaming::CONTRACT_EVENTS_SSE;
+        let events = gated_syntax_router(Arc::clone(&app), events_route);
+        let contracts = gated_syntax_router(Arc::clone(&app), contracts_route);
+        let syntax_calls = Arc::new(AtomicUsize::new(0));
+        let remote_ip = [203, 0, 113, 42];
+
+        for (router, route, token, port, expected_status, expected_calls) in [
+            (
+                &events,
+                events_route,
+                "attacker-a",
+                2010,
+                StatusCode::BAD_REQUEST,
+                1,
+            ),
+            (
+                &contracts,
+                contracts_route,
+                "attacker-b",
+                2011,
+                StatusCode::BAD_REQUEST,
+                2,
+            ),
+            (
+                &events,
+                events_route,
+                "attacker-c",
+                2012,
+                StatusCode::TOO_MANY_REQUESTS,
+                2,
+            ),
+            (
+                &contracts,
+                contracts_route,
+                "attacker-d",
+                2013,
+                StatusCode::TOO_MANY_REQUESTS,
+                2,
+            ),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(stream_syntax_request(
+                    route,
+                    &syntax_calls,
+                    Some(token),
+                    Some(std::net::SocketAddr::from((remote_ip, port))),
+                ))
+                .await
+                .expect("IP-scoped stream admission response");
+            assert_eq!(response.status(), expected_status, "route={}", route.path());
+            assert_eq!(
+                syntax_calls.load(Ordering::SeqCst),
+                expected_calls,
+                "route={}",
+                route.path()
+            );
+        }
     }
 
     #[tokio::test]
@@ -32440,20 +34337,15 @@ async fn handler_bridge_finality_proof(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
+    validate_api_token(app.as_ref(), &headers)?;
+    let _token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
         .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    let format = match negotiate_heavy_query_response_format(&headers) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -32461,17 +34353,24 @@ async fn handler_bridge_finality_proof(
         app.api_token_enforced(),
     );
     rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
-    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
+    let query_permit = acquire_query_admission(app.as_ref(), true).await?;
     #[cfg(feature = "telemetry")]
-    if let Some(api_token) = token_hdr {
+    if let Some(api_token) = _token_hdr {
         crate::telemetry::report_torii_api_hit(&app.telemetry, &api_token, "v1/bridge/finality");
     }
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    Ok(
-        routing::handle_v1_bridge_finality(app.state.clone(), height, accept)
+    let response =
+        routing::handle_v1_bridge_finality(app.state.clone(), height, format, query_permit)
             .await?
-            .into_response(),
+            .into_response();
+    proof_response_with_exact_egress(
+        app.as_ref(),
+        &headers,
+        Some(remote_ip),
+        "v1/bridge/finality",
+        response,
+        true,
     )
+    .await
 }
 
 async fn handler_bridge_finality_bundle(
@@ -32481,20 +34380,15 @@ async fn handler_bridge_finality_bundle(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
+    validate_api_token(app.as_ref(), &headers)?;
+    let _token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
         .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    let format = match negotiate_heavy_query_response_format(&headers) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -32502,21 +34396,28 @@ async fn handler_bridge_finality_bundle(
         app.api_token_enforced(),
     );
     rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
-    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
+    let query_permit = acquire_query_admission(app.as_ref(), true).await?;
     #[cfg(feature = "telemetry")]
-    if let Some(api_token) = token_hdr {
+    if let Some(api_token) = _token_hdr {
         crate::telemetry::report_torii_api_hit(
             &app.telemetry,
             &api_token,
             "v1/bridge/finality/bundle",
         );
     }
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    Ok(
-        routing::handle_v1_bridge_finality_bundle(app.state.clone(), height, accept)
+    let response =
+        routing::handle_v1_bridge_finality_bundle(app.state.clone(), height, format, query_permit)
             .await?
-            .into_response(),
+            .into_response();
+    proof_response_with_exact_egress(
+        app.as_ref(),
+        &headers,
+        Some(remote_ip),
+        "v1/bridge/finality/bundle",
+        response,
+        true,
     )
+    .await
 }
 
 async fn handler_sccp_message_proof(
@@ -32526,22 +34427,17 @@ async fn handler_sccp_message_proof(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
-    routing::reject_sccp_query(raw_query.as_deref())?;
     let remote_ip = remote.ip();
-    let token_hdr = headers
+    validate_api_token(app.as_ref(), &headers)?;
+    routing::reject_sccp_query(raw_query.as_deref())?;
+    let _token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
         .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    let format = match negotiate_heavy_query_response_format(&headers) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -32549,21 +34445,32 @@ async fn handler_sccp_message_proof(
         app.api_token_enforced(),
     );
     rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
-    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
+    let query_permit = acquire_query_admission(app.as_ref(), true).await?;
     #[cfg(feature = "telemetry")]
-    if let Some(api_token) = token_hdr {
+    if let Some(api_token) = _token_hdr {
         crate::telemetry::report_torii_api_hit(
             &app.telemetry,
             &api_token,
             "v1/sccp/proofs/message",
         );
     }
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    Ok(
-        routing::handle_v1_sccp_message_bundle(Arc::clone(&app.state), message_id, accept)
-            .await?
-            .into_response(),
+    let response = routing::handle_v1_sccp_message_bundle(
+        Arc::clone(&app.state),
+        message_id,
+        format,
+        query_permit,
     )
+    .await?
+    .into_response();
+    proof_response_with_exact_egress(
+        app.as_ref(),
+        &headers,
+        Some(remote_ip),
+        "v1/sccp/proofs/message",
+        response,
+        true,
+    )
+    .await
 }
 
 async fn handler_sccp_registry(
@@ -32572,22 +34479,13 @@ async fn handler_sccp_registry(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
-    routing::reject_sccp_query(raw_query.as_deref())?;
     let remote_ip = remote.ip();
-    let token_hdr = headers
+    validate_api_token(app.as_ref(), &headers)?;
+    routing::reject_sccp_query(raw_query.as_deref())?;
+    let _token_hdr = headers
         .get("x-api-token")
         .and_then(|value| value.to_str().ok())
         .map(ToString::to_string);
-    if app.require_api_token
-        && !app.api_tokens_set.is_empty()
-        && !token_hdr
-            .as_ref()
-            .is_some_and(|token| app.api_tokens_set.contains(token))
-    {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -32596,7 +34494,7 @@ async fn handler_sccp_registry(
     );
     rate_limit_requests(&app, &key).await?;
     #[cfg(feature = "telemetry")]
-    if let Some(api_token) = token_hdr {
+    if let Some(api_token) = _token_hdr {
         crate::telemetry::report_torii_api_hit(&app.telemetry, &api_token, "v1/sccp/registry");
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
@@ -32612,22 +34510,17 @@ async fn handler_sccp_proof_request(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
-    routing::reject_sccp_query(raw_query.as_deref())?;
     let remote_ip = remote.ip();
-    let token_hdr = headers
+    validate_api_token(app.as_ref(), &headers)?;
+    routing::reject_sccp_query(raw_query.as_deref())?;
+    let _token_hdr = headers
         .get("x-api-token")
         .and_then(|value| value.to_str().ok())
         .map(ToString::to_string);
-    if app.require_api_token
-        && !app.api_tokens_set.is_empty()
-        && !token_hdr
-            .as_ref()
-            .is_some_and(|token| app.api_tokens_set.contains(token))
-    {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
+    let format = match negotiate_heavy_query_response_format(&headers) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -32635,21 +34528,32 @@ async fn handler_sccp_proof_request(
         app.api_token_enforced(),
     );
     rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
-    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
+    let query_permit = acquire_query_admission(app.as_ref(), true).await?;
     #[cfg(feature = "telemetry")]
-    if let Some(api_token) = token_hdr {
+    if let Some(api_token) = _token_hdr {
         crate::telemetry::report_torii_api_hit(
             &app.telemetry,
             &api_token,
             "v1/sccp/proof-requests",
         );
     }
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    Ok(
-        routing::handle_v1_sccp_proof_request(Arc::clone(&app.state), message_id, accept)
-            .await?
-            .into_response(),
+    let response = routing::handle_v1_sccp_proof_request(
+        Arc::clone(&app.state),
+        message_id,
+        format,
+        query_permit,
     )
+    .await?
+    .into_response();
+    proof_response_with_exact_egress(
+        app.as_ref(),
+        &headers,
+        Some(remote_ip),
+        "v1/sccp/proof-requests",
+        response,
+        true,
+    )
+    .await
 }
 
 async fn handler_sccp_capabilities(
@@ -32658,22 +34562,13 @@ async fn handler_sccp_capabilities(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
-    routing::reject_sccp_query(raw_query.as_deref())?;
     let remote_ip = remote.ip();
-    let token_hdr = headers
+    validate_api_token(app.as_ref(), &headers)?;
+    routing::reject_sccp_query(raw_query.as_deref())?;
+    let _token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
         .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -32682,7 +34577,7 @@ async fn handler_sccp_capabilities(
     );
     rate_limit_requests(&app, &key).await?;
     #[cfg(feature = "telemetry")]
-    if let Some(api_token) = token_hdr {
+    if let Some(api_token) = _token_hdr {
         crate::telemetry::report_torii_api_hit(&app.telemetry, &api_token, "v1/sccp/capabilities");
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
@@ -32693,27 +34588,21 @@ async fn handler_sccp_capabilities(
 
 async fn handler_sccp_messages_recent(
     State(app): State<SharedAppState>,
-    window: crate::NoritoQuery<routing::HistoryWindowQuery>,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
-    routing::validate_sccp_recent_query(raw_query.as_deref())?;
     let remote_ip = remote.ip();
-    let token_hdr = headers
+    validate_api_token(app.as_ref(), &headers)?;
+    let window = routing::parse_sccp_recent_query(raw_query.as_deref())?;
+    let _token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
         .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    let format = match negotiate_heavy_query_response_format(&headers) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -32721,21 +34610,32 @@ async fn handler_sccp_messages_recent(
         app.api_token_enforced(),
     );
     rate_limit_requests_with_cost(&app, &key, SCCP_RECENT_QUERY_RATE_COST).await?;
-    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
+    let query_permit = acquire_query_admission(app.as_ref(), true).await?;
     #[cfg(feature = "telemetry")]
-    if let Some(api_token) = token_hdr {
+    if let Some(api_token) = _token_hdr {
         crate::telemetry::report_torii_api_hit(
             &app.telemetry,
             &api_token,
             "v1/sccp/messages/recent",
         );
     }
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    Ok(
-        routing::handle_v1_sccp_messages_recent(Arc::clone(&app.state), window, accept)
-            .await?
-            .into_response(),
+    let response = routing::handle_v1_sccp_messages_recent(
+        Arc::clone(&app.state),
+        window,
+        format,
+        query_permit,
     )
+    .await?
+    .into_response();
+    proof_response_with_exact_egress(
+        app.as_ref(),
+        &headers,
+        Some(remote_ip),
+        "v1/sccp/messages/recent",
+        response,
+        true,
+    )
+    .await
 }
 
 #[cfg(feature = "telemetry")]
@@ -32949,6 +34849,9 @@ async fn handler_commit_qc(
     .map(axum::response::IntoResponse::into_response)
 }
 // ---------------- Contracts/VK POST handlers ----------------
+
+#[cfg(feature = "app_api")]
+const MULTISIG_READ_MAX_BODY_BYTES: usize = 16 * 1024;
 
 #[cfg(feature = "app_api")]
 async fn check_public_contract_route_rate_limit(
@@ -33252,18 +35155,35 @@ async fn handler_post_contract_call_simulate(
 #[cfg(feature = "app_api")]
 async fn handler_post_bridge_proof_submit(
     State(app): State<SharedAppState>,
-    request: crate::utils::extractors::JsonOnly<crate::routing::BridgeProofSubmitDto>,
+    axum::Extension(admission): axum::Extension<Arc<SccpSubmitAdmission>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    let SccpSubmitWork { permit, body } = admission.take()?;
     match crate::routing::handle_post_bridge_proof_submit(
         app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
-        request,
+        body,
+        permit,
     )
     .await
     {
-        Ok(resp) => Ok(resp.into_response()),
+        Ok((response, true)) => {
+            proof_response_with_exact_egress(
+                app.as_ref(),
+                &headers,
+                Some(remote.ip()),
+                "v1/bridge/proofs/submit",
+                response,
+                true,
+            )
+            .await
+        }
+        // A direct submission has already mutated the local queue. Never turn
+        // its success into a retry-inducing egress rejection after the fact.
+        Ok((response, false)) => Ok(response),
         Err(err) => {
             app.telemetry
                 .with_metrics(|tel| tel.inc_torii_contract_error("bridge_proof"));
@@ -33275,18 +35195,35 @@ async fn handler_post_bridge_proof_submit(
 #[cfg(feature = "app_api")]
 async fn handler_post_bridge_message_submit(
     State(app): State<SharedAppState>,
-    request: crate::utils::extractors::JsonOnly<crate::routing::BridgeMessageSubmitDto>,
+    axum::Extension(admission): axum::Extension<Arc<SccpSubmitAdmission>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    let SccpSubmitWork { permit, body } = admission.take()?;
     match crate::routing::handle_post_bridge_message_submit(
         app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
-        request,
+        body,
+        permit,
     )
     .await
     {
-        Ok(resp) => Ok(resp.into_response()),
+        Ok((response, true)) => {
+            proof_response_with_exact_egress(
+                app.as_ref(),
+                &headers,
+                Some(remote.ip()),
+                "v1/bridge/messages",
+                response,
+                true,
+            )
+            .await
+        }
+        // See the proof-submit route: mutation success must not be rewritten
+        // as a retryable response solely by post-commit egress shaping.
+        Ok((response, false)) => Ok(response),
         Err(err) => {
             app.telemetry
                 .with_metrics(|tel| tel.inc_torii_contract_error("bridge_message"));
@@ -33750,24 +35687,13 @@ async fn handler_post_multisig_spec(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
+    request: NoritoJson<crate::routing::MultisigSpecRequestDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_spec"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+    if let Err(error) = validate_api_token(app.as_ref(), &headers) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_spec"));
+        return Err(error);
     }
     check_public_contract_read_route_rate_limit(
         &app,
@@ -33778,14 +35704,7 @@ async fn handler_post_multisig_spec(
         app.api_token_enforced(),
     )
     .await?;
-    let request: crate::routing::MultisigSpecRequestDto = norito::json::from_slice(body.as_ref())
-        .map_err(|err| {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
-        ))
-    })?;
-    let response =
-        crate::routing::handle_post_multisig_spec(app.state.clone(), NoritoJson(request)).await;
+    let response = crate::routing::handle_post_multisig_spec(app.state.clone(), request).await;
     match response {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
@@ -33962,115 +35881,79 @@ async fn handler_post_multisig_cancel(
 }
 
 #[cfg(feature = "app_api")]
-async fn handler_post_multisig_proposals_list(
+async fn handler_post_multisig_proposals_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
+    request: NoritoJson<crate::routing::MultisigProposalsQueryRequestDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_list"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+    if let Err(error) = validate_api_token(app.as_ref(), &headers) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_query"));
+        return Err(error);
     }
     check_public_contract_read_route_rate_limit(
         &app,
         &headers,
         remote_ip,
         "v1/multisig/proposals/query",
-        "multisig_proposals_list",
+        "multisig_proposals_query",
         app.api_token_enforced(),
     )
     .await?;
-    let request: crate::routing::MultisigProposalsListRequestDto =
-        norito::json::from_slice(body.as_ref()).map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
-            ))
-        })?;
     let response =
-        crate::routing::handle_post_multisig_proposals_list(app.state.clone(), NoritoJson(request))
-            .await;
+        crate::routing::handle_post_multisig_proposals_query(app.state.clone(), request).await;
     match response {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
             app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_list"));
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_query"));
             Err(err)
         }
     }
 }
 
 #[cfg(feature = "app_api")]
-async fn handler_post_multisig_proposals_get(
+async fn handler_post_multisig_proposals_lookup(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
+    request: NoritoJson<crate::routing::MultisigProposalLookupRequestDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_get"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+    if let Err(error) = validate_api_token(app.as_ref(), &headers) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_lookup"));
+        return Err(error);
     }
     check_public_contract_read_route_rate_limit(
         &app,
         &headers,
         remote_ip,
         "v1/multisig/proposals/lookup",
-        "multisig_proposals_get",
+        "multisig_proposals_lookup",
         app.api_token_enforced(),
     )
     .await?;
-    let request: crate::routing::MultisigProposalsGetRequestDto =
-        norito::json::from_slice(body.as_ref()).map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
-            ))
-        })?;
     let response =
-        crate::routing::handle_post_multisig_proposals_get(app.state.clone(), NoritoJson(request))
-            .await;
+        crate::routing::handle_post_multisig_proposals_lookup(app.state.clone(), request).await;
     match response {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
             app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_get"));
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_lookup"));
             Err(err)
         }
     }
 }
 
 #[cfg(feature = "app_api")]
-async fn handler_post_multisig_approvals_list(
+async fn handler_post_multisig_approvals_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<crate::routing::MultisigApprovalsListRequestDto>,
+    NoritoJson(request): NoritoJson<crate::routing::MultisigApprovalsQueryRequestDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     validate_api_token(&app, &headers)?;
@@ -34083,11 +35966,11 @@ async fn handler_post_multisig_approvals_list(
         &headers,
         remote_ip,
         &format!("v1/multisig/approvals/query:{}", viewer.subject),
-        "multisig_approvals_list",
+        "multisig_approvals_query",
         app.api_token_enforced(),
     )
     .await?;
-    match crate::routing::handle_post_multisig_approvals_list(
+    match crate::routing::handle_post_multisig_approvals_query(
         app.state.clone(),
         crate::routing::MultisigApprovalsViewerScope {
             viewer_account_ids: viewer.account_ids,
@@ -34099,18 +35982,18 @@ async fn handler_post_multisig_approvals_list(
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
             app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approvals_list"));
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approvals_query"));
             Err(err)
         }
     }
 }
 
 #[cfg(feature = "app_api")]
-async fn handler_post_multisig_approvals_get(
+async fn handler_post_multisig_approvals_lookup(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<crate::routing::MultisigApprovalsGetRequestDto>,
+    NoritoJson(request): NoritoJson<crate::routing::MultisigApprovalLookupRequestDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     validate_api_token(&app, &headers)?;
@@ -34123,11 +36006,11 @@ async fn handler_post_multisig_approvals_get(
         &headers,
         remote_ip,
         &format!("v1/multisig/approvals/lookup:{}", viewer.subject),
-        "multisig_approvals_get",
+        "multisig_approvals_lookup",
         app.api_token_enforced(),
     )
     .await?;
-    match crate::routing::handle_post_multisig_approvals_get(
+    match crate::routing::handle_post_multisig_approvals_lookup(
         app.state.clone(),
         crate::routing::MultisigApprovalsViewerScope {
             viewer_account_ids: viewer.account_ids,
@@ -34139,42 +36022,37 @@ async fn handler_post_multisig_approvals_get(
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
             app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approvals_get"));
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approvals_lookup"));
             Err(err)
         }
     }
 }
 
 #[cfg(feature = "app_api")]
-async fn handler_post_multisig_approvals_list_for_authority(
+async fn handler_post_multisig_approvals_query_for_authority(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
+    request: NoritoJsonWithBytes<crate::routing::MultisigApprovalsQueryRequestDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     validate_api_token(&app, &headers)?;
-    let authority = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
+    let authority =
+        require_signed_alias_request(&app, &headers, &method, &uri, request.raw.as_ref())?;
     check_public_contract_read_route_rate_limit(
         &app,
         &headers,
         remote_ip,
         &format!("v1/multisig/approvals/query-for-authority:{authority}"),
-        "multisig_approvals_list_for_authority",
+        "multisig_approvals_query_for_authority",
         app.api_token_enforced(),
     )
     .await?;
-    let request: crate::routing::MultisigApprovalsListRequestDto =
-        norito::json::from_slice(body.as_ref()).map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
-            ))
-        })?;
-    match crate::routing::handle_post_multisig_approvals_list_for_authority(
+    match crate::routing::handle_post_multisig_approvals_query_for_authority(
         app.state.clone(),
-        request,
+        request.value,
         authority,
     )
     .await
@@ -34182,7 +36060,7 @@ async fn handler_post_multisig_approvals_list_for_authority(
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
             app.telemetry.with_metrics(|tel| {
-                tel.inc_torii_contract_error("multisig_approvals_list_for_authority")
+                tel.inc_torii_contract_error("multisig_approvals_query_for_authority")
             });
             Err(err)
         }
@@ -34190,35 +36068,30 @@ async fn handler_post_multisig_approvals_list_for_authority(
 }
 
 #[cfg(feature = "app_api")]
-async fn handler_post_multisig_approvals_get_for_authority(
+async fn handler_post_multisig_approvals_lookup_for_authority(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
+    request: NoritoJsonWithBytes<crate::routing::MultisigApprovalLookupRequestDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     validate_api_token(&app, &headers)?;
-    let authority = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
+    let authority =
+        require_signed_alias_request(&app, &headers, &method, &uri, request.raw.as_ref())?;
     check_public_contract_read_route_rate_limit(
         &app,
         &headers,
         remote_ip,
         &format!("v1/multisig/approvals/lookup-for-authority:{authority}"),
-        "multisig_approvals_get_for_authority",
+        "multisig_approvals_lookup_for_authority",
         app.api_token_enforced(),
     )
     .await?;
-    let request: crate::routing::MultisigApprovalsGetRequestDto =
-        norito::json::from_slice(body.as_ref()).map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
-            ))
-        })?;
-    match crate::routing::handle_post_multisig_approvals_get_for_authority(
+    match crate::routing::handle_post_multisig_approvals_lookup_for_authority(
         app.state.clone(),
-        request,
+        request.value,
         authority,
     )
     .await
@@ -34226,7 +36099,7 @@ async fn handler_post_multisig_approvals_get_for_authority(
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
             app.telemetry.with_metrics(|tel| {
-                tel.inc_torii_contract_error("multisig_approvals_get_for_authority")
+                tel.inc_torii_contract_error("multisig_approvals_lookup_for_authority")
             });
             Err(err)
         }
@@ -38615,7 +40488,7 @@ async fn handler_pipeline_recovery(
             }
             Err(err) => Err(Error::SerializationFailure {
                 context: "pipeline_recovery_sidecar",
-                source: err,
+                source: Box::new(err),
             }),
         },
     )
@@ -38686,7 +40559,7 @@ async fn handler_pipeline_recovery_fastpq_proofs(
         }
         Err(err) => Err(Error::SerializationFailure {
             context: "pipeline_recovery_fastpq_proofs",
-            source: err,
+            source: Box::new(err),
         }),
     }
 }
@@ -43350,22 +45223,16 @@ impl Torii {
     #[cfg(feature = "app_api")]
     fn add_contracts_and_vk_routes(&self, builder: &mut RouterBuilder) {
         let app_state = builder.state().clone();
+        let transaction_max_content_len = self
+            .transaction_max_content_len
+            .get()
+            .try_into()
+            .expect("transaction content limit should fit usize");
+        let contracts_body_limit = DefaultBodyLimit::max(transaction_max_content_len);
         let bridge_submit_state = SccpSubmitIngressState {
             app: app_state.clone(),
-            operator_max_body_bytes: self
-                .transaction_max_content_len
-                .get()
-                .try_into()
-                .expect("transaction content limit should fit usize"),
+            operator_max_body_bytes: transaction_max_content_len,
         };
-        let bridge_submit_layer =
-            axum::middleware::from_fn_with_state(bridge_submit_state, enforce_sccp_submit_ingress);
-        let contracts_body_limit = DefaultBodyLimit::max(
-            self.transaction_max_content_len
-                .get()
-                .try_into()
-                .expect("shouldn't exceed usize"),
-        );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET,
             catalog_get(handler_get_contract_code_bytes).layer(contracts_body_limit.clone()),
@@ -43402,13 +45269,19 @@ impl Torii {
             &route_catalog::contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
             catalog_post(handler_post_bridge_proof_submit)
                 .layer(DefaultBodyLimit::disable())
-                .layer(bridge_submit_layer.clone()),
+                .layer(axum::middleware::from_fn_with_state(
+                    bridge_submit_state.clone(),
+                    enforce_sccp_submit_ingress,
+                )),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::BRIDGE_MESSAGES_POST,
             catalog_post(handler_post_bridge_message_submit)
                 .layer(DefaultBodyLimit::disable())
-                .layer(bridge_submit_layer),
+                .layer(axum::middleware::from_fn_with_state(
+                    bridge_submit_state,
+                    enforce_sccp_submit_ingress,
+                )),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_VIEW_POST,
@@ -43454,32 +45327,39 @@ impl Torii {
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::MULTISIG_SPEC_POST,
-            catalog_post(handler_post_multisig_spec),
+            catalog_post(handler_post_multisig_spec)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
-            catalog_post(handler_post_multisig_proposals_list),
+            catalog_post(handler_post_multisig_proposals_query)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
-            catalog_post(handler_post_multisig_proposals_get),
+            catalog_post(handler_post_multisig_proposals_lookup)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST,
-            catalog_post(handler_post_multisig_approvals_list),
+            catalog_post(handler_post_multisig_approvals_query)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST,
-            catalog_post(handler_post_multisig_approvals_get),
+            catalog_post(handler_post_multisig_approvals_lookup)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST,
-        catalog_post(handler_post_multisig_approvals_list_for_authority),
-    );
+            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST,
+            catalog_post(handler_post_multisig_approvals_query_for_authority)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+        );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST,
-        catalog_post(handler_post_multisig_approvals_get_for_authority),
-    );
+            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST,
+            catalog_post(handler_post_multisig_approvals_lookup_for_authority)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+        );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTROLS_ASSET_TRANSFER_QUERY_POST,
             catalog_post(handler_post_asset_transfer_control_get),
@@ -44067,7 +45947,7 @@ impl Torii {
         let _ = self;
     }
 
-    /// App-facing JSON endpoints (filters, webhooks, attachments, zk vote tally)
+    /// App-facing typed and protocol-native endpoints.
     #[cfg(feature = "app_api")]
     fn add_app_api_routes(&self, builder: &mut RouterBuilder) {
         let offline_command_body_limit: usize = self
@@ -45236,15 +47116,9 @@ impl Torii {
     fn add_cataloged_runtime_governance_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
         use route_catalog::runtime_governance as routes;
-
         let app_state = builder.state().clone();
-        let proof_body_limit = DefaultBodyLimit::max(
-            usize::try_from(app_state.proof_limits.max_body_bytes).unwrap_or(usize::MAX),
-        );
-        let proof_body_admission = axum::middleware::from_fn_with_state(
-            app_state.clone(),
-            proof_body_admission_middleware,
-        );
+        let proof_body_limit =
+            usize::try_from(app_state.proof_limits.max_body_bytes).unwrap_or(usize::MAX);
 
         macro_rules! mount_get {
             ($descriptor:ident, $handler:expr) => {
@@ -45261,8 +47135,11 @@ impl Torii {
                 builder.route(
                     &routes::$descriptor,
                     catalog_post($handler)
-                        .layer(proof_body_limit.clone())
-                        .layer(proof_body_admission.clone()),
+                        .layer(DefaultBodyLimit::max(proof_body_limit))
+                        .layer(axum::middleware::from_fn_with_state(
+                            app_state.clone(),
+                            proof_body_admission_middleware,
+                        )),
                 );
             };
         }
@@ -46752,7 +48629,29 @@ impl Torii {
         let mut router = router
             .fallback(handler_route_not_found)
             .method_not_allowed_fallback(handler_method_not_allowed)
-            .layer(axum::middleware::from_fn(enforce_route_timeout))
+            .layer(axum::middleware::from_fn(enforce_route_timeout));
+        #[cfg(feature = "app_api")]
+        {
+            // Route-specific command guards stay inside the global pre-auth
+            // and API-token gates. They may inspect or buffer request bodies,
+            // so unauthenticated or over-capacity callers must never reach
+            // them.
+            router = router.layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                enforce_soracloud_signed_mutation_request,
+            ));
+            router = router.layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                enforce_offline_command_prebody_admission,
+            ));
+        }
+        // Strict media negotiation belongs inside pre-auth and API-token
+        // admission. An unauthenticated or over-capacity caller must receive
+        // that primary rejection without first exercising header grammar or
+        // representation parsing.
+        let mut router = router
+            .layer(axum::middleware::from_fn(capture_response_format))
+            .layer(axum::middleware::from_fn(coalesce_accept_headers))
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 enforce_api_token,
@@ -46767,16 +48666,7 @@ impl Torii {
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 inject_remote_addr_header,
-            ))
-            .layer(axum::middleware::from_fn(enforce_json_utf8_charset))
-            .layer(axum::middleware::from_fn(capture_response_format));
-        #[cfg(feature = "app_api")]
-        {
-            router = router.layer(axum::middleware::from_fn_with_state(
-                app_state.clone(),
-                enforce_soracloud_signed_mutation_request,
             ));
-        }
         if let Some(cors_layer) = self.build_cors_layer() {
             router = router.layer(cors_layer);
         }
@@ -46789,19 +48679,25 @@ impl Torii {
         // authentication, rate/size limits, timeout, and handlers.
         let router = router.layer(axum::middleware::from_fn(catch_handler_panics));
 
-        // Enforce the finite ErrorEnvelope contract after every ordinary
-        // response-producing layer. A handler cannot leak a bare status or an
-        // ad-hoc JSON error shape into the public API.
-        let router = router.layer(axum::middleware::from_fn(enforce_typed_error_contract));
-
         // Reject paths whose interpretation could change across proxies or
         // routers before any selected handler is invoked.
         let router = router.layer(axum::middleware::from_fn(enforce_strict_request_target));
 
-        // Accept coalescing is outside the panic boundary so malformed-header
-        // responses are deterministic, but remains inside metrics and route
-        // metadata so those early responses are observable.
-        let router = router.layer(axum::middleware::from_fn(coalesce_accept_headers));
+        // Enforce the finite ErrorEnvelope contract after every ordinary
+        // response-producing layer, including strict-target and Accept-header
+        // failures. A handler cannot leak a bare status or ad-hoc error body.
+        let router = router.layer(axum::middleware::from_fn(enforce_typed_error_contract));
+
+        // Normalize every JSON response, including errors returned before
+        // handler selection, to the required UTF-8 media type.
+        let router = router.layer(axum::middleware::from_fn(enforce_json_utf8_charset));
+
+        // Offline command and operation-status responses, plus readiness
+        // failures, are never cacheable, including early validation,
+        // authorization, not-found, and recovery failures. Successful
+        // readiness responses receive the exact private revalidation policy
+        // even if an inner layer supplied a conflicting cache directive.
+        let router = router.layer(axum::middleware::from_fn(enforce_offline_cache_policy));
 
         // Metrics wrap every response-producing layer, including CORS,
         // malformed headers, authentication, request-size, rate-limit,
@@ -48678,9 +50574,9 @@ pub enum Error {
     SerializationFailure {
         /// Logical context for the serialization failure.
         context: &'static str,
-        /// Underlying Norito JSON error.
+        /// Underlying Norito JSON or binary-codec error.
         #[source]
-        source: norito::json::Error,
+        source: Box<dyn std::error::Error + Send + Sync>,
     },
     /// Failed to apply Nexus lane lifecycle plan: {reason}
     LaneLifecycle {
@@ -48784,12 +50680,36 @@ fn validation_fail_message(fail: &iroha_data_model::ValidationFail) -> String {
     }
 }
 
+fn public_validation_fail_envelope(
+    fail: &iroha_data_model::ValidationFail,
+    status: StatusCode,
+) -> ErrorEnvelope {
+    if status.is_server_error() {
+        iroha_logger::error!(
+            ?fail,
+            "Internal validation failure was redacted from the public Torii response"
+        );
+        return ErrorEnvelope::new(
+            "internal_server_error",
+            "Torii could not complete the request.",
+        );
+    }
+    ErrorEnvelope::new("query_validation_failed", validation_fail_message(fail))
+}
+
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let format = utils::current_response_format();
         match self {
             Self::Query(err) => {
                 let status = Self::query_status_code(&err);
+                if status.is_server_error() {
+                    return utils::respond_with_status_and_format(
+                        status,
+                        public_validation_fail_envelope(&err, status),
+                        format,
+                    );
+                }
                 let offline_reason =
                     offline_reject_code_from_validation_fail(&err).map(str::to_owned);
                 let axt = match &err {
@@ -48809,8 +50729,7 @@ impl IntoResponse for Error {
                     next_min_handle_era: ctx.next_min_handle_era,
                     next_min_sub_nonce: ctx.next_min_sub_nonce,
                 });
-                let mut envelope =
-                    ErrorEnvelope::new("query_validation_failed", validation_fail_message(&err));
+                let mut envelope = public_validation_fail_envelope(&err, status);
                 if !details.is_empty() {
                     envelope = envelope.with_details(details);
                 }
@@ -48898,11 +50817,17 @@ impl IntoResponse for Error {
             }
             Self::AppServiceUnavailable { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
-                utils::respond_with_status_and_format(
+                let mut response = utils::respond_with_status_and_format(
                     StatusCode::SERVICE_UNAVAILABLE,
                     payload,
                     format,
-                )
+                );
+                if let Ok(header) = HeaderValue::from_str(code) {
+                    response
+                        .headers_mut()
+                        .insert(HeaderName::from_static("x-iroha-reject-code"), header);
+                }
+                response
             }
             Self::ProofRateLimited {
                 endpoint,
@@ -49024,7 +50949,7 @@ pub(crate) mod tests_runtime_handlers {
     };
 
     use axum::{
-        extract::{Extension, State},
+        extract::State,
         http::{HeaderMap, HeaderValue, StatusCode},
         response::IntoResponse,
         routing::any,
@@ -49059,8 +50984,8 @@ pub(crate) mod tests_runtime_handlers {
             BlockHeader, BlockSignature, SignedBlock,
             consensus_v2::{
                 BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-                GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate,
-                ValidatorPower, finality::V2FinalityArtifact,
+                ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
+                QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
             },
         },
         consensus::{
@@ -49100,6 +51025,7 @@ pub(crate) mod tests_runtime_handlers {
     use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Numeric};
     use iroha_test_samples::ALICE_ID;
     use norito::codec::Encode;
+    use tower::ServiceExt as _;
 
     use super::*;
     #[cfg(feature = "telemetry")]
@@ -58328,6 +60254,11 @@ pub(crate) mod tests_runtime_handlers {
                 vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
             )
             .expect("test block entrypoint hash should match payload");
+        let legacy_post_state_root = block
+            .header()
+            .result_merkle_root()
+            .map(|hash| iroha_crypto::Hash::prehashed(*hash.as_ref()))
+            .expect("SCCP fixture result root");
         let messages = iroha_core::bridge::collect_sccp_messages_from_signed_block(&block);
         assert_eq!(messages.len(), 1);
         let message = &messages[0];
@@ -58338,16 +60269,18 @@ pub(crate) mod tests_runtime_handlers {
         let message_id = message.commitment.message_id;
         let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1::new(context.lane, message_id)
             .expect("valid outbound key");
-        let durable = iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
+        let durable = iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
             destination_binding_hash: context.destination_binding_hash,
             route_configuration_hash: context.route_configuration_hash,
             payload_hash: message.commitment.payload_hash,
+            payload_bytes: iroha_sccp::canonical_sccp_payload_bytes(&message.payload)
+                .expect("canonical indexed Torii SCCP-message payload"),
             recorded_at_height: HEIGHT,
+            commitment_index: 0,
         };
         app.state
             .insert_sccp_outbound_message_for_testing(key, durable)
             .expect("insert indexed outbound record");
-
         let mut validator_keys = (1_u8..=4)
             .map(|seed| {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -58405,6 +60338,11 @@ pub(crate) mod tests_runtime_handlers {
             },
             phase: GlobalPhase::Commit,
             subject,
+            execution_commitment: ExecutionCommitment::without_topups(
+                Hash::new(b"Torii SCCP exact-v2 parent state"),
+                Hash::new(b"Torii SCCP exact-v2 post state"),
+                Hash::new(b"Torii SCCP exact-v2 ordinary writes"),
+            ),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![1],
         };
@@ -58444,6 +60382,18 @@ pub(crate) mod tests_runtime_handlers {
             .verify()
             .expect("SCCP finality fixture is cryptographically valid");
 
+        // Seed the retired QC model as an adversarial control. Proof routes
+        // must still require the exact durable v2 artifact below; a valid
+        // legacy QC in world state is not an alternative finality source.
+        let (legacy_qc, legacy_validator_pop) = sample_commit_qc(
+            app.state.chain_id_ref(),
+            block_hash,
+            legacy_post_state_root,
+            HEIGHT,
+            HEIGHT.saturating_add(1),
+            0,
+        );
+
         let stored_block_hash = store_block(&app, block);
         assert_eq!(stored_block_hash, artifact.block_hash);
         if persist_finality {
@@ -58458,6 +60408,18 @@ pub(crate) mod tests_runtime_handlers {
             assert_eq!(receipt.certificate(), artifact.commit_qc.as_ref());
             assert_eq!(receipt.artifact_hash(), HashOf::new(&artifact));
         }
+        let mut app = app;
+        let app_mut = Arc::get_mut(&mut app).expect("unique app state for SCCP fixture");
+        let state = Arc::get_mut(&mut app_mut.state).expect("unique core state for SCCP fixture");
+        state.world.register_validator_pop_for_testing(
+            legacy_qc.validator_set[0].public_key().clone(),
+            legacy_validator_pop,
+        );
+        state.insert_commit_qc_for_testing(block_hash, legacy_qc);
+        assert!(
+            state.world_view().commit_qcs().get(&block_hash).is_some(),
+            "SCCP adversarial fixture retains a valid legacy QC"
+        );
         (app, message_id, artifact)
     }
 
@@ -58468,7 +60430,10 @@ pub(crate) mod tests_runtime_handlers {
         let bundle_response = routing::handle_v1_sccp_message_bundle(
             Arc::clone(&app.state),
             message_id_hex.clone(),
-            Some(HeaderValue::from_static("application/json")),
+            utils::ResponseFormat::Json,
+            acquire_query_admission(app.as_ref(), true)
+                .await
+                .expect("acquire bundle test admission"),
         )
         .await
         .expect("indexed bundle response");
@@ -58486,10 +60451,16 @@ pub(crate) mod tests_runtime_handlers {
             .expect("bundle carries a cryptographically self-consistent exact-v2 proof");
         assert_eq!(verified_finality.finality_artifact, expected_artifact);
 
-        let request_error =
-            routing::handle_v1_sccp_proof_request(Arc::clone(&app.state), message_id_hex, None)
+        let request_error = routing::handle_v1_sccp_proof_request(
+            Arc::clone(&app.state),
+            message_id_hex,
+            utils::ResponseFormat::Json,
+            acquire_query_admission(app.as_ref(), true)
                 .await
-                .expect_err("proof request must require its historical governed route");
+                .expect("acquire proof-request test admission"),
+        )
+        .await
+        .expect_err("proof request must require its historical governed route");
         let Error::Query(ValidationFail::InternalError(message)) = request_error else {
             panic!("unexpected missing-route error: {request_error}");
         };
@@ -58510,8 +60481,11 @@ pub(crate) mod tests_runtime_handlers {
 
         let recent_response = routing::handle_v1_sccp_messages_recent(
             Arc::clone(&app.state),
-            crate::NoritoQuery(routing::HistoryWindowQuery::default()),
-            Some(HeaderValue::from_static("application/json")),
+            routing::SccpRecentWindowQuery::default(),
+            utils::ResponseFormat::Json,
+            acquire_query_admission(app.as_ref(), true)
+                .await
+                .expect("acquire recent-message test admission"),
         )
         .await
         .expect("recent metadata does not require finality");
@@ -58539,17 +60513,23 @@ pub(crate) mod tests_runtime_handlers {
         assert!(links.contains_key("bundle_path"));
         assert!(links.contains_key("proof_request_path"));
 
-        assert!(matches!(
-            routing::handle_v1_sccp_message_bundle(
-                Arc::clone(&app.state),
-                message_id_hex.clone(),
-                None,
-            )
-            .await,
-            Err(Error::Query(ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::NotFound
-            )))
-        ));
+        assert!(
+            matches!(
+                routing::handle_v1_sccp_message_bundle(
+                    Arc::clone(&app.state),
+                    message_id_hex.clone(),
+                    utils::ResponseFormat::Json,
+                    acquire_query_admission(app.as_ref(), true)
+                        .await
+                        .expect("acquire missing-bundle test admission"),
+                )
+                .await,
+                Err(Error::Query(ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::NotFound
+                )))
+            ),
+            "a valid legacy QC must not substitute for a missing exact-v2 artifact"
+        );
 
         std::fs::create_dir_all(sidecar.parent().expect("sidecar directory"))
             .expect("create adversarial finality directory");
@@ -58557,8 +60537,11 @@ pub(crate) mod tests_runtime_handlers {
             .expect("write adversarial finality sidecar");
         let recent_response = routing::handle_v1_sccp_messages_recent(
             Arc::clone(&app.state),
-            crate::NoritoQuery(routing::HistoryWindowQuery::default()),
-            Some(HeaderValue::from_static("application/json")),
+            routing::SccpRecentWindowQuery::default(),
+            utils::ResponseFormat::Json,
+            acquire_query_admission(app.as_ref(), true)
+                .await
+                .expect("acquire corrupted-recent test admission"),
         )
         .await
         .expect("malformed finality remains outside recent metadata path");
@@ -58568,7 +60551,15 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(recent_after, recent_before);
 
         assert!(matches!(
-            routing::handle_v1_sccp_message_bundle(app.state.clone(), message_id_hex, None).await,
+            routing::handle_v1_sccp_message_bundle(
+                app.state.clone(),
+                message_id_hex,
+                utils::ResponseFormat::Json,
+                acquire_query_admission(app.as_ref(), true)
+                    .await
+                    .expect("acquire corrupted-bundle test admission"),
+            )
+            .await,
             Err(Error::Query(ValidationFail::InternalError(_)))
         ));
     }
@@ -58601,7 +60592,7 @@ pub(crate) mod tests_runtime_handlers {
             handler_sccp_message_proof(
                 State(app.clone()),
                 axum::extract::Path(message_id.clone()),
-                axum::extract::RawQuery(None),
+                axum::extract::RawQuery(Some("retired_route=1".to_owned())),
                 HeaderMap::new(),
                 crate::loopback_connect_info(),
             )
@@ -58610,7 +60601,7 @@ pub(crate) mod tests_runtime_handlers {
             handler_sccp_proof_request(
                 State(app.clone()),
                 axum::extract::Path(message_id),
-                axum::extract::RawQuery(None),
+                axum::extract::RawQuery(Some("retired_route=1".to_owned())),
                 HeaderMap::new(),
                 crate::loopback_connect_info(),
             )
@@ -58618,8 +60609,7 @@ pub(crate) mod tests_runtime_handlers {
             .expect_err("SCCP proof request must acquire heavy admission"),
             handler_sccp_messages_recent(
                 State(app),
-                crate::NoritoQuery(routing::HistoryWindowQuery::default()),
-                axum::extract::RawQuery(None),
+                axum::extract::RawQuery(Some("retired_route=1".to_owned())),
                 HeaderMap::new(),
                 crate::loopback_connect_info(),
             )
@@ -58639,36 +60629,376 @@ pub(crate) mod tests_runtime_handlers {
         }
     }
 
+    async fn heavy_route_auth_errors_for_test(
+        app: SharedAppState,
+        headers: HeaderMap,
+    ) -> [Error; 5] {
+        let message_id = "11".repeat(32);
+        [
+            handler_bridge_finality_proof(
+                State(app.clone()),
+                axum::extract::Path(1),
+                headers.clone(),
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect_err("finality proof authentication must reject"),
+            handler_bridge_finality_bundle(
+                State(app.clone()),
+                axum::extract::Path(1),
+                headers.clone(),
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect_err("finality bundle authentication must reject"),
+            handler_sccp_message_proof(
+                State(app.clone()),
+                axum::extract::Path(message_id.clone()),
+                axum::extract::RawQuery(None),
+                headers.clone(),
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect_err("SCCP message authentication must reject"),
+            handler_sccp_proof_request(
+                State(app.clone()),
+                axum::extract::Path(message_id),
+                axum::extract::RawQuery(None),
+                headers.clone(),
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect_err("SCCP request authentication must reject"),
+            handler_sccp_messages_recent(
+                State(app),
+                axum::extract::RawQuery(None),
+                headers,
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect_err("SCCP recent authentication must reject"),
+        ]
+    }
+
+    async fn light_sccp_route_auth_errors_for_test(
+        app: SharedAppState,
+        headers: HeaderMap,
+    ) -> [Error; 2] {
+        [
+            handler_sccp_registry(
+                State(app.clone()),
+                axum::extract::RawQuery(Some("retired_route=1".to_owned())),
+                headers.clone(),
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect_err("SCCP registry authentication must reject"),
+            handler_sccp_capabilities(
+                State(app),
+                axum::extract::RawQuery(Some("retired_route=1".to_owned())),
+                headers,
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect_err("SCCP capabilities authentication must reject"),
+        ]
+    }
+
     #[tokio::test]
-    async fn finality_rate_weight_rejects_cost_above_burst_without_throttling_light_registry() {
+    async fn all_sccp_and_bridge_read_routes_fail_closed_on_empty_or_duplicate_tokens() {
+        for duplicate in [false, true] {
+            let mut app = mk_app_state_for_tests();
+            let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
+            app_mut.require_api_token = true;
+            app_mut.api_tokens_set = if duplicate {
+                Arc::new(HashSet::from(["valid-token".to_owned()]))
+            } else {
+                Arc::new(HashSet::new())
+            };
+            app_mut.rate_limiter = limits::RateLimiter::new(Some(1), Some(8));
+            app_mut.query_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+            app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+            app_mut.query_queue_timeout = Duration::ZERO;
+            let mut headers = HeaderMap::new();
+            let rate_key = if duplicate {
+                headers.append(HEADER_API_TOKEN, HeaderValue::from_static("valid-token"));
+                headers.append(HEADER_API_TOKEN, HeaderValue::from_static("valid-token"));
+                "valid-token"
+            } else {
+                "127.0.0.1"
+            };
+
+            let heavy_errors =
+                heavy_route_auth_errors_for_test(Arc::clone(&app), headers.clone()).await;
+            let light_errors =
+                light_sccp_route_auth_errors_for_test(Arc::clone(&app), headers).await;
+            for error in heavy_errors.into_iter().chain(light_errors) {
+                assert!(
+                    matches!(&error, Error::Query(ValidationFail::NotPermitted(_))),
+                    "unexpected authentication error: {error}"
+                );
+            }
+            assert!(
+                app.rate_limiter.allow_cost(rate_key, 8).await,
+                "authentication failures must not consume rate capacity"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn heavy_finality_routes_reject_unsupported_accept_before_rate_and_admission() {
+        let mut app = mk_app_state_for_tests();
+        let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
+        app_mut.rate_limiter = limits::RateLimiter::new(Some(1), Some(8));
+        app_mut.query_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+        app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+        app_mut.query_queue_timeout = Duration::ZERO;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::ACCEPT,
+            HeaderValue::from_static("image/png"),
+        );
+        let message_id = "11".repeat(32);
+
+        let responses = [
+            handler_bridge_finality_proof(
+                State(app.clone()),
+                axum::extract::Path(1),
+                headers.clone(),
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect("early finality negotiation"),
+            handler_bridge_finality_bundle(
+                State(app.clone()),
+                axum::extract::Path(1),
+                headers.clone(),
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect("early finality-bundle negotiation"),
+            handler_sccp_message_proof(
+                State(app.clone()),
+                axum::extract::Path(message_id.clone()),
+                axum::extract::RawQuery(None),
+                headers.clone(),
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect("early SCCP bundle negotiation"),
+            handler_sccp_proof_request(
+                State(app.clone()),
+                axum::extract::Path(message_id),
+                axum::extract::RawQuery(None),
+                headers.clone(),
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect("early SCCP request negotiation"),
+            handler_sccp_messages_recent(
+                State(app.clone()),
+                axum::extract::RawQuery(None),
+                headers,
+                crate::loopback_connect_info(),
+            )
+            .await
+            .expect("early SCCP recent negotiation"),
+        ];
+        for response in responses {
+            assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+        }
+        assert!(
+            app.rate_limiter
+                .allow_cost("127.0.0.1", FINALITY_HEAVY_QUERY_RATE_COST)
+                .await,
+            "unsupported representations must reject before rate accounting"
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_query_queue_timeout_is_fail_fast_and_does_not_reserve_general_capacity() {
+        let mut app = mk_app_state_for_tests();
+        let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
+        app_mut.query_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+        app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+        app_mut.query_queue_timeout = Duration::ZERO;
+        let query = Arc::clone(&app_mut.query_inflight);
+
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(50),
+            acquire_query_admission(app.as_ref(), true),
+        )
+        .await
+        .expect("zero queue timeout must never wait");
+        let error = match outcome {
+            Ok(_) => panic!("saturated heavy admission must reject"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+            ))
+        ));
+        assert_eq!(query.available_permits(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn heavy_admission_waits_for_heavy_capacity_before_reserving_general_capacity() {
+        let mut app = mk_app_state_for_tests();
+        let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
+        app_mut.query_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+        app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+        app_mut.query_queue_timeout = Duration::from_secs(5);
+        let query = Arc::clone(&app_mut.query_inflight);
+        let heavy = Arc::clone(&app_mut.query_heavy_inflight);
+        let app_for_task = Arc::clone(&app);
+        let admission_task =
+            tokio::spawn(async move { acquire_query_admission(app_for_task.as_ref(), true).await });
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        assert_eq!(
+            query.available_permits(),
+            1,
+            "a heavy waiter must not occupy general query capacity"
+        );
+
+        heavy.add_permits(1);
+        let admission = tokio::time::timeout(Duration::from_secs(1), admission_task)
+            .await
+            .expect("released heavy waiter completes")
+            .expect("admission task")
+            .expect("admission succeeds");
+        assert_eq!(query.available_permits(), 0);
+        assert_eq!(heavy.available_permits(), 0);
+        drop(admission);
+        assert_eq!(query.available_permits(), 1);
+        assert_eq!(heavy.available_permits(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn heavy_admission_uses_one_end_to_end_queue_deadline() {
+        let mut app = mk_app_state_for_tests();
+        let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
+        app_mut.query_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+        app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+        app_mut.query_queue_timeout = Duration::from_millis(500);
+        let heavy = Arc::clone(&app_mut.query_heavy_inflight);
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            heavy.add_permits(1);
+        });
+
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(550),
+            acquire_query_admission(app.as_ref(), true),
+        )
+        .await
+        .expect("both semaphore waits must share the configured 500ms deadline");
+        let error = match outcome {
+            Ok(_) => panic!("general saturation must reject admission"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+            ))
+        ));
+        release.await.expect("heavy release task");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelled_query_cannot_release_admission_before_blocking_worker_finishes() {
+        let mut app = mk_app_state_for_tests();
+        let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
+        app_mut.query_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+        app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+        app_mut.proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+        let query_semaphore = Arc::clone(&app_mut.query_inflight);
+        let heavy_semaphore = Arc::clone(&app_mut.query_heavy_inflight);
+        let body_semaphore = Arc::clone(&app_mut.proof_body_inflight);
+        let admission = acquire_query_admission(app.as_ref(), true)
+            .await
+            .expect("acquire sole query admission")
+            .with_body_permit(
+                body_semaphore
+                    .clone()
+                    .try_acquire_owned()
+                    .expect("acquire sole body admission"),
+            );
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let awaiting_request = tokio::spawn(routing::run_admitted_blocking(
+            admission,
+            "admission cancellation test worker failed",
+            move || {
+                started_tx.send(()).expect("report physical worker start");
+                release_rx
+                    .blocking_recv()
+                    .expect("release physical test worker");
+                Ok(())
+            },
+        ));
+        started_rx.await.expect("physical worker started");
+
+        awaiting_request.abort();
+        tokio::task::yield_now().await;
+        assert!(
+            query_semaphore.clone().try_acquire_owned().is_err(),
+            "request cancellation must not release the general query permit"
+        );
+        assert!(
+            heavy_semaphore.clone().try_acquire_owned().is_err(),
+            "request cancellation must not release the heavy query permit"
+        );
+        assert!(
+            body_semaphore.clone().try_acquire_owned().is_err(),
+            "request cancellation must not release the body permit"
+        );
+
+        release_tx.send(()).expect("release physical worker");
+        let query_permit =
+            tokio::time::timeout(Duration::from_secs(5), query_semaphore.acquire_owned())
+                .await
+                .expect("general permit is released after physical completion")
+                .expect("general query semaphore remains open");
+        let heavy_permit =
+            tokio::time::timeout(Duration::from_secs(5), heavy_semaphore.acquire_owned())
+                .await
+                .expect("heavy permit is released after physical completion")
+                .expect("heavy query semaphore remains open");
+        let body_permit =
+            tokio::time::timeout(Duration::from_secs(5), body_semaphore.acquire_owned())
+                .await
+                .expect("body permit is released after physical completion")
+                .expect("body semaphore remains open");
+        drop((query_permit, heavy_permit, body_permit));
+    }
+
+    #[tokio::test]
+    async fn finality_rate_weight_caps_to_burst_without_disabling_the_route() {
         let mut app = mk_app_state_for_tests();
         Arc::get_mut(&mut app)
             .expect("unique Torii app fixture")
             .rate_limiter = limits::RateLimiter::new(Some(1), Some(7));
+        let key = "capped-finality-cost";
 
-        let finality_error = handler_bridge_finality_proof(
-            State(app.clone()),
-            axum::extract::Path(1),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-        )
-        .await
-        .expect_err("eight-token finality query must exceed seven-token burst");
+        rate_limit_requests_with_cost(&app, key, FINALITY_HEAVY_QUERY_RATE_COST)
+            .await
+            .expect("a positive configured burst must keep finality serviceable");
+        let finality_error = rate_limit_requests(&app, key)
+            .await
+            .expect_err("capped weighted request must consume the full burst");
         assert!(matches!(
             finality_error,
             Error::Query(ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
             ))
         ));
-
-        handler_sccp_registry(
-            State(app),
-            axum::extract::RawQuery(None),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-        )
-        .await
-        .expect("one-token SCCP registry read remains available");
+        rate_limit_requests(&app, "independent-light-route")
+            .await
+            .expect("weighted accounting remains isolated by caller key");
     }
 
     #[tokio::test]
@@ -58710,7 +61040,6 @@ pub(crate) mod tests_runtime_handlers {
                 .expect_err("registry query material must reject");
         let recent_error = handler_sccp_messages_recent(
             State(app.clone()),
-            crate::NoritoQuery(routing::HistoryWindowQuery::default()),
             legacy_query(),
             HeaderMap::new(),
             remote,
@@ -66027,11 +68356,27 @@ pub(crate) mod tests_runtime_handlers {
         Router::new()
             .route(
                 "/v1/bridge/proofs/submit",
-                post(|_: axum::body::Bytes| async { StatusCode::NO_CONTENT }),
+                post(
+                    |axum::Extension(admission): axum::Extension<
+                        Arc<super::SccpSubmitAdmission>,
+                    >,
+                     _: axum::body::Bytes| async move {
+                        admission.take().expect("take SCCP test admission");
+                        StatusCode::NO_CONTENT
+                    },
+                ),
             )
             .route(
                 "/v1/bridge/messages",
-                post(|_: axum::body::Bytes| async { StatusCode::NO_CONTENT }),
+                post(
+                    |axum::Extension(admission): axum::Extension<
+                        Arc<super::SccpSubmitAdmission>,
+                    >,
+                     _: axum::body::Bytes| async move {
+                        admission.take().expect("take SCCP test admission");
+                        StatusCode::NO_CONTENT
+                    },
+                ),
             )
             .layer(axum::extract::DefaultBodyLimit::disable())
             .layer(axum::middleware::from_fn_with_state(
@@ -66056,11 +68401,27 @@ pub(crate) mod tests_runtime_handlers {
         Router::new()
             .route(
                 "/v1/bridge/proofs/submit",
-                post(|body: axum::body::Bytes| async move { body }),
+                post(
+                    |axum::Extension(admission): axum::Extension<
+                        Arc<super::SccpSubmitAdmission>,
+                    >,
+                     body: axum::body::Bytes| async move {
+                        admission.take().expect("take SCCP test admission");
+                        body
+                    },
+                ),
             )
             .route(
                 "/v1/bridge/messages",
-                post(|body: axum::body::Bytes| async move { body }),
+                post(
+                    |axum::Extension(admission): axum::Extension<
+                        Arc<super::SccpSubmitAdmission>,
+                    >,
+                     body: axum::body::Bytes| async move {
+                        admission.take().expect("take SCCP test admission");
+                        body
+                    },
+                ),
             )
             .layer(axum::extract::DefaultBodyLimit::disable())
             .layer(axum::middleware::from_fn_with_state(
@@ -66108,6 +68469,11 @@ pub(crate) mod tests_runtime_handlers {
 
         assert_eq!(destination.telemetry_label, "bridge_proof");
         assert_eq!(native.telemetry_label, "bridge_message");
+        assert_eq!(
+            destination.rate_limit_cost,
+            super::FINALITY_HEAVY_QUERY_RATE_COST
+        );
+        assert_eq!(native.rate_limit_cost, destination.rate_limit_cost);
         let shared_fields =
             super::canonical_base64_max_len(super::SCCP_SUBMIT_MAX_TRANSACTION_PAYLOAD_BYTES_V1);
         let shared_fields = shared_fields
@@ -66197,14 +68563,252 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
+    async fn sccp_submit_ingress_fails_closed_when_required_tokens_are_unconfigured() {
+        use tower::ServiceExt as _;
+
+        let mut app = mk_app_state_for_tests_with_options(None, Some((1, 8)), None, None);
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app state");
+            state.require_api_token = true;
+            state.api_tokens_set = Arc::new(HashSet::new());
+            state.query_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+            state.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+            state.query_queue_timeout = Duration::ZERO;
+        }
+        let router = sccp_ingress_test_router(Arc::clone(&app));
+
+        for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
+            let mut request = sccp_ingress_request(path, sccp_body_that_must_not_be_polled());
+            request.headers_mut().insert(
+                axum::http::header::CONTENT_LENGTH,
+                HeaderValue::from_static("not-a-length"),
+            );
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("middleware response");
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "path {path}");
+        }
+        assert!(
+            app.deploy_rate_limiter.allow_cost("127.0.0.1", 8).await,
+            "unconfigured authentication must reject before consuming rate budget"
+        );
+    }
+
+    #[tokio::test]
+    async fn sccp_submit_ingress_rejects_duplicate_tokens_before_rate_body_and_admission() {
+        use tower::ServiceExt as _;
+
+        let mut app = mk_app_state_for_tests_with_options(None, Some((1, 8)), None, None);
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app state");
+            state.require_api_token = true;
+            state.api_tokens_set = Arc::new(HashSet::from(["expected-token".to_owned()]));
+            state.query_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+            state.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+            state.query_queue_timeout = Duration::ZERO;
+        }
+        let router = sccp_ingress_test_router(Arc::clone(&app));
+        for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
+            let mut request = sccp_ingress_request(path, sccp_body_that_must_not_be_polled());
+            request
+                .headers_mut()
+                .append(HEADER_API_TOKEN, HeaderValue::from_static("expected-token"));
+            request
+                .headers_mut()
+                .append(HEADER_API_TOKEN, HeaderValue::from_static("expected-token"));
+
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("middleware response");
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "path {path}");
+        }
+        assert!(
+            app.deploy_rate_limiter
+                .allow_cost("expected-token", 8)
+                .await,
+            "duplicate authentication must reject before consuming rate budget"
+        );
+    }
+
+    #[test]
+    fn sccp_submit_content_type_accepts_only_unambiguous_utf8_application_json() {
+        for value in [
+            "application/json",
+            "APPLICATION/JSON",
+            "application/json; charset=utf-8",
+            "application/json; charset=\"UTF-8\"",
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_str(value).expect("valid header fixture"),
+            );
+            assert_eq!(super::validate_sccp_submit_content_type(&headers), Ok(()));
+        }
+    }
+
+    #[tokio::test]
+    async fn sccp_submit_content_type_rejects_before_rate_body_and_admission() {
+        use tower::ServiceExt as _;
+
+        let mut app = mk_app_state_for_tests_with_options(None, Some((1, 8)), None, None);
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app state");
+            state.query_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+            state.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+            state.query_queue_timeout = Duration::ZERO;
+        }
+        let router = sccp_ingress_test_router(Arc::clone(&app));
+
+        let cases = [
+            (None, StatusCode::UNSUPPORTED_MEDIA_TYPE),
+            (
+                Some("application/octet-stream"),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ),
+            (
+                Some("application/problem+json"),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ),
+            (Some("   "), StatusCode::UNSUPPORTED_MEDIA_TYPE),
+            (
+                Some("application/json; charset="),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ),
+            (
+                Some("application/json; charset=\"\""),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ),
+            (
+                Some("application/json; charset=latin1"),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ),
+            (
+                Some("application/json; profile=x"),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ),
+            (Some("application/json;"), StatusCode::BAD_REQUEST),
+            (
+                Some("application/json;;charset=utf-8"),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                Some("application/json; charset=utf-8; charset=utf-8"),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                Some("application/json; charset=\"utf-8"),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                Some("application/json;\tcharset=utf-8"),
+                StatusCode::BAD_REQUEST,
+            ),
+        ];
+        for (content_type, expected) in cases {
+            let mut request = sccp_ingress_request(
+                "/v1/bridge/proofs/submit",
+                sccp_body_that_must_not_be_polled(),
+            );
+            request
+                .headers_mut()
+                .remove(axum::http::header::CONTENT_TYPE);
+            if let Some(content_type) = content_type {
+                request.headers_mut().insert(
+                    axum::http::header::CONTENT_TYPE,
+                    HeaderValue::from_str(content_type).expect("representable adversarial header"),
+                );
+            }
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("content-type response");
+            assert_eq!(response.status(), expected, "content type {content_type:?}");
+        }
+
+        let mut duplicate = sccp_ingress_request(
+            "/v1/bridge/proofs/submit",
+            sccp_body_that_must_not_be_polled(),
+        );
+        duplicate.headers_mut().append(
+            axum::http::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        let response = router
+            .oneshot(duplicate)
+            .await
+            .expect("duplicate content-type response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            app.deploy_rate_limiter
+                .allow_cost("127.0.0.1", super::FINALITY_HEAVY_QUERY_RATE_COST)
+                .await,
+            "invalid content types must reject before consuming rate budget"
+        );
+    }
+
+    #[tokio::test]
+    async fn sccp_submit_wrong_methods_bypass_proof_admission_and_body_polling() {
+        use tower::ServiceExt as _;
+
+        let mut app = mk_app_state_for_tests_with_options(None, Some((1, 8)), None, None);
+        let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+        app_mut.query_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+        app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+        app_mut.query_queue_timeout = Duration::ZERO;
+        let headers = HeaderMap::new();
+        let remote_ip = std::net::IpAddr::from([127, 0, 0, 1]);
+        let policy =
+            super::sccp_submit_ingress_policy("/v1/bridge/proofs/submit").expect("known policy");
+        let key = super::rate_limit_key(
+            &headers,
+            Some(remote_ip),
+            policy.rate_limit_hint,
+            app.api_token_enforced(),
+        );
+        let router = sccp_ingress_test_router(Arc::clone(&app));
+
+        for method in [axum::http::Method::GET, axum::http::Method::PUT] {
+            let mut request = sccp_ingress_request(
+                "/v1/bridge/proofs/submit",
+                sccp_body_that_must_not_be_polled(),
+            );
+            *request.method_mut() = method;
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("wrong-method response");
+            assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        }
+
+        assert!(
+            app.deploy_rate_limiter
+                .allow_cost(&key, policy.rate_limit_cost)
+                .await,
+            "wrong methods must not consume the SCCP proof-rate budget"
+        );
+        assert!(
+            !app.deploy_rate_limiter.allow(&key).await,
+            "the exact weighted request must consume the full enabled burst"
+        );
+    }
+
+    #[tokio::test]
     async fn sccp_submit_ingress_rejects_exhausted_rate_limit_without_polling_body() {
         use tower::ServiceExt as _;
 
         let app = mk_app_state_for_tests_with_options(None, Some((1, 1)), None, None);
         let headers = HeaderMap::new();
         let remote_ip = std::net::IpAddr::from([127, 0, 0, 1]);
-        let rate_limit_keys = ["/v1/bridge/proofs/submit", "/v1/bridge/messages"].map(|path| {
-            let policy = super::sccp_submit_ingress_policy(path).expect("known policy");
+        let policies = ["/v1/bridge/proofs/submit", "/v1/bridge/messages"]
+            .map(|path| super::sccp_submit_ingress_policy(path).expect("known policy"));
+        let rate_limit_keys = policies.map(|policy| {
             super::rate_limit_key(
                 &headers,
                 Some(remote_ip),
@@ -66216,7 +68820,11 @@ pub(crate) mod tests_runtime_handlers {
             rate_limit_keys[0], rate_limit_keys[1],
             "identified callers must share one deploy-rate bucket across SCCP submit routes"
         );
-        assert!(app.deploy_rate_limiter.allow(&rate_limit_keys[0]).await);
+        assert!(
+            app.deploy_rate_limiter
+                .allow_cost_capped_to_burst(&rate_limit_keys[0], policies[0].rate_limit_cost)
+                .await
+        );
         let router = sccp_ingress_test_router(app);
 
         for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
@@ -66236,6 +68844,159 @@ pub(crate) mod tests_runtime_handlers {
                 "path {path}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn sccp_submit_ingress_rejects_exhausted_body_gate_without_polling() {
+        use tower::ServiceExt as _;
+
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+        let router = sccp_ingress_test_router(app);
+
+        for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
+            let response = router
+                .clone()
+                .oneshot(sccp_ingress_request(
+                    path,
+                    sccp_body_that_must_not_be_polled(),
+                ))
+                .await
+                .expect("body-gate response");
+            assert_eq!(
+                response.status(),
+                StatusCode::TOO_MANY_REQUESTS,
+                "path {path}"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stalled_sccp_body_times_out_without_reserving_query_capacity() {
+        use std::task::Poll;
+        use tower::ServiceExt as _;
+
+        let mut app = mk_app_state_for_tests();
+        let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+        app_mut.proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+        app_mut.proof_limits.body_read_timeout = Duration::from_millis(250);
+        app_mut.query_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+        app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+        app_mut.query_queue_timeout = Duration::ZERO;
+        let body_gate = Arc::clone(&app_mut.proof_body_inflight);
+        let query = Arc::clone(&app_mut.query_inflight);
+        let heavy = Arc::clone(&app_mut.query_heavy_inflight);
+        let router = sccp_ingress_test_router(app);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let mut started_tx = Some(started_tx);
+        let stream = futures::stream::poll_fn(
+            move |_context| -> Poll<Option<Result<axum::body::Bytes, std::io::Error>>> {
+                if let Some(started_tx) = started_tx.take() {
+                    let _ = started_tx.send(());
+                }
+                Poll::Pending
+            },
+        );
+        let request = sccp_ingress_request(
+            "/v1/bridge/proofs/submit",
+            axum::body::Body::from_stream(stream),
+        );
+        let response_task = tokio::spawn(router.oneshot(request));
+        started_rx.await.expect("stalled body was polled");
+
+        assert_eq!(body_gate.available_permits(), 0);
+        let query_permit = query
+            .clone()
+            .try_acquire_owned()
+            .expect("network body read must not reserve general query capacity");
+        let heavy_permit = heavy
+            .clone()
+            .try_acquire_owned()
+            .expect("network body read must not reserve heavy query capacity");
+        drop((query_permit, heavy_permit));
+
+        let response = response_task
+            .await
+            .expect("body timeout task")
+            .expect("middleware response");
+        assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+        assert_eq!(body_gate.available_permits(), 1);
+        assert_eq!(query.available_permits(), 1);
+        assert_eq!(heavy.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn sccp_submit_ingress_checks_heavy_admission_after_bounded_body_collection() {
+        use tower::ServiceExt as _;
+
+        let mut app = mk_app_state_for_tests();
+        let state = Arc::get_mut(&mut app).expect("unique app state");
+        state.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+        state.query_queue_timeout = Duration::ZERO;
+        let router = sccp_ingress_test_router(app);
+
+        for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
+            let yielded = Arc::new(AtomicUsize::new(0));
+            let yielded_for_stream = Arc::clone(&yielded);
+            let stream = futures::stream::once(async move {
+                yielded_for_stream.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"{}"))
+            });
+            let request = sccp_ingress_request(path, axum::body::Body::from_stream(stream));
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("middleware response");
+            assert_eq!(
+                response.status(),
+                StatusCode::TOO_MANY_REQUESTS,
+                "path {path}"
+            );
+            assert_eq!(
+                yielded.load(Ordering::SeqCst),
+                1,
+                "heavy admission must be acquired only after the bounded body is complete"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sccp_submit_weight_is_capped_to_burst_and_consumes_the_full_budget() {
+        use tower::ServiceExt as _;
+
+        let mut app = mk_app_state_for_tests_with_options(None, Some((1, 7)), None, None);
+        let state = Arc::get_mut(&mut app).expect("unique app state");
+        state.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+        state.query_queue_timeout = Duration::ZERO;
+        let router = sccp_ingress_test_router(app);
+        let yielded = Arc::new(AtomicUsize::new(0));
+        let yielded_for_stream = Arc::clone(&yielded);
+        let stream = futures::stream::once(async move {
+            yielded_for_stream.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"{}"))
+        });
+        let first = router
+            .clone()
+            .oneshot(sccp_ingress_request(
+                "/v1/bridge/proofs/submit",
+                axum::body::Body::from_stream(stream),
+            ))
+            .await
+            .expect("capped-cost response");
+        assert_eq!(first.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(yielded.load(Ordering::SeqCst), 1);
+
+        let second = router
+            .oneshot(sccp_ingress_request(
+                "/v1/bridge/messages",
+                sccp_body_that_must_not_be_polled(),
+            ))
+            .await
+            .expect("exhausted-cost response");
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]
@@ -68158,7 +70919,7 @@ pub(crate) mod tests_runtime_handlers {
     async fn serialization_error_emits_redacted_norito_payload() {
         let err = super::Error::SerializationFailure {
             context: "unit_test",
-            source: norito::json::Error::Message("boom".into()),
+            source: Box::new(norito::json::Error::Message("boom".into())),
         };
 
         let response = err.into_response();
@@ -68181,6 +70942,45 @@ pub(crate) mod tests_runtime_handlers {
             !payload.message().contains("boom"),
             "redacted message leaked internal context"
         );
+    }
+
+    #[tokio::test]
+    async fn internal_validation_failures_never_expose_their_source_message() {
+        const MARKER: &str = "private_runtime_marker_9a2c";
+        for format in [ResponseFormat::Json, ResponseFormat::Norito] {
+            let response = error_response_with_format(
+                super::Error::Query(ValidationFail::InternalError(MARKER.to_owned())),
+                format,
+            );
+            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            let body = http_body_util::BodyExt::collect(response.into_body())
+                .await
+                .expect("collect redacted validation response")
+                .to_bytes();
+            assert!(!String::from_utf8_lossy(&body).contains(MARKER));
+            let envelope: super::ErrorEnvelope = match format {
+                ResponseFormat::Json => {
+                    norito::json::from_slice(&body).expect("decode JSON validation error")
+                }
+                ResponseFormat::Norito => {
+                    norito::decode_from_bytes(&body).expect("decode Norito validation error")
+                }
+            };
+            assert_eq!(envelope.code(), "internal_server_error");
+            assert_eq!(envelope.message(), "Torii could not complete the request.");
+            assert!(envelope.details.is_none());
+        }
+
+        let response =
+            super::Error::Query(ValidationFail::InternalError(MARKER.to_owned())).into_response();
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect direct validation response")
+            .to_bytes();
+        let envelope: super::ErrorEnvelope =
+            norito::decode_from_bytes(&body).expect("decode direct validation error");
+        assert_eq!(envelope.code(), "internal_server_error");
+        assert!(!envelope.message().contains(MARKER));
     }
 
     #[test]
@@ -68363,11 +71163,8 @@ impl Error {
     fn into_envelope(self) -> ErrorEnvelope {
         match self {
             Self::Query(err) => {
-                iroha_logger::error!(
-                    ?err,
-                    "Query error reached envelope renderer; expected to be handled earlier"
-                );
-                ErrorEnvelope::new("query_error", validation_fail_message(&err))
+                let status = Self::query_status_code(&err);
+                public_validation_fail_envelope(&err, status)
             }
             Self::AcceptTransaction(err) => {
                 iroha_logger::warn!(?err, "Transaction rejected during admission");
@@ -68434,7 +71231,10 @@ impl Error {
             }
             Self::ConfigurationFailure(err) => {
                 iroha_logger::error!(?err, "Configuration subsystem request failed");
-                ErrorEnvelope::new("configuration_failure", err.to_string())
+                ErrorEnvelope::new(
+                    "configuration_failure",
+                    "The configuration subsystem could not complete the request.",
+                )
             }
             Self::StatusSegmentNotFound(err) => {
                 iroha_logger::warn!(?err, "Requested status segment not found");
@@ -69752,43 +72552,188 @@ mod tests {
             ..TxHistoryAccessPolicy::default()
         });
 
-        let request = crate::routing::MultisigApprovalsListRequestDto::default();
-        let body = norito::json::to_vec(&request).expect("serialize approvals request");
         let method = axum::http::Method::POST;
         let uri: axum::http::Uri = "/v1/multisig/approvals/query-for-authority"
             .parse()
             .expect("uri");
-        let headers = signed_app_headers(&account_id, &key_pair, &method, &uri, body.as_ref());
+        let router = Router::new()
+            .route(
+                uri.path(),
+                post(super::handler_post_multisig_approvals_query_for_authority),
+            )
+            .with_state(app.clone());
+        for (content_type, body) in [
+            (
+                "application/json",
+                norito::json::to_vec(&crate::routing::MultisigApprovalsQueryRequestDto::default())
+                    .expect("serialize JSON approvals request"),
+            ),
+            (
+                "application/x-norito",
+                norito::to_bytes(&crate::routing::MultisigApprovalsQueryRequestDto::default())
+                    .expect("serialize Norito approvals request"),
+            ),
+        ] {
+            let mut headers =
+                signed_app_headers(&account_id, &key_pair, &method, &uri, body.as_ref());
+            headers.insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_str(content_type).expect("content type"),
+            );
+            let mut request = Request::builder()
+                .method(method.clone())
+                .uri(uri.clone())
+                .body(Body::from(body))
+                .expect("authority request");
+            *request.headers_mut() = headers;
+            request
+                .extensions_mut()
+                .insert(crate::loopback_connect_info());
+            let authority_response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("authority response");
+            assert_eq!(
+                authority_response.status(),
+                StatusCode::OK,
+                "{content_type}"
+            );
 
-        let authority_response = super::handler_post_multisig_approvals_list_for_authority(
-            State(app.clone()),
-            method,
-            uri,
-            headers,
-            crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect("authority response");
-        assert_eq!(authority_response.status(), StatusCode::OK);
+            let body = axum::body::to_bytes(authority_response.into_body(), usize::MAX)
+                .await
+                .expect("body");
+            let payload: norito::json::Value =
+                norito::json::from_slice(&body).expect("decode authority approvals response");
+            assert!(
+                payload
+                    .get("items")
+                    .and_then(norito::json::Value::as_array)
+                    .is_some_and(|items| items.is_empty())
+            );
+        }
 
-        let body = axum::body::to_bytes(authority_response.into_body(), usize::MAX)
-            .await
-            .expect("body");
-        let payload: norito::json::Value =
-            norito::json::from_slice(&body).expect("decode authority approvals response");
-        assert!(
-            payload
-                .get("items")
-                .and_then(norito::json::Value::as_array)
-                .is_some_and(|items| items.is_empty())
+        for content_type in [None, Some("text/plain")] {
+            let body = b"{}".to_vec();
+            let mut headers =
+                signed_app_headers(&account_id, &key_pair, &method, &uri, body.as_ref());
+            if let Some(content_type) = content_type {
+                headers.insert(
+                    axum::http::header::CONTENT_TYPE,
+                    HeaderValue::from_static(content_type),
+                );
+            }
+            let mut request = Request::builder()
+                .method(method.clone())
+                .uri(uri.clone())
+                .body(Body::from(body))
+                .expect("unsupported-media authority request");
+            *request.headers_mut() = headers;
+            request
+                .extensions_mut()
+                .insert(crate::loopback_connect_info());
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("unsupported-media authority response");
+            assert_eq!(
+                response.status(),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "content_type={content_type:?}",
+            );
+        }
+
+        let signed_body = b"{}".to_vec();
+        let mut headers =
+            signed_app_headers(&account_id, &key_pair, &method, &uri, signed_body.as_ref());
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
         );
+        let mut mutated_request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::from(r#"{"status":[]}"#))
+            .expect("mutated authority request");
+        *mutated_request.headers_mut() = headers;
+        mutated_request
+            .extensions_mut()
+            .insert(crate::loopback_connect_info());
+        let mutated_response = router
+            .oneshot(mutated_request)
+            .await
+            .expect("mutated authority response");
+        assert_eq!(mutated_response.status(), StatusCode::FORBIDDEN);
 
-        let jwt_only_response = super::handler_post_multisig_approvals_list(
+        let lookup_method = axum::http::Method::POST;
+        let lookup_uri: axum::http::Uri = "/v1/multisig/approvals/lookup-for-authority"
+            .parse()
+            .expect("lookup uri");
+        let lookup_router = Router::new()
+            .route(
+                lookup_uri.path(),
+                post(super::handler_post_multisig_approvals_lookup_for_authority),
+            )
+            .with_state(app.clone());
+        let proposal_id = Hash::new(b"missing authority lookup proposal").to_string();
+        for (content_type, body) in [
+            (
+                "application/json",
+                norito::json::to_vec(&crate::routing::MultisigApprovalLookupRequestDto {
+                    multisig_account_id: account_id.clone(),
+                    proposal_id: Some(proposal_id.clone()),
+                    instructions_hash: None,
+                })
+                .expect("serialize JSON approval lookup request"),
+            ),
+            (
+                "application/x-norito",
+                norito::to_bytes(&crate::routing::MultisigApprovalLookupRequestDto {
+                    multisig_account_id: account_id.clone(),
+                    proposal_id: Some(proposal_id.clone()),
+                    instructions_hash: None,
+                })
+                .expect("serialize Norito approval lookup request"),
+            ),
+        ] {
+            let mut headers = signed_app_headers(
+                &account_id,
+                &key_pair,
+                &lookup_method,
+                &lookup_uri,
+                body.as_ref(),
+            );
+            headers.insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_str(content_type).expect("lookup content type"),
+            );
+            let mut request = Request::builder()
+                .method(lookup_method.clone())
+                .uri(lookup_uri.clone())
+                .body(Body::from(body))
+                .expect("authority lookup request");
+            *request.headers_mut() = headers;
+            request
+                .extensions_mut()
+                .insert(crate::loopback_connect_info());
+            let lookup_response = lookup_router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("authority lookup response");
+            assert_eq!(
+                lookup_response.status(),
+                StatusCode::NOT_FOUND,
+                "{content_type}",
+            );
+        }
+
+        let jwt_only_response = super::handler_post_multisig_approvals_query(
             State(app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            NoritoJson(request),
+            NoritoJson(crate::routing::MultisigApprovalsQueryRequestDto::default()),
         )
         .await
         .expect("jwt-only response");
@@ -73608,6 +76553,35 @@ mod tests {
                 iroha_data_model::query::error::QueryExecutionFail::NotFound
             ))
         ));
+
+        let state = app.state.view();
+        let world = state.world();
+        assert_eq!(
+            parse_offline_readiness_asset_definition_id(world, 1_500, alias.as_ref())
+                .expect("the same snapshot resolver accepts a live alias"),
+            definition_id
+        );
+        let expired =
+            parse_offline_readiness_asset_definition_id(world, after_grace, alias.as_ref())
+                .expect_err("readiness must reject an alias outside the evaluated snapshot");
+        assert!(matches!(
+            expired,
+            Error::AppNotFound {
+                code: "asset_definition_not_found",
+                ..
+            }
+        ));
+        for invalid in ["", " usd#issuer.main", "usd#issuer.main ", "prefix:opaque"] {
+            let error = parse_offline_readiness_asset_definition_id(world, 1_500, invalid)
+                .expect_err("malformed readiness selector must fail as a 400-class error");
+            assert!(matches!(
+                error,
+                Error::AppQueryValidation {
+                    code: "asset_definition_id_invalid",
+                    ..
+                }
+            ));
+        }
     }
 
     #[tokio::test]
@@ -74587,6 +77561,95 @@ mod tests {
             .expect("response body")
             .to_bytes();
         assert_eq!(actual.as_ref(), expected.as_slice());
+    }
+
+    #[tokio::test]
+    async fn buffered_sccp_response_egress_charges_exact_bytes_and_preserves_body() {
+        let expected = Bytes::from_static(b"exact-sccp-proof-response");
+        let response = || {
+            let mut response = AxResponse::new(Body::from(expected.clone()));
+            response.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+            response
+        };
+        let remote = Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+
+        let mut limited_app = mk_app_state_for_tests();
+        Arc::get_mut(&mut limited_app)
+            .expect("unique limited app state")
+            .proof_egress_limiter = limits::RateLimiter::new_u64(
+            Some(1),
+            Some(u64::try_from(expected.len()).expect("small body") - 1),
+        );
+        let error = proof_response_with_exact_egress(
+            limited_app.as_ref(),
+            &HeaderMap::new(),
+            remote,
+            "v1/sccp/proofs/message",
+            response(),
+            true,
+        )
+        .await
+        .expect_err("one byte below the buffered SCCP response must reject");
+        assert!(matches!(
+            error,
+            Error::ProofRateLimited {
+                endpoint: "v1/sccp/proofs/message",
+                ..
+            }
+        ));
+
+        let mut exact_app = mk_app_state_for_tests();
+        Arc::get_mut(&mut exact_app)
+            .expect("unique exact app state")
+            .proof_egress_limiter = limits::RateLimiter::new_u64(
+            Some(1),
+            Some(u64::try_from(expected.len()).expect("small body")),
+        );
+        let admitted = proof_response_with_exact_egress(
+            exact_app.as_ref(),
+            &HeaderMap::new(),
+            remote,
+            "v1/sccp/proofs/message",
+            response(),
+            true,
+        )
+        .await
+        .expect("exact buffered SCCP response budget must pass");
+        assert_eq!(
+            admitted
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let actual = axum::body::to_bytes(admitted.into_body(), usize::MAX)
+            .await
+            .expect("collect admitted response");
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn default_proof_egress_burst_covers_worst_case_sccp_hex_expansion() {
+        let binary_ceiling = u64::try_from(SCCP_SUBMIT_MAX_TRANSACTION_PAYLOAD_BYTES_V1)
+            .expect("SCCP binary ceiling fits u64");
+        let json_hex_and_envelope_ceiling = binary_ceiling
+            .checked_mul(2)
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    u64::try_from(SCCP_SUBMIT_JSON_ENVELOPE_ALLOWANCE_BYTES_V1)
+                        .expect("SCCP JSON allowance fits u64"),
+                )
+            })
+            .expect("first-release SCCP response ceiling fits u64");
+        let burst = iroha_config::parameters::defaults::torii::PROOF_EGRESS_BURST_BYTES
+            .expect("production proof egress shaping is enabled by default");
+        assert!(
+            burst >= json_hex_and_envelope_ceiling,
+            "default proof egress burst must admit one maximum SCCP response"
+        );
     }
 
     #[tokio::test]
@@ -76181,12 +79244,11 @@ mod tests {
                 multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
             },
         };
-        let body = norito::json::to_vec(&request).expect("encode request");
         let response = handler_post_multisig_spec(
             State(mk_app_state_for_tests()),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
+            NoritoJson(request),
         )
         .await
         .expect_err("missing alias should still fail lookup")
@@ -76196,20 +79258,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_list_does_not_forbid_unsigned_request_for_alias_selector() {
-        let request = routing::MultisigProposalsListRequestDto {
+    async fn multisig_proposals_query_does_not_forbid_unsigned_request_for_alias_selector() {
+        let request = routing::MultisigProposalsQueryRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
                 multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
             },
             status: Vec::new(),
+            cursor: None,
+            limit: None,
         };
-        let body = norito::json::to_vec(&request).expect("encode request");
-        let response = handler_post_multisig_proposals_list(
+        let response = handler_post_multisig_proposals_query(
             State(mk_app_state_for_tests()),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
+            NoritoJson(request),
         )
         .await
         .expect_err("missing alias should still fail lookup")
@@ -76219,8 +79282,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_get_does_not_forbid_unsigned_request_for_alias_selector() {
-        let request = routing::MultisigProposalsGetRequestDto {
+    async fn multisig_proposals_lookup_does_not_forbid_unsigned_request_for_alias_selector() {
+        let request = routing::MultisigProposalLookupRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
                 multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
@@ -76228,18 +79291,209 @@ mod tests {
             proposal_id: Some("deadbeef".to_owned()),
             instructions_hash: None,
         };
-        let body = norito::json::to_vec(&request).expect("encode request");
-        let response = handler_post_multisig_proposals_get(
+        let response = handler_post_multisig_proposals_lookup(
             State(mk_app_state_for_tests()),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
+            NoritoJson(request),
         )
         .await
         .expect_err("missing alias should still fail lookup")
         .into_response();
 
         assert_ne!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    fn multisig_read_contract_test_router(app: SharedAppState) -> Router {
+        Router::new()
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_SPEC_POST.path(),
+                post(handler_post_multisig_spec)
+                    .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST
+                    .path(),
+                post(handler_post_multisig_proposals_query)
+                    .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST
+                    .path(),
+                post(handler_post_multisig_proposals_lookup)
+                    .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+            )
+            .fallback(|| async { StatusCode::NOT_FOUND })
+            .with_state(app)
+    }
+
+    fn multisig_read_contract_request(
+        method: HttpMethod,
+        path: &str,
+        body: impl Into<Body>,
+    ) -> Request<Body> {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .header(axum::http::header::ACCEPT, "application/json")
+            .body(body.into())
+            .expect("multisig read contract request");
+        request
+            .extensions_mut()
+            .insert(crate::loopback_connect_info());
+        request
+    }
+
+    #[tokio::test]
+    async fn multisig_read_http_contract_is_unsigned_post_only_closed_and_bounded() {
+        let router = multisig_read_contract_test_router(mk_app_state_for_tests());
+        let alias_body = r#"{"multisig_account_alias":"banking@centralbank.universal"}"#;
+
+        let unsigned = router
+            .clone()
+            .oneshot(multisig_read_contract_request(
+                HttpMethod::POST,
+                "/v1/multisig/spec",
+                alias_body,
+            ))
+            .await
+            .expect("unsigned spec response");
+        assert_eq!(
+            unsigned.status(),
+            StatusCode::NOT_FOUND,
+            "unsigned request must reach alias resolution"
+        );
+
+        for path in [
+            "/v1/multisig/spec",
+            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
+        ] {
+            let method_response = router
+                .clone()
+                .oneshot(multisig_read_contract_request(
+                    HttpMethod::GET,
+                    path,
+                    Body::empty(),
+                ))
+                .await
+                .expect("method response");
+            assert_eq!(
+                method_response.status(),
+                StatusCode::METHOD_NOT_ALLOWED,
+                "{path}"
+            );
+        }
+        for retired in ["/v1/multisig/proposals/list", "/v1/multisig/proposals/get"] {
+            let response = router
+                .clone()
+                .oneshot(multisig_read_contract_request(
+                    HttpMethod::POST,
+                    retired,
+                    alias_body,
+                ))
+                .await
+                .expect("retired route response");
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{retired}");
+        }
+
+        for (path, body) in [
+            (
+                "/v1/multisig/spec",
+                r#"{"multisig_account_alias":"banking@centralbank.universal","extra":true}"#,
+            ),
+            (
+                "/v1/multisig/proposals/query",
+                r#"{"multisig_account_alias":"banking@centralbank.universal","status":[],"extra":true}"#,
+            ),
+            (
+                "/v1/multisig/proposals/lookup",
+                r#"{"multisig_account_alias":"banking@centralbank.universal","proposal_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","extra":true}"#,
+            ),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(multisig_read_contract_request(HttpMethod::POST, path, body))
+                .await
+                .expect("closed-schema response");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+        }
+
+        let malformed = router
+            .clone()
+            .oneshot(multisig_read_contract_request(
+                HttpMethod::POST,
+                "/v1/multisig/proposals/query",
+                r#"{"multisig_account_alias": "unterminated"#,
+            ))
+            .await
+            .expect("malformed JSON response");
+        assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+
+        let mut missing_content_type = multisig_read_contract_request(
+            HttpMethod::POST,
+            "/v1/multisig/proposals/query",
+            alias_body,
+        );
+        missing_content_type
+            .headers_mut()
+            .remove(axum::http::header::CONTENT_TYPE);
+        let missing_content_type = router
+            .clone()
+            .oneshot(missing_content_type)
+            .await
+            .expect("missing Content-Type response");
+        assert_eq!(
+            missing_content_type.status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
+
+        let oversized = format!(
+            "{{\"multisig_account_alias\":\"banking@centralbank.universal\",\"padding\":\"{}\"}}",
+            "x".repeat(MULTISIG_READ_MAX_BODY_BYTES)
+        );
+        let oversized_response = router
+            .oneshot(multisig_read_contract_request(
+                HttpMethod::POST,
+                "/v1/multisig/proposals/query",
+                oversized,
+            ))
+            .await
+            .expect("oversized response");
+        assert_eq!(oversized_response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn multisig_read_handler_honors_explicit_api_token_policy_without_signed_viewer_auth() {
+        let mut app = mk_app_state_for_tests();
+        let state = Arc::get_mut(&mut app).expect("unique app state");
+        state.require_api_token = true;
+        state.api_tokens_set = Arc::new(HashSet::from(["valid-token".to_owned()]));
+        let router = multisig_read_contract_test_router(app);
+        let body = r#"{"multisig_account_alias":"banking@centralbank.universal"}"#;
+
+        let missing = router
+            .clone()
+            .oneshot(multisig_read_contract_request(
+                HttpMethod::POST,
+                "/v1/multisig/spec",
+                body,
+            ))
+            .await
+            .expect("missing-token response");
+        assert_eq!(missing.status(), StatusCode::FORBIDDEN);
+
+        let mut authenticated =
+            multisig_read_contract_request(HttpMethod::POST, "/v1/multisig/spec", body);
+        authenticated
+            .headers_mut()
+            .insert(HEADER_API_TOKEN, HeaderValue::from_static("valid-token"));
+        let reached_lookup = router
+            .oneshot(authenticated)
+            .await
+            .expect("authenticated read response");
+        assert_eq!(reached_lookup.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -76281,48 +79535,47 @@ mod tests {
             multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
         };
 
-        let spec_body = norito::json::to_vec(&routing::MultisigSpecRequestDto {
+        let spec_request = routing::MultisigSpecRequestDto {
             selector: selector(),
-        })
-        .expect("encode spec request");
+        };
         let spec_response = handler_post_multisig_spec(
             State(app.clone()),
             headers.clone(),
             crate::loopback_connect_info(),
-            axum::body::Bytes::from(spec_body),
+            NoritoJson(spec_request),
         )
         .await
         .expect_err("missing alias should still fail lookup")
         .into_response();
         assert_ne!(spec_response.status(), StatusCode::TOO_MANY_REQUESTS);
 
-        let list_body = norito::json::to_vec(&routing::MultisigProposalsListRequestDto {
+        let list_request = routing::MultisigProposalsQueryRequestDto {
             selector: selector(),
             status: Vec::new(),
-        })
-        .expect("encode proposals list request");
-        let list_response = handler_post_multisig_proposals_list(
+            cursor: None,
+            limit: None,
+        };
+        let list_response = handler_post_multisig_proposals_query(
             State(app.clone()),
             headers.clone(),
             crate::loopback_connect_info(),
-            axum::body::Bytes::from(list_body),
+            NoritoJson(list_request),
         )
         .await
         .expect_err("missing alias should still fail lookup")
         .into_response();
         assert_ne!(list_response.status(), StatusCode::TOO_MANY_REQUESTS);
 
-        let get_body = norito::json::to_vec(&routing::MultisigProposalsGetRequestDto {
+        let get_request = routing::MultisigProposalLookupRequestDto {
             selector: selector(),
             proposal_id: Some("deadbeef".to_owned()),
             instructions_hash: None,
-        })
-        .expect("encode proposals get request");
-        let get_response = handler_post_multisig_proposals_get(
+        };
+        let get_response = handler_post_multisig_proposals_lookup(
             State(app),
             headers,
             crate::loopback_connect_info(),
-            axum::body::Bytes::from(get_body),
+            NoritoJson(get_request),
         )
         .await
         .expect_err("missing alias should still fail lookup")
@@ -76354,31 +79607,31 @@ mod tests {
             multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
         };
 
-        let spec_body = norito::json::to_vec(&routing::MultisigSpecRequestDto {
+        let spec_request = routing::MultisigSpecRequestDto {
             selector: selector(),
-        })
-        .expect("encode spec request");
+        };
         let spec_response = handler_post_multisig_spec(
             State(app.clone()),
             headers.clone(),
             crate::loopback_connect_info(),
-            axum::body::Bytes::from(spec_body),
+            NoritoJson(spec_request),
         )
         .await
         .expect_err("missing alias should still fail lookup")
         .into_response();
         assert_ne!(spec_response.status(), StatusCode::TOO_MANY_REQUESTS);
 
-        let list_body = norito::json::to_vec(&routing::MultisigProposalsListRequestDto {
+        let list_request = routing::MultisigProposalsQueryRequestDto {
             selector: selector(),
             status: Vec::new(),
-        })
-        .expect("encode proposals list request");
-        let list_response = handler_post_multisig_proposals_list(
+            cursor: None,
+            limit: None,
+        };
+        let list_response = handler_post_multisig_proposals_query(
             State(app),
             headers,
             crate::loopback_connect_info(),
-            axum::body::Bytes::from(list_body),
+            NoritoJson(list_request),
         )
         .await
         .expect_err("missing alias should still fail lookup")

@@ -61,11 +61,39 @@ pub enum SyscallMeteringPhase {
 impl SyscallMeteringPhase {
     /// Number of stable staged-metering phase tags in ABI V1.
     pub const COUNT: usize = 9;
+    /// Every ABI V1 phase in stable tag order.
+    pub const ALL: [Self; Self::COUNT] = [
+        Self::Entry,
+        Self::PointerHeader,
+        Self::PointerEnvelope,
+        Self::PayloadHash,
+        Self::NoritoDecode,
+        Self::CanonicalValidation,
+        Self::Arithmetic,
+        Self::Normalization,
+        Self::OutputSerialization,
+    ];
 
     /// Return the stable numeric tag used in diagnostics and gas vectors.
     #[must_use]
     pub const fn tag(self) -> u8 {
         self as u8
+    }
+
+    /// Return the stable descriptor name bound by the gas-schedule hash.
+    #[must_use]
+    pub const fn descriptor_name(self) -> &'static str {
+        match self {
+            Self::Entry => "Entry",
+            Self::PointerHeader => "PointerHeader",
+            Self::PointerEnvelope => "PointerEnvelope",
+            Self::PayloadHash => "PayloadHash",
+            Self::NoritoDecode => "NoritoDecode",
+            Self::CanonicalValidation => "CanonicalValidation",
+            Self::Arithmetic => "Arithmetic",
+            Self::Normalization => "Normalization",
+            Self::OutputSerialization => "OutputSerialization",
+        }
     }
 }
 
@@ -146,20 +174,10 @@ mod tests {
 
     #[test]
     fn phase_tags_are_contiguous_and_stable() {
-        let phases = [
-            SyscallMeteringPhase::Entry,
-            SyscallMeteringPhase::PointerHeader,
-            SyscallMeteringPhase::PointerEnvelope,
-            SyscallMeteringPhase::PayloadHash,
-            SyscallMeteringPhase::NoritoDecode,
-            SyscallMeteringPhase::CanonicalValidation,
-            SyscallMeteringPhase::Arithmetic,
-            SyscallMeteringPhase::Normalization,
-            SyscallMeteringPhase::OutputSerialization,
-        ];
-        assert_eq!(phases.len(), SyscallMeteringPhase::COUNT);
-        for (expected, phase) in phases.into_iter().enumerate() {
+        assert_eq!(SyscallMeteringPhase::ALL.len(), SyscallMeteringPhase::COUNT);
+        for (expected, phase) in SyscallMeteringPhase::ALL.into_iter().enumerate() {
             assert_eq!(usize::from(phase.tag()), expected);
+            assert!(!phase.descriptor_name().is_empty());
         }
     }
 

@@ -1579,7 +1579,7 @@ final class OfflineTransferWidgetTests: XCTestCase {
                 assetDefinitionId: "ds",
                 amount: "1.00",
                 recipientKeyCertificate: OfflineCompactKeyCertificate(
-                    platform: OfflineNoteV2Constants.iosAppAttestPlatform,
+                    platform: AttestedOfflineNoteConstants.iosAppAttestPlatform,
                     keyId: "key-1",
                     deviceId: "device-1",
                     accountId: "recipient@leumi.is2",

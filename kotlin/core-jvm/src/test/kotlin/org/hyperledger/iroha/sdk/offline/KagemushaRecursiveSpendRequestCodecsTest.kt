@@ -62,10 +62,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         )
         assertEquals("iroha.kagemusha.recursive_spend.abi7.fixture_manifest.v1", manifest["schema"])
         assertEquals("native_bridge_norito_archives", manifest["fixture_kind"])
-        assertEquals(
-            KagemushaRecursiveSpendProver.RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
-            (manifest["native_bridge_abi_version"] as Number).toInt(),
-        )
+        assertEquals(7, (manifest["native_bridge_abi_version"] as Number).toInt())
 
         val archiveFixtureRef = manifest["archive_fixture"] as Map<String, Any?>
         assertEquals(setOf("path", "schema"), archiveFixtureRef.keys)
@@ -1270,13 +1267,17 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                     recipient = sampleRecipient(),
                     publicAmount = "7",
                     redeemProof = redeemProof,
+                    lineageWitness = lineageWitness,
                     lineageVerifierRecord = lineageVerifierRecord,
                 ),
             ),
             KagemushaRecursiveSpendRequestCodecs.SCHEMA_REDEEM_REQUEST,
         )
         assertEquals(9, exactRedeemFields.size)
-        assertOptionNone(exactRedeemFields[4])
+        assertContentEquals(
+            compactPayload(lineageWitness, KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS),
+            optionSomePayload(exactRedeemFields[4]),
+        )
         assertOptionNone(exactRedeemFields[5])
         assertContentEquals(
             compactPayload(
@@ -1295,6 +1296,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                     recipient = sampleRecipient(),
                     publicAmount = "7",
                     redeemProof = redeemProof,
+                    lineageWitness = lineageWitness,
                     lineageVerifierRecords = listOf(lineageVerifierRecord),
                 ),
             ),
@@ -1316,6 +1318,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             recipient = sampleRecipient(),
             publicAmount = "7",
             redeemProof = redeemProof,
+            lineageWitness = lineageWitness,
             lineageVerifierRecords = mutableLineageVerifierRecords,
         )
         mutableLineageVerifierRecords.clear()
@@ -2086,18 +2089,20 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         assertContentEquals(pallasOpenEnvelopes, readBytesVecPayload(appendFields[2]))
 
         val appendLineageArtifacts = sampleAppendLineageArtifacts(seed = 0x5d)
-        val lineageAppend = KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
-            previousBundle = previousBundle,
-            hop = evidence,
-            pallasOpenEnvelopes = pallasOpenEnvelopes,
-            spendableNote = sampleNote(seed = 0x73),
-            outputCircuitId = KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
-            previousLineageVerifierRecord = sampleVerifierRecord(),
-            previousProofOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
-            lineageKeyArtifacts = appendLineageArtifacts.typed,
-            blockHeight = 13L,
-        )
-        assertArchiveSchema(lineageAppend, KagemushaRecursiveSpendRequestCodecs.SCHEMA_APPEND_REQUEST)
+        val lineageAppendRejected = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
+                previousBundle = previousBundle,
+                hop = evidence,
+                pallasOpenEnvelopes = pallasOpenEnvelopes,
+                spendableNote = sampleNote(seed = 0x73),
+                outputCircuitId = KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+                previousLineageVerifierRecord = sampleVerifierRecord(),
+                previousProofOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
+                lineageKeyArtifacts = appendLineageArtifacts.typed,
+                blockHeight = 13L,
+            )
+        }
+        assertEquals("outputProofCircuitId is not valid for the previous bundle", lineageAppendRejected.message)
 
         val autoPreviousOpeningsWithoutLineageRecord = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
@@ -2112,7 +2117,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             )
         }
         assertEquals(
-            "previousLineageVerifierRecord is required for lineage previous bundles",
+            "outputProofCircuitId is not valid for the previous bundle",
             autoPreviousOpeningsWithoutLineageRecord.message,
         )
         val autoAppendLineageArtifactsOnAggregation = assertFailsWith<IllegalArgumentException> {
@@ -2144,7 +2149,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 blockHeight = 16L,
             )
         }
-        assertEquals("lineageKeyArtifacts must be append artifacts", autoAppendWrongProfile.message)
+        assertEquals("outputProofCircuitId is not valid for the previous bundle", autoAppendWrongProfile.message)
     }
 
     @Test
@@ -2641,9 +2646,10 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             )
         }
 
-        // The same decoder guards the previousProofOpenEnvelopes append path.
+        // The first-release selector rejects the reserved lineage-append path
+        // before any optional opening archive can influence dispatch.
         val appendLineageArtifacts = sampleAppendLineageArtifacts(seed = 0x6b)
-        assertArchiveSchema(
+        val lineageAppendRejected = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(
                 AppendSpendRequest(
                     previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
@@ -2657,9 +2663,9 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                     lineageKeyArtifacts = appendLineageArtifacts.typed,
                     blockHeight = null,
                 ),
-            ),
-            KagemushaRecursiveSpendRequestCodecs.SCHEMA_APPEND_REQUEST,
-        )
+            )
+        }
+        assertEquals("outputProofCircuitId is not valid for the previous bundle", lineageAppendRejected.message)
     }
 
     @Test
@@ -3063,7 +3069,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 lineageProvingKeyArchive = appendLineageArtifacts.provingKeyArchive,
             )
         }
-        assertEquals("previousProofOpenEnvelopes is required for lineage append output", error.message)
+        assertEquals("outputProofCircuitId is not valid for the previous bundle", error.message)
 
         val initArtifactsOnAppend = sampleInitLineageArtifacts(seed = 0x6e)
         val wrongAppendLineage = assertFailsWith<IllegalArgumentException> {
@@ -3080,7 +3086,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 lineageProvingKeyArchive = initArtifactsOnAppend.provingKeyArchive,
             )
         }
-        assertEquals("lineage key artifacts are invalid for lineage append output", wrongAppendLineage.message)
+        assertEquals("outputProofCircuitId is not valid for the previous bundle", wrongAppendLineage.message)
         val wrongAppendLineageProfile = assertFailsWith<IllegalArgumentException> {
             AppendSpendRequest(
                 previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
@@ -3097,7 +3103,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         }
         assertEquals("lineageKeyArtifacts must be append artifacts", wrongAppendLineageProfile.message)
 
-        assertArchiveSchema(
+        val lineageAppendRejected = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(
                 AppendSpendRequest(
                     previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
@@ -3111,9 +3117,9 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                     lineageKeyArtifacts = appendLineageArtifacts.typed,
                     blockHeight = null,
                 ),
-            ),
-            KagemushaRecursiveSpendRequestCodecs.SCHEMA_APPEND_REQUEST,
-        )
+            )
+        }
+        assertEquals("outputProofCircuitId is not valid for the previous bundle", lineageAppendRejected.message)
 
         val malformedPreviousOpenArchives = listOf(
             syntheticArchive("test.WrongPreviousProofOpenEnvelopes") to
@@ -3163,7 +3169,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 "Trailing bytes after previousProofOpenEnvelopes[0]",
             pallasOpenEnvelopeVectorArchiveWithPayload(byteArrayOf(0x00)) to "Unexpected end of data",
         )
-        for ((archive, expectedMessage) in malformedPreviousOpenArchives) {
+        for ((archive, adversarialCase) in malformedPreviousOpenArchives) {
             val archiveError = assertFailsWith<IllegalArgumentException> {
                 AppendSpendRequest(
                     previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
@@ -3178,7 +3184,11 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                     lineageProvingKeyArchive = appendLineageArtifacts.provingKeyArchive,
                 )
             }
-            assertEquals(expectedMessage, archiveError.message)
+            assertEquals(
+                "outputProofCircuitId is not valid for the previous bundle",
+                archiveError.message,
+                adversarialCase,
+            )
         }
 
         val appendWrongRecordBundle = assertFailsWith<IllegalArgumentException> {

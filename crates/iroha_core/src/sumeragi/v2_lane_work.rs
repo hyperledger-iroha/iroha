@@ -3454,6 +3454,11 @@ mod tests {
                         format!("v2-lane-work-parent-payload:{}", height - 1).as_bytes(),
                     ),
                 },
+                execution_commitment: wire::ExecutionCommitment::without_topups(
+                    Hash::new(b"lane-work parent state"),
+                    Hash::new(b"lane-work post state"),
+                    Hash::new(b"lane-work ordinary writes"),
+                ),
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![0xA5; 48],
             }),

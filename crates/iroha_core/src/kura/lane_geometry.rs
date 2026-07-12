@@ -94,6 +94,17 @@ static CONFIGURED_CATALOG_PREFLIGHT_FAIL_AFTER_ESTABLISH: std::sync::Mutex<Optio
 static GEOMETRY_MOVE_TARGET_COLLISION: std::sync::Mutex<Option<PathBuf>> =
     std::sync::Mutex::new(None);
 
+#[cfg(test)]
+fn canonical_test_store_root(store_root: &Path) -> PathBuf {
+    fs::canonicalize(store_root).unwrap_or_else(|_| {
+        store_root
+            .parent()
+            .and_then(|parent| fs::canonicalize(parent).ok())
+            .and_then(|parent| store_root.file_name().map(|name| parent.join(name)))
+            .unwrap_or_else(|| store_root.to_path_buf())
+    })
+}
+
 #[cfg(not(unix))]
 static UNSUPPORTED_GEOMETRY_IDENTITY_NONCE: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(1);
@@ -401,6 +412,36 @@ fn configured_catalog_require_store_root_identity(
         ));
     }
     Ok(())
+}
+
+fn configured_catalog_store_root_lock_identity(
+    store_root: &Path,
+    lock_file: &File,
+) -> Result<GeometryFileIdentity> {
+    let lock_path = store_root.join(super::STORE_ROOT_LOCK_FILE_NAME);
+    let opened_metadata = lock_file
+        .metadata()
+        .map_err(|error| Error::IO(error, lock_path.clone()))?;
+    let path_metadata =
+        fs::symlink_metadata(&lock_path).map_err(|error| Error::IO(error, lock_path.clone()))?;
+    let opened_identity = geometry_file_identity(&opened_metadata);
+    if opened_metadata.file_type().is_symlink()
+        || !opened_metadata.file_type().is_file()
+        || path_metadata.file_type().is_symlink()
+        || !path_metadata.file_type().is_file()
+        || !Kura::sidecar_is_single_link(&opened_metadata)
+        || !Kura::sidecar_is_single_link(&path_metadata)
+        || geometry_file_identity(&path_metadata) != opened_identity
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "authenticated Kura store-root lock changed before configured-catalog preflight",
+            ),
+            lock_path,
+        ));
+    }
+    Ok(opened_identity)
 }
 
 fn read_configured_catalog_journal_for_preflight(
@@ -1082,15 +1123,41 @@ fn require_pristine_configured_catalog_root(
     store_root: &Path,
     root_identity: GeometryFileIdentity,
     allowed_publication_temp: Option<&ConfiguredCatalogPreflightJournal>,
+    authenticated_lock_identity: Option<GeometryFileIdentity>,
 ) -> Result<()> {
     configured_catalog_require_store_root_identity(store_root, root_identity)?;
     let allowed_path = allowed_publication_temp.map(|_| store_root.join(JOURNAL_TEMP_FILE_NAME));
+    let lock_path = store_root.join(super::STORE_ROOT_LOCK_FILE_NAME);
     let mut saw_allowed_temp = false;
+    let mut saw_authenticated_lock = false;
     for entry in
         fs::read_dir(store_root).map_err(|error| Error::IO(error, store_root.to_path_buf()))?
     {
         let entry = entry.map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
         let path = entry.path();
+        if path == lock_path && authenticated_lock_identity.is_some() {
+            let expected = authenticated_lock_identity.expect("authenticated lock identity exists");
+            let metadata = entry
+                .metadata()
+                .map_err(|error| Error::IO(error, path.clone()))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|error| Error::IO(error, path.clone()))?;
+            if saw_authenticated_lock
+                || file_type.is_symlink()
+                || !file_type.is_file()
+                || !Kura::sidecar_is_single_link(&metadata)
+                || geometry_file_identity(&metadata) != expected
+            {
+                return Err(configured_catalog_preflight_error(
+                    store_root,
+                    ErrorKind::InvalidData,
+                    "authenticated Kura store-root lock changed during pristine-root validation",
+                ));
+            }
+            saw_authenticated_lock = true;
+            continue;
+        }
         if allowed_path.as_deref() == Some(path.as_path()) {
             let expected = allowed_publication_temp.expect("allowed path has a preflight value");
             let metadata = entry
@@ -1126,6 +1193,13 @@ fn require_pristine_configured_catalog_root(
             store_root,
             ErrorKind::InvalidData,
             "configured-catalog startup temp disappeared during pristine-root validation",
+        ));
+    }
+    if authenticated_lock_identity.is_some() != saw_authenticated_lock {
+        return Err(configured_catalog_preflight_error(
+            store_root,
+            ErrorKind::InvalidData,
+            "authenticated Kura store-root lock disappeared during pristine-root validation",
         ));
     }
     configured_catalog_require_store_root_identity(store_root, root_identity)
@@ -1323,6 +1397,31 @@ impl Kura {
         store_root: &Path,
         attempted: Hash,
     ) -> Result<()> {
+        Self::establish_or_verify_configured_lane_catalog_baseline_inner(
+            store_root, attempted, None,
+        )
+    }
+
+    pub(super) fn establish_or_verify_configured_lane_catalog_baseline_with_lock(
+        store_root: &Path,
+        attempted: Hash,
+        lock_file: &File,
+    ) -> Result<()> {
+        let root_identity = configured_catalog_store_root_identity(store_root)?;
+        let lock_identity = configured_catalog_store_root_lock_identity(store_root, lock_file)?;
+        configured_catalog_require_store_root_identity(store_root, root_identity)?;
+        Self::establish_or_verify_configured_lane_catalog_baseline_inner(
+            store_root,
+            attempted,
+            Some(lock_identity),
+        )
+    }
+
+    fn establish_or_verify_configured_lane_catalog_baseline_inner(
+        store_root: &Path,
+        attempted: Hash,
+        authenticated_lock_identity: Option<GeometryFileIdentity>,
+    ) -> Result<()> {
         create_dir_all_with_context(store_root)?;
         let root_identity = configured_catalog_store_root_identity(store_root)?;
         let journal_path = store_root.join(JOURNAL_FILE_NAME);
@@ -1412,6 +1511,7 @@ impl Kura {
             store_root,
             root_identity,
             publication_temp.as_ref(),
+            authenticated_lock_identity,
         )?;
 
         let expected_journal = LaneGeometryJournal {
@@ -1454,6 +1554,7 @@ impl Kura {
             store_root,
             root_identity,
             Some(&publication_temp),
+            authenticated_lock_identity,
         )?;
 
         promote_initial_configured_catalog_temp(
@@ -1723,14 +1824,15 @@ impl Kura {
         *CONFIGURED_CATALOG_PREFLIGHT_IDENTITY_SWAP
             .lock()
             .expect("configured-catalog identity-swap hook lock") =
-            Some(store_root.join(JOURNAL_FILE_NAME));
+            Some(canonical_test_store_root(store_root).join(JOURNAL_FILE_NAME));
     }
 
     #[cfg(test)]
     pub(super) fn fail_after_configured_catalog_preflight_for_test(store_root: &Path) {
         *CONFIGURED_CATALOG_PREFLIGHT_FAIL_AFTER_ESTABLISH
             .lock()
-            .expect("configured-catalog crash hook lock") = Some(store_root.to_path_buf());
+            .expect("configured-catalog crash hook lock") =
+            Some(canonical_test_store_root(store_root));
     }
 
     #[cfg(test)]

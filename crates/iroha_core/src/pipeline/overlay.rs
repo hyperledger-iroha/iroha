@@ -36,7 +36,7 @@ use iroha_data_model::{
     executor::{ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo},
     isi::{
         InstructionBox,
-        settlement::{DvpIsi, PvpIsi},
+        settlement::{DvpIsi, PvpIsi, SettleFxCorridor, SettlementInstructionBox},
         smart_contract_code::{
             ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
         },
@@ -67,7 +67,9 @@ use crate::{
     },
     smartcontracts::{
         code,
-        isi::settlement::{admission_validate_dvp, admission_validate_pvp},
+        isi::settlement::{
+            admission_validate_dvp, admission_validate_fx_corridor, admission_validate_pvp,
+        },
         ivm::{
             cache::{IvmCache, ProgramSummary},
             host::{AmxBudgetViolation, HostOutputLimits, QueryStateSource},
@@ -1040,7 +1042,10 @@ fn append_verified_contract_metadata_registration_to_queued<R: StateReadOnly>(
             .map(
                 |instruction| crate::smartcontracts::ivm::host::QueuedInstruction {
                     instruction,
-                    authority: tx.authority().clone(),
+                    authority: contract_runtime_context.map_or_else(
+                        || tx.authority().clone(),
+                        |context| context.contract_subject.clone(),
+                    ),
                     contract_runtime_context: contract_runtime_context.cloned(),
                     entrypoint_authorization: Some(entrypoint_authorization.clone()),
                 },
@@ -1463,14 +1468,14 @@ impl TxOverlay {
     #[cfg(test)]
     fn from_ivm_proved_instructions(
         instrs: Vec<InstructionBox>,
-        authority: &AccountId,
+        _authority: &AccountId,
         contract_runtime_context: crate::executor::ContractRuntimeExecutionContext,
         entrypoint_authorization: ContractEntrypointAuthorizationSnapshot,
     ) -> Self {
         let execution_contexts = instrs
             .iter()
             .map(|_| OverlayInstructionExecutionContext {
-                authority: authority.clone(),
+                authority: contract_runtime_context.contract_subject.clone(),
                 contract_runtime_context: Some(contract_runtime_context.clone()),
                 entrypoint_authorization: Some(entrypoint_authorization.clone()),
             })
@@ -1700,14 +1705,14 @@ impl TxOverlay {
                 if runtime_context.contract_address != authorization.contract_address
                     || runtime_context.contract_alias != authorization.contract_alias
                     || runtime_context.entrypoint != authorization.entrypoint
-                    || execution_context.authority != authorization.authority
+                    || execution_context.authority != runtime_context.contract_subject
                 {
                     return Err(ValidationFail::NotPermitted(
                         "prepared contract effect does not match its immutable authorization snapshot"
                             .to_owned(),
                     ));
                 }
-                authorization.validate_for_authority(world, &execution_context.authority)
+                authorization.validate(world)
             }
             (Some(_), None) => Err(ValidationFail::NotPermitted(
                 "prepared contract effect is missing its entrypoint authorization snapshot"
@@ -1855,6 +1860,27 @@ impl TxOverlay {
                     } else if let Some(pvp) = instr.as_any().downcast_ref::<PvpIsi>() {
                         admission_validate_pvp(effect_authority, state_tx, pvp)
                             .map_err(ValidationFail::from)?;
+                    } else if let Some(fx) = instr.as_any().downcast_ref::<SettleFxCorridor>() {
+                        admission_validate_fx_corridor(effect_authority, state_tx, fx)
+                            .map_err(ValidationFail::from)?;
+                    } else if let Some(settlement) =
+                        instr.as_any().downcast_ref::<SettlementInstructionBox>()
+                    {
+                        match settlement {
+                            SettlementInstructionBox::Dvp(dvp) => {
+                                admission_validate_dvp(effect_authority, state_tx, dvp)
+                                    .map_err(ValidationFail::from)?;
+                            }
+                            SettlementInstructionBox::Pvp(pvp) => {
+                                admission_validate_pvp(effect_authority, state_tx, pvp)
+                                    .map_err(ValidationFail::from)?;
+                            }
+                            SettlementInstructionBox::SettleFxCorridor(fx) => {
+                                admission_validate_fx_corridor(effect_authority, state_tx, fx)
+                                    .map_err(ValidationFail::from)?;
+                            }
+                            SettlementInstructionBox::SetFxCorridorPolicy(_) => {}
+                        }
                     }
                     if let Some(reg_asset_definition) = extract_register_asset_definition(instr) {
                         ensure_asset_definition_registration_allowed(
@@ -4118,7 +4144,7 @@ seiyaku ProtectedStateFreeOverlay {
         );
         metadata.insert(
             "contract_payload".parse().expect("metadata key"),
-            Json::from(norito::json!({ "value": 7 })),
+            Json::from(norito::json!({ "value": "7" })),
         );
         let transaction = TransactionBuilder::new(chain_id, authority)
             .with_metadata(metadata)
@@ -4165,7 +4191,7 @@ seiyaku PermissionlessStateFreeOverlay {
         );
         metadata.insert(
             "contract_payload".parse().expect("metadata key"),
-            Json::from(norito::json!({ "value": 7 })),
+            Json::from(norito::json!({ "value": "7" })),
         );
         let transaction = TransactionBuilder::new(
             ChainId::from("permissionless-state-free-overlay"),
@@ -4222,7 +4248,7 @@ seiyaku ProtectedParameterizedOverlay {
             .expect("write argument schema");
         let arguments = ivm::encode_argument_record_from_json(
             schema,
-            &Json::from(norito::json!({ "value": 7 })),
+            &Json::from(norito::json!({ "value": "7" })),
         )
         .expect("encode canonical parameterized arguments");
         let arguments = ContractArgumentRecord::try_new(arguments)
@@ -4387,7 +4413,7 @@ seiyaku ProtectedParameterizedOverlay {
             .execution_contexts
             .get_or_insert_with(Vec::new)
             .push(OverlayInstructionExecutionContext {
-                authority: authority.clone(),
+                authority: contract_address.subject_id(),
                 contract_runtime_context: Some(crate::executor::ContractRuntimeExecutionContext {
                     contract_subject: contract_address.subject_id(),
                     contract_address: contract_address.clone(),
@@ -7254,7 +7280,7 @@ seiyaku DeriveDispatch {
         };
 
         let exact = queued(
-            authority.clone(),
+            root_context.contract_subject.clone(),
             Some(root_context.clone()),
             Some(root_authorization.clone()),
         );
@@ -7302,11 +7328,19 @@ seiyaku DeriveDispatch {
             ),
             (
                 "missing runtime context",
-                queued(authority.clone(), None, Some(root_authorization.clone())),
+                queued(
+                    root_context.contract_subject.clone(),
+                    None,
+                    Some(root_authorization.clone()),
+                ),
             ),
             (
                 "missing authorization snapshot",
-                queued(authority.clone(), Some(root_context.clone()), None),
+                queued(
+                    root_context.contract_subject.clone(),
+                    Some(root_context.clone()),
+                    None,
+                ),
             ),
         ];
         for (label, queued) in adversarial {
@@ -7391,7 +7425,7 @@ seiyaku ProtectedProved {
         );
         metadata.insert(
             "contract_payload".parse().expect("metadata key"),
-            Json::from(norito::json!({ "value": 9 })),
+            Json::from(norito::json!({ "value": "9" })),
         );
         metadata.insert(
             "contract_address".parse().expect("metadata key"),
@@ -7467,7 +7501,7 @@ seiyaku ProtectedProved {
                 argument_schema: None,
                 return_type: None,
                 return_schema: None,
-                permission: None,
+                permission: Some("CanInvokeOverlayFixture".to_owned()),
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
                 access_hints_complete: Some(true),
@@ -9127,8 +9161,9 @@ fn validate_ivm_proved_queued_authorization(
     authorization: &ContractEntrypointAuthorizationSnapshot,
 ) -> Result<(), OverlayBuildError> {
     let invalid = !authorization.is_root()
+        || authorization.authority != *authority
         || queued.iter().any(|queued| {
-            queued.authority != *authority
+            queued.authority != runtime_context.contract_subject
                 || queued.entrypoint_authorization.as_ref() != Some(authorization)
                 || queued
                     .contract_runtime_context

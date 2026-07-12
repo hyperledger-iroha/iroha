@@ -43,14 +43,6 @@ const ARGUMENT_DECODE_GAS_PER_BYTE: u64 = 1;
 const TLV_ENVELOPE_BYTES: usize = 7 + Hash::LENGTH;
 const ARGUMENT_RECORD_BINDING_DOMAIN_V1: &[u8] = b"iroha:ivm:argument-record-binding:v1";
 
-fn canonical_norito_bytes<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, norito::Error> {
-    // Canonical contract-boundary bytes must not inherit an ambient decoder's
-    // advertised layout flags. This path can run while validating nested
-    // Norito values, so pin the first-release encoding policy explicitly.
-    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    to_bytes(value)
-}
-
 #[cfg(any(test, debug_assertions))]
 thread_local! {
     static RECORD_DECODE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -511,17 +503,14 @@ fn argument_record_runtime_gas_upper_bound(record_bytes: usize, schema_bytes: us
 
 fn canonical_norito_frame_len<T: NoritoSerialize>(value: &T) -> usize {
     let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let payload_len = norito::codec::Encode::encoded_len(value);
-    let alignment = core::mem::align_of::<norito::Archived<T>>();
-    let remainder = norito::core::Header::SIZE % alignment;
-    let padding = if remainder == 0 {
-        0
-    } else {
-        alignment - remainder
-    };
-    norito::core::Header::SIZE
-        .saturating_add(padding)
-        .saturating_add(payload_len)
+    norito::core::encoded_frame_len(value).expect("trusted schema serialization must be infallible")
+}
+
+fn canonical_norito_frame<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, norito::core::Error> {
+    // Contract-boundary bytes must never inherit an ambient decoder's layout
+    // policy, including while validating a nested Norito value.
+    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    to_bytes(value)
 }
 
 fn decoded_table_envelope_len(word_count: usize) -> usize {
@@ -657,7 +646,7 @@ fn encode_leaf_atom(
         )?,
         EntrypointValueKindV1::Json => encoded_pointer(
             PointerType::Json,
-            canonical_norito_bytes(
+            canonical_norito_frame(
                 &Json::from_norito_value_ref(value).map_err(|_| VMError::DecodeError)?,
             )
             .map_err(|_| VMError::NoritoInvalid)?,
@@ -670,7 +659,7 @@ fn encode_leaf_atom(
             )?;
             encoded_pointer(
                 PointerType::Name,
-                canonical_norito_bytes(&name).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&name).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::AccountId => {
@@ -682,7 +671,7 @@ fn encode_leaf_atom(
             let account_id = parsed.into_account_id();
             encoded_pointer(
                 PointerType::AccountId,
-                canonical_norito_bytes(&account_id).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&account_id).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::AssetDefinitionId => {
@@ -695,7 +684,7 @@ fn encode_leaf_atom(
             )?;
             encoded_pointer(
                 PointerType::AssetDefinitionId,
-                canonical_norito_bytes(&asset_definition_id).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&asset_definition_id).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::AssetId => {
@@ -706,7 +695,7 @@ fn encode_leaf_atom(
             )?;
             encoded_pointer(
                 PointerType::AssetId,
-                canonical_norito_bytes(&asset_id).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&asset_id).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::DomainId => {
@@ -717,7 +706,7 @@ fn encode_leaf_atom(
             )?;
             encoded_pointer(
                 PointerType::DomainId,
-                canonical_norito_bytes(&domain_id).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&domain_id).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::NftId => {
@@ -728,14 +717,14 @@ fn encode_leaf_atom(
             )?;
             encoded_pointer(
                 PointerType::NftId,
-                canonical_norito_bytes(&nft_id).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&nft_id).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::DataSpaceId => {
             let dataspace_id = DataSpaceId::new(decode_u64(value)?);
             encoded_pointer(
                 PointerType::DataSpaceId,
-                canonical_norito_bytes(&dataspace_id).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&dataspace_id).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::Blob => encoded_pointer(PointerType::Blob, decode_blob(value)?)?,
@@ -1063,7 +1052,7 @@ pub fn argument_record_from_json(
     if !schema.validate_atoms(&atoms) {
         return Err(VMError::DecodeError);
     }
-    let schema_bytes = canonical_norito_bytes(schema).map_err(|_| VMError::NoritoInvalid)?;
+    let schema_bytes = canonical_norito_frame(schema).map_err(|_| VMError::NoritoInvalid)?;
     Ok(EntrypointArgumentRecordV1 {
         schema_hash: entrypoint_argument_schema_hash_v1(&schema_bytes),
         atoms,
@@ -1076,7 +1065,7 @@ pub fn encode_argument_record_from_json(
     payload: &Json,
 ) -> Result<Vec<u8>, VMError> {
     let record = argument_record_from_json(schema, payload)?;
-    let bytes = canonical_norito_bytes(&record).map_err(|_| VMError::NoritoInvalid)?;
+    let bytes = canonical_norito_frame(&record).map_err(|_| VMError::NoritoInvalid)?;
     if bytes.len() > MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES {
         return Err(VMError::NoritoInvalid);
     }
@@ -1091,7 +1080,7 @@ fn decode_schema(payload: &[u8]) -> Result<EntrypointArgumentSchemaV1, VMError> 
         decode_from_bytes(payload).map_err(|_| VMError::DecodeError)?;
     if !schema.validate()
         || schema.fields.len() > MAX_ENTRYPOINT_ARGUMENTS
-        || canonical_norito_bytes(&schema).map_err(|_| VMError::DecodeError)? != payload
+        || canonical_norito_frame(&schema).map_err(|_| VMError::DecodeError)? != payload
     {
         return Err(VMError::DecodeError);
     }
@@ -1106,7 +1095,7 @@ fn decode_record(payload: &[u8]) -> Result<EntrypointArgumentRecordV1, VMError> 
     RECORD_DECODE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
     let record: EntrypointArgumentRecordV1 =
         decode_from_bytes(payload).map_err(|_| VMError::DecodeError)?;
-    if canonical_norito_bytes(&record).map_err(|_| VMError::DecodeError)? != payload {
+    if canonical_norito_frame(&record).map_err(|_| VMError::DecodeError)? != payload {
         return Err(VMError::DecodeError);
     }
     Ok(record)
@@ -1158,7 +1147,7 @@ where
     T: norito::codec::Decode + norito::codec::Encode,
 {
     let value = decode_from_bytes(payload).map_err(|_| VMError::DecodeError)?;
-    if canonical_norito_bytes(&value).map_err(|_| VMError::DecodeError)? != payload {
+    if canonical_norito_frame(&value).map_err(|_| VMError::DecodeError)? != payload {
         return Err(VMError::DecodeError);
     }
     Ok(value)
@@ -1352,7 +1341,7 @@ pub fn validate_argument_record(
         return Err(VMError::DecodeError);
     }
     let record = decode_record(payload)?;
-    let schema_bytes = canonical_norito_bytes(schema).map_err(|_| VMError::DecodeError)?;
+    let schema_bytes = canonical_norito_frame(schema).map_err(|_| VMError::DecodeError)?;
     validate_record_shape(
         schema,
         &schema_bytes,
@@ -1718,11 +1707,12 @@ fn build_decode_plan(
 /// Validate and prepare a canonical record only after its deterministic work
 /// fits the invocation's gas allowance.
 ///
-/// The compiler-owned schema is validated first. Its flat preorder tape then
-/// yields a bounded, allocation-free maximum for ABI words and aggregate HEAP
-/// storage. Together with signed wire lengths and the record-bounded aligned
-/// pointer-copy allowance, that quote is checked before the first untrusted
-/// record decode.
+/// The compiler-owned schema is validated first and its framed length is counted
+/// under the canonical V1 Norito flags, independently of any prior decode
+/// context. Its flat preorder tape then yields a bounded, allocation-free
+/// maximum for ABI words and aggregate HEAP storage. Together with signed wire
+/// lengths and the record-bounded aligned pointer-copy allowance, that quote is
+/// checked before the first untrusted record decode.
 ///
 /// # Errors
 ///
@@ -1751,7 +1741,7 @@ pub fn prepare_argument_record_with_gas_limit(
         return Err(VMError::OutOfGas);
     }
     let schema_bytes: Arc<[u8]> =
-        Arc::from(canonical_norito_bytes(schema).map_err(|_| VMError::DecodeError)?);
+        Arc::from(canonical_norito_frame(schema).map_err(|_| VMError::DecodeError)?);
     debug_assert_eq!(schema_bytes.len(), schema_bytes_len);
     let record = decode_record(&canonical_record)?;
     let decode_plan = build_decode_plan(
@@ -1924,7 +1914,7 @@ mod tests {
     }
 
     fn prepared_gas_bound(schema: &EntrypointArgumentSchemaV1, record_bytes: usize) -> u64 {
-        let schema_bytes = canonical_norito_bytes(schema).expect("encode schema for gas bound");
+        let schema_bytes = canonical_norito_frame(schema).expect("encode schema for gas bound");
         let bound = schema_materialization_bound(schema).expect("valid schema bound");
         argument_record_gas_for_schema_bound(record_bytes, schema_bytes.len(), bound)
     }
@@ -1977,7 +1967,7 @@ mod tests {
         let schema_ptr = alloc(
             &mut vm,
             PointerType::NoritoBytes,
-            &to_bytes(schema).expect("encode schema"),
+            &canonical_norito_frame(schema).expect("encode schema"),
         );
         vm.set_register(10, record_ptr);
         vm.set_register(11, schema_ptr);
@@ -1997,7 +1987,7 @@ mod tests {
         let schema_ptr = alloc(
             &mut vm,
             PointerType::NoritoBytes,
-            &to_bytes(schema).expect("encode raw argument schema"),
+            &canonical_norito_frame(schema).expect("encode raw argument schema"),
         );
         vm.set_register(10, record_ptr);
         vm.set_register(11, schema_ptr);
@@ -2267,8 +2257,22 @@ mod tests {
                 },
             ],
         };
-        let canonical = to_bytes(&schema).expect("encode canonical schema");
+        let canonical = canonical_norito_frame(&schema).expect("encode canonical schema");
         assert_eq!(canonical_norito_frame_len(&schema), canonical.len());
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient_flags = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert_eq!(
+            canonical_norito_frame_len(&schema),
+            canonical.len(),
+            "compiler-owned schema admission must ignore an ambient decode layout"
+        );
+        assert_eq!(
+            canonical_norito_frame(&schema).expect("re-encode canonical schema"),
+            canonical,
+            "compiler-owned schema bytes must ignore an ambient decode layout"
+        );
     }
 
     #[test]
@@ -2291,18 +2295,20 @@ mod tests {
         let payload = Json::from(norito::json!({
             "value": { "err": ["7", "9"] }
         }));
-        let expected_schema = canonical_norito_bytes(&schema).expect("canonical schema");
+        let expected_schema = canonical_norito_frame(&schema).expect("canonical schema");
         let expected_record =
             encode_argument_record_from_json(&schema, &payload).expect("canonical record");
 
-        let _ambient = norito::core::DecodeFlagsGuard::enter(0);
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_schema = to_bytes(&schema).expect("ambient-layout schema");
         assert_ne!(
-            to_bytes(&schema).expect("ambient-layout schema"),
-            expected_schema,
+            ambient_schema, expected_schema,
             "the adversarial ambient layout must exercise a distinct encoding"
         );
         assert_eq!(
-            canonical_norito_bytes(&schema).expect("pinned canonical schema"),
+            canonical_norito_frame(&schema).expect("pinned canonical schema"),
             expected_schema
         );
         assert_eq!(canonical_norito_frame_len(&schema), expected_schema.len());
@@ -2320,6 +2326,11 @@ mod tests {
         assert_eq!(prepared.schema_bytes(), expected_schema);
         validate_argument_record(&schema, &expected_record)
             .expect("validate under adversarial ambient layout");
+        assert_eq!(
+            to_bytes(&schema).expect("ambient layout after canonical operations"),
+            ambient_schema,
+            "nested canonical framing must restore the caller's ambient Norito layout"
+        );
     }
 
     #[test]
@@ -3510,6 +3521,34 @@ mod tests {
         );
         let schema_bound = schema_materialization_bound(schema).expect("aggregate schema bound");
         let bound = prepared_gas_bound(schema, canonical.len());
+
+        let schema_bytes = canonical_norito_frame(schema).expect("encode aggregate schema");
+        assert_eq!(
+            canonical_norito_frame_len(schema),
+            schema_bytes.len(),
+            "{label} counted schema frame must match canonical Norito bytes"
+        );
+        let record = decode_record(&canonical).expect("decode aggregate record for diagnostics");
+        let diagnostic_plan = build_decode_plan(
+            schema,
+            &schema_bytes,
+            record,
+            ivm_abi::SyscallPolicy::AbiV1,
+            canonical.len(),
+        )
+        .unwrap_or_else(|error| panic!("{label} decode plan must be canonical: {error:?}"));
+        assert!(
+            diagnostic_plan.gas() <= bound,
+            "{label} decode plan must fit the schema-derived gas bound"
+        );
+        let mut allocation_lengths = Vec::with_capacity(diagnostic_plan.decoded.len() + 2);
+        allocation_lengths.push(TLV_ENVELOPE_BYTES + Hash::LENGTH);
+        allocation_lengths.extend(diagnostic_plan.allocation_lengths());
+        IVM::preflight_fresh_host_tlv_allocations_with_reserved_heap(
+            &allocation_lengths,
+            diagnostic_plan.raw_heap_bytes(),
+        )
+        .unwrap_or_else(|error| panic!("{label} allocation plan must fit a fresh VM: {error:?}"));
 
         reset_argument_record_decode_count();
         assert!(matches!(

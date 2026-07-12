@@ -430,6 +430,13 @@ public final class SccpClientExactTests {
     assert parsed.proofRequestPath.equals("/v1/sccp/proof-requests/{message_id}");
     assert parsed.registryLimits.maxRetainedRoutesPerLane == 64;
     assert parsed.registryLimits.maxRetainedNativeTrustAnchorsPerLane == 4_096;
+    assert parsed.resourceLimits.maxOutboundMessagesPerBlock == 512;
+    assert parsed.resourceLimits.maxOutboundMessagePayloadBytes.equals(
+        BigInteger.valueOf(4_096));
+    assert parsed.resourceLimits.maxPendingOutboundMessages.equals(
+        BigInteger.valueOf(65_536));
+    assert parsed.resourceLimits.maxPendingOutboundPayloadBytes.equals(
+        BigInteger.valueOf(268_435_456));
     assert parsed.resourceLimits.maxBlsSignerContributionsPerTransaction == 131_713;
     assert parsed.proofSubmitPath == null;
     final Map<String, Object> enabled = capabilities();
@@ -455,6 +462,10 @@ public final class SccpClientExactTests {
     expectFailure(() -> SccpJsonParser.parseCapabilities(jsonBytes(retiredPath)));
     for (final String field :
         List.of(
+            "max_outbound_messages_per_block",
+            "max_outbound_message_payload_bytes",
+            "max_pending_outbound_messages",
+            "max_pending_outbound_payload_bytes",
             "max_proofs_per_transaction",
             "max_proofs_per_block",
             "max_proof_bytes_per_proof",
@@ -478,9 +489,41 @@ public final class SccpClientExactTests {
       object(hostile.get("resource_limits")).put(field, 0);
       expectFailure(() -> SccpJsonParser.parseCapabilities(jsonBytes(hostile)));
     }
+    for (final String field :
+        List.of(
+            "max_outbound_messages_per_block",
+            "max_outbound_message_payload_bytes",
+            "max_pending_outbound_messages",
+            "max_pending_outbound_payload_bytes")) {
+      final Map<String, Object> missing = capabilities();
+      object(missing.get("resource_limits")).remove(field);
+      expectFailure(() -> SccpJsonParser.parseCapabilities(jsonBytes(missing)));
+    }
+    final Map<String, Object> unknownResourceLimit = capabilities();
+    object(unknownResourceLimit.get("resource_limits"))
+        .put("max_outbound_messages_per_transaction", 1);
+    expectFailure(
+        () -> SccpJsonParser.parseCapabilities(jsonBytes(unknownResourceLimit)));
+    final Map<String, List<Object>> hostileFixedLimits = new LinkedHashMap<>();
+    hostileFixedLimits.put(
+        "max_outbound_messages_per_block", List.of(511, 513, "512", Boolean.TRUE));
+    hostileFixedLimits.put(
+        "max_outbound_message_payload_bytes", List.of(4_095, 4_097, "4096", Boolean.TRUE));
+    for (final Map.Entry<String, List<Object>> entry : hostileFixedLimits.entrySet()) {
+      for (final Object replacement : entry.getValue()) {
+        final Map<String, Object> hostile = capabilities();
+        object(hostile.get("resource_limits")).put(entry.getKey(), replacement);
+        expectFailure(() -> SccpJsonParser.parseCapabilities(jsonBytes(hostile)));
+      }
+      final Map<String, Object> nullValue = capabilities();
+      object(nullValue.get("resource_limits")).put(entry.getKey(), null);
+      expectFailure(() -> SccpJsonParser.parseCapabilities(jsonBytes(nullValue)));
+    }
     final long jsSafeMaximum = 9_007_199_254_740_991L;
     final List<String> byteLimitFields =
         List.of(
+            "max_pending_outbound_messages",
+            "max_pending_outbound_payload_bytes",
             "max_proof_bytes_per_proof",
             "max_proof_bytes_per_transaction",
             "max_proof_bytes_per_block",
@@ -488,6 +531,10 @@ public final class SccpClientExactTests {
             "max_native_header_bytes_per_block");
     for (final String field :
         List.of(
+            "max_outbound_messages_per_block",
+            "max_outbound_message_payload_bytes",
+            "max_pending_outbound_messages",
+            "max_pending_outbound_payload_bytes",
             "max_proofs_per_transaction",
             "max_proofs_per_block",
             "max_proof_bytes_per_proof",
@@ -966,9 +1013,15 @@ public final class SccpClientExactTests {
   private static void recentMessagesRequireExactLinksAndUniqueIds() {
     final Map<String, Object> body = map();
     body.put("items", List.of(recent(9, MESSAGE_ID), recent(8, hash(0x12))));
+    body.put("next", Map.of("from", 8, "after_index", 0));
     final SccpModels.RecentMessages parsed =
         SccpJsonParser.parseRecentMessages(jsonBytes(body));
-    assert parsed.items.size() == 2 && parsed.items.get(0).height == 9;
+    assert parsed.items.size() == 2
+        && parsed.items.get(0).height.equals(BigInteger.valueOf(9));
+    assert parsed.items.get(0).commitmentIndex == 0;
+    assert parsed.next != null
+        && parsed.next.from.equals(BigInteger.valueOf(8))
+        && parsed.next.afterIndex == 0;
     assert parsed.items.get(0).routeConfigurationHash.equals(prefixed(0x72));
     assert parsed.items.get(0).payloadProjection.containsKey("Transfer");
     try {
@@ -977,6 +1030,94 @@ public final class SccpClientExactTests {
     } catch (final UnsupportedOperationException expected) {
       // Expected: public readback maps are immutable at every level.
     }
+
+    final Map<String, Object> sameHeightBody = map();
+    sameHeightBody.put(
+        "items", List.of(recent(9, MESSAGE_ID, 0), recent(9, hash(0x12), 1)));
+    sameHeightBody.put("next", null);
+    final SccpModels.RecentMessages sameHeight =
+        SccpJsonParser.parseRecentMessages(jsonBytes(sameHeightBody));
+    assert sameHeight.items.get(0).commitmentIndex == 0;
+    assert sameHeight.items.get(1).commitmentIndex == 1;
+    assert sameHeight.next == null;
+    assert SccpJsonParser.parseRecentMessages(jsonBytes(Map.of("items", List.of()))).next
+        == null;
+    final BigInteger maxU64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
+    final Map<String, Object> maxHeightBody = map();
+    maxHeightBody.put("items", List.of(recent(maxU64, MESSAGE_ID, 511)));
+    maxHeightBody.put("next", Map.of("from", maxU64, "after_index", 511));
+    final SccpModels.RecentMessages maxHeight =
+        SccpJsonParser.parseRecentMessages(jsonBytes(maxHeightBody));
+    assert maxHeight.items.get(0).height.equals(maxU64);
+    assert maxHeight.next != null && maxHeight.next.from.equals(maxU64);
+    assert maxHeight.next.afterIndex == 511;
+
+    for (final Object replacement :
+        List.of(-1, 512, "0", Double.valueOf(0.0d), Boolean.TRUE)) {
+      final Map<String, Object> hostile = recent(9, MESSAGE_ID);
+      hostile.put("commitment_index", replacement);
+      expectFailure(
+          () ->
+              SccpJsonParser.parseRecentMessages(
+                  jsonBytes(Map.of("items", List.of(hostile)))));
+    }
+    final Map<String, Object> nullCommitmentIndex = recent(9, MESSAGE_ID);
+    nullCommitmentIndex.put("commitment_index", null);
+    expectFailure(
+        () ->
+            SccpJsonParser.parseRecentMessages(
+                jsonBytes(Map.of("items", List.of(nullCommitmentIndex)))));
+    final Map<String, Object> missingCommitmentIndex = recent(9, MESSAGE_ID);
+    missingCommitmentIndex.remove("commitment_index");
+    expectFailure(
+        () ->
+            SccpJsonParser.parseRecentMessages(
+                jsonBytes(Map.of("items", List.of(missingCommitmentIndex)))));
+    expectFailure(
+        () ->
+            SccpJsonParser.parseRecentMessages(
+                jsonBytes(
+                    Map.of(
+                        "items",
+                        List.of(recent(BigInteger.ONE.shiftLeft(64), MESSAGE_ID))))));
+    expectFailure(
+        () ->
+            SccpJsonParser.parseRecentMessages(
+                jsonBytes(
+                    Map.of(
+                        "items",
+                        List.of(recent(9, MESSAGE_ID, 1), recent(9, hash(0x12), 0))))));
+    expectFailure(
+        () ->
+            SccpJsonParser.parseRecentMessages(
+                jsonBytes(
+                    Map.of(
+                        "items",
+                        List.of(recent(9, MESSAGE_ID, 0), recent(9, hash(0x12), 0))))));
+
+    final List<Map<String, Object>> cursorHostiles = new ArrayList<>();
+    cursorHostiles.add(new LinkedHashMap<>(Map.of("from", 9)));
+    cursorHostiles.add(new LinkedHashMap<>(Map.of("after_index", 0)));
+    cursorHostiles.add(new LinkedHashMap<>(Map.of("from", 0, "after_index", 0)));
+    cursorHostiles.add(
+        new LinkedHashMap<>(
+            Map.of("from", BigInteger.ONE.shiftLeft(64), "after_index", 0)));
+    cursorHostiles.add(new LinkedHashMap<>(Map.of("from", 9, "after_index", 512)));
+    cursorHostiles.add(
+        new LinkedHashMap<>(Map.of("from", 9, "after_index", 0, "offset", 0)));
+    cursorHostiles.add(new LinkedHashMap<>(Map.of("from", 8, "after_index", 0)));
+    cursorHostiles.add(new LinkedHashMap<>(Map.of("from", 9, "after_index", 1)));
+    for (final Map<String, Object> cursor : cursorHostiles) {
+      final Map<String, Object> hostile = map();
+      hostile.put("items", List.of(recent(9, MESSAGE_ID, 0)));
+      hostile.put("next", cursor);
+      expectFailure(() -> SccpJsonParser.parseRecentMessages(jsonBytes(hostile)));
+    }
+    final Map<String, Object> cursorOnEmptyPage = map();
+    cursorOnEmptyPage.put("items", List.of());
+    cursorOnEmptyPage.put("next", Map.of("from", 9, "after_index", 0));
+    expectFailure(
+        () -> SccpJsonParser.parseRecentMessages(jsonBytes(cursorOnEmptyPage)));
 
     final Map<String, Object> tronProjection = recent(9, MESSAGE_ID);
     tronProjection.put("target_profile", "tron-mainnet");
@@ -1105,6 +1246,10 @@ public final class SccpClientExactTests {
     registryLimits.put("max_retained_native_trust_anchors_per_lane", 4_096);
     value.put("registry_limits", registryLimits);
     final Map<String, Object> resourceLimits = map();
+    resourceLimits.put("max_outbound_messages_per_block", 512);
+    resourceLimits.put("max_outbound_message_payload_bytes", 4_096);
+    resourceLimits.put("max_pending_outbound_messages", 65_536);
+    resourceLimits.put("max_pending_outbound_payload_bytes", 268_435_456);
     resourceLimits.put("max_proofs_per_transaction", 1);
     resourceLimits.put("max_proofs_per_block", 4);
     resourceLimits.put("max_proof_bytes_per_proof", 8 * 1024 * 1024);
@@ -1597,12 +1742,18 @@ public final class SccpClientExactTests {
     return root;
   }
 
-  private static Map<String, Object> recent(final int height, final String id) {
+  private static Map<String, Object> recent(final Number height, final String id) {
+    return recent(height, id, 0);
+  }
+
+  private static Map<String, Object> recent(
+      final Number height, final String id, final int commitmentIndex) {
     final Map<String, Object> links = map();
     links.put("bundle_path", "/v1/sccp/proofs/message/" + id);
     links.put("proof_request_path", "/v1/sccp/proof-requests/" + id);
     final Map<String, Object> value = map();
     value.put("height", height);
+    value.put("commitment_index", commitmentIndex);
     value.put("message_id_hex", id);
     value.put("kind", "transfer");
     value.put("source_profile", "sora-taira");

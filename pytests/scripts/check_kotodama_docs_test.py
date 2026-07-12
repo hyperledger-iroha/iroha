@@ -333,12 +333,12 @@ seiyaku ExplicitDemo {}
         )
         self.assertEqual(document_set.source_roots, (Path("docs"),))
         # The V1 reset removed the parallel English-syntax copies from every
-        # translated example. Each of the 671 tracked documents still carries
-        # at least one canonical source, while the normative grammar contributes
-        # the additional distinct examples.
-        self.assertEqual(len(fences), 676)
-        self.assertEqual(len({fence.document for fence in fences}), 671)
-        self.assertEqual(len({(fence.source, fence.zk) for fence in fences}), 14)
+        # translated example. Each of the 672 tracked documents still carries
+        # at least one canonical source, while the normative grammar and Numeric
+        # V1 specification contribute the additional distinct examples.
+        self.assertEqual(len(fences), 677)
+        self.assertEqual(len({fence.document for fence in fences}), 672)
+        self.assertEqual(len({(fence.source, fence.zk) for fence in fences}), 15)
 
 
 if __name__ == "__main__":

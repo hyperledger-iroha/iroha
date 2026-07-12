@@ -87,14 +87,19 @@ The following table is generated from the implementation and lists canonical `ab
 
 The hash binds indexed-literal opcode/kind/layout semantics, the sorted allowed
 syscall numbers, their canonical argument and return signatures, each syscall's
-conservative host-access class, and the sorted allowed pointer-ABI type IDs.
-Gas prices are deliberately excluded;
-`ivm::gas::schedule_hash()` commits to the canonical gas schedule separately.
+conservative host-access class, the sorted allowed pointer-ABI type IDs, exact
+numeric domains/rules/JSON grammars/fault ordering, and typed durable-state
+schema identities, enum tags, layouts, pointer mappings, traversal rules, and
+caps. Gas prices are deliberately excluded; `ivm::gas::schedule_hash()` commits
+to the canonical gas schedule, including every staged-metering phase name and
+tag, separately. The descriptor-format revision does not introduce ABI v2:
+first-release artifacts still declare `abi_version = 1` and stale hashes fail
+closed.
 
 <!-- BEGIN GENERATED ABI HASHES -->
 | Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | b23c852dd485262beb79efd35cc9dfd69bd548a84239c77053b98a565839b7d3 |
+| ABI v1 | 935bed2cd46d78c00cad2b82f4b8396c3221ed3092884f428a4df9744900474b |
 <!-- END GENERATED ABI HASHES -->
 
 - ABI v1 is the sole first-release policy. Its `LDLIT`, `LDI64`, `JAL`, `JMP`, and

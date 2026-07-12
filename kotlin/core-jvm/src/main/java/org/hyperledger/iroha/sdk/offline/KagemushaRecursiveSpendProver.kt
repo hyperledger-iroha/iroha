@@ -8,17 +8,18 @@ import java.security.MessageDigest
 /** Exact ABI-18 Kagemusha recursive-spend bridge. */
 class KagemushaRecursiveSpendProver private constructor() {
     enum class Mode(val wireName: String) {
-        RECURSIVE_SPEND_V2("recursive_spend_v2"),
+        RECURSIVE_SPEND("recursive_spend_v2"),
     }
 
     companion object {
-        const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 6
-        const val RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 7
-        const val TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 15
-        const val PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18
+        const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18
+        internal const val RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 7
+        internal const val TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 15
+        internal const val PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18
         const val PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA: String =
             "kagemusha.offline.recursive_spend.artifact_manifest.v3"
-        const val PASTA_CYCLE_V3_MODE: String = "recursive_spend_v2"
+        const val MODE: String = "recursive_spend_v2"
+        const val PASTA_CYCLE_V3_MODE: String = MODE
         const val PASTA_CYCLE_V3_PROOF_BACKEND: String = "halo2/ipa-pasta-cycle-v1"
         const val PASTA_CYCLE_V3_TRANSCRIPT_PROFILE: String =
             "kagemusha-pasta-cycle-poseidon-v1"
@@ -27,6 +28,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val PASTA_CYCLE_V3_STATE_CIRCUIT_ID: String =
             "kagemusha-recursive-spend-state-ep-v1"
         const val PASTA_CYCLE_V3_MAX_PROOF_BYTES: Int = 4_096
+        const val MAX_MANIFEST_BYTES: Int = 1024 * 1024
         const val RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
             "kagemusha-recursive-aggregation-v1"
         const val RECURSIVE_COMPACT_CIRCUIT_ID_V1 =
@@ -90,19 +92,11 @@ class KagemushaRecursiveSpendProver private constructor() {
                             nativeTopUpInstruction(MALFORMED_NATIVE_PROBE_ARCHIVE)
                         }
                     },
-                    requiredNativeBridgeAbiVersion = TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+                    requiredNativeBridgeAbiVersion = REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
                 )
         private val pastaCycleV3ArtifactIngestAvailable: Boolean =
             loadPastaCycleV3ArtifactIngestBridge()
-        private val pastaCycleV3BackendAvailable: Boolean =
-            nativeAvailable &&
-                detectNativeAvailability(
-                    loadLibrary = {},
-                    nativeBridgeAbiVersionProbe = { nativeBridgeAbiVersion() },
-                    probeSymbol = { nativePastaCycleV3BackendAvailable() },
-                    requiredNativeBridgeAbiVersion =
-                        PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
-                )
+        private val pastaCycleV3BackendAvailable: Boolean = loadPastaCycleV3Backend()
 
         private class LineageProvingKeyArchive(
             val version: Int,
@@ -120,6 +114,9 @@ class KagemushaRecursiveSpendProver private constructor() {
             val value: Int,
             val offset: Int,
         )
+
+        internal fun isExactBridgeAbi(abiVersion: Int): Boolean =
+            abiVersion == REQUIRED_NATIVE_BRIDGE_ABI_VERSION
 
         @JvmStatic
         fun isNativeAvailable(): Boolean = nativeAvailable
@@ -141,34 +138,74 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic
         fun preferredMode(pastaCycleV3BackendAvailable: Boolean): Mode? =
-            if (pastaCycleV3BackendAvailable) Mode.RECURSIVE_SPEND_V2 else null
+            if (pastaCycleV3BackendAvailable) Mode.RECURSIVE_SPEND else null
 
-        /** Begin one manifest-bound, bounded streaming ingest of a complete KRV3 package. */
+        /** True only for the sole first-release spend-again product selector. */
         @JvmStatic
-        fun beginPastaCycleV3ArtifactIngest(
+        fun isSpendAgainMode(mode: String?): Boolean = mode == MODE
+
+        /** Begin one manifest-bound artifact spool for an atomic six-artifact install. */
+        @JvmStatic
+        fun beginArtifactIngest(
             manifestNorito: ByteArray?,
             manifestSha256: ByteArray?,
             artifactSha256: ByteArray?,
-        ): PastaCycleV3ArtifactIngest {
-            check(pastaCycleV3ArtifactIngestAvailable) {
-                "$LIBRARY_NAME ABI-18 artifact ingest is not available in this runtime"
-            }
-            val manifest = requireArtifactInput(manifestNorito, "manifestNorito", false)
-            val manifestDigest = requireArtifactInput(manifestSha256, "manifestSha256", true)
-            val artifactDigest = requireArtifactInput(artifactSha256, "artifactSha256", true)
+        ): ArtifactIngest {
+            val manifest =
+                requireArtifactInput(
+                    manifestNorito,
+                    "manifestNorito",
+                    digest = false,
+                    maxBytes = MAX_MANIFEST_BYTES,
+                )
+            val manifestDigest =
+                requireArtifactInput(manifestSha256, "manifestSha256", digest = true)
+            val artifactDigest =
+                requireArtifactInput(artifactSha256, "artifactSha256", digest = true)
+            requireArtifactBridge()
             val handle = nativeArtifactBeginV3(manifest, manifestDigest, artifactDigest)
             check(handle > 0) { "native Kagemusha V3 artifact ingest returned no handle" }
-            return PastaCycleV3ArtifactIngest(handle)
+            return ArtifactIngest(handle)
+        }
+
+        /** Begin one all-or-nothing installation of the manifest's six artifact roles. */
+        @JvmStatic
+        fun beginArtifactInstallSession(
+            manifestNorito: ByteArray?,
+            manifestSha256: ByteArray?,
+        ): ArtifactInstallSession {
+            val manifest =
+                requireArtifactInput(
+                    manifestNorito,
+                    "manifestNorito",
+                    digest = false,
+                    maxBytes = MAX_MANIFEST_BYTES,
+                )
+            val manifestDigest =
+                requireArtifactInput(manifestSha256, "manifestSha256", digest = true)
+            requireArtifactBridge()
+            return ArtifactInstallSession(manifest, manifestDigest)
         }
 
         private fun requireArtifactInput(
             bytes: ByteArray?,
             name: String,
             digest: Boolean,
+            maxBytes: Int? = null,
         ): ByteArray {
             require(bytes != null && bytes.isNotEmpty()) { "$name must not be empty" }
             require(!digest || bytes.size == 32) { "$name must be exactly 32 bytes" }
-            return bytes
+            require(!digest || bytes.any { it.toInt() != 0 }) { "$name must not be all zero" }
+            require(maxBytes == null || bytes.size <= maxBytes) {
+                "$name must not exceed $maxBytes bytes"
+            }
+            return bytes.copyOf()
+        }
+
+        private fun requireArtifactBridge() {
+            check(pastaCycleV3ArtifactIngestAvailable) {
+                "$LIBRARY_NAME exact ABI-18 artifact ingest is not available in this runtime"
+            }
         }
 
         @JvmStatic
@@ -374,8 +411,8 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         private fun lineageProvingKeyArchivePayload(lineageProvingKeyArchive: ByteArray): ByteArray {
             require(
-                KagemushaCompactPaymentTokenProver.isValidNoritoArchive(lineageProvingKeyArchive) &&
-                    KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(lineageProvingKeyArchive),
+                NoritoArchiveValidation.isValidNoritoArchive(lineageProvingKeyArchive) &&
+                    NoritoArchiveValidation.hasNonEmptyNoritoPayload(lineageProvingKeyArchive),
             ) {
                 "lineage_proving_key_archive"
             }
@@ -729,16 +766,13 @@ class KagemushaRecursiveSpendProver private constructor() {
             isLineageAppendOutputCircuitId(normalizeAppendOutputCircuitId(outputCircuitId)) &&
                 previousHopCount >= 1
 
-        @JvmStatic
-        fun initSpend(requestArchive: ByteArray?): ByteArray =
+        internal fun initSpend(requestArchive: ByteArray?): ByteArray =
             call("init", requestArchive, ::nativeInitSpend)
 
-        @JvmStatic
-        fun initSpend(request: InitSpendRequest): ByteArray =
+        internal fun initSpend(request: InitSpendRequest): ByteArray =
             initSpend(KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(request))
 
-        @JvmStatic
-        fun topUpSpend(requestArchive: ByteArray?): ByteArray =
+        internal fun topUpSpend(requestArchive: ByteArray?): ByteArray =
             call(
                 "top-up",
                 requestArchive,
@@ -746,28 +780,22 @@ class KagemushaRecursiveSpendProver private constructor() {
                 bridgeAvailable = nativeTopUpAvailable,
             )
 
-        @JvmStatic
-        fun topUpSpend(request: TopUpSpendRequest): ByteArray =
+        internal fun topUpSpend(request: TopUpSpendRequest): ByteArray =
             topUpSpend(KagemushaRecursiveSpendRequestCodecs.encodeTopUpRequest(request))
 
-        @JvmStatic
-        fun appendSpend(requestArchive: ByteArray?): ByteArray =
+        internal fun appendSpend(requestArchive: ByteArray?): ByteArray =
             call("append", requestArchive, ::nativeAppendSpend)
 
-        @JvmStatic
-        fun appendSpend(request: AppendSpendRequest): ByteArray =
+        internal fun appendSpend(request: AppendSpendRequest): ByteArray =
             appendSpend(KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(request))
 
-        @JvmStatic
-        fun transitionProfileInit(requestArchive: ByteArray?): ByteArray =
+        internal fun transitionProfileInit(requestArchive: ByteArray?): ByteArray =
             call("transition profile init", requestArchive, ::nativeTransitionProfileInit)
 
-        @JvmStatic
-        fun transitionProfileAppend(requestArchive: ByteArray?): ByteArray =
+        internal fun transitionProfileAppend(requestArchive: ByteArray?): ByteArray =
             call("transition profile append", requestArchive, ::nativeTransitionProfileAppend)
 
-        @JvmStatic
-        fun lineageAppendBoundary(profileArchive: ByteArray?): ByteArray =
+        internal fun lineageAppendBoundary(profileArchive: ByteArray?): ByteArray =
             callArchive(
                 "lineage append boundary",
                 "profileArchive",
@@ -775,8 +803,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 ::nativeLineageAppendBoundary,
             )
 
-        @JvmStatic
-        fun lineageWitnessFromInitResult(
+        internal fun lineageWitnessFromInitResult(
             requestArchive: ByteArray?,
             bundleArchive: ByteArray?,
         ): ByteArray =
@@ -787,8 +814,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 ::nativeLineageWitnessFromInitResult,
             )
 
-        @JvmStatic
-        fun lineageWitnessAppendResult(
+        internal fun lineageWitnessAppendResult(
             previousWitnessArchive: ByteArray?,
             requestArchive: ByteArray?,
             bundleArchive: ByteArray?,
@@ -801,26 +827,21 @@ class KagemushaRecursiveSpendProver private constructor() {
                 ::nativeLineageWitnessAppendResult,
             )
 
-        @JvmStatic
-        fun verifySpend(requestArchive: ByteArray?): ByteArray =
+        internal fun verifySpend(requestArchive: ByteArray?): ByteArray =
             call("verify", requestArchive, ::nativeVerifySpend)
 
-        @JvmStatic
-        fun verifySpend(request: VerifySpendRequest): VerifySpendResult =
+        internal fun verifySpend(request: VerifySpendRequest): VerifySpendResult =
             KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
                 verifySpend(KagemushaRecursiveSpendRequestCodecs.encodeVerifyRequest(request)),
             )
 
-        @JvmStatic
-        fun redeemSpend(requestArchive: ByteArray?): ByteArray =
+        internal fun redeemSpend(requestArchive: ByteArray?): ByteArray =
             call("redeem", requestArchive, ::nativeRedeemSpend)
 
-        @JvmStatic
-        fun redeemSpend(request: RedeemSpendRequest): ByteArray =
+        internal fun redeemSpend(request: RedeemSpendRequest): ByteArray =
             redeemSpend(KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(request))
 
-        @JvmStatic
-        fun buildPallasOpenEnvelopesArchive(recordBundleArchive: ByteArray?): ByteArray =
+        internal fun buildPallasOpenEnvelopesArchive(recordBundleArchive: ByteArray?): ByteArray =
             callArchive(
                 "build Pallas open envelopes",
                 "recordBundleArchive",
@@ -828,8 +849,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 ::nativeBuildPallasOpenEnvelopesArchive,
             )
 
-        @JvmStatic
-        fun buildPreviousProofOpenEnvelopesArchive(previousBundleArchive: ByteArray?): ByteArray =
+        internal fun buildPreviousProofOpenEnvelopesArchive(previousBundleArchive: ByteArray?): ByteArray =
             callArchive(
                 "build previous proof open envelopes",
                 "previousBundleArchive",
@@ -899,10 +919,10 @@ class KagemushaRecursiveSpendProver private constructor() {
             require(archive.size <= NATIVE_ARCHIVE_MAX_BYTES) {
                 "$archiveName must not exceed $NATIVE_ARCHIVE_MAX_BYTES bytes"
             }
-            require(KagemushaCompactPaymentTokenProver.isValidNoritoArchive(archive)) {
+            require(NoritoArchiveValidation.isValidNoritoArchive(archive)) {
                 "$archiveName must be a valid Norito archive"
             }
-            require(KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(archive)) {
+            require(NoritoArchiveValidation.hasNonEmptyNoritoPayload(archive)) {
                 "$archiveName must contain a non-empty Norito payload"
             }
             return archive
@@ -912,10 +932,10 @@ class KagemushaRecursiveSpendProver private constructor() {
             check(output != null) { "$label returned no output" }
             check(output.isNotEmpty()) { "$label returned empty output" }
             check(output.size <= NATIVE_ARCHIVE_MAX_BYTES) { "$label returned oversized output" }
-            check(KagemushaCompactPaymentTokenProver.isValidNoritoArchive(output)) {
+            check(NoritoArchiveValidation.isValidNoritoArchive(output)) {
                 "$label returned invalid Norito archive"
             }
-            check(KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(output)) {
+            check(NoritoArchiveValidation.hasNonEmptyNoritoPayload(output)) {
                 "$label returned empty Norito payload"
             }
             return output
@@ -929,22 +949,27 @@ class KagemushaRecursiveSpendProver private constructor() {
             )
 
         private fun loadPastaCycleV3ArtifactIngestBridge(): Boolean {
-            if (!nativeAvailable) return false
-            return try {
-                if (nativeBridgeAbiVersion() != PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION) {
-                    false
-                } else {
-                    nativeArtifactBeginV3(byteArrayOf(0), ByteArray(32), ByteArray(32))
-                    false
-                }
-            } catch (_: IllegalArgumentException) {
-                true
-            } catch (_: UnsatisfiedLinkError) {
-                false
-            } catch (_: RuntimeException) {
-                false
-            }
+            return detectExactNativeAvailability(
+                loadLibrary = { System.loadLibrary(LIBRARY_NAME) },
+                nativeBridgeAbiVersionProbe = { nativeBridgeAbiVersion() },
+                probeSymbol = {
+                    expectIllegalArgumentProbe {
+                        nativeArtifactBeginV3(byteArrayOf(0), ByteArray(32), ByteArray(32))
+                    }
+                },
+                expectedNativeBridgeAbiVersion =
+                    PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+            )
         }
+
+        private fun loadPastaCycleV3Backend(): Boolean =
+            detectExactNativeAvailability(
+                loadLibrary = { System.loadLibrary(LIBRARY_NAME) },
+                nativeBridgeAbiVersionProbe = { nativeBridgeAbiVersion() },
+                probeSymbol = { nativePastaCycleV3BackendAvailable() },
+                expectedNativeBridgeAbiVersion =
+                    PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+            )
 
         private fun probeRequiredNativeSymbols(): Boolean {
             val probe = MALFORMED_NATIVE_PROBE_ARCHIVE
@@ -1018,6 +1043,38 @@ class KagemushaRecursiveSpendProver private constructor() {
             }
         }
 
+        internal fun detectExactNativeAvailability(
+            loadLibrary: () -> Unit,
+            nativeBridgeAbiVersionProbe: () -> Int,
+            probeSymbol: () -> Boolean,
+            expectedNativeBridgeAbiVersion: Int,
+        ): Boolean {
+            if (expectedNativeBridgeAbiVersion <= 0) return false
+            try {
+                loadLibrary()
+            } catch (_: UnsatisfiedLinkError) {
+                return false
+            } catch (_: RuntimeException) {
+                return false
+            }
+            val abiVersion =
+                try {
+                    nativeBridgeAbiVersionProbe()
+                } catch (_: UnsatisfiedLinkError) {
+                    return false
+                } catch (_: RuntimeException) {
+                    return false
+                }
+            if (abiVersion != expectedNativeBridgeAbiVersion) return false
+            return try {
+                probeSymbol()
+            } catch (_: UnsatisfiedLinkError) {
+                false
+            } catch (_: RuntimeException) {
+                false
+            }
+        }
+
         @JvmStatic
         private external fun nativeBridgeAbiVersion(): Int
 
@@ -1039,6 +1096,22 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic
         private external fun nativeArtifactCancelV3(handle: Long)
+
+        @JvmStatic
+        private external fun nativeArtifactSetInstallV3(
+            manifestNorito: ByteArray,
+            manifestSha256: ByteArray,
+            handles: LongArray,
+        )
+
+        @JvmStatic
+        private external fun nativeArtifactSetIsInstalledV3(
+            manifestNorito: ByteArray,
+            manifestSha256: ByteArray,
+        ): Boolean
+
+        @JvmStatic
+        private external fun nativeArtifactSetUninstallV3(manifestSha256: ByteArray)
 
         @JvmStatic
         private external fun nativeInitSpend(requestArchive: ByteArray): ByteArray?
@@ -1089,9 +1162,10 @@ class KagemushaRecursiveSpendProver private constructor() {
     }
 
     /** Owns a native KRV3 spool until the caller closes it. */
-    class PastaCycleV3ArtifactIngest internal constructor(initialHandle: Long) : AutoCloseable {
+    class ArtifactIngest internal constructor(initialHandle: Long) : AutoCloseable {
         private var handle: Long = initialHandle
         private var finalized: Boolean = false
+        private var installClaimed: Boolean = false
 
         @Synchronized
         fun write(chunk: ByteArray?) {
@@ -1113,13 +1187,134 @@ class KagemushaRecursiveSpendProver private constructor() {
         @Synchronized
         override fun close() {
             if (handle == 0L) return
-            nativeArtifactCancelV3(handle)
+            check(!installClaimed) { "Kagemusha V3 artifact ingest is being installed" }
+            val current = handle
+            nativeArtifactCancelV3(current)
             handle = 0L
+            finalized = false
+        }
+
+        @Synchronized
+        internal fun claimFinalizedHandle(): Long {
+            check(handle != 0L && finalized && !installClaimed) {
+                "Kagemusha V3 artifact ingest is not installable"
+            }
+            installClaimed = true
+            return handle
+        }
+
+        @Synchronized
+        internal fun releaseInstallClaim(expectedHandle: Long) {
+            if (handle == expectedHandle && installClaimed) installClaimed = false
+        }
+
+        @Synchronized
+        internal fun relinquishInstalledHandle(expectedHandle: Long) {
+            check(handle == expectedHandle && finalized && installClaimed) {
+                "Kagemusha V3 artifact install ownership mismatch"
+            }
+            handle = 0L
+            finalized = false
+            installClaimed = false
         }
 
         private fun requireOpen() {
             check(handle != 0L) { "Kagemusha V3 artifact ingest is closed" }
             check(!finalized) { "Kagemusha V3 artifact ingest is already finalized" }
+            check(!installClaimed) { "Kagemusha V3 artifact ingest is being installed" }
+        }
+    }
+
+    /** Coordinates one atomic six-artifact V3 generation install. */
+    class ArtifactInstallSession internal constructor(
+        manifestNorito: ByteArray,
+        manifestSha256: ByteArray,
+    ) : AutoCloseable {
+        private val manifestNorito = manifestNorito.copyOf()
+        private val manifestSha256 = manifestSha256.copyOf()
+        private val artifacts = linkedMapOf<String, ArtifactIngest>()
+        private var installed = false
+        private var closed = false
+
+        @Synchronized
+        fun beginArtifact(expectedArtifactSha256: ByteArray?): ArtifactIngest {
+            requirePending()
+            check(artifacts.size < 6) { "artifact set already has six streams" }
+            val digest =
+                requireArtifactInput(
+                    expectedArtifactSha256,
+                    "expectedArtifactSha256",
+                    digest = true,
+                )
+            val key = digest.joinToString(separator = "") { byte ->
+                "%02x".format(byte.toInt() and 0xff)
+            }
+            require(!artifacts.containsKey(key)) { "expectedArtifactSha256 is duplicated" }
+            return beginArtifactIngest(manifestNorito, manifestSha256, digest)
+                .also { artifacts[key] = it }
+        }
+
+        /** Native failure consumes no handles and preserves the previous generation. */
+        @Synchronized
+        fun install() {
+            requirePending()
+            check(artifacts.size == 6) { "artifact set must contain exactly six streams" }
+            val ordered = artifacts.values.toList()
+            val handles = LongArray(6)
+            var claimed = 0
+            try {
+                while (claimed < ordered.size) {
+                    handles[claimed] = ordered[claimed].claimFinalizedHandle()
+                    claimed += 1
+                }
+                nativeArtifactSetInstallV3(manifestNorito, manifestSha256, handles)
+            } catch (failure: Throwable) {
+                repeat(claimed) { index ->
+                    ordered[index].releaseInstallClaim(handles[index])
+                }
+                throw failure
+            }
+            ordered.forEachIndexed { index, artifact ->
+                artifact.relinquishInstalledHandle(handles[index])
+            }
+            artifacts.clear()
+            installed = true
+        }
+
+        @Synchronized
+        fun isInstalled(): Boolean {
+            if (closed && !installed) return false
+            return nativeArtifactSetIsInstalledV3(manifestNorito, manifestSha256)
+        }
+
+        /** The digest guard prevents a stale session from removing a newer generation. */
+        @Synchronized
+        fun uninstall() {
+            if (!installed || closed) return
+            nativeArtifactSetUninstallV3(manifestSha256)
+            installed = false
+            closed = true
+        }
+
+        /** Cancels pending streams; installed generations require explicit uninstall. */
+        @Synchronized
+        override fun close() {
+            if (closed || installed) return
+            var firstFailure: RuntimeException? = null
+            artifacts.values.forEach { artifact ->
+                try {
+                    artifact.close()
+                } catch (failure: RuntimeException) {
+                    if (firstFailure == null) firstFailure = failure
+                }
+            }
+            artifacts.clear()
+            closed = true
+            firstFailure?.let { throw it }
+        }
+
+        private fun requirePending() {
+            check(!closed && !installed) { "artifact install session is not pending" }
         }
     }
 

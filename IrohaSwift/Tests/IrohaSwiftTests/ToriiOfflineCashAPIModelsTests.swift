@@ -4,11 +4,11 @@ import XCTest
 final class ToriiOfflineCashAPIModelsTests: XCTestCase {
     func testPublicRequestSchemaNamesMatchRust() {
         XCTAssertEqual(
-            KagemushaRecursiveSpendV2.topUpRequestWireName,
+            KagemushaRecursiveSpend.topUpRequestWireName,
             "iroha.torii.v1.offline.top_up.request"
         )
         XCTAssertEqual(
-            KagemushaRecursiveSpendV2.redeemRequestWireName,
+            KagemushaRecursiveSpend.redeemRequestWireName,
             "iroha.torii.v1.offline.redeem.request"
         )
     }
@@ -116,11 +116,14 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
     func testOfflineTopUpAnchorUsesCurrentPublicNameAndRetainsCanonicalWire() throws {
         let archive = try canonicalTopUpAnchorArchive()
         let anchor = try OfflineTopUpAnchor(noritoArchive: archive)
+        let finalityProof = try OfflineTopUpFinalityProof(
+            noritoArchive: canonicalTopUpFinalityProofArchive()
+        )
         XCTAssertEqual(anchor.noritoArchive(), archive)
         XCTAssertEqual(anchor.digest, Data(repeating: 0xd8, count: 32))
         XCTAssertEqual(
             anchor.digest,
-            try KagemushaRecursiveSpendV2Codecs.decodeTopUpAnchor(archive).anchorDigest
+            try KagemushaRecursiveSpendCodecs.decodeTopUpAnchor(archive).anchorDigest
         )
         XCTAssertEqual(anchor, try OfflineTopUpAnchor(noritoArchive: archive))
 
@@ -128,11 +131,24 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             transactionHash: Self.transactionHash,
             finalizedBlockHeight: 7,
             serverTimeMs: 8,
-            anchor: anchor
+            anchor: anchor,
+            finalityProof: finalityProof
         )
         XCTAssertEqual(result.anchor.noritoArchive(), archive)
+        XCTAssertEqual(
+            result.finalityProof.noritoArchive,
+            canonicalTopUpFinalityProofArchive()
+        )
 
         XCTAssertThrowsError(try OfflineTopUpAnchor(noritoArchive: Data()))
+        XCTAssertThrowsError(try OfflineTopUpAnchor(noritoArchive: noritoEncode(
+            typeName: KagemushaRecursiveSpend.topUpAnchorWireName,
+            payload: Data(
+                repeating: 0xa4,
+                count: KagemushaRecursiveSpend.topUpFinalityAnchorMaximumArchiveBytes
+            ),
+            flags: NoritoHeader.compactLen
+        )))
         XCTAssertThrowsError(try OfflineTopUpAnchor(noritoArchive: noritoEncode(
             typeName: "wrong.anchor.schema",
             payload: try XCTUnwrap(noritoDecodeFrame(archive)).payload,
@@ -212,6 +228,9 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         }
 
         let anchor = try OfflineTopUpAnchor(noritoArchive: canonicalTopUpAnchorArchive())
+        let finalityProof = try OfflineTopUpFinalityProof(
+            noritoArchive: canonicalTopUpFinalityProofArchive()
+        )
         for (finalizedBlockHeight, serverTimeMs, field) in [
             (UInt64(0), UInt64(1), "finalized_block_height"),
             (UInt64(1), UInt64(0), "server_time_ms"),
@@ -220,7 +239,8 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
                 transactionHash: Self.transactionHash,
                 finalizedBlockHeight: finalizedBlockHeight,
                 serverTimeMs: serverTimeMs,
-                anchor: anchor
+                anchor: anchor,
+                finalityProof: finalityProof
             )) { error in
                 XCTAssertEqual(error as? OfflineOperationError, .invalidField(field))
             }
@@ -341,13 +361,13 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         let operationId = Data(repeating: 0xab, count: 32)
         let expectedOperationId = String(repeating: "ab", count: 32)
         let topUpArchive = requestArchive(
-            schema: KagemushaRecursiveSpendV2.topUpRequestWireName,
+            schema: KagemushaRecursiveSpend.topUpRequestWireName,
             fieldCount: 8,
             operationIdFieldIndex: 6,
             operationId: operationId
         )
         let redeemArchive = requestArchive(
-            schema: KagemushaRecursiveSpendV2.redeemRequestWireName,
+            schema: KagemushaRecursiveSpend.redeemRequestWireName,
             fieldCount: 11,
             operationIdFieldIndex: 9,
             operationId: operationId
@@ -365,13 +385,13 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
     func testRequestsRequireTheirExactSchemaAndOperationIdField() throws {
         let operationId = Data(repeating: 0x11, count: 32)
         let topUpArchive = requestArchive(
-            schema: KagemushaRecursiveSpendV2.topUpRequestWireName,
+            schema: KagemushaRecursiveSpend.topUpRequestWireName,
             fieldCount: 8,
             operationIdFieldIndex: 6,
             operationId: operationId
         )
         let redeemArchive = requestArchive(
-            schema: KagemushaRecursiveSpendV2.redeemRequestWireName,
+            schema: KagemushaRecursiveSpend.redeemRequestWireName,
             fieldCount: 11,
             operationIdFieldIndex: 9,
             operationId: operationId
@@ -381,7 +401,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         XCTAssertThrowsError(try OfflineRedeemRequest(noritoArchive: topUpArchive))
         XCTAssertThrowsError(
             try OfflineTopUpRequest(noritoArchive: requestArchive(
-                schema: KagemushaRecursiveSpendV2.topUpRequestWireName,
+                schema: KagemushaRecursiveSpend.topUpRequestWireName,
                 fieldCount: 8,
                 operationIdFieldIndex: 5,
                 operationId: operationId
@@ -389,7 +409,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         )
         XCTAssertThrowsError(
             try OfflineRedeemRequest(noritoArchive: requestArchive(
-                schema: KagemushaRecursiveSpendV2.redeemRequestWireName,
+                schema: KagemushaRecursiveSpend.redeemRequestWireName,
                 fieldCount: 11,
                 operationIdFieldIndex: 8,
                 operationId: operationId
@@ -404,7 +424,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             Data(repeating: 0x11, count: 33),
         ] {
             XCTAssertThrowsError(try OfflineTopUpRequest(noritoArchive: requestArchive(
-                schema: KagemushaRecursiveSpendV2.topUpRequestWireName,
+                schema: KagemushaRecursiveSpend.topUpRequestWireName,
                 fieldCount: 8,
                 operationIdFieldIndex: 6,
                 operationId: operationId
@@ -412,7 +432,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
                 XCTAssertEqual(error as? OfflineOperationError, .invalidField("operation_id"))
             }
             XCTAssertThrowsError(try OfflineRedeemRequest(noritoArchive: requestArchive(
-                schema: KagemushaRecursiveSpendV2.redeemRequestWireName,
+                schema: KagemushaRecursiveSpend.redeemRequestWireName,
                 fieldCount: 11,
                 operationIdFieldIndex: 9,
                 operationId: operationId
@@ -429,7 +449,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             operationIdFieldIndex: 6,
             operationId: operationId
         )
-        let schema = KagemushaRecursiveSpendV2.topUpRequestWireName
+        let schema = KagemushaRecursiveSpend.topUpRequestWireName
 
         var trailingBytePayload = canonicalPayload
         trailingBytePayload.append(0xff)
@@ -515,14 +535,14 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             .fromAccount(publicKey: fixed32(0xc0))
             .toI105(networkPrefix: 0x02f1)
         let amount = try KagemushaScaledAmount(atomicUnits: "1", scale: 2)
-        let note = try KagemushaSpendableNoteDescriptorV2(
+        let note = try KagemushaSpendableNoteDescriptor(
             chainID: "swift-offline-api",
             assetDefinitionID: assetDefinitionId,
             noteCommitment: fixed32(0xd0),
             spendNullifier: fixed32(0xd1),
             amount: amount
         )
-        let draft = try KagemushaRecursiveSpendTopUpAnchorV2(
+        let draft = try KagemushaRecursiveSpendTopUpAnchor(
             version: 2,
             chainID: note.chainID,
             payer: payer,
@@ -531,18 +551,26 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             amount: amount,
             initialRoot: fixed32(0xd2),
             finalizedRoot: fixed32(0xd3),
-            topUpAnchorNullifiers: [fixed32(0xd4)],
+            shieldLeafIndex: 7,
             currentNote: note,
             topUpOperationID: fixed32(0xd5),
-            transferVerifierID: "halo2:fixture-transfer",
-            transferVerifierCommitment: fixed32(0xd6),
+            shieldVerifierID: "halo2/ipa:fixture-topup-shield",
+            shieldVerifierCommitment: fixed32(0xd6),
             artifactGeneration: "generation-v2-test",
             finalizedHeight: 1,
             finalizedTransactionHash: fixed32(0xd7),
             anchorDigest: fixed32(0xd8),
             archive: Data([1])
         )
-        return try KagemushaRecursiveSpendV2Codecs.encodeTopUpAnchor(draft)
+        return try KagemushaRecursiveSpendCodecs.encodeTopUpAnchor(draft)
+    }
+
+    private func canonicalTopUpFinalityProofArchive() -> Data {
+        noritoEncode(
+            typeName: KagemushaRecursiveSpend.topUpFinalityProofWireName,
+            payload: Data([0x02]),
+            flags: NoritoHeader.compactLen
+        )
     }
 
     private static let operationId = String(repeating: "11", count: 32)

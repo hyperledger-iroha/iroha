@@ -150,7 +150,6 @@ impl PreparedCandidateWork {
         }
     }
 }
-
 /// A bounded subset of candidate indices whose lane-local work is unavailable.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CandidateWorkUnavailable {
@@ -222,7 +221,6 @@ impl CandidateWorkProvider for SingleRouteWorkProvider {
         }
     }
 }
-
 /// Complete immutable inputs for one fresh successor candidate.
 pub(crate) struct CandidateRequest<'request, Work> {
     /// Frozen height context governing this candidate.
@@ -871,7 +869,6 @@ fn unavailable_native_amx_indices(candidates: &[CandidateDescriptor<'_>]) -> BTr
         })
         .collect()
 }
-
 fn encoded_chunk_count(
     layout: wire::DataAvailabilityLayout,
     payload_len: usize,

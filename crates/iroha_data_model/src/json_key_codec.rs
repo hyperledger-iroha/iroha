@@ -380,8 +380,9 @@ impl JsonKeyCodec for crate::bridge::sccp::SccpOutboundMessageKeyV1 {
 impl JsonKeyCodec for crate::bridge::sccp::SccpOutboundMessageIndexKeyV1 {
     fn encode_json_key(&self, out: &mut String) {
         let encoded = format!(
-            "sccp-outbound-index-v1:{}:{}:{}:{}",
+            "sccp-outbound-index-v1:{}:{}:{}:{}:{}",
             self.recorded_at_height,
+            self.commitment_index,
             self.lane.source.profile_key(),
             self.lane.target.profile_key(),
             hex::encode(self.message_id)
@@ -411,6 +412,22 @@ impl JsonKeyCodec for crate::bridge::sccp::SccpOutboundMessageIndexKeyV1 {
         }
         let recorded_at_height = height_text
             .parse::<u64>()
+            .map_err(|err| json::Error::Message(err.to_string()))?;
+        let commitment_index_text = parts
+            .next()
+            .ok_or_else(|| json::Error::Message("missing SCCP outbound commitment index".into()))?;
+        if commitment_index_text.is_empty()
+            || (commitment_index_text.len() > 1 && commitment_index_text.starts_with('0'))
+            || !commitment_index_text
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())
+        {
+            return Err(json::Error::Message(
+                "SCCP outbound commitment index must be canonical unsigned decimal".into(),
+            ));
+        }
+        let commitment_index = commitment_index_text
+            .parse::<u32>()
             .map_err(|err| json::Error::Message(err.to_string()))?;
         let source = parts
             .next()
@@ -447,6 +464,7 @@ impl JsonKeyCodec for crate::bridge::sccp::SccpOutboundMessageIndexKeyV1 {
             .map_err(|_| json::Error::Message("SCCP message id must be 32 bytes".into()))?;
         let key = crate::bridge::sccp::SccpOutboundMessageIndexKeyV1 {
             recorded_at_height,
+            commitment_index,
             lane: crate::bridge::sccp::SccpLaneIdV1 { source, target },
             message_id,
         };
@@ -658,6 +676,7 @@ mod tests {
     fn sccp_outbound_message_key_json_key_codec_rejects_aliases_and_malleability() {
         let message_id = "4242424242424242424242424242424242424242424242424242424242424242";
         let zero_id = "0000000000000000000000000000000000000000000000000000000000000000";
+        let uppercase_id = format!("ab{}", &message_id[2..]).to_uppercase();
         let hostile = [
             format!("sora-taira:bsc-testnet:{message_id}"),
             format!("SCCP-OUTBOUND-V1:sora-taira:bsc-testnet:{message_id}"),
@@ -669,10 +688,7 @@ mod tests {
             format!("sccp-outbound-v1:bsc-testnet:sora-taira:{message_id}"),
             format!("sccp-outbound-v1:sora-taira:sora-nexus:{message_id}"),
             format!("sccp-outbound-v1:sora-taira:ethereum-sepolia:{zero_id}"),
-            format!(
-                "sccp-outbound-v1:sora-taira:bsc-testnet:{}",
-                message_id.to_uppercase()
-            ),
+            format!("sccp-outbound-v1:sora-taira:bsc-testnet:{}", uppercase_id),
             format!("sccp-outbound-v1:sora-taira:bsc-testnet: {message_id}"),
             format!("sccp-outbound-v1:sora-taira:bsc-testnet:{message_id}:trailing"),
             String::new(),
@@ -690,6 +706,7 @@ mod tests {
     fn sccp_outbound_index_key_json_key_codec_is_canonical() {
         let key = SccpOutboundMessageIndexKeyV1 {
             recorded_at_height: 42,
+            commitment_index: 7,
             lane: SccpLaneIdV1 {
                 source: SccpNetworkV1::SoraTaira,
                 target: SccpNetworkV1::EthereumMainnet,
@@ -702,8 +719,8 @@ mod tests {
         assert_eq!(
             encoded,
             concat!(
-                "\"sccp-outbound-index-v1:42:sora-taira:ethereum-mainnet:",
-                "7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b\""
+                "\"sccp-outbound-index-v1:42:7:sora-taira:ethereum-mainnet:",
+                "7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b\""
             )
         );
         let mut parser = Parser::new(&encoded);
@@ -717,19 +734,26 @@ mod tests {
 
     #[test]
     fn sccp_outbound_index_key_json_key_codec_rejects_malleability() {
-        let id = "7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b";
+        let id = "7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b";
         for encoded in [
-            format!("sccp-outbound-index-v1:0:sora-taira:ethereum-mainnet:{id}"),
-            format!("sccp-outbound-index-v1:01:sora-taira:ethereum-mainnet:{id}"),
-            format!("sccp-outbound-index-v1:+1:sora-taira:ethereum-mainnet:{id}"),
-            format!("sccp-outbound-index-v1: 1:sora-taira:ethereum-mainnet:{id}"),
-            format!("sccp-outbound-index-v1:1:ethereum-mainnet:sora-taira:{id}"),
+            format!("sccp-outbound-index-v1:0:0:sora-taira:ethereum-mainnet:{id}"),
+            format!("sccp-outbound-index-v1:01:0:sora-taira:ethereum-mainnet:{id}"),
+            format!("sccp-outbound-index-v1:+1:0:sora-taira:ethereum-mainnet:{id}"),
+            format!("sccp-outbound-index-v1: 1:0:sora-taira:ethereum-mainnet:{id}"),
+            format!("sccp-outbound-index-v1:1::sora-taira:ethereum-mainnet:{id}"),
+            format!("sccp-outbound-index-v1:1:00:sora-taira:ethereum-mainnet:{id}"),
+            format!("sccp-outbound-index-v1:1:+1:sora-taira:ethereum-mainnet:{id}"),
+            format!("sccp-outbound-index-v1:1:512:sora-taira:ethereum-mainnet:{id}"),
+            format!("sccp-outbound-index-v1:1:4294967296:sora-taira:ethereum-mainnet:{id}"),
+            format!("sccp-outbound-index-v1:1:0:ethereum-mainnet:sora-taira:{id}"),
             format!(
-                "sccp-outbound-index-v1:1:sora-taira:ethereum-mainnet:{}",
+                "sccp-outbound-index-v1:1:0:sora-taira:ethereum-mainnet:{}",
                 id.to_uppercase()
             ),
-            format!("sccp-outbound-index-v1:1:sora-taira:ethereum-mainnet:{id}:tail"),
-            format!("sccp-outbound-index-v1:18446744073709551616:sora-taira:ethereum-mainnet:{id}"),
+            format!("sccp-outbound-index-v1:1:0:sora-taira:ethereum-mainnet:{id}:tail"),
+            format!(
+                "sccp-outbound-index-v1:18446744073709551616:0:sora-taira:ethereum-mainnet:{id}"
+            ),
         ] {
             assert!(
                 SccpOutboundMessageIndexKeyV1::decode_json_key(&encoded).is_err(),

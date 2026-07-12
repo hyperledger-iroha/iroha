@@ -214,12 +214,11 @@ pub const SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT: u32 = 0x8E;
 /// Direct schema-info helper that accepts validated TLVs from any allowed pointer region.
 pub const SYSCALL_SCHEMA_INFO_DIRECT: u32 = 0x8F;
 
-/// Build a state path from a base Name and an integer key: returns a new `&Name` TLV
-/// in INPUT with the canonical form "<base>/<key>" (decimal).
+/// Permanently retired pre-release decimal-i64 path helper number.
 ///
-/// Args: r10 = &Name base, r11 = key (i64 as u64)
-/// Ret:  r10 = &Name (INPUT pointer)
-pub const SYSCALL_BUILD_PATH_MAP_KEY: u32 = 0x54;
+/// V1 adaptive numeric map keys use [`SYSCALL_BUILD_PATH_KEY_NORITO`] with a
+/// canonical nominal pointer envelope. This number must never be reassigned.
+pub const RETIRED_SYSCALL_BUILD_PATH_MAP_KEY: u32 = 0x54;
 /// Encode a 64-bit signed integer in ASCII decimal and return a `&NoritoBytes` TLV pointer in INPUT.
 ///
 /// Args: r10 = value (i64 as u64)
@@ -280,6 +279,14 @@ pub const SYSCALL_GRANT_ROLE: u32 = 0x32;
 pub const SYSCALL_REVOKE_ROLE: u32 = 0x33;
 pub const SYSCALL_GRANT_PERMISSION: u32 = 0x34;
 pub const SYSCALL_REVOKE_PERMISSION: u32 = 0x35;
+/// Grant the current immutable contract address's exact entrypoint capability.
+///
+/// Args: r10 = &AccountId, r11 = &Blob (UTF-8 canonical entrypoint selector).
+pub const SYSCALL_GRANT_CONTRACT_ENTRYPOINT: u32 = 0x36;
+/// Revoke the current immutable contract address's exact entrypoint capability.
+///
+/// Args: r10 = &AccountId, r11 = &Blob (UTF-8 canonical entrypoint selector).
+pub const SYSCALL_REVOKE_CONTRACT_ENTRYPOINT: u32 = 0x37;
 
 /// Triggers.
 pub const SYSCALL_CREATE_TRIGGER: u32 = 0x40;
@@ -511,6 +518,11 @@ pub const SYSCALL_SYSVAR_AUTHORITY: u32 = 0x01_0023;
 pub const SYSCALL_SYSVAR_CONTRACT_ADDRESS: u32 = 0x01_0024;
 /// Return the current contract entrypoint name as a `Blob` TLV, or zero when not in a contract scope.
 pub const SYSCALL_SYSVAR_ENTRYPOINT: u32 = 0x01_0025;
+/// Return the immutable subject account of the currently executing deployed contract.
+///
+/// The result is an `AccountId` TLV in `r10`. Calls outside a deployed-contract
+/// scope fail closed instead of falling back to transaction authority.
+pub const SYSCALL_SYSVAR_CONTRACT_SUBJECT: u32 = 0x01_0027;
 /// Decode a complete schema-bound public argument record.
 ///
 /// Args: r10 = `&NoritoBytes(EntrypointArgumentRecordV1)` for raw hosts, or
@@ -520,6 +532,31 @@ pub const SYSCALL_SYSVAR_ENTRYPOINT: u32 = 0x01_0025;
 /// declaration-ordered flattened words, which contain sum tags, canonical
 /// scalar bits, or validated pointer-ABI addresses.
 pub const SYSCALL_DECODE_ARGUMENT_RECORD: u32 = 0x01_0026;
+
+/// Set or clear native outbound-transfer freeze state for one account/asset pair.
+///
+/// Args: `r10 = &AccountId`, `r11 = &AssetDefinitionId`, `r12 = bool`.
+pub const SYSCALL_SET_ASSET_TRANSFER_FREEZE: u32 = 0x01_0200;
+/// Set the native UTC daily outbound-transfer cap for one account/asset pair.
+///
+/// Args: `r10 = &AccountId`, `r11 = &AssetDefinitionId`, `r12 = &Quantity`.
+pub const SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT: u32 = 0x01_0201;
+/// Propose native alias-based account recovery with a replacement controller.
+///
+/// Args: `r10 = &Blob(alias literal)`, `r11 = &AccountId(replacement controller)`.
+pub const SYSCALL_ACCOUNT_RECOVERY_PROPOSE: u32 = 0x01_0210;
+/// Approve the pending native recovery request for an alias.
+///
+/// Args: `r10 = &Blob(alias literal)`.
+pub const SYSCALL_ACCOUNT_RECOVERY_APPROVE: u32 = 0x01_0211;
+/// Cancel the pending native recovery request for an alias.
+///
+/// Args: `r10 = &Blob(alias literal)`.
+pub const SYSCALL_ACCOUNT_RECOVERY_CANCEL: u32 = 0x01_0212;
+/// Finalize the pending native recovery request for an alias.
+///
+/// Args: `r10 = &Blob(alias literal)`.
+pub const SYSCALL_ACCOUNT_RECOVERY_FINALIZE: u32 = 0x01_0213;
 
 // Kotodama V1 exact numeric families. These numbers are deliberately grouped
 // by value domain so admission, host dispatch, and generated SDK tables can
@@ -846,6 +883,8 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_REVOKE_ROLE
             | SYSCALL_GRANT_PERMISSION
             | SYSCALL_REVOKE_PERMISSION
+            | SYSCALL_GRANT_CONTRACT_ENTRYPOINT
+            | SYSCALL_REVOKE_CONTRACT_ENTRYPOINT
             | SYSCALL_CREATE_TRIGGER
             | SYSCALL_REMOVE_TRIGGER
             | SYSCALL_SET_TRIGGER_ENABLED
@@ -885,6 +924,12 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE
             | SYSCALL_SORACLOUD_APPEND_JOURNAL
             | SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT
+            | SYSCALL_SET_ASSET_TRANSFER_FREEZE
+            | SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT
+            | SYSCALL_ACCOUNT_RECOVERY_PROPOSE
+            | SYSCALL_ACCOUNT_RECOVERY_APPROVE
+            | SYSCALL_ACCOUNT_RECOVERY_CANCEL
+            | SYSCALL_ACCOUNT_RECOVERY_FINALIZE
     ) {
         return Some(SyscallAccess::LedgerWrite);
     }
@@ -960,7 +1005,6 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_SCHEMA_ENCODE_DIRECT
             | SYSCALL_SCHEMA_DECODE_DIRECT
             | SYSCALL_NAME_DECODE
-            | SYSCALL_BUILD_PATH_MAP_KEY
             | SYSCALL_BUILD_PATH_KEY_NORITO
             | SYSCALL_ENCODE_INT
             | SYSCALL_DECODE_INT
@@ -976,6 +1020,7 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_SYSVAR_BLOCK_TIME_MS
             | SYSCALL_SYSVAR_AUTHORITY
             | SYSCALL_SYSVAR_CONTRACT_ADDRESS
+            | SYSCALL_SYSVAR_CONTRACT_SUBJECT
             | SYSCALL_SYSVAR_ENTRYPOINT
             | SYSCALL_DECODE_ARGUMENT_RECORD
     ) {
@@ -1123,7 +1168,6 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
         v.push(SYSCALL_STATE_MAP_KEY_AT);
         v.push(SYSCALL_STATE_VALUE_ENCODE);
         v.push(SYSCALL_STATE_VALUE_DECODE);
-        v.push(SYSCALL_BUILD_PATH_MAP_KEY);
         v.push(SYSCALL_BUILD_PATH_KEY_NORITO);
         v.push(SYSCALL_ENCODE_INT);
         v.push(SYSCALL_DECODE_INT);
@@ -1193,6 +1237,8 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_REVOKE_ROLE,
             SYSCALL_GRANT_PERMISSION,
             SYSCALL_REVOKE_PERMISSION,
+            SYSCALL_GRANT_CONTRACT_ENTRYPOINT,
+            SYSCALL_REVOKE_CONTRACT_ENTRYPOINT,
         ]);
         // Triggers
         v.extend_from_slice(&[
@@ -1239,11 +1285,18 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_SYSVAR_BLOCK_TIME_MS,
             SYSCALL_SYSVAR_AUTHORITY,
             SYSCALL_SYSVAR_CONTRACT_ADDRESS,
+            SYSCALL_SYSVAR_CONTRACT_SUBJECT,
             SYSCALL_SYSVAR_ENTRYPOINT,
             SYSCALL_DECODE_ARGUMENT_RECORD,
             SYSCALL_SUBSCRIPTION_BILL,
             SYSCALL_SUBSCRIPTION_RECORD_USAGE,
             SYSCALL_RESOLVE_ACCOUNT_ALIAS,
+            SYSCALL_SET_ASSET_TRANSFER_FREEZE,
+            SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT,
+            SYSCALL_ACCOUNT_RECOVERY_PROPOSE,
+            SYSCALL_ACCOUNT_RECOVERY_APPROVE,
+            SYSCALL_ACCOUNT_RECOVERY_CANCEL,
+            SYSCALL_ACCOUNT_RECOVERY_FINALIZE,
         ]);
         // Atomic cross-transaction (AXT) scaffolding
         v.extend_from_slice(&[
@@ -1373,7 +1426,6 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_STATE_VALUE_ENCODE => "STATE_VALUE_ENCODE",
         SYSCALL_STATE_VALUE_DECODE => "STATE_VALUE_DECODE",
         SYSCALL_DECODE_INT => "DECODE_INT",
-        SYSCALL_BUILD_PATH_MAP_KEY => "BUILD_PATH_MAP_KEY",
         SYSCALL_ENCODE_INT => "ENCODE_INT",
         SYSCALL_BUILD_PATH_KEY_NORITO => "BUILD_PATH_KEY_NORITO",
         // Roles/permissions
@@ -1383,6 +1435,8 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_REVOKE_ROLE => "REVOKE_ROLE",
         SYSCALL_GRANT_PERMISSION => "GRANT_PERMISSION",
         SYSCALL_REVOKE_PERMISSION => "REVOKE_PERMISSION",
+        SYSCALL_GRANT_CONTRACT_ENTRYPOINT => "GRANT_CONTRACT_ENTRYPOINT",
+        SYSCALL_REVOKE_CONTRACT_ENTRYPOINT => "REVOKE_CONTRACT_ENTRYPOINT",
         // Triggers
         SYSCALL_CREATE_TRIGGER => "CREATE_TRIGGER",
         SYSCALL_REMOVE_TRIGGER => "REMOVE_TRIGGER",
@@ -1462,6 +1516,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_SYSVAR_BLOCK_TIME_MS => "SYSVAR_BLOCK_TIME_MS",
         SYSCALL_SYSVAR_AUTHORITY => "SYSVAR_AUTHORITY",
         SYSCALL_SYSVAR_CONTRACT_ADDRESS => "SYSVAR_CONTRACT_ADDRESS",
+        SYSCALL_SYSVAR_CONTRACT_SUBJECT => "SYSVAR_CONTRACT_SUBJECT",
         SYSCALL_SYSVAR_ENTRYPOINT => "SYSVAR_ENTRYPOINT",
         SYSCALL_DECODE_ARGUMENT_RECORD => "DECODE_ARGUMENT_RECORD",
         SYSCALL_INT_FROM_I64 => "INT_FROM_I64",
@@ -1520,6 +1575,12 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_SUBSCRIPTION_BILL => "SUBSCRIPTION_BILL",
         SYSCALL_SUBSCRIPTION_RECORD_USAGE => "SUBSCRIPTION_RECORD_USAGE",
         SYSCALL_RESOLVE_ACCOUNT_ALIAS => "RESOLVE_ACCOUNT_ALIAS",
+        SYSCALL_SET_ASSET_TRANSFER_FREEZE => "SET_ASSET_TRANSFER_FREEZE",
+        SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT => "SET_ASSET_TRANSFER_DAILY_LIMIT",
+        SYSCALL_ACCOUNT_RECOVERY_PROPOSE => "ACCOUNT_RECOVERY_PROPOSE",
+        SYSCALL_ACCOUNT_RECOVERY_APPROVE => "ACCOUNT_RECOVERY_APPROVE",
+        SYSCALL_ACCOUNT_RECOVERY_CANCEL => "ACCOUNT_RECOVERY_CANCEL",
+        SYSCALL_ACCOUNT_RECOVERY_FINALIZE => "ACCOUNT_RECOVERY_FINALIZE",
         SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER => "ANONYMOUS_ESCROW_OPEN_OFFER",
         SYSCALL_ANONYMOUS_ESCROW_ACCEPT => "ANONYMOUS_ESCROW_ACCEPT",
         SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT => "ANONYMOUS_ESCROW_MARK_PAYMENT_SENT",
@@ -1648,7 +1709,7 @@ pub fn render_abi_hashes_markdown_table() -> String {
 }
 
 const ABI_V1_SURFACE_DOMAIN: &[u8] = b"IVM_ABI_V1_FULL_SURFACE\0";
-const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 2;
+const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 4;
 const NUMERIC_MANTISSA_BITS_V1: u16 = 512;
 const DECIMAL_MAX_SCALE_V1: u8 = 28;
 const NUMERIC_WIRE_FORMAT_VERSION_V1: u8 = 1;
@@ -1726,7 +1787,22 @@ struct AbiNumericFaultSurface {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiNumericRuleSurface {
+    name: &'static str,
+    specification: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiNumericJsonSurface {
+    type_name: &'static str,
+    token_kind: &'static str,
+    decoded_string_grammar: &'static str,
+    validation: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiNumericSurface {
+    semantics_descriptor_version: u8,
     retired_amount_pointer_type_id: u16,
     int_pointer_type_id: u16,
     decimal_pointer_type_id: u16,
@@ -1739,6 +1815,9 @@ struct AbiNumericSurface {
     canonicalization: &'static str,
     integer_division: &'static str,
     wrapping_modulus: &'static str,
+    rules: Vec<AbiNumericRuleSurface>,
+    json_grammar: Vec<AbiNumericJsonSurface>,
+    fault_ordering: Vec<AbiNumericRuleSurface>,
     wire_format_version: u8,
     int_schema_name: &'static str,
     int_schema_hash: [u8; 16],
@@ -1773,8 +1852,75 @@ struct AbiIndexedLiteralSurface {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiStateValueKindSurface {
+    name: &'static str,
+    tag: u32,
+    word_layout: &'static str,
+    pointer_type_id_or_zero: u16,
+    resource_handle: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiTaggedLayoutSurface {
+    name: &'static str,
+    tag: u32,
+    layout: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiEmbeddedStateTypeSurface {
+    name: &'static str,
+    tag: u8,
+    layout: &'static str,
+    canonical_sample_frame: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiTypedStateValueSurface {
+    wire_format_version: u8,
+    norito_header_bytes: u16,
+    norito_version_major: u8,
+    norito_version_minor: u8,
+    norito_default_encode_flags: u8,
+    enum_discriminant_layout: &'static str,
+    schema_hash_domain: &'static [u8],
+    schema_hash_algorithm: &'static str,
+    schema_name: &'static str,
+    schema_hash: [u8; 16],
+    record_name: &'static str,
+    record_hash: [u8; 16],
+    schema_layout: &'static str,
+    record_layout: &'static str,
+    traversal_semantics: &'static str,
+    option_tag_semantics: &'static str,
+    result_tag_semantics: &'static str,
+    kinds: Vec<AbiStateValueKindSurface>,
+    nodes: Vec<AbiTaggedLayoutSurface>,
+    atoms: Vec<AbiTaggedLayoutSurface>,
+    max_nodes: u64,
+    max_depth: u64,
+    max_words: u64,
+    max_schema_bytes: u64,
+    max_record_bytes: u64,
+    list_min_capacity: u8,
+    list_max_capacity: u8,
+    decoded_table_offset: u16,
+    decoded_word_bytes: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiDurableStateSurface {
     semantics_version: u8,
+    contract_interface_section_magic: [u8; 4],
+    contract_interface_section_layout: &'static str,
+    contract_interface_schema_name: &'static str,
+    contract_interface_schema_hash: [u8; 16],
+    embedded_state_type_schema_name: &'static str,
+    embedded_state_type_schema_hash: [u8; 16],
+    embedded_state_type_tag_layout: &'static str,
+    embedded_state_type_max_depth: u64,
+    embedded_state_type_validation: &'static str,
+    embedded_state_types: Vec<AbiEmbeddedStateTypeSurface>,
     keys_max_items: u64,
     max_path_bytes: u64,
     max_value_bytes: u64,
@@ -1789,6 +1935,11 @@ struct AbiDurableStateSurface {
     map_path_derivation_version: u8,
     map_path_derivation: &'static str,
     page_overflow: &'static str,
+    operation_path_rules_version: u8,
+    operation_path_rules: &'static str,
+    state_value_validation_version: u8,
+    state_value_validation: &'static str,
+    typed_value: AbiTypedStateValueSurface,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2097,6 +2248,7 @@ fn semantic_abi_surface_v1() -> Result<
             max_schema_depth,
         },
         AbiNumericSurface {
+            semantics_descriptor_version: 1,
             retired_amount_pointer_type_id: PointerType::RetiredAmount as u16,
             int_pointer_type_id,
             decimal_pointer_type_id,
@@ -2109,6 +2261,106 @@ fn semantic_abi_surface_v1() -> Result<
             canonicalization: "minimal-signed-little-endian;zero-empty;strip-fractional-trailing-zeroes;zero-scale-is-zero",
             integer_division: "quotient-truncates-toward-zero;remainder-sign-is-dividend",
             wrapping_modulus: "2^512;reinterpret-as-signed-domain",
+            rules: vec![
+                AbiNumericRuleSurface {
+                    name: "checked_intermediates",
+                    specification: "compute-exact-mathematical-result-with-conceptually-unbounded-intermediates;canonicalize;then-check-final-domain",
+                },
+                AbiNumericRuleSurface {
+                    name: "result_domain",
+                    specification: "canonical-scale-first;then-signed-512-bit-mantissa;then-nonnegative-quantity-invariant",
+                },
+                AbiNumericRuleSurface {
+                    name: "integer_arithmetic",
+                    specification: "neg-add-sub-mul-div-rem-are-checked;division-and-remainder-by-zero-fail;min-int-div-or-rem-minus-one-is-mantissa-overflow",
+                },
+                AbiNumericRuleSurface {
+                    name: "decimal_add_sub",
+                    specification: "align-to-common-decimal-scale-exactly;operate;canonicalize;check-final-domain",
+                },
+                AbiNumericRuleSurface {
+                    name: "decimal_multiplication",
+                    specification: "multiply-mantissas-exactly;sum-scales;canonicalize;reject-only-if-canonical-final-scale-or-mantissa-is-out-of-domain",
+                },
+                AbiNumericRuleSurface {
+                    name: "exact_division",
+                    specification: "reduce-denominator;classify-prime-factors;non-2-or-5-factor-is-repeating-decimal;terminating-minimum-scale-above-28-is-exact-division-scale-overflow;never-round",
+                },
+                AbiNumericRuleSurface {
+                    name: "rounded_division",
+                    specification: "explicit-output-scale-0-through-28-and-one-of-seven-rounding-tags;round-exact-rational-once;canonicalize-result",
+                },
+                AbiNumericRuleSurface {
+                    name: "comparison",
+                    specification: "compare-mathematical-values-after-canonicalization;int-promotes-to-decimal-exactly-for-mixed-int-decimal-comparison",
+                },
+                AbiNumericRuleSurface {
+                    name: "conversion",
+                    specification: "int-to-decimal-exact;decimal-to-int-exact-by-default-with-distinct-named-truncating-and-rounded-forms;quantity-entry-checked-and-explicit",
+                },
+                AbiNumericRuleSurface {
+                    name: "quantity",
+                    specification: "nominal-nonnegative-domain;addition-checked;representable-negative-subtraction-is-quantity-underflow;multiplication-and-division-by-decimal-preserve-quantity;quantity-ratio-yields-decimal",
+                },
+                AbiNumericRuleSurface {
+                    name: "wrapping",
+                    specification: "only-explicit-int-neg-add-sub-mul-wrap-modulo-2^512;ordinary-operators-never-wrap",
+                },
+                AbiNumericRuleSurface {
+                    name: "bitwise_shift_surface",
+                    specification: "no-source-bitwise-or-shift-operators-in-abi-v1",
+                },
+            ],
+            json_grammar: vec![
+                AbiNumericJsonSurface {
+                    type_name: "int",
+                    token_kind: "JSON-string-only",
+                    decoded_string_grammar: "0|-?[1-9][0-9]*",
+                    validation: "canonical-base-10-no-plus-no-leading-zero-no-negative-zero-no-decimal-point-no-exponent;then-signed-512-bit-domain",
+                },
+                AbiNumericJsonSurface {
+                    type_name: "decimal",
+                    token_kind: "JSON-string-only",
+                    decoded_string_grammar: "-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?",
+                    validation: "shortest-canonical-non-exponent-spelling;no-plus-leading-zero-negative-zero-or-removable-fractional-zero;then-scale-0-through-28-and-signed-512-bit-mantissa",
+                },
+                AbiNumericJsonSurface {
+                    type_name: "quantity",
+                    token_kind: "JSON-string-only",
+                    decoded_string_grammar: "(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?",
+                    validation: "shortest-canonical-nonnegative-non-exponent-spelling;no-plus-leading-zero-or-removable-fractional-zero;then-scale-0-through-28-and-signed-512-bit-mantissa",
+                },
+            ],
+            fault_ordering: vec![
+                AbiNumericRuleSurface {
+                    name: "operand_pointer_validation",
+                    specification: "operands-in-register-order:pointer-provenance;type-policy;expected-type;version;capped-length;range;snapshot;hash;frame;schema;canonical",
+                },
+                AbiNumericRuleSurface {
+                    name: "scale_pointer_validation",
+                    specification: "after-all-operands-and-before-control-registers-when-the-syscall-has-a-dynamic-scale-pointer",
+                },
+                AbiNumericRuleSurface {
+                    name: "control_validation",
+                    specification: "required-zero-registers;rounding-tag;failure-mode-in-syscall-contract-order",
+                },
+                AbiNumericRuleSurface {
+                    name: "division_by_zero",
+                    specification: "after-structural-and-control-validation;before-arithmetic-classification",
+                },
+                AbiNumericRuleSurface {
+                    name: "arithmetic_classification",
+                    specification: "operation-specific-exact-arithmetic-fault-before-final-result-domain-faults",
+                },
+                AbiNumericRuleSurface {
+                    name: "final_result_domain",
+                    specification: "scale-overflow;then-mantissa-overflow;then-negative-quantity",
+                },
+                AbiNumericRuleSurface {
+                    name: "quantity_subtraction",
+                    specification: "representable-negative-result-maps-to-quantity-underflow;out-of-range-negative-result-remains-mantissa-overflow",
+                },
+            ],
             wire_format_version: NUMERIC_WIRE_FORMAT_VERSION_V1,
             int_schema_name: INT_SCHEMA_NAME_V1,
             int_schema_hash: INT_SCHEMA_HASH_V1,
@@ -2419,6 +2671,52 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
     })?;
     descriptor.record("durable_state", |state| {
         state.u8("semantics_version", surface.durable_state.semantics_version)?;
+        state.field(
+            "contract_interface_section_magic",
+            &surface.durable_state.contract_interface_section_magic,
+        )?;
+        state.text(
+            "contract_interface_section_layout",
+            surface.durable_state.contract_interface_section_layout,
+        )?;
+        state.text(
+            "contract_interface_schema_name",
+            surface.durable_state.contract_interface_schema_name,
+        )?;
+        state.field(
+            "contract_interface_schema_hash",
+            &surface.durable_state.contract_interface_schema_hash,
+        )?;
+        state.text(
+            "embedded_state_type_schema_name",
+            surface.durable_state.embedded_state_type_schema_name,
+        )?;
+        state.field(
+            "embedded_state_type_schema_hash",
+            &surface.durable_state.embedded_state_type_schema_hash,
+        )?;
+        state.text(
+            "embedded_state_type_tag_layout",
+            surface.durable_state.embedded_state_type_tag_layout,
+        )?;
+        state.u64(
+            "embedded_state_type_max_depth",
+            surface.durable_state.embedded_state_type_max_depth,
+        )?;
+        state.text(
+            "embedded_state_type_validation",
+            surface.durable_state.embedded_state_type_validation,
+        )?;
+        state.sequence(
+            "embedded_state_types",
+            &surface.durable_state.embedded_state_types,
+            |record, state_type| {
+                record.text("name", state_type.name)?;
+                record.u8("tag", state_type.tag)?;
+                record.text("layout", state_type.layout)?;
+                record.field("canonical_sample_frame", &state_type.canonical_sample_frame)
+            },
+        )?;
         state.u64("keys_max_items", surface.durable_state.keys_max_items)?;
         state.u64("max_path_bytes", surface.durable_state.max_path_bytes)?;
         state.u64("max_value_bytes", surface.durable_state.max_value_bytes)?;
@@ -2444,7 +2742,72 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
             "map_path_derivation",
             surface.durable_state.map_path_derivation,
         )?;
-        state.text("page_overflow", surface.durable_state.page_overflow)
+        state.text("page_overflow", surface.durable_state.page_overflow)?;
+        state.u8(
+            "operation_path_rules_version",
+            surface.durable_state.operation_path_rules_version,
+        )?;
+        state.text(
+            "operation_path_rules",
+            surface.durable_state.operation_path_rules,
+        )?;
+        state.u8(
+            "state_value_validation_version",
+            surface.durable_state.state_value_validation_version,
+        )?;
+        state.text(
+            "state_value_validation",
+            surface.durable_state.state_value_validation,
+        )?;
+        state.record("typed_value", |typed| {
+            let value = &surface.durable_state.typed_value;
+            typed.u8("wire_format_version", value.wire_format_version)?;
+            typed.u16("norito_header_bytes", value.norito_header_bytes)?;
+            typed.u8("norito_version_major", value.norito_version_major)?;
+            typed.u8("norito_version_minor", value.norito_version_minor)?;
+            typed.u8(
+                "norito_default_encode_flags",
+                value.norito_default_encode_flags,
+            )?;
+            typed.text("enum_discriminant_layout", value.enum_discriminant_layout)?;
+            typed.field("schema_hash_domain", value.schema_hash_domain)?;
+            typed.text("schema_hash_algorithm", value.schema_hash_algorithm)?;
+            typed.text("schema_name", value.schema_name)?;
+            typed.field("schema_hash", &value.schema_hash)?;
+            typed.text("record_name", value.record_name)?;
+            typed.field("record_hash", &value.record_hash)?;
+            typed.text("schema_layout", value.schema_layout)?;
+            typed.text("record_layout", value.record_layout)?;
+            typed.text("traversal_semantics", value.traversal_semantics)?;
+            typed.text("option_tag_semantics", value.option_tag_semantics)?;
+            typed.text("result_tag_semantics", value.result_tag_semantics)?;
+            typed.sequence("kinds", &value.kinds, |kind_record, kind| {
+                kind_record.text("name", kind.name)?;
+                kind_record.u32("tag", kind.tag)?;
+                kind_record.text("word_layout", kind.word_layout)?;
+                kind_record.u16("pointer_type_id_or_zero", kind.pointer_type_id_or_zero)?;
+                kind_record.bool("resource_handle", kind.resource_handle)
+            })?;
+            typed.sequence("nodes", &value.nodes, |node_record, node| {
+                node_record.text("name", node.name)?;
+                node_record.u32("tag", node.tag)?;
+                node_record.text("layout", node.layout)
+            })?;
+            typed.sequence("atoms", &value.atoms, |atom_record, atom| {
+                atom_record.text("name", atom.name)?;
+                atom_record.u32("tag", atom.tag)?;
+                atom_record.text("layout", atom.layout)
+            })?;
+            typed.u64("max_nodes", value.max_nodes)?;
+            typed.u64("max_depth", value.max_depth)?;
+            typed.u64("max_words", value.max_words)?;
+            typed.u64("max_schema_bytes", value.max_schema_bytes)?;
+            typed.u64("max_record_bytes", value.max_record_bytes)?;
+            typed.u8("list_min_capacity", value.list_min_capacity)?;
+            typed.u8("list_max_capacity", value.list_max_capacity)?;
+            typed.u16("decoded_table_offset", value.decoded_table_offset)?;
+            typed.u16("decoded_word_bytes", value.decoded_word_bytes)
+        })
     })?;
     descriptor.record("entrypoint", |entrypoint| {
         entrypoint.u8("schema_version", surface.entrypoint.schema_version)?;
@@ -2491,6 +2854,41 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
         )?;
         numeric.u16("mantissa_bits", surface.numeric.mantissa_bits)?;
         numeric.u8("max_scale", surface.numeric.max_scale)?;
+        numeric.record("semantics", |semantics| {
+            semantics.u8(
+                "descriptor_version",
+                surface.numeric.semantics_descriptor_version,
+            )?;
+            semantics.text("int_domain", surface.numeric.int_domain)?;
+            semantics.text("decimal_domain", surface.numeric.decimal_domain)?;
+            semantics.text("quantity_domain", surface.numeric.quantity_domain)?;
+            semantics.text("canonicalization", surface.numeric.canonicalization)?;
+            semantics.text("integer_division", surface.numeric.integer_division)?;
+            semantics.text("wrapping_modulus", surface.numeric.wrapping_modulus)?;
+            semantics.sequence("rules", &surface.numeric.rules, |rule_record, rule| {
+                rule_record.text("name", rule.name)?;
+                rule_record.text("specification", rule.specification)
+            })?;
+            semantics.sequence(
+                "json_grammar",
+                &surface.numeric.json_grammar,
+                |json_record, grammar| {
+                    json_record.text("type_name", grammar.type_name)?;
+                    json_record.text("token_kind", grammar.token_kind)?;
+                    json_record.text("decoded_string_grammar", grammar.decoded_string_grammar)?;
+                    json_record.text("validation", grammar.validation)
+                },
+            )?;
+            semantics.sequence(
+                "fault_ordering",
+                &surface.numeric.fault_ordering,
+                |fault_record, rule| {
+                    fault_record.text("name", rule.name)?;
+                    fault_record.text("specification", rule.specification)
+                },
+            )?;
+            semantics.text("full_error_precedence", surface.numeric.error_precedence)
+        })?;
         numeric.text("int_domain", surface.numeric.int_domain)?;
         numeric.text("decimal_domain", surface.numeric.decimal_domain)?;
         numeric.text("quantity_domain", surface.numeric.quantity_domain)?;
@@ -2571,6 +2969,308 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
     Ok(descriptor.finish())
 }
 
+fn embedded_state_type_surface_v1() -> Result<Vec<AbiEmbeddedStateTypeSurface>, AbiSurfaceError> {
+    use crate::metadata::{EmbeddedStateFieldDescriptor as Field, EmbeddedStateType as Type};
+
+    let samples = vec![
+        ("Int", Type::Int, "u8-tag"),
+        ("Decimal", Type::Decimal, "u8-tag"),
+        ("Quantity", Type::Quantity, "u8-tag"),
+        ("Bool", Type::Bool, "u8-tag"),
+        ("String", Type::String, "u8-tag"),
+        ("Bytes", Type::Bytes, "u8-tag"),
+        ("DataSpaceId", Type::DataSpaceId, "u8-tag"),
+        ("AccountId", Type::AccountId, "u8-tag"),
+        ("AssetDefinitionId", Type::AssetDefinitionId, "u8-tag"),
+        ("AssetId", Type::AssetId, "u8-tag"),
+        ("NftId", Type::NftId, "u8-tag"),
+        ("DomainId", Type::DomainId, "u8-tag"),
+        ("Name", Type::Name, "u8-tag"),
+        ("Json", Type::Json, "u8-tag"),
+        (
+            "Tuple",
+            Type::Tuple(vec![Type::Int, Type::Decimal]),
+            "u8-tag+Vec<EmbeddedStateTypeV1>;arity-at-least-2",
+        ),
+        (
+            "Struct",
+            Type::Struct {
+                name: "Sample".to_owned(),
+                fields: vec![
+                    Field {
+                        name: "left".to_owned(),
+                        ty: Type::Int,
+                    },
+                    Field {
+                        name: "right".to_owned(),
+                        ty: Type::Decimal,
+                    },
+                ],
+            },
+            "u8-tag+String(name)+Vec<{String(name),EmbeddedStateTypeV1}>;nonempty-unique-fields",
+        ),
+        (
+            "StateMap",
+            Type::StateMap {
+                key: Box::new(Type::Int),
+                value: Box::new(Type::Quantity),
+            },
+            "u8-tag+owned(key)+owned(value);top-level-only;key-is-supported-canonical-scalar",
+        ),
+        (
+            "Option",
+            Type::Option(Box::new(Type::Int)),
+            "u8-tag+owned(value)",
+        ),
+        (
+            "Result",
+            Type::Result {
+                ok: Box::new(Type::Int),
+                err: Box::new(Type::Decimal),
+            },
+            "u8-tag+owned(ok)+owned(err)",
+        ),
+        (
+            "List",
+            Type::List {
+                element: Box::new(Type::Quantity),
+                capacity: 64,
+            },
+            "u8-tag+owned(element)+u8(capacity);capacity=1..64;no-StateMap-descendant",
+        ),
+    ];
+
+    samples
+        .into_iter()
+        .map(|(name, value, layout)| {
+            let tag = value.wire_tag();
+            let canonical_sample_frame =
+                norito::to_bytes(&value).map_err(|_| AbiSurfaceError::SurfaceTooLarge)?;
+            Ok(AbiEmbeddedStateTypeSurface {
+                name,
+                tag,
+                layout,
+                canonical_sample_frame,
+            })
+        })
+        .collect()
+}
+
+fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfaceError> {
+    use crate::state_value::{
+        DECODED_STATE_VALUE_TABLE_OFFSET, DECODED_STATE_VALUE_WORD_BYTES,
+        MAX_STATE_VALUE_LIST_CAPACITY_V1, MAX_STATE_VALUE_NODES, MAX_STATE_VALUE_RECORD_BYTES,
+        MAX_STATE_VALUE_SCHEMA_BYTES, MAX_STATE_VALUE_WORDS, MIN_STATE_VALUE_LIST_CAPACITY_V1,
+        STATE_VALUE_RECORD_NAME_V1, STATE_VALUE_SCHEMA_HASH_DOMAIN_V1, STATE_VALUE_SCHEMA_NAME_V1,
+        StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1,
+        StateValueSchemaV1,
+    };
+
+    let kind = |value: StateValueKindV1, name: &'static str, word_layout: &'static str| {
+        AbiStateValueKindSurface {
+            name,
+            tag: value.tag(),
+            word_layout,
+            pointer_type_id_or_zero: value
+                .pointer_type()
+                .map_or(0, |pointer_type| pointer_type as u16),
+            resource_handle: value.is_resource_handle(),
+        }
+    };
+    let kinds = vec![
+        kind(
+            StateValueKindV1::Int,
+            "Int",
+            "one-u64-pointer-word;complete-canonical-TLV",
+        ),
+        kind(
+            StateValueKindV1::Decimal,
+            "Decimal",
+            "one-u64-pointer-word;complete-canonical-TLV",
+        ),
+        kind(
+            StateValueKindV1::Quantity,
+            "Quantity",
+            "one-u64-pointer-word;complete-canonical-TLV",
+        ),
+        kind(
+            StateValueKindV1::Bool,
+            "Bool",
+            "one-inline-u64-word;only-0-or-1",
+        ),
+        kind(
+            StateValueKindV1::String,
+            "String",
+            "one-u64-pointer-word;complete-canonical-TLV;payload-is-UTF-8",
+        ),
+        kind(
+            StateValueKindV1::Json,
+            "Json",
+            "one-u64-pointer-word;complete-canonical-TLV",
+        ),
+        kind(
+            StateValueKindV1::Bytes,
+            "Bytes",
+            "one-u64-pointer-word;complete-canonical-TLV;payload-is-raw-bytes",
+        ),
+        kind(
+            StateValueKindV1::AccountId,
+            "AccountId",
+            "one-u64-pointer-word;complete-canonical-TLV",
+        ),
+        kind(
+            StateValueKindV1::AssetDefinitionId,
+            "AssetDefinitionId",
+            "one-u64-pointer-word;complete-canonical-TLV",
+        ),
+        kind(
+            StateValueKindV1::AssetId,
+            "AssetId",
+            "one-u64-pointer-word;complete-canonical-TLV",
+        ),
+        kind(
+            StateValueKindV1::DomainId,
+            "DomainId",
+            "one-u64-pointer-word;complete-canonical-TLV",
+        ),
+        kind(
+            StateValueKindV1::NftId,
+            "NftId",
+            "one-u64-pointer-word;complete-canonical-TLV",
+        ),
+        kind(
+            StateValueKindV1::Name,
+            "Name",
+            "one-u64-pointer-word;complete-canonical-TLV",
+        ),
+        kind(
+            StateValueKindV1::DataSpaceId,
+            "DataSpaceId",
+            "one-u64-pointer-word;complete-canonical-TLV",
+        ),
+        kind(
+            StateValueKindV1::AxtDescriptor,
+            "AxtDescriptor",
+            "one-u64-pointer-word;complete-canonical-TLV",
+        ),
+        kind(
+            StateValueKindV1::AssetHandle,
+            "AssetHandle",
+            "one-u64-pointer-word;complete-canonical-TLV;non-copyable-resource",
+        ),
+        kind(
+            StateValueKindV1::ProofBlob,
+            "ProofBlob",
+            "one-u64-pointer-word;complete-canonical-TLV",
+        ),
+        kind(
+            StateValueKindV1::SoracloudRequest,
+            "SoracloudRequest",
+            "one-u64-pointer-word;complete-canonical-TLV",
+        ),
+        kind(
+            StateValueKindV1::SoracloudResponse,
+            "SoracloudResponse",
+            "one-u64-pointer-word;complete-canonical-TLV",
+        ),
+    ];
+
+    let nodes = vec![
+        AbiTaggedLayoutSurface {
+            name: "Struct",
+            tag: StateValueNodeV1::STRUCT_TAG,
+            layout: "u32le-tag+String(name)+Vec<String>(ordered-field-names);one-immediate-child-per-field",
+        },
+        AbiTaggedLayoutSurface {
+            name: "Tuple",
+            tag: StateValueNodeV1::TUPLE_TAG,
+            layout: "u32le-tag+u16le(arity);arity-at-least-2;one-immediate-child-per-position",
+        },
+        AbiTaggedLayoutSurface {
+            name: "Option",
+            tag: StateValueNodeV1::OPTION_TAG,
+            layout: "u32le-tag;exactly-one-immediate-child",
+        },
+        AbiTaggedLayoutSurface {
+            name: "Result",
+            tag: StateValueNodeV1::RESULT_TAG,
+            layout: "u32le-tag;exactly-two-immediate-children-in-ok-then-error-order",
+        },
+        AbiTaggedLayoutSurface {
+            name: "List",
+            tag: StateValueNodeV1::LIST_TAG,
+            layout: "u32le-tag+StateValueSchemaV1(element)+u8(capacity);element-schema-is-recursive-and-capacity-is-schema-bound",
+        },
+        AbiTaggedLayoutSurface {
+            name: "Leaf",
+            tag: StateValueNodeV1::LEAF_TAG,
+            layout: "u32le-tag+StateValueKindV1",
+        },
+    ];
+    let atoms = vec![
+        AbiTaggedLayoutSurface {
+            name: "Tag",
+            tag: StateValueAtomV1::TAG_TAG,
+            layout: "u32le-tag+bool;compiler-owned-option-or-result-discriminant",
+        },
+        AbiTaggedLayoutSurface {
+            name: "Bool",
+            tag: StateValueAtomV1::BOOL_TAG,
+            layout: "u32le-tag+bool",
+        },
+        AbiTaggedLayoutSurface {
+            name: "Pointer",
+            tag: StateValueAtomV1::POINTER_TAG,
+            layout: "u32le-tag+Vec<u8>(complete-validated-pointer-ABI-TLV-envelope)",
+        },
+        AbiTaggedLayoutSurface {
+            name: "List",
+            tag: StateValueAtomV1::LIST_TAG,
+            layout: "u32le-tag+Vec<Vec<StateValueAtomV1>>(items-in-order;each-item-one-active-only-element-atom-stream)",
+        },
+    ];
+
+    Ok(AbiTypedStateValueSurface {
+        wire_format_version: 1,
+        norito_header_bytes: u16::try_from(norito::core::Header::SIZE)
+            .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+        norito_version_major: norito::core::VERSION_MAJOR,
+        norito_version_minor: norito::core::VERSION_MINOR,
+        norito_default_encode_flags: norito::core::default_encode_flags(),
+        enum_discriminant_layout: "explicit-u32-little-endian-codec-index-followed-by-variant-fields-in-declaration-order",
+        schema_hash_domain: STATE_VALUE_SCHEMA_HASH_DOMAIN_V1,
+        schema_hash_algorithm: "iroha_crypto::Hash::new(schema-hash-domain||exact-canonical-Norito-schema-frame)",
+        schema_name: STATE_VALUE_SCHEMA_NAME_V1,
+        schema_hash: <StateValueSchemaV1 as norito::NoritoSerialize>::schema_hash(),
+        record_name: STATE_VALUE_RECORD_NAME_V1,
+        record_hash: <StateValueRecordV1 as norito::NoritoSerialize>::schema_hash(),
+        schema_layout: "canonical-Norito-v1-frame;header=NRT0+version+schema+compression-none+payload-length+crc64+advertised-layout-flags;StateValueSchemaV1{nodes:Vec<StateValueNodeV1>};preorder-node-stream",
+        record_layout: "canonical-Norito-v1-frame;header=NRT0+version+schema+compression-none+payload-length+crc64+advertised-layout-flags;StateValueRecordV1{schema_hash:[u8;32],atoms:Vec<StateValueAtomV1>};field-order-as-written",
+        traversal_semantics: "schema-is-exactly-one-preorder-tree;products-store-children-in-order;sums-and-lists-consume-one-compiler-owned-word;record-atoms-contain-only-active-sum-payloads",
+        option_tag_semantics: "false=None-with-no-payload;true=Some-with-one-active-child-payload",
+        result_tag_semantics: "false=Err-with-error-child-payload;true=Ok-with-ok-child-payload",
+        kinds,
+        nodes,
+        atoms,
+        max_nodes: u64::try_from(MAX_STATE_VALUE_NODES)
+            .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+        max_depth: u64::try_from(MAX_STATE_VALUE_NODES)
+            .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+        max_words: u64::try_from(MAX_STATE_VALUE_WORDS)
+            .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+        max_schema_bytes: u64::try_from(MAX_STATE_VALUE_SCHEMA_BYTES)
+            .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+        max_record_bytes: u64::try_from(MAX_STATE_VALUE_RECORD_BYTES)
+            .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+        list_min_capacity: MIN_STATE_VALUE_LIST_CAPACITY_V1,
+        list_max_capacity: MAX_STATE_VALUE_LIST_CAPACITY_V1,
+        decoded_table_offset: u16::try_from(DECODED_STATE_VALUE_TABLE_OFFSET)
+            .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+        decoded_word_bytes: u16::try_from(DECODED_STATE_VALUE_WORD_BYTES)
+            .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+    })
+}
+
 fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSurfaceError> {
     let crate::SyscallPolicy::AbiV1 = policy;
     let syscalls =
@@ -2598,7 +3298,22 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         },
     ];
     let durable_state = AbiDurableStateSurface {
-        semantics_version: 1,
+        semantics_version: 3,
+        contract_interface_section_magic: crate::metadata::CONTRACT_INTERFACE_SECTION_MAGIC,
+        contract_interface_section_layout: "ASCII-CNTR+u32le(payload-bytes)+canonical-Norito-frame(EmbeddedContractInterfaceV1)",
+        contract_interface_schema_name: crate::metadata::CONTRACT_INTERFACE_SCHEMA_NAME_V1,
+        contract_interface_schema_hash:
+            <crate::metadata::EmbeddedContractInterfaceV1 as norito::NoritoSerialize>::schema_hash(),
+        embedded_state_type_schema_name: crate::metadata::EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1,
+        embedded_state_type_schema_hash:
+            <crate::metadata::EmbeddedStateType as norito::NoritoSerialize>::schema_hash(),
+        embedded_state_type_tag_layout: "one-u8-tag-at-start-of-custom-length-delimited-payload",
+        embedded_state_type_max_depth: u64::try_from(
+            crate::metadata::MAX_EMBEDDED_STATE_TYPE_DEPTH_V1,
+        )
+        .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+        embedded_state_type_validation: "top-level-state-is-scalar-or-exactly-one-StateMap;StateMap-forbidden-below-top-level;map-key-in-{Int,Decimal,Quantity,Bool,String,Bytes,DataSpaceId,AccountId,AssetDefinitionId,AssetId,NftId,DomainId,Name};Tuple-arity-at-least-2;Struct-name-and-nonempty-field-names-are-canonical-and-fields-are-unique-and-nonempty;List-capacity=1..64-and-no-StateMap-descendant",
+        embedded_state_types: embedded_state_type_surface_v1()?,
         keys_max_items: STATE_KEYS_MAX_ITEMS,
         max_path_bytes: u64::try_from(STATE_MAX_PATH_BYTES)
             .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
@@ -2618,6 +3333,11 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         map_path_derivation_version: 1,
         map_path_derivation: "base + slash + lowercase_hex(canonical_norito_key_payload)",
         page_overflow: "reject before selected-page materialization",
+        operation_path_rules_version: 1,
+        operation_path_rules: "CNTR-present:value-operations(STATE_GET,STATE_SET,STATE_DEL,STATE_HAS,STATE_LEN)=declared-non-map-base-or-canonical-StateMap-child-only;bare-StateMap-base-rejected;scan-operations(STATE_KEYS,STATE_COUNT)=same-declared-path-validation-with-bare-StateMap-base-allowed;CNTR-absent=raw-path-compatibility",
+        state_value_validation_version: 1,
+        state_value_validation: "CNTR-present:STATE_SET-before-mutation-and-present-STATE_GET-before-publication-reconstruct-exact-StateValueSchemaV1-from-declared-scalar-type-or-StateMap-value-type;require-canonical-StateValueRecordV1-with-schema_hash=iroha_crypto::Hash::new(KOTODAMA_STATE_VALUE_SCHEMA_V1\\0||exact-canonical-Norito-schema-frame);validate-exact-active-only-atom-stream,pointer-policy,pointer-type,pointer-envelope-hash,and-canonical-leaf-payload;CNTR-absent=bounded-raw-NoritoBytes-payload",
+        typed_value: typed_state_value_surface_v1()?,
     };
     Ok(AbiSurface {
         descriptor_format_version: ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION,
@@ -2653,11 +3373,17 @@ fn abi_surface_descriptor(policy: crate::SyscallPolicy) -> Result<&'static [u8],
 /// The domain-separated, versioned, length-prefixed descriptor binds the
 /// ABI-v1 policy tag; indexed-literal opcodes, table kinds, and payload layouts;
 /// every sorted syscall signature and host-access class; every allowed pointer
-/// type; durable-state caps, ordering, storage, paging, and path derivation;
+/// type; the CNTR marker, section layout, nominal schema identities, complete
+/// embedded state-type tag/layout table, admission rules, depth limit, and
+/// durable-state caps, ordering, storage, paging, and path derivation;
+/// typed durable-state nominal schema identities, exact schema-binding domain,
+/// kind/node/atom discriminants and layouts, pointer mappings, traversal rules,
+/// decoded-table layout, and aggregate caps;
 /// typed core-query entity tags, projections, and page semantics; recursive
 /// entrypoint `List`, `Int`, `Decimal`, and `Quantity` kinds; and canonical
-/// numeric-domain, division, wrapping, frame schema/layout, error-precedence,
-/// and rounding rules. Gas prices remain bound independently by the
+/// numeric domains, exact arithmetic/conversion/wrapping rules, JSON grammar,
+/// fault ordering, frame schema/layout, error-precedence, and rounding rules.
+/// Gas prices and staged-metering phase tags remain bound independently by the
 /// gas-schedule hash. A malformed compiled registry
 /// returns a diagnostic sentinel with an invalid Iroha-hash marker; release
 /// tests require that path to be unreachable, and a valid Iroha hash can never
@@ -2692,7 +3418,8 @@ mod tests {
             assert!(syscall_name(number).is_some());
         }
 
-        for retired in (0x69..=0x76)
+        for retired in core::iter::once(RETIRED_SYSCALL_BUILD_PATH_MAP_KEY)
+            .chain(0x69..=0x76)
             .chain(0xD2..=0xDE)
             .chain(0x01_0040..=0x01_004D)
         {
@@ -2902,16 +3629,201 @@ mod tests {
 
     #[test]
     fn abi_hash_descriptor_binds_every_durable_state_semantic() {
+        use crate::state_value::{
+            DECODED_STATE_VALUE_TABLE_OFFSET, DECODED_STATE_VALUE_WORD_BYTES,
+            MAX_STATE_VALUE_LIST_CAPACITY_V1, MAX_STATE_VALUE_NODES, MAX_STATE_VALUE_RECORD_BYTES,
+            MAX_STATE_VALUE_SCHEMA_BYTES, MAX_STATE_VALUE_WORDS, MIN_STATE_VALUE_LIST_CAPACITY_V1,
+            STATE_VALUE_RECORD_NAME_V1, STATE_VALUE_SCHEMA_HASH_DOMAIN_V1,
+            STATE_VALUE_SCHEMA_NAME_V1, StateValueRecordV1, StateValueSchemaV1,
+        };
+
         let state = canonical_surface().durable_state;
+        assert_eq!(state.semantics_version, 3);
+        assert_eq!(
+            state.contract_interface_section_magic,
+            crate::metadata::CONTRACT_INTERFACE_SECTION_MAGIC
+        );
+        assert_eq!(
+            state.contract_interface_schema_name,
+            crate::metadata::CONTRACT_INTERFACE_SCHEMA_NAME_V1
+        );
+        assert_eq!(
+            state.contract_interface_schema_hash,
+            <crate::metadata::EmbeddedContractInterfaceV1 as norito::NoritoSerialize>::schema_hash(
+            )
+        );
+        assert_eq!(
+            state.embedded_state_type_schema_name,
+            crate::metadata::EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1
+        );
+        assert_eq!(
+            state.embedded_state_type_schema_hash,
+            <crate::metadata::EmbeddedStateType as norito::NoritoSerialize>::schema_hash()
+        );
+        assert_eq!(
+            state.embedded_state_type_max_depth,
+            crate::metadata::MAX_EMBEDDED_STATE_TYPE_DEPTH_V1 as u64
+        );
+        assert!(
+            state
+                .embedded_state_type_validation
+                .contains("StateMap-forbidden-below-top-level")
+        );
+        assert_eq!(
+            state
+                .embedded_state_types
+                .iter()
+                .map(|state_type| (state_type.name, state_type.tag))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Int", 0),
+                ("Decimal", 1),
+                ("Quantity", 2),
+                ("Bool", 3),
+                ("String", 4),
+                ("Bytes", 5),
+                ("DataSpaceId", 6),
+                ("AccountId", 7),
+                ("AssetDefinitionId", 8),
+                ("AssetId", 9),
+                ("NftId", 10),
+                ("DomainId", 11),
+                ("Name", 12),
+                ("Json", 13),
+                ("Tuple", 14),
+                ("Struct", 15),
+                ("StateMap", 16),
+                ("Option", 17),
+                ("Result", 18),
+                ("List", 19),
+            ]
+        );
+        for state_type in &state.embedded_state_types {
+            assert!(!state_type.layout.is_empty());
+            let decoded: crate::metadata::EmbeddedStateType =
+                norito::decode_from_bytes(&state_type.canonical_sample_frame)
+                    .expect("ABI-bound state-type sample frame must decode");
+            assert_eq!(decoded.wire_tag(), state_type.tag);
+            assert_eq!(
+                norito::to_bytes(&decoded).expect("re-encode ABI-bound state-type sample"),
+                state_type.canonical_sample_frame
+            );
+        }
         assert_eq!(state.keys_max_items, STATE_KEYS_MAX_ITEMS);
         assert_eq!(state.max_path_bytes, STATE_MAX_PATH_BYTES as u64);
         assert_eq!(state.max_value_bytes, STATE_MAX_VALUE_BYTES as u64);
         assert_eq!(state.map_max_key_bytes, STATE_MAP_MAX_KEY_BYTES as u64);
         assert_eq!(state.map_max_base_bytes, STATE_MAP_MAX_BASE_BYTES as u64);
         assert_eq!(state.map_max_page_bytes, STATE_MAP_MAX_PAGE_BYTES as u64);
+        assert_eq!(state.operation_path_rules_version, 1);
+        assert!(
+            state
+                .operation_path_rules
+                .contains("bare-StateMap-base-rejected")
+        );
+        assert_eq!(state.state_value_validation_version, 1);
+        assert!(
+            state.state_value_validation.contains(
+                "exact-StateValueSchemaV1-from-declared-scalar-type-or-StateMap-value-type"
+            )
+        );
+        assert!(
+            state
+                .state_value_validation
+                .contains("present-STATE_GET-before-publication")
+        );
+        let typed = &state.typed_value;
+        assert_eq!(typed.wire_format_version, 1);
+        assert_eq!(
+            typed.norito_header_bytes,
+            u16::try_from(norito::core::Header::SIZE).expect("Norito header width")
+        );
+        assert_eq!(typed.norito_version_major, norito::core::VERSION_MAJOR);
+        assert_eq!(typed.norito_version_minor, norito::core::VERSION_MINOR);
+        assert_eq!(
+            typed.norito_default_encode_flags,
+            norito::core::default_encode_flags()
+        );
+        assert_eq!(typed.schema_hash_domain, STATE_VALUE_SCHEMA_HASH_DOMAIN_V1);
+        assert_eq!(
+            typed.schema_hash_algorithm,
+            "iroha_crypto::Hash::new(schema-hash-domain||exact-canonical-Norito-schema-frame)"
+        );
+        assert_eq!(typed.schema_name, STATE_VALUE_SCHEMA_NAME_V1);
+        assert_eq!(
+            typed.schema_hash,
+            <StateValueSchemaV1 as norito::NoritoSerialize>::schema_hash()
+        );
+        assert_eq!(typed.record_name, STATE_VALUE_RECORD_NAME_V1);
+        assert_eq!(
+            typed.record_hash,
+            <StateValueRecordV1 as norito::NoritoSerialize>::schema_hash()
+        );
+        assert_eq!(typed.kinds.len(), 19);
+        assert_eq!(typed.nodes.len(), 6);
+        assert_eq!(typed.atoms.len(), 4);
+        assert_eq!(typed.max_nodes, MAX_STATE_VALUE_NODES as u64);
+        assert_eq!(typed.max_depth, MAX_STATE_VALUE_NODES as u64);
+        assert_eq!(typed.max_words, MAX_STATE_VALUE_WORDS as u64);
+        assert_eq!(typed.max_schema_bytes, MAX_STATE_VALUE_SCHEMA_BYTES as u64);
+        assert_eq!(typed.max_record_bytes, MAX_STATE_VALUE_RECORD_BYTES as u64);
+        assert_eq!(typed.list_min_capacity, MIN_STATE_VALUE_LIST_CAPACITY_V1);
+        assert_eq!(typed.list_max_capacity, MAX_STATE_VALUE_LIST_CAPACITY_V1);
+        assert_eq!(
+            typed.decoded_table_offset,
+            u16::try_from(DECODED_STATE_VALUE_TABLE_OFFSET).expect("positive table offset")
+        );
+        assert_eq!(
+            typed.decoded_word_bytes,
+            u16::try_from(DECODED_STATE_VALUE_WORD_BYTES).expect("positive word width")
+        );
 
         assert_surface_mutation_changes_hash(|changed| {
             changed.durable_state.semantics_version += 1
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.contract_interface_section_magic[0] ^= 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.contract_interface_section_layout = "mutated-CNTR-layout";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.contract_interface_schema_name = "wrong.ContractInterface";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.contract_interface_schema_hash[0] ^= 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.embedded_state_type_schema_name = "wrong.EmbeddedStateType";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.embedded_state_type_schema_hash[0] ^= 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.embedded_state_type_tag_layout = "host-enum-layout";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.embedded_state_type_max_depth += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.embedded_state_type_validation = "accept-all-type-trees";
+        });
+        for index in 0..state.embedded_state_types.len() {
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.durable_state.embedded_state_types[index].name = "MutatedStateType";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.durable_state.embedded_state_types[index].tag ^= 0x80;
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.durable_state.embedded_state_types[index].layout = "mutated-layout";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.durable_state.embedded_state_types[index].canonical_sample_frame[0] ^= 1;
+            });
+        }
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.embedded_state_types.swap(0, 1);
         });
         assert_surface_mutation_changes_hash(|changed| changed.durable_state.keys_max_items += 1);
         assert_surface_mutation_changes_hash(|changed| changed.durable_state.max_path_bytes += 1);
@@ -2946,6 +3858,148 @@ mod tests {
         });
         assert_surface_mutation_changes_hash(|changed| {
             changed.durable_state.page_overflow = "truncate selected page";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.operation_path_rules_version += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.operation_path_rules = "all operations accept map bases";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.state_value_validation_version += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.state_value_validation = "accept any bounded payload";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.wire_format_version += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.norito_header_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.norito_version_major += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.norito_version_minor += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed
+                .durable_state
+                .typed_value
+                .norito_default_encode_flags ^= 0x80;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.enum_discriminant_layout = "host-enum-layout";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.schema_hash_domain = b"mutated-domain";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.schema_hash_algorithm = "unkeyed-host-hash";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.schema_name = "wrong.StateValueSchema";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.schema_hash[0] ^= 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.record_name = "wrong.StateValueRecord";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.record_hash[0] ^= 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.schema_layout = "unframed-schema";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.record_layout = "unframed-record";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.traversal_semantics = "host-dependent";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.option_tag_semantics = "false=Some";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.result_tag_semantics = "false=Ok";
+        });
+        for index in 0..typed.kinds.len() {
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.durable_state.typed_value.kinds[index].name = "MutatedKind";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.durable_state.typed_value.kinds[index].tag ^= 0x80;
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.durable_state.typed_value.kinds[index].word_layout = "mutated-word";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.durable_state.typed_value.kinds[index].pointer_type_id_or_zero ^= 0x8000;
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                let kind = &mut changed.durable_state.typed_value.kinds[index];
+                kind.resource_handle = !kind.resource_handle;
+            });
+        }
+        for index in 0..typed.nodes.len() {
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.durable_state.typed_value.nodes[index].name = "MutatedNode";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.durable_state.typed_value.nodes[index].tag ^= 0x80;
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.durable_state.typed_value.nodes[index].layout = "mutated-node-layout";
+            });
+        }
+        for index in 0..typed.atoms.len() {
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.durable_state.typed_value.atoms[index].name = "MutatedAtom";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.durable_state.typed_value.atoms[index].tag ^= 0x80;
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.durable_state.typed_value.atoms[index].layout = "mutated-atom-layout";
+            });
+        }
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.kinds.swap(0, 1);
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.nodes.swap(0, 1);
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.atoms.swap(0, 1);
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.max_nodes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.max_depth += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.max_words += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.max_schema_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.max_record_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.list_min_capacity += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.list_max_capacity -= 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.decoded_table_offset += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.decoded_word_bytes += 1;
         });
     }
 
@@ -3206,6 +4260,10 @@ mod tests {
         );
         assert_eq!(surface.numeric.mantissa_bits, 512);
         assert_eq!(surface.numeric.max_scale, 28);
+        assert_eq!(surface.numeric.semantics_descriptor_version, 1);
+        assert_eq!(surface.numeric.rules.len(), 12);
+        assert_eq!(surface.numeric.json_grammar.len(), 3);
+        assert_eq!(surface.numeric.fault_ordering.len(), 7);
         assert_eq!(surface.numeric.wire_format_version, 1);
         assert_eq!(surface.numeric.int_schema_name, INT_SCHEMA_NAME_V1);
         assert_eq!(surface.numeric.int_schema_hash, INT_SCHEMA_HASH_V1);
@@ -3330,6 +4388,9 @@ mod tests {
             changed.numeric.max_scale -= 1;
         });
         assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.semantics_descriptor_version += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
             changed.numeric.int_domain = "unbounded";
         });
         assert_surface_mutation_changes_hash(|changed| {
@@ -3400,6 +4461,50 @@ mod tests {
         });
         assert_surface_mutation_changes_hash(|changed| {
             changed.numeric.error_precedence = "unspecified";
+        });
+        for rule_index in 0..surface.numeric.rules.len() {
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.rules[rule_index].name = "mutated_rule";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.rules[rule_index].specification = "host-dependent";
+            });
+        }
+        for grammar_index in 0..surface.numeric.json_grammar.len() {
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.json_grammar[grammar_index].type_name = "mutated_type";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.json_grammar[grammar_index].token_kind = "JSON-number";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.json_grammar[grammar_index].decoded_string_grammar = ".*";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.json_grammar[grammar_index].validation = "accept-anything";
+            });
+        }
+        for order_index in 0..surface.numeric.fault_ordering.len() {
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.fault_ordering[order_index].name = "mutated_fault_stage";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.fault_ordering[order_index].specification = "unspecified";
+            });
+        }
+        assert_surface_mutation_changes_hash(|changed| changed.numeric.rules.swap(0, 1));
+        assert_surface_mutation_changes_hash(|changed| changed.numeric.json_grammar.swap(0, 1));
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.fault_ordering.swap(0, 1);
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            let _ = changed.numeric.rules.pop();
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            let _ = changed.numeric.json_grammar.pop();
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            let _ = changed.numeric.fault_ordering.pop();
         });
         for mode_index in 0..surface.numeric.rounding_modes.len() {
             assert_surface_mutation_changes_hash(|changed| {

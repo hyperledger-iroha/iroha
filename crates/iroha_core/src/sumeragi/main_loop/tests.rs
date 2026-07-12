@@ -2043,12 +2043,13 @@ fn bind_single_route_lane_payload_ownership(
     topology: &[PeerId],
     base_qc_mode_tag: &str,
 ) -> SumeragiLanePayloadOwnership {
-    assert!(
-        !state.nexus_snapshot().enabled,
-        "single-route fixture currently models the shared disabled-Nexus committee"
-    );
     let proposal_height = block.header().height().get();
     let proposal_view = block.header().view_change_index();
+    let nexus = state.nexus_snapshot();
+    assert!(
+        crate::queue::routable_lane_ids_for_nexus_at_height(&nexus, proposal_height).len() <= 1,
+        "single-route fixture requires the shared lane-domain committee"
+    );
     let execution_context = block
         .execution_context()
         .expect("single-route fixture block has execution context")

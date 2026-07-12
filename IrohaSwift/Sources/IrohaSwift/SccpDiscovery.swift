@@ -11,6 +11,10 @@ public struct SccpRegistryLimits: Equatable, Sendable {
 
 /// Consensus-critical SCCP proof and deterministic verifier-work limits.
 public struct SccpResourceLimits: Equatable, Sendable {
+    public let maxOutboundMessagesPerBlock: UInt32
+    public let maxOutboundMessagePayloadBytes: UInt64
+    public let maxPendingOutboundMessages: UInt64
+    public let maxPendingOutboundPayloadBytes: UInt64
     public let maxProofsPerTransaction: UInt32
     public let maxProofsPerBlock: UInt32
     public let maxProofBytesPerProof: UInt64
@@ -198,6 +202,7 @@ public struct SccpRecentMessageLinks: Equatable, Sendable {
 
 public struct SccpRecentMessage: Equatable, Sendable {
     public let height: UInt64
+    public let commitmentIndex: UInt32
     public let messageIdHex: String
     public let kind: SccpPayloadKindV1
     public let lane: SccpLaneIdV1
@@ -211,8 +216,15 @@ public struct SccpRecentMessage: Equatable, Sendable {
     public let links: SccpRecentMessageLinks
 }
 
+/// Exact compound continuation for newest-first SCCP discovery.
+public struct SccpRecentCursor: Equatable, Sendable {
+    public let from: UInt64
+    public let afterIndex: UInt32
+}
+
 public struct SccpRecentMessages: Equatable, Sendable {
     public let items: [SccpRecentMessage]
+    public let next: SccpRecentCursor?
 
     public static func parse(_ data: Data) throws -> Self {
         try SccpExactParser.recent(data)
@@ -329,6 +341,8 @@ private enum SccpExactParser {
 
     private static func resourceLimits(_ value: [String: Any]) throws -> SccpResourceLimits {
         let fields: Set<String> = [
+            "max_outbound_messages_per_block", "max_outbound_message_payload_bytes",
+            "max_pending_outbound_messages", "max_pending_outbound_payload_bytes",
             "max_proofs_per_transaction", "max_proofs_per_block", "max_proof_bytes_per_proof",
             "max_proof_bytes_per_transaction", "max_proof_bytes_per_block",
             "max_native_headers_per_transaction", "max_native_headers_per_block",
@@ -343,6 +357,27 @@ private enum SccpExactParser {
         ]
         try SccpStrictJSON.exactFields(value, fields, label: "SCCP resource limits")
         let result = SccpResourceLimits(
+            maxOutboundMessagesPerBlock: try SccpStrictJSON.uint32(
+                value, "max_outbound_messages_per_block", minimum: 1, maximum: UInt32.max
+            ),
+            maxOutboundMessagePayloadBytes: try SccpStrictJSON.uint64(
+                value,
+                "max_outbound_message_payload_bytes",
+                minimum: 1,
+                maximum: jsonSafeIntegerMaximum
+            ),
+            maxPendingOutboundMessages: try SccpStrictJSON.uint64(
+                value,
+                "max_pending_outbound_messages",
+                minimum: 1,
+                maximum: jsonSafeIntegerMaximum
+            ),
+            maxPendingOutboundPayloadBytes: try SccpStrictJSON.uint64(
+                value,
+                "max_pending_outbound_payload_bytes",
+                minimum: 1,
+                maximum: jsonSafeIntegerMaximum
+            ),
             maxProofsPerTransaction: try SccpStrictJSON.uint32(
                 value, "max_proofs_per_transaction", minimum: 1, maximum: UInt32.max
             ),
@@ -440,6 +475,13 @@ private enum SccpExactParser {
                 maximum: UInt32.max
             )
         )
+        guard result.maxOutboundMessagesPerBlock == 512,
+              result.maxOutboundMessagePayloadBytes == 4_096
+        else {
+            throw SccpV1Error.invalid(
+                "SCCP fixed outbound message limits must equal 512 messages and 4,096 payload bytes"
+            )
+        }
         guard result.maxProofBytesPerProof <= result.maxProofBytesPerTransaction else {
             throw SccpV1Error.invalid("SCCP per-proof byte limit exceeds its transaction limit")
         }
@@ -690,7 +732,12 @@ private enum SccpExactParser {
 
     static func recent(_ data: Data) throws -> SccpRecentMessages {
         let root = try SccpStrictJSON.object(data, label: "SCCP recent messages")
-        try SccpStrictJSON.exactFields(root, ["items"], label: "SCCP recent messages")
+        try SccpStrictJSON.exactFields(
+            root,
+            allowed: ["items", "next"],
+            required: ["items"],
+            label: "SCCP recent messages"
+        )
         let values = try array(root, "items")
         guard values.count <= 50 else { throw SccpV1Error.invalid("SCCP recent response exceeds 50 items") }
         var items: [SccpRecentMessage] = []
@@ -698,7 +745,8 @@ private enum SccpExactParser {
         for (index, raw) in values.enumerated() {
             let item = try object(raw, label: "items[\(index)]")
             let required: Set<String> = [
-                "height", "message_id_hex", "kind", "source_profile", "target_profile",
+                "height", "commitment_index", "message_id_hex", "kind", "source_profile",
+                "target_profile",
                 "destination_binding_hash", "route_configuration_hash", "target_domain",
                 "amount", "payload_projection", "links",
             ]
@@ -750,6 +798,9 @@ private enum SccpExactParser {
             else { throw SccpV1Error.invalid("recent SCCP summary fields disagree with payload_projection") }
             items.append(SccpRecentMessage(
                 height: try SccpStrictJSON.uint64(item, "height", minimum: 1),
+                commitmentIndex: try SccpStrictJSON.uint32(
+                    item, "commitment_index", minimum: 0, maximum: 511
+                ),
                 messageIdHex: id,
                 kind: .transfer,
                 lane: lane,
@@ -764,11 +815,49 @@ private enum SccpExactParser {
             ))
         }
         if items.count > 1 {
-            for index in 1..<items.count where items[index].height > items[index - 1].height {
-                throw SccpV1Error.invalid("recent SCCP messages must be newest first")
+            for index in 1..<items.count {
+                let previous = items[index - 1]
+                let current = items[index]
+                guard current.height <= previous.height else {
+                    throw SccpV1Error.invalid("recent SCCP messages must be newest first")
+                }
+                if current.height == previous.height {
+                    guard current.commitmentIndex == previous.commitmentIndex + 1 else {
+                        throw SccpV1Error.invalid(
+                            "same-height recent SCCP messages must have contiguous ascending commitment indices"
+                        )
+                    }
+                } else if current.commitmentIndex != 0 {
+                    throw SccpV1Error.invalid("an older SCCP block must begin at commitment index zero")
+                }
             }
         }
-        return SccpRecentMessages(items: items)
+        let next: SccpRecentCursor?
+        if let rawNext = root["next"] {
+            let cursor = try object(rawNext, label: "SCCP recent messages.next")
+            try SccpStrictJSON.exactFields(
+                cursor, ["from", "after_index"], label: "SCCP recent messages.next"
+            )
+            next = SccpRecentCursor(
+                from: try SccpStrictJSON.uint64(cursor, "from", minimum: 1),
+                afterIndex: try SccpStrictJSON.uint32(
+                    cursor, "after_index", minimum: 0, maximum: 511
+                )
+            )
+        } else {
+            next = nil
+        }
+        if let next {
+            guard let last = items.last else {
+                throw SccpV1Error.invalid(
+                    "an empty SCCP recent page must not advertise a continuation"
+                )
+            }
+            guard next.from == last.height, next.afterIndex == last.commitmentIndex else {
+                throw SccpV1Error.invalid("SCCP recent continuation must identify the last returned item")
+            }
+        }
+        return SccpRecentMessages(items: items, next: next)
     }
 
     private static func governedRoute(

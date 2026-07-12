@@ -574,7 +574,14 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     /// Return the exact Decision key reconstructed by safety-WAL replay.
     pub(crate) fn replayed_decision_key(
         &self,
-    ) -> Result<Option<(wire::ConsensusRound, wire::BlockSubject)>, AdapterError> {
+    ) -> Result<
+        Option<(
+            wire::ConsensusRound,
+            wire::BlockSubject,
+            wire::ExecutionCommitment,
+        )>,
+        AdapterError,
+    > {
         self.driver.replayed_decision_key()
     }
 
@@ -1060,6 +1067,11 @@ mod tests {
             round,
             phase: wire::GlobalPhase::Commit,
             subject,
+            execution_commitment: wire::ExecutionCommitment::without_topups(
+                Hash::new(b"runtime parent state"),
+                Hash::new(b"runtime post state"),
+                Hash::new(b"runtime ordinary writes"),
+            ),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![1],
         });

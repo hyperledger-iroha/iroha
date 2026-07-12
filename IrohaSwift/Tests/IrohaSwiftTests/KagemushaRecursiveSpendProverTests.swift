@@ -9,7 +9,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             KagemushaRecursiveSpendProver.preferredMode(
                 pastaCycleV3BackendAvailable: true
             ),
-            .recursiveSpendV2
+            .recursiveSpend
         )
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredMode(
@@ -21,7 +21,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             KagemushaRecursiveSpendProver.preferredSpendableCashMode(
                 pastaCycleV3BackendAvailable: true
             ),
-            .recursiveSpendV2
+            .recursiveSpend
         )
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredSpendableCashMode(
@@ -30,7 +30,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             nil
         )
         XCTAssertEqual(KagemushaOfflineSpendMode.allCases.count, 1)
-        XCTAssertEqual(KagemushaOfflineSpendMode.recursiveSpendV2.rawValue, "recursive_spend_v2")
+        XCTAssertEqual(KagemushaOfflineSpendMode.recursiveSpend.rawValue, "recursive_spend_v2")
     }
 
     func testLineageKeyArtifactPackagesValidateReleaseProfiles() throws {
@@ -551,7 +551,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             manifest["native_bridge_abi_version"] as? Int,
             Int(KagemushaRecursiveSpendProver.requiredNativeBridgeAbiVersion)
         )
-        XCTAssertEqual(Int(KagemushaRecursiveSpendProver.topUpRequiredNativeBridgeAbiVersion), 15)
+        XCTAssertEqual(Int(KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion), 18)
 
         let circuitIds = try XCTUnwrap(manifest["proof_circuit_ids"] as? [String: Any])
         XCTAssertEqual(

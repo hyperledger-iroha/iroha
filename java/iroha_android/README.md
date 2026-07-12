@@ -1208,6 +1208,9 @@ transaction submitter surfaces fail closed for retired note issue, audit,
 redeem, and defund paths. `NativeOfflineNoteProver` and chain-VK proof
 providers also fail closed for retired proof generation. Production offline
 payments use Kagemusha flows.
+The attestation-aware fixture codec is exposed as `AttestedOfflineNote`, with
+`AttestedOfflineNoteHalo2Prover` for its proof fixtures; internal Norito schema
+labels remain unchanged.
 `KagemushaCompactPaymentTokenProver` exposes the native record-backed compact
 token prover for shielded offline-offline payments. Pass a Norito-encoded
 `KagemushaVerifiedFoldRecordBundle`; the JNI bridge verifies each private hop
@@ -1247,12 +1250,11 @@ throws `IllegalStateException`; `isRecursiveCompactUnavailable(Throwable)`
 matches those reserved ABI-7 state errors. Empty or malformed local archives
 still fail as `IllegalArgumentException` before they can be confused with that
 reserved state.
-`KagemushaRecursiveSpendProver` exposes the ABI 6 spend-again-offline cash
-surface. Preferred mode selection chooses `recursive_spend_v1` after the JNI
-bridge ABI-version probe succeeds and init, append, both transition-profile helpers,
-the append-boundary helper, both lineage-witness helpers, verify, and redeem
-reject the empty-archive availability probes instead of accepting permissive
-native calls.
+`KagemushaRecursiveSpendProver` exposes the exact ABI-18 spend-again-offline
+cash surface. Preferred mode selection returns `RECURSIVE_SPEND` only when the
+ABI probe is exactly 18 and the Pasta-cycle backend is available; its stable
+wire value is exactly `recursive_spend_v2`. Other mode labels and permissive
+symbol-presence fallbacks are not release inputs.
 The Android StrongBox/offline-payments lab gate is tracked in
 `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; rows
 remain blocked until signed device evidence is attached.
@@ -1331,6 +1333,9 @@ material: Android wallet code must pass it through Norito unchanged and must not
 construct, rewrite, or mutate it. The native bridge validates `vk_commitment`,
 `public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
 before proving or returning output bytes.
+Wallets use the append-boundary helper to bind that validated previous-proof
+material to the public chain/asset and final-root/current-note boundary before
+append proving.
 Native append streams the previous recursive proof bytes and per-hop accumulator
 material into native-owned accumulator digests (`recursive_proof_chain_digest`,
 lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base,
@@ -1479,13 +1484,39 @@ created from any `HttpClientTransport`:
 transport
     .offlineToriiClient()
     .getOfflineReadiness("xor#wonderland")
-    .thenAccept(readiness -> System.out.println(readiness.ready()));
+    .thenAccept(readiness -> {
+      var transferVerifier = readiness.activeTransferVerifier();
+      var topUpShieldVerifier = readiness.activeTopUpShieldVerifier();
+      var transferVerifierLabel = transferVerifier == null
+          ? "unavailable"
+          : transferVerifier.id().backend() + ":" + transferVerifier.id().name()
+              + " v" + transferVerifier.version();
+      var topUpShieldVerifierLabel = topUpShieldVerifier == null
+          ? "unavailable"
+          : topUpShieldVerifier.id().backend() + ":" + topUpShieldVerifier.id().name()
+              + " v" + topUpShieldVerifier.version();
+      System.out.println(
+          readiness.ready() + " scale=" + readiness.assetScale()
+              + " transferVerifier=" + transferVerifierLabel
+              + " topUpShieldVerifier=" + topUpShieldVerifierLabel);
+    });
 ```
 
 `OfflineToriiClient` exposes only the first-release routes: readiness for a
 required asset definition, direct-Norito top-up and redeem submissions, and the
 operation status resource. Use `getOfflineReadiness(assetDefinitionId)` before
 showing offline receive or payment-token UI.
+Readiness preserves the authoritative nullable unsigned-32-bit asset scale and
+the key-material-free transfer and public-to-confidential top-up shield
+verifiers selected at the same evaluated block. Both nullable verifier fields
+are required: null must correlate exactly with `transfer_verifier_unavailable`
+or `topup_shield_verifier_unavailable`, and each reported verifier must be
+active at the evaluated height.
+A scale above 28 remains decodable with `asset_scale_unsupported`; only a ready
+snapshot requires the 0-through-28 Offline amount range and both active
+verifier roles.
+The Kotlin/JVM mirror enforces the same verifier-window, digest, proof-size,
+blocker-correlation, and duplicate-code invariants.
 `OfflineTopUpRequest` and `OfflineRedeemRequest` accept only the canonical
 schema-bound request archive and derive the lowercase `Idempotency-Key` from
 its nonzero 32-byte `operation_id`; callers cannot provide a second, mismatched

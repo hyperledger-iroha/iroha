@@ -73,7 +73,7 @@ pub struct SourceLocation {
 }
 
 /// Exact declaration role of a function inside a seiyaku or module.
-#[derive(Debug, PartialEq, Clone, Copy, Default)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub enum FunctionKind {
     /// Private `fn`, including module-private and compiler-created helpers.
     #[default]
@@ -89,7 +89,7 @@ pub enum FunctionKind {
 }
 
 /// Parsed modifiers associated with a function.
-#[derive(Debug, PartialEq, Clone, Default)]
+#[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct FunctionModifiers {
     pub kind: FunctionKind,
     /// Optional caller authorization declared with `authorize("Permission")`.
@@ -197,7 +197,7 @@ pub struct ErrorVariant {
     pub code: u32,
 }
 
-/// A seiyaku-level `const` declaration: `const Type name = expr;`.
+/// A seiyaku-level type-first `const` declaration: `const Type name = expr;`.
 #[derive(Debug, PartialEq, Clone)]
 pub struct ConstDecl {
     pub name: String,

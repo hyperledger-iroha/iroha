@@ -297,6 +297,13 @@ transaction limits cannot exceed block limits, and they are included in the ZK
 consensus-policy hash. They have no environment-variable aliases: validators
 must obtain identical values from configuration files.
 
+Outbound SCCP messages have two additional fixed V1 limits that are not
+configuration knobs: at most 512 successful messages per block and at most
+4,096 canonical payload bytes per message. The consensus-critical `[zk.sccp]`
+pending-outbox defaults are 65,536 payload-bearing messages and 268,435,456
+canonical payload bytes. Operators may lower or raise the pending limits in the
+shared validator configuration, but every validator must use the same values.
+
 Core preflights proof count and bytes before any proof-controlled canonical
 decode. It then derives hardware-independent work from bounded framing and
 atomically registers the complete transaction/block delta before signature
@@ -309,6 +316,52 @@ committee key validations and 512 possible signer contributions. BSC reserves
 all framed headers, the anchor seal and continuation recoveries, every possible
 attestation, and all active/pending/epoch roster validation passes. These are
 upper bounds, so different peer hardware cannot change admission results.
+
+## Outbound commitment, retention, and discovery
+
+Every successful outbound message receives a `commitment_index` in block
+execution order. Indices are dense and zero-based (`0..=511`); rejected or
+rolled-back execution cannot consume an index. The block header's SCCP Merkle
+root commits leaves in exactly that order. Lane, route, message-id, or map-key
+ordering never substitutes for the commitment index, and a gap, duplicate,
+swap, omission, extra message, or out-of-range index fails validation.
+
+Before finality is published or a block body can be evicted, Kura writes one
+immutable retained-block record containing the exact canonical header and the
+canonical SCCP payload archive in commitment-index order. It validates every
+payload, reconstructs the header commitment root, and rejects a conflicting
+rewrite. Finality-proof, message-bundle, proof-request, and recent-message
+reconstruction use this root-authenticated archive. They never require the
+historical block body and never treat a mutable WSV payload copy as proof
+material. Restart performs the same header, canonical-hash, archive, and root
+checks before serving history.
+
+WSV separates bulky pending data from permanent replay metadata. A newly
+committed message stores its canonical payload in the pending map and charges
+both `[zk.sccp]` pending counters. When the exact destination proof is accepted,
+the payload and its counter charge are removed atomically and replaced with a
+fixed-size terminal descriptor. The global message locator and ordered history
+index persist across that transition. Consequently the pending payload state is
+hard-bounded by both configured maxima, while terminal replay descriptors,
+their locator/index entries, and Kura's immutable retained history intentionally
+grow to preserve permanent replay protection and historical proof service.
+Operators must capacity-plan and monitor that permanent history; the limits do
+not claim that total chain state is bounded.
+
+`GET /v1/sccp/messages/recent` returns height-descending history and preserves
+execution order within one height. Each item carries `commitment_index`. When
+more entries exist, `next` contains the compound cursor `{ from, after_index }`
+for the last returned item; the next request must send both values. This avoids
+skipping or repeating entries when a page ends inside a 512-message block.
+`after_index` without `from`, indices outside `0..=511`, non-canonical decimal
+spellings, duplicate or unknown query fields, and limits outside `1..=50` are
+rejected.
+
+The retained-block and finality records are safety evidence, not evictable body
+cache. Their bytes are included in Kura's total/operator disk-usage accounting,
+but excluded from the evictable-storage budget so a body cap cannot deadlock the
+write of the evidence required to make that body evictable. This is not a total
+disk bound: immutable retained records grow with chain history.
 
 ## Proof-local typed admission
 
@@ -401,15 +454,19 @@ bytes fail before a request is sent or opaque response bytes are returned. This
 framing check does not claim to decode or bind the embedded SCCP message id.
 
 `GET /v1/sccp/capabilities` requires two closed limit objects in every V1
-response. `registry_limits` advertises the fixed lane/live/retained capacities,
-while `resource_limits` advertises every consensus-critical `[zk.sccp]` value.
-Rust, Swift, Kotlin, Java, JavaScript/TypeScript, Python, and .NET clients reject
-missing, unknown, zero, reversed transaction/block, or drifted fixed-registry
-limits before accepting the capability snapshot. The five byte-budget fields
-are also restricted to canonical unsigned JSON integer tokens no greater than
-`9,007,199,254,740,991` (`2^53 - 1`). Fractional, exponent, signed, leading-zero,
-and larger spellings are rejected before a runtime with binary floating-point
-numbers can round them into a different consensus limit.
+response. `registry_limits` advertises the five fixed lane/live/retained
+capacities. `resource_limits` has exactly 23 fields: the two fixed outbound
+limits, the two configured pending-outbox limits, and all 19 verifier-work
+limits from `[zk.sccp]`. Rust, Swift, Kotlin, Java, JavaScript/TypeScript, Python,
+and .NET clients reject missing, unknown, zero, reversed transaction/block, or
+drifted fixed limits before accepting the capability snapshot. All eight
+`u64`-valued fields (`max_outbound_message_payload_bytes`, both
+`max_pending_outbound_*` fields, the three `max_proof_bytes_*` fields, and both
+`max_native_header_bytes_*` fields) are restricted to canonical unsigned JSON
+integer tokens no greater than `9,007,199,254,740,991` (`2^53 - 1`). Fractional,
+exponent, signed, leading-zero, and larger spellings are rejected before a
+runtime with binary floating-point numbers can round them into a different
+consensus limit.
 
 ## Outbound destination authentication
 

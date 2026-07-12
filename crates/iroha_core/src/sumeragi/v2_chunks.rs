@@ -581,6 +581,11 @@ mod tests {
             },
             phase: wire::GlobalPhase::Commit,
             subject,
+            execution_commitment: wire::ExecutionCommitment::without_topups(
+                Hash::new(b"chunk fixture parent state"),
+                Hash::new(b"chunk fixture post state"),
+                Hash::new(b"chunk fixture ordinary writes"),
+            ),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0xA5; 48],
         }

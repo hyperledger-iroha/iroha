@@ -111,6 +111,11 @@ test("JavaScript identifier validation consumes the normative V1 keyword table",
   const typeNames = [...typeTable[1].matchAll(/"([A-Za-z_][A-Za-z0-9_]*)"/gu)].map(
     (match) => match[1],
   );
+  const intrinsicNames = [
+    ...semantic.matchAll(
+      /pub\(crate\) const [A-Z0-9_]+_INTRINSIC: &str = "([^"]+)";/gu,
+    ),
+  ].map((match) => match[1]);
   assert.deepEqual(KOTODAMA_V1_DECLARATION_RESERVED, [
     ...typeNames,
     "AxtDescriptor",
@@ -119,6 +124,7 @@ test("JavaScript identifier validation consumes the normative V1 keyword table",
     "SoracloudRequest",
     "SoracloudResponse",
     "state_map_get",
+    ...intrinsicNames,
   ]);
 });
 
@@ -360,7 +366,9 @@ test("compiler adapters preserve branded selectors and reject forged manifest de
   for (const seiyakuName of [
     "seiyaku",
     "match",
-    "i64",
+    "int",
+    "decimal",
+    "quantity",
     "state_map_get",
     "__kotodama_link_forged",
   ]) {
@@ -396,7 +404,7 @@ test("compiler adapters preserve branded selectors and reject forged manifest de
   await assert.rejects(
     compileResponse((manifest) => {
       manifest.states = [
-        { name: "match", type_name: "i64" },
+        { name: "match", type_name: "int" },
       ];
     }),
     /state 0.name is not canonical/u,

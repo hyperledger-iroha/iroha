@@ -81,6 +81,14 @@ const CASES: &[CompileFailCase] = &[
         line: 2,
     },
     CompileFailCase {
+        name: "missing-kotoage-authorization",
+        source: "seiyaku MissingAuthorization {\nkotoage fn run() {}\n}",
+        phase: DiagnosticPhase::Parse,
+        code: "K1001",
+        message: "kotoage function `run` requires `authorize(\"Permission\")` before its body",
+        line: 2,
+    },
+    CompileFailCase {
         name: "retired-parameter-order",
         source: "seiyaku RetiredParameterOrder {\nfn run(value: int) {}\n}",
         phase: DiagnosticPhase::Parse,

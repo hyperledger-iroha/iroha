@@ -14,11 +14,12 @@ Numbering ranges
 - `0x80..=0xFF`: host/crypto helpers and reserved slots; only numbers present in the ABI v1 allowlist are accepted.
 
 Durable helpers (ABI v1)
-- The durable state helper syscalls (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_*, JSON/SCHEMA encode/decode) are part of the V1 ABI and included in `abi_hash` computation.
+- The allowed durable-state helpers in `0x50..=0x5A` are part of ABI V1 and included in `abi_hash`; pre-release scalar map-path syscall `0x54` is permanently retired and must not be reassigned.
+- The hash also binds the literal `CNTR` marker and framing, nominal contract-interface and state-type schemas, all embedded state-type tags/layouts/canonical samples, the nesting bound and admission rules, and the typed state-value schema/record identities and validation rules.
 - CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may persist locally but must preserve identical syscall semantics.
 
 Pointer‑ABI calling convention (smart‑contract syscalls)
-- Arguments are placed in registers `r10+` as raw `u64` values or as pointers into the INPUT region to immutable Norito TLV envelopes (e.g., `AccountId`, `AssetDefinitionId`, `Name`, `Json`, `NftId`).
+- Arguments are placed in registers `r10+` as raw `u64` values or as pointers to immutable Norito TLV envelopes in INPUT, an allocated HEAP range, or an exact loader-authenticated code literal (e.g., `AccountId`, `AssetDefinitionId`, `Name`, `Json`, `NftId`).
 - Scalar return values are the `u64` returned from the host. Pointer results are written by the host into `r10`.
 
 Canonical syscall table (subset)
@@ -56,7 +57,10 @@ Gas enforcement
   making consensus depend on host bigint performance.
 
 Notes
-- All pointer arguments reference Norito TLV envelopes in the INPUT region and are validated on first dereference (`E_NORITO_INVALID` on error).
+- Pointer arguments are validated on first dereference. V1 accepts INPUT,
+  allocated HEAP, and exact loader-authenticated literal envelopes; stack,
+  OUTPUT, unallocated or partially owned HEAP, and arbitrary code offsets fail
+  with `E_NORITO_INVALID`.
 - All mutations are applied via Iroha’s standard executor (through `CoreHost`), not directly by the VM.
 - Kotodama `block_height()` lowers to the existing extended `SYSVAR_BLOCK_HEIGHT` syscall (`0x010021`) and returns the host-provided block height as an integer.
 - `IntValueV1`, `DecimalValueV1`, and `QuantityValueV1` use pointer types
@@ -109,7 +113,7 @@ Generation note
 
 ## Admin/Role TLV Examples (Mock Host)
 
-This section documents the TLV shapes and minimal JSON payloads accepted by the mock WSV host for admin‑style syscalls used in tests. All pointer arguments follow the pointer‑ABI (Norito TLV envelopes placed in INPUT). Production hosts may use richer schemas; these examples aim to clarify types and basic shapes.
+This section documents the TLV shapes and minimal JSON payloads accepted by the mock WSV host for admin‑style syscalls used in tests. All pointer arguments follow the V1 pointer ABI and its provenance rules. Production hosts may use richer schemas; these examples aim to clarify types and basic shapes.
 
 - REGISTER_PEER / UNREGISTER_PEER
   - Args: `r10=&Json`

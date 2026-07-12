@@ -356,6 +356,12 @@ pub enum Builtin {
     MintAsset,
     BurnAsset,
     TransferAsset,
+    SetAssetTransferFreeze,
+    SetAssetTransferDailyLimit,
+    AccountRecoveryPropose,
+    AccountRecoveryApprove,
+    AccountRecoveryCancel,
+    AccountRecoveryFinalize,
     NftMintAsset,
     NftSetMetadata,
     NftBurnAsset,
@@ -381,6 +387,8 @@ pub enum Builtin {
     RevokeRole,
     GrantPermission,
     RevokePermission,
+    GrantContractEntrypoint,
+    RevokeContractEntrypoint,
     EscrowOpenOffer,
     EscrowAccept,
     EscrowMarkPaymentSent,
@@ -545,6 +553,7 @@ pub enum Builtin {
     GetBlobHex,
     TriggerEvent,
     Authority,
+    ContractSubject,
     CurrentTimeMs,
     BlockHeight,
     BlockTimeMs,
@@ -627,6 +636,12 @@ impl Builtin {
         Self::MintAsset,
         Self::BurnAsset,
         Self::TransferAsset,
+        Self::SetAssetTransferFreeze,
+        Self::SetAssetTransferDailyLimit,
+        Self::AccountRecoveryPropose,
+        Self::AccountRecoveryApprove,
+        Self::AccountRecoveryCancel,
+        Self::AccountRecoveryFinalize,
         Self::NftMintAsset,
         Self::NftSetMetadata,
         Self::NftBurnAsset,
@@ -652,6 +667,8 @@ impl Builtin {
         Self::RevokeRole,
         Self::GrantPermission,
         Self::RevokePermission,
+        Self::GrantContractEntrypoint,
+        Self::RevokeContractEntrypoint,
         Self::EscrowOpenOffer,
         Self::EscrowAccept,
         Self::EscrowMarkPaymentSent,
@@ -786,6 +803,7 @@ impl Builtin {
         Self::GetBlobHex,
         Self::TriggerEvent,
         Self::Authority,
+        Self::ContractSubject,
         Self::CurrentTimeMs,
         Self::BlockHeight,
         Self::BlockTimeMs,
@@ -858,6 +876,12 @@ impl Builtin {
             "mint_asset" => Self::MintAsset,
             "burn_asset" => Self::BurnAsset,
             "transfer_asset" => Self::TransferAsset,
+            "set_asset_transfer_freeze" => Self::SetAssetTransferFreeze,
+            "set_asset_transfer_daily_limit" => Self::SetAssetTransferDailyLimit,
+            "account_recovery_propose" => Self::AccountRecoveryPropose,
+            "account_recovery_approve" => Self::AccountRecoveryApprove,
+            "account_recovery_cancel" => Self::AccountRecoveryCancel,
+            "account_recovery_finalize" => Self::AccountRecoveryFinalize,
             "nft_mint_asset" => Self::NftMintAsset,
             "nft_set_metadata" => Self::NftSetMetadata,
             "nft_burn_asset" => Self::NftBurnAsset,
@@ -883,6 +907,8 @@ impl Builtin {
             "revoke_role" => Self::RevokeRole,
             "grant_permission" => Self::GrantPermission,
             "revoke_permission" => Self::RevokePermission,
+            "grant_contract_entrypoint" => Self::GrantContractEntrypoint,
+            "revoke_contract_entrypoint" => Self::RevokeContractEntrypoint,
             "escrow_open_offer" => Self::EscrowOpenOffer,
             "escrow_accept" => Self::EscrowAccept,
             "escrow_mark_payment_sent" => Self::EscrowMarkPaymentSent,
@@ -1017,6 +1043,7 @@ impl Builtin {
             "get_blob_hex" => Self::GetBlobHex,
             "trigger_event" => Self::TriggerEvent,
             "authority" => Self::Authority,
+            "contract_subject" => Self::ContractSubject,
             "current_time_ms" => Self::CurrentTimeMs,
             "block_height" => Self::BlockHeight,
             "block_time_ms" => Self::BlockTimeMs,
@@ -1086,6 +1113,12 @@ impl Builtin {
             Self::MintAsset => "mint_asset",
             Self::BurnAsset => "burn_asset",
             Self::TransferAsset => "transfer_asset",
+            Self::SetAssetTransferFreeze => "set_asset_transfer_freeze",
+            Self::SetAssetTransferDailyLimit => "set_asset_transfer_daily_limit",
+            Self::AccountRecoveryPropose => "account_recovery_propose",
+            Self::AccountRecoveryApprove => "account_recovery_approve",
+            Self::AccountRecoveryCancel => "account_recovery_cancel",
+            Self::AccountRecoveryFinalize => "account_recovery_finalize",
             Self::NftMintAsset => "nft_mint_asset",
             Self::NftSetMetadata => "nft_set_metadata",
             Self::NftBurnAsset => "nft_burn_asset",
@@ -1111,6 +1144,8 @@ impl Builtin {
             Self::RevokeRole => "revoke_role",
             Self::GrantPermission => "grant_permission",
             Self::RevokePermission => "revoke_permission",
+            Self::GrantContractEntrypoint => "grant_contract_entrypoint",
+            Self::RevokeContractEntrypoint => "revoke_contract_entrypoint",
             Self::EscrowOpenOffer => "escrow_open_offer",
             Self::EscrowAccept => "escrow_accept",
             Self::EscrowMarkPaymentSent => "escrow_mark_payment_sent",
@@ -1271,6 +1306,7 @@ impl Builtin {
             Self::GetBlobHex => "get_blob_hex",
             Self::TriggerEvent => "trigger_event",
             Self::Authority => "authority",
+            Self::ContractSubject => "contract_subject",
             Self::CurrentTimeMs => "current_time_ms",
             Self::BlockHeight => "block_height",
             Self::BlockTimeMs => "block_time_ms",
@@ -1314,6 +1350,7 @@ impl Builtin {
             Self::ValuesTake2 => "state::values_take2",
             Self::KeysValuesTake2 => "state::entries_take2",
             Self::Authority => "context::authority",
+            Self::ContractSubject => "context::contract_subject",
             Self::CurrentTimeMs => "context::current_time_ms",
             Self::BlockHeight => "context::block_height",
             Self::BlockTimeMs => "context::block_time_ms",
@@ -1362,6 +1399,8 @@ impl Builtin {
             Self::MintAsset => "ledger::asset::mint",
             Self::BurnAsset => "ledger::asset::burn",
             Self::TransferAsset => "ledger::asset::transfer",
+            Self::SetAssetTransferFreeze => "ledger::asset::set_transfer_freeze",
+            Self::SetAssetTransferDailyLimit => "ledger::asset::set_transfer_daily_limit",
             Self::RegisterAsset => "ledger::asset::register",
             Self::CreateNewAsset => "ledger::asset::create",
             Self::UnregisterAsset => "ledger::asset::unregister",
@@ -1371,6 +1410,10 @@ impl Builtin {
             Self::AddSignatory => "ledger::account::add_signatory",
             Self::RemoveSignatory => "ledger::account::remove_signatory",
             Self::SetAccountQuorum => "ledger::account::set_quorum",
+            Self::AccountRecoveryPropose => "ledger::account::recovery::propose",
+            Self::AccountRecoveryApprove => "ledger::account::recovery::approve",
+            Self::AccountRecoveryCancel => "ledger::account::recovery::cancel",
+            Self::AccountRecoveryFinalize => "ledger::account::recovery::finalize",
             Self::NftMintAsset => "ledger::nft::mint",
             Self::NftSetMetadata => "ledger::nft::set_metadata",
             Self::NftBurnAsset => "ledger::nft::burn",
@@ -1392,6 +1435,8 @@ impl Builtin {
             Self::RevokeRole => "ledger::role::revoke",
             Self::GrantPermission => "ledger::permission::grant",
             Self::RevokePermission => "ledger::permission::revoke",
+            Self::GrantContractEntrypoint => "ledger::contract::grant_entrypoint",
+            Self::RevokeContractEntrypoint => "ledger::contract::revoke_entrypoint",
             Self::EscrowOpenOffer => "ledger::escrow::open_offer",
             Self::EscrowAccept => "ledger::escrow::accept",
             Self::EscrowMarkPaymentSent => "ledger::escrow::mark_payment_sent",
@@ -1621,6 +1666,12 @@ impl Builtin {
             | Self::MintAsset
             | Self::BurnAsset
             | Self::TransferAsset
+            | Self::SetAssetTransferFreeze
+            | Self::SetAssetTransferDailyLimit
+            | Self::AccountRecoveryPropose
+            | Self::AccountRecoveryApprove
+            | Self::AccountRecoveryCancel
+            | Self::AccountRecoveryFinalize
             | Self::NftMintAsset
             | Self::NftSetMetadata
             | Self::NftBurnAsset
@@ -1646,6 +1697,8 @@ impl Builtin {
             | Self::RevokeRole
             | Self::GrantPermission
             | Self::RevokePermission
+            | Self::GrantContractEntrypoint
+            | Self::RevokeContractEntrypoint
             | Self::EscrowOpenOffer
             | Self::EscrowAccept
             | Self::EscrowMarkPaymentSent
@@ -1925,19 +1978,13 @@ impl Builtin {
                 &[s::SYSCALL_RESOLVE_ACCOUNT_ALIAS]
             }
             Self::PointerConstructor(_) => &[],
-            Self::Contains => &[
-                s::SYSCALL_BUILD_PATH_MAP_KEY,
-                s::SYSCALL_BUILD_PATH_KEY_NORITO,
-                s::SYSCALL_STATE_GET,
-            ],
+            Self::Contains => &[s::SYSCALL_BUILD_PATH_KEY_NORITO, s::SYSCALL_STATE_GET],
             Self::GetOrDefault | Self::GetOr => &[
-                s::SYSCALL_BUILD_PATH_MAP_KEY,
                 s::SYSCALL_BUILD_PATH_KEY_NORITO,
                 s::SYSCALL_STATE_GET,
                 s::SYSCALL_STATE_VALUE_DECODE,
             ],
             Self::Ensure => &[
-                s::SYSCALL_BUILD_PATH_MAP_KEY,
                 s::SYSCALL_BUILD_PATH_KEY_NORITO,
                 s::SYSCALL_STATE_GET,
                 s::SYSCALL_STATE_VALUE_DECODE,
@@ -1945,7 +1992,6 @@ impl Builtin {
                 s::SYSCALL_STATE_SET,
             ],
             Self::StateMapRemove => &[
-                s::SYSCALL_BUILD_PATH_MAP_KEY,
                 s::SYSCALL_BUILD_PATH_KEY_NORITO,
                 s::SYSCALL_STATE_GET,
                 s::SYSCALL_STATE_VALUE_DECODE,
@@ -2000,6 +2046,12 @@ impl Builtin {
             Self::MintAsset => &[s::SYSCALL_MINT_ASSET],
             Self::BurnAsset => &[s::SYSCALL_BURN_ASSET],
             Self::TransferAsset => &[s::SYSCALL_TRANSFER_ASSET_SCOPED],
+            Self::SetAssetTransferFreeze => &[s::SYSCALL_SET_ASSET_TRANSFER_FREEZE],
+            Self::SetAssetTransferDailyLimit => &[s::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT],
+            Self::AccountRecoveryPropose => &[s::SYSCALL_ACCOUNT_RECOVERY_PROPOSE],
+            Self::AccountRecoveryApprove => &[s::SYSCALL_ACCOUNT_RECOVERY_APPROVE],
+            Self::AccountRecoveryCancel => &[s::SYSCALL_ACCOUNT_RECOVERY_CANCEL],
+            Self::AccountRecoveryFinalize => &[s::SYSCALL_ACCOUNT_RECOVERY_FINALIZE],
             Self::NftMintAsset => &[s::SYSCALL_NFT_MINT_ASSET],
             Self::NftSetMetadata => &[s::SYSCALL_NFT_SET_METADATA],
             Self::NftBurnAsset => &[s::SYSCALL_NFT_BURN_ASSET],
@@ -2022,6 +2074,8 @@ impl Builtin {
             Self::RevokeRole => &[s::SYSCALL_REVOKE_ROLE],
             Self::GrantPermission => &[s::SYSCALL_GRANT_PERMISSION],
             Self::RevokePermission => &[s::SYSCALL_REVOKE_PERMISSION],
+            Self::GrantContractEntrypoint => &[s::SYSCALL_GRANT_CONTRACT_ENTRYPOINT],
+            Self::RevokeContractEntrypoint => &[s::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT],
             Self::EscrowOpenOffer => &[s::SYSCALL_ESCROW_OPEN_OFFER],
             Self::EscrowAccept => &[s::SYSCALL_ESCROW_ACCEPT],
             Self::EscrowMarkPaymentSent => &[s::SYSCALL_ESCROW_MARK_PAYMENT_SENT],
@@ -2104,10 +2158,7 @@ impl Builtin {
             Self::AddSignatory => &[s::SYSCALL_ADD_SIGNATORY],
             Self::RemoveSignatory => &[s::SYSCALL_REMOVE_SIGNATORY],
             Self::SetAccountQuorum => &[s::SYSCALL_SET_ACCOUNT_QUORUM],
-            Self::Path => &[
-                s::SYSCALL_BUILD_PATH_MAP_KEY,
-                s::SYSCALL_BUILD_PATH_KEY_NORITO,
-            ],
+            Self::Path => &[s::SYSCALL_BUILD_PATH_KEY_NORITO],
             Self::NameDecode => &[s::SYSCALL_NAME_DECODE],
             Self::TlvEq => &[s::SYSCALL_TLV_EQ],
             Self::TlvLen => &[s::SYSCALL_TLV_LEN],
@@ -2233,6 +2284,7 @@ impl Builtin {
             Self::GetBlobHex => &[s::SYSCALL_JSON_GET_BLOB_HEX],
             Self::Authority => &[s::SYSCALL_GET_AUTHORITY],
             Self::CurrentTimeMs => &[s::SYSCALL_CURRENT_TIME_MS],
+            Self::ContractSubject => &[s::SYSCALL_SYSVAR_CONTRACT_SUBJECT],
             Self::BlockHeight => &[s::SYSCALL_SYSVAR_BLOCK_HEIGHT],
             Self::BlockTimeMs => &[s::SYSCALL_SYSVAR_BLOCK_TIME_MS],
             Self::ChainId => &[s::SYSCALL_SYSVAR_CHAIN_ID],
@@ -2377,6 +2429,17 @@ impl Builtin {
                 ],
                 "()",
             ),
+            Self::SetAssetTransferFreeze => {
+                S::new(&["AccountId", "AssetDefinitionId", "bool"], "()")
+            }
+            Self::SetAssetTransferDailyLimit => S::new(
+                &["AccountId", "AssetDefinitionId", "Option<quantity>"],
+                "()",
+            ),
+            Self::AccountRecoveryPropose => S::new(&["string", "AccountId"], "()"),
+            Self::AccountRecoveryApprove
+            | Self::AccountRecoveryCancel
+            | Self::AccountRecoveryFinalize => S::new(&["string"], "()"),
             Self::NftMintAsset => S::new(&["NftId", "AccountId"], "()"),
             Self::NftSetMetadata => S::new(&["NftId", "Name", "Json"], "()"),
             Self::NftBurnAsset => S::new(&["NftId"], "()"),
@@ -2399,6 +2462,9 @@ impl Builtin {
             Self::GrantRole | Self::RevokeRole => S::new(&["AccountId", "Name"], "()"),
             Self::GrantPermission | Self::RevokePermission => {
                 S::new(&["AccountId", "Name|Json"], "()")
+            }
+            Self::GrantContractEntrypoint | Self::RevokeContractEntrypoint => {
+                S::new(&["AccountId", "string"], "()")
             }
             Self::EscrowOpenOffer => {
                 S::new(&["Name", "AssetDefinitionId", "quantity", "bytes?"], "()")
@@ -2442,7 +2508,7 @@ impl Builtin {
             | Self::ZkVerifyBatch
             | Self::ZkVoteVerifyBallot
             | Self::ZkVoteVerifyTally => S::new(&["bytes"], "()"),
-            Self::VrfVerify => S::new(&["bytes", "bytes", "bytes", "int"], "bytes"),
+            Self::VrfVerify => S::new(&["bytes"], "bytes"),
             Self::VrfVerifyBatch => S::new(&["bytes"], "bytes"),
             Self::Sm3Hash
             | Self::Sha256Hash
@@ -2553,6 +2619,7 @@ impl Builtin {
             Self::SetVl => S::new(&["int"], "()"),
             Self::TriggerEvent => S::new(&[], "Json"),
             Self::Authority | Self::SysvarAuthority => S::new(&[], "AccountId"),
+            Self::ContractSubject => S::new(&[], "AccountId"),
             Self::CurrentTimeMs | Self::BlockHeight | Self::BlockTimeMs => S::new(&[], "int"),
             Self::ChainId | Self::ContractAddress | Self::Entrypoint => S::new(&[], "bytes"),
         };
@@ -2631,6 +2698,16 @@ impl Builtin {
                 "amount",
                 "dataspace",
             ]),
+            Self::SetAssetTransferFreeze => {
+                signature.with_names(&["account", "asset_definition", "frozen"])
+            }
+            Self::SetAssetTransferDailyLimit => {
+                signature.with_names(&["account", "asset_definition", "cap"])
+            }
+            Self::AccountRecoveryPropose => signature.with_names(&["alias", "replacement"]),
+            Self::AccountRecoveryApprove
+            | Self::AccountRecoveryCancel
+            | Self::AccountRecoveryFinalize => signature.with_names(&["alias"]),
             Self::NftMintAsset => signature.with_names(&["nft", "owner"]),
             Self::NftSetMetadata => signature.with_names(&["nft", "key", "value"]),
             Self::NftBurnAsset => signature.with_names(&["nft"]),
@@ -2651,6 +2728,9 @@ impl Builtin {
             Self::GrantPermission | Self::RevokePermission => {
                 signature.with_names(&["account", "permission"])
             }
+            Self::GrantContractEntrypoint | Self::RevokeContractEntrypoint => {
+                signature.with_names(&["account", "entrypoint"])
+            }
             Self::EscrowOpenOffer => {
                 signature.with_names(&["offer", "asset_definition", "amount", "evidence"])
             }
@@ -2664,7 +2744,7 @@ impl Builtin {
             Self::AxtTouch => signature.with_names(&["dataspace", "proof"]),
             Self::VerifyDsProof => signature.with_names(&["dataspace", "proof"]),
             Self::UseAssetHandle => signature.with_names(&["handle", "operation", "proof"]),
-            Self::VrfVerify => signature.with_names(&["message", "proof", "public_key", "variant"]),
+            Self::VrfVerify => signature.with_names(&["request"]),
             Self::Sm2Verify => {
                 signature.with_names(&["message", "signature", "public_key", "distid"])
             }
@@ -3062,6 +3142,111 @@ mod tests {
             Builtin::StateKeys.call_policy(),
             BuiltinCallPolicy::Pagination
         );
+    }
+
+    #[test]
+    fn native_transfer_control_and_recovery_registry_is_exact() {
+        use ivm_abi::syscalls as s;
+
+        for (builtin, name, source_name, syscall, parameters, parameter_names) in [
+            (
+                Builtin::SetAssetTransferFreeze,
+                "set_asset_transfer_freeze",
+                "ledger::asset::set_transfer_freeze",
+                s::SYSCALL_SET_ASSET_TRANSFER_FREEZE,
+                &["AccountId", "AssetDefinitionId", "bool"][..],
+                &["account", "asset_definition", "frozen"][..],
+            ),
+            (
+                Builtin::SetAssetTransferDailyLimit,
+                "set_asset_transfer_daily_limit",
+                "ledger::asset::set_transfer_daily_limit",
+                s::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT,
+                &["AccountId", "AssetDefinitionId", "Option<quantity>"][..],
+                &["account", "asset_definition", "cap"][..],
+            ),
+            (
+                Builtin::AccountRecoveryPropose,
+                "account_recovery_propose",
+                "ledger::account::recovery::propose",
+                s::SYSCALL_ACCOUNT_RECOVERY_PROPOSE,
+                &["string", "AccountId"][..],
+                &["alias", "replacement"][..],
+            ),
+            (
+                Builtin::AccountRecoveryApprove,
+                "account_recovery_approve",
+                "ledger::account::recovery::approve",
+                s::SYSCALL_ACCOUNT_RECOVERY_APPROVE,
+                &["string"][..],
+                &["alias"][..],
+            ),
+            (
+                Builtin::AccountRecoveryCancel,
+                "account_recovery_cancel",
+                "ledger::account::recovery::cancel",
+                s::SYSCALL_ACCOUNT_RECOVERY_CANCEL,
+                &["string"][..],
+                &["alias"][..],
+            ),
+            (
+                Builtin::AccountRecoveryFinalize,
+                "account_recovery_finalize",
+                "ledger::account::recovery::finalize",
+                s::SYSCALL_ACCOUNT_RECOVERY_FINALIZE,
+                &["string"][..],
+                &["alias"][..],
+            ),
+        ] {
+            assert_eq!(builtin.name(), name);
+            assert_eq!(builtin.source_name(), source_name);
+            assert_eq!(Builtin::from_name(name), Some(builtin));
+            assert_eq!(Builtin::from_source_name(source_name), Some(builtin));
+            assert_eq!(builtin.operation_syscalls(), &[syscall]);
+            assert_eq!(builtin.syscall(), Some(syscall));
+            assert_eq!(builtin.lowering(), BuiltinLowering::DirectSyscall);
+            assert_eq!(builtin.effects(), BuiltinEffects::HOST);
+            assert_eq!(builtin.access(), BuiltinAccess::LedgerWrite);
+            let signature = builtin.signature();
+            assert_eq!(signature.parameters, parameters);
+            assert_eq!(signature.parameter_names, parameter_names);
+            assert_eq!(signature.return_type, "()");
+        }
+    }
+
+    #[test]
+    fn contract_entrypoint_capability_registry_is_exact_and_namespaced() {
+        use ivm_abi::syscalls as s;
+
+        for (builtin, internal_name, source_name, syscall) in [
+            (
+                Builtin::GrantContractEntrypoint,
+                "grant_contract_entrypoint",
+                "ledger::contract::grant_entrypoint",
+                s::SYSCALL_GRANT_CONTRACT_ENTRYPOINT,
+            ),
+            (
+                Builtin::RevokeContractEntrypoint,
+                "revoke_contract_entrypoint",
+                "ledger::contract::revoke_entrypoint",
+                s::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT,
+            ),
+        ] {
+            assert_eq!(builtin.name(), internal_name);
+            assert_eq!(builtin.source_name(), source_name);
+            assert_eq!(Builtin::from_name(internal_name), Some(builtin));
+            assert_eq!(Builtin::from_source_name(source_name), Some(builtin));
+            assert_eq!(Builtin::from_source_name(internal_name), None);
+            assert_eq!(builtin.operation_syscalls(), &[syscall]);
+            assert_eq!(builtin.syscall(), Some(syscall));
+            assert_eq!(builtin.lowering(), BuiltinLowering::DirectSyscall);
+            assert_eq!(builtin.effects(), BuiltinEffects::HOST);
+            assert_eq!(builtin.access(), BuiltinAccess::LedgerWrite);
+            let signature = builtin.signature();
+            assert_eq!(signature.parameters, &["AccountId", "string"]);
+            assert_eq!(signature.parameter_names, &["account", "entrypoint"]);
+            assert_eq!(signature.return_type, "()");
+        }
     }
 
     #[test]

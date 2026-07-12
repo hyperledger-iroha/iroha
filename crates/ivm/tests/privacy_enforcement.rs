@@ -770,7 +770,7 @@ fn compiled_secret_commitment_executes_end_to_end() {
         .expect("compile a source-level Secret<T> commitment");
     let metadata = ProgramMetadata::parse(&artifact).expect("parse compiled artifact");
     assert_ne!(
-        metadata.mode & ivm::ivm_mode::ZK,
+        metadata.metadata.mode & ivm::ivm_mode::ZK,
         0,
         "Secret<T> artifacts must bind ZK execution mode"
     );

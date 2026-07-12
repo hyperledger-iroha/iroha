@@ -49,7 +49,7 @@ public struct OfflineTopUpRequest: Equatable, Sendable {
     public init(noritoArchive: Data) throws {
         let validated = try OfflineOperationValidation.requestArchive(
             noritoArchive,
-            schema: KagemushaRecursiveSpendV2.topUpRequestWireName,
+            schema: KagemushaRecursiveSpend.topUpRequestWireName,
             operationIdFieldIndex: 6,
             fieldCount: 8
         )
@@ -70,7 +70,7 @@ public struct OfflineRedeemRequest: Equatable, Sendable {
     public init(noritoArchive: Data) throws {
         let validated = try OfflineOperationValidation.requestArchive(
             noritoArchive,
-            schema: KagemushaRecursiveSpendV2.redeemRequestWireName,
+            schema: KagemushaRecursiveSpend.redeemRequestWireName,
             operationIdFieldIndex: 9,
             fieldCount: 11
         )
@@ -144,7 +144,12 @@ public struct OfflineTopUpAnchor: Equatable, Sendable {
 
     /// Validates and retains a canonical top-up anchor Norito archive.
     public init(noritoArchive: Data) throws {
-        let wireValue = try KagemushaRecursiveSpendV2Codecs.decodeTopUpAnchor(
+        guard !noritoArchive.isEmpty,
+              noritoArchive.count
+                <= KagemushaRecursiveSpend.topUpFinalityAnchorMaximumArchiveBytes else {
+            throw OfflineOperationError.invalidNoritoArchive
+        }
+        let wireValue = try KagemushaRecursiveSpendCodecs.decodeTopUpAnchor(
             Data(noritoArchive)
         )
         self.archive = Data(wireValue.archive)
@@ -162,17 +167,23 @@ public struct OfflineTopUpAnchor: Equatable, Sendable {
     }
 }
 
+/// Opaque typed consensus proof returned by the canonical Torii top-up
+/// operation status resource.
+public typealias OfflineTopUpFinalityProof = KagemushaTopUpFinalityProofArchive
+
 public struct OfflineTopUpResult: Equatable, Sendable {
     public let transactionHash: String
     public let finalizedBlockHeight: UInt64
     public let serverTimeMs: UInt64
     public let anchor: OfflineTopUpAnchor
+    public let finalityProof: OfflineTopUpFinalityProof
 
     public init(
         transactionHash: String,
         finalizedBlockHeight: UInt64,
         serverTimeMs: UInt64,
-        anchor: OfflineTopUpAnchor
+        anchor: OfflineTopUpAnchor,
+        finalityProof: OfflineTopUpFinalityProof
     ) throws {
         self.transactionHash = try OfflineOperationValidation.transactionHash(
             transactionHash,
@@ -187,6 +198,7 @@ public struct OfflineTopUpResult: Equatable, Sendable {
             field: "server_time_ms"
         )
         self.anchor = anchor
+        self.finalityProof = finalityProof
     }
 }
 
@@ -589,16 +601,27 @@ public enum OfflineOperationCodec {
             try $0.readBytes($0.remaining())
         }
         let anchorArchive = noritoEncode(
-            typeName: KagemushaRecursiveSpendV2.topUpAnchorWireName,
+            typeName: KagemushaRecursiveSpend.topUpAnchorWireName,
             payload: anchorPayload,
             flags: NoritoHeader.compactLen
         )
         let anchor = try OfflineTopUpAnchor(noritoArchive: anchorArchive)
+        let finalityProofPayload = try readField(&reader, compact: compact) {
+            try $0.readBytes($0.remaining())
+        }
+        let finalityProof = try OfflineTopUpFinalityProof(
+            noritoArchive: noritoEncode(
+                typeName: KagemushaRecursiveSpend.topUpFinalityProofWireName,
+                payload: finalityProofPayload,
+                flags: NoritoHeader.compactLen
+            )
+        )
         return try OfflineTopUpResult(
             transactionHash: transactionHash,
             finalizedBlockHeight: finalizedBlockHeight,
             serverTimeMs: serverTimeMs,
-            anchor: anchor
+            anchor: anchor,
+            finalityProof: finalityProof
         )
     }
 
@@ -956,7 +979,7 @@ private enum OfflineOperationValidation {
         fieldCount: Int
     ) throws -> (archive: Data, operationId: String) {
         guard !value.isEmpty,
-              value.count <= KagemushaRecursiveSpendProver.nativeArchiveMaxBytes,
+              value.count <= KagemushaRecursiveSpend.artifactMaximumFileBytes,
               let frame = noritoDecodeFrame(value),
               frame.header.schema == noritoSchemaHash(forTypeName: schema),
               frame.header.compression == .none,

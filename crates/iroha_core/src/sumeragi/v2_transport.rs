@@ -855,6 +855,11 @@ mod tests {
                     round: self.manifest.round,
                     phase: wire::GlobalPhase::Prepare,
                     subject: self.manifest.subject,
+                    execution_commitment: wire::ExecutionCommitment::without_topups(
+                        Hash::new(b"transport fixture parent state"),
+                        Hash::new(b"transport fixture post state"),
+                        Hash::new(b"transport fixture ordinary writes"),
+                    ),
                     signers: vec![0, 1, 2],
                     aggregate_signature: vec![0xA5; 48],
                 },

@@ -205,6 +205,54 @@ async fn assembled_router_canonicalizes_early_path_and_accept_failures() {
 }
 
 #[tokio::test]
+async fn offline_command_header_admission_precedes_body_decoding() {
+    let router = build_router();
+    for path in ["/v1/offline/top-up", "/v1/offline/redeem"] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(path)
+                    .extension(local_connect_info())
+                    .header(ACCEPT, "application/json")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from("{"))
+                    .expect("malformed command without idempotency key"),
+            )
+            .await
+            .expect("header rejection");
+        let (status, _, envelope) = decode_error_response(response).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "path={path}");
+        assert_eq!(envelope.code(), "idempotency_key_missing", "path={path}");
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(path)
+                    .extension(local_connect_info())
+                    .header(ACCEPT, "application/json")
+                    .header(CONTENT_TYPE, "application/json")
+                    .header("idempotency-key", "11".repeat(32))
+                    .header("x-iroha-account", "forbidden-before-body")
+                    .body(axum::body::Body::from("{"))
+                    .expect("malformed command with forbidden auth header"),
+            )
+            .await
+            .expect("header rejection");
+        let (status, _, envelope) = decode_error_response(response).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "path={path}");
+        assert_eq!(
+            envelope.code(),
+            "offline_auth_header_unsupported",
+            "path={path}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn wrong_methods_use_negotiated_typed_errors_and_retain_allow() {
     let router = build_router();
     for accept in ["application/json", "application/x-norito"] {
@@ -282,30 +330,57 @@ async fn retired_api_versions_endpoint_is_unmounted() {
 #[tokio::test]
 async fn retired_route_spellings_and_iso_status_alias_cannot_resolve() {
     let router = build_router();
+    let not_found = (StatusCode::NOT_FOUND, "route_not_found");
+    let invalid_path = (StatusCode::BAD_REQUEST, "request_path_invalid");
     let retired = [
-        (Method::POST, "/v1/aliases/resolve_index"),
-        (Method::POST, "/v1/aliases/by_account"),
-        (Method::GET, "/v1/da/proof_policies"),
-        (Method::GET, "/v1/da/proof_policy_snapshot"),
-        (Method::POST, "/v1/da/pin_intents"),
-        (Method::POST, "/v1/da/pin_intents/prove"),
-        (Method::POST, "/v1/da/pin_intents/verify"),
-        (Method::GET, "/v1/iso20022/status/message-1"),
-        (Method::GET, "/v1/sumeragi/new_view/json"),
-        (Method::GET, "/v1/sumeragi/new_view/sse"),
-        (Method::GET, "/v1/sumeragi/bls_keys"),
-        (Method::GET, "/v1/sumeragi/commit_qc/deadbeef"),
+        (Method::POST, "/v1/aliases/resolve_index", not_found),
+        (Method::POST, "/v1/aliases/by_account", not_found),
+        (Method::GET, "/v1/da/proof_policies", not_found),
+        (Method::GET, "/v1/da/proof_policy_snapshot", not_found),
+        (Method::POST, "/v1/da/pin_intents", not_found),
+        (Method::POST, "/v1/da/pin_intents/prove", not_found),
+        (Method::POST, "/v1/da/pin_intents/verify", not_found),
+        (Method::POST, "/v1/multisig/proposals/list", not_found),
+        (Method::POST, "/v1/multisig/proposals/get", not_found),
+        (Method::POST, "/v1/multisig/approvals/list", not_found),
+        (Method::POST, "/v1/multisig/approvals/get", not_found),
+        (
+            Method::POST,
+            "/v1/multisig/approvals/list_for_authority",
+            not_found,
+        ),
+        (
+            Method::POST,
+            "/v1/multisig/approvals/get_for_authority",
+            not_found,
+        ),
+        (Method::GET, "/v1/iso20022/status/message-1", not_found),
+        (Method::GET, "/v1/sumeragi/new_view/json", not_found),
+        (Method::GET, "/v1/sumeragi/new_view/sse", not_found),
+        (Method::GET, "/v1/sumeragi/bls_keys", not_found),
+        (Method::GET, "/v1/sumeragi/commit_qc/deadbeef", not_found),
         // A parameter-looking tail must not let the retired item prefix
         // resolve through the canonical commit-certificate resources.
-        (Method::GET, "/v1/sumeragi/commit_qc/commit-certificates"),
+        (
+            Method::GET,
+            "/v1/sumeragi/commit_qc/commit-certificates",
+            not_found,
+        ),
         // Router normalization must not turn alternate spellings into aliases.
-        (Method::POST, "/v1/aliases/resolve-index/"),
-        (Method::POST, "/v1/Aliases/resolve-index"),
-        (Method::POST, "/v1/aliases//resolve-index"),
-        (Method::POST, "/v1/aliases/resolve%5Findex"),
+        (Method::POST, "/v1/aliases/resolve-index/", not_found),
+        (Method::POST, "/v1/Aliases/resolve-index", not_found),
+        (Method::POST, "/v1/aliases//resolve-index", invalid_path),
+        (Method::POST, "/v1/aliases/resolve%5Findex", not_found),
+        (Method::POST, "/v1/multisig/proposals/query/", not_found),
+        (Method::POST, "/v1/Multisig/proposals/query", not_found),
+        (Method::POST, "/v1/multisig/proposals//query", invalid_path),
+        (Method::POST, "/v1/multisig/proposals/%71uery", not_found),
+        (Method::POST, "/v1/multisig/approvals/query/", not_found),
+        (Method::POST, "/v1/multisig/approvals//query", invalid_path),
+        (Method::POST, "/v1/multisig/approvals/%71uery", not_found),
     ];
 
-    for (method, path) in retired {
+    for (method, path, (expected_status, expected_code)) in retired {
         let response = router
             .clone()
             .oneshot(
@@ -321,8 +396,8 @@ async fn retired_route_spellings_and_iso_status_alias_cannot_resolve() {
             .await
             .expect("retired-route response");
         let (status, _, envelope) = decode_error_response(response).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
-        assert_eq!(envelope.code(), "route_not_found", "{method} {path}");
+        assert_eq!(status, expected_status, "{method} {path}");
+        assert_eq!(envelope.code(), expected_code, "{method} {path}");
     }
 }
 

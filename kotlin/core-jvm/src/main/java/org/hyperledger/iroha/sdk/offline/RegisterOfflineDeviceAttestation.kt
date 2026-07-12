@@ -18,7 +18,7 @@ import org.hyperledger.iroha.sdk.tx.TransactionBuilder
 class RegisterOfflineDeviceAttestation(
     val chainId: String,
     val authority: String,
-    val registration: OfflineNoteV2.DeviceAttestationRegistrationV2,
+    val registration: AttestedOfflineNote.DeviceAttestationRegistration,
     val creationTimeMs: Long,
     val timeToLiveMs: Long? = null,
     val nonce: Int? = null,
@@ -42,7 +42,7 @@ class RegisterOfflineDeviceAttestation(
 
     /** Exact native instruction carried by this transaction. */
     fun instruction(): InstructionBox =
-        OfflineNoteV2.registerDeviceAttestationInstruction(registration)
+        AttestedOfflineNote.registerDeviceAttestationInstruction(registration)
 
     /** Build the canonical transaction payload without exporting account key material. */
     fun transactionPayload(): TransactionPayload = TransactionPayload(

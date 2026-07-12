@@ -657,9 +657,9 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
         "base_asset": "6qLb5RYJbzychndCXgFa9aZzjWyx",
         "quote_asset": "7Dsw1EgqCsPmv9HpEztf26xEL2qo",
         "vault_account": authority_literal,
-        "fee_pips": 3000,
-        "bin_step": 1,
-        "active_bin": 0
+        "fee_pips": "3000",
+        "bin_step": "1",
+        "active_bin": "0"
     }));
     let init_arguments = prepare_kotodama_arguments(&program, "init_pool", &init_args);
     let mut init_vm = IVM::new(50_000_000);
@@ -701,9 +701,9 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
     let provider_literal = authority.to_string();
     let seed_args = Json::new(norito::json!({
         "provider": provider_literal,
-        "bin_id": 0,
-        "base_amount": 1000,
-        "quote_amount": 1000
+        "bin_id": "0",
+        "base_amount": "1000",
+        "quote_amount": "1000"
     }));
     let seed_arguments = prepare_kotodama_arguments(&program, "seed_bin", &seed_args);
     let mut seed_vm = IVM::new(50_000_000);

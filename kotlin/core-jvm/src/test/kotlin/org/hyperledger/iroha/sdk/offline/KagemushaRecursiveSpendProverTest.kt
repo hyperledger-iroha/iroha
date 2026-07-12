@@ -20,8 +20,59 @@ class KagemushaRecursiveSpendProverTest {
     }
 
     @Test
+    fun malformedArtifactInputsFailBeforeNativeDispatch() {
+        val digest = ByteArray(32) { 1 }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.beginArtifactInstallSession(null, digest)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.beginArtifactInstallSession(ByteArray(0), digest)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.beginArtifactInstallSession(
+                ByteArray(KagemushaRecursiveSpendProver.MAX_MANIFEST_BYTES + 1),
+                digest,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.beginArtifactInstallSession(byteArrayOf(1), null)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.beginArtifactInstallSession(byteArrayOf(1), ByteArray(31))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.beginArtifactInstallSession(byteArrayOf(1), ByteArray(32))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.beginArtifactIngest(
+                byteArrayOf(1),
+                digest,
+                ByteArray(32),
+            )
+        }
+    }
+
+    @Test
+    fun artifactInstallSessionRejectsPartialAndClosedUse() {
+        val session =
+            KagemushaRecursiveSpendProver.ArtifactInstallSession(
+                byteArrayOf(1),
+                ByteArray(32) { 1 },
+            )
+        assertFailsWith<IllegalStateException> { session.install() }
+        session.close()
+        assertFalse(session.isInstalled())
+        assertFailsWith<IllegalStateException> {
+            session.beginArtifact(ByteArray(32) { 2 })
+        }
+    }
+
+    @Test
     fun exposesStableModesAndCircuitIds() {
-        assertEquals(6, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
+        assertEquals(18, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
+        assertTrue(KagemushaRecursiveSpendProver.isExactBridgeAbi(18))
+        assertFalse(KagemushaRecursiveSpendProver.isExactBridgeAbi(17))
+        assertFalse(KagemushaRecursiveSpendProver.isExactBridgeAbi(19))
         assertEquals(15, KagemushaRecursiveSpendProver.TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(
             18,
@@ -32,6 +83,7 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA,
         )
         assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_MODE)
+        assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.MODE)
         assertEquals(
             "halo2/ipa-pasta-cycle-v1",
             KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_PROOF_BACKEND,
@@ -621,13 +673,16 @@ class KagemushaRecursiveSpendProverTest {
         )
         assertFalse(KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(null, 1))
         assertFalse(KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend("", 1))
-        assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V2.wireName)
+        assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND.wireName)
         assertEquals(1, KagemushaRecursiveSpendProver.Mode.values().size)
         assertEquals(
-            KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V2,
+            KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND,
             KagemushaRecursiveSpendProver.preferredMode(true),
         )
         assertEquals(null, KagemushaRecursiveSpendProver.preferredMode(false))
+        assertTrue(KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_spend_v2"))
+        assertFalse(KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_spend_v1"))
+        assertFalse(KagemushaRecursiveSpendProver.isSpendAgainMode(null))
         assertEquals(7, KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(
             "kagemusha-recursive-compact-v1",
@@ -977,6 +1032,33 @@ class KagemushaRecursiveSpendProverTest {
                     validRecursiveCompactInput,
                     null as BigInteger?,
                 )
+        }
+    }
+
+    @Test
+    fun publicSurfaceOmitsRetiredRecursiveApis() {
+        val publicMethods =
+            KagemushaRecursiveSpendProver::class.java.declaredMethods
+                .filter { java.lang.reflect.Modifier.isPublic(it.modifiers) }
+                .mapTo(mutableSetOf()) { it.name }
+        for (
+            retired in
+                setOf(
+                    "initSpend",
+                    "appendSpend",
+                    "topUpSpend",
+                    "verifySpend",
+                    "redeemSpend",
+                    "transitionProfileInit",
+                    "transitionProfileAppend",
+                    "lineageAppendBoundary",
+                    "lineageWitnessFromInitResult",
+                    "lineageWitnessAppendResult",
+                    "buildPallasOpenEnvelopesArchive",
+                    "buildPreviousProofOpenEnvelopesArchive",
+                )
+        ) {
+            assertFalse(retired in publicMethods, "retired public method remains: $retired")
         }
     }
 
@@ -1644,7 +1726,7 @@ class KagemushaRecursiveSpendProverTest {
         assertContains(manifest, "\"schema\": \"iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1\"")
         assertContains(
             manifest,
-            "\"native_bridge_abi_version\": ${KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION}",
+            "\"native_bridge_abi_version\": 6",
         )
         assertContains(manifest, "\"operation_count\": 9")
         assertContains(
@@ -2035,7 +2117,7 @@ class KagemushaRecursiveSpendProverTest {
     }
 
     @Test
-    fun nativeProbeRequiresAbiSixAndAllSymbols() {
+    fun nativeProbeRequiresAbiEighteenAndAllSymbols() {
         assertTrue(
             KagemushaRecursiveSpendProver.expectIllegalArgumentProbe {
                 throw IllegalArgumentException("malformed probe")
@@ -2048,17 +2130,24 @@ class KagemushaRecursiveSpendProverTest {
             }
         }
 
-        assertTrue(
+        assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
                 nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { true },
             ),
         )
-        assertTrue(
+        assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
                 nativeBridgeAbiVersionProbe = { 7 },
+                probeSymbol = { true },
+            ),
+        )
+        assertTrue(
+            KagemushaRecursiveSpendProver.detectNativeAvailability(
+                loadLibrary = {},
+                nativeBridgeAbiVersionProbe = { 18 },
                 probeSymbol = { true },
             ),
         )
@@ -2190,6 +2279,58 @@ class KagemushaRecursiveSpendProverTest {
                 loadLibrary = {},
                 nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { throw IllegalStateException("bad malformed probe") },
+            ),
+        )
+    }
+
+    @Test
+    fun pastaCycleV3CapabilityProbesAreIndependentFromLegacyRecursiveJni() {
+        val legacyAvailable =
+            KagemushaRecursiveSpendProver.detectNativeAvailability(
+                loadLibrary = {},
+                nativeBridgeAbiVersionProbe = { 18 },
+                probeSymbol = { throw UnsatisfiedLinkError("missing legacy recursive JNI") },
+            )
+        assertFalse(legacyAvailable)
+
+        assertTrue(
+            KagemushaRecursiveSpendProver.detectExactNativeAvailability(
+                loadLibrary = {},
+                nativeBridgeAbiVersionProbe = { 18 },
+                probeSymbol = { true },
+                expectedNativeBridgeAbiVersion = 18,
+            ),
+        )
+        assertFalse(
+            KagemushaRecursiveSpendProver.detectExactNativeAvailability(
+                loadLibrary = {},
+                nativeBridgeAbiVersionProbe = { 17 },
+                probeSymbol = { throw AssertionError("wrong ABI must not probe V3 symbols") },
+                expectedNativeBridgeAbiVersion = 18,
+            ),
+        )
+        assertFalse(
+            KagemushaRecursiveSpendProver.detectExactNativeAvailability(
+                loadLibrary = {},
+                nativeBridgeAbiVersionProbe = { 19 },
+                probeSymbol = { throw AssertionError("newer ABI must not be accepted implicitly") },
+                expectedNativeBridgeAbiVersion = 18,
+            ),
+        )
+        assertFalse(
+            KagemushaRecursiveSpendProver.detectExactNativeAvailability(
+                loadLibrary = {},
+                nativeBridgeAbiVersionProbe = { 18 },
+                probeSymbol = { throw UnsatisfiedLinkError("missing V3 symbol") },
+                expectedNativeBridgeAbiVersion = 18,
+            ),
+        )
+        assertFalse(
+            KagemushaRecursiveSpendProver.detectExactNativeAvailability(
+                loadLibrary = { throw UnsatisfiedLinkError("missing bridge") },
+                nativeBridgeAbiVersionProbe = { throw AssertionError("must not inspect ABI") },
+                probeSymbol = { throw AssertionError("must not probe V3 symbols") },
+                expectedNativeBridgeAbiVersion = 18,
             ),
         )
     }

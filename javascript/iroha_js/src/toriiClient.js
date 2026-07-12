@@ -334,6 +334,12 @@ const ISO_STATUS_VALUES = new Map([
   ["rejected", "Rejected"],
   ["committed", "Committed"],
 ]);
+const MULTISIG_PROPOSAL_STATUS_VALUES = new Set([
+  "COLLECTING_SIGNATURES",
+  "FINALIZED",
+  "CANCELED",
+  "EXPIRED",
+]);
 const PACS002_STATUS_CODES = new Set(["ACTC", "ACSP", "ACSC", "ACWC", "PDNG", "RJCT"]);
 
 function resolveNativeBinding(nativeBinding) {
@@ -5707,7 +5713,7 @@ export class ToriiClient {
 
   /**
    * Fetch newest-first SCCP message discovery (`GET /v1/sccp/messages/recent`).
-   * @param {{from?: number, limit?: number, signal?: AbortSignal}} [options]
+   * @param {{from?: number, after_index?: number, limit?: number, signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
    */
   async getSccpRecentMessages(options = {}) {
@@ -5715,7 +5721,8 @@ export class ToriiClient {
       message: "must be a plain object",
     });
     const unknown = Object.keys(record).find(
-      (key) => key !== "from" && key !== "limit" && key !== "signal",
+      (key) =>
+        key !== "from" && key !== "after_index" && key !== "limit" && key !== "signal",
     );
     if (unknown !== undefined) {
       throw new TypeError(`getSccpRecentMessages.options contains unknown field \`${unknown}\``);
@@ -5728,6 +5735,21 @@ export class ToriiClient {
         );
       }
       params.from = String(record.from);
+    }
+    if (record.after_index !== undefined) {
+      if (record.from === undefined) {
+        throw new TypeError("getSccpRecentMessages.options.after_index requires from");
+      }
+      if (
+        !Number.isSafeInteger(record.after_index) ||
+        record.after_index < 0 ||
+        record.after_index > 511
+      ) {
+        throw new TypeError(
+          "getSccpRecentMessages.options.after_index must be an integer in 0..511",
+        );
+      }
+      params.after_index = String(record.after_index);
     }
     if (record.limit !== undefined) {
       if (!Number.isSafeInteger(record.limit) || record.limit < 1 || record.limit > 50) {
@@ -8758,16 +8780,16 @@ export class ToriiClient {
   }
 
   /**
-   * List nonterminal multisig proposals for a selector (`POST /v1/multisig/proposals/query`).
+   * Query multisig proposals for a selector, optionally filtered by lifecycle status (`POST /v1/multisig/proposals/query`).
    * @param {object} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
    */
-  async listMultisigProposals(request = {}, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "listMultisigProposals");
-    const payload = normalizeMultisigSelectorOnlyRequest(
+  async queryMultisigProposals(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "queryMultisigProposals");
+    const payload = normalizeMultisigProposalsQueryRequest(
       request,
-      "listMultisigProposals request",
+      "queryMultisigProposals request",
     );
     const response = await this._request("POST", "/v1/multisig/proposals/query", {
       headers: JSON_REQUEST_HEADERS,
@@ -8777,19 +8799,19 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("multisig proposals list endpoint returned no payload");
+      throw new Error("multisig proposals query endpoint returned no payload");
     }
-    return normalizeMultisigProposalsListResponse(body);
+    return normalizeMultisigProposalsQueryResponse(body);
   }
 
   /**
-   * Fetch one multisig proposal by proposal id or instructions hash (`POST /v1/multisig/proposals/lookup`).
+   * Look up one multisig proposal by proposal id or instructions hash (`POST /v1/multisig/proposals/lookup`).
    * @param {object} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
    */
-  async getMultisigProposal(request = {}, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "getMultisigProposal");
+  async lookupMultisigProposal(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "lookupMultisigProposal");
     const payload = normalizeMultisigProposalLookupRequest(request);
     const response = await this._request("POST", "/v1/multisig/proposals/lookup", {
       headers: JSON_REQUEST_HEADERS,
@@ -8799,9 +8821,9 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("multisig proposal get endpoint returned no payload");
+      throw new Error("multisig proposal lookup endpoint returned no payload");
     }
-    return normalizeMultisigProposalGetResponse(body);
+    return normalizeMultisigProposalLookupResponse(body);
   }
 
   /**
@@ -22630,6 +22652,40 @@ function normalizeMultisigSelectorOnlyRequest(input, context) {
   return normalizeMultisigAccountSelector(input, context);
 }
 
+function normalizeMultisigProposalStatus(value, context) {
+  const status = requireNonEmptyString(value, context).trim().toUpperCase();
+  if (!MULTISIG_PROPOSAL_STATUS_VALUES.has(status)) {
+    throw new TypeError(
+      `${context} must be one of ${[...MULTISIG_PROPOSAL_STATUS_VALUES].join(", ")}`,
+    );
+  }
+  return status;
+}
+
+function normalizeMultisigProposalsQueryRequest(input, context) {
+  const record = ensureRecord(input, context);
+  const payload = normalizeMultisigAccountSelector(record, context);
+  if (record.status !== undefined) {
+    if (!Array.isArray(record.status)) {
+      throw new TypeError(`${context}.status must be an array`);
+    }
+    payload.status = record.status.map((status, index) =>
+      normalizeMultisigProposalStatus(status, `${context}.status[${index}]`),
+    );
+  }
+  if (record.cursor !== undefined && record.cursor !== null) {
+    payload.cursor = requireNonEmptyString(record.cursor, `${context}.cursor`);
+  }
+  if (record.limit !== undefined && record.limit !== null) {
+    payload.limit = ToriiClient._normalizeUnsignedInteger(
+      record.limit,
+      `${context}.limit`,
+      { allowZero: false },
+    );
+  }
+  return payload;
+}
+
 function normalizeMultisigProposeInstructionInput(value, context) {
   if (
     typeof value === "string" ||
@@ -23009,13 +23065,30 @@ function normalizeMultisigProposalEntry(payload, context) {
       record.instructions_hash,
       `${context}.instructions_hash`,
     ),
+    operation_type: requireNonEmptyString(
+      record.operation_type,
+      `${context}.operation_type`,
+    ),
+    intent:
+      record.intent === undefined || record.intent === null
+        ? null
+        : cloneJsonValue(record.intent, `${context}.intent`),
     proposal: cloneJsonValue(record.proposal, `${context}.proposal`),
+    status: normalizeMultisigProposalStatus(record.status, `${context}.status`),
+    terminal_at_ms:
+      record.terminal_at_ms === undefined || record.terminal_at_ms === null
+        ? null
+        : ToriiClient._normalizeUnsignedInteger(
+            record.terminal_at_ms,
+            `${context}.terminal_at_ms`,
+            { allowZero: true },
+          ),
   };
 }
 
-function normalizeMultisigProposalsListResponse(
+function normalizeMultisigProposalsQueryResponse(
   payload,
-  context = "multisig proposals list response",
+  context = "multisig proposals query response",
 ) {
   const record = ensureRecord(payload, context);
   const proposalsValue = record.proposals;
@@ -23030,17 +23103,21 @@ function normalizeMultisigProposalsListResponse(
     proposals: proposalsValue.map((entry, index) =>
       normalizeMultisigProposalEntry(entry, `${context}.proposals[${index}]`),
     ),
+    next_cursor:
+      record.next_cursor === undefined || record.next_cursor === null
+        ? null
+        : requireNonEmptyString(record.next_cursor, `${context}.next_cursor`),
   };
 }
 
 function normalizeMultisigProposalLookupRequest(input) {
-  const record = ensureRecord(input, "getMultisigProposal request");
-  const payload = normalizeMultisigAccountSelector(record, "getMultisigProposal request");
+  const record = ensureRecord(input, "lookupMultisigProposal request");
+  const payload = normalizeMultisigAccountSelector(record, "lookupMultisigProposal request");
   const proposalId = pickOverride(record, "proposal_id", "proposalId");
   if (proposalId !== undefined && proposalId !== null) {
     payload.proposal_id = requireNonEmptyString(
       proposalId,
-      "getMultisigProposal request.proposal_id",
+      "lookupMultisigProposal request.proposal_id",
     );
   }
   const instructionsHash = pickOverride(
@@ -23051,22 +23128,24 @@ function normalizeMultisigProposalLookupRequest(input) {
   if (instructionsHash !== undefined && instructionsHash !== null) {
     payload.instructions_hash = normalizeHex32String(
       instructionsHash,
-      "getMultisigProposal request.instructions_hash",
+      "lookupMultisigProposal request.instructions_hash",
     );
   }
-  if (!payload.proposal_id && !payload.instructions_hash) {
+  const hasProposalId = payload.proposal_id !== undefined;
+  const hasInstructionsHash = payload.instructions_hash !== undefined;
+  if (hasProposalId === hasInstructionsHash) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
-      "getMultisigProposal request requires proposal_id or instructions_hash",
-      "getMultisigProposal.request",
+      "lookupMultisigProposal request requires exactly one of proposal_id or instructions_hash",
+      "lookupMultisigProposal.request",
     );
   }
   return payload;
 }
 
-function normalizeMultisigProposalGetResponse(
+function normalizeMultisigProposalLookupResponse(
   payload,
-  context = "multisig proposal get response",
+  context = "multisig proposal lookup response",
 ) {
   const record = ensureRecord(payload, context);
   return {
@@ -23074,12 +23153,7 @@ function normalizeMultisigProposalGetResponse(
       record.resolved_multisig_account_id,
       `${context}.resolved_multisig_account_id`,
     ),
-    proposal_id: requireNonEmptyString(record.proposal_id, `${context}.proposal_id`),
-    instructions_hash: normalizeHex32String(
-      record.instructions_hash,
-      `${context}.instructions_hash`,
-    ),
-    proposal: cloneJsonValue(record.proposal, `${context}.proposal`),
+    ...normalizeMultisigProposalEntry(record, context),
   };
 }
 

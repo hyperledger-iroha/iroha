@@ -8,6 +8,15 @@ import org.hyperledger.iroha.sdk.sccp.SccpLaneIdV1
 import org.hyperledger.iroha.sdk.sccp.SccpNetworkV1
 import org.hyperledger.iroha.sdk.sccp.SccpV1
 
+/** Fixed maximum number of successful outbound SCCP messages in one V1 block. */
+const val SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1: Int = 512
+
+/** Fixed maximum retained canonical payload size for one V1 outbound SCCP message. */
+const val SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1: Int = 4_096
+
+private val SCCP_U64_MAX_VALUE: BigInteger =
+    BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
+
 /** Fixed SCCP V1 route-registry capacity limits. */
 data class SccpRegistryLimits(
     val maxGovernedLanes: Long,
@@ -19,6 +28,10 @@ data class SccpRegistryLimits(
 
 /** Consensus-critical SCCP proof and deterministic verifier-work limits. */
 data class SccpResourceLimits(
+    val maxOutboundMessagesPerBlock: Long,
+    val maxOutboundMessagePayloadBytes: BigInteger,
+    val maxPendingOutboundMessages: BigInteger,
+    val maxPendingOutboundPayloadBytes: BigInteger,
     val maxProofsPerTransaction: Long,
     val maxProofsPerBlock: Long,
     val maxProofBytesPerProof: BigInteger,
@@ -118,7 +131,8 @@ data class SccpGroth16ProofRequestV1(
 data class SccpRecentMessageLinks(val bundlePath: String, val proofRequestPath: String)
 
 data class SccpRecentMessage(
-    val height: Long,
+    val height: BigInteger,
+    val commitmentIndex: Int,
     val messageIdHex: String,
     val sourceProfile: String,
     val targetProfile: String,
@@ -133,7 +147,22 @@ data class SccpRecentMessage(
     val links: SccpRecentMessageLinks,
 )
 
-data class SccpRecentMessages(val items: List<SccpRecentMessage>)
+/** Exact continuation for the newest-first SCCP outbound-message index. */
+data class SccpRecentCursor(val from: BigInteger, val afterIndex: Int) {
+    init {
+        require(from > BigInteger.ZERO && from <= SCCP_U64_MAX_VALUE) {
+            "from must be a positive u64 height"
+        }
+        require(afterIndex in 0 until SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1) {
+            "afterIndex must be between 0 and ${SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 - 1}"
+        }
+    }
+}
+
+data class SccpRecentMessages(
+    val items: List<SccpRecentMessage>,
+    val next: SccpRecentCursor?,
+)
 
 /** Strict decoders for the closed first-release SCCP JSON API. */
 object SccpJsonParser {
@@ -205,6 +234,10 @@ object SccpJsonParser {
         fun u64(field: String): BigInteger =
             requiredUnsignedInteger(value, field, MAX_JSON_SAFE_INTEGER, true)
         val result = SccpResourceLimits(
+            u32("max_outbound_messages_per_block"),
+            u64("max_outbound_message_payload_bytes"),
+            u64("max_pending_outbound_messages"),
+            u64("max_pending_outbound_payload_bytes"),
             u32("max_proofs_per_transaction"),
             u32("max_proofs_per_block"),
             u64("max_proof_bytes_per_proof"),
@@ -225,6 +258,12 @@ object SccpJsonParser {
             u32("max_bn254_pairing_checks_per_transaction"),
             u32("max_bn254_pairing_checks_per_block"),
         )
+        require(
+            result.maxOutboundMessagesPerBlock ==
+                SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1.toLong() &&
+                result.maxOutboundMessagePayloadBytes ==
+                BigInteger.valueOf(SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1.toLong()),
+        ) { "SCCP outbound-message limits must equal the fixed V1 capacities" }
         require(result.maxProofBytesPerProof <= result.maxProofBytesPerTransaction) {
             "SCCP per-proof byte limit exceeds its transaction limit"
         }
@@ -518,19 +557,49 @@ object SccpJsonParser {
 
     @JvmStatic fun parseRecentMessages(bytes: ByteArray): SccpRecentMessages {
         val root = rootObject(bytes, "SCCP recent messages")
-        exactFields(root, setOf("items"), "SCCP recent messages")
+        exactFields(
+            root,
+            setOf("items", "next"),
+            "SCCP recent messages",
+            setOf("items"),
+        )
         val values = requiredList(root, "items")
         require(values.size <= 50) { "SCCP recent response exceeds 50 items" }
         val items = values.mapIndexed { index, raw ->
             parseRecent(objectValue(raw, "items[$index]"), index)
         }
-        require(items.zipWithNext().all { (left, right) -> left.height >= right.height }) {
-            "SCCP recent messages must be newest-first"
+        require(items.zipWithNext().all { (left, right) ->
+            left.height > right.height ||
+                (left.height == right.height && left.commitmentIndex < right.commitmentIndex)
+        }) {
+            "SCCP recent messages must use strict height-descending/index-ascending order"
         }
         require(items.map(SccpRecentMessage::messageIdHex).distinct().size == items.size) {
             "SCCP recent messages contain duplicate message ids"
         }
-        return SccpRecentMessages(items)
+        val next = if (root["next"] == null) {
+            null
+        } else {
+            val value = requiredObject(root, "next")
+            exactFields(value, setOf("from", "after_index"), "SCCP recent messages.next")
+            SccpRecentCursor(
+                requiredUnsignedInteger(value, "from", MAX_U64, true),
+                requiredInt(
+                    value,
+                    "after_index",
+                    0,
+                    SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 - 1,
+                ),
+            )
+        }
+        if (next != null) {
+            val last = items.lastOrNull()
+                ?: throw IllegalArgumentException("SCCP recent messages.next requires a non-empty page")
+            require(next.from == last.height && next.afterIndex == last.commitmentIndex) {
+                "SCCP recent messages.next must identify the last returned item"
+            }
+        }
+        return SccpRecentMessages(items, next)
     }
 
     private data class ParsedRoute(
@@ -1145,7 +1214,13 @@ object SccpJsonParser {
             "$label.payload_projection",
         )
         return SccpRecentMessage(
-            requiredLong(value, "height", 1, Long.MAX_VALUE),
+            requiredUnsignedInteger(value, "height", MAX_U64, true),
+            requiredInt(
+                value,
+                "commitment_index",
+                0,
+                SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 - 1,
+            ),
             messageId,
             source.profileKey,
             target.profileKey,
@@ -1367,6 +1442,9 @@ object SccpJsonParser {
         positive: Boolean,
     ): BigInteger {
         val number = value[field] as? Number ?: throw IllegalArgumentException("$field must be an integer")
+        require(number !is java.math.BigDecimal) {
+            "$field must be a canonical unsigned integer"
+        }
         val text = number.toString()
         require(Regex(if (positive) "[1-9][0-9]*" else "0|[1-9][0-9]*").matches(text)) {
             "$field must be a canonical unsigned integer"
@@ -1566,6 +1644,10 @@ object SccpJsonParser {
         "max_retained_native_trust_anchors_per_lane",
     )
     private val RESOURCE_LIMIT_FIELDS = setOf(
+        "max_outbound_messages_per_block",
+        "max_outbound_message_payload_bytes",
+        "max_pending_outbound_messages",
+        "max_pending_outbound_payload_bytes",
         "max_proofs_per_transaction",
         "max_proofs_per_block",
         "max_proof_bytes_per_proof",
@@ -1684,6 +1766,7 @@ object SccpJsonParser {
     )
     private val RECENT_FIELDS = setOf(
         "height",
+        "commitment_index",
         "message_id_hex",
         "kind",
         "source_profile",
@@ -1700,6 +1783,7 @@ object SccpJsonParser {
     )
     private val RECENT_REQUIRED = setOf(
         "height",
+        "commitment_index",
         "message_id_hex",
         "kind",
         "source_profile",

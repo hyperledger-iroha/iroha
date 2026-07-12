@@ -682,6 +682,17 @@ pub struct HistoryWindowQuery {
     pub limit: Option<u64>,
 }
 
+/// Compound cursor window for newest-first SCCP outbox discovery.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SccpRecentWindowQuery {
+    /// Inclusive starting height; omitted starts at the newest retained height.
+    pub from: Option<u64>,
+    /// Last commitment index already consumed at `from`.
+    pub after_index: Option<u32>,
+    /// Optional result cap.
+    pub limit: Option<u64>,
+}
+
 /// Apply a height window to a newest-first history vector while clamping to a server cap.
 pub fn clamp_history_window<T, F>(
     items_newest_first: Vec<T>,
@@ -6028,74 +6039,103 @@ pub async fn handle_v1_sumeragi_commit_qcs(
     Ok(resp)
 }
 
-/// GET /v1/bridge/finality/{height} — Self-contained finality proof for a block.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_bridge_finality(
-    state: Arc<CoreState>,
-    height: u64,
-    accept: Option<axum::http::HeaderValue>,
-) -> Result<Response> {
-    let proof = tokio::task::spawn_blocking(move || {
-        iroha_core::bridge::build_finality_proof(state.as_ref(), height)
+/// Run synchronous query work while retaining admission through physical completion.
+pub(crate) async fn run_admitted_blocking<T, F>(
+    admission: crate::QueryAdmissionPermit,
+    worker_failure: &'static str,
+    work: F,
+) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || {
+        // Keep every owned permit in the physical worker. Dropping or aborting
+        // the HTTP future detaches `spawn_blocking`; it must not free capacity
+        // while CPU or file work is still running.
+        let _admission = admission;
+        work()
     })
     .await
-    .map_err(|_| sccp_internal_error("bridge finality verification worker failed"))?
-    .map_err(map_bridge_finality_error)?;
+    .map_err(|_| sccp_internal_error(worker_failure))?
+}
 
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+#[cfg(feature = "app_api")]
+async fn run_sccp_submit_blocking<T, F>(worker_failure: &'static str, work: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|_| sccp_internal_error(worker_failure))?
+}
 
-    if matches!(format, crate::utils::ResponseFormat::Norito) {
-        return Ok(crate::NoritoBody(proof).into_response());
-    }
+/// GET /v1/bridge/finality/{height} — Self-contained finality proof for a block.
+#[iroha_futures::telemetry_future]
+pub(crate) async fn handle_v1_bridge_finality(
+    state: Arc<CoreState>,
+    height: u64,
+    format: crate::utils::ResponseFormat,
+    admission: crate::QueryAdmissionPermit,
+) -> Result<Response> {
+    run_admitted_blocking(
+        admission,
+        "bridge finality verification worker failed",
+        move || {
+            let proof = iroha_core::bridge::build_finality_proof(state.as_ref(), height)
+                .map_err(map_bridge_finality_error)?;
 
-    let body = json::to_json_pretty(&proof).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+            if matches!(format, crate::utils::ResponseFormat::Norito) {
+                return Ok(crate::NoritoBody(proof).into_response());
+            }
+
+            let body = json::to_json_pretty(&proof).map_err(norito_internal_error)?;
+            let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+            resp.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/json"),
+            );
+            Ok(resp)
+        },
+    )
+    .await
 }
 
 /// GET /v1/bridge/finality/bundle/{height} — Compact commitment + exact v2 proof for a block.
 #[iroha_futures::telemetry_future]
-pub async fn handle_v1_bridge_finality_bundle(
+pub(crate) async fn handle_v1_bridge_finality_bundle(
     state: Arc<CoreState>,
     height: u64,
-    accept: Option<axum::http::HeaderValue>,
+    format: crate::utils::ResponseFormat,
+    admission: crate::QueryAdmissionPermit,
 ) -> Result<Response> {
-    let bundle = tokio::task::spawn_blocking(move || {
-        iroha_core::bridge::build_finality_bundle(state.as_ref(), height)
-    })
+    run_admitted_blocking(
+        admission,
+        "bridge finality bundle worker failed",
+        move || {
+            let bundle = iroha_core::bridge::build_finality_bundle(state.as_ref(), height)
+                .map_err(map_bridge_finality_error)?;
+
+            if matches!(format, crate::utils::ResponseFormat::Norito) {
+                return Ok(crate::NoritoBody(bundle).into_response());
+            }
+
+            let body = json::to_json_pretty(&bundle).map_err(norito_internal_error)?;
+            let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+            resp.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/json"),
+            );
+            Ok(resp)
+        },
+    )
     .await
-    .map_err(|_| sccp_internal_error("bridge finality bundle worker failed"))?
-    .map_err(map_bridge_finality_error)?;
-
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-
-    if matches!(format, crate::utils::ResponseFormat::Norito) {
-        return Ok(crate::NoritoBody(bundle).into_response());
-    }
-
-    let body = json::to_json_pretty(&bundle).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
 }
 
 fn map_bridge_finality_error(err: iroha_core::bridge::BridgeFinalityError) -> Error {
     match err {
         iroha_core::bridge::BridgeFinalityError::InvalidHeight(_)
-        | iroha_core::bridge::BridgeFinalityError::BlockNotFound(_)
         | iroha_core::bridge::BridgeFinalityError::FinalityArtifactNotFound(_) => {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::NotFound,
@@ -6134,6 +6174,16 @@ where
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
+    sccp_bundle_response_with_format(value, format)
+}
+
+fn sccp_bundle_response_with_format<T>(
+    value: &T,
+    format: crate::utils::ResponseFormat,
+) -> Result<Response>
+where
+    T: Clone + Send + norito::core::NoritoSerialize + norito::json::JsonSerialize + 'static,
+{
     if matches!(format, crate::utils::ResponseFormat::Norito) {
         let mut response = crate::NoritoBody(value.clone()).into_response();
         response
@@ -6192,14 +6242,21 @@ pub fn reject_sccp_query(raw_query: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Validate the only two canonical query fields accepted by recent-message discovery.
-pub fn validate_sccp_recent_query(raw_query: Option<&str>) -> Result<()> {
+/// Parse the canonical compound cursor accepted by recent-message discovery.
+pub fn parse_sccp_recent_query(raw_query: Option<&str>) -> Result<SccpRecentWindowQuery> {
     const RECENT_SCCP_MESSAGES_CAP: u64 = 50;
+    const MAX_CANONICAL_QUERY_BYTES: usize = 64;
 
     let Some(query) = raw_query.filter(|query| !query.is_empty()) else {
-        return Ok(());
+        return Ok(SccpRecentWindowQuery::default());
     };
+    if query.len() > MAX_CANONICAL_QUERY_BYTES {
+        return Err(sccp_bad_request(
+            "recent SCCP query exceeds the canonical 64-byte bound",
+        ));
+    }
     let mut seen = BTreeSet::new();
+    let mut window = SccpRecentWindowQuery::default();
     for segment in query.split('&') {
         if segment.is_empty() {
             return Err(sccp_bad_request(
@@ -6211,9 +6268,9 @@ pub fn validate_sccp_recent_query(raw_query: Option<&str>) -> Result<()> {
                 "recent SCCP query fields must use canonical `key=value` syntax",
             ));
         };
-        if !matches!(key, "from" | "limit") {
+        if !matches!(key, "from" | "after_index" | "limit") {
             return Err(sccp_bad_request(format!(
-                "recent SCCP query field `{key}` is not supported; only `from` and `limit` are allowed"
+                "recent SCCP query field `{key}` is not supported; only `from`, `after_index`, and `limit` are allowed"
             )));
         }
         if !seen.insert(key) {
@@ -6232,7 +6289,11 @@ pub fn validate_sccp_recent_query(raw_query: Option<&str>) -> Result<()> {
                 "recent SCCP query field `{key}` must be one canonical unsigned decimal integer"
             )));
         }
-        let parsed = parsed.expect("canonical SCCP query integer parsed above");
+        let parsed = parsed.ok_or_else(|| {
+            sccp_bad_request(format!(
+                "recent SCCP query field `{key}` must be one canonical unsigned decimal integer"
+            ))
+        })?;
         match key {
             "from" if parsed == 0 => {
                 return Err(sccp_bad_request(
@@ -6244,10 +6305,41 @@ pub fn validate_sccp_recent_query(raw_query: Option<&str>) -> Result<()> {
                     "recent SCCP query field `limit` must be between 1 and {RECENT_SCCP_MESSAGES_CAP}"
                 )));
             }
-            _ => {}
+            "after_index"
+                if parsed
+                    >= u64::from(
+                        iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
+                    ) =>
+            {
+                return Err(sccp_bad_request(format!(
+                    "recent SCCP query field `after_index` must be between 0 and {}",
+                    iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 - 1
+                )));
+            }
+            "from" => window.from = Some(parsed),
+            "after_index" => {
+                window.after_index =
+                    Some(u32::try_from(parsed).expect("bounded SCCP cursor index fits u32"));
+            }
+            "limit" => window.limit = Some(parsed),
+            _ => {
+                return Err(sccp_bad_request(
+                    "recent SCCP query contains an unsupported field",
+                ));
+            }
         }
     }
-    Ok(())
+    if window.after_index.is_some() && window.from.is_none() {
+        return Err(sccp_bad_request(
+            "recent SCCP query field `after_index` requires the paired `from` height",
+        ));
+    }
+    Ok(window)
+}
+
+/// Validate the canonical recent-message query without retaining its values.
+pub fn validate_sccp_recent_query(raw_query: Option<&str>) -> Result<()> {
+    parse_sccp_recent_query(raw_query).map(|_| ())
 }
 
 #[derive(
@@ -6286,6 +6378,14 @@ pub struct SccpRegistryLimitsDto {
 #[norito(deny_unknown_fields)]
 /// Consensus-critical SCCP proof and deterministic verifier-work limits.
 pub struct SccpResourceLimitsDto {
+    /// Maximum successful outbound SCCP messages committed by one block.
+    pub max_outbound_messages_per_block: u32,
+    /// Maximum canonical payload bytes retained by one outbound SCCP message.
+    pub max_outbound_message_payload_bytes: u64,
+    /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
+    pub max_pending_outbound_messages: u64,
+    /// Maximum canonical outbound payload bytes awaiting destination proof acceptance.
+    pub max_pending_outbound_payload_bytes: u64,
     /// Maximum closed SCCP proofs in one transaction.
     pub max_proofs_per_transaction: u32,
     /// Maximum closed SCCP proofs committed in one block.
@@ -6354,6 +6454,14 @@ impl SccpRegistryLimitsDto {
 impl From<iroha_config::parameters::actual::Sccp> for SccpResourceLimitsDto {
     fn from(sccp: iroha_config::parameters::actual::Sccp) -> Self {
         Self {
+            max_outbound_messages_per_block:
+                iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
+            max_outbound_message_payload_bytes: u64::try_from(
+                iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1,
+            )
+            .expect("SCCP outbound payload bound fits u64"),
+            max_pending_outbound_messages: sccp.max_pending_outbound_messages.get(),
+            max_pending_outbound_payload_bytes: sccp.max_pending_outbound_payload_bytes.get(),
             max_proofs_per_transaction: sccp.max_proofs_per_transaction.get(),
             max_proofs_per_block: sccp.max_proofs_per_block.get(),
             max_proof_bytes_per_proof: sccp.max_proof_bytes_per_proof.get(),
@@ -6446,6 +6554,8 @@ pub struct SccpRecentMessageLinksDto {
 pub struct SccpRecentMessageDto {
     /// Finalized SORA block height containing the message.
     pub height: u64,
+    /// Zero-based position in that block's finalized SCCP commitment tree.
+    pub commitment_index: u32,
     /// Hex-encoded canonical SCCP message identifier.
     pub message_id_hex: String,
     /// Stable closed payload kind.
@@ -6480,27 +6590,43 @@ pub struct SccpRecentMessageDto {
     pub links: SccpRecentMessageLinksDto,
 }
 
+#[derive(
+    Clone, Copy, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Compound continuation for SCCP recent-message discovery.
+pub struct SccpRecentCursorDto {
+    /// Height of the last item returned by the current page.
+    pub from: u64,
+    /// Commitment index of the last item returned by the current page.
+    pub after_index: u32,
+}
+
 #[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 /// Newest-first SCCP recent-message discovery response.
 pub struct SccpRecentMessagesDto {
     /// Finalized outbound messages selected by the ordered consensus index.
     pub items: Vec<SccpRecentMessageDto>,
+    /// Continuation to pass back as paired `from` and `after_index` fields.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub next: Option<SccpRecentCursorDto>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct SccpIndexedOutboundRecord {
     key: iroha_data_model::bridge::SccpOutboundMessageKeyV1,
-    record: iroha_data_model::bridge::SccpOutboundMessageRecordV1,
+    descriptor: iroha_data_model::bridge::SccpOutboundMessageDescriptorV1,
 }
 
 fn validate_sccp_indexed_outbound_record(
     message_id: [u8; 32],
     key: iroha_data_model::bridge::SccpOutboundMessageKeyV1,
-    record: iroha_data_model::bridge::SccpOutboundMessageRecordV1,
+    descriptor: iroha_data_model::bridge::SccpOutboundMessageDescriptorV1,
     ordered_index_present: bool,
 ) -> Result<SccpIndexedOutboundRecord> {
-    if key.message_id != message_id || !record.is_well_formed_for_key(&key) {
+    if key.message_id != message_id || !descriptor.is_well_formed_for_key(&key) {
         return Err(sccp_internal_error(format!(
             "global SCCP locator for {} names a malformed or different outbound record",
             hex::encode(message_id)
@@ -6512,7 +6638,7 @@ fn validate_sccp_indexed_outbound_record(
             hex::encode(message_id)
         )));
     }
-    Ok(SccpIndexedOutboundRecord { key, record })
+    Ok(SccpIndexedOutboundRecord { key, descriptor })
 }
 
 fn sccp_indexed_outbound_record(
@@ -6520,31 +6646,45 @@ fn sccp_indexed_outbound_record(
     message_id: [u8; 32],
 ) -> Result<Option<SccpIndexedOutboundRecord>> {
     let world = state.world_view();
-    let Some((key, record)) = world.sccp_outbound_message_by_id(&message_id) else {
-        return Ok(None);
-    };
-    let key = *key;
-    let record = *record;
-    let expected_index = iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::new(key, record)
-        .ok_or_else(|| {
+    let Some((key, descriptor)) = world
+        .sccp_outbound_message_descriptor_by_id(&message_id)
+        .map_err(|reason| {
             sccp_internal_error(format!(
-                "outbound SCCP record {} cannot form its ordered index key",
+                "failed to resolve global SCCP descriptor {}: {reason}",
                 hex::encode(message_id)
             ))
-        })?;
+        })?
+    else {
+        return Ok(None);
+    };
+    if !descriptor.is_well_formed_for_key(&key) {
+        return Err(sccp_internal_error(format!(
+            "outbound SCCP descriptor {} is malformed",
+            hex::encode(message_id)
+        )));
+    }
+    let expected_index =
+        iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::from_descriptor(key, descriptor);
+    let expected_index = expected_index.ok_or_else(|| {
+        sccp_internal_error(format!(
+            "outbound SCCP descriptor {} cannot form its ordered index key",
+            hex::encode(message_id)
+        ))
+    })?;
     let ordered_index_present = world
         .sccp_outbound_message_index()
         .get(&expected_index)
         .is_some();
-    validate_sccp_indexed_outbound_record(message_id, key, record, ordered_index_present).map(Some)
+    validate_sccp_indexed_outbound_record(message_id, key, descriptor, ordered_index_present)
+        .map(Some)
 }
 
 fn sccp_historical_route_for_record<'a>(
     registry: &'a iroha_core::state::ValidatedSccpRegistryV1,
-    indexed: SccpIndexedOutboundRecord,
+    indexed: &SccpIndexedOutboundRecord,
 ) -> Result<&'a iroha_data_model::bridge::SccpGovernedRouteV1> {
     let by_binding = registry
-        .historical_route_by_destination_binding(indexed.record.destination_binding_hash)
+        .historical_route_by_destination_binding(indexed.descriptor.destination_binding_hash)
         .ok_or_else(|| {
             sccp_internal_error(format!(
                 "outbound SCCP message {} names no retained destination binding",
@@ -6552,7 +6692,7 @@ fn sccp_historical_route_for_record<'a>(
             ))
         })?;
     let by_configuration = registry
-        .historical_route_by_configuration(indexed.record.route_configuration_hash)
+        .historical_route_by_configuration(indexed.descriptor.route_configuration_hash)
         .ok_or_else(|| {
             sccp_internal_error(format!(
                 "outbound SCCP message {} names no retained route configuration",
@@ -6566,9 +6706,9 @@ fn sccp_historical_route_for_record<'a>(
     if by_binding.key() != by_configuration.key()
         || expected_outbound_lane != indexed.key.lane
         || by_binding.destination_binding_hash().ok()
-            != Some(indexed.record.destination_binding_hash)
+            != Some(indexed.descriptor.destination_binding_hash)
         || by_binding.route_configuration_hash().ok()
-            != Some(indexed.record.route_configuration_hash)
+            != Some(indexed.descriptor.route_configuration_hash)
     {
         return Err(sccp_internal_error(format!(
             "outbound SCCP message {} aliases two governed routes or a different exact lane",
@@ -6592,9 +6732,9 @@ fn sccp_exact_proof_material(
     let Some(indexed) = sccp_indexed_outbound_record(state, message_id)? else {
         return Ok(None);
     };
-    let bundle = reconstruct_sccp_message_bundle_from_indexed_record(state, indexed)?;
+    let bundle = reconstruct_sccp_message_bundle_from_indexed_record(state, indexed.clone())?;
     let registry = state.sccp_registry_snapshot();
-    let governed_route = sccp_historical_route_for_record(registry.as_ref(), indexed)?;
+    let governed_route = sccp_historical_route_for_record(registry.as_ref(), &indexed)?;
     let request = iroha_sccp::build_sccp_groth16_bn254_proof_request_from_governed_route_v1(
         &bundle,
         governed_route,
@@ -6658,25 +6798,73 @@ mod sccp_first_release_api_tests {
         }
     }
 
+    #[cfg(feature = "app_api")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn sccp_submit_worker_does_not_block_runtime_or_release_on_cancellation() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let physically_finished = Arc::new(AtomicBool::new(false));
+        let worker_finished = Arc::clone(&physically_finished);
+        let task = tokio::spawn(run_sccp_submit_blocking(
+            "adversarial SCCP worker failed",
+            move || {
+                let _ = started_tx.send(());
+                release_rx.recv().expect("release physical SCCP worker");
+                worker_finished.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+        ));
+
+        started_rx.await.expect("blocking SCCP worker started");
+        tokio::time::timeout(std::time::Duration::from_millis(100), async {
+            for _ in 0..64 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("blocking SCCP work must not stall a current-thread runtime");
+
+        task.abort();
+        tokio::task::yield_now().await;
+        assert!(
+            !physically_finished.load(Ordering::SeqCst),
+            "request cancellation must not pretend the physical worker completed"
+        );
+        release_tx.send(()).expect("release blocking SCCP worker");
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !physically_finished.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("detached SCCP worker must complete after cancellation");
+    }
+
     fn indexed_fixture() -> (
         [u8; 32],
         iroha_data_model::bridge::SccpOutboundMessageKeyV1,
-        iroha_data_model::bridge::SccpOutboundMessageRecordV1,
+        iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1,
     ) {
-        let message_id = [0x11; 32];
+        let exact = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let message_id = exact.bundle.commitment.message_id;
         let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1::new(
-            iroha_data_model::bridge::SccpLaneIdV1 {
-                source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
-                target: iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
-            },
+            exact.bundle.commitment.context.lane,
             message_id,
         )
         .expect("valid indexed fixture key");
-        let record = iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
-            destination_binding_hash: [0x22; 32],
-            route_configuration_hash: [0x33; 32],
-            payload_hash: [0x44; 32],
+        let record = iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
+            destination_binding_hash: exact.bundle.commitment.context.destination_binding_hash,
+            route_configuration_hash: exact.bundle.commitment.context.route_configuration_hash,
+            payload_hash: exact.bundle.commitment.payload_hash,
+            payload_bytes: iroha_sccp::canonical_sccp_payload_bytes(&exact.bundle.payload)
+                .expect("canonical exact outbound payload"),
             recorded_at_height: 9,
+            commitment_index: 0,
         };
         (message_id, key, record)
     }
@@ -6728,15 +6916,37 @@ mod sccp_first_release_api_tests {
             Some("from=7"),
             Some("limit=50"),
             Some("from=7&limit=50"),
+            Some("from=7&after_index=0"),
+            Some("from=7&after_index=511&limit=50"),
         ] {
             assert!(validate_sccp_recent_query(valid).is_ok());
         }
+        assert_eq!(
+            parse_sccp_recent_query(Some("from=7&limit=50"))
+                .expect("canonical recent window")
+                .from,
+            Some(7)
+        );
+        assert_eq!(
+            parse_sccp_recent_query(Some("from=7&limit=50"))
+                .expect("canonical recent window")
+                .limit,
+            Some(50)
+        );
+        assert_eq!(
+            parse_sccp_recent_query(Some("from=7&after_index=12"))
+                .expect("canonical compound recent cursor")
+                .after_index,
+            Some(12)
+        );
         for invalid in [
             "network_id_hex=00",
             "proof_bytes_hex=00",
             "allow_unready=true",
             "from=1&from=2",
             "limit=1&limit=2",
+            "after_index=0",
+            "from=1&after_index=0&after_index=1",
             "from=1&&limit=2",
             "f%72om=1",
             "from=1&",
@@ -6750,26 +6960,42 @@ mod sccp_first_release_api_tests {
             "limit=0",
             "limit=51",
             "limit=18446744073709551615",
+            "from=1&after_index=512",
+            "from=1&after_index=01",
+            "from=1&after_index=+1",
         ] {
             assert!(
                 validate_sccp_recent_query(Some(invalid)).is_err(),
                 "noncanonical recent query must reject: {invalid}"
             );
         }
+        let oversized = format!("from=1&limit=1{}", "0".repeat(65));
+        assert!(
+            parse_sccp_recent_query(Some(&oversized)).is_err(),
+            "oversized recent query must reject before generic query decoding"
+        );
 
         let state = empty_taira_state();
         for window in [
-            HistoryWindowQuery {
+            SccpRecentWindowQuery {
                 from: Some(0),
+                after_index: None,
                 limit: Some(1),
             },
-            HistoryWindowQuery {
+            SccpRecentWindowQuery {
                 from: Some(1),
+                after_index: None,
                 limit: Some(0),
             },
-            HistoryWindowQuery {
+            SccpRecentWindowQuery {
                 from: Some(1),
+                after_index: None,
                 limit: Some(51),
+            },
+            SccpRecentWindowQuery {
+                from: None,
+                after_index: Some(0),
+                limit: Some(1),
             },
         ] {
             assert!(
@@ -6782,28 +7008,33 @@ mod sccp_first_release_api_tests {
     #[test]
     fn locator_record_validation_rejects_tamper_and_missing_index() {
         let (message_id, key, record) = indexed_fixture();
-        assert!(validate_sccp_indexed_outbound_record(message_id, key, record, true).is_ok());
+        let descriptor = record.descriptor();
+        assert!(validate_sccp_indexed_outbound_record(message_id, key, descriptor, true).is_ok());
 
         let wrong_id = [0x12; 32];
-        assert!(validate_sccp_indexed_outbound_record(wrong_id, key, record, true).is_err());
-        assert!(validate_sccp_indexed_outbound_record(message_id, key, record, false).is_err());
+        assert!(validate_sccp_indexed_outbound_record(wrong_id, key, descriptor, true).is_err());
+        assert!(validate_sccp_indexed_outbound_record(message_id, key, descriptor, false).is_err());
 
         for hostile in [
-            iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
+            iroha_data_model::bridge::SccpOutboundMessageDescriptorV1 {
                 destination_binding_hash: [0; 32],
-                ..record
+                ..descriptor
             },
-            iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
-                route_configuration_hash: record.destination_binding_hash,
-                ..record
+            iroha_data_model::bridge::SccpOutboundMessageDescriptorV1 {
+                route_configuration_hash: descriptor.destination_binding_hash,
+                ..descriptor
             },
-            iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
-                payload_hash: record.route_configuration_hash,
-                ..record
+            iroha_data_model::bridge::SccpOutboundMessageDescriptorV1 {
+                payload_hash: descriptor.route_configuration_hash,
+                ..descriptor
             },
-            iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
+            iroha_data_model::bridge::SccpOutboundMessageDescriptorV1 {
                 recorded_at_height: 0,
-                ..record
+                ..descriptor
+            },
+            iroha_data_model::bridge::SccpOutboundMessageDescriptorV1 {
+                commitment_index: iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
+                ..descriptor
             },
         ] {
             assert!(
@@ -6831,6 +7062,7 @@ mod sccp_first_release_api_tests {
             assert!(
                 history.insert(iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1 {
                     recorded_at_height: height,
+                    commitment_index: 0,
                     lane,
                     message_id,
                 })
@@ -6866,47 +7098,70 @@ mod sccp_first_release_api_tests {
     }
 
     #[test]
-    fn recent_index_records_group_each_block_height_exactly_once() {
-        let indexed_at = |height: u64, id: u8| {
-            let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1::new(
-                iroha_data_model::bridge::SccpLaneIdV1 {
-                    source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
-                    target: iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
-                },
-                [id; 32],
-            )
-            .expect("valid outbound key");
-            SccpIndexedOutboundRecord {
-                key,
-                record: iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
-                    destination_binding_hash: [0xa1; 32],
-                    route_configuration_hash: [0xa2; 32],
-                    payload_hash: [0xa3; 32],
-                    recorded_at_height: height,
-                },
-            }
-        };
-        let groups = group_sccp_indexed_records_by_height(vec![
-            indexed_at(41, 1),
-            indexed_at(40, 2),
-            indexed_at(41, 3),
-            indexed_at(7, 4),
-            indexed_at(40, 5),
-        ]);
+    fn recent_compound_cursor_pages_all_512_same_height_entries_once() {
+        use std::collections::BTreeSet;
 
-        assert_eq!(groups.len(), 3);
+        const HEIGHT: u64 = 42;
+        const LIMIT: usize = 50;
+        let lane = iroha_data_model::bridge::SccpLaneIdV1 {
+            source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+            target: iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
+        };
+        let mut history = BTreeSet::new();
+        for commitment_index in 0..iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
+        {
+            let mut message_id = [0_u8; 32];
+            message_id[..4].copy_from_slice(&(commitment_index + 1).to_le_bytes());
+            assert!(
+                history.insert(iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1 {
+                    recorded_at_height: HEIGHT,
+                    commitment_index,
+                    lane,
+                    message_id,
+                })
+            );
+        }
+
+        let mut after = None;
+        let mut observed = Vec::new();
+        let mut pages = 0;
+        loop {
+            let start = after.map_or_else(
+                || {
+                    iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::range_start_at_or_before(
+                        HEIGHT,
+                    )
+                },
+                |index| {
+                    iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::range_start_after(
+                        HEIGHT, index,
+                    )
+                    .expect("valid same-height cursor")
+                },
+            );
+            let selected = history
+                .range(start..)
+                .take(LIMIT + 1)
+                .copied()
+                .collect::<Vec<_>>();
+            let has_more = selected.len() > LIMIT;
+            let page = selected.into_iter().take(LIMIT).collect::<Vec<_>>();
+            if page.is_empty() {
+                break;
+            }
+            pages += 1;
+            observed.extend(page.iter().map(|entry| entry.commitment_index));
+            if !has_more {
+                break;
+            }
+            after = page.last().map(|entry| entry.commitment_index);
+        }
+
+        assert_eq!(pages, 11);
         assert_eq!(
-            groups
-                .iter()
-                .map(|group| (
-                    group[0].record.recorded_at_height,
-                    group
-                        .iter()
-                        .map(|item| item.key.message_id[0])
-                        .collect::<Vec<_>>()
-                ))
-                .collect::<Vec<_>>(),
-            [(41, vec![1, 3]), (40, vec![2, 5]), (7, vec![4])]
+            observed,
+            (0..iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1)
+                .collect::<Vec<_>>()
         );
     }
 
@@ -7015,6 +7270,30 @@ mod sccp_first_release_api_tests {
             state.zk_snapshot().sccp.max_proofs_per_transaction.get()
         );
         assert_eq!(
+            capabilities.resource_limits.max_outbound_messages_per_block,
+            512
+        );
+        assert_eq!(
+            capabilities
+                .resource_limits
+                .max_outbound_message_payload_bytes,
+            4_096
+        );
+        assert_eq!(
+            capabilities.resource_limits.max_pending_outbound_messages,
+            state.zk_snapshot().sccp.max_pending_outbound_messages.get()
+        );
+        assert_eq!(
+            capabilities
+                .resource_limits
+                .max_pending_outbound_payload_bytes,
+            state
+                .zk_snapshot()
+                .sccp
+                .max_pending_outbound_payload_bytes
+                .get()
+        );
+        assert_eq!(
             capabilities
                 .resource_limits
                 .max_bls_signer_contributions_per_block,
@@ -7031,6 +7310,12 @@ mod sccp_first_release_api_tests {
                 "required SCCP capability limit surface is missing: {required}"
             );
         }
+        for required in [
+            "max_pending_outbound_messages",
+            "max_pending_outbound_payload_bytes",
+        ] {
+            assert!(encoded.contains(required), "missing SCCP limit {required}");
+        }
         for retired in ["manifests", "artifacts", "jobs", "allow_unready"] {
             assert!(
                 !encoded.contains(retired),
@@ -7040,19 +7325,35 @@ mod sccp_first_release_api_tests {
     }
 
     #[test]
-    fn indexed_locator_with_missing_block_body_fails_closed() {
+    fn recent_projection_fails_closed_without_immutable_finality_archive() {
         let state = empty_taira_state();
         let (message_id, key, record) = indexed_fixture();
         state
             .insert_sccp_outbound_message_for_testing(key, record)
-            .expect("insert indexed hostile fixture");
+            .expect("insert exact indexed fixture");
+
+        let error = collect_recent_sccp_messages(
+            &state,
+            &SccpRecentWindowQuery {
+                from: None,
+                after_index: None,
+                limit: Some(1),
+            },
+        )
+        .expect_err("recent readback requires immutable retained-header finality and archive");
+        assert!(
+            error
+                .to_string()
+                .contains("finality artifact for height 9 not found"),
+            "unexpected missing-archive error: {error}"
+        );
 
         let error = sccp_message_bundle_for_request(&state, message_id)
-            .expect_err("indexed message without its block body must fail closed");
+            .expect_err("proof material still requires an exact retained-header finality record");
         let Error::Query(iroha_data_model::ValidationFail::InternalError(message)) = error else {
             panic!("unexpected missing-block error: {error}");
         };
-        assert!(message.contains("finalized block body is unavailable"));
+        assert!(message.contains("finality artifact for height 9 not found"));
     }
 
     #[tokio::test]
@@ -7486,170 +7787,23 @@ fn build_sccp_finality_proof_bytes(
     })
 }
 
-fn validate_sccp_durable_outbox_record(
-    state: &CoreState,
-    height: u64,
-    message: &iroha_core::bridge::RecordedSccpMessage,
+fn validate_archived_sccp_message_descriptor(
+    indexed: &SccpIndexedOutboundRecord,
+    message: &iroha_core::bridge::ValidatedSccpOutboundMessageProjectionV1,
 ) -> Result<()> {
-    let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1::new(
-        message.context.lane,
-        message.commitment.message_id,
-    )
-    .ok_or_else(|| sccp_internal_error("committed SCCP message has an invalid exact replay key"))?;
-    let record = state.sccp_outbound_message_record(&key).ok_or_else(|| {
-        sccp_internal_error(format!(
-            "committed SCCP message {} has no durable outbox record",
-            hex::encode(key.message_id)
-        ))
-    })?;
-    if !record.is_well_formed_for_key(&key)
-        || record.destination_binding_hash != message.context.destination_binding_hash
-        || record.route_configuration_hash != message.context.route_configuration_hash
-        || record.payload_hash != message.commitment.payload_hash
-        || record.recorded_at_height != height
+    if message.commitment_index != indexed.descriptor.commitment_index
+        || message.commitment.message_id != indexed.key.message_id
+        || message.context.lane != indexed.key.lane
+        || message.context.destination_binding_hash != indexed.descriptor.destination_binding_hash
+        || message.context.route_configuration_hash != indexed.descriptor.route_configuration_hash
+        || message.commitment.payload_hash != indexed.descriptor.payload_hash
     {
         return Err(sccp_internal_error(format!(
-            "durable outbox record for SCCP message {} does not match its committed lane, binding, route configuration, payload, and height",
-            hex::encode(key.message_id)
+            "SCCP message {} disagrees with its authenticated commitment index, lane, binding, route configuration, or payload",
+            hex::encode(indexed.key.message_id)
         )));
     }
     Ok(())
-}
-
-struct ValidatedSccpBlockMessages {
-    commitment_root: [u8; 32],
-    messages: Vec<iroha_core::bridge::RecordedSccpMessage>,
-    positions: BTreeMap<[u8; 32], usize>,
-}
-
-fn validate_sccp_block_messages(
-    state: &CoreState,
-    height: u64,
-    block: &iroha_data_model::block::SignedBlock,
-    indexed_records: &[SccpIndexedOutboundRecord],
-) -> Result<Option<ValidatedSccpBlockMessages>> {
-    if indexed_records.is_empty() {
-        return Ok(None);
-    }
-    if indexed_records
-        .iter()
-        .any(|indexed| indexed.record.recorded_at_height != height)
-    {
-        return Err(sccp_internal_error(format!(
-            "SCCP block group mixes records outside height {height}"
-        )));
-    }
-
-    let messages = iroha_core::bridge::collect_sccp_messages_from_signed_block(block);
-    for recorded in &messages {
-        validate_sccp_durable_outbox_record(state, height, recorded)?;
-    }
-    let Some(commitment_root) = iroha_core::bridge::sccp_commitment_root_from_messages(&messages)
-    else {
-        return Err(sccp_internal_error(format!(
-            "failed to reconstruct SCCP commitment root for block {height}"
-        )));
-    };
-    let Some(anchored_root) = block.header().sccp_commitment_root() else {
-        return Err(sccp_internal_error(format!(
-            "SCCP message {} is present in block {height}, but the finalized block header does not anchor an SCCP commitment root",
-            hex::encode(indexed_records[0].key.message_id)
-        )));
-    };
-    if anchored_root != commitment_root {
-        return Err(sccp_internal_error(format!(
-            "finalized block {height} anchors SCCP root 0x{}, but committed SCCP messages reconstruct to 0x{}",
-            hex::encode(anchored_root),
-            hex::encode(commitment_root)
-        )));
-    }
-
-    let mut positions = BTreeMap::new();
-    for (index, message) in messages.iter().enumerate() {
-        if positions
-            .insert(message.commitment.message_id, index)
-            .is_some()
-        {
-            return Err(sccp_internal_error(format!(
-                "finalized block {height} contains a duplicate SCCP message identifier {}",
-                hex::encode(message.commitment.message_id)
-            )));
-        }
-    }
-    Ok(Some(ValidatedSccpBlockMessages {
-        commitment_root,
-        messages,
-        positions,
-    }))
-}
-
-fn reconstruct_sccp_message_bundles_from_block(
-    state: &CoreState,
-    height: u64,
-    block: &iroha_data_model::block::SignedBlock,
-    indexed_records: &[SccpIndexedOutboundRecord],
-) -> Result<Vec<TairaSccpMessageProofV1>> {
-    let Some(validated) = validate_sccp_block_messages(state, height, block, indexed_records)?
-    else {
-        return Ok(Vec::new());
-    };
-    let commitment_root = validated.commitment_root;
-    let messages = validated.messages;
-    let message_positions = validated.positions;
-    let commitments = messages
-        .iter()
-        .map(|message| message.commitment.clone())
-        .collect::<Vec<_>>();
-    let finality_proof = iroha_core::bridge::build_finality_proof(state, height)
-        .map_err(map_bridge_finality_error)?;
-    let finality_proof_bytes = build_sccp_finality_proof_bytes(&finality_proof, commitment_root)?;
-
-    let mut bundles = Vec::with_capacity(indexed_records.len());
-    for indexed in indexed_records {
-        let index = *message_positions
-            .get(&indexed.key.message_id)
-            .ok_or_else(|| {
-                sccp_internal_error(format!(
-                    "SCCP message {} is indexed at height {height}, but that block contains no matching successful record",
-                    hex::encode(indexed.key.message_id)
-                ))
-            })?;
-        let message = &messages[index];
-        if sccp_message_source_domain(&message.payload) != iroha_sccp::SCCP_DOMAIN_SORA {
-            return Err(sccp_bad_request(
-                "SCCP transparent proof readback is reserved for SORA-origin messages; inbound messages use protocol-native admission",
-            ));
-        }
-        let merkle_proof =
-            iroha_sccp::commitment_merkle_proof(&commitments, index).ok_or_else(|| {
-                sccp_internal_error(format!(
-                    "failed to derive SCCP Merkle proof for message {} in block {height}",
-                    hex::encode(message.commitment.message_id)
-                ))
-            })?;
-        let bundle = TairaSccpMessageProofV1 {
-            version: 1,
-            commitment_root,
-            commitment: message.commitment.clone(),
-            merkle_proof,
-            payload: message.payload.clone(),
-            finality_proof: finality_proof_bytes.clone(),
-        };
-        if bundle.commitment.context.lane != indexed.key.lane
-            || bundle.commitment.context.destination_binding_hash
-                != indexed.record.destination_binding_hash
-            || bundle.commitment.context.route_configuration_hash
-                != indexed.record.route_configuration_hash
-            || bundle.commitment.payload_hash != indexed.record.payload_hash
-        {
-            return Err(sccp_internal_error(format!(
-                "SCCP message {} disagrees with its indexed lane, destination binding, route configuration, or payload",
-                hex::encode(indexed.key.message_id)
-            )));
-        }
-        bundles.push(bundle);
-    }
-    Ok(bundles)
 }
 
 fn reconstruct_sccp_message_bundles_from_indexed_records(
@@ -7659,39 +7813,74 @@ fn reconstruct_sccp_message_bundles_from_indexed_records(
     let Some(first) = indexed_records.first() else {
         return Ok(Vec::new());
     };
-    let recorded_at_height = first.record.recorded_at_height;
-    let height = usize::try_from(recorded_at_height).map_err(|_| {
-        sccp_internal_error(format!(
-            "SCCP message {} records a block height that is not representable on this host",
-            hex::encode(first.key.message_id)
-        ))
-    })?;
-    let height_nz = NonZeroUsize::new(height).ok_or_else(|| {
-        sccp_internal_error(format!(
-            "SCCP message {} records forbidden block height zero",
-            hex::encode(first.key.message_id)
-        ))
-    })?;
-    let block = state.block_by_height(height_nz).ok_or_else(|| {
-        sccp_internal_error(format!(
-            "SCCP message {} is indexed at height {}, but the finalized block body is unavailable",
-            hex::encode(first.key.message_id),
-            recorded_at_height
-        ))
-    })?;
-    reconstruct_sccp_message_bundles_from_block(
-        state,
-        recorded_at_height,
-        block.as_ref(),
-        indexed_records,
-    )
+    let height = first.descriptor.recorded_at_height;
+    if indexed_records
+        .iter()
+        .any(|indexed| indexed.descriptor.recorded_at_height != height)
+    {
+        return Err(sccp_internal_error(format!(
+            "SCCP proof request mixes records outside height {height}"
+        )));
+    }
+    let finalized = iroha_core::bridge::validated_sccp_finalized_messages_at_height(state, height)
+        .map_err(|reason| sccp_internal_error(reason))?
+        .ok_or_else(|| {
+            sccp_internal_error(format!(
+                "SCCP message {} is indexed at height {height}, but the finalized projection is empty",
+                hex::encode(first.key.message_id)
+            ))
+        })?;
+    let commitments = finalized
+        .messages
+        .iter()
+        .map(|message| message.commitment.clone())
+        .collect::<Vec<_>>();
+    let finality_proof_bytes =
+        build_sccp_finality_proof_bytes(&finalized.finality_proof, finalized.commitment_root)?;
+    let mut bundles = Vec::with_capacity(indexed_records.len());
+    for indexed in indexed_records {
+        let index = usize::try_from(indexed.descriptor.commitment_index)
+            .expect("bounded SCCP commitment index fits usize");
+        let message = finalized.messages.get(index).ok_or_else(|| {
+            sccp_internal_error(format!(
+                "SCCP message {} names absent commitment index {} at height {height}",
+                hex::encode(indexed.key.message_id),
+                indexed.descriptor.commitment_index
+            ))
+        })?;
+        validate_archived_sccp_message_descriptor(indexed, message)?;
+        if sccp_message_source_domain(&message.payload) != iroha_sccp::SCCP_DOMAIN_SORA {
+            return Err(sccp_bad_request(
+                "SCCP transparent proof readback is reserved for SORA-origin messages; inbound messages use protocol-native admission",
+            ));
+        }
+        let merkle_proof =
+            iroha_sccp::commitment_merkle_proof(&commitments, index).ok_or_else(|| {
+                sccp_internal_error(format!(
+                    "failed to derive SCCP Merkle proof for message {} at height {height}",
+                    hex::encode(indexed.key.message_id)
+                ))
+            })?;
+        bundles.push(TairaSccpMessageProofV1 {
+            version: 1,
+            commitment_root: finalized.commitment_root,
+            commitment: message.commitment.clone(),
+            merkle_proof,
+            payload: message.payload.clone(),
+            finality_proof: finality_proof_bytes.clone(),
+        });
+    }
+    Ok(bundles)
 }
 
 fn reconstruct_sccp_message_bundle_from_indexed_record(
     state: &CoreState,
     indexed: SccpIndexedOutboundRecord,
 ) -> Result<TairaSccpMessageProofV1> {
-    let mut bundles = reconstruct_sccp_message_bundles_from_indexed_records(state, &[indexed])?;
+    let mut bundles = reconstruct_sccp_message_bundles_from_indexed_records(
+        state,
+        std::slice::from_ref(&indexed),
+    )?;
     bundles.pop().ok_or_else(|| {
         sccp_internal_error(format!(
             "SCCP message {} produced no reconstructed finalized bundle",
@@ -7800,9 +7989,10 @@ fn validate_recent_message_projection(
     Ok(())
 }
 
-fn recent_message_entry_from_recorded(
+fn recent_message_entry_from_projection(
     height: u64,
-    message: &iroha_core::bridge::RecordedSccpMessage,
+    message_id: [u8; 32],
+    message: &iroha_core::bridge::ValidatedSccpOutboundMessageProjectionV1,
 ) -> Result<SccpRecentMessageDto> {
     let context = message.context;
     if !context.is_well_formed()
@@ -7815,7 +8005,12 @@ fn recent_message_entry_from_recorded(
             "finalized SCCP message disagrees with its exact committed outbound context",
         ));
     }
-    let message_id_hex = hex::encode(message.commitment.message_id);
+    if message.commitment.message_id != message_id {
+        return Err(sccp_internal_error(
+            "validated SCCP outbox projection returned a different message identifier",
+        ));
+    }
+    let message_id_hex = hex::encode(message_id);
     let payload_projection = sccp_payload_projection(&message.payload).ok_or_else(|| {
         sccp_internal_error(format!(
             "finalized SCCP message {message_id_hex} has no valid closed transfer projection"
@@ -7828,6 +8023,7 @@ fn recent_message_entry_from_recorded(
     let amount = recent_message_projection_amount(&payload_projection);
     Ok(SccpRecentMessageDto {
         height,
+        commitment_index: message.commitment_index,
         message_id_hex: message_id_hex.clone(),
         kind: sccp_message_payload_kind_key(&message.payload).to_owned(),
         source_profile: context.lane.source.profile_key().to_owned(),
@@ -7854,85 +8050,56 @@ fn take_bounded_recent_sccp_index_keys(
     ordered.take(limit).collect()
 }
 
-fn group_sccp_indexed_records_by_height(
-    records: Vec<SccpIndexedOutboundRecord>,
-) -> Vec<Vec<SccpIndexedOutboundRecord>> {
-    let mut groups: BTreeMap<Reverse<u64>, Vec<SccpIndexedOutboundRecord>> = BTreeMap::new();
-    for indexed in records {
-        groups
-            .entry(Reverse(indexed.record.recorded_at_height))
-            .or_default()
-            .push(indexed);
-    }
-    groups.into_values().collect()
-}
-
 fn recent_sccp_entries_from_indexed_records(
     state: &CoreState,
     indexed_records: &[SccpIndexedOutboundRecord],
 ) -> Result<Vec<SccpRecentMessageDto>> {
-    let Some(first) = indexed_records.first() else {
-        return Ok(Vec::new());
-    };
-    let height = first.record.recorded_at_height;
-    let host_height = usize::try_from(height).map_err(|_| {
-        sccp_internal_error(format!(
-            "SCCP message {} records a block height that is not representable on this host",
-            hex::encode(first.key.message_id)
-        ))
-    })?;
-    let host_height = NonZeroUsize::new(host_height).ok_or_else(|| {
-        sccp_internal_error(format!(
-            "SCCP message {} records forbidden block height zero",
-            hex::encode(first.key.message_id)
-        ))
-    })?;
-    let block = state.block_by_height(host_height).ok_or_else(|| {
-        sccp_internal_error(format!(
-            "SCCP message {} is indexed at height {height}, but the finalized block body is unavailable",
-            hex::encode(first.key.message_id)
-        ))
-    })?;
-    let validated = validate_sccp_block_messages(state, height, block.as_ref(), indexed_records)?
-        .ok_or_else(|| sccp_internal_error("nonempty SCCP group validated as empty"))?;
-
     let mut entries = Vec::with_capacity(indexed_records.len());
-    for indexed in indexed_records {
-        let index = *validated
-            .positions
-            .get(&indexed.key.message_id)
-            .ok_or_else(|| {
+    let mut offset = 0;
+    while offset < indexed_records.len() {
+        let height = indexed_records[offset].descriptor.recorded_at_height;
+        let end = indexed_records[offset..]
+            .iter()
+            .position(|indexed| indexed.descriptor.recorded_at_height != height)
+            .map_or(indexed_records.len(), |relative| offset + relative);
+        let finalized =
+            iroha_core::bridge::validated_sccp_finalized_messages_at_height(state, height)
+                .map_err(sccp_internal_error)?
+                .ok_or_else(|| {
+                    sccp_internal_error(format!(
+                        "SCCP recent index at height {height} names an empty finalized projection"
+                    ))
+                })?;
+        for indexed in &indexed_records[offset..end] {
+            let index = usize::try_from(indexed.descriptor.commitment_index)
+                .expect("bounded SCCP commitment index fits usize");
+            let message = finalized.messages.get(index).ok_or_else(|| {
                 sccp_internal_error(format!(
-                    "SCCP message {} is indexed at height {height}, but that block contains no matching successful record",
-                    hex::encode(indexed.key.message_id)
+                    "SCCP recent message {} names absent commitment index {} at height {height}",
+                    hex::encode(indexed.key.message_id),
+                    indexed.descriptor.commitment_index,
                 ))
             })?;
-        let message = &validated.messages[index];
-        if sccp_message_source_domain(&message.payload) != iroha_sccp::SCCP_DOMAIN_SORA {
-            return Err(sccp_bad_request(
-                "SCCP recent readback is reserved for SORA-origin messages; inbound messages use protocol-native admission",
-            ));
+            validate_archived_sccp_message_descriptor(indexed, message)?;
+            if sccp_message_source_domain(&message.payload) != iroha_sccp::SCCP_DOMAIN_SORA {
+                return Err(sccp_bad_request(
+                    "SCCP recent readback is reserved for SORA-origin messages; inbound messages use protocol-native admission",
+                ));
+            }
+            entries.push(recent_message_entry_from_projection(
+                height,
+                indexed.key.message_id,
+                message,
+            )?);
         }
-        if message.commitment.context.lane != indexed.key.lane
-            || message.commitment.context.destination_binding_hash
-                != indexed.record.destination_binding_hash
-            || message.commitment.context.route_configuration_hash
-                != indexed.record.route_configuration_hash
-            || message.commitment.payload_hash != indexed.record.payload_hash
-        {
-            return Err(sccp_internal_error(format!(
-                "SCCP message {} disagrees with its indexed lane, destination binding, route configuration, or payload",
-                hex::encode(indexed.key.message_id)
-            )));
-        }
-        entries.push(recent_message_entry_from_recorded(height, message)?);
+        offset = end;
     }
     Ok(entries)
 }
 
 fn collect_recent_sccp_messages(
     state: &CoreState,
-    window: &HistoryWindowQuery,
+    window: &SccpRecentWindowQuery,
 ) -> Result<SccpRecentMessagesDto> {
     const RECENT_SCCP_MESSAGES_CAP: usize = 50;
 
@@ -7940,6 +8107,19 @@ fn collect_recent_sccp_messages(
         return Err(sccp_bad_request(
             "recent SCCP query field `from` must be a positive block height",
         ));
+    }
+    if window.after_index.is_some() && window.from.is_none() {
+        return Err(sccp_bad_request(
+            "recent SCCP query field `after_index` requires the paired `from` height",
+        ));
+    }
+    if window.after_index.is_some_and(|index| {
+        index >= iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
+    }) {
+        return Err(sccp_bad_request(format!(
+            "recent SCCP query field `after_index` must be between 0 and {}",
+            iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 - 1
+        )));
     }
     if window
         .limit
@@ -7960,21 +8140,29 @@ fn collect_recent_sccp_messages(
     // large history.
     let selected = {
         let world = state.world_view();
-        let start =
+        let start = if let Some(after_index) = window.after_index {
+            iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::range_start_after(
+                through_height,
+                after_index,
+            )
+            .ok_or_else(|| sccp_bad_request("invalid SCCP recent compound cursor"))?
+        } else {
             iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::range_start_at_or_before(
                 through_height,
-            );
+            )
+        };
         take_bounded_recent_sccp_index_keys(
             world
                 .sccp_outbound_message_index()
                 .range(start..)
                 .map(|(index_key, _)| *index_key),
-            limit,
+            limit.saturating_add(1),
         )
     };
 
-    let mut indexed_records = Vec::with_capacity(selected.len());
-    for index_key in selected {
+    let has_more = selected.len() > limit;
+    let mut indexed_records = Vec::with_capacity(selected.len().min(limit));
+    for index_key in selected.into_iter().take(limit) {
         let indexed =
             sccp_indexed_outbound_record(state, index_key.message_id)?.ok_or_else(|| {
                 sccp_internal_error(format!(
@@ -7982,8 +8170,10 @@ fn collect_recent_sccp_messages(
                     hex::encode(index_key.message_id)
                 ))
             })?;
-        if index_key.message_key() != indexed.key
-            || index_key.recorded_at_height != indexed.record.recorded_at_height
+        if iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::from_descriptor(
+            indexed.key,
+            indexed.descriptor,
+        ) != Some(index_key)
         {
             return Err(sccp_internal_error(format!(
                 "ordered SCCP index entry {} disagrees with its authoritative outbound record",
@@ -7993,35 +8183,38 @@ fn collect_recent_sccp_messages(
         indexed_records.push(indexed);
     }
 
-    let mut items = Vec::with_capacity(indexed_records.len());
-    for group in group_sccp_indexed_records_by_height(indexed_records) {
-        let entries = recent_sccp_entries_from_indexed_records(state, &group)?;
-        if entries.len() != group.len() {
-            return Err(sccp_internal_error(
-                "SCCP recent-message block reconstruction returned an incomplete group",
-            ));
-        }
-        items.extend(entries);
+    let items = recent_sccp_entries_from_indexed_records(state, &indexed_records)?;
+    if items.len() != indexed_records.len() {
+        return Err(sccp_internal_error(
+            "SCCP recent-message outbox projection returned an incomplete page",
+        ));
     }
 
-    Ok(SccpRecentMessagesDto { items })
+    let next = has_more
+        .then_some(indexed_records.last())
+        .flatten()
+        .map(|last| SccpRecentCursorDto {
+            from: last.descriptor.recorded_at_height,
+            after_index: last.descriptor.commitment_index,
+        });
+    Ok(SccpRecentMessagesDto { items, next })
 }
 
 /// GET /v1/sccp/proofs/message/{message_id} — SORA-origin SCCP message bundle.
 #[iroha_futures::telemetry_future]
-pub async fn handle_v1_sccp_message_bundle(
+pub(crate) async fn handle_v1_sccp_message_bundle(
     state: Arc<CoreState>,
     message_id_hex: String,
-    accept: Option<axum::http::HeaderValue>,
+    format: crate::utils::ResponseFormat,
+    admission: crate::QueryAdmissionPermit,
 ) -> Result<Response> {
     let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
-    let bundle = tokio::task::spawn_blocking(move || {
-        sccp_message_bundle_for_request(state.as_ref(), message_id)
+    run_admitted_blocking(admission, "SCCP message-proof worker failed", move || {
+        let bundle = sccp_message_bundle_for_request(state.as_ref(), message_id)?
+            .ok_or_else(sccp_not_found)?;
+        sccp_bundle_response_with_format(&bundle, format)
     })
     .await
-    .map_err(|_| sccp_internal_error("SCCP message-proof worker failed"))??
-    .ok_or_else(sccp_not_found)?;
-    sccp_bundle_response(&bundle, accept.as_ref())
 }
 
 /// GET /v1/sccp/registry — authoritative typed SCCP route registry.
@@ -8036,18 +8229,19 @@ pub async fn handle_v1_sccp_registry(
 
 /// GET /v1/sccp/proof-requests/{message_id} — exact state-derived Groth16 request.
 #[iroha_futures::telemetry_future]
-pub async fn handle_v1_sccp_proof_request(
+pub(crate) async fn handle_v1_sccp_proof_request(
     state: Arc<CoreState>,
     message_id_hex: String,
-    accept: Option<axum::http::HeaderValue>,
+    format: crate::utils::ResponseFormat,
+    admission: crate::QueryAdmissionPermit,
 ) -> Result<Response> {
     let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
-    let material =
-        tokio::task::spawn_blocking(move || sccp_exact_proof_material(state.as_ref(), message_id))
-            .await
-            .map_err(|_| sccp_internal_error("SCCP proof-request worker failed"))??
-            .ok_or_else(sccp_not_found)?;
-    sccp_bundle_response(&material.request, accept.as_ref())
+    run_admitted_blocking(admission, "SCCP proof-request worker failed", move || {
+        let material =
+            sccp_exact_proof_material(state.as_ref(), message_id)?.ok_or_else(sccp_not_found)?;
+        sccp_bundle_response_with_format(&material.request, format)
+    })
+    .await
 }
 
 /// GET /v1/sccp/capabilities — relay-operator SCCP capability discovery for proof backends, codecs, and routes.
@@ -8062,16 +8256,17 @@ pub async fn handle_v1_sccp_capabilities(
 
 /// GET /v1/sccp/messages/recent — newest-first committed SCCP message discovery with compact metadata.
 #[iroha_futures::telemetry_future]
-pub async fn handle_v1_sccp_messages_recent(
+pub(crate) async fn handle_v1_sccp_messages_recent(
     state: Arc<CoreState>,
-    crate::NoritoQuery(window): crate::NoritoQuery<HistoryWindowQuery>,
-    accept: Option<axum::http::HeaderValue>,
+    window: SccpRecentWindowQuery,
+    format: crate::utils::ResponseFormat,
+    admission: crate::QueryAdmissionPermit,
 ) -> Result<Response> {
-    let snapshot =
-        tokio::task::spawn_blocking(move || collect_recent_sccp_messages(state.as_ref(), &window))
-            .await
-            .map_err(|_| sccp_internal_error("SCCP recent-message worker failed"))??;
-    sccp_bundle_response(&snapshot, accept.as_ref())
+    run_admitted_blocking(admission, "SCCP recent-message worker failed", move || {
+        let snapshot = collect_recent_sccp_messages(state.as_ref(), &window)?;
+        sccp_bundle_response_with_format(&snapshot, format)
+    })
+    .await
 }
 
 /// GET /v1/sumeragi/validator-sets — Bounded history of validator-set snapshots (newest first)
@@ -12370,8 +12565,7 @@ pub(crate) fn push_accepted_transactions_for_ingress_with_routing_plans(
         })
 }
 
-#[iroha_futures::telemetry_future]
-async fn handle_transaction_inner(
+fn handle_transaction_inner_sync(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -12402,6 +12596,18 @@ async fn handle_transaction_inner(
         enqueue_started.elapsed(),
     );
     result
+}
+
+#[iroha_futures::telemetry_future]
+async fn handle_transaction_inner(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    tx: impl Into<TransactionEntrypoint>,
+    telemetry: &MaybeTelemetry,
+    routing_plan: Option<RoutingPlan>,
+) -> Result<RoutingDecision> {
+    handle_transaction_inner_sync(chain_id, queue, state, tx, telemetry, routing_plan)
 }
 
 pub async fn handle_transaction(
@@ -12472,6 +12678,44 @@ async fn handle_transaction_with_metrics_and_routing_plan(
 
     let result =
         handle_transaction_inner(chain_id, queue, state, tx, &telemetry, routing_plan).await;
+
+    #[cfg(feature = "telemetry")]
+    observe_route_stage_latency(
+        &telemetry,
+        "transaction",
+        "handle",
+        if result.is_ok() { "ok" } else { "error" },
+        start.elapsed(),
+    );
+
+    #[cfg(feature = "telemetry")]
+    if let Ok(decision) = &result {
+        observe_lane_admission_latency(
+            &telemetry,
+            endpoint,
+            decision.lane_id,
+            start.elapsed().as_secs_f64(),
+        );
+    }
+
+    result
+}
+
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+fn handle_transaction_with_metrics_and_routing_plan_sync(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    tx: impl Into<TransactionEntrypoint>,
+    telemetry: MaybeTelemetry,
+    routing_plan: Option<RoutingPlan>,
+    endpoint: &'static str,
+) -> Result<RoutingDecision> {
+    #[cfg(feature = "telemetry")]
+    let start = std::time::Instant::now();
+
+    let result =
+        handle_transaction_inner_sync(chain_id, queue, state, tx, &telemetry, routing_plan);
 
     #[cfg(feature = "telemetry")]
     observe_route_stage_latency(
@@ -12943,7 +13187,7 @@ mod contract_manifest_response_tests {
                 kind: EntryPointKind::Kotoage,
                 params: vec![EntrypointParamDescriptor {
                     name: "amount".to_owned(),
-                    type_name: "Amount".to_owned(),
+                    type_name: "quantity".to_owned(),
                 }],
                 argument_schema: Some(EntrypointArgumentSchemaV1 {
                     fields: vec![EntrypointArgumentFieldV1 {
@@ -13203,27 +13447,24 @@ fn encode_contract_state_pointer_tlv_bytes(
     let (type_id, payload) = match ty {
         ivm::EmbeddedStateType::Int => {
             let value = raw.parse::<iroha_primitives::bigint::BigInt>().ok()?;
-            let frame = iroha_primitives::numeric_abi::IntValueV1::try_new(value)
-                .ok()?
-                .encode_frame()
-                .ok()?;
-            (PointerType::Int, frame)
+            return ivm::numeric_tlv::encode_int(&value).ok();
         }
         ivm::EmbeddedStateType::Decimal => {
-            let value = raw.parse::<iroha_primitives::numeric::Numeric>().ok()?;
-            let frame = iroha_primitives::numeric_abi::DecimalValueV1::try_from_numeric(value)
+            let value = raw
+                .parse::<iroha_primitives::numeric::Numeric>()
                 .ok()?
-                .encode_frame()
+                .canonicalize_decimal()
                 .ok()?;
-            (PointerType::Decimal, frame)
+            return ivm::numeric_tlv::encode_decimal(&value).ok();
         }
         ivm::EmbeddedStateType::Quantity => {
-            let value = raw.parse::<iroha_primitives::numeric::Numeric>().ok()?;
-            let quantity = iroha_primitives::numeric::Quantity::try_from_numeric(value).ok()?;
-            let frame = iroha_primitives::numeric_abi::QuantityValueV1::new(quantity)
-                .encode_frame()
+            let value = raw
+                .parse::<iroha_primitives::numeric::Numeric>()
+                .ok()?
+                .canonicalize_decimal()
                 .ok()?;
-            (PointerType::Quantity, frame)
+            let value = iroha_primitives::numeric::Quantity::try_from_numeric(value).ok()?;
+            return ivm::numeric_tlv::encode_quantity(&value).ok();
         }
         ivm::EmbeddedStateType::String => (PointerType::Blob, raw.as_bytes().to_vec()),
         ivm::EmbeddedStateType::Bytes => {
@@ -14575,6 +14816,79 @@ mod contract_state_tests {
             decode_contract_state_scalar_json(&noncanonical_record, &ty).is_err(),
             "trailing bytes after a state record must reject"
         );
+    }
+
+    #[test]
+    fn contract_state_map_key_suffix_uses_canonical_numeric_pointer_envelopes() {
+        let int = "42"
+            .parse::<iroha_primitives::bigint::BigInt>()
+            .expect("parse int");
+        let decimal = "7.00"
+            .parse::<iroha_primitives::numeric::Numeric>()
+            .expect("parse decimal")
+            .canonicalize_decimal()
+            .expect("canonical decimal");
+        let quantity = iroha_primitives::numeric::Quantity::try_from_numeric(decimal.clone())
+            .expect("canonical quantity");
+
+        for (ty, raw, expected) in [
+            (
+                ivm::EmbeddedStateType::Int,
+                "42",
+                ivm::numeric_tlv::encode_int(&int).expect("encode int"),
+            ),
+            (
+                ivm::EmbeddedStateType::Decimal,
+                "7.00",
+                ivm::numeric_tlv::encode_decimal(&decimal).expect("encode decimal"),
+            ),
+            (
+                ivm::EmbeddedStateType::Quantity,
+                "7.00",
+                ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity"),
+            ),
+        ] {
+            let expected = hex::encode(expected);
+            assert_eq!(
+                contract_state_stored_map_key_suffix(&ty, raw).as_deref(),
+                Some(expected.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn decode_contract_state_scalar_json_supports_decimal_and_quantity() {
+        use ivm_abi::state_value::StateValueAtomV1;
+
+        let decimal = "123.450"
+            .parse::<iroha_primitives::numeric::Numeric>()
+            .expect("parse decimal")
+            .canonicalize_decimal()
+            .expect("canonical decimal");
+        let quantity = iroha_primitives::numeric::Quantity::try_from_numeric(decimal.clone())
+            .expect("canonical quantity");
+        let decimal_ty = ivm::EmbeddedStateType::Decimal;
+        let quantity_ty = ivm::EmbeddedStateType::Quantity;
+        let decimal_record = make_state_record(
+            &decimal_ty,
+            vec![StateValueAtomV1::Pointer(
+                ivm::numeric_tlv::encode_decimal(&decimal).expect("encode decimal"),
+            )],
+        );
+        let quantity_record = make_state_record(
+            &quantity_ty,
+            vec![StateValueAtomV1::Pointer(
+                ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity"),
+            )],
+        );
+
+        let decimal_json = decode_contract_state_scalar_json(&decimal_record, &decimal_ty)
+            .expect("decode decimal");
+        let quantity_json = decode_contract_state_scalar_json(&quantity_record, &quantity_ty)
+            .expect("decode quantity");
+
+        assert_eq!(decimal_json, Value::from(decimal.to_string()));
+        assert_eq!(quantity_json, Value::from(quantity.to_string()));
     }
 
     #[test]
@@ -15977,16 +16291,21 @@ pub fn handle_post_contract_call_simulate(
     Ok(body)
 }
 
-/// POST /v1/bridge/proofs/submit — submit a bridge proof derived from a live SCCP bundle.
-#[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_bridge_proof_submit(
+enum PreparedBridgeProofSubmit {
+    Direct {
+        transaction: SignedTransaction,
+        response: BridgeSubmitResponseDto,
+    },
+    Prepare(BridgeSubmitResponseDto),
+}
+
+#[cfg(feature = "app_api")]
+fn prepare_bridge_proof_submit(
     chain_id: Arc<ChainId>,
-    queue: Arc<Queue>,
     state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    JsonOnly(req): JsonOnly<BridgeProofSubmitDto>,
-) -> Result<impl IntoResponse> {
+    req: BridgeProofSubmitDto,
+) -> Result<PreparedBridgeProofSubmit> {
     use base64::Engine as _;
     use iroha_data_model::prelude as dm;
     use iroha_primitives::const_vec::ConstVec;
@@ -16025,7 +16344,7 @@ pub async fn handle_post_bridge_proof_submit(
             )
         })?;
     if destination_proof.route_configuration_hash
-        != material.indexed.record.route_configuration_hash
+        != material.indexed.descriptor.route_configuration_hash
     {
         return Err(conversion_error(
             "destination proof route configuration differs from the finalized outbound record"
@@ -16048,10 +16367,10 @@ pub async fn handle_post_bridge_proof_submit(
     let range_start_height = bridge_proof.range.start_height;
     let range_end_height = bridge_proof.range.end_height;
     let route_configuration_hash_hex =
-        hex::encode(material.indexed.record.route_configuration_hash);
+        hex::encode(material.indexed.descriptor.route_configuration_hash);
     let backend = bridge_proof.backend_label();
 
-    let response = if direct_submit {
+    let prepared = if direct_submit {
         let creation_time_ms = creation_time_ms.expect("validated direct SCCP creation time");
         let tx = build_exact_sccp_signed_transaction(
             state.as_ref(),
@@ -16068,29 +16387,23 @@ pub async fn handle_post_bridge_proof_submit(
             "bridge proof",
         )?;
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
-        handle_transaction_with_metrics(
-            chain_id,
-            queue,
-            state,
-            tx,
-            telemetry,
-            "/v1/bridge/proofs/submit",
-        )
-        .await?;
-        BridgeSubmitResponseDto {
-            submitted: true,
-            payload_kind,
-            message_id_hex,
-            backend,
-            counterparty_domain,
-            counterparty_chain: counterparty_chain.clone(),
-            route_configuration_hash_hex,
-            range_start_height,
-            range_end_height,
-            creation_time_ms,
-            tx_hash_hex: Some(tx_hash_hex),
-            transaction_payload_b64: None,
-            signing_message_b64: None,
+        PreparedBridgeProofSubmit::Direct {
+            transaction: tx,
+            response: BridgeSubmitResponseDto {
+                submitted: true,
+                payload_kind,
+                message_id_hex,
+                backend,
+                counterparty_domain,
+                counterparty_chain: counterparty_chain.clone(),
+                route_configuration_hash_hex,
+                range_start_height,
+                range_end_height,
+                creation_time_ms,
+                tx_hash_hex: Some(tx_hash_hex),
+                transaction_payload_b64: None,
+                signing_message_b64: None,
+            },
         }
     } else {
         let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
@@ -16108,7 +16421,7 @@ pub async fn handle_post_bridge_proof_submit(
             base64::engine::general_purpose::STANDARD.encode(builder.encode_payload());
         let signing_message_b64 =
             base64::engine::general_purpose::STANDARD.encode(builder.payload_hash_bytes());
-        BridgeSubmitResponseDto {
+        PreparedBridgeProofSubmit::Prepare(BridgeSubmitResponseDto {
             submitted: false,
             payload_kind,
             message_id_hex,
@@ -16122,32 +16435,95 @@ pub async fn handle_post_bridge_proof_submit(
             tx_hash_hex: None,
             transaction_payload_b64: Some(transaction_payload_b64),
             signing_message_b64: Some(signing_message_b64),
-        }
+        })
     };
 
-    let body = norito::json::to_json_pretty(&response).map_err(|error| {
-        sccp_internal_error(format!(
-            "failed to encode exact SCCP bridge-proof response: {error}"
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(prepared)
 }
 
-/// POST /v1/bridge/messages — prepare or submit one native SCCP proof-admission transaction.
-#[cfg(feature = "app_api")]
+/// POST /v1/bridge/proofs/submit — submit a bridge proof derived from a live SCCP bundle.
 #[iroha_futures::telemetry_future]
-pub async fn handle_post_bridge_message_submit(
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_bridge_proof_submit(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
-    JsonOnly(req): JsonOnly<BridgeMessageSubmitDto>,
-) -> Result<impl IntoResponse> {
+    request_body: axum::body::Bytes,
+    admission: crate::QueryAdmissionPermit,
+) -> Result<(axum::response::Response, bool)> {
+    run_sccp_submit_blocking("SCCP bridge-proof admission worker failed", move || {
+        // The sole ingress permit, including the bounded-body slot, remains in
+        // this physical worker even if the awaiting HTTP request is cancelled.
+        let _admission = admission;
+        let request: BridgeProofSubmitDto =
+            norito::json::from_slice(&request_body).map_err(|error| {
+                conversion_error(format!(
+                    "invalid closed SCCP bridge-proof submission JSON: {error}"
+                ))
+            })?;
+        let prepared =
+            prepare_bridge_proof_submit(Arc::clone(&chain_id), Arc::clone(&state), request)?;
+        let (body, charge_prepare_egress) = match prepared {
+            PreparedBridgeProofSubmit::Direct {
+                transaction,
+                response,
+            } => {
+                // Complete every fallible response transformation before the
+                // queue mutation so a successful submission cannot become an
+                // ambiguous serialization failure.
+                let body = norito::json::to_vec_pretty(&response).map_err(|error| {
+                    sccp_internal_error(format!(
+                        "failed to encode exact SCCP bridge-proof response: {error}"
+                    ))
+                })?;
+                handle_transaction_with_metrics_and_routing_plan_sync(
+                    chain_id,
+                    queue,
+                    state,
+                    transaction,
+                    telemetry,
+                    None,
+                    "/v1/bridge/proofs/submit",
+                )?;
+                (body, false)
+            }
+            PreparedBridgeProofSubmit::Prepare(response) => (
+                norito::json::to_vec_pretty(&response).map_err(|error| {
+                    sccp_internal_error(format!(
+                        "failed to encode exact SCCP bridge-proof response: {error}"
+                    ))
+                })?,
+                true,
+            ),
+        };
+        let mut response = axum::response::Response::new(axum::body::Body::from(body));
+        response.headers_mut().insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+        Ok((response, charge_prepare_egress))
+    })
+    .await
+}
+
+#[cfg(feature = "app_api")]
+enum PreparedBridgeMessageSubmit {
+    Direct {
+        transaction: SignedTransaction,
+        routing_plan: RoutingPlan,
+        response: BridgeSubmitResponseDto,
+    },
+    Prepare(BridgeSubmitResponseDto),
+}
+
+#[cfg(feature = "app_api")]
+fn prepare_bridge_message_submit(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    req: BridgeMessageSubmitDto,
+) -> Result<PreparedBridgeMessageSubmit> {
     use base64::Engine as _;
     use iroha_data_model::prelude as dm;
     use iroha_primitives::const_vec::ConstVec;
@@ -16229,7 +16605,7 @@ pub async fn handle_post_bridge_message_submit(
     let route_configuration_hash_hex = hex::encode(route_configuration_hash);
     let backend = bridge_proof.backend_label();
 
-    let response = if direct_submit {
+    let prepared = if direct_submit {
         let creation_time_ms = creation_time_ms.expect("validated direct SCCP creation time");
         let tx = build_exact_sccp_signed_transaction(
             state.as_ref(),
@@ -16256,30 +16632,24 @@ pub async fn handle_post_bridge_message_submit(
             "/v1/bridge/messages",
         )?;
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
-        handle_transaction_with_metrics_and_routing_plan(
-            chain_id.clone(),
-            queue.clone(),
-            state.clone(),
-            tx,
-            telemetry.clone(),
-            Some(routing_plan.clone()),
-            "/v1/bridge/messages",
-        )
-        .await?;
-        BridgeSubmitResponseDto {
-            submitted: true,
-            payload_kind,
-            message_id_hex,
-            backend,
-            counterparty_domain,
-            counterparty_chain: counterparty_chain.to_owned(),
-            route_configuration_hash_hex,
-            range_start_height,
-            range_end_height,
-            creation_time_ms,
-            tx_hash_hex: Some(tx_hash_hex),
-            transaction_payload_b64: None,
-            signing_message_b64: None,
+        PreparedBridgeMessageSubmit::Direct {
+            transaction: tx,
+            routing_plan,
+            response: BridgeSubmitResponseDto {
+                submitted: true,
+                payload_kind,
+                message_id_hex,
+                backend,
+                counterparty_domain,
+                counterparty_chain: counterparty_chain.to_owned(),
+                route_configuration_hash_hex,
+                range_start_height,
+                range_end_height,
+                creation_time_ms,
+                tx_hash_hex: Some(tx_hash_hex),
+                transaction_payload_b64: None,
+                signing_message_b64: None,
+            },
         }
     } else {
         let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
@@ -16297,7 +16667,7 @@ pub async fn handle_post_bridge_message_submit(
             base64::engine::general_purpose::STANDARD.encode(builder.encode_payload());
         let signing_message_b64 =
             base64::engine::general_purpose::STANDARD.encode(builder.payload_hash_bytes());
-        BridgeSubmitResponseDto {
+        PreparedBridgeMessageSubmit::Prepare(BridgeSubmitResponseDto {
             submitted: false,
             payload_kind,
             message_id_hex,
@@ -16311,20 +16681,77 @@ pub async fn handle_post_bridge_message_submit(
             tx_hash_hex: None,
             transaction_payload_b64: Some(transaction_payload_b64),
             signing_message_b64: Some(signing_message_b64),
-        }
+        })
     };
 
-    let body = norito::json::to_json_pretty(&response).map_err(|error| {
-        sccp_internal_error(format!(
-            "failed to encode exact SCCP bridge-message response: {error}"
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(prepared)
+}
+
+/// POST /v1/bridge/messages — prepare or submit one native SCCP proof-admission transaction.
+#[cfg(feature = "app_api")]
+#[iroha_futures::telemetry_future]
+pub(crate) async fn handle_post_bridge_message_submit(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    request_body: axum::body::Bytes,
+    admission: crate::QueryAdmissionPermit,
+) -> Result<(axum::response::Response, bool)> {
+    run_sccp_submit_blocking("SCCP bridge-message admission worker failed", move || {
+        // Keep all admission capacity with the physical verifier/serializer.
+        let _admission = admission;
+        let request: BridgeMessageSubmitDto =
+            norito::json::from_slice(&request_body).map_err(|error| {
+                conversion_error(format!(
+                    "invalid closed SCCP bridge-message submission JSON: {error}"
+                ))
+            })?;
+        let prepared = prepare_bridge_message_submit(
+            Arc::clone(&chain_id),
+            Arc::clone(&queue),
+            Arc::clone(&state),
+            request,
+        )?;
+        let (body, charge_prepare_egress) = match prepared {
+            PreparedBridgeMessageSubmit::Direct {
+                transaction,
+                routing_plan,
+                response,
+            } => {
+                let body = norito::json::to_vec_pretty(&response).map_err(|error| {
+                    sccp_internal_error(format!(
+                        "failed to encode exact SCCP bridge-message response: {error}"
+                    ))
+                })?;
+                handle_transaction_with_metrics_and_routing_plan_sync(
+                    chain_id,
+                    queue,
+                    state,
+                    transaction,
+                    telemetry,
+                    Some(routing_plan),
+                    "/v1/bridge/messages",
+                )?;
+                (body, false)
+            }
+            PreparedBridgeMessageSubmit::Prepare(response) => (
+                norito::json::to_vec_pretty(&response).map_err(|error| {
+                    sccp_internal_error(format!(
+                        "failed to encode exact SCCP bridge-message response: {error}"
+                    ))
+                })?,
+                true,
+            ),
+        };
+        let mut response = axum::response::Response::new(axum::body::Body::from(body));
+        response.headers_mut().insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+        Ok((response, charge_prepare_egress))
+    })
+    .await
 }
 
 /// POST /v1/contracts/view — execute a read-only contract view entrypoint locally.
@@ -16493,29 +16920,6 @@ pub(crate) fn asset_alias_observation_time_ms(state: &CoreState) -> u64 {
 }
 
 #[cfg(feature = "app_api")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ContractSchemaType {
-    Unit,
-    Int,
-    Numeric,
-    Bool,
-    String,
-    Json,
-    Name,
-    AccountId,
-    AssetDefinitionId,
-    AssetId,
-    DomainId,
-    NftId,
-    Bytes,
-    DataSpaceId,
-    AxtDescriptor,
-    AssetHandle,
-    ProofBlob,
-    Tuple(Vec<ContractSchemaType>),
-}
-
-#[cfg(feature = "app_api")]
 fn advertised_contract_entrypoint<'a>(
     manifest: &'a manifest::ContractManifest,
     selector: &str,
@@ -16592,274 +16996,6 @@ fn ensure_view_contract_entrypoint<'a>(
     selector: &str,
 ) -> Result<&'a manifest::EntrypointDescriptor> {
     ensure_contract_entrypoint_kind(manifest, selector, manifest::EntryPointKind::View)
-}
-
-#[cfg(feature = "app_api")]
-fn split_schema_list(input: &str) -> Result<Vec<String>> {
-    let mut items = Vec::new();
-    let mut current = String::new();
-    let mut depth = 0_i32;
-    for ch in input.chars() {
-        match ch {
-            '(' => {
-                depth += 1;
-                current.push(ch);
-            }
-            ')' => {
-                depth -= 1;
-                if depth < 0 {
-                    return Err(conversion_error(format!(
-                        "invalid contract schema type `{input}`"
-                    )));
-                }
-                current.push(ch);
-            }
-            ',' if depth == 0 => {
-                items.push(current.trim().to_owned());
-                current.clear();
-            }
-            _ => current.push(ch),
-        }
-    }
-    if depth != 0 {
-        return Err(conversion_error(format!(
-            "invalid contract schema type `{input}`"
-        )));
-    }
-    if !current.trim().is_empty() {
-        items.push(current.trim().to_owned());
-    }
-    Ok(items)
-}
-
-#[cfg(feature = "app_api")]
-fn parse_contract_schema_type(raw: &str) -> Result<ContractSchemaType> {
-    let trimmed = raw.trim();
-    if trimmed == "()" {
-        return Ok(ContractSchemaType::Unit);
-    }
-    if trimmed.starts_with('(') && trimmed.ends_with(')') {
-        let inner = &trimmed[1..trimmed.len() - 1];
-        if inner.trim().is_empty() {
-            return Ok(ContractSchemaType::Tuple(Vec::new()));
-        }
-        let items = split_schema_list(inner)?
-            .into_iter()
-            .map(|item| parse_contract_schema_type(&item))
-            .collect::<Result<Vec<_>>>()?;
-        return Ok(ContractSchemaType::Tuple(items));
-    }
-    match trimmed {
-        "i64" => Ok(ContractSchemaType::Int),
-        "u128" | "Amount" => Ok(ContractSchemaType::Numeric),
-        "bool" => Ok(ContractSchemaType::Bool),
-        "string" => Ok(ContractSchemaType::String),
-        "Json" => Ok(ContractSchemaType::Json),
-        "Name" => Ok(ContractSchemaType::Name),
-        "AccountId" => Ok(ContractSchemaType::AccountId),
-        "AssetDefinitionId" => Ok(ContractSchemaType::AssetDefinitionId),
-        "AssetId" => Ok(ContractSchemaType::AssetId),
-        "DomainId" => Ok(ContractSchemaType::DomainId),
-        "NftId" => Ok(ContractSchemaType::NftId),
-        "bytes" => Ok(ContractSchemaType::Bytes),
-        "DataSpaceId" => Ok(ContractSchemaType::DataSpaceId),
-        "AxtDescriptor" => Ok(ContractSchemaType::AxtDescriptor),
-        "AssetHandle" => Ok(ContractSchemaType::AssetHandle),
-        "ProofBlob" => Ok(ContractSchemaType::ProofBlob),
-        _ => Err(conversion_error(format!(
-            "unsupported contract schema type `{trimmed}`"
-        ))),
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn validate_numeric_json_value(value: &Value) -> bool {
-    match value {
-        Value::String(raw) => raw.parse::<iroha_primitives::numeric::Numeric>().is_ok(),
-        Value::Number(norito::json::native::Number::I64(_))
-        | Value::Number(norito::json::native::Number::U64(_)) => true,
-        _ => false,
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn parse_contract_i64_literal(raw: &str) -> Option<i64> {
-    if raw.is_empty() {
-        return None;
-    }
-    let bytes = raw.as_bytes();
-    let start = usize::from(bytes.first() == Some(&b'-'));
-    if start == bytes.len() || !bytes[start..].iter().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    raw.parse::<i64>().ok()
-}
-
-#[cfg(feature = "app_api")]
-fn normalize_contract_blob_literal(raw: &str) -> Value {
-    let trimmed = raw.strip_prefix("0x").unwrap_or(raw);
-    if trimmed.len() % 2 == 0 && hex::decode(trimmed).is_ok() {
-        Value::from(trimmed.to_ascii_lowercase())
-    } else {
-        Value::from(hex::encode(raw.as_bytes()))
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn normalize_contract_value(
-    schema: &ContractSchemaType,
-    value: &Value,
-    field_name: &str,
-) -> Result<Value> {
-    match schema {
-        ContractSchemaType::Unit if matches!(value, Value::Null) => Ok(Value::Null),
-        ContractSchemaType::Unit => Err(conversion_error(format!(
-            "contract payload field `{field_name}` does not match the declared schema"
-        ))),
-        ContractSchemaType::Int => match value {
-            Value::Number(norito::json::native::Number::I64(v)) => Ok(Value::from(*v)),
-            Value::Number(norito::json::native::Number::U64(v)) => {
-                let parsed = i64::try_from(*v).map_err(|_| {
-                    conversion_error(format!(
-                        "contract payload field `{field_name}` must fit within signed 64-bit integer range"
-                    ))
-                })?;
-                Ok(Value::from(parsed))
-            }
-            Value::String(raw) => parse_contract_i64_literal(raw)
-                .map(Value::from)
-                .ok_or_else(|| {
-                    conversion_error(format!(
-                        "contract payload field `{field_name}` must be a base-10 signed 64-bit integer"
-                    ))
-                }),
-            _ => Err(conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))),
-        },
-        ContractSchemaType::Numeric if validate_numeric_json_value(value) => Ok(value.clone()),
-        ContractSchemaType::Numeric => Err(conversion_error(format!(
-            "contract payload field `{field_name}` does not match the declared schema"
-        ))),
-        ContractSchemaType::Bool if matches!(value, Value::Bool(_)) => Ok(value.clone()),
-        ContractSchemaType::Bool => Err(conversion_error(format!(
-            "contract payload field `{field_name}` does not match the declared schema"
-        ))),
-        ContractSchemaType::String if matches!(value, Value::String(_)) => Ok(value.clone()),
-        ContractSchemaType::String => Err(conversion_error(format!(
-            "contract payload field `{field_name}` does not match the declared schema"
-        ))),
-        ContractSchemaType::Json => Ok(value.clone()),
-        ContractSchemaType::Name => match value {
-            Value::String(raw) => Name::from_str(raw).is_ok(),
-            _ => false,
-        }
-        .then(|| value.clone())
-        .ok_or_else(|| {
-            conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))
-        }),
-        ContractSchemaType::AccountId => match value {
-            Value::String(raw) => iroha_data_model::account::AccountId::parse_encoded(raw)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .or_else(|_| {
-                    raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
-                        .map(|address| address.subject_id())
-                })
-                .is_ok(),
-            _ => false,
-        }
-        .then(|| value.clone())
-        .ok_or_else(|| {
-            conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))
-        }),
-        ContractSchemaType::AssetDefinitionId => match value {
-            Value::String(raw) => raw
-                .parse::<iroha_data_model::asset::AssetDefinitionId>()
-                .is_ok(),
-            _ => false,
-        }
-        .then(|| value.clone())
-        .ok_or_else(|| {
-            conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))
-        }),
-        ContractSchemaType::AssetId => match value {
-            Value::String(raw) => raw.parse::<iroha_data_model::asset::AssetId>().is_ok(),
-            _ => false,
-        }
-        .then(|| value.clone())
-        .ok_or_else(|| {
-            conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))
-        }),
-        ContractSchemaType::DomainId => match value {
-            Value::String(raw) => {
-                iroha_data_model::domain::DomainId::parse_fully_qualified(raw).is_ok()
-            }
-            _ => false,
-        }
-        .then(|| value.clone())
-        .ok_or_else(|| {
-            conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))
-        }),
-        ContractSchemaType::NftId => match value {
-            Value::String(raw) => raw.parse::<iroha_data_model::nft::NftId>().is_ok(),
-            _ => false,
-        }
-        .then(|| value.clone())
-        .ok_or_else(|| {
-            conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))
-        }),
-        ContractSchemaType::Bytes => match value {
-            Value::String(raw) => Ok(normalize_contract_blob_literal(raw)),
-            _ => Err(conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))),
-        },
-        ContractSchemaType::DataSpaceId => match value {
-            Value::String(raw) => raw.parse::<u64>().is_ok(),
-            Value::Number(norito::json::native::Number::I64(v)) => *v >= 0,
-            Value::Number(norito::json::native::Number::U64(_)) => true,
-            _ => false,
-        }
-        .then(|| value.clone())
-        .ok_or_else(|| {
-            conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))
-        }),
-        ContractSchemaType::AxtDescriptor
-        | ContractSchemaType::AssetHandle
-        | ContractSchemaType::ProofBlob if matches!(value, Value::String(_)) => Ok(value.clone()),
-        ContractSchemaType::AxtDescriptor
-        | ContractSchemaType::AssetHandle
-        | ContractSchemaType::ProofBlob => Err(conversion_error(format!(
-            "contract payload field `{field_name}` does not match the declared schema"
-        ))),
-        ContractSchemaType::Tuple(items) => match value {
-            Value::Array(values) if values.len() == items.len() => {
-                let normalized = items
-                    .iter()
-                    .zip(values.iter())
-                    .map(|(schema, item)| normalize_contract_value(schema, item, field_name))
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(Value::Array(normalized))
-            }
-            _ => Err(conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))),
-        },
-    }
 }
 
 #[cfg(feature = "app_api")]
@@ -17401,20 +17537,40 @@ fn map_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> ContractViewVmDiagnos
 }
 
 #[cfg(feature = "app_api")]
-fn authority_has_named_contract_permission(
+fn exact_contract_permission_target(
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    entrypoint: &str,
+    required: &str,
+) -> iroha_data_model::permission::Permission {
+    if required == "CanInvokeContractEntrypoint" {
+        iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+            contract: contract_address.clone(),
+            entrypoint: entrypoint.to_owned(),
+        }
+        .into()
+    } else {
+        iroha_data_model::permission::Permission::new(required.to_owned(), IrohaJson::new(()))
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn authority_has_exact_contract_permission(
     world: &impl WorldReadOnly,
     authority: &iroha_data_model::account::AccountId,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    entrypoint: &str,
     required: &str,
 ) -> std::result::Result<bool, String> {
+    let target = exact_contract_permission_target(contract_address, entrypoint, required);
     let direct = world
         .account_permissions_iter(authority)
         .map_err(|err| format!("failed to resolve contract authority: {err}"))?
-        .any(|permission| permission.name() == required);
+        .any(|permission| permission == &target);
     let through_role = world.account_roles_iter(authority).any(|role_id| {
-        world.roles().get(role_id).is_some_and(|role| {
-            role.permissions()
-                .any(|permission| permission.name() == required)
-        })
+        world
+            .roles()
+            .get(role_id)
+            .is_some_and(|role| role.permissions().any(|permission| permission == &target))
     });
     Ok(direct || through_role)
 }
@@ -17486,6 +17642,7 @@ fn exact_prepared_entrypoint<'a>(
 fn ensure_contract_view_authorized(
     world: &impl WorldReadOnly,
     authority: &iroha_data_model::account::AccountId,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
     required: Option<&str>,
 ) -> std::result::Result<(), ContractViewExecutionError> {
@@ -17498,12 +17655,17 @@ fn ensure_contract_view_authorized(
             message: "contract view authorization must not be empty".to_owned(),
             vm_diagnostic: None,
         })
-    } else if authority_has_named_contract_permission(world, authority, required).map_err(
-        |message| ContractViewExecutionError {
-            message,
-            vm_diagnostic: None,
-        },
-    )? {
+    } else if authority_has_exact_contract_permission(
+        world,
+        authority,
+        contract_address,
+        entrypoint,
+        required,
+    )
+    .map_err(|message| ContractViewExecutionError {
+        message,
+        vm_diagnostic: None,
+    })? {
         Ok(())
     } else {
         Err(ContractViewExecutionError {
@@ -17536,6 +17698,7 @@ fn contract_call_runtime_permission(
 fn ensure_contract_call_authorized(
     world: &impl WorldReadOnly,
     authority: &iroha_data_model::account::AccountId,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
     required: Option<&str>,
 ) -> std::result::Result<(), ContractCallSimulationError> {
@@ -17552,14 +17715,19 @@ fn ensure_contract_call_authorized(
             queued_instructions: Vec::new(),
         });
     }
-    if authority_has_named_contract_permission(world, authority, required).map_err(|message| {
-        ContractCallSimulationError {
-            message,
-            vm_diagnostic: None,
-            normalized_payload: None,
-            gas_used: 0,
-            queued_instructions: Vec::new(),
-        }
+    if authority_has_exact_contract_permission(
+        world,
+        authority,
+        contract_address,
+        entrypoint,
+        required,
+    )
+    .map_err(|message| ContractCallSimulationError {
+        message,
+        vm_diagnostic: None,
+        normalized_payload: None,
+        gas_used: 0,
+        queued_instructions: Vec::new(),
     })? {
         Ok(())
     } else {
@@ -17627,6 +17795,7 @@ fn execute_contract_view(
             ensure_contract_view_authorized(
                 &query_view.world,
                 authority,
+                contract_address,
                 selector,
                 runtime_permission.as_deref(),
             )
@@ -17808,6 +17977,7 @@ fn execute_contract_call_simulation(
             ensure_contract_call_authorized(
                 &query_view.world,
                 authority,
+                contract_address,
                 selector,
                 runtime_permission.as_deref(),
             )
@@ -17988,6 +18158,11 @@ fn build_contract_call_metadata(
         let entrypoint_key = Name::from_str("contract_entrypoint")
             .expect("static metadata key `contract_entrypoint`");
         metadata.insert(entrypoint_key, IrohaJson::new(entrypoint.to_owned()));
+    }
+    if let Some(payload) = payload {
+        let payload_key =
+            Name::from_str("contract_payload").expect("static metadata key `contract_payload`");
+        metadata.insert(payload_key, payload.clone());
     }
     if let Some(module) = canonical_contract_module(
         contract_alias.map(ToString::to_string).as_deref(),
@@ -18497,6 +18672,14 @@ fn multisig_selector_validation_error(message: impl Into<String>) -> Error {
 }
 
 #[cfg(feature = "app_api")]
+fn multisig_cursor_validation_error(message: impl Into<String>) -> Error {
+    Error::AppQueryValidation {
+        code: "multisig_cursor_invalid",
+        message: message.into(),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn multisig_selector_forbidden_error(code: &'static str, message: impl Into<String>) -> Error {
     Error::AppForbidden {
         code,
@@ -18525,8 +18708,7 @@ fn selected_multisig_alias_literal(selector: &MultisigAccountSelectorDto) -> Opt
     selector
         .multisig_account_alias
         .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.is_empty() && value.trim() == *value)
         .map(str::to_owned)
 }
 
@@ -18535,9 +18717,26 @@ fn parse_multisig_account_alias(
     alias_input: &str,
     catalog: &DataSpaceCatalog,
 ) -> Result<account::rekey::AccountAlias> {
-    account::rekey::AccountAlias::from_literal(alias_input, catalog).map_err(|err| {
-        multisig_selector_validation_error(format!("invalid multisig_account_alias: {err}"))
-    })
+    if alias_input.is_empty() || alias_input.trim() != alias_input {
+        return Err(multisig_selector_validation_error(
+            "multisig_account_alias must use an exact non-empty canonical literal".to_owned(),
+        ));
+    }
+    let alias =
+        account::rekey::AccountAlias::from_literal(alias_input, catalog).map_err(|err| {
+            multisig_selector_validation_error(format!("invalid multisig_account_alias: {err}"))
+        })?;
+    let canonical = alias.to_literal(catalog).map_err(|err| {
+        multisig_selector_validation_error(format!(
+            "failed to canonicalize multisig_account_alias: {err}"
+        ))
+    })?;
+    if canonical != alias_input {
+        return Err(multisig_selector_validation_error(format!(
+            "multisig_account_alias must use canonical literal `{canonical}`"
+        )));
+    }
+    Ok(alias)
 }
 
 #[cfg(feature = "app_api")]
@@ -18546,11 +18745,7 @@ fn resolve_multisig_account_selector(
     selector: &MultisigAccountSelectorDto,
     resolve_authority: Option<&iroha_data_model::account::AccountId>,
 ) -> Result<iroha_data_model::account::AccountId> {
-    let alias = selector
-        .multisig_account_alias
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
+    let alias = selector.multisig_account_alias.as_deref();
     match (&selector.multisig_account_id, alias) {
         (Some(_), Some(_)) => Err(multisig_selector_validation_error(
             "exactly one of multisig_account_id or multisig_account_alias must be set".to_owned(),
@@ -18560,6 +18755,12 @@ fn resolve_multisig_account_selector(
         )),
         (Some(account_id), None) => Ok(account_id.clone()),
         (None, Some(alias)) => {
+            if alias.is_empty() || alias.trim() != alias {
+                return Err(multisig_selector_validation_error(
+                    "multisig_account_alias must use an exact non-empty canonical literal"
+                        .to_owned(),
+                ));
+            }
             let nexus = state.nexus_snapshot();
             let label = parse_multisig_account_alias(alias, &nexus.dataspace_catalog)?;
             let world = state.world_view();
@@ -18598,12 +18799,6 @@ fn load_multisig_spec(
             format!("multisig account not found: {multisig_account_id}"),
         )
     })?;
-    let key =
-        Name::from_str(MULTISIG_SPEC_METADATA_KEY).expect("static multisig spec metadata key");
-    if let Some(value) = account.metadata().get(&key).cloned() {
-        return decode_multisig_spec_from_metadata(value);
-    }
-
     let storage = world.smart_contract_state();
     let contract_key = multisig_account_state_contract_key(multisig_account_id);
     let Some(bytes) = storage.get(contract_key.as_ref()) else {
@@ -18624,7 +18819,52 @@ fn load_multisig_spec(
             "invalid native multisig account state on account: {err}"
         ))
     })?;
+    if account_state.account_id != *multisig_account_id {
+        return Err(conversion_error(format!(
+            "native multisig account state is bound to {}, not {multisig_account_id}",
+            account_state.account_id
+        )));
+    }
+    validate_multisig_spec_account_binding(multisig_account_id, &account_state.spec)?;
+    let metadata_key =
+        Name::from_str(MULTISIG_SPEC_METADATA_KEY).expect("static multisig spec metadata key");
+    if let Some(value) = account.metadata().get(&metadata_key).cloned() {
+        let metadata_spec = decode_multisig_spec_from_metadata(value)?;
+        if metadata_spec != account_state.spec {
+            return Err(conversion_error(format!(
+                "multisig/spec metadata disagrees with canonical native account state for {multisig_account_id}"
+            )));
+        }
+    }
     Ok(account_state.spec)
+}
+
+#[cfg(feature = "app_api")]
+fn validate_multisig_spec_account_binding(
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
+) -> Result<()> {
+    let mut members = Vec::with_capacity(spec.signatories.len());
+    for (signatory, weight) in &spec.signatories {
+        let public_key = signatory.controller().single_signatory().ok_or_else(|| {
+            conversion_error(format!(
+                "native multisig spec signatory `{signatory}` is not a single-key account"
+            ))
+        })?;
+        members.push(
+            iroha_data_model::account::MultisigMember::new(public_key.clone(), u16::from(*weight))
+                .map_err(|error| conversion_error(error.to_string()))?,
+        );
+    }
+    let policy = iroha_data_model::account::MultisigPolicy::new(spec.quorum.get(), members)
+        .map_err(|error| conversion_error(error.to_string()))?;
+    let derived = iroha_data_model::account::AccountId::new_multisig(policy);
+    if derived != *multisig_account_id {
+        return Err(conversion_error(format!(
+            "native multisig spec derives `{derived}`, not `{multisig_account_id}`"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "app_api")]
@@ -18678,16 +18918,32 @@ fn resolve_multisig_proposal_hash(
     proposal_id: Option<String>,
     instructions_hash: Option<String>,
 ) -> Result<(String, HashOf<Vec<iroha_data_model::isi::InstructionBox>>)> {
-    let proposal_id_literal = proposal_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned);
-    let instructions_hash_literal = instructions_hash
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned);
+    let parse_literal = |field: &'static str, value: Option<String>| -> Result<Option<String>> {
+        let Some(value) = value else {
+            return Ok(None);
+        };
+        if value.is_empty() || value.trim() != value {
+            return Err(multisig_selector_validation_error(format!(
+                "{field} must be a non-empty canonical instruction hash"
+            )));
+        }
+        let parsed = value
+            .parse::<HashOf<Vec<iroha_data_model::isi::InstructionBox>>>()
+            .map_err(|err| multisig_selector_validation_error(format!("invalid {field}: {err}")))?;
+        if parsed.to_string() != value {
+            return Err(multisig_selector_validation_error(format!(
+                "{field} must use the canonical lowercase instruction-hash encoding"
+            )));
+        }
+        Ok(Some(value))
+    };
+    let proposal_id_literal = parse_literal("proposal_id", proposal_id)?;
+    let instructions_hash_literal = parse_literal("instructions_hash", instructions_hash)?;
+    if proposal_id_literal.is_some() && instructions_hash_literal.is_some() {
+        return Err(multisig_selector_validation_error(
+            "exactly one of proposal_id or instructions_hash must be set".to_owned(),
+        ));
+    }
     let hash_literal = instructions_hash_literal
         .clone()
         .or_else(|| proposal_id_literal.clone())
@@ -18715,8 +18971,25 @@ fn approvals_reach_quorum(
         .filter_map(|(account_id, weight)| {
             approvals.contains(account_id).then_some(u16::from(*weight))
         })
-        .sum();
+        .fold(0_u16, u16::saturating_add);
     approved_weight >= u16::from(spec.quorum)
+}
+
+#[cfg(feature = "app_api")]
+fn validate_multisig_proposal_approvals(
+    spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
+    proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+) -> Result<()> {
+    if proposal
+        .approvals
+        .iter()
+        .any(|account_id| !spec.signatories.contains_key(account_id))
+    {
+        return Err(conversion_error(
+            "multisig proposal contains an approval outside the active specification".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "app_api")]
@@ -18762,17 +19035,64 @@ fn proposal_value_from_state(
 }
 
 #[cfg(feature = "app_api")]
+fn validate_multisig_active_proposal_binding(
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    instructions_hash: &HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
+    proposal_state: &iroha_executor_data_model::isi::multisig::MultisigProposalState,
+) -> Result<()> {
+    if proposal_state.multisig_account_id != *multisig_account_id
+        || proposal_state.instructions_hash != *instructions_hash
+        || HashOf::new(&proposal_state.instructions) != *instructions_hash
+        || proposal_state.expires_at_ms <= proposal_state.proposed_at_ms
+    {
+        return Err(conversion_error(format!(
+            "multisig proposal state does not match account/hash/timestamp invariants for {multisig_account_id}/{instructions_hash}"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn validate_multisig_terminal_proposal_binding(
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    instructions_hash: &HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
+    terminal_state: &iroha_executor_data_model::isi::multisig::MultisigProposalTerminalState,
+) -> Result<()> {
+    let valid_terminal_time = match terminal_state.status {
+        iroha_executor_data_model::isi::multisig::MultisigProposalTerminalStatus::Finalized
+        | iroha_executor_data_model::isi::multisig::MultisigProposalTerminalStatus::Canceled => {
+            terminal_state.terminal_at_ms < terminal_state.proposal.expires_at_ms
+        }
+        iroha_executor_data_model::isi::multisig::MultisigProposalTerminalStatus::Expired => {
+            terminal_state.terminal_at_ms >= terminal_state.proposal.expires_at_ms
+        }
+    };
+    if terminal_state.multisig_account_id != *multisig_account_id
+        || terminal_state.instructions_hash != *instructions_hash
+        || HashOf::new(&terminal_state.proposal.instructions) != *instructions_hash
+        || terminal_state.proposal.expires_at_ms <= terminal_state.proposal.proposed_at_ms
+        || terminal_state.terminal_at_ms < terminal_state.proposal.proposed_at_ms
+        || !valid_terminal_time
+    {
+        return Err(conversion_error(format!(
+            "terminal multisig proposal state does not match account/hash/timestamp invariants for {multisig_account_id}/{instructions_hash}"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
 fn classify_active_multisig_proposal_status(
-    spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
+    _spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
     proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
     now_ms: u64,
 ) -> MultisigProposalStatus {
     if proposal.expires_at_ms <= now_ms {
         MultisigProposalStatus::Expired
-    } else if approvals_reach_quorum(spec, &proposal.approvals) || proposal.is_relayed == Some(true)
-    {
-        MultisigProposalStatus::Finalized
     } else {
+        // Only the native terminal record proves final execution. An active record with quorum
+        // may represent a failed or not-yet-applied execution and must never be projected as
+        // final success merely from its approval count.
         MultisigProposalStatus::CollectingSignatures
     }
 }
@@ -18796,6 +19116,11 @@ fn load_multisig_active_proposal_state_optional(
         iroha_executor_data_model::isi::multisig::MultisigProposalState,
     >(bytes)
     .map_err(|err| conversion_error(format!("invalid multisig proposal state: {err}")))?;
+    validate_multisig_active_proposal_binding(
+        multisig_account_id,
+        instructions_hash,
+        &proposal_state,
+    )?;
     Ok(Some(proposal_state))
 }
 
@@ -18812,11 +19137,29 @@ fn load_multisig_proposal_record(
     })?;
     let storage = world.smart_contract_state();
     let now_ms = current_time_millis();
+    let active_key = multisig_proposal_state_contract_key(multisig_account_id, instructions_hash);
+    let terminal_key =
+        multisig_proposal_terminal_state_contract_key(multisig_account_id, instructions_hash);
+    let active_bytes = storage.get(active_key.as_ref());
+    let terminal_bytes = storage.get(terminal_key.as_ref());
+    if active_bytes.is_some() && terminal_bytes.is_some() {
+        return Err(conversion_error(format!(
+            "multisig proposal has conflicting active and terminal state for {multisig_account_id}/{instructions_hash}"
+        )));
+    }
 
-    if let Some(proposal_state) =
-        load_multisig_active_proposal_state_optional(state, multisig_account_id, instructions_hash)?
-    {
+    if let Some(bytes) = active_bytes {
+        let proposal_state = norito::decode_from_bytes::<
+            iroha_executor_data_model::isi::multisig::MultisigProposalState,
+        >(bytes)
+        .map_err(|err| conversion_error(format!("invalid multisig proposal state: {err}")))?;
+        validate_multisig_active_proposal_binding(
+            multisig_account_id,
+            instructions_hash,
+            &proposal_state,
+        )?;
         let proposal = proposal_value_from_state(proposal_state);
+        validate_multisig_proposal_approvals(spec, &proposal)?;
         let status = classify_active_multisig_proposal_status(spec, &proposal, now_ms);
         return Ok(Some(MultisigProposalRecord {
             proposal,
@@ -18825,14 +19168,19 @@ fn load_multisig_proposal_record(
         }));
     }
 
-    let key = multisig_proposal_terminal_state_contract_key(multisig_account_id, instructions_hash);
-    let Some(bytes) = storage.get(key.as_ref()) else {
+    let Some(bytes) = terminal_bytes else {
         return Ok(None);
     };
     let terminal_state = norito::decode_from_bytes::<
         iroha_executor_data_model::isi::multisig::MultisigProposalTerminalState,
     >(bytes)
     .map_err(|err| conversion_error(format!("invalid multisig proposal terminal state: {err}")))?;
+    validate_multisig_terminal_proposal_binding(
+        multisig_account_id,
+        instructions_hash,
+        &terminal_state,
+    )?;
+    validate_multisig_proposal_approvals(spec, &terminal_state.proposal)?;
     let status = match terminal_state.status {
         iroha_executor_data_model::isi::multisig::MultisigProposalTerminalStatus::Finalized => {
             MultisigProposalStatus::Finalized
@@ -18908,123 +19256,584 @@ fn multisig_proposal_is_user_visible(
 }
 
 #[cfg(feature = "app_api")]
-fn requested_multisig_statuses(statuses: &[String]) -> BTreeSet<String> {
-    statuses
-        .iter()
-        .map(|status| status.trim().to_uppercase())
-        .filter(|status| !status.is_empty())
-        .collect()
-}
-
-#[cfg(feature = "app_api")]
-fn requested_multisig_operation_types(operation_types: &[String]) -> BTreeSet<String> {
-    operation_types
-        .iter()
-        .map(|operation_type| operation_type.trim().to_uppercase())
-        .filter(|operation_type| !operation_type.is_empty())
-        .collect()
-}
-
-#[cfg(feature = "app_api")]
-fn multisig_json_scalar_literal(value: Option<&norito::json::Value>) -> Option<String> {
-    let value = value?;
-    match value {
-        norito::json::Value::String(value) => {
-            let trimmed = value.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_owned())
+fn requested_multisig_statuses(statuses: &[String]) -> Result<BTreeSet<String>> {
+    const STATUS_COUNT: usize = 4;
+    if statuses.len() > STATUS_COUNT {
+        return Err(Error::AppQueryValidation {
+            code: "multisig_status_invalid",
+            message: format!("status must contain at most {STATUS_COUNT} entries"),
+        });
+    }
+    let mut normalized = BTreeSet::new();
+    for (index, status) in statuses.iter().enumerate() {
+        let status = status.as_str();
+        if !matches!(
+            status,
+            "COLLECTING_SIGNATURES" | "FINALIZED" | "CANCELED" | "EXPIRED"
+        ) {
+            return Err(Error::AppQueryValidation {
+                code: "multisig_status_invalid",
+                message: format!(
+                    "status[{index}] must be one of COLLECTING_SIGNATURES, FINALIZED, CANCELED, or EXPIRED"
+                ),
+            });
         }
-        norito::json::Value::Number(number) => Some(match number {
-            norito::json::native::Number::I64(value) => value.to_string(),
-            norito::json::native::Number::U64(value) => value.to_string(),
-            norito::json::native::Number::F64(value) => {
-                if !value.is_finite() {
-                    return None;
-                }
-                value.to_string()
-            }
-        }),
-        norito::json::Value::Bool(value) => Some(value.to_string()),
-        _ => None,
+        if !normalized.insert(status.to_owned()) {
+            return Err(Error::AppQueryValidation {
+                code: "multisig_status_invalid",
+                message: format!("status[{index}] duplicates `{status}`"),
+            });
+        }
+    }
+    Ok(normalized)
+}
+
+#[cfg(feature = "app_api")]
+fn requested_multisig_operation_types(operation_types: &[String]) -> Result<BTreeSet<String>> {
+    const OPERATION_TYPE_COUNT: usize = 32;
+    const OPERATION_TYPE_MAX_BYTES: usize = 128;
+    if operation_types.len() > OPERATION_TYPE_COUNT {
+        return Err(Error::AppQueryValidation {
+            code: "multisig_operation_type_invalid",
+            message: format!("operation_type must contain at most {OPERATION_TYPE_COUNT} entries"),
+        });
+    }
+    let mut normalized = BTreeSet::new();
+    for (index, operation_type) in operation_types.iter().enumerate() {
+        let mut bytes = operation_type.bytes();
+        let has_canonical_prefix = bytes.next().is_some_and(|byte| byte.is_ascii_uppercase());
+        let has_canonical_suffix =
+            bytes.all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_');
+        if operation_type.len() > OPERATION_TYPE_MAX_BYTES
+            || !has_canonical_prefix
+            || !has_canonical_suffix
+        {
+            return Err(Error::AppQueryValidation {
+                code: "multisig_operation_type_invalid",
+                message: format!(
+                    "operation_type[{index}] must match [A-Z][A-Z0-9_]* and be no longer than {OPERATION_TYPE_MAX_BYTES} bytes"
+                ),
+            });
+        }
+        if !normalized.insert(operation_type.clone()) {
+            return Err(Error::AppQueryValidation {
+                code: "multisig_operation_type_invalid",
+                message: format!("operation_type[{index}] is duplicated"),
+            });
+        }
+    }
+    Ok(normalized)
+}
+
+#[cfg(feature = "app_api")]
+const MULTISIG_PROPOSALS_CURSOR_MAX_BYTES: usize = 512;
+
+/// Hard response-page bound for browser-facing multisig proposal reads.
+#[cfg(feature = "app_api")]
+pub(crate) const MULTISIG_PROPOSALS_MAX_PAGE_LIMIT: u64 = 100;
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MultisigProposalsCursor {
+    multisig_account_fingerprint: String,
+    proposed_at_ms: u64,
+    instructions_hash: String,
+    status_fingerprint: String,
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_account_fingerprint(
+    multisig_account_id: &iroha_data_model::account::AccountId,
+) -> String {
+    Hash::new(format!("iroha.torii.multisig.account.v1\0{}", multisig_account_id).as_bytes())
+        .to_string()
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_status_fingerprint(statuses: &BTreeSet<String>) -> String {
+    let statuses = statuses.iter().cloned().collect::<Vec<_>>().join("\0");
+    Hash::new(format!("iroha.torii.multisig.statuses.v1\0{statuses}").as_bytes()).to_string()
+}
+
+#[cfg(feature = "app_api")]
+fn encode_multisig_proposals_cursor(cursor: &MultisigProposalsCursor) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
+        "v1|{}|{}|{}|{}",
+        cursor.multisig_account_fingerprint,
+        cursor.proposed_at_ms,
+        cursor.instructions_hash,
+        cursor.status_fingerprint
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn decode_multisig_proposals_cursor(
+    raw: &str,
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    requested_statuses: &BTreeSet<String>,
+) -> Result<MultisigProposalsCursor> {
+    if raw.is_empty()
+        || raw.len() > MULTISIG_PROPOSALS_CURSOR_MAX_BYTES
+        || raw.trim() != raw
+        || !raw.is_ascii()
+    {
+        return Err(multisig_cursor_validation_error(
+            "cursor must be a non-empty canonical base64url value within the advertised bound",
+        ));
+    }
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(raw.as_bytes())
+        .map_err(|_| multisig_cursor_validation_error("cursor is not canonical base64url"))?;
+    let decoded = String::from_utf8(decoded)
+        .map_err(|_| multisig_cursor_validation_error("cursor payload is not UTF-8"))?;
+    let mut parts = decoded.split('|');
+    if parts.next() != Some("v1") {
+        return Err(multisig_cursor_validation_error(
+            "cursor version is not supported",
+        ));
+    }
+    let account_fingerprint = parts
+        .next()
+        .ok_or_else(|| multisig_cursor_validation_error("cursor payload is incomplete"))?;
+    let proposed_at_literal = parts
+        .next()
+        .ok_or_else(|| multisig_cursor_validation_error("cursor payload is incomplete"))?;
+    let instructions_hash_literal = parts
+        .next()
+        .ok_or_else(|| multisig_cursor_validation_error("cursor payload is incomplete"))?;
+    let status_fingerprint = parts
+        .next()
+        .ok_or_else(|| multisig_cursor_validation_error("cursor payload is incomplete"))?;
+    if parts.next().is_some() {
+        return Err(multisig_cursor_validation_error(
+            "cursor payload contains trailing fields",
+        ));
+    }
+
+    let parsed_account_fingerprint = Hash::from_str(account_fingerprint)
+        .map_err(|_| multisig_cursor_validation_error("cursor account fingerprint is invalid"))?;
+    if parsed_account_fingerprint.to_string() != account_fingerprint {
+        return Err(multisig_cursor_validation_error(
+            "cursor account fingerprint is not canonically encoded",
+        ));
+    }
+    let expected_account_fingerprint = multisig_account_fingerprint(multisig_account_id);
+    if account_fingerprint != expected_account_fingerprint {
+        return Err(multisig_cursor_validation_error(
+            "cursor does not belong to the resolved multisig account",
+        ));
+    }
+    let proposed_at_ms = proposed_at_literal.parse::<u64>().map_err(|_| {
+        multisig_cursor_validation_error("cursor proposed_at_ms is not a canonical u64")
+    })?;
+    if proposed_at_ms.to_string() != proposed_at_literal {
+        return Err(multisig_cursor_validation_error(
+            "cursor proposed_at_ms is not canonically encoded",
+        ));
+    }
+    let instructions_hash = instructions_hash_literal
+        .parse::<HashOf<Vec<iroha_data_model::isi::InstructionBox>>>()
+        .map_err(|_| multisig_cursor_validation_error("cursor instructions_hash is invalid"))?;
+    let canonical_instructions_hash = instructions_hash.to_string();
+    if canonical_instructions_hash != instructions_hash_literal {
+        return Err(multisig_cursor_validation_error(
+            "cursor instructions_hash is not canonically encoded",
+        ));
+    }
+    let expected_status_fingerprint = multisig_status_fingerprint(requested_statuses);
+    if status_fingerprint != expected_status_fingerprint {
+        return Err(multisig_cursor_validation_error(
+            "cursor does not belong to the requested status filter",
+        ));
+    }
+
+    let cursor = MultisigProposalsCursor {
+        multisig_account_fingerprint: expected_account_fingerprint,
+        proposed_at_ms,
+        instructions_hash: canonical_instructions_hash,
+        status_fingerprint: expected_status_fingerprint,
+    };
+    if encode_multisig_proposals_cursor(&cursor) != raw {
+        return Err(multisig_cursor_validation_error(
+            "cursor is not canonically encoded",
+        ));
+    }
+    Ok(cursor)
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_proposal_sort_order(
+    left_proposed_at_ms: u64,
+    left_instructions_hash: &str,
+    right_proposed_at_ms: u64,
+    right_instructions_hash: &str,
+) -> Ordering {
+    right_proposed_at_ms
+        .cmp(&left_proposed_at_ms)
+        .then_with(|| left_instructions_hash.cmp(right_instructions_hash))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_proposal_cursor_for(
+    entry: &MultisigProposalEntryDto,
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    requested_statuses: &BTreeSet<String>,
+) -> MultisigProposalsCursor {
+    MultisigProposalsCursor {
+        multisig_account_fingerprint: multisig_account_fingerprint(multisig_account_id),
+        proposed_at_ms: entry.proposal.proposed_at_ms,
+        instructions_hash: entry.instructions_hash.clone(),
+        status_fingerprint: multisig_status_fingerprint(requested_statuses),
     }
 }
 
 #[cfg(feature = "app_api")]
-fn multisig_execute_trigger_is_mint_request(
-    trigger_id: &str,
-    args: Option<&norito::json::Value>,
+fn multisig_proposal_is_after_cursor(
+    entry: &MultisigProposalEntryDto,
+    cursor: &MultisigProposalsCursor,
 ) -> bool {
-    let normalized_trigger_id = trigger_id.trim().to_ascii_lowercase();
-    if !matches!(
-        normalized_trigger_id.as_str(),
-        "staged_mint_request_hbl" | "staged_mint_request_ubl"
-    ) {
-        return false;
-    }
-    let Some(args) = args.and_then(norito::json::Value::as_object) else {
-        return false;
-    };
-    if let Some(action) = multisig_json_scalar_literal(args.get("action"))
-        && !action.eq_ignore_ascii_case("create")
-    {
-        return false;
-    }
-    [
-        "request_id",
-        "asset_id",
-        "to_account_id",
-        "fi_id",
-        "amount_i64",
-    ]
-    .into_iter()
-    .all(|key| multisig_json_scalar_literal(args.get(key)).is_some())
+    matches!(
+        multisig_proposal_sort_order(
+            entry.proposal.proposed_at_ms,
+            &entry.instructions_hash,
+            cursor.proposed_at_ms,
+            &cursor.instructions_hash,
+        ),
+        Ordering::Greater
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_proposal_matches_cursor(
+    entry: &MultisigProposalEntryDto,
+    cursor: &MultisigProposalsCursor,
+) -> bool {
+    entry.proposal.proposed_at_ms == cursor.proposed_at_ms
+        && entry.instructions_hash == cursor.instructions_hash
 }
 
 #[cfg(feature = "app_api")]
 fn multisig_metadata_string(metadata: &Metadata, key: &str) -> Option<String> {
     let name = Name::from_str(key).ok()?;
     let value = metadata.get(&name)?;
-    if let Ok(parsed) = value.try_into_any::<String>() {
-        let trimmed = parsed.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_owned());
-        }
-    }
-    value
-        .try_into_any_norito::<norito::json::Value>()
-        .ok()
-        .and_then(|parsed| multisig_json_scalar_literal(Some(&parsed)))
+    let parsed = value.try_into_any::<String>().ok()?;
+    (!parsed.is_empty() && parsed.trim() == parsed).then_some(parsed)
 }
 
 #[cfg(feature = "app_api")]
-const MULTISIG_PACS009_MARKER_PREFIX: &str = "PAYNET_PACS009_MINT_V1:";
-#[cfg(feature = "app_api")]
-const MULTISIG_PACS009_MINT_OPERATION_TYPE: &str = "ISO20022_PACS009_MINT";
+fn multisig_metadata_json(metadata: &Metadata, key: &str) -> Option<norito::json::Value> {
+    metadata
+        .get(&Name::from_str(key).ok()?)?
+        .try_into_any_norito::<norito::json::Value>()
+        .ok()
+}
 
 #[cfg(feature = "app_api")]
-fn multisig_contract_call_operation_type(
-    instruction: &iroha_data_model::isi::InstructionBox,
-) -> Option<&'static str> {
-    let register = instruction
+fn json_object_has_exact_keys(object: &Map, expected: &[&str]) -> bool {
+    object.len() == expected.len() && expected.iter().all(|key| object.contains_key(*key))
+}
+
+#[cfg(feature = "app_api")]
+fn required_nonempty_json_string(object: &Map, key: &str) -> Option<String> {
+    let literal = object.get(key)?.as_str()?;
+    (!literal.is_empty() && literal.trim() == literal).then(|| literal.to_owned())
+}
+
+#[cfg(feature = "app_api")]
+fn required_canonical_account_id_string(object: &Map, key: &str) -> Option<String> {
+    let literal = required_nonempty_json_string(object, key)?;
+    let account = iroha_data_model::account::AccountId::parse_encoded(&literal)
+        .ok()?
+        .into_account_id();
+    (account.to_string() == literal).then_some(literal)
+}
+
+#[cfg(feature = "app_api")]
+fn required_canonical_asset_definition_id_string(object: &Map, key: &str) -> Option<String> {
+    let literal = required_nonempty_json_string(object, key)?;
+    let asset = literal
+        .parse::<iroha_data_model::asset::AssetDefinitionId>()
+        .ok()?;
+    (asset.canonical_address() == literal).then_some(literal)
+}
+
+#[cfg(feature = "app_api")]
+fn required_canonical_name_string(object: &Map, key: &str) -> Option<String> {
+    let literal = required_nonempty_json_string(object, key)?;
+    let name = literal.parse::<Name>().ok()?;
+    (name.as_ref() == literal).then_some(literal)
+}
+
+#[cfg(feature = "app_api")]
+fn canonical_quantity_string(value: &Value, allow_zero: bool) -> Option<String> {
+    let literal = value.as_str()?;
+    if literal.is_empty() || literal.trim() != literal {
+        return None;
+    }
+    let quantity = literal.parse::<Numeric>().ok()?;
+    if quantity.mantissa().is_negative() || (!allow_zero && quantity.is_zero()) {
+        return None;
+    }
+    (quantity.to_string() == literal).then(|| literal.to_owned())
+}
+
+#[cfg(feature = "app_api")]
+struct StrictMultisigContractCallIntent {
+    operation_type: &'static str,
+    intent: IrohaJson,
+    contract_alias: iroha_data_model::smart_contract::ContractAlias,
+    contract_address: iroha_data_model::smart_contract::ContractAddress,
+    contract_entrypoint: String,
+    payload: IrohaJson,
+}
+
+#[cfg(feature = "app_api")]
+fn strict_multisig_contract_call_intent(
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+) -> Option<StrictMultisigContractCallIntent> {
+    if proposal.instructions.len() != 2 {
+        return None;
+    }
+    let register = proposal.instructions[0]
         .as_any()
         .downcast_ref::<iroha_data_model::isi::RegisterBox>()?;
-    let iroha_data_model::isi::RegisterBox::Trigger(register_trigger) = register else {
+    let iroha_data_model::isi::RegisterBox::Trigger(register) = register else {
         return None;
     };
-    let metadata = register_trigger.object().action().metadata();
-    let contract_alias = multisig_metadata_string(metadata, "contract_alias")?;
-    let contract_alias: iroha_data_model::smart_contract::ContractAlias =
-        contract_alias.parse().ok()?;
-    if !contract_alias
-        .name_segment()
-        .eq_ignore_ascii_case("mint_request")
+    let execute = proposal.instructions[1]
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::ExecuteTrigger>()?;
+    let trigger = register.object();
+    if trigger.id() != &execute.trigger
+        || trigger.action().repeats() != iroha_data_model::trigger::action::Repeats::Exactly(1)
+        || trigger.action().authority() != multisig_account_id
     {
         return None;
     }
-    let entrypoint = multisig_metadata_string(metadata, "contract_entrypoint")?;
-    match entrypoint.trim().to_ascii_lowercase().as_str() {
-        "create_mint_request" | "finalize_mint_request" => Some("MINT_REQUEST"),
-        _ => None,
+    let expected_filter =
+        iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
+            .for_trigger(trigger.id().clone());
+    if !matches!(
+        trigger.action().filter(),
+        iroha_data_model::events::EventFilterBox::ExecuteTrigger(filter)
+            if filter == &expected_filter
+    ) {
+        return None;
     }
+    let iroha_data_model::transaction::Executable::ContractCall(invocation) =
+        trigger.action().executable()
+    else {
+        return None;
+    };
+    let metadata = trigger.action().metadata();
+    let contract_alias_literal = multisig_metadata_string(metadata, "contract_alias")?;
+    let contract_alias: iroha_data_model::smart_contract::ContractAlias =
+        contract_alias_literal.parse().ok()?;
+    if contract_alias.to_string() != contract_alias_literal {
+        return None;
+    }
+    let contract_entrypoint = multisig_metadata_string(metadata, "contract_entrypoint")?;
+    let contract_address = multisig_metadata_string(metadata, "contract_address")?;
+    if contract_entrypoint != invocation.entrypoint
+        || contract_address != invocation.contract_address.to_string()
+    {
+        return None;
+    }
+    let payload = execute
+        .args
+        .try_into_any_norito::<norito::json::Value>()
+        .ok()?;
+    if multisig_metadata_json(metadata, "contract_payload").as_ref() != Some(&payload) {
+        return None;
+    }
+    let object = payload.as_object()?;
+
+    let (operation_type, expected_keys) = match (
+        contract_alias_literal.as_str(),
+        contract_entrypoint.as_str(),
+    ) {
+        ("apps_freeze::hbl.sbp" | "apps_freeze::ubl.sbp", "apply_freeze") => (
+            "FREEZE",
+            &[
+                "change_id",
+                "account",
+                "asset_definition",
+                "reason",
+                "frozen",
+            ][..],
+        ),
+        ("apps_limits_update::hbl.sbp" | "apps_limits_update::ubl.sbp", "apply_limits") => (
+            "LIMITS_UPDATE",
+            &[
+                "change_id",
+                "account",
+                "asset_definition",
+                "reason",
+                "daily_transfer_cap",
+                "offline_spend_cap",
+            ][..],
+        ),
+        ("apps_mint_request::sbp", "create_mint_request") => {
+            ("MINT_REQUEST", &["proposal_id", "amount"][..])
+        }
+        ("apps_mint_request::sbp", "finalize_mint_request" | "cancel_mint_request") => {
+            ("MINT_REQUEST", &["proposal_id"][..])
+        }
+        ("pkdeploy_issuance_swap_sbp::sbp", "swap") => (
+            "ISSUANCE_SWAP",
+            &["swap_id", "pkr_amount", "treasury_amount"][..],
+        ),
+        _ => return None,
+    };
+    if !json_object_has_exact_keys(object, expected_keys) {
+        return None;
+    }
+
+    let mut intent = Map::new();
+    intent.insert("contract_alias".into(), Value::from(contract_alias_literal));
+    intent.insert(
+        "contract_entrypoint".into(),
+        Value::from(contract_entrypoint.clone()),
+    );
+    match operation_type {
+        "FREEZE" => {
+            intent.insert(
+                "change_id".into(),
+                Value::from(required_canonical_name_string(object, "change_id")?),
+            );
+            intent.insert(
+                "account".into(),
+                Value::from(required_canonical_account_id_string(object, "account")?),
+            );
+            intent.insert(
+                "asset_definition".into(),
+                Value::from(required_canonical_asset_definition_id_string(
+                    object,
+                    "asset_definition",
+                )?),
+            );
+            intent.insert(
+                "reason".into(),
+                Value::from(required_nonempty_json_string(object, "reason")?),
+            );
+            intent.insert(
+                "frozen".into(),
+                Value::from(object.get("frozen")?.as_bool()?),
+            );
+        }
+        "LIMITS_UPDATE" => {
+            intent.insert(
+                "change_id".into(),
+                Value::from(required_canonical_name_string(object, "change_id")?),
+            );
+            intent.insert(
+                "account".into(),
+                Value::from(required_canonical_account_id_string(object, "account")?),
+            );
+            intent.insert(
+                "asset_definition".into(),
+                Value::from(required_canonical_asset_definition_id_string(
+                    object,
+                    "asset_definition",
+                )?),
+            );
+            intent.insert(
+                "reason".into(),
+                Value::from(required_nonempty_json_string(object, "reason")?),
+            );
+            for key in ["daily_transfer_cap", "offline_spend_cap"] {
+                let value = match object.get(key)? {
+                    Value::Null => Value::Null,
+                    value => Value::from(canonical_quantity_string(value, true)?),
+                };
+                intent.insert(key.into(), value);
+            }
+        }
+        "MINT_REQUEST" => {
+            intent.insert(
+                "proposal_id".into(),
+                Value::from(required_canonical_name_string(object, "proposal_id")?),
+            );
+            if let Some(amount) = object.get("amount") {
+                intent.insert(
+                    "amount".into(),
+                    Value::from(canonical_quantity_string(amount, false)?),
+                );
+            }
+        }
+        "ISSUANCE_SWAP" => {
+            intent.insert(
+                "swap_id".into(),
+                Value::from(required_canonical_name_string(object, "swap_id")?),
+            );
+            for key in ["pkr_amount", "treasury_amount"] {
+                intent.insert(
+                    key.into(),
+                    Value::from(canonical_quantity_string(object.get(key)?, false)?),
+                );
+            }
+        }
+        _ => return None,
+    }
+    Some(StrictMultisigContractCallIntent {
+        operation_type,
+        intent: IrohaJson::new(Value::Object(intent)),
+        contract_alias,
+        contract_address: invocation.contract_address.clone(),
+        contract_entrypoint,
+        payload: IrohaJson::new(payload),
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn strict_multisig_contract_call_intent_with_world<W: iroha_core::state::WorldReadOnly>(
+    world: &W,
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+) -> Option<StrictMultisigContractCallIntent> {
+    let parsed = strict_multisig_contract_call_intent(multisig_account_id, proposal)?;
+    if world.contract_aliases().get(&parsed.contract_alias) != Some(&parsed.contract_address) {
+        return None;
+    }
+
+    let binding = world.contract_instances().get(&parsed.contract_address)?;
+    let code = world.contract_code().get(binding)?;
+    let prepared = ivm::prepare_contract(Arc::<[u8]>::from(code.as_ref())).ok()?;
+    let stored_manifest = world.contract_manifests().get(binding)?;
+    if stored_manifest.signature_payload() != prepared.manifest().signature_payload() {
+        return None;
+    }
+    let descriptor = prepared.entrypoint_descriptor(&parsed.contract_entrypoint)?;
+    if descriptor.kind != manifest::EntryPointKind::Kotoage
+        || descriptor.permission.as_deref() != Some("CanInvokeContractEntrypoint")
+    {
+        return None;
+    }
+    let expected_arguments = encode_contract_argument_record(
+        &prepared,
+        &parsed.contract_entrypoint,
+        Some(&parsed.payload),
+    )
+    .ok()?;
+    let actual_arguments = proposal.instructions[0]
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::RegisterBox>()
+        .and_then(|register| match register {
+            iroha_data_model::isi::RegisterBox::Trigger(register) => Some(register.object()),
+            _ => None,
+        })
+        .and_then(|trigger| match trigger.action().executable() {
+            iroha_data_model::transaction::Executable::ContractCall(invocation) => invocation
+                .arguments
+                .as_ref()
+                .map(|record| record.as_bytes()),
+            _ => None,
+        });
+    if expected_arguments.as_deref() != actual_arguments {
+        return None;
+    }
+    Some(parsed)
 }
 
 #[cfg(feature = "app_api")]
@@ -19105,79 +19914,16 @@ fn multisig_asset_transfer_control_operation(
 }
 
 #[cfg(feature = "app_api")]
-fn multisig_pacs009_marker_intent(
-    proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
-) -> Option<IrohaJson> {
-    let first_instruction = proposal.instructions.first()?;
-    if !matches!(
-        first_instruction
-            .as_any()
-            .downcast_ref::<iroha_data_model::isi::MintBox>(),
-        Some(iroha_data_model::isi::MintBox::Asset(_))
-    ) {
-        return None;
-    }
-    for instruction in proposal.instructions.iter().skip(1) {
-        let Some(log) = instruction
-            .as_any()
-            .downcast_ref::<iroha_data_model::isi::Log>()
-        else {
-            continue;
-        };
-        let Some(raw_payload) = log.msg.trim().strip_prefix(MULTISIG_PACS009_MARKER_PREFIX) else {
-            continue;
-        };
-        let Ok(norito::json::Value::Object(mut payload)) =
-            norito::json::from_str::<norito::json::Value>(raw_payload)
-        else {
-            continue;
-        };
-        payload.insert(
-            "kind".into(),
-            norito::json::Value::from(MULTISIG_PACS009_MINT_OPERATION_TYPE),
-        );
-        return Some(IrohaJson::new(norito::json::Value::Object(payload)));
-    }
-    None
-}
-
-#[cfg(feature = "app_api")]
-fn multisig_execute_trigger_is_issuance_swap(
-    trigger_id: &str,
-    args: Option<&norito::json::Value>,
-) -> bool {
-    let Some(args) = args.and_then(norito::json::Value::as_object) else {
-        return false;
-    };
-    let kind_matches = multisig_json_scalar_literal(args.get("kind"))
-        .map(|kind| kind.eq_ignore_ascii_case("ISSUANCE_SWAP"))
-        .unwrap_or(false);
-    if !kind_matches
-        && !trigger_id
-            .trim()
-            .eq_ignore_ascii_case("issuance_swap_centralbank")
-        && !trigger_id
-            .trim()
-            .eq_ignore_ascii_case("issuance_swap_paynet")
-    {
-        return false;
-    }
-    [
-        "vault_account_id",
-        "issuance_account_id",
-        "pkr_asset_id",
-        "pkr_amount",
-        "treasury_asset_id",
-        "treasury_amount",
-    ]
-    .into_iter()
-    .all(|key| multisig_json_scalar_literal(args.get(key)).is_some())
-}
-
-#[cfg(feature = "app_api")]
-fn multisig_proposal_operation_type(
+fn multisig_proposal_operation_type<W: iroha_core::state::WorldReadOnly>(
+    world: &W,
+    multisig_account_id: &iroha_data_model::account::AccountId,
     proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
 ) -> &'static str {
+    if let Some(intent) =
+        strict_multisig_contract_call_intent_with_world(world, multisig_account_id, proposal)
+    {
+        return intent.operation_type;
+    }
     let Some(first_instruction) = proposal.instructions.first() else {
         return "ONCHAIN_MULTISIG";
     };
@@ -19186,10 +19932,6 @@ fn multisig_proposal_operation_type(
         multisig_asset_transfer_control_operation(first_instruction)
     {
         return operation_type;
-    }
-
-    if multisig_pacs009_marker_intent(proposal).is_some() {
-        return MULTISIG_PACS009_MINT_OPERATION_TYPE;
     }
 
     if matches!(
@@ -19210,26 +19952,11 @@ fn multisig_proposal_operation_type(
         return "MINT";
     }
 
-    if let Some(operation_type) = multisig_contract_call_operation_type(first_instruction) {
-        return operation_type;
-    }
-
-    if let Some(execute_trigger) = first_instruction
+    if first_instruction
         .as_any()
         .downcast_ref::<iroha_data_model::isi::ExecuteTrigger>()
+        .is_some()
     {
-        let trigger_id = execute_trigger.trigger.to_string();
-        let args = execute_trigger
-            .args
-            .try_into_any_norito::<norito::json::Value>()
-            .ok();
-        let args = args.as_ref();
-        if multisig_execute_trigger_is_issuance_swap(&trigger_id, args) {
-            return "ISSUANCE_SWAP";
-        }
-        if multisig_execute_trigger_is_mint_request(&trigger_id, args) {
-            return "MINT_REQUEST";
-        }
         return "EXECUTE_TRIGGER";
     }
 
@@ -19237,24 +19964,18 @@ fn multisig_proposal_operation_type(
 }
 
 #[cfg(feature = "app_api")]
-fn multisig_proposal_intent(
+fn multisig_proposal_intent<W: iroha_core::state::WorldReadOnly>(
+    world: &W,
+    multisig_account_id: &iroha_data_model::account::AccountId,
     proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
 ) -> Option<IrohaJson> {
-    proposal
-        .instructions
-        .first()
-        .and_then(|instruction| {
-            multisig_asset_transfer_control_operation(instruction).map(|(_, intent)| intent)
+    strict_multisig_contract_call_intent_with_world(world, multisig_account_id, proposal)
+        .map(|intent| intent.intent)
+        .or_else(|| {
+            proposal.instructions.first().and_then(|instruction| {
+                multisig_asset_transfer_control_operation(instruction).map(|(_, intent)| intent)
+            })
         })
-        .or_else(|| multisig_pacs009_marker_intent(proposal))
-}
-
-#[cfg(feature = "app_api")]
-fn multisig_operation_type_matches_requested_set(
-    requested: &BTreeSet<String>,
-    proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
-) -> bool {
-    requested.is_empty() || requested.contains(multisig_proposal_operation_type(proposal))
 }
 
 #[cfg(feature = "app_api")]
@@ -19266,11 +19987,12 @@ fn status_matches_requested_set(
 }
 
 #[cfg(feature = "app_api")]
-fn list_multisig_proposals(
+fn query_multisig_proposals(
     state: &CoreState,
     multisig_account_id: &iroha_data_model::account::AccountId,
     spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
     requested_statuses: &BTreeSet<String>,
+    remaining_scan_budget: &mut usize,
 ) -> Result<Vec<MultisigProposalEntryDto>> {
     let world = state.world_view();
     world.account(multisig_account_id).map_err(|_| {
@@ -19278,6 +20000,7 @@ fn list_multisig_proposals(
     })?;
     let storage = world.smart_contract_state();
     let mut proposals = Vec::new();
+    let mut seen_hashes = BTreeSet::new();
     let now_ms = current_time_millis();
 
     let active_prefix = multisig_proposal_state_prefix(multisig_account_id);
@@ -19287,20 +20010,49 @@ fn list_multisig_proposals(
         let Some(hash_literal) = key_str.strip_prefix(active_prefix_literal.as_str()) else {
             break;
         };
+        *remaining_scan_budget = (*remaining_scan_budget).checked_sub(1).ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            ))
+        })?;
+        let instructions_hash = hash_literal
+            .parse::<HashOf<Vec<iroha_data_model::isi::InstructionBox>>>()
+            .map_err(|err| {
+                conversion_error(format!(
+                    "invalid multisig proposal state-key instruction hash: {err}"
+                ))
+            })?;
+        if instructions_hash.to_string() != hash_literal {
+            return Err(conversion_error(
+                "multisig proposal state-key instruction hash is not canonical".to_owned(),
+            ));
+        }
         let proposal_state = norito::decode_from_bytes::<
             iroha_executor_data_model::isi::multisig::MultisigProposalState,
         >(value)
         .map_err(|err| conversion_error(format!("invalid multisig proposal state: {err}")))?;
+        validate_multisig_active_proposal_binding(
+            multisig_account_id,
+            &instructions_hash,
+            &proposal_state,
+        )?;
         let proposal = proposal_value_from_state(proposal_state);
+        validate_multisig_proposal_approvals(spec, &proposal)?;
         if !multisig_proposal_is_user_visible(&proposal) {
             continue;
+        }
+        if !seen_hashes.insert(hash_literal.to_owned()) {
+            return Err(conversion_error(format!(
+                "duplicate multisig proposal state for instruction hash {hash_literal}"
+            )));
         }
         let status = classify_active_multisig_proposal_status(spec, &proposal, now_ms);
         if !status_matches_requested_set(requested_statuses, status) {
             continue;
         }
-        let operation_type = multisig_proposal_operation_type(&proposal).to_owned();
-        let intent = multisig_proposal_intent(&proposal);
+        let operation_type =
+            multisig_proposal_operation_type(&world, multisig_account_id, &proposal).to_owned();
+        let intent = multisig_proposal_intent(&world, multisig_account_id, &proposal);
         proposals.push(MultisigProposalEntryDto {
             proposal_id: hash_literal.to_owned(),
             instructions_hash: hash_literal.to_owned(),
@@ -19319,14 +20071,42 @@ fn list_multisig_proposals(
         let Some(hash_literal) = key_str.strip_prefix(terminal_prefix_literal.as_str()) else {
             break;
         };
+        *remaining_scan_budget = (*remaining_scan_budget).checked_sub(1).ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            ))
+        })?;
+        let instructions_hash = hash_literal
+            .parse::<HashOf<Vec<iroha_data_model::isi::InstructionBox>>>()
+            .map_err(|err| {
+                conversion_error(format!(
+                    "invalid terminal multisig proposal state-key instruction hash: {err}"
+                ))
+            })?;
+        if instructions_hash.to_string() != hash_literal {
+            return Err(conversion_error(
+                "terminal multisig proposal state-key instruction hash is not canonical".to_owned(),
+            ));
+        }
         let terminal_state = norito::decode_from_bytes::<
             iroha_executor_data_model::isi::multisig::MultisigProposalTerminalState,
         >(value)
         .map_err(|err| {
             conversion_error(format!("invalid multisig proposal terminal state: {err}"))
         })?;
+        validate_multisig_terminal_proposal_binding(
+            multisig_account_id,
+            &instructions_hash,
+            &terminal_state,
+        )?;
+        validate_multisig_proposal_approvals(spec, &terminal_state.proposal)?;
         if !multisig_proposal_is_user_visible(&terminal_state.proposal) {
             continue;
+        }
+        if !seen_hashes.insert(hash_literal.to_owned()) {
+            return Err(conversion_error(format!(
+                "active and terminal multisig proposal state overlap for instruction hash {hash_literal}"
+            )));
         }
         let status = match terminal_state.status {
             iroha_executor_data_model::isi::multisig::MultisigProposalTerminalStatus::Finalized => {
@@ -19342,8 +20122,11 @@ fn list_multisig_proposals(
         if !status_matches_requested_set(requested_statuses, status) {
             continue;
         }
-        let operation_type = multisig_proposal_operation_type(&terminal_state.proposal).to_owned();
-        let intent = multisig_proposal_intent(&terminal_state.proposal);
+        let operation_type =
+            multisig_proposal_operation_type(&world, multisig_account_id, &terminal_state.proposal)
+                .to_owned();
+        let intent =
+            multisig_proposal_intent(&world, multisig_account_id, &terminal_state.proposal);
         proposals.push(MultisigProposalEntryDto {
             proposal_id: hash_literal.to_owned(),
             instructions_hash: hash_literal.to_owned(),
@@ -19356,11 +20139,12 @@ fn list_multisig_proposals(
     }
 
     proposals.sort_by(|left, right| {
-        right
-            .proposal
-            .proposed_at_ms
-            .cmp(&left.proposal.proposed_at_ms)
-            .then_with(|| left.instructions_hash.cmp(&right.instructions_hash))
+        multisig_proposal_sort_order(
+            left.proposal.proposed_at_ms,
+            &left.instructions_hash,
+            right.proposal.proposed_at_ms,
+            &right.instructions_hash,
+        )
     });
     Ok(proposals)
 }
@@ -19441,50 +20225,164 @@ fn multisig_approval_requires_viewer_signature(
 }
 
 #[cfg(feature = "app_api")]
-#[derive(Debug, Clone)]
+const MULTISIG_APPROVALS_CURSOR_MAX_BYTES: usize = 512;
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct MultisigApprovalsCursor {
     proposed_at_ms: u64,
     instructions_hash: String,
-    multisig_account_id: String,
+    multisig_account_fingerprint: String,
+    context_fingerprint: String,
+}
+
+#[cfg(feature = "app_api")]
+fn append_multisig_approvals_query_context_set(
+    payload: &mut Vec<u8>,
+    tag: u8,
+    values: &BTreeSet<String>,
+) {
+    payload.push(tag);
+    payload.extend_from_slice(
+        &u64::try_from(values.len())
+            .expect("in-memory approvals query context set length must fit u64")
+            .to_be_bytes(),
+    );
+    for value in values {
+        payload.extend_from_slice(
+            &u64::try_from(value.len())
+                .expect("in-memory approvals query context value length must fit u64")
+                .to_be_bytes(),
+        );
+        payload.extend_from_slice(value.as_bytes());
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approvals_query_context_fingerprint(
+    viewer_scope: &MultisigApprovalsViewerScope,
+    requested_statuses: &BTreeSet<String>,
+    requested_operation_types: &BTreeSet<String>,
+    requires_my_signature: bool,
+) -> String {
+    let viewer_account_ids = viewer_scope
+        .viewer_account_ids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+    let mut payload = b"iroha.torii.multisig.approvals.query-context.v1".to_vec();
+    append_multisig_approvals_query_context_set(&mut payload, 1, &viewer_account_ids);
+    append_multisig_approvals_query_context_set(&mut payload, 2, requested_statuses);
+    append_multisig_approvals_query_context_set(&mut payload, 3, requested_operation_types);
+    payload.extend_from_slice(&[4, u8::from(requires_my_signature)]);
+    Hash::new(payload.as_slice()).to_string()
 }
 
 #[cfg(feature = "app_api")]
 fn encode_multisig_approvals_cursor(cursor: &MultisigApprovalsCursor) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
-        "{}|{}|{}",
-        cursor.proposed_at_ms, cursor.instructions_hash, cursor.multisig_account_id
+        "v1|{}|{}|{}|{}",
+        cursor.proposed_at_ms,
+        cursor.instructions_hash,
+        cursor.multisig_account_fingerprint,
+        cursor.context_fingerprint
     ))
 }
 
 #[cfg(feature = "app_api")]
-fn decode_multisig_approvals_cursor(raw: &str) -> Result<MultisigApprovalsCursor> {
+fn decode_multisig_approvals_cursor(
+    raw: &str,
+    expected_context_fingerprint: &str,
+) -> Result<MultisigApprovalsCursor> {
+    if raw.is_empty()
+        || raw.len() > MULTISIG_APPROVALS_CURSOR_MAX_BYTES
+        || raw.trim() != raw
+        || !raw.is_ascii()
+    {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor must be a non-empty canonical base64url value within the advertised bound",
+        ));
+    }
     let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(raw.as_bytes())
-        .map_err(|_| conversion_error("invalid approvals cursor".to_owned()))?;
+        .map_err(|_| multisig_cursor_validation_error("approvals cursor is not base64url"))?;
+    if decoded.len() > MULTISIG_APPROVALS_CURSOR_MAX_BYTES {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor payload exceeds the advertised bound",
+        ));
+    }
     let decoded = String::from_utf8(decoded)
-        .map_err(|_| conversion_error("invalid approvals cursor".to_owned()))?;
-    let mut parts = decoded.splitn(3, '|');
-    let proposed_at_ms = parts
+        .map_err(|_| multisig_cursor_validation_error("approvals cursor payload is not UTF-8"))?;
+    let mut parts = decoded.split('|');
+    if parts.next() != Some("v1") {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor version is not supported",
+        ));
+    }
+    let proposed_at_literal = parts
         .next()
-        .and_then(|value| value.parse::<u64>().ok())
-        .ok_or_else(|| conversion_error("invalid approvals cursor".to_owned()))?;
-    let instructions_hash = parts
+        .ok_or_else(|| multisig_cursor_validation_error("approvals cursor is incomplete"))?;
+    let instructions_hash_literal = parts
         .next()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| conversion_error("invalid approvals cursor".to_owned()))?
-        .to_owned();
-    let multisig_account_id = parts
+        .ok_or_else(|| multisig_cursor_validation_error("approvals cursor is incomplete"))?;
+    let multisig_account_fingerprint = parts
         .next()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| conversion_error("invalid approvals cursor".to_owned()))?
-        .to_owned();
-    Ok(MultisigApprovalsCursor {
+        .ok_or_else(|| multisig_cursor_validation_error("approvals cursor is incomplete"))?;
+    let context_fingerprint = parts
+        .next()
+        .ok_or_else(|| multisig_cursor_validation_error("approvals cursor is incomplete"))?;
+    if parts.next().is_some() {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor contains trailing fields",
+        ));
+    }
+    if context_fingerprint != expected_context_fingerprint {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor does not belong to this viewer and filter context",
+        ));
+    }
+    let proposed_at_ms = proposed_at_literal.parse::<u64>().map_err(|_| {
+        multisig_cursor_validation_error("approvals cursor proposed_at_ms is not a canonical u64")
+    })?;
+    if proposed_at_ms.to_string() != proposed_at_literal {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor proposed_at_ms is not canonically encoded",
+        ));
+    }
+    let instructions_hash = instructions_hash_literal
+        .parse::<HashOf<Vec<iroha_data_model::isi::InstructionBox>>>()
+        .map_err(|_| {
+            multisig_cursor_validation_error(
+                "approvals cursor instructions_hash is not a canonical instruction hash",
+            )
+        })?
+        .to_string();
+    if instructions_hash != instructions_hash_literal {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor instructions_hash is not canonically encoded",
+        ));
+    }
+    let parsed_account_fingerprint =
+        Hash::from_str(multisig_account_fingerprint).map_err(|_| {
+            multisig_cursor_validation_error("approvals cursor account fingerprint is invalid")
+        })?;
+    if parsed_account_fingerprint.to_string() != multisig_account_fingerprint {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor account fingerprint is not canonically encoded",
+        ));
+    }
+    let cursor = MultisigApprovalsCursor {
         proposed_at_ms,
         instructions_hash,
-        multisig_account_id,
-    })
+        multisig_account_fingerprint: multisig_account_fingerprint.to_owned(),
+        context_fingerprint: context_fingerprint.to_owned(),
+    };
+    if encode_multisig_approvals_cursor(&cursor) != raw {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor is not canonically encoded",
+        ));
+    }
+    Ok(cursor)
 }
 
 #[cfg(feature = "app_api")]
@@ -19503,37 +20401,27 @@ fn multisig_approval_sort_order(
 }
 
 #[cfg(feature = "app_api")]
-fn multisig_approval_cursor_for(entry: &MultisigApprovalEntryDto) -> MultisigApprovalsCursor {
+fn multisig_approval_cursor_for(
+    entry: &MultisigApprovalEntryDto,
+    context_fingerprint: &str,
+) -> MultisigApprovalsCursor {
     MultisigApprovalsCursor {
         proposed_at_ms: entry.proposal.proposed_at_ms,
         instructions_hash: entry.instructions_hash.clone(),
-        multisig_account_id: entry.multisig_account_id.to_string(),
+        multisig_account_fingerprint: multisig_account_fingerprint(&entry.multisig_account_id),
+        context_fingerprint: context_fingerprint.to_owned(),
     }
 }
 
 #[cfg(feature = "app_api")]
-fn multisig_approval_is_after_cursor(
+fn multisig_approval_matches_cursor(
     entry: &MultisigApprovalEntryDto,
     cursor: &MultisigApprovalsCursor,
 ) -> bool {
-    let cursor_account_id =
-        iroha_data_model::account::AccountId::parse_encoded(cursor.multisig_account_id.as_str())
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .ok();
-    let Some(cursor_account_id) = cursor_account_id.as_ref() else {
-        return false;
-    };
-    matches!(
-        multisig_approval_sort_order(
-            entry.proposal.proposed_at_ms,
-            &entry.instructions_hash,
-            &entry.multisig_account_id,
-            cursor.proposed_at_ms,
-            &cursor.instructions_hash,
-            cursor_account_id,
-        ),
-        Ordering::Greater
-    )
+    entry.proposal.proposed_at_ms == cursor.proposed_at_ms
+        && entry.instructions_hash == cursor.instructions_hash
+        && multisig_account_fingerprint(&entry.multisig_account_id)
+            == cursor.multisig_account_fingerprint
 }
 
 #[cfg(feature = "app_api")]
@@ -19542,16 +20430,14 @@ fn multisig_approval_entry(
     spec: iroha_executor_data_model::isi::multisig::MultisigSpec,
     proposal_entry: MultisigProposalEntryDto,
 ) -> MultisigApprovalEntryDto {
-    let operation_type = multisig_proposal_operation_type(&proposal_entry.proposal).to_owned();
-    let intent = multisig_proposal_intent(&proposal_entry.proposal);
     MultisigApprovalEntryDto {
         multisig_account_id,
         spec,
         proposal_id: proposal_entry.proposal_id,
         instructions_hash: proposal_entry.instructions_hash,
         proposal: proposal_entry.proposal,
-        operation_type,
-        intent,
+        operation_type: proposal_entry.operation_type,
+        intent: proposal_entry.intent,
         status: proposal_entry.status,
         terminal_at_ms: proposal_entry.terminal_at_ms,
     }
@@ -19560,6 +20446,24 @@ fn multisig_approval_entry(
 #[cfg(all(test, feature = "app_api"))]
 mod multisig_contract_call_tests {
     use super::*;
+
+    fn manifest_with_entrypoints(
+        entrypoints: Option<Vec<manifest::EntrypointDescriptor>>,
+    ) -> manifest::ContractManifest {
+        manifest::ContractManifest {
+            seiyaku_name: None,
+            code_hash: None,
+            abi_hash: None,
+            compiler_fingerprint: Some("torii-multisig-tests".to_owned()),
+            features_bitmap: Some(0),
+            access_set_hints: None,
+            entrypoints,
+            states: None,
+            kotoba: None,
+            error_codes: None,
+            provenance: None,
+        }
+    }
 
     #[test]
     fn implicit_contract_gas_limit_covers_strict_argument_admission_floor() {
@@ -19582,6 +20486,50 @@ mod multisig_contract_call_tests {
                 .public_key()
                 .clone(),
         )
+    }
+
+    #[test]
+    fn contract_runtime_permission_target_is_exactly_bound_to_instance_and_selector() {
+        let authority = sample_account_id();
+        let first = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &authority,
+            1,
+            iroha_data_model::nexus::DataSpaceId::new(10),
+        )
+        .expect("first contract address");
+        let second = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &authority,
+            2,
+            iroha_data_model::nexus::DataSpaceId::new(10),
+        )
+        .expect("second contract address");
+
+        let expected =
+            exact_contract_permission_target(&first, "apply_freeze", "CanInvokeContractEntrypoint");
+        assert_ne!(
+            expected,
+            exact_contract_permission_target(&first, "apply_limits", "CanInvokeContractEntrypoint",),
+            "a grant for another selector must not authorize the requested entrypoint",
+        );
+        assert_ne!(
+            expected,
+            exact_contract_permission_target(
+                &second,
+                "apply_freeze",
+                "CanInvokeContractEntrypoint",
+            ),
+            "a grant for another deployed instance must not authorize the requested entrypoint",
+        );
+        assert_ne!(
+            expected,
+            iroha_data_model::permission::Permission::new(
+                "CanInvokeContractEntrypoint".to_owned(),
+                IrohaJson::new(()),
+            ),
+            "a name-only token must not spoof the typed contract permission",
+        );
     }
 
     #[test]
@@ -19647,19 +20595,20 @@ mod multisig_contract_call_tests {
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
-        let manifest = manifest::ContractManifest {
-            seiyaku_name: None,
-            code_hash: None,
-            abi_hash: None,
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            states: None,
-            kotoba: None,
-            error_codes: None,
-            provenance: None,
-        };
+        let manifest = manifest_with_entrypoints(Some(vec![manifest::EntrypointDescriptor {
+            name: "main".to_owned(),
+            kind: manifest::EntryPointKind::Kotoage,
+            params: Vec::new(),
+            argument_schema: None,
+            return_type: None,
+            return_schema: None,
+            permission: Some("CanInvokeContractEntrypoint".to_owned()),
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+        }]));
         let code_hash = Hash::new(b"code-hash".to_vec());
         let payload = IrohaJson::new(norito::json!({ "invoice_id": "INV-1" }));
         let asset_definition =
@@ -19691,6 +20640,335 @@ mod multisig_contract_call_tests {
             execute_trigger.args, payload,
             "contract-call trigger execution must carry the normalized payload because the trigger host receives ExecuteTrigger args"
         );
+    }
+
+    #[test]
+    fn multisig_contract_call_intent_requires_exact_canonical_envelope() {
+        let multisig = sample_account_id();
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &multisig,
+            7,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let manifest = manifest_with_entrypoints(Some(
+            [
+                "apply_freeze",
+                "apply_limits",
+                "create_mint_request",
+                "finalize_mint_request",
+                "cancel_mint_request",
+                "swap",
+            ]
+            .into_iter()
+            .map(|name| manifest::EntrypointDescriptor {
+                name: name.to_owned(),
+                kind: manifest::EntryPointKind::Kotoage,
+                params: Vec::new(),
+                argument_schema: None,
+                return_type: None,
+                return_schema: None,
+                permission: Some("CanInvokeContractEntrypoint".to_owned()),
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+            })
+            .collect(),
+        ));
+        let code_hash = Hash::new(b"strict-control-intent");
+        let canonical_alias: iroha_data_model::smart_contract::ContractAlias =
+            "apps_freeze::hbl.sbp".parse().expect("canonical alias");
+        let account = multisig.to_string();
+        let asset_definition =
+            test_asset_definition_literal_from_hex("550e8400e29b41d4a7164466554400aa");
+        let payload = IrohaJson::new(norito::json!({
+            "change_id": "freeze_1",
+            "account": account,
+            "asset_definition": asset_definition,
+            "reason": "risk review",
+            "frozen": true,
+        }));
+        let build = |alias: &iroha_data_model::smart_contract::ContractAlias,
+                     entrypoint: &str,
+                     payload: &IrohaJson| {
+            build_multisig_contract_call_instructions(
+                &multisig,
+                &contract_address,
+                Some(alias),
+                entrypoint,
+                Some(payload),
+                None,
+                None,
+                None,
+                300_000,
+                &manifest,
+                &code_hash,
+            )
+            .expect("build strict contract proposal")
+            .0
+        };
+        let proposal = |instructions| {
+            iroha_executor_data_model::isi::multisig::MultisigProposalValue::new(
+                instructions,
+                1,
+                2,
+                BTreeSet::new(),
+                None,
+            )
+        };
+
+        let canonical = proposal(build(&canonical_alias, "apply_freeze", &payload));
+        let typed = strict_multisig_contract_call_intent(&multisig, &canonical)
+            .expect("typed canonical intent");
+        assert_eq!(typed.operation_type, "FREEZE");
+        let intent = typed
+            .intent
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("intent value");
+        assert_eq!(
+            intent["contract_alias"].as_str(),
+            Some("apps_freeze::hbl.sbp")
+        );
+        assert_eq!(intent["contract_entrypoint"].as_str(), Some("apply_freeze"));
+        assert_eq!(intent["change_id"].as_str(), Some("freeze_1"));
+        assert_eq!(intent["frozen"].as_bool(), Some(true));
+        assert_eq!(intent.as_object().expect("flat intent").len(), 7);
+
+        let mint_alias: iroha_data_model::smart_contract::ContractAlias =
+            "apps_mint_request::sbp".parse().expect("mint alias");
+        let mint_payload = IrohaJson::new(norito::json!({
+            "proposal_id": "mint_1",
+            "amount": "125",
+        }));
+        let mint_instructions = build(&mint_alias, "create_mint_request", &mint_payload);
+        let mint_typed =
+            strict_multisig_contract_call_intent(&multisig, &proposal(mint_instructions))
+                .expect("typed mint intent");
+        assert_eq!(mint_typed.operation_type, "MINT_REQUEST");
+        let mint_intent = mint_typed
+            .intent
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("mint intent value");
+        assert_eq!(mint_intent["proposal_id"].as_str(), Some("mint_1"));
+        assert_eq!(mint_intent["amount"].as_str(), Some("125"));
+        assert_eq!(mint_intent.as_object().expect("flat mint intent").len(), 4);
+
+        let issuance_alias: iroha_data_model::smart_contract::ContractAlias =
+            "pkdeploy_issuance_swap_sbp::sbp"
+                .parse()
+                .expect("issuance swap alias");
+        let issuance_payload = IrohaJson::new(norito::json!({
+            "swap_id": "swap_1",
+            "pkr_amount": "7600",
+            "treasury_amount": "100",
+        }));
+        let issuance = strict_multisig_contract_call_intent(
+            &multisig,
+            &proposal(build(&issuance_alias, "swap", &issuance_payload)),
+        )
+        .expect("typed issuance-swap intent");
+        assert_eq!(issuance.operation_type, "ISSUANCE_SWAP");
+        let issuance_intent = issuance
+            .intent
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("issuance-swap intent value");
+        assert_eq!(issuance_intent["swap_id"].as_str(), Some("swap_1"));
+        assert_eq!(issuance_intent["pkr_amount"].as_str(), Some("7600"));
+        assert_eq!(issuance_intent["treasury_amount"].as_str(), Some("100"));
+        assert_eq!(
+            issuance_intent
+                .as_object()
+                .expect("flat issuance-swap intent")
+                .len(),
+            5,
+        );
+
+        for invalid_amount in [
+            norito::json!(7600),
+            norito::json!(9_007_199_254_740_993_u64),
+            norito::json!("07600"),
+            norito::json!("-1"),
+            norito::json!("0"),
+        ] {
+            let payload = IrohaJson::new(norito::json!({
+                "swap_id": "swap_bad_amount",
+                "pkr_amount": invalid_amount,
+                "treasury_amount": "100",
+            }));
+            assert!(
+                strict_multisig_contract_call_intent(
+                    &multisig,
+                    &proposal(build(&issuance_alias, "swap", &payload)),
+                )
+                .is_none(),
+                "issuance swap intent must reject non-string, non-canonical, non-positive, and unsafe-integer quantities",
+            );
+        }
+        let invalid_treasury_amount = IrohaJson::new(norito::json!({
+            "swap_id": "swap_bad_treasury_amount",
+            "pkr_amount": "7600",
+            "treasury_amount": 100,
+        }));
+        assert!(
+            strict_multisig_contract_call_intent(
+                &multisig,
+                &proposal(build(&issuance_alias, "swap", &invalid_treasury_amount,)),
+            )
+            .is_none(),
+            "every issuance-swap quantity must use the canonical string representation",
+        );
+        let noncanonical_swap_id = IrohaJson::new(norito::json!({
+            "swap_id": " swap_1",
+            "pkr_amount": "7600",
+            "treasury_amount": "100",
+        }));
+        assert!(
+            strict_multisig_contract_call_intent(
+                &multisig,
+                &proposal(build(&issuance_alias, "swap", &noncanonical_swap_id,)),
+            )
+            .is_none(),
+            "issuance-swap identifiers must use the exact canonical Name literal",
+        );
+        let extra_field = IrohaJson::new(norito::json!({
+            "swap_id": "swap_extra",
+            "pkr_amount": "7600",
+            "treasury_amount": "100",
+            "vault_account_id": account,
+        }));
+        assert!(
+            strict_multisig_contract_call_intent(
+                &multisig,
+                &proposal(build(&issuance_alias, "swap", &extra_field)),
+            )
+            .is_none(),
+            "legacy caller-selected account fields must not enter the fixed-policy contract envelope",
+        );
+        let wrong_issuance_alias: iroha_data_model::smart_contract::ContractAlias =
+            "pkdeploy_issuance_swap_sbp::cbuae"
+                .parse()
+                .expect("wrong issuance scope alias");
+        assert!(
+            strict_multisig_contract_call_intent(
+                &multisig,
+                &proposal(build(&wrong_issuance_alias, "swap", &issuance_payload,)),
+            )
+            .is_none(),
+            "a contract with the same selector in another scope must not spoof issuance swap",
+        );
+
+        for noncanonical_amount in [
+            norito::json!(125),
+            norito::json!(9_007_199_254_740_993_u64),
+            norito::json!("0125"),
+            norito::json!("-1"),
+            norito::json!("0"),
+        ] {
+            let payload = IrohaJson::new(norito::json!({
+                "proposal_id": "mint_bad_amount",
+                "amount": noncanonical_amount,
+            }));
+            assert!(
+                strict_multisig_contract_call_intent(
+                    &multisig,
+                    &proposal(build(&mint_alias, "create_mint_request", &payload)),
+                )
+                .is_none(),
+                "mint intent must reject non-string, non-canonical, non-positive, and unsafe-integer amounts",
+            );
+        }
+
+        let limits_alias: iroha_data_model::smart_contract::ContractAlias =
+            "apps_limits_update::hbl.sbp".parse().expect("limits alias");
+        let canonical_limits = IrohaJson::new(norito::json!({
+            "change_id": "limits_1",
+            "account": account,
+            "asset_definition": asset_definition,
+            "reason": "risk policy",
+            "daily_transfer_cap": "9007199254740993",
+            "offline_spend_cap": null,
+        }));
+        let limits = strict_multisig_contract_call_intent(
+            &multisig,
+            &proposal(build(&limits_alias, "apply_limits", &canonical_limits)),
+        )
+        .expect("canonical string limits intent");
+        let limits_intent = limits
+            .intent
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("limits intent value");
+        assert_eq!(
+            limits_intent["daily_transfer_cap"].as_str(),
+            Some("9007199254740993")
+        );
+        assert!(limits_intent["offline_spend_cap"].is_null());
+
+        for invalid_cap in [norito::json!(10), norito::json!("01"), norito::json!("-1")] {
+            let payload = IrohaJson::new(norito::json!({
+                "change_id": "limits_bad_cap",
+                "account": account,
+                "asset_definition": asset_definition,
+                "reason": "risk policy",
+                "daily_transfer_cap": invalid_cap,
+                "offline_spend_cap": null,
+            }));
+            assert!(
+                strict_multisig_contract_call_intent(
+                    &multisig,
+                    &proposal(build(&limits_alias, "apply_limits", &payload)),
+                )
+                .is_none(),
+                "limits intent must reject numeric, non-canonical, and negative caps",
+            );
+        }
+
+        let wrong_scope: iroha_data_model::smart_contract::ContractAlias = "apps_freeze::cbuae"
+            .parse()
+            .expect("noncanonical scope alias");
+        assert!(
+            strict_multisig_contract_call_intent(
+                &multisig,
+                &proposal(build(&wrong_scope, "apply_freeze", &payload)),
+            )
+            .is_none()
+        );
+
+        let malformed = IrohaJson::new(norito::json!({
+            "change_id": "freeze_1",
+            "account": account,
+            "asset_definition": asset_definition,
+            "reason": "risk review",
+            "frozen": true,
+            "spoofed_operation_type": "LIMITS_UPDATE",
+        }));
+        assert!(
+            strict_multisig_contract_call_intent(
+                &multisig,
+                &proposal(build(&canonical_alias, "apply_freeze", &malformed)),
+            )
+            .is_none()
+        );
+
+        let mut mismatched = build(&canonical_alias, "apply_freeze", &payload);
+        let trigger_id = mismatched[1]
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::ExecuteTrigger>()
+            .expect("execute trigger")
+            .trigger
+            .clone();
+        mismatched[1] = iroha_data_model::isi::ExecuteTrigger::new(trigger_id)
+            .with_args(IrohaJson::new(norito::json!({
+                "change_id": "spoof",
+                "account": account,
+                "asset_definition": asset_definition,
+                "reason": "spoof",
+                "frozen": false,
+            })))
+            .into();
+        assert!(strict_multisig_contract_call_intent(&multisig, &proposal(mismatched)).is_none());
     }
 
     #[test]
@@ -19735,16 +21013,13 @@ mod multisig_contract_call_tests {
         );
         assert_eq!(
             metadata.iter().count(),
-            5,
-            "contract address and entrypoint should stay alongside the fee metadata"
+            6,
+            "contract identity and exact payload should stay alongside the fee metadata"
         );
         assert!(metadata.get("gov_contract_address").is_none());
         assert!(metadata.get("contract_address").is_some());
         assert!(metadata.get("contract_entrypoint").is_some());
-        assert!(
-            metadata.get("contract_payload").is_none(),
-            "the canonical Norito argument record is the only V1 call payload"
-        );
+        assert!(metadata.get("contract_payload").is_some());
     }
 
     #[test]
@@ -20038,6 +21313,11 @@ mod contract_payload_normalization_tests {
 
     use super::*;
 
+    const SIGNED_512_MAX: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
+    const SIGNED_512_MIN: &str = "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048";
+    const ABOVE_SIGNED_512_MAX: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048";
+    const BELOW_SIGNED_512_MIN: &str = "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042049";
+
     fn checked_payload_account_id(seed: u8, context: &'static str) -> AccountId {
         AccountId::new(
             super::checked_routing_fixture_keypair(seed, iroha_crypto::Algorithm::Ed25519, context)
@@ -20060,13 +21340,19 @@ mod contract_payload_normalization_tests {
         }
     }
 
-    fn i64_descriptor() -> EntrypointDescriptor {
+    fn scalar_payload(name: &str, value: Value) -> IrohaJson {
+        let mut object = Map::new();
+        object.insert(name.to_owned(), value);
+        IrohaJson::new(Value::Object(object))
+    }
+
+    fn int_descriptor() -> EntrypointDescriptor {
         EntrypointDescriptor {
             name: "create".to_owned(),
             kind: EntryPointKind::Kotoage,
             params: vec![EntrypointParamDescriptor {
                 name: "amount".to_owned(),
-                type_name: "i64".to_owned(),
+                type_name: "int".to_owned(),
             }],
             argument_schema: Some(scalar_argument_schema("amount", EntrypointValueKindV1::Int)),
             return_type: None,
@@ -20157,9 +21443,9 @@ mod contract_payload_normalization_tests {
 
     #[test]
     fn denied_contract_requests_skip_payload_normalization_and_record_decoding() {
-        let descriptor = i64_descriptor();
+        let descriptor = int_descriptor();
         let malformed_payload = IrohaJson::new(norito::json!({
-            "amount": "9223372036854775808"
+            "amount": "+1"
         }));
         let normalization_attempted = std::cell::Cell::new(false);
         ivm::reset_argument_record_decode_count();
@@ -20181,60 +21467,85 @@ mod contract_payload_normalization_tests {
     }
 
     #[test]
-    fn normalize_contract_payload_canonicalizes_string_i64_values() {
-        let descriptor = i64_descriptor();
-        let string_payload = IrohaJson::new(norito::json!({ "amount": "10" }));
-        let number_payload = IrohaJson::new(norito::json!({ "amount": 10 }));
-
-        let normalized_string = normalize_contract_payload(&descriptor, Some(&string_payload))
-            .expect("string i64 payload should normalize")
-            .expect("payload");
-        let normalized_number = normalize_contract_payload(&descriptor, Some(&number_payload))
-            .expect("numeric i64 payload should normalize")
-            .expect("payload");
-
-        let left =
-            json::parse_value(normalized_string.get()).expect("normalized string payload json");
-        let right =
-            json::parse_value(normalized_number.get()).expect("normalized numeric payload json");
-        assert_eq!(left, right);
-        assert_eq!(left, norito::json!({ "amount": 10 }));
+    fn normalize_contract_payload_accepts_wide_and_endpoint_int_values() {
+        let descriptor = int_descriptor();
+        for value in [
+            "10",
+            "9223372036854775808",
+            "-9223372036854775809",
+            SIGNED_512_MAX,
+            SIGNED_512_MIN,
+        ] {
+            let payload = scalar_payload("amount", Value::from(value));
+            let normalized = normalize_contract_payload(&descriptor, Some(&payload))
+                .unwrap_or_else(|error| panic!("canonical int `{value}` rejected: {error}"))
+                .expect("payload");
+            assert_eq!(normalized, payload, "canonical int `{value}` was rewritten");
+        }
     }
 
     #[test]
-    fn normalize_contract_payload_rejects_out_of_range_string_i64_values() {
-        let descriptor = i64_descriptor();
-        let payload = IrohaJson::new(norito::json!({
-            "amount": "9223372036854775808"
-        }));
+    fn normalize_contract_payload_rejects_noncanonical_int_boundaries() {
+        let descriptor = int_descriptor();
+        for value in [
+            "",
+            "+1",
+            "01",
+            "-0",
+            " 1",
+            "1 ",
+            "1_0",
+            "１２",
+            ABOVE_SIGNED_512_MAX,
+            BELOW_SIGNED_512_MIN,
+        ] {
+            let payload = scalar_payload("amount", Value::from(value));
+            let error = match normalize_contract_payload(&descriptor, Some(&payload)) {
+                Ok(_) => panic!("noncanonical int `{value}` was accepted"),
+                Err(error) => error,
+            };
+            assert!(
+                expect_conversion(error).contains("exact argument schema"),
+                "unexpected error for `{value}`"
+            );
+        }
 
-        let err = normalize_contract_payload(&descriptor, Some(&payload))
-            .expect_err("overflowing string i64 values must fail");
-        let message = expect_conversion(err);
-        assert!(message.contains("base-10 signed 64-bit integer"));
+        let number_payload = scalar_payload("amount", Value::from(10_u64));
+        let error = normalize_contract_payload(&descriptor, Some(&number_payload))
+            .expect_err("JSON number tokens must not enter the exact int domain");
+        assert!(expect_conversion(error).contains("exact argument schema"));
     }
 
     #[test]
-    fn normalize_contract_payload_canonicalizes_utf8_bytes_strings_to_hex() {
+    fn normalize_contract_payload_requires_canonical_lowercase_hex_bytes() {
         let descriptor = bytes_descriptor();
-        let payload = IrohaJson::new(norito::json!({
-            "alias_literal": "banking@centralbank"
-        }));
+        let canonical = format!("0x{}", hex::encode("banking@centralbank"));
+        let payload = scalar_payload("alias_literal", Value::from(canonical.clone()));
 
         let normalized = normalize_contract_payload(&descriptor, Some(&payload))
-            .expect("blob payload should normalize")
+            .expect("canonical blob payload should validate")
             .expect("payload");
-        let value = json::parse_value(normalized.get()).expect("normalized blob payload json");
-        let mut expected = Map::new();
-        expected.insert(
-            "alias_literal".into(),
-            Value::from(hex::encode("banking@centralbank".as_bytes())),
-        );
-        assert_eq!(value, Value::Object(expected));
+        assert_eq!(normalized, payload);
+
+        for invalid in [
+            "banking@centralbank",
+            canonical.trim_start_matches("0x"),
+            "0X00",
+            "0x0",
+            "0xAB",
+            "0xgg",
+        ] {
+            let payload = scalar_payload("alias_literal", Value::from(invalid));
+            let error = match normalize_contract_payload(&descriptor, Some(&payload)) {
+                Ok(_) => panic!("noncanonical blob `{invalid}` was accepted"),
+                Err(error) => error,
+            };
+            assert!(expect_conversion(error).contains("exact argument schema"));
+        }
     }
 
     #[test]
-    fn normalize_contract_call_metadata_for_bytecode_canonicalizes_zk_ivm_payload() {
+    fn normalize_contract_call_metadata_for_bytecode_preserves_canonical_zk_ivm_payload() {
         let code = ivm::KotodamaCompiler::new()
             .compile_source(
                 r#"
@@ -20267,14 +21578,14 @@ seiyaku ZkIvmPayloadNormalizeTest {
             Value::from(settlement_asset.clone()),
         );
         request_payload.insert("amount".into(), Value::from("25000000000000000"));
-        request_payload.insert("record_instruction".into(), Value::from("0xAABBCC"));
+        request_payload.insert("record_instruction".into(), Value::from("0xaabbcc"));
         metadata.insert(
             "contract_payload".parse().expect("metadata key"),
             IrohaJson::new(Value::Object(request_payload)),
         );
 
         normalize_contract_call_metadata_for_bytecode(&mut metadata, &code)
-            .expect("metadata payload should normalize");
+            .expect("canonical metadata payload should validate");
 
         let payload = metadata
             .get("contract_payload")
@@ -20283,16 +21594,22 @@ seiyaku ZkIvmPayloadNormalizeTest {
         let mut expected = Map::new();
         expected.insert("sender".into(), Value::from(sender));
         expected.insert("settlement_asset".into(), Value::from(settlement_asset));
-        expected.insert("amount".into(), Value::from(25_000_000_000_000_000_i64));
-        expected.insert("record_instruction".into(), Value::from("aabbcc"));
+        expected.insert("amount".into(), Value::from("25000000000000000"));
+        expected.insert("record_instruction".into(), Value::from("0xaabbcc"));
         assert_eq!(value, Value::Object(expected));
     }
 
     #[test]
-    fn normalize_contract_payload_accepts_contract_address_for_account_id_fields() {
+    fn normalize_contract_payload_accepts_only_canonical_account_ids_for_account_id_fields() {
         let descriptor = account_id_descriptor();
         let authority =
             checked_payload_account_id(0xed, "derive contract payload normalization authority key");
+        let payload = scalar_payload("controller", Value::from(authority.to_string()));
+        let normalized = normalize_contract_payload(&descriptor, Some(&payload))
+            .expect("canonical account payload should validate")
+            .expect("payload");
+        assert_eq!(normalized, payload);
+
         let contract_address = ContractAddress::derive(
             iroha_data_model::account::address::chain_discriminant(),
             &authority,
@@ -20300,18 +21617,10 @@ seiyaku ZkIvmPayloadNormalizeTest {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
-        let mut expected = std::collections::BTreeMap::new();
-        expected.insert(
-            "controller".to_owned(),
-            Value::from(contract_address.to_string()),
-        );
-        let payload = IrohaJson::new(Value::Object(expected.clone()));
-
-        let normalized = normalize_contract_payload(&descriptor, Some(&payload))
-            .expect("contract address payload should normalize")
-            .expect("payload");
-        let value = json::parse_value(normalized.get()).expect("normalized payload json");
-        assert_eq!(value, Value::Object(expected));
+        let payload = scalar_payload("controller", Value::from(contract_address.to_string()));
+        let error = normalize_contract_payload(&descriptor, Some(&payload))
+            .expect_err("a contract address is not a canonical AccountId");
+        assert!(expect_conversion(error).contains("exact argument schema"));
     }
 
     #[test]
@@ -20349,7 +21658,7 @@ seiyaku ZkIvmPayloadNormalizeTest {
 
         let error = normalize_contract_payload(&descriptor, Some(&payload))
             .expect_err("single Json parameters still require their declared field name");
-        assert!(expect_conversion(error).contains("missing contract payload field `ev`"));
+        assert!(expect_conversion(error).contains("exact argument schema"));
     }
 }
 
@@ -20498,6 +21807,38 @@ mod multisig_selector_tests {
         nexus.dataspace_catalog = dataspace_catalog;
     }
 
+    fn install_sbp_routing_state(state: &State) {
+        let sbp_dataspace_id = DataSpaceId::new(10);
+        let sbp_lane_id = LaneId::new(1);
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: sbp_dataspace_id,
+                alias: "sbp".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("valid SBP dataspace catalog");
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: sbp_lane_id,
+                    dataspace_id: sbp_dataspace_id,
+                    alias: "sbp".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("valid SBP lane catalog");
+        let mut nexus = state.nexus.write();
+        nexus.routing_policy = paynet_routing_policy();
+        nexus.lane_catalog = lane_catalog;
+        nexus.dataspace_catalog = dataspace_catalog;
+    }
+
     fn test_asset_definition_id() -> dm::AssetDefinitionId {
         test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400aa")
     }
@@ -20548,6 +21889,23 @@ mod multisig_selector_tests {
         instructions_hash.to_string()
     }
 
+    fn insert_native_multisig_account_state(
+        world: &mut World,
+        multisig_account_id: &dm::AccountId,
+        home_domain: Option<DomainId>,
+        spec: &MultisigSpec,
+    ) {
+        world.smart_contract_state_mut_for_testing().insert(
+            multisig_account_state_contract_key(multisig_account_id),
+            norito::to_bytes(&MultisigAccountState::new(
+                multisig_account_id.clone(),
+                home_domain,
+                spec.clone(),
+            ))
+            .expect("encode native multisig account state"),
+        );
+    }
+
     fn multisig_test_world() -> (
         World,
         dm::AccountId,
@@ -20590,7 +21948,7 @@ mod multisig_selector_tests {
         let mut multisig_metadata = Metadata::default();
         multisig_metadata.insert(
             Name::from_str(MULTISIG_SPEC_METADATA_KEY).expect("spec key"),
-            IrohaJson::new(spec),
+            IrohaJson::new(spec.clone()),
         );
 
         let active_instructions = vec![dm::Log::new(dm::Level::INFO, "active".to_owned()).into()];
@@ -20622,6 +21980,12 @@ mod multisig_selector_tests {
             [domain],
             [multisig_account, signer_one_account, signer_two_account],
             [],
+        );
+        insert_native_multisig_account_state(
+            &mut world,
+            &multisig_account_id,
+            Some(domain_id.clone()),
+            &spec,
         );
         world.smart_contract_state_mut_for_testing().insert(
             multisig_proposal_state_contract_key(&multisig_account_id, &active_hash),
@@ -20661,7 +22025,7 @@ mod multisig_selector_tests {
                     expired_hash,
                     expired_instructions,
                     1_600_000_000_000,
-                    1,
+                    1_600_000_000_001,
                     BTreeSet::new(),
                     None,
                 ),
@@ -20675,7 +22039,6 @@ mod multisig_selector_tests {
                     .expect("encode signatory index state"),
             );
         }
-
         (
             world,
             multisig_account_id,
@@ -20710,7 +22073,7 @@ mod multisig_selector_tests {
         let mut multisig_metadata = Metadata::default();
         multisig_metadata.insert(
             Name::from_str(MULTISIG_SPEC_METADATA_KEY).expect("spec key"),
-            IrohaJson::new(spec),
+            IrohaJson::new(spec.clone()),
         );
 
         let label = iroha_data_model::account::rekey::AccountAlias::new(
@@ -20721,15 +22084,23 @@ mod multisig_selector_tests {
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         );
         let authority = signer_id.account().clone();
-        let domain = Domain::new(domain_id).build(&authority);
+        let domain = Domain::new(domain_id.clone()).build(&authority);
         let multisig_account = Account::new(multisig_id.account().clone())
             .with_label(Some(label))
             .with_metadata(multisig_metadata)
             .build(&authority);
         let signer_account = Account::new(signer_id.account().clone()).build(&authority);
 
+        let mut world = World::with([domain], [multisig_account, signer_account], []);
+        insert_native_multisig_account_state(
+            &mut world,
+            &multisig_account_id,
+            Some(domain_id),
+            &spec,
+        );
+
         (
-            World::with([domain], [multisig_account, signer_account], []),
+            world,
             multisig_account_id,
             signer_id.into(),
             alias_literal,
@@ -20741,7 +22112,7 @@ mod multisig_selector_tests {
         let authority =
             checked_multisig_selector_account_id(0x63, "derive overlong multisig authority key");
         let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
-        let domain = Domain::new(domain_id).build(&authority);
+        let domain = Domain::new(domain_id.clone()).build(&authority);
 
         let viewer_key =
             checked_multisig_selector_keypair(0x64, "derive overlong multisig viewer key");
@@ -20762,7 +22133,7 @@ mod multisig_selector_tests {
             std::iter::once(
                 MultisigMember::new(viewer_key.public_key().clone(), 1).expect("viewer member"),
             )
-            .chain(filler_members.into_iter())
+            .chain(filler_members)
             .collect(),
         )
         .expect("policy");
@@ -20774,8 +22145,8 @@ mod multisig_selector_tests {
                 .canonical_i105()
                 .expect("canonical multisig literal")
                 .len()
-                > 128,
-            "fixture must exercise an overlong canonical multisig literal",
+                > MULTISIG_APPROVALS_CURSOR_MAX_BYTES,
+            "fixture must exceed the retired full-account cursor bound",
         );
 
         let mut signatories = BTreeMap::from([(viewer_id.clone(), 1_u8)]);
@@ -20793,21 +22164,25 @@ mod multisig_selector_tests {
             quorum: NonZeroU16::new(2).expect("quorum"),
             transaction_ttl_ms: NonZeroU64::new(60_000).expect("ttl"),
         };
-
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str(MULTISIG_SPEC_METADATA_KEY).expect("spec key"),
-            IrohaJson::new(spec),
+            IrohaJson::new(spec.clone()),
         );
 
         let active_instructions = vec![dm::Log::new(dm::Level::INFO, "overlong".to_owned()).into()];
         let active_hash = HashOf::new(&active_instructions);
-
         let multisig_account = Account::new(multisig_id.account().clone())
             .with_metadata(metadata)
             .build(&authority);
         let viewer_account = Account::new(viewer_id.clone()).build(&authority);
         let mut world = World::with([domain], [multisig_account, viewer_account], []);
+        insert_native_multisig_account_state(
+            &mut world,
+            &multisig_account_id,
+            Some(domain_id),
+            &spec,
+        );
         world.smart_contract_state_mut_for_testing().insert(
             multisig_proposal_state_contract_key(&multisig_account_id, &active_hash),
             norito::to_bytes(
@@ -20918,7 +22293,7 @@ mod multisig_selector_tests {
         let mut multisig_metadata = Metadata::default();
         multisig_metadata.insert(
             Name::from_str(MULTISIG_SPEC_METADATA_KEY).expect("spec key"),
-            IrohaJson::new(spec),
+            IrohaJson::new(spec.clone()),
         );
 
         let label = iroha_data_model::account::rekey::AccountAlias::new(
@@ -20929,18 +22304,25 @@ mod multisig_selector_tests {
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         );
         let authority = signer_one_id.account().clone();
-        let domain = Domain::new(domain_id).build(&authority);
+        let domain = Domain::new(domain_id.clone()).build(&authority);
         let multisig_account = Account::new(multisig_id.account().clone())
             .with_label(Some(label))
             .with_metadata(multisig_metadata)
             .build(&authority);
         let signer_one_account = Account::new(signer_one_id.account().clone()).build(&authority);
         let signer_two_account = Account::new(signer_two_id.account().clone()).build(&authority);
-        let state = build_state(World::with(
+        let mut world = World::with(
             [domain],
             [multisig_account, signer_one_account, signer_two_account],
             [],
-        ));
+        );
+        insert_native_multisig_account_state(
+            &mut world,
+            &multisig_account_id,
+            Some(domain_id),
+            &spec,
+        );
+        let state = build_state(world);
 
         (
             state,
@@ -20964,6 +22346,7 @@ mod multisig_selector_tests {
             authority_keypair,
             contract_address,
             minimal_ivm_program(1),
+            None,
         );
     }
 
@@ -20986,6 +22369,7 @@ mod multisig_selector_tests {
         authority_keypair: &KeyPair,
         contract_address: &iroha_data_model::smart_contract::ContractAddress,
         code: Vec<u8>,
+        contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
     ) {
         let mut block = state.block(dm::BlockHeader::new(
             NonZeroU64::new(1).expect("height"),
@@ -21018,6 +22402,30 @@ mod multisig_selector_tests {
         register_manifest(authority, manifest, &mut stx).expect("register manifest");
         activate_instance(authority, contract_address.clone(), code_hash, &mut stx)
             .expect("activate instance");
+        if let Some(contract_alias) = contract_alias {
+            let alias_dataspace = contract_address
+                .dataspace_id()
+                .expect("test contract dataspace");
+            Grant::account_permission(
+                Permission::from(
+                    iroha_executor_data_model::permission::account::CanManageAccountAlias {
+                        scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
+                            alias_dataspace,
+                        ),
+                    },
+                ),
+                authority.clone(),
+            )
+            .execute(authority, &mut stx)
+            .expect("grant contract-alias namespace permission");
+            iroha_data_model::isi::contract_alias::SetContractAlias::bind(
+                contract_address.clone(),
+                contract_alias,
+                None,
+            )
+            .execute(authority, &mut stx)
+            .expect("bind contract alias");
+        }
 
         stx.apply();
         block.commit().expect("commit block");
@@ -21109,6 +22517,271 @@ mod multisig_selector_tests {
         .expect_err("selector must be rejected");
         let message = expect_app_validation(err, "multisig_selector_invalid");
         assert!(message.contains("exactly one of multisig_account_id or multisig_account_alias"));
+    }
+
+    #[test]
+    fn multisig_proposal_selector_requires_exactly_one_canonical_hash() {
+        let instructions: Vec<dm::InstructionBox> =
+            vec![dm::Log::new(dm::Level::INFO, "x".to_owned()).into()];
+        let canonical = HashOf::new(&instructions).to_string();
+        assert_eq!(
+            resolve_multisig_proposal_hash(Some(canonical.clone()), None)
+                .expect("canonical proposal id")
+                .0,
+            canonical
+        );
+
+        for (proposal_id, instructions_hash) in [
+            (None, None),
+            (Some(canonical.clone()), Some(canonical.clone())),
+            (Some(format!(" {canonical}")), None),
+            (Some("not-a-hash".to_owned()), None),
+        ] {
+            let error = resolve_multisig_proposal_hash(proposal_id, instructions_hash)
+                .expect_err("ambiguous or noncanonical selector must fail");
+            assert!(matches!(
+                error,
+                Error::AppQueryValidation {
+                    code: "multisig_selector_invalid",
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn multisig_read_json_contracts_reject_unknown_top_level_fields() {
+        let cases = [
+            (
+                "spec",
+                r#"{"multisig_account_alias":"cbdc@banka.universal","unexpected":true}"#,
+            ),
+            (
+                "query",
+                r#"{"multisig_account_alias":"cbdc@banka.universal","status":[],"unexpected":true}"#,
+            ),
+            (
+                "lookup",
+                r#"{"multisig_account_alias":"cbdc@banka.universal","proposal_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","unexpected":true}"#,
+            ),
+        ];
+        for (kind, body) in cases {
+            let rejected = match kind {
+                "spec" => norito::json::from_str::<MultisigSpecRequestDto>(body).is_err(),
+                "query" => {
+                    norito::json::from_str::<MultisigProposalsQueryRequestDto>(body).is_err()
+                }
+                "lookup" => {
+                    norito::json::from_str::<MultisigProposalLookupRequestDto>(body).is_err()
+                }
+                _ => unreachable!(),
+            };
+            assert!(rejected, "{kind} must reject unknown fields");
+        }
+    }
+
+    #[test]
+    fn multisig_approval_lookup_json_requires_exact_multisig_account() {
+        let multisig_account_id = checked_multisig_selector_account_id(
+            0x77,
+            "derive approval lookup JSON multisig account",
+        );
+        let instructions: Vec<dm::InstructionBox> =
+            vec![dm::Log::new(dm::Level::INFO, "lookup-json".to_owned()).into()];
+        let proposal_id = HashOf::new(&instructions).to_string();
+        let valid = format!(
+            r#"{{"multisig_account_id":"{multisig_account_id}","proposal_id":"{proposal_id}"}}"#
+        );
+        let decoded: MultisigApprovalLookupRequestDto =
+            norito::json::from_str(&valid).expect("exact approval lookup request");
+        assert_eq!(decoded.multisig_account_id, multisig_account_id);
+        assert_eq!(decoded.proposal_id.as_deref(), Some(proposal_id.as_str()));
+        assert!(decoded.instructions_hash.is_none());
+
+        for invalid in [
+            format!(r#"{{"proposal_id":"{proposal_id}"}}"#),
+            format!(
+                r#"{{"multisig_account_id":"{multisig_account_id}","proposal_id":"{proposal_id}","unexpected":true}}"#
+            ),
+        ] {
+            assert!(
+                norito::json::from_str::<MultisigApprovalLookupRequestDto>(&invalid).is_err(),
+                "approval lookup JSON must be closed and require multisig_account_id",
+            );
+        }
+    }
+
+    #[test]
+    fn multisig_contract_call_json_contracts_reject_unknown_top_level_fields() {
+        let account = checked_multisig_selector_account_id(
+            0x76,
+            "derive strict contract-call DTO fixture account",
+        )
+        .to_string();
+        let propose = format!(
+            r#"{{"multisig_account_id":"{account}","signer_account_id":"{account}","contract_alias":"pkdeploy_issuance_swap_sbp::sbp","entrypoint":"swap","payload":{{"swap_id":"swap_1","pkr_amount":"7600","treasury_amount":"100"}},"unexpected":true}}"#,
+        );
+        assert!(
+            norito::json::from_str::<MultisigContractCallProposeDto>(&propose).is_err(),
+            "contract-call propose must reject unknown fields",
+        );
+
+        let approve = format!(
+            r#"{{"multisig_account_id":"{account}","signer_account_id":"{account}","proposal_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","unexpected":true}}"#,
+        );
+        assert!(
+            norito::json::from_str::<MultisigContractCallApproveDto>(&approve).is_err(),
+            "contract-call approve must reject unknown fields",
+        );
+    }
+
+    #[test]
+    fn multisig_selector_rejects_noncanonical_alias_whitespace() {
+        let state = build_state(World::default());
+        for alias in ["", " ", " cbdc@banka.universal", "cbdc@banka.universal "] {
+            let err =
+                resolve_multisig_account_selector(state.as_ref(), &alias_selector(alias), None)
+                    .expect_err("noncanonical alias whitespace must be rejected");
+            let message = expect_app_validation(err, "multisig_selector_invalid");
+            assert!(message.contains("exact non-empty canonical literal"));
+        }
+    }
+
+    #[test]
+    fn multisig_proposal_selector_requires_one_canonical_consistent_hash() {
+        let instructions: Vec<dm::InstructionBox> =
+            vec![dm::Log::new(dm::Level::INFO, "strict".to_owned()).into()];
+        let canonical = HashOf::new(&instructions).to_string();
+        let (_, parsed) = resolve_multisig_proposal_hash(None, Some(canonical.clone()))
+            .expect("one canonical selector");
+        assert_eq!(parsed.to_string(), canonical);
+
+        let other_instructions: Vec<dm::InstructionBox> =
+            vec![dm::Log::new(dm::Level::INFO, "other".to_owned()).into()];
+        let other = HashOf::new(&other_instructions).to_string();
+        for (proposal_id, instructions_hash, expected) in [
+            (
+                Some(canonical.clone()),
+                Some(canonical.clone()),
+                "exactly one",
+            ),
+            (Some(canonical.clone()), Some(other), "exactly one"),
+            (
+                Some(format!(" {canonical}")),
+                None,
+                "canonical instruction hash",
+            ),
+            (
+                None,
+                Some(format!("{canonical} ")),
+                "canonical instruction hash",
+            ),
+            (None, None, "is required"),
+        ] {
+            let err = resolve_multisig_proposal_hash(proposal_id, instructions_hash)
+                .expect_err("malformed or conflicting selectors must fail closed");
+            let message = expect_app_validation(err, "multisig_selector_invalid");
+            assert!(message.contains(expected), "unexpected message: {message}");
+        }
+    }
+
+    #[test]
+    fn multisig_status_filters_require_exact_canonical_values() {
+        assert_eq!(
+            requested_multisig_statuses(&["FINALIZED".to_owned()]).expect("canonical status"),
+            BTreeSet::from(["FINALIZED".to_owned()]),
+        );
+        for statuses in [
+            vec!["finalized".to_owned()],
+            vec![" FINALIZED".to_owned()],
+            vec!["FINALIZED".to_owned(), "FINALIZED".to_owned()],
+        ] {
+            let err = requested_multisig_statuses(&statuses)
+                .expect_err("noncanonical status filters must fail closed");
+            let message = expect_app_validation(err, "multisig_status_invalid");
+            assert!(!message.is_empty());
+        }
+    }
+
+    #[test]
+    fn active_proposal_with_quorum_is_not_reported_as_finalized() {
+        let signer_one =
+            checked_multisig_selector_account_id(0x73, "derive active-quorum signer one key");
+        let signer_two =
+            checked_multisig_selector_account_id(0x74, "derive active-quorum signer two key");
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer_one.clone(), 1_u8), (signer_two.clone(), 1_u8)]),
+            quorum: NonZeroU16::new(2).expect("quorum"),
+            transaction_ttl_ms: NonZeroU64::new(60_000).expect("ttl"),
+        };
+        let proposal = MultisigProposalValue::new(
+            Vec::new(),
+            1,
+            10_000,
+            BTreeSet::from([signer_one, signer_two]),
+            None,
+        );
+
+        assert_eq!(
+            classify_active_multisig_proposal_status(&spec, &proposal, 2),
+            MultisigProposalStatus::CollectingSignatures,
+            "only a native terminal record may prove final execution",
+        );
+    }
+
+    #[test]
+    fn terminal_proposal_projection_rejects_impossible_status_timestamps() {
+        use iroha_executor_data_model::isi::multisig::{
+            MultisigProposalTerminalState, MultisigProposalTerminalStatus,
+        };
+
+        let account =
+            checked_multisig_selector_account_id(0x75, "derive terminal-timestamp fixture account");
+        let instructions = vec![dm::Log::new(dm::Level::INFO, "terminal".to_owned()).into()];
+        let instructions_hash = HashOf::new(&instructions);
+        let proposal = MultisigProposalValue::new(instructions, 100, 200, BTreeSet::new(), None);
+
+        let finalized_after_expiry = MultisigProposalTerminalState::new(
+            account.clone(),
+            instructions_hash,
+            proposal.clone(),
+            MultisigProposalTerminalStatus::Finalized,
+            200,
+        );
+        assert!(
+            validate_multisig_terminal_proposal_binding(
+                &account,
+                &instructions_hash,
+                &finalized_after_expiry,
+            )
+            .is_err(),
+        );
+
+        let expired_before_expiry = MultisigProposalTerminalState::new(
+            account.clone(),
+            instructions_hash,
+            proposal.clone(),
+            MultisigProposalTerminalStatus::Expired,
+            199,
+        );
+        assert!(
+            validate_multisig_terminal_proposal_binding(
+                &account,
+                &instructions_hash,
+                &expired_before_expiry,
+            )
+            .is_err(),
+        );
+
+        let canceled = MultisigProposalTerminalState::new(
+            account.clone(),
+            instructions_hash,
+            proposal,
+            MultisigProposalTerminalStatus::Canceled,
+            150,
+        );
+        validate_multisig_terminal_proposal_binding(&account, &instructions_hash, &canceled)
+            .expect("a cancellation between proposal creation and expiry is coherent");
     }
 
     #[tokio::test]
@@ -21340,7 +23013,7 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_spec_falls_back_to_contract_state_when_metadata_is_missing() {
+    async fn multisig_spec_uses_native_account_state_when_metadata_is_missing() {
         let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
         let label_name: Name = "cbdc".parse().expect("label");
 
@@ -21409,10 +23082,183 @@ mod multisig_selector_tests {
             }),
         )
         .await
-        .expect("contract-state fallback should resolve spec");
+        .expect("native account state should resolve spec");
 
         assert_eq!(response.resolved_multisig_account_id, multisig_account_id);
         assert_eq!(response.spec, spec);
+    }
+
+    #[tokio::test]
+    async fn multisig_spec_rejects_metadata_without_native_account_state() {
+        let (mut world, multisig_account_id, _signer_one, _signer_two, _alias, _active_hash) =
+            multisig_test_world();
+        let mut smart_contract_state = world.smart_contract_state_mut_for_testing().block();
+        assert!(
+            smart_contract_state
+                .remove(multisig_account_state_contract_key(&multisig_account_id))
+                .is_some(),
+            "fixture must contain native multisig account state"
+        );
+        smart_contract_state.commit();
+
+        let error = handle_post_multisig_spec(
+            build_state(world),
+            NoritoJson(MultisigSpecRequestDto {
+                selector: concrete_selector(multisig_account_id),
+            }),
+        )
+        .await
+        .expect_err("metadata alone must not fabricate a native multisig spec");
+        let message = expect_app_conflict(error, "multisig_account_not_authority");
+        assert!(message.contains("not a multisig authority"));
+    }
+
+    #[tokio::test]
+    async fn multisig_spec_rejects_metadata_native_state_disagreement() {
+        let (mut world, multisig_account_id, signer_one, signer_two, _alias, _active_hash) =
+            multisig_test_world();
+        let divergent_spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer_one, 1_u8), (signer_two, 1_u8)]),
+            quorum: NonZeroU16::new(2).expect("quorum"),
+            transaction_ttl_ms: NonZeroU64::new(120_000).expect("ttl"),
+        };
+        insert_native_multisig_account_state(
+            &mut world,
+            &multisig_account_id,
+            Some(DomainId::try_new("banka", "universal").expect("domain")),
+            &divergent_spec,
+        );
+
+        let error = handle_post_multisig_spec(
+            build_state(world),
+            NoritoJson(MultisigSpecRequestDto {
+                selector: concrete_selector(multisig_account_id),
+            }),
+        )
+        .await
+        .expect_err("metadata/native spec disagreement must fail closed");
+        let message = expect_conversion(error);
+        assert!(message.contains("disagrees with canonical native account state"));
+    }
+
+    #[test]
+    fn multisig_status_filters_are_canonical_and_fail_closed() {
+        let statuses = requested_multisig_statuses(&[
+            "COLLECTING_SIGNATURES".to_owned(),
+            "CANCELED".to_owned(),
+        ])
+        .expect("supported statuses");
+        assert_eq!(
+            statuses,
+            BTreeSet::from(["CANCELED".to_owned(), "COLLECTING_SIGNATURES".to_owned(),])
+        );
+
+        for status in [
+            "READY_TO_SUBMIT",
+            " ",
+            "collecting_signatures",
+            " CANCELED ",
+        ] {
+            let error = requested_multisig_statuses(&[status.to_owned()])
+                .expect_err("unsupported status must fail before querying state");
+            assert!(matches!(
+                error,
+                Error::AppQueryValidation {
+                    code: "multisig_status_invalid",
+                    ..
+                }
+            ));
+        }
+        for statuses in [
+            vec!["FINALIZED".to_owned(), "FINALIZED".to_owned()],
+            vec![
+                "COLLECTING_SIGNATURES".to_owned(),
+                "FINALIZED".to_owned(),
+                "CANCELED".to_owned(),
+                "EXPIRED".to_owned(),
+                "FINALIZED".to_owned(),
+            ],
+        ] {
+            assert!(
+                requested_multisig_statuses(&statuses).is_err(),
+                "duplicate or oversized status filter must fail"
+            );
+        }
+    }
+
+    #[test]
+    fn multisig_operation_type_filters_and_approval_cursors_fail_closed() {
+        use base64::Engine as _;
+
+        assert_eq!(
+            requested_multisig_operation_types(&["TRANSFER".to_owned()])
+                .expect("canonical operation type"),
+            BTreeSet::from(["TRANSFER".to_owned()])
+        );
+        for operation_types in [
+            vec!["transfer".to_owned()],
+            vec!["TRANSFER\0MINT".to_owned()],
+            vec!["ÄSSET".to_owned()],
+            vec!["TRANSFER".to_owned(), "TRANSFER".to_owned()],
+        ] {
+            let error = requested_multisig_operation_types(&operation_types)
+                .expect_err("non-canonical or duplicate operation type must fail");
+            assert!(matches!(
+                error,
+                Error::AppQueryValidation {
+                    code: "multisig_operation_type_invalid",
+                    ..
+                }
+            ));
+        }
+
+        let multisig_account_id = checked_multisig_selector_account_id(
+            0x6f,
+            "derive approvals cursor fixture account key",
+        );
+        let instructions = vec![dm::InstructionBox::from(dm::Log::new(
+            dm::Level::INFO,
+            "approvals cursor fixture".to_owned(),
+        ))];
+        let context_fingerprint = Hash::new(b"approvals cursor context").to_string();
+        let cursor = MultisigApprovalsCursor {
+            proposed_at_ms: 1_700_000_000_000,
+            instructions_hash: HashOf::new(&instructions).to_string(),
+            multisig_account_fingerprint: multisig_account_fingerprint(&multisig_account_id),
+            context_fingerprint: context_fingerprint.clone(),
+        };
+        let encoded = encode_multisig_approvals_cursor(&cursor);
+        let decoded = decode_multisig_approvals_cursor(&encoded, &context_fingerprint)
+            .expect("canonical cursor");
+        assert_eq!(decoded.proposed_at_ms, cursor.proposed_at_ms);
+        assert_eq!(decoded.instructions_hash, cursor.instructions_hash);
+        assert_eq!(
+            decoded.multisig_account_fingerprint,
+            cursor.multisig_account_fingerprint
+        );
+        assert_eq!(decoded.context_fingerprint, context_fingerprint);
+        assert!(
+            decode_multisig_approvals_cursor(&encoded, &Hash::new(b"other context").to_string())
+                .is_err(),
+            "an approvals cursor must be bound to its viewer and filter context"
+        );
+
+        let noncanonical = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
+            "v1|0{}|{}|{}|{}",
+            cursor.proposed_at_ms,
+            cursor.instructions_hash,
+            cursor.multisig_account_fingerprint,
+            cursor.context_fingerprint
+        ));
+        for raw in [
+            noncanonical,
+            "A".repeat(MULTISIG_APPROVALS_CURSOR_MAX_BYTES + 1),
+        ] {
+            assert!(
+                decode_multisig_approvals_cursor(&raw, &context_fingerprint).is_err(),
+                "non-canonical or oversized approvals cursor must fail"
+            );
+        }
     }
 
     #[tokio::test]
@@ -21449,20 +23295,24 @@ mod multisig_selector_tests {
         );
         assert_eq!(alias_spec.spec, concrete_spec.spec);
 
-        let JsonBody(alias_list) = handle_post_multisig_proposals_list(
+        let JsonBody(alias_list) = handle_post_multisig_proposals_query(
             state.clone(),
-            NoritoJson(MultisigProposalsListRequestDto {
+            NoritoJson(MultisigProposalsQueryRequestDto {
                 selector: alias_selector(&alias_literal),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                cursor: None,
+                limit: None,
             }),
         )
         .await
         .expect("alias list");
-        let JsonBody(concrete_list) = handle_post_multisig_proposals_list(
+        let JsonBody(concrete_list) = handle_post_multisig_proposals_query(
             state.clone(),
-            NoritoJson(MultisigProposalsListRequestDto {
+            NoritoJson(MultisigProposalsQueryRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                cursor: None,
+                limit: None,
             }),
         )
         .await
@@ -21475,9 +23325,9 @@ mod multisig_selector_tests {
         assert_eq!(alias_list.proposals, concrete_list.proposals);
         assert_eq!(alias_list.proposals[0].proposal_id, active_hash);
 
-        let JsonBody(alias_get) = handle_post_multisig_proposals_get(
+        let JsonBody(alias_get) = handle_post_multisig_proposals_lookup(
             state.clone(),
-            NoritoJson(MultisigProposalsGetRequestDto {
+            NoritoJson(MultisigProposalLookupRequestDto {
                 selector: alias_selector(&alias_literal),
                 proposal_id: Some(active_hash.clone()),
                 instructions_hash: None,
@@ -21485,9 +23335,9 @@ mod multisig_selector_tests {
         )
         .await
         .expect("alias get");
-        let JsonBody(concrete_get) = handle_post_multisig_proposals_get(
+        let JsonBody(concrete_get) = handle_post_multisig_proposals_lookup(
             state,
-            NoritoJson(MultisigProposalsGetRequestDto {
+            NoritoJson(MultisigProposalLookupRequestDto {
                 selector: concrete_selector(multisig_account_id),
                 proposal_id: None,
                 instructions_hash: Some(active_hash.clone()),
@@ -21501,6 +23351,249 @@ mod multisig_selector_tests {
         );
         assert_eq!(alias_get.instructions_hash, active_hash);
         assert_eq!(alias_get.proposal, concrete_get.proposal);
+    }
+
+    #[tokio::test]
+    async fn multisig_proposals_query_is_bounded_and_cursor_is_context_bound() {
+        let (world, multisig_account_id, _signer_one, _signer_two, alias_literal, active_hash) =
+            multisig_test_world();
+        let state = build_state(world);
+        let JsonBody(first) = handle_post_multisig_proposals_query(
+            state.clone(),
+            NoritoJson(MultisigProposalsQueryRequestDto {
+                selector: alias_selector(&alias_literal),
+                status: Vec::new(),
+                cursor: None,
+                limit: Some(1),
+            }),
+        )
+        .await
+        .expect("first bounded proposal page");
+        assert_eq!(first.proposals.len(), 1);
+        assert_eq!(first.proposals[0].instructions_hash, active_hash);
+        let cursor = first.next_cursor.expect("second page cursor");
+        assert!(cursor.len() <= MULTISIG_PROPOSALS_CURSOR_MAX_BYTES);
+
+        let JsonBody(second) = handle_post_multisig_proposals_query(
+            state.clone(),
+            NoritoJson(MultisigProposalsQueryRequestDto {
+                selector: concrete_selector(multisig_account_id.clone()),
+                status: Vec::new(),
+                cursor: Some(cursor.clone()),
+                limit: Some(1),
+            }),
+        )
+        .await
+        .expect("second bounded proposal page");
+        assert_eq!(second.proposals.len(), 1);
+        assert_ne!(second.proposals[0].instructions_hash, active_hash);
+        assert!(second.next_cursor.is_none());
+
+        for (cursor, statuses) in [
+            (format!("A{}", &cursor[1..]), Vec::new()),
+            (
+                "A".repeat(MULTISIG_PROPOSALS_CURSOR_MAX_BYTES + 1),
+                Vec::new(),
+            ),
+            (cursor.clone(), vec!["EXPIRED".to_owned()]),
+        ] {
+            let error = handle_post_multisig_proposals_query(
+                state.clone(),
+                NoritoJson(MultisigProposalsQueryRequestDto {
+                    selector: concrete_selector(multisig_account_id.clone()),
+                    status: statuses,
+                    cursor: Some(cursor),
+                    limit: Some(1),
+                }),
+            )
+            .await
+            .expect_err("tampered, oversized, or filter-replayed cursor must fail");
+            assert!(matches!(
+                error,
+                Error::AppQueryValidation {
+                    code: "multisig_cursor_invalid",
+                    ..
+                }
+            ));
+        }
+
+        let other_account = checked_multisig_selector_account_id(
+            0x6e,
+            "derive cross-account multisig cursor fixture key",
+        );
+        assert!(
+            decode_multisig_proposals_cursor(&cursor, &other_account, &BTreeSet::new()).is_err(),
+            "cursor must not replay across multisig accounts"
+        );
+
+        let nonexistent_hash = HashOf::new(&vec![dm::InstructionBox::from(dm::Log::new(
+            dm::Level::INFO,
+            "nonexistent cursor boundary".to_owned(),
+        ))])
+        .to_string();
+        let expired_statuses = BTreeSet::from(["EXPIRED".to_owned()]);
+        for forged in [
+            MultisigProposalsCursor {
+                multisig_account_fingerprint: multisig_account_fingerprint(&multisig_account_id),
+                proposed_at_ms: 1_700_000_000_000,
+                instructions_hash: nonexistent_hash,
+                status_fingerprint: multisig_status_fingerprint(&BTreeSet::new()),
+            },
+            MultisigProposalsCursor {
+                multisig_account_fingerprint: multisig_account_fingerprint(&multisig_account_id),
+                proposed_at_ms: 1_700_000_000_001,
+                instructions_hash: active_hash.clone(),
+                status_fingerprint: multisig_status_fingerprint(&BTreeSet::new()),
+            },
+        ] {
+            let error = handle_post_multisig_proposals_query(
+                state.clone(),
+                NoritoJson(MultisigProposalsQueryRequestDto {
+                    selector: concrete_selector(multisig_account_id.clone()),
+                    status: Vec::new(),
+                    cursor: Some(encode_multisig_proposals_cursor(&forged)),
+                    limit: Some(1),
+                }),
+            )
+            .await
+            .expect_err("a canonical cursor for a nonexistent boundary must fail closed");
+            let message = expect_app_validation(error, "multisig_cursor_invalid");
+            assert!(message.contains("boundary is not present"));
+        }
+
+        let filter_rebound_cursor = encode_multisig_proposals_cursor(&MultisigProposalsCursor {
+            multisig_account_fingerprint: multisig_account_fingerprint(&multisig_account_id),
+            proposed_at_ms: 1_700_000_000_000,
+            instructions_hash: active_hash,
+            status_fingerprint: multisig_status_fingerprint(&expired_statuses),
+        });
+        let error = handle_post_multisig_proposals_query(
+            state.clone(),
+            NoritoJson(MultisigProposalsQueryRequestDto {
+                selector: concrete_selector(multisig_account_id.clone()),
+                status: vec!["EXPIRED".to_owned()],
+                cursor: Some(filter_rebound_cursor),
+                limit: Some(1),
+            }),
+        )
+        .await
+        .expect_err(
+            "recomputing the filter fingerprint must not admit a boundary excluded by that filter",
+        );
+        let message = expect_app_validation(error, "multisig_cursor_invalid");
+        assert!(message.contains("boundary is not present"));
+
+        for limit in [0, MULTISIG_PROPOSALS_MAX_PAGE_LIMIT + 1] {
+            let error = handle_post_multisig_proposals_query(
+                state.clone(),
+                NoritoJson(MultisigProposalsQueryRequestDto {
+                    selector: concrete_selector(multisig_account_id.clone()),
+                    status: Vec::new(),
+                    cursor: None,
+                    limit: Some(limit),
+                }),
+            )
+            .await
+            .expect_err("unsafe proposal list limit must fail");
+            assert!(matches!(
+                error,
+                Error::AppQueryValidation {
+                    code: "multisig_limit_invalid",
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn multisig_reads_fail_closed_on_cross_account_proposal_state_tamper() {
+        let (mut world, multisig_account_id, _signer_one, _signer_two, _alias, active_hash) =
+            multisig_test_world();
+        let instructions = vec![dm::Log::new(dm::Level::INFO, "active".to_owned()).into()];
+        let instructions_hash = active_hash
+            .parse::<HashOf<Vec<dm::InstructionBox>>>()
+            .expect("active hash");
+        assert_eq!(HashOf::new(&instructions), instructions_hash);
+        let foreign_account = checked_multisig_selector_account_id(
+            0x6f,
+            "derive cross-account proposal tamper fixture key",
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            multisig_proposal_state_contract_key(&multisig_account_id, &instructions_hash),
+            norito::to_bytes(
+                &iroha_executor_data_model::isi::multisig::MultisigProposalState::new(
+                    foreign_account,
+                    instructions_hash,
+                    instructions,
+                    1_700_000_000_000,
+                    4_000_000_000_000,
+                    BTreeSet::new(),
+                    None,
+                ),
+            )
+            .expect("encode tampered proposal state"),
+        );
+        let error = handle_post_multisig_proposals_lookup(
+            build_state(world),
+            NoritoJson(MultisigProposalLookupRequestDto {
+                selector: concrete_selector(multisig_account_id),
+                proposal_id: Some(active_hash),
+                instructions_hash: None,
+            }),
+        )
+        .await
+        .expect_err("cross-account proposal state must fail closed");
+        assert!(matches!(
+            error,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(_)
+            ))
+        ));
+    }
+
+    #[tokio::test]
+    async fn multisig_get_fails_closed_on_conflicting_active_and_terminal_state() {
+        use iroha_executor_data_model::isi::multisig::{
+            MultisigProposalTerminalState, MultisigProposalTerminalStatus,
+        };
+
+        let (mut world, multisig_account_id, signer_one, _signer_two, _alias, active_hash) =
+            multisig_test_world();
+        let instructions = vec![dm::Log::new(dm::Level::INFO, "active".to_owned()).into()];
+        let instructions_hash = active_hash
+            .parse::<HashOf<Vec<dm::InstructionBox>>>()
+            .expect("active hash");
+        assert_eq!(HashOf::new(&instructions), instructions_hash);
+        let terminal = MultisigProposalTerminalState::new(
+            multisig_account_id.clone(),
+            instructions_hash,
+            MultisigProposalValue::new(
+                instructions,
+                1_700_000_000_000,
+                4_000_000_000_000,
+                BTreeSet::from([signer_one]),
+                None,
+            ),
+            MultisigProposalTerminalStatus::Canceled,
+            1_700_000_000_010,
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            multisig_proposal_terminal_state_contract_key(&multisig_account_id, &instructions_hash),
+            norito::to_bytes(&terminal).expect("encode conflicting terminal state"),
+        );
+
+        let error = handle_post_multisig_proposals_lookup(
+            build_state(world),
+            NoritoJson(MultisigProposalLookupRequestDto {
+                selector: concrete_selector(multisig_account_id),
+                proposal_id: Some(active_hash),
+                instructions_hash: None,
+            }),
+        )
+        .await
+        .expect_err("conflicting active and terminal records must fail closed");
+        let message = expect_conversion(error);
+        assert!(message.contains("conflicting active and terminal state"));
     }
 
     #[tokio::test]
@@ -21545,11 +23638,13 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let JsonBody(list_response) = handle_post_multisig_proposals_list(
+        let JsonBody(list_response) = handle_post_multisig_proposals_query(
             state.clone(),
-            NoritoJson(MultisigProposalsListRequestDto {
+            NoritoJson(MultisigProposalsQueryRequestDto {
                 selector: alias_selector(&alias_literal),
                 status: vec!["CANCELED".to_owned()],
+                cursor: None,
+                limit: None,
             }),
         )
         .await
@@ -21562,9 +23657,9 @@ mod multisig_selector_tests {
             Some(1_700_000_000_333)
         );
 
-        let JsonBody(get_response) = handle_post_multisig_proposals_get(
+        let JsonBody(get_response) = handle_post_multisig_proposals_lookup(
             state,
-            NoritoJson(MultisigProposalsGetRequestDto {
+            NoritoJson(MultisigProposalLookupRequestDto {
                 selector: alias_selector(&alias_literal),
                 proposal_id: Some(canceled_hash.clone()),
                 instructions_hash: None,
@@ -21579,7 +23674,7 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_list_and_get_include_asset_transfer_control_intent() {
+    async fn multisig_proposals_query_and_lookup_include_asset_transfer_control_intent() {
         let (
             mut world,
             multisig_account_id,
@@ -21608,11 +23703,13 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let JsonBody(list_response) = handle_post_multisig_proposals_list(
+        let JsonBody(list_response) = handle_post_multisig_proposals_query(
             state.clone(),
-            NoritoJson(MultisigProposalsListRequestDto {
+            NoritoJson(MultisigProposalsQueryRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                cursor: None,
+                limit: None,
             }),
         )
         .await
@@ -21636,9 +23733,9 @@ mod multisig_selector_tests {
         assert_eq!(list_intent["outgoing_frozen"].as_bool(), Some(true));
         assert_eq!(list_intent["reason"].as_str(), Some("risk review"));
 
-        let JsonBody(get_response) = handle_post_multisig_proposals_get(
+        let JsonBody(get_response) = handle_post_multisig_proposals_lookup(
             state,
-            NoritoJson(MultisigProposalsGetRequestDto {
+            NoritoJson(MultisigProposalLookupRequestDto {
                 selector: concrete_selector(multisig_account_id),
                 proposal_id: Some(freeze_hash),
                 instructions_hash: None,
@@ -21660,7 +23757,7 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_list_and_get_include_pacs009_marker_intent() {
+    async fn multisig_proposals_query_and_lookup_do_not_project_retired_pacs009_markers() {
         let (
             mut world,
             multisig_account_id,
@@ -21685,7 +23782,7 @@ mod multisig_selector_tests {
                 dm::Mint::asset_numeric(25_u32, test_asset_id_for(&multisig_account_id)).into(),
                 dm::Log::new(
                     dm::Level::INFO,
-                    format!("{MULTISIG_PACS009_MARKER_PREFIX}{pacs009_marker_payload}"),
+                    format!("PAYNET_PACS009_MINT_V1:{pacs009_marker_payload}"),
                 )
                 .into(),
             ],
@@ -21696,11 +23793,13 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let JsonBody(list_response) = handle_post_multisig_proposals_list(
+        let JsonBody(list_response) = handle_post_multisig_proposals_query(
             state.clone(),
-            NoritoJson(MultisigProposalsListRequestDto {
+            NoritoJson(MultisigProposalsQueryRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                cursor: None,
+                limit: None,
             }),
         )
         .await
@@ -21710,26 +23809,15 @@ mod multisig_selector_tests {
             .iter()
             .find(|item| item.instructions_hash == pacs009_hash)
             .expect("pacs009 proposal in list");
-        assert_eq!(
-            list_item.operation_type,
-            MULTISIG_PACS009_MINT_OPERATION_TYPE
+        assert_eq!(list_item.operation_type, "MINT");
+        assert!(
+            list_item.intent.is_none(),
+            "retired marker logs must not synthesize trusted business intent",
         );
-        let list_intent = list_item
-            .intent
-            .clone()
-            .expect("pacs009 list intent")
-            .try_into_any_norito::<norito::json::Value>()
-            .expect("list intent value");
-        assert_eq!(
-            list_intent["kind"].as_str(),
-            Some(MULTISIG_PACS009_MINT_OPERATION_TYPE)
-        );
-        assert_eq!(list_intent["instruction_id"].as_str(), Some("pacs-1"));
-        assert_eq!(list_intent["mint_intent"].as_str(), Some("pacs009"));
 
-        let JsonBody(get_response) = handle_post_multisig_proposals_get(
+        let JsonBody(get_response) = handle_post_multisig_proposals_lookup(
             state,
-            NoritoJson(MultisigProposalsGetRequestDto {
+            NoritoJson(MultisigProposalLookupRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: Some(pacs009_hash),
                 instructions_hash: None,
@@ -21737,28 +23825,12 @@ mod multisig_selector_tests {
         )
         .await
         .expect("get proposal");
-        assert_eq!(
-            get_response.operation_type,
-            MULTISIG_PACS009_MINT_OPERATION_TYPE
-        );
-        let get_intent = get_response
-            .intent
-            .expect("pacs009 get intent")
-            .try_into_any_norito::<norito::json::Value>()
-            .expect("get intent value");
-        assert_eq!(
-            get_intent["kind"].as_str(),
-            Some(MULTISIG_PACS009_MINT_OPERATION_TYPE)
-        );
-        assert_eq!(get_intent["amount"].as_str(), Some("25"));
-        assert_eq!(
-            get_intent["to_account_id"].as_str(),
-            Some(multisig_account_id.to_string().as_str())
-        );
+        assert_eq!(get_response.operation_type, "MINT");
+        assert!(get_response.intent.is_none());
     }
 
     #[tokio::test]
-    async fn multisig_proposals_list_and_get_ignore_pacs009_marker_on_non_mint_proposals() {
+    async fn multisig_proposals_query_and_lookup_ignore_pacs009_marker_on_non_mint_proposals() {
         let (
             mut world,
             multisig_account_id,
@@ -21787,7 +23859,7 @@ mod multisig_selector_tests {
                 .into(),
                 dm::Log::new(
                     dm::Level::INFO,
-                    format!("{MULTISIG_PACS009_MARKER_PREFIX}{pacs009_marker_payload}"),
+                    format!("PAYNET_PACS009_MINT_V1:{pacs009_marker_payload}"),
                 )
                 .into(),
             ],
@@ -21806,7 +23878,7 @@ mod multisig_selector_tests {
                 ),
                 dm::Log::new(
                     dm::Level::INFO,
-                    format!("{MULTISIG_PACS009_MARKER_PREFIX}{pacs009_marker_payload}"),
+                    format!("PAYNET_PACS009_MINT_V1:{pacs009_marker_payload}"),
                 )
                 .into(),
             ],
@@ -21817,11 +23889,13 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let JsonBody(list_response) = handle_post_multisig_proposals_list(
+        let JsonBody(list_response) = handle_post_multisig_proposals_query(
             state.clone(),
-            NoritoJson(MultisigProposalsListRequestDto {
+            NoritoJson(MultisigProposalsQueryRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                cursor: None,
+                limit: None,
             }),
         )
         .await
@@ -21841,9 +23915,9 @@ mod multisig_selector_tests {
         assert_eq!(execute_trigger_item.operation_type, "EXECUTE_TRIGGER");
         assert!(execute_trigger_item.intent.is_none());
 
-        let JsonBody(transfer_get_response) = handle_post_multisig_proposals_get(
+        let JsonBody(transfer_get_response) = handle_post_multisig_proposals_lookup(
             state.clone(),
-            NoritoJson(MultisigProposalsGetRequestDto {
+            NoritoJson(MultisigProposalLookupRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: Some(transfer_hash),
                 instructions_hash: None,
@@ -21854,9 +23928,9 @@ mod multisig_selector_tests {
         assert_eq!(transfer_get_response.operation_type, "TRANSFER");
         assert!(transfer_get_response.intent.is_none());
 
-        let JsonBody(execute_trigger_get_response) = handle_post_multisig_proposals_get(
+        let JsonBody(execute_trigger_get_response) = handle_post_multisig_proposals_lookup(
             state,
-            NoritoJson(MultisigProposalsGetRequestDto {
+            NoritoJson(MultisigProposalLookupRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: Some(execute_trigger_hash),
                 instructions_hash: None,
@@ -21872,7 +23946,7 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_list_and_get_ignore_malformed_pacs009_marker_on_mints() {
+    async fn multisig_proposals_query_and_lookup_ignore_malformed_pacs009_marker_on_mints() {
         let (
             mut world,
             multisig_account_id,
@@ -21888,7 +23962,7 @@ mod multisig_selector_tests {
                 dm::Mint::asset_numeric(25_u32, test_asset_id_for(&multisig_account_id)).into(),
                 dm::Log::new(
                     dm::Level::INFO,
-                    format!("{MULTISIG_PACS009_MARKER_PREFIX}{{not-json"),
+                    "PAYNET_PACS009_MINT_V1:{not-json".to_owned(),
                 )
                 .into(),
             ],
@@ -21899,11 +23973,13 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let JsonBody(list_response) = handle_post_multisig_proposals_list(
+        let JsonBody(list_response) = handle_post_multisig_proposals_query(
             state.clone(),
-            NoritoJson(MultisigProposalsListRequestDto {
+            NoritoJson(MultisigProposalsQueryRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                cursor: None,
+                limit: None,
             }),
         )
         .await
@@ -21916,9 +23992,9 @@ mod multisig_selector_tests {
         assert_eq!(list_item.operation_type, "MINT");
         assert!(list_item.intent.is_none());
 
-        let JsonBody(get_response) = handle_post_multisig_proposals_get(
+        let JsonBody(get_response) = handle_post_multisig_proposals_lookup(
             state,
-            NoritoJson(MultisigProposalsGetRequestDto {
+            NoritoJson(MultisigProposalLookupRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: Some(malformed_hash),
                 instructions_hash: None,
@@ -21930,8 +24006,144 @@ mod multisig_selector_tests {
         assert!(get_response.intent.is_none());
     }
 
+    #[test]
+    fn multisig_approvals_cursor_is_versioned_canonical_and_context_bound() {
+        let viewer_one =
+            checked_multisig_selector_account_id(0x74, "derive approvals cursor viewer one");
+        let viewer_two =
+            checked_multisig_selector_account_id(0x75, "derive approvals cursor viewer two");
+        let multisig_account_id =
+            checked_multisig_selector_account_id(0x76, "derive approvals cursor authority");
+        let instructions: Vec<dm::InstructionBox> =
+            vec![dm::Log::new(dm::Level::INFO, "cursor".to_owned()).into()];
+        let instructions_hash = HashOf::new(&instructions).to_string();
+        let statuses = BTreeSet::from(["COLLECTING_SIGNATURES".to_owned(), "EXPIRED".to_owned()]);
+        let operation_types = BTreeSet::from(["ONCHAIN_MULTISIG".to_owned()]);
+        let viewer_scope = MultisigApprovalsViewerScope {
+            viewer_account_ids: vec![viewer_one.clone(), viewer_two.clone(), viewer_one.clone()],
+        };
+        let reordered_viewer_scope = MultisigApprovalsViewerScope {
+            viewer_account_ids: vec![viewer_two.clone(), viewer_one.clone()],
+        };
+        let context_fingerprint = multisig_approvals_query_context_fingerprint(
+            &viewer_scope,
+            &statuses,
+            &operation_types,
+            false,
+        );
+        assert_eq!(
+            context_fingerprint,
+            multisig_approvals_query_context_fingerprint(
+                &reordered_viewer_scope,
+                &statuses,
+                &operation_types,
+                false,
+            ),
+            "viewer ordering and duplicate identities must not alter the canonical context",
+        );
+        assert_ne!(
+            multisig_approvals_query_context_fingerprint(
+                &reordered_viewer_scope,
+                &BTreeSet::from(["CANCELED".to_owned(), "FINALIZED".to_owned()]),
+                &BTreeSet::from(["TRANSFER".to_owned()]),
+                false,
+            ),
+            multisig_approvals_query_context_fingerprint(
+                &reordered_viewer_scope,
+                &BTreeSet::from(["CANCELED".to_owned()]),
+                &BTreeSet::from(["FINALIZED".to_owned(), "TRANSFER".to_owned()]),
+                false,
+            ),
+            "status and operation-type values must not collide when redistributed across sections",
+        );
+        for changed_context in [
+            multisig_approvals_query_context_fingerprint(
+                &MultisigApprovalsViewerScope {
+                    viewer_account_ids: vec![viewer_one],
+                },
+                &statuses,
+                &operation_types,
+                false,
+            ),
+            multisig_approvals_query_context_fingerprint(
+                &reordered_viewer_scope,
+                &BTreeSet::from(["COLLECTING_SIGNATURES".to_owned()]),
+                &operation_types,
+                false,
+            ),
+            multisig_approvals_query_context_fingerprint(
+                &reordered_viewer_scope,
+                &statuses,
+                &BTreeSet::new(),
+                false,
+            ),
+            multisig_approvals_query_context_fingerprint(
+                &reordered_viewer_scope,
+                &statuses,
+                &operation_types,
+                true,
+            ),
+        ] {
+            assert_ne!(context_fingerprint, changed_context);
+        }
+
+        let cursor = MultisigApprovalsCursor {
+            proposed_at_ms: 1_700_000_000_000,
+            instructions_hash: instructions_hash.clone(),
+            multisig_account_fingerprint: multisig_account_fingerprint(&multisig_account_id),
+            context_fingerprint: context_fingerprint.clone(),
+        };
+        let encoded = encode_multisig_approvals_cursor(&cursor);
+        assert_eq!(
+            decode_multisig_approvals_cursor(&encoded, &context_fingerprint)
+                .expect("canonical approvals cursor"),
+            cursor,
+        );
+
+        let wrong_context = Hash::new(b"wrong approvals cursor context").to_string();
+        let old_version = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
+            "v0|{}|{}|{}|{}",
+            cursor.proposed_at_ms,
+            cursor.instructions_hash,
+            cursor.multisig_account_fingerprint,
+            cursor.context_fingerprint
+        ));
+        let leading_zero_timestamp =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
+                "v1|0{}|{}|{}|{}",
+                cursor.proposed_at_ms,
+                cursor.instructions_hash,
+                cursor.multisig_account_fingerprint,
+                cursor.context_fingerprint
+            ));
+        let trailing_field = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
+            "v1|{}|{}|{}|{}|extra",
+            cursor.proposed_at_ms,
+            cursor.instructions_hash,
+            cursor.multisig_account_fingerprint,
+            cursor.context_fingerprint
+        ));
+        for (raw, expected_context) in [
+            (encoded.clone(), wrong_context.as_str()),
+            (format!("{encoded}="), context_fingerprint.as_str()),
+            (format!(" {encoded}"), context_fingerprint.as_str()),
+            (old_version, context_fingerprint.as_str()),
+            (leading_zero_timestamp, context_fingerprint.as_str()),
+            (trailing_field, context_fingerprint.as_str()),
+            (
+                "x".repeat(MULTISIG_APPROVALS_CURSOR_MAX_BYTES + 1),
+                context_fingerprint.as_str(),
+            ),
+        ] {
+            let error = decode_multisig_approvals_cursor(&raw, expected_context)
+                .expect_err("noncanonical or rebound approvals cursor must fail");
+            let message = expect_app_validation(error, "multisig_cursor_invalid");
+            assert!(!message.is_empty());
+        }
+    }
+
     #[tokio::test]
-    async fn multisig_approvals_list_is_signer_scoped_and_paginates() {
+    async fn multisig_approvals_query_is_signer_scoped_and_paginates() {
         let (
             world,
             _multisig_account_id,
@@ -21942,12 +24154,12 @@ mod multisig_selector_tests {
         ) = multisig_test_world();
         let state = build_state(world);
 
-        let JsonBody(signed_response) = handle_post_multisig_approvals_list(
+        let JsonBody(signed_response) = handle_post_multisig_approvals_query(
             state.clone(),
             MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_one_id.clone()],
+                viewer_account_ids: vec![signer_one_id],
             },
-            NoritoJson(MultisigApprovalsListRequestDto {
+            NoritoJson(MultisigApprovalsQueryRequestDto {
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 operation_type: vec![],
                 requires_my_signature: true,
@@ -21960,12 +24172,12 @@ mod multisig_selector_tests {
         assert!(signed_response.items.is_empty());
         assert!(signed_response.next_cursor.is_none());
 
-        let JsonBody(first_page) = handle_post_multisig_approvals_list(
+        let JsonBody(first_page) = handle_post_multisig_approvals_query(
             state.clone(),
             MultisigApprovalsViewerScope {
                 viewer_account_ids: vec![signer_two_id.clone()],
             },
-            NoritoJson(MultisigApprovalsListRequestDto {
+            NoritoJson(MultisigApprovalsQueryRequestDto {
                 status: vec!["COLLECTING_SIGNATURES".to_owned(), "EXPIRED".to_owned()],
                 operation_type: vec![],
                 requires_my_signature: false,
@@ -21977,15 +24189,15 @@ mod multisig_selector_tests {
         .expect("first approvals page");
         assert_eq!(first_page.items.len(), 1);
         assert_eq!(first_page.items[0].instructions_hash, active_hash);
-        let next_cursor = first_page.next_cursor.clone().expect("next cursor");
+        let next_cursor = first_page.next_cursor.expect("next cursor");
 
-        let JsonBody(second_page) = handle_post_multisig_approvals_list(
+        let JsonBody(second_page) = handle_post_multisig_approvals_query(
             state,
             MultisigApprovalsViewerScope {
                 viewer_account_ids: vec![signer_two_id],
             },
-            NoritoJson(MultisigApprovalsListRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned(), "EXPIRED".to_owned()],
+            NoritoJson(MultisigApprovalsQueryRequestDto {
+                status: vec!["EXPIRED".to_owned(), "COLLECTING_SIGNATURES".to_owned()],
                 operation_type: vec![],
                 requires_my_signature: false,
                 cursor: Some(next_cursor),
@@ -22000,34 +24212,229 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_approvals_list_for_authority_supports_overlong_multisig_membership() {
-        let (world, multisig_account_id, viewer_id, active_hash) = overlong_multisig_test_world();
+    async fn multisig_approvals_query_rejects_cursor_rebinding_and_missing_boundaries() {
+        let (
+            world,
+            _multisig_account_id,
+            signer_one_id,
+            signer_two_id,
+            _alias_literal,
+            _active_hash,
+        ) = multisig_test_world();
+        let state = build_state(world);
+        let base_statuses = vec!["COLLECTING_SIGNATURES".to_owned(), "EXPIRED".to_owned()];
+
+        let JsonBody(first_page) = handle_post_multisig_approvals_query(
+            state.clone(),
+            MultisigApprovalsViewerScope {
+                viewer_account_ids: vec![signer_two_id.clone()],
+            },
+            NoritoJson(MultisigApprovalsQueryRequestDto {
+                status: base_statuses.clone(),
+                operation_type: vec![],
+                requires_my_signature: false,
+                cursor: None,
+                limit: Some(1),
+            }),
+        )
+        .await
+        .expect("first approvals page");
+        let cursor = first_page.next_cursor.expect("next cursor");
+
+        let rebound_cases = [
+            (
+                MultisigApprovalsViewerScope {
+                    viewer_account_ids: vec![signer_one_id],
+                },
+                MultisigApprovalsQueryRequestDto {
+                    status: base_statuses.clone(),
+                    operation_type: vec![],
+                    requires_my_signature: false,
+                    cursor: Some(cursor.clone()),
+                    limit: Some(1),
+                },
+            ),
+            (
+                MultisigApprovalsViewerScope {
+                    viewer_account_ids: vec![signer_two_id.clone()],
+                },
+                MultisigApprovalsQueryRequestDto {
+                    status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                    operation_type: vec![],
+                    requires_my_signature: false,
+                    cursor: Some(cursor.clone()),
+                    limit: Some(1),
+                },
+            ),
+            (
+                MultisigApprovalsViewerScope {
+                    viewer_account_ids: vec![signer_two_id.clone()],
+                },
+                MultisigApprovalsQueryRequestDto {
+                    status: base_statuses.clone(),
+                    operation_type: vec!["ONCHAIN_MULTISIG".to_owned()],
+                    requires_my_signature: false,
+                    cursor: Some(cursor.clone()),
+                    limit: Some(1),
+                },
+            ),
+            (
+                MultisigApprovalsViewerScope {
+                    viewer_account_ids: vec![signer_two_id.clone()],
+                },
+                MultisigApprovalsQueryRequestDto {
+                    status: base_statuses.clone(),
+                    operation_type: vec![],
+                    requires_my_signature: true,
+                    cursor: Some(cursor.clone()),
+                    limit: Some(1),
+                },
+            ),
+        ];
+        for (viewer_scope, request) in rebound_cases {
+            let error = handle_post_multisig_approvals_query(
+                state.clone(),
+                viewer_scope,
+                NoritoJson(request),
+            )
+            .await
+            .expect_err("cursor context rebinding must fail");
+            let message = expect_app_validation(error, "multisig_cursor_invalid");
+            assert!(message.contains("context"));
+        }
+
+        let requested_statuses = requested_multisig_statuses(&base_statuses).expect("statuses");
+        let requested_operation_types = BTreeSet::new();
+        let context_fingerprint = multisig_approvals_query_context_fingerprint(
+            &MultisigApprovalsViewerScope {
+                viewer_account_ids: vec![signer_two_id.clone()],
+            },
+            &requested_statuses,
+            &requested_operation_types,
+            false,
+        );
+        let mut stale_boundary =
+            decode_multisig_approvals_cursor(&cursor, &context_fingerprint).expect("cursor");
+        stale_boundary.proposed_at_ms = stale_boundary.proposed_at_ms.saturating_add(1);
+        let stale_cursor = encode_multisig_approvals_cursor(&stale_boundary);
+        let error = handle_post_multisig_approvals_query(
+            state,
+            MultisigApprovalsViewerScope {
+                viewer_account_ids: vec![signer_two_id],
+            },
+            NoritoJson(MultisigApprovalsQueryRequestDto {
+                status: base_statuses,
+                operation_type: vec![],
+                requires_my_signature: false,
+                cursor: Some(stale_cursor),
+                limit: Some(1),
+            }),
+        )
+        .await
+        .expect_err("canonical cursor with a missing boundary must fail");
+        let message = expect_app_validation(error, "multisig_cursor_invalid");
+        assert!(message.contains("boundary"));
+    }
+
+    #[tokio::test]
+    async fn multisig_approvals_query_for_authority_supports_overlong_multisig_membership() {
+        let (mut world, multisig_account_id, viewer_id, active_hash) =
+            overlong_multisig_test_world();
+        let older_hash = insert_active_multisig_proposal(
+            &mut world,
+            &multisig_account_id,
+            vec![dm::Log::new(dm::Level::INFO, "older overlong".to_owned()).into()],
+            1_700_000_000_000,
+            4_000_000_000_000,
+            BTreeSet::new(),
+            None,
+        );
         let state = build_state(world);
 
-        let JsonBody(response) = handle_post_multisig_approvals_list_for_authority(
-            state,
-            MultisigApprovalsListRequestDto {
+        let JsonBody(first_proposal_page) = handle_post_multisig_proposals_query(
+            state.clone(),
+            NoritoJson(MultisigProposalsQueryRequestDto {
+                selector: concrete_selector(multisig_account_id.clone()),
+                status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                cursor: None,
+                limit: Some(1),
+            }),
+        )
+        .await
+        .expect("query first proposal page for overlong authority");
+        assert_eq!(
+            first_proposal_page.proposals[0].instructions_hash,
+            active_hash
+        );
+        let proposal_cursor = first_proposal_page
+            .next_cursor
+            .expect("bounded proposal continuation cursor");
+        assert!(proposal_cursor.len() <= MULTISIG_PROPOSALS_CURSOR_MAX_BYTES);
+        let JsonBody(second_proposal_page) = handle_post_multisig_proposals_query(
+            state.clone(),
+            NoritoJson(MultisigProposalsQueryRequestDto {
+                selector: concrete_selector(multisig_account_id.clone()),
+                status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                cursor: Some(proposal_cursor),
+                limit: Some(1),
+            }),
+        )
+        .await
+        .expect("continue proposal query for overlong authority");
+        assert_eq!(
+            second_proposal_page.proposals[0].instructions_hash,
+            older_hash
+        );
+        assert!(second_proposal_page.next_cursor.is_none());
+
+        let JsonBody(first_page) = handle_post_multisig_approvals_query_for_authority(
+            state.clone(),
+            MultisigApprovalsQueryRequestDto {
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 operation_type: vec![],
                 requires_my_signature: false,
                 cursor: None,
-                limit: Some(10),
+                limit: Some(1),
+            },
+            viewer_id.clone(),
+        )
+        .await
+        .expect("query first approvals page for overlong authority");
+
+        assert_eq!(first_page.items.len(), 1);
+        assert_eq!(first_page.items[0].multisig_account_id, multisig_account_id);
+        assert_eq!(first_page.items[0].instructions_hash, active_hash);
+        let cursor = first_page.next_cursor.expect("bounded continuation cursor");
+        assert!(cursor.len() <= MULTISIG_APPROVALS_CURSOR_MAX_BYTES);
+
+        let JsonBody(second_page) = handle_post_multisig_approvals_query_for_authority(
+            state,
+            MultisigApprovalsQueryRequestDto {
+                status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                operation_type: vec![],
+                requires_my_signature: false,
+                cursor: Some(cursor),
+                limit: Some(1),
             },
             viewer_id,
         )
         .await
-        .expect("list approvals for authority");
+        .expect("continue approvals query for overlong authority");
 
-        assert_eq!(response.items.len(), 1);
-        assert_eq!(response.items[0].multisig_account_id, multisig_account_id);
-        assert_eq!(response.items[0].instructions_hash, active_hash);
+        assert_eq!(second_page.items.len(), 1);
+        assert_eq!(
+            second_page.items[0].multisig_account_id,
+            multisig_account_id
+        );
+        assert_eq!(second_page.items[0].instructions_hash, older_hash);
+        assert!(second_page.next_cursor.is_none());
     }
 
     #[tokio::test]
-    async fn multisig_approvals_list_for_authority_continues_pagination_cursor() {
+    async fn multisig_approvals_authority_query_cursor_continues_and_lookup_is_exact() {
         let (
             world,
-            _multisig_account_id,
+            multisig_account_id,
             _signer_one_id,
             signer_two_id,
             _alias_literal,
@@ -22035,9 +24442,9 @@ mod multisig_selector_tests {
         ) = multisig_test_world();
         let state = build_state(world);
 
-        let JsonBody(first_page) = handle_post_multisig_approvals_list_for_authority(
+        let JsonBody(first_page) = handle_post_multisig_approvals_query_for_authority(
             state.clone(),
-            MultisigApprovalsListRequestDto {
+            MultisigApprovalsQueryRequestDto {
                 status: vec!["COLLECTING_SIGNATURES".to_owned(), "EXPIRED".to_owned()],
                 operation_type: vec![],
                 requires_my_signature: false,
@@ -22050,11 +24457,11 @@ mod multisig_selector_tests {
         .expect("first approvals page for authority");
         assert_eq!(first_page.items.len(), 1);
         assert_eq!(first_page.items[0].instructions_hash, active_hash);
-        let next_cursor = first_page.next_cursor.clone().expect("next cursor");
+        let next_cursor = first_page.next_cursor.expect("next cursor");
 
-        let JsonBody(second_page) = handle_post_multisig_approvals_list_for_authority(
+        let JsonBody(second_page) = handle_post_multisig_approvals_query_for_authority(
             state.clone(),
-            MultisigApprovalsListRequestDto {
+            MultisigApprovalsQueryRequestDto {
                 status: vec!["COLLECTING_SIGNATURES".to_owned(), "EXPIRED".to_owned()],
                 operation_type: vec![],
                 requires_my_signature: false,
@@ -22069,22 +24476,23 @@ mod multisig_selector_tests {
         assert_eq!(second_page.items[0].status, "EXPIRED");
         assert!(second_page.next_cursor.is_none());
 
-        let JsonBody(get_response) = handle_post_multisig_approvals_get_for_authority(
+        let JsonBody(lookup_response) = handle_post_multisig_approvals_lookup_for_authority(
             state,
-            MultisigApprovalsGetRequestDto {
+            MultisigApprovalLookupRequestDto {
+                multisig_account_id,
                 proposal_id: Some(active_hash.clone()),
                 instructions_hash: None,
             },
             signer_two_id,
         )
         .await
-        .expect("get approvals entry for authority");
-        assert_eq!(get_response.item.instructions_hash, active_hash);
-        assert_eq!(get_response.item.status, "COLLECTING_SIGNATURES");
+        .expect("lookup approvals entry for authority");
+        assert_eq!(lookup_response.item.instructions_hash, active_hash);
+        assert_eq!(lookup_response.item.status, "COLLECTING_SIGNATURES");
     }
 
     #[tokio::test]
-    async fn multisig_approvals_list_filters_by_canonical_operation_type_before_pagination() {
+    async fn multisig_approvals_query_filters_by_canonical_operation_type_before_pagination() {
         let (
             mut world,
             multisig_account_id,
@@ -22137,14 +24545,14 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let JsonBody(first_page) = handle_post_multisig_approvals_list(
+        let JsonBody(first_page) = handle_post_multisig_approvals_query(
             state.clone(),
             MultisigApprovalsViewerScope {
                 viewer_account_ids: vec![signer_two_id.clone()],
             },
-            NoritoJson(MultisigApprovalsListRequestDto {
+            NoritoJson(MultisigApprovalsQueryRequestDto {
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec!["transfer".to_owned()],
+                operation_type: vec!["TRANSFER".to_owned()],
                 requires_my_signature: false,
                 cursor: None,
                 limit: Some(1),
@@ -22154,14 +24562,14 @@ mod multisig_selector_tests {
         .expect("first filtered approvals page");
         assert_eq!(first_page.items.len(), 1);
         assert_eq!(first_page.items[0].instructions_hash, newest_transfer_hash);
-        let next_cursor = first_page.next_cursor.clone().expect("next cursor");
+        let next_cursor = first_page.next_cursor.expect("next cursor");
 
-        let JsonBody(second_page) = handle_post_multisig_approvals_list(
+        let JsonBody(second_page) = handle_post_multisig_approvals_query(
             state,
             MultisigApprovalsViewerScope {
                 viewer_account_ids: vec![signer_two_id],
             },
-            NoritoJson(MultisigApprovalsListRequestDto {
+            NoritoJson(MultisigApprovalsQueryRequestDto {
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 operation_type: vec!["TRANSFER".to_owned()],
                 requires_my_signature: false,
@@ -22177,37 +24585,23 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_approvals_list_filters_each_canonical_operation_type() {
+    async fn multisig_approvals_query_filters_each_supported_canonical_operation_type() {
         let (
             mut world,
             multisig_account_id,
-            signer_one_id,
+            _signer_one_id,
             signer_two_id,
             _alias_literal,
             onchain_hash,
         ) = multisig_test_world();
-        let pacs009_marker_payload = norito::json::to_string_pretty(&norito::json!({
-            "instruction_id": "pacs-1",
-            "asset_id": (test_asset_definition_id().to_string()),
-            "amount": "25",
-            "to_account_id": (multisig_account_id.to_string()),
-            "mint_intent": "pacs009",
-        }))
-        .expect("pacs009 marker payload");
-
         let transfer_hash = insert_active_multisig_proposal(
             &mut world,
             &multisig_account_id,
             vec![
                 dm::Transfer::asset_numeric(
                     test_asset_id_for(&multisig_account_id),
-                    10_u32,
+                    7_u32,
                     signer_two_id.clone(),
-                )
-                .into(),
-                dm::Log::new(
-                    dm::Level::INFO,
-                    format!("{MULTISIG_PACS009_MARKER_PREFIX}{pacs009_marker_payload}"),
                 )
                 .into(),
             ],
@@ -22219,124 +24613,8 @@ mod multisig_selector_tests {
         let mint_hash = insert_active_multisig_proposal(
             &mut world,
             &multisig_account_id,
-            vec![dm::Mint::asset_numeric(25_u32, test_asset_id_for(&multisig_account_id)).into()],
+            vec![dm::Mint::asset_numeric(9_u32, test_asset_id_for(&multisig_account_id)).into()],
             1_700_000_000_120,
-            4_000_000_000_000,
-            BTreeSet::new(),
-            None,
-        );
-        let pacs009_hash = insert_active_multisig_proposal(
-            &mut world,
-            &multisig_account_id,
-            vec![
-                dm::Mint::asset_numeric(25_u32, test_asset_id_for(&multisig_account_id)).into(),
-                dm::Log::new(
-                    dm::Level::INFO,
-                    format!("{MULTISIG_PACS009_MARKER_PREFIX}{pacs009_marker_payload}"),
-                )
-                .into(),
-            ],
-            1_700_000_000_125,
-            4_000_000_000_000,
-            BTreeSet::new(),
-            None,
-        );
-        let mint_request_hash = insert_active_multisig_proposal(
-            &mut world,
-            &multisig_account_id,
-            vec![execute_trigger_instruction(
-                "staged_mint_request_hbl",
-                norito::json::parse_value(&format!(
-                    r#"{{"action":"create","request_id":"mr_type_filter_1","asset_id":"{}","to_account_id":"{}","fi_id":"banka","amount_i64":77}}"#,
-                    test_asset_definition_id(),
-                    multisig_account_id,
-                ))
-                .expect("mint request args"),
-            )],
-            1_700_000_000_130,
-            4_000_000_000_000,
-            BTreeSet::new(),
-            None,
-        );
-        let contract_manifest = manifest::ContractManifest {
-            seiyaku_name: None,
-            code_hash: None,
-            abi_hash: None,
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            states: None,
-            kotoba: None,
-            error_codes: None,
-            provenance: None,
-        };
-        let asset_definition = test_asset_definition_id().to_string();
-        let contract_address = derived_universal_contract_address(&multisig_account_id, 2);
-        let contract_alias: iroha_data_model::smart_contract::ContractAlias =
-            "mint_request::universal"
-                .parse()
-                .expect("mint request alias");
-        let contract_payload = IrohaJson::new(
-            norito::json::parse_value(&format!(
-                r#"{{
-                    "proposal_id":"mr_type_filter_contract",
-                    "approval_alias":"banking@centralbank",
-                    "requesting_fi_dataspace":"banka",
-                    "asset_definition":"{asset_definition}",
-                    "to_account_alias":"cbdc@banka.centralbank",
-                    "amount":"77",
-                    "requested_by_actor":{{
-                        "proposal_id":"mr_type_filter_contract",
-                        "requesting_fi_id":"banka",
-                        "approval_alias_fqn":"banking@centralbank",
-                        "creation_multisig_alias_fqn":"cbdc@banka.centralbank",
-                        "asset_id":"{asset_definition}",
-                        "amount":"77",
-                        "to_account_id":"cbdc@banka.centralbank"
-                    }}
-                }}"#,
-            ))
-            .expect("contract mint request payload"),
-        );
-        let (contract_mint_request_instructions, _) = build_multisig_contract_call_instructions(
-            &multisig_account_id,
-            &contract_address,
-            Some(&contract_alias),
-            "create_mint_request",
-            Some(&contract_payload),
-            None,
-            None,
-            None,
-            300_000,
-            &contract_manifest,
-            &Hash::new(b"mint-request-type-filter-contract".to_vec()),
-        )
-        .expect("contract mint request instructions");
-        let contract_mint_request_hash = insert_active_multisig_proposal(
-            &mut world,
-            &multisig_account_id,
-            contract_mint_request_instructions,
-            1_700_000_000_135,
-            4_000_000_000_000,
-            BTreeSet::new(),
-            None,
-        );
-        let issuance_swap_hash = insert_active_multisig_proposal(
-            &mut world,
-            &multisig_account_id,
-            vec![execute_trigger_instruction(
-                "issuance_swap_centralbank",
-                norito::json::parse_value(&format!(
-                    r#"{{"vault_account_id":"{}","issuance_account_id":"{}","pkr_asset_id":"{}","pkr_amount":"1000","treasury_asset_id":"{}","treasury_amount":"1000"}}"#,
-                    multisig_account_id,
-                    signer_one_id,
-                    test_asset_definition_id(),
-                    test_asset_definition_id(),
-                ))
-                .expect("issuance swap args"),
-            )],
-            1_700_000_000_140,
             4_000_000_000_000,
             BTreeSet::new(),
             None,
@@ -22344,180 +24622,52 @@ mod multisig_selector_tests {
         let execute_trigger_hash = insert_active_multisig_proposal(
             &mut world,
             &multisig_account_id,
-            vec![
-                execute_trigger_instruction(
-                    "custom_portal_job",
-                    norito::json!({ "kind": "SOMETHING_ELSE", "job_id": "job-1" }),
-                ),
-                dm::Log::new(
-                    dm::Level::INFO,
-                    format!("{MULTISIG_PACS009_MARKER_PREFIX}{pacs009_marker_payload}"),
-                )
-                .into(),
-            ],
-            1_700_000_000_150,
+            vec![execute_trigger_instruction(
+                "canonical_operation_test",
+                norito::json!({ "kind": "QUERY_TEST" }),
+            )],
+            1_700_000_000_130,
             4_000_000_000_000,
             BTreeSet::new(),
             None,
         );
         let state = build_state(world);
 
-        let list_hashes = |items: &[MultisigApprovalEntryDto]| {
-            items
+        for (operation_type, expected_hash) in [
+            ("TRANSFER", transfer_hash),
+            ("MINT", mint_hash),
+            ("EXECUTE_TRIGGER", execute_trigger_hash),
+            ("ONCHAIN_MULTISIG", onchain_hash),
+        ] {
+            let JsonBody(response) = handle_post_multisig_approvals_query(
+                state.clone(),
+                MultisigApprovalsViewerScope {
+                    viewer_account_ids: vec![signer_two_id.clone()],
+                },
+                NoritoJson(MultisigApprovalsQueryRequestDto {
+                    status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                    operation_type: vec![operation_type.to_owned()],
+                    requires_my_signature: false,
+                    cursor: None,
+                    limit: Some(20),
+                }),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("query {operation_type} approvals: {error:?}"));
+            let hashes = response
+                .items
                 .iter()
                 .map(|item| item.instructions_hash.clone())
-                .collect::<BTreeSet<_>>()
-        };
+                .collect::<BTreeSet<_>>();
+            assert_eq!(hashes, BTreeSet::from([expected_hash]), "{operation_type}");
+        }
 
-        let JsonBody(transfer_items) = handle_post_multisig_approvals_list(
-            state.clone(),
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id.clone()],
-            },
-            NoritoJson(MultisigApprovalsListRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec!["transfer".to_owned()],
-                requires_my_signature: false,
-                cursor: None,
-                limit: Some(20),
-            }),
-        )
-        .await
-        .expect("transfer approvals");
-        assert_eq!(
-            list_hashes(&transfer_items.items),
-            BTreeSet::from([transfer_hash.clone()])
-        );
-
-        let JsonBody(mint_items) = handle_post_multisig_approvals_list(
-            state.clone(),
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id.clone()],
-            },
-            NoritoJson(MultisigApprovalsListRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec!["MINT".to_owned()],
-                requires_my_signature: false,
-                cursor: None,
-                limit: Some(20),
-            }),
-        )
-        .await
-        .expect("mint approvals");
-        assert_eq!(
-            list_hashes(&mint_items.items),
-            BTreeSet::from([mint_hash.clone()])
-        );
-
-        let JsonBody(pacs009_items) = handle_post_multisig_approvals_list(
-            state.clone(),
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id.clone()],
-            },
-            NoritoJson(MultisigApprovalsListRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec![MULTISIG_PACS009_MINT_OPERATION_TYPE.to_owned()],
-                requires_my_signature: false,
-                cursor: None,
-                limit: Some(20),
-            }),
-        )
-        .await
-        .expect("pacs009 approvals");
-        assert_eq!(
-            list_hashes(&pacs009_items.items),
-            BTreeSet::from([pacs009_hash.clone()])
-        );
-
-        let JsonBody(mint_request_items) = handle_post_multisig_approvals_list(
-            state.clone(),
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id.clone()],
-            },
-            NoritoJson(MultisigApprovalsListRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec!["MINT_REQUEST".to_owned()],
-                requires_my_signature: false,
-                cursor: None,
-                limit: Some(20),
-            }),
-        )
-        .await
-        .expect("mint request approvals");
-        assert_eq!(
-            list_hashes(&mint_request_items.items),
-            BTreeSet::from([
-                mint_request_hash.clone(),
-                contract_mint_request_hash.clone()
-            ])
-        );
-
-        let JsonBody(issuance_swap_items) = handle_post_multisig_approvals_list(
-            state.clone(),
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id.clone()],
-            },
-            NoritoJson(MultisigApprovalsListRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec!["ISSUANCE_SWAP".to_owned()],
-                requires_my_signature: false,
-                cursor: None,
-                limit: Some(20),
-            }),
-        )
-        .await
-        .expect("issuance swap approvals");
-        assert_eq!(
-            list_hashes(&issuance_swap_items.items),
-            BTreeSet::from([issuance_swap_hash.clone()])
-        );
-
-        let JsonBody(execute_trigger_items) = handle_post_multisig_approvals_list(
-            state.clone(),
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id.clone()],
-            },
-            NoritoJson(MultisigApprovalsListRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec!["EXECUTE_TRIGGER".to_owned()],
-                requires_my_signature: false,
-                cursor: None,
-                limit: Some(20),
-            }),
-        )
-        .await
-        .expect("execute trigger approvals");
-        assert_eq!(
-            list_hashes(&execute_trigger_items.items),
-            BTreeSet::from([execute_trigger_hash.clone()])
-        );
-
-        let JsonBody(onchain_items) = handle_post_multisig_approvals_list(
-            state.clone(),
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id.clone()],
-            },
-            NoritoJson(MultisigApprovalsListRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec!["ONCHAIN_MULTISIG".to_owned()],
-                requires_my_signature: false,
-                cursor: None,
-                limit: Some(20),
-            }),
-        )
-        .await
-        .expect("onchain approvals");
-        assert_eq!(
-            list_hashes(&onchain_items.items),
-            BTreeSet::from([onchain_hash.clone()])
-        );
-
-        let JsonBody(unknown_items) = handle_post_multisig_approvals_list(
+        let JsonBody(unknown) = handle_post_multisig_approvals_query(
             state,
             MultisigApprovalsViewerScope {
                 viewer_account_ids: vec![signer_two_id],
             },
-            NoritoJson(MultisigApprovalsListRequestDto {
+            NoritoJson(MultisigApprovalsQueryRequestDto {
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 operation_type: vec!["NOT_A_REAL_TYPE".to_owned()],
                 requires_my_signature: false,
@@ -22526,12 +24676,116 @@ mod multisig_selector_tests {
             }),
         )
         .await
-        .expect("unknown approvals type");
-        assert!(unknown_items.items.is_empty());
+        .expect("unknown canonical operation filter is an empty query");
+        assert!(unknown.items.is_empty());
     }
 
     #[tokio::test]
-    async fn multisig_approvals_list_filters_asset_transfer_control_operation_types() {
+    async fn multisig_approvals_query_rejects_noncanonical_operation_filters() {
+        let (world, _multisig_account_id, _signer_one_id, signer_two_id, _, _) =
+            multisig_test_world();
+        let state = build_state(world);
+        let invalid_filters = [
+            vec!["transfer".to_owned()],
+            vec![" TRANSFER".to_owned()],
+            vec![String::new()],
+            vec!["TYPE-ONE".to_owned()],
+            vec!["1TYPE".to_owned()],
+            vec!["ÄTYPE".to_owned()],
+            vec!["TRANSFER".to_owned(), "TRANSFER".to_owned()],
+            vec!["X".repeat(129)],
+            (0..33).map(|index| format!("TYPE_{index}")).collect(),
+        ];
+
+        for operation_type in invalid_filters {
+            let error = handle_post_multisig_approvals_query(
+                state.clone(),
+                MultisigApprovalsViewerScope {
+                    viewer_account_ids: vec![signer_two_id.clone()],
+                },
+                NoritoJson(MultisigApprovalsQueryRequestDto {
+                    status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                    operation_type,
+                    requires_my_signature: false,
+                    cursor: None,
+                    limit: Some(20),
+                }),
+            )
+            .await
+            .expect_err("noncanonical operation filter must fail");
+            let message = expect_app_validation(error, "multisig_operation_type_invalid");
+            assert!(!message.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn multisig_approvals_lookup_returns_signer_visible_proposal() {
+        let (
+            world,
+            multisig_account_id,
+            _signer_one_id,
+            signer_two_id,
+            _alias_literal,
+            active_hash,
+        ) = multisig_test_world();
+        let state = build_state(world);
+
+        let JsonBody(response) = handle_post_multisig_approvals_lookup(
+            state.clone(),
+            MultisigApprovalsViewerScope {
+                viewer_account_ids: vec![signer_two_id.clone()],
+            },
+            NoritoJson(MultisigApprovalLookupRequestDto {
+                multisig_account_id: multisig_account_id.clone(),
+                proposal_id: Some(active_hash.clone()),
+                instructions_hash: None,
+            }),
+        )
+        .await
+        .expect("get signer-visible approval");
+        assert_eq!(response.item.multisig_account_id, multisig_account_id);
+        assert_eq!(response.item.instructions_hash, active_hash);
+        assert_eq!(response.item.status, "COLLECTING_SIGNATURES");
+        assert!(response.item.spec.signatories.contains_key(&signer_two_id));
+
+        let wrong_multisig_account_id = checked_multisig_selector_account_id(
+            0x6f,
+            "derive wrong approvals lookup multisig account key",
+        );
+        let wrong_account_result = handle_post_multisig_approvals_lookup(
+            state.clone(),
+            MultisigApprovalsViewerScope {
+                viewer_account_ids: vec![signer_two_id.clone()],
+            },
+            NoritoJson(MultisigApprovalLookupRequestDto {
+                multisig_account_id: wrong_multisig_account_id,
+                proposal_id: Some(active_hash.clone()),
+                instructions_hash: None,
+            }),
+        )
+        .await
+        .expect_err("lookup must not search another multisig authority by hash");
+        expect_not_found(wrong_account_result);
+
+        let hidden_viewer =
+            checked_multisig_selector_account_id(0x70, "derive hidden approvals viewer key");
+        let result = handle_post_multisig_approvals_lookup(
+            state,
+            MultisigApprovalsViewerScope {
+                viewer_account_ids: vec![hidden_viewer],
+            },
+            NoritoJson(MultisigApprovalLookupRequestDto {
+                multisig_account_id,
+                proposal_id: Some(active_hash),
+                instructions_hash: None,
+            }),
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn multisig_approvals_query_filters_asset_transfer_control_operation_types() {
         let (
             mut world,
             multisig_account_id,
@@ -22602,76 +24856,37 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let list_hashes = |items: &[MultisigApprovalEntryDto]| {
-            items
+        for (operation_type, expected_hash) in [
+            ("ASSET_TRANSFER_FREEZE", freeze_hash),
+            ("ASSET_TRANSFER_BLACKLIST", blacklist_hash),
+            ("ASSET_TRANSFER_LIMITS_UPDATE", limits_hash),
+        ] {
+            let JsonBody(response) = handle_post_multisig_approvals_query(
+                state.clone(),
+                MultisigApprovalsViewerScope {
+                    viewer_account_ids: vec![signer_two_id.clone()],
+                },
+                NoritoJson(MultisigApprovalsQueryRequestDto {
+                    status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                    operation_type: vec![operation_type.to_owned()],
+                    requires_my_signature: false,
+                    cursor: None,
+                    limit: Some(20),
+                }),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("query {operation_type} approvals: {error:?}"));
+            let hashes = response
+                .items
                 .iter()
                 .map(|item| item.instructions_hash.clone())
-                .collect::<BTreeSet<_>>()
-        };
-
-        let JsonBody(freeze_items) = handle_post_multisig_approvals_list(
-            state.clone(),
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id.clone()],
-            },
-            NoritoJson(MultisigApprovalsListRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec!["ASSET_TRANSFER_FREEZE".to_owned()],
-                requires_my_signature: false,
-                cursor: None,
-                limit: Some(20),
-            }),
-        )
-        .await
-        .expect("freeze approvals");
-        assert_eq!(
-            list_hashes(&freeze_items.items),
-            BTreeSet::from([freeze_hash.clone()])
-        );
-
-        let JsonBody(blacklist_items) = handle_post_multisig_approvals_list(
-            state.clone(),
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id.clone()],
-            },
-            NoritoJson(MultisigApprovalsListRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec!["ASSET_TRANSFER_BLACKLIST".to_owned()],
-                requires_my_signature: false,
-                cursor: None,
-                limit: Some(20),
-            }),
-        )
-        .await
-        .expect("blacklist approvals");
-        assert_eq!(
-            list_hashes(&blacklist_items.items),
-            BTreeSet::from([blacklist_hash.clone()])
-        );
-
-        let JsonBody(limit_items) = handle_post_multisig_approvals_list(
-            state,
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id],
-            },
-            NoritoJson(MultisigApprovalsListRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec!["ASSET_TRANSFER_LIMITS_UPDATE".to_owned()],
-                requires_my_signature: false,
-                cursor: None,
-                limit: Some(20),
-            }),
-        )
-        .await
-        .expect("limits approvals");
-        assert_eq!(
-            list_hashes(&limit_items.items),
-            BTreeSet::from([limits_hash.clone()])
-        );
+                .collect::<BTreeSet<_>>();
+            assert_eq!(hashes, BTreeSet::from([expected_hash]), "{operation_type}");
+        }
     }
 
     #[tokio::test]
-    async fn multisig_approvals_list_keeps_relay_and_cancel_wrappers_hidden() {
+    async fn multisig_approvals_query_keeps_relay_and_cancel_wrappers_hidden() {
         let (
             mut world,
             multisig_account_id,
@@ -22713,12 +24928,12 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let JsonBody(response) = handle_post_multisig_approvals_list(
+        let JsonBody(response) = handle_post_multisig_approvals_query(
             state,
             MultisigApprovalsViewerScope {
                 viewer_account_ids: vec![signer_two_id],
             },
-            NoritoJson(MultisigApprovalsListRequestDto {
+            NoritoJson(MultisigApprovalsQueryRequestDto {
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 operation_type: vec!["ONCHAIN_MULTISIG".to_owned(), "TRANSFER".to_owned()],
                 requires_my_signature: false,
@@ -22739,7 +24954,7 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_approvals_list_skips_stale_signatory_index_entries() {
+    async fn multisig_approvals_query_skips_stale_signatory_index_entries() {
         let (
             mut world,
             multisig_account_id,
@@ -22755,19 +24970,19 @@ mod multisig_selector_tests {
         world.smart_contract_state_mut_for_testing().insert(
             multisig_signatory_index_contract_key(&signer_two_id),
             norito::to_bytes(&BTreeSet::from([
-                multisig_account_id.clone(),
+                multisig_account_id,
                 stale_multisig_account_id,
             ]))
             .expect("encode stale signatory index state"),
         );
         let state = build_state(world);
 
-        let JsonBody(response) = handle_post_multisig_approvals_list(
+        let JsonBody(response) = handle_post_multisig_approvals_query(
             state,
             MultisigApprovalsViewerScope {
                 viewer_account_ids: vec![signer_two_id],
             },
-            NoritoJson(MultisigApprovalsListRequestDto {
+            NoritoJson(MultisigApprovalsQueryRequestDto {
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 operation_type: vec!["ONCHAIN_MULTISIG".to_owned()],
                 requires_my_signature: false,
@@ -22787,52 +25002,7 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_approvals_get_returns_signer_visible_proposal() {
-        let (
-            world,
-            multisig_account_id,
-            _signer_one_id,
-            signer_two_id,
-            _alias_literal,
-            active_hash,
-        ) = multisig_test_world();
-        let state = build_state(world);
-
-        let JsonBody(response) = handle_post_multisig_approvals_get(
-            state.clone(),
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id.clone()],
-            },
-            NoritoJson(MultisigApprovalsGetRequestDto {
-                proposal_id: Some(active_hash.clone()),
-                instructions_hash: None,
-            }),
-        )
-        .await
-        .expect("get signer-visible approval");
-        assert_eq!(response.item.multisig_account_id, multisig_account_id);
-        assert_eq!(response.item.instructions_hash, active_hash);
-        assert_eq!(response.item.status, "COLLECTING_SIGNATURES");
-        assert!(response.item.spec.signatories.contains_key(&signer_two_id));
-
-        let hidden_viewer =
-            checked_multisig_selector_account_id(0x6f, "derive hidden approvals viewer key");
-        let result = handle_post_multisig_approvals_get(
-            state,
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![hidden_viewer],
-            },
-            NoritoJson(MultisigApprovalsGetRequestDto {
-                proposal_id: Some(active_hash),
-                instructions_hash: None,
-            }),
-        )
-        .await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn multisig_approvals_get_includes_asset_transfer_control_intent() {
+    async fn multisig_approval_lookup_includes_asset_transfer_control_intent() {
         let (
             mut world,
             multisig_account_id,
@@ -22861,18 +25031,19 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let JsonBody(response) = handle_post_multisig_approvals_get(
+        let JsonBody(response) = handle_post_multisig_approvals_lookup(
             state,
             MultisigApprovalsViewerScope {
                 viewer_account_ids: vec![signer_two_id.clone()],
             },
-            NoritoJson(MultisigApprovalsGetRequestDto {
+            NoritoJson(MultisigApprovalLookupRequestDto {
+                multisig_account_id: multisig_account_id.clone(),
                 proposal_id: Some(freeze_hash.clone()),
                 instructions_hash: None,
             }),
         )
         .await
-        .expect("get asset transfer freeze approval");
+        .expect("lookup asset transfer freeze approval");
 
         assert_eq!(response.item.multisig_account_id, multisig_account_id);
         assert_eq!(response.item.instructions_hash, freeze_hash);
@@ -23197,7 +25368,7 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_contract_propose_normalizes_payload_before_hashing() {
+    async fn multisig_contract_propose_validates_payload_before_hashing() {
         let (
             state,
             multisig_account_id,
@@ -23222,11 +25393,12 @@ seiyaku BytesPayloadNormalizeTest {
             &authority_keypair,
             &derived_universal_contract_address(&authority_account_id, 1),
             code,
+            None,
         );
         let contract_address = derived_universal_contract_address(&authority_account_id, 1);
 
         let request_payload = IrohaJson::new(norito::json!({
-            "alias_literal": "banking@centralbank"
+            "alias_literal": "0x62616e6b696e674063656e7472616c62616e6b"
         }));
         let response = handle_post_contract_call_multisig_propose(
             Arc::new("multisig-selector-test".parse().expect("chain id")),
@@ -23267,8 +25439,8 @@ seiyaku BytesPayloadNormalizeTest {
         let entrypoint = ensure_public_contract_entrypoint(&manifest, "create")
             .expect("blob entrypoint descriptor");
         let normalized_payload = normalize_contract_payload(entrypoint, Some(&request_payload))
-            .expect("blob payload should normalize")
-            .expect("normalized payload");
+            .expect("canonical blob payload should validate")
+            .expect("validated payload");
         let arguments = encode_contract_argument_record(
             program.prepared_contract(),
             "create",
@@ -24578,6 +26750,7 @@ pub async fn handle_post_multisig_cancel(
                 "multisig cancel detached signature verification failed: {err}"
             ))
         })?;
+        let tx_hash_hex = hex::encode(tx.hash().as_ref());
         handle_transaction_with_metrics(
             chain_id,
             queue,
@@ -24612,6 +26785,7 @@ pub async fn handle_post_multisig_cancel(
             target_instructions_hash: target_hash_literal.clone(),
             cancel_proposal_id: cancel_hash_literal.clone(),
             cancel_instructions_hash: cancel_hash_literal.clone(),
+            tx_hash_hex: Some(tx_hash_hex),
             executed_tx_hash_hex: None,
             creation_time_ms: Some(creation_time_ms),
             signing_message_b64: None,
@@ -24633,6 +26807,7 @@ pub async fn handle_post_multisig_cancel(
             target_instructions_hash: target_hash_literal,
             cancel_proposal_id: cancel_hash_literal.clone(),
             cancel_instructions_hash: cancel_hash_literal,
+            tx_hash_hex: None,
             executed_tx_hash_hex: None,
             creation_time_ms: Some(creation_time_ms),
             signing_message_b64: Some(signing_message_b64),
@@ -25023,25 +27198,25 @@ fn multisig_spec_response(
     })
 }
 
-/// POST /v1/multisig/proposals/query — list multisig proposals for a multisig authority.
+/// POST /v1/multisig/proposals/query — query multisig proposals for an authority.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_multisig_proposals_list(
+pub async fn handle_post_multisig_proposals_query(
     state: Arc<CoreState>,
-    NoritoJson(req): NoritoJson<MultisigProposalsListRequestDto>,
-) -> Result<JsonBody<MultisigProposalsListResponseDto>> {
-    Ok(JsonBody(multisig_proposals_list_response(
+    NoritoJson(req): NoritoJson<MultisigProposalsQueryRequestDto>,
+) -> Result<JsonBody<MultisigProposalsQueryResponseDto>> {
+    Ok(JsonBody(multisig_proposals_query_response(
         &state, &req, None,
     )?))
 }
 
 #[cfg(feature = "app_api")]
-pub(crate) async fn handle_post_multisig_proposals_list_for_authority(
+pub(crate) async fn handle_post_multisig_proposals_query_for_authority(
     state: Arc<CoreState>,
-    req: MultisigProposalsListRequestDto,
+    req: MultisigProposalsQueryRequestDto,
     resolve_authority: AccountId,
-) -> Result<JsonBody<MultisigProposalsListResponseDto>> {
-    Ok(JsonBody(multisig_proposals_list_response(
+) -> Result<JsonBody<MultisigProposalsQueryResponseDto>> {
+    Ok(JsonBody(multisig_proposals_query_response(
         &state,
         &req,
         Some(&resolve_authority),
@@ -25049,45 +27224,94 @@ pub(crate) async fn handle_post_multisig_proposals_list_for_authority(
 }
 
 #[cfg(feature = "app_api")]
-fn multisig_proposals_list_response(
+fn multisig_proposals_query_response(
     state: &Arc<CoreState>,
-    req: &MultisigProposalsListRequestDto,
+    req: &MultisigProposalsQueryRequestDto,
     resolve_authority: Option<&AccountId>,
-) -> Result<MultisigProposalsListResponseDto> {
-    let requested_statuses = requested_multisig_statuses(&req.status);
+) -> Result<MultisigProposalsQueryResponseDto> {
+    let requested_statuses = requested_multisig_statuses(&req.status)?;
+    let query_limits = app_query_limits();
+    let max_page_limit = query_limits
+        .max_page_limit
+        .min(MULTISIG_PROPOSALS_MAX_PAGE_LIMIT);
+    let default_page_limit = query_limits.default_page_limit.min(max_page_limit);
+    let requested_limit = req.limit.unwrap_or(default_page_limit);
+    if requested_limit == 0 || requested_limit > max_page_limit {
+        return Err(Error::AppQueryValidation {
+            code: "multisig_limit_invalid",
+            message: format!("limit must be between 1 and {max_page_limit}"),
+        });
+    }
+    let page_limit = usize::try_from(requested_limit)
+        .map_err(|_| multisig_selector_validation_error("limit exceeds usize"))?;
     let (resolved_multisig_account_id, spec) =
         resolve_multisig_account_and_spec(state, &req.selector, resolve_authority)?;
-    let proposals = list_multisig_proposals(
+    let cursor = req
+        .cursor
+        .as_deref()
+        .map(|cursor| {
+            decode_multisig_proposals_cursor(
+                cursor,
+                &resolved_multisig_account_id,
+                &requested_statuses,
+            )
+        })
+        .transpose()?;
+    let mut remaining_scan_budget = usize::try_from(query_limits.max_fetch_size)
+        .map_err(|_| conversion_error("multisig proposal scan limit exceeds usize".to_owned()))?;
+    let mut proposals = query_multisig_proposals(
         state,
         &resolved_multisig_account_id,
         &spec,
         &requested_statuses,
+        &mut remaining_scan_budget,
     )?;
-    Ok(MultisigProposalsListResponseDto {
+    if let Some(cursor) = cursor.as_ref() {
+        if !proposals
+            .iter()
+            .any(|entry| multisig_proposal_matches_cursor(entry, cursor))
+        {
+            return Err(multisig_cursor_validation_error(
+                "cursor boundary is not present in the requested proposal result set",
+            ));
+        }
+        proposals.retain(|entry| multisig_proposal_is_after_cursor(entry, cursor));
+    }
+    let next_cursor = (proposals.len() > page_limit).then(|| {
+        let last = &proposals[page_limit - 1];
+        encode_multisig_proposals_cursor(&multisig_proposal_cursor_for(
+            last,
+            &resolved_multisig_account_id,
+            &requested_statuses,
+        ))
+    });
+    proposals.truncate(page_limit);
+    Ok(MultisigProposalsQueryResponseDto {
         resolved_multisig_account_id,
         proposals,
+        next_cursor,
     })
 }
 
-/// POST /v1/multisig/proposals/lookup — resolve a multisig selector and fetch a specific proposal.
+/// POST /v1/multisig/proposals/lookup — resolve a selector and look up a specific proposal.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_multisig_proposals_get(
+pub async fn handle_post_multisig_proposals_lookup(
     state: Arc<CoreState>,
-    NoritoJson(req): NoritoJson<MultisigProposalsGetRequestDto>,
-) -> Result<JsonBody<MultisigProposalGetResponseDto>> {
-    Ok(JsonBody(multisig_proposals_get_response(
+    NoritoJson(req): NoritoJson<MultisigProposalLookupRequestDto>,
+) -> Result<JsonBody<MultisigProposalLookupResponseDto>> {
+    Ok(JsonBody(multisig_proposals_lookup_response(
         &state, &req, None,
     )?))
 }
 
 #[cfg(feature = "app_api")]
-pub(crate) async fn handle_post_multisig_proposals_get_for_authority(
+pub(crate) async fn handle_post_multisig_proposals_lookup_for_authority(
     state: Arc<CoreState>,
-    req: MultisigProposalsGetRequestDto,
+    req: MultisigProposalLookupRequestDto,
     resolve_authority: AccountId,
-) -> Result<JsonBody<MultisigProposalGetResponseDto>> {
-    Ok(JsonBody(multisig_proposals_get_response(
+) -> Result<JsonBody<MultisigProposalLookupResponseDto>> {
+    Ok(JsonBody(multisig_proposals_lookup_response(
         &state,
         &req,
         Some(&resolve_authority),
@@ -25095,11 +27319,11 @@ pub(crate) async fn handle_post_multisig_proposals_get_for_authority(
 }
 
 #[cfg(feature = "app_api")]
-fn multisig_proposals_get_response(
+fn multisig_proposals_lookup_response(
     state: &Arc<CoreState>,
-    req: &MultisigProposalsGetRequestDto,
+    req: &MultisigProposalLookupRequestDto,
     resolve_authority: Option<&AccountId>,
-) -> Result<MultisigProposalGetResponseDto> {
+) -> Result<MultisigProposalLookupResponseDto> {
     let (resolved_multisig_account_id, spec) =
         resolve_multisig_account_and_spec(state, &req.selector, resolve_authority)?;
     let (hash_literal, instructions_hash) =
@@ -25112,9 +27336,19 @@ fn multisig_proposals_get_response(
     )?
     .filter(|record| multisig_proposal_is_user_visible(&record.proposal))
     .ok_or_else(multisig_not_found_error)?;
-    let operation_type = multisig_proposal_operation_type(&proposal_record.proposal).to_owned();
-    let intent = multisig_proposal_intent(&proposal_record.proposal);
-    Ok(MultisigProposalGetResponseDto {
+    let world = state.world_view();
+    let operation_type = multisig_proposal_operation_type(
+        &world,
+        &resolved_multisig_account_id,
+        &proposal_record.proposal,
+    )
+    .to_owned();
+    let intent = multisig_proposal_intent(
+        &world,
+        &resolved_multisig_account_id,
+        &proposal_record.proposal,
+    );
+    Ok(MultisigProposalLookupResponseDto {
         resolved_multisig_account_id,
         proposal_id: hash_literal.clone(),
         instructions_hash: hash_literal,
@@ -25129,12 +27363,12 @@ fn multisig_proposals_get_response(
 /// POST /v1/multisig/approvals/query — list signer-visible multisig approvals.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_multisig_approvals_list(
+pub async fn handle_post_multisig_approvals_query(
     state: Arc<CoreState>,
     viewer_scope: MultisigApprovalsViewerScope,
-    NoritoJson(req): NoritoJson<MultisigApprovalsListRequestDto>,
-) -> Result<JsonBody<MultisigApprovalsListResponseDto>> {
-    Ok(JsonBody(multisig_approvals_list_response(
+    NoritoJson(req): NoritoJson<MultisigApprovalsQueryRequestDto>,
+) -> Result<JsonBody<MultisigApprovalsQueryResponseDto>> {
+    Ok(JsonBody(multisig_approvals_query_response(
         &state,
         &viewer_scope,
         &req,
@@ -25142,12 +27376,12 @@ pub async fn handle_post_multisig_approvals_list(
 }
 
 #[cfg(feature = "app_api")]
-pub(crate) async fn handle_post_multisig_approvals_list_for_authority(
+pub(crate) async fn handle_post_multisig_approvals_query_for_authority(
     state: Arc<CoreState>,
-    req: MultisigApprovalsListRequestDto,
+    req: MultisigApprovalsQueryRequestDto,
     resolve_authority: AccountId,
-) -> Result<JsonBody<MultisigApprovalsListResponseDto>> {
-    Ok(JsonBody(multisig_approvals_list_response(
+) -> Result<JsonBody<MultisigApprovalsQueryResponseDto>> {
+    Ok(JsonBody(multisig_approvals_query_response(
         &state,
         &MultisigApprovalsViewerScope {
             viewer_account_ids: vec![resolve_authority],
@@ -25157,39 +27391,64 @@ pub(crate) async fn handle_post_multisig_approvals_list_for_authority(
 }
 
 #[cfg(feature = "app_api")]
-fn multisig_approvals_list_response(
+fn multisig_approvals_query_response(
     state: &Arc<CoreState>,
     viewer_scope: &MultisigApprovalsViewerScope,
-    req: &MultisigApprovalsListRequestDto,
-) -> Result<MultisigApprovalsListResponseDto> {
-    let requested_statuses = requested_multisig_statuses(&req.status);
-    let requested_operation_types = requested_multisig_operation_types(&req.operation_type);
-    let page_limit = app_query_limits().clamp_page_limit(req.limit)?;
+    req: &MultisigApprovalsQueryRequestDto,
+) -> Result<MultisigApprovalsQueryResponseDto> {
+    let requested_statuses = requested_multisig_statuses(&req.status)?;
+    let requested_operation_types = requested_multisig_operation_types(&req.operation_type)?;
+    let context_fingerprint = multisig_approvals_query_context_fingerprint(
+        viewer_scope,
+        &requested_statuses,
+        &requested_operation_types,
+        req.requires_my_signature,
+    );
+    let query_limits = app_query_limits();
+    let max_page_limit = query_limits
+        .max_page_limit
+        .min(MULTISIG_PROPOSALS_MAX_PAGE_LIMIT);
+    let default_page_limit = query_limits.default_page_limit.min(max_page_limit);
+    let requested_limit = req.limit.unwrap_or(default_page_limit);
+    if requested_limit == 0 || requested_limit > max_page_limit {
+        return Err(Error::AppQueryValidation {
+            code: "multisig_limit_invalid",
+            message: format!("limit must be between 1 and {max_page_limit}"),
+        });
+    }
+    let page_limit = usize::try_from(requested_limit)
+        .map_err(|_| conversion_error("approvals page limit exceeds usize".to_owned()))?;
     let cursor = req
         .cursor
         .as_deref()
-        .map(decode_multisig_approvals_cursor)
+        .map(|cursor| decode_multisig_approvals_cursor(cursor, &context_fingerprint))
         .transpose()?;
     let mut items = Vec::new();
+    let mut remaining_scan_budget = usize::try_from(query_limits.max_fetch_size)
+        .map_err(|_| conversion_error("multisig approvals scan limit exceeds usize".to_owned()))?;
 
-    for (multisig_account_id, spec) in viewer_multisig_accounts(&state, &viewer_scope)? {
-        let proposals =
-            list_multisig_proposals(&state, &multisig_account_id, &spec, &requested_statuses)?;
-        if !multisig_approval_is_viewer_relevant(&spec, &viewer_scope) {
+    for (multisig_account_id, spec) in viewer_multisig_accounts(state, viewer_scope)? {
+        if !multisig_approval_is_viewer_relevant(&spec, viewer_scope) {
             continue;
         }
+        let proposals = query_multisig_proposals(
+            state,
+            &multisig_account_id,
+            &spec,
+            &requested_statuses,
+            &mut remaining_scan_budget,
+        )?;
         for proposal_entry in proposals {
-            if !multisig_operation_type_matches_requested_set(
-                &requested_operation_types,
-                &proposal_entry.proposal,
-            ) {
+            if !requested_operation_types.is_empty()
+                && !requested_operation_types.contains(&proposal_entry.operation_type)
+            {
                 continue;
             }
             if req.requires_my_signature
                 && !multisig_approval_requires_viewer_signature(
                     &proposal_entry.proposal,
                     &spec,
-                    &viewer_scope,
+                    viewer_scope,
                 )
             {
                 continue;
@@ -25214,32 +27473,37 @@ fn multisig_approvals_list_response(
     });
 
     if let Some(cursor) = cursor.as_ref() {
-        items.retain(|entry| multisig_approval_is_after_cursor(entry, cursor));
+        let boundary_position = items
+            .iter()
+            .position(|entry| multisig_approval_matches_cursor(entry, cursor))
+            .ok_or_else(|| {
+                multisig_cursor_validation_error(
+                    "cursor boundary is not present in the requested approvals result set",
+                )
+            })?;
+        drop(items.drain(..=boundary_position));
     }
 
-    let page_limit = usize::try_from(page_limit)
-        .map_err(|_| conversion_error("approvals page limit exceeds usize".to_owned()))?;
-    let next_cursor = items
-        .get(page_limit.saturating_sub(1))
-        .filter(|_| items.len() > page_limit)
-        .map(multisig_approval_cursor_for)
-        .map(|cursor| encode_multisig_approvals_cursor(&cursor));
-    if items.len() > page_limit {
-        items.truncate(page_limit);
-    }
+    let next_cursor = (items.len() > page_limit).then(|| {
+        encode_multisig_approvals_cursor(&multisig_approval_cursor_for(
+            &items[page_limit - 1],
+            &context_fingerprint,
+        ))
+    });
+    items.truncate(page_limit);
 
-    Ok(MultisigApprovalsListResponseDto { items, next_cursor })
+    Ok(MultisigApprovalsQueryResponseDto { items, next_cursor })
 }
 
 /// POST /v1/multisig/approvals/lookup — fetch a signer-visible multisig approval by id/hash.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_multisig_approvals_get(
+pub async fn handle_post_multisig_approvals_lookup(
     state: Arc<CoreState>,
     viewer_scope: MultisigApprovalsViewerScope,
-    NoritoJson(req): NoritoJson<MultisigApprovalsGetRequestDto>,
-) -> Result<JsonBody<MultisigApprovalsGetResponseDto>> {
-    Ok(JsonBody(multisig_approvals_get_response(
+    NoritoJson(req): NoritoJson<MultisigApprovalLookupRequestDto>,
+) -> Result<JsonBody<MultisigApprovalLookupResponseDto>> {
+    Ok(JsonBody(multisig_approvals_lookup_response(
         &state,
         &viewer_scope,
         &req,
@@ -25247,12 +27511,12 @@ pub async fn handle_post_multisig_approvals_get(
 }
 
 #[cfg(feature = "app_api")]
-pub(crate) async fn handle_post_multisig_approvals_get_for_authority(
+pub(crate) async fn handle_post_multisig_approvals_lookup_for_authority(
     state: Arc<CoreState>,
-    req: MultisigApprovalsGetRequestDto,
+    req: MultisigApprovalLookupRequestDto,
     resolve_authority: AccountId,
-) -> Result<JsonBody<MultisigApprovalsGetResponseDto>> {
-    Ok(JsonBody(multisig_approvals_get_response(
+) -> Result<JsonBody<MultisigApprovalLookupResponseDto>> {
+    Ok(JsonBody(multisig_approvals_lookup_response(
         &state,
         &MultisigApprovalsViewerScope {
             viewer_account_ids: vec![resolve_authority],
@@ -25262,56 +27526,42 @@ pub(crate) async fn handle_post_multisig_approvals_get_for_authority(
 }
 
 #[cfg(feature = "app_api")]
-fn multisig_approvals_get_response(
+fn multisig_approvals_lookup_response(
     state: &Arc<CoreState>,
     viewer_scope: &MultisigApprovalsViewerScope,
-    req: &MultisigApprovalsGetRequestDto,
-) -> Result<MultisigApprovalsGetResponseDto> {
+    req: &MultisigApprovalLookupRequestDto,
+) -> Result<MultisigApprovalLookupResponseDto> {
     let (hash_literal, instructions_hash) =
         resolve_multisig_proposal_hash(req.proposal_id.clone(), req.instructions_hash.clone())?;
-    let mut matches = Vec::new();
-
-    for (multisig_account_id, spec) in viewer_multisig_accounts(state, viewer_scope)? {
-        if !multisig_approval_is_viewer_relevant(&spec, viewer_scope) {
-            continue;
-        }
-        let Some(proposal_record) =
-            load_multisig_proposal_record(state, &multisig_account_id, &spec, &instructions_hash)?
-        else {
-            continue;
-        };
-        if !multisig_proposal_is_user_visible(&proposal_record.proposal) {
-            continue;
-        }
-        matches.push(MultisigApprovalEntryDto {
-            multisig_account_id,
-            spec,
-            proposal_id: hash_literal.clone(),
-            instructions_hash: hash_literal.clone(),
-            operation_type: multisig_proposal_operation_type(&proposal_record.proposal).to_owned(),
-            intent: multisig_proposal_intent(&proposal_record.proposal),
-            proposal: proposal_record.proposal,
-            status: proposal_record.status.as_str().to_owned(),
-            terminal_at_ms: proposal_record.terminal_at_ms,
-        });
-    }
-
-    matches.sort_by(|left, right| {
-        multisig_approval_sort_order(
-            left.proposal.proposed_at_ms,
-            &left.instructions_hash,
-            &left.multisig_account_id,
-            right.proposal.proposed_at_ms,
-            &right.instructions_hash,
-            &right.multisig_account_id,
-        )
-    });
-    let item = matches
+    let (multisig_account_id, spec) = viewer_multisig_accounts(state, viewer_scope)?
         .into_iter()
-        .next()
+        .find(|(account_id, _)| account_id == &req.multisig_account_id)
         .ok_or_else(multisig_not_found_error)?;
+    if !multisig_approval_is_viewer_relevant(&spec, viewer_scope) {
+        return Err(multisig_not_found_error());
+    }
+    let proposal_record =
+        load_multisig_proposal_record(state, &multisig_account_id, &spec, &instructions_hash)?
+            .filter(|record| multisig_proposal_is_user_visible(&record.proposal))
+            .ok_or_else(multisig_not_found_error)?;
+    let world = state.world_view();
+    let operation_type =
+        multisig_proposal_operation_type(&world, &multisig_account_id, &proposal_record.proposal)
+            .to_owned();
+    let intent = multisig_proposal_intent(&world, &multisig_account_id, &proposal_record.proposal);
+    let item = MultisigApprovalEntryDto {
+        multisig_account_id,
+        spec,
+        proposal_id: hash_literal.clone(),
+        instructions_hash: hash_literal,
+        proposal: proposal_record.proposal,
+        operation_type,
+        intent,
+        status: proposal_record.status.as_str().to_owned(),
+        terminal_at_ms: proposal_record.terminal_at_ms,
+    };
 
-    Ok(MultisigApprovalsGetResponseDto { item })
+    Ok(MultisigApprovalLookupResponseDto { item })
 }
 
 #[cfg(feature = "app_api")]
@@ -28308,6 +30558,7 @@ pub struct MultisigApproveDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Request payload for proposing a multisig-wrapped contract call.
 pub struct MultisigContractCallProposeDto {
     /// Alias-aware selector for the multisig authority controlling the action.
@@ -28357,6 +30608,7 @@ pub struct MultisigContractCallProposeDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Request payload for approving a multisig-wrapped contract call proposal.
 pub struct MultisigContractCallApproveDto {
     /// Alias-aware selector for the multisig authority controlling the action.
@@ -28610,6 +30862,9 @@ pub struct MultisigCancelResponseDto {
     pub cancel_proposal_id: String,
     /// Deterministic hash of the cancel proposal instructions.
     pub cancel_instructions_hash: String,
+    /// Submitted cancellation participation transaction hash when available.
+    #[norito(default)]
+    pub tx_hash_hex: Option<String>,
     /// Executed tx hash once quorum has executed.
     #[norito(default)]
     pub executed_tx_hash_hex: Option<String>,
@@ -28629,6 +30884,7 @@ pub struct MultisigCancelResponseDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Request payload for resolving a multisig spec through the alias-aware selector.
 pub struct MultisigSpecRequestDto {
     #[norito(flatten)]
@@ -28651,14 +30907,21 @@ pub struct MultisigSpecResponseDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
-/// Request payload for listing multisig proposals.
-pub struct MultisigProposalsListRequestDto {
-    /// Alias-aware selector for the multisig authority whose proposals are listed.
+#[norito(deny_unknown_fields)]
+/// Request payload for querying multisig proposals.
+pub struct MultisigProposalsQueryRequestDto {
+    /// Alias-aware selector for the multisig authority whose proposals are queried.
     #[norito(flatten)]
     pub selector: MultisigAccountSelectorDto,
     /// Optional status filter list such as `COLLECTING_SIGNATURES`, `FINALIZED`, `CANCELED`, or `EXPIRED`.
     #[norito(default)]
     pub status: Vec<String>,
+    /// Opaque cursor returned by the preceding page; it is bound to the account and status filter.
+    #[norito(default)]
+    pub cursor: Option<String>,
+    /// Optional page size; zero and values above the configured app-query maximum are rejected.
+    #[norito(default)]
+    pub limit: Option<u64>,
 }
 
 #[cfg(feature = "app_api")]
@@ -28680,10 +30943,13 @@ pub struct MultisigProposalEntryDto {
 
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
-/// Response payload for multisig proposal listings.
-pub struct MultisigProposalsListResponseDto {
+/// Response payload for a multisig proposal query.
+pub struct MultisigProposalsQueryResponseDto {
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     pub proposals: Vec<MultisigProposalEntryDto>,
+    /// Opaque cursor for the next page, absent when this page is final.
+    #[norito(default)]
+    pub next_cursor: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -28694,8 +30960,9 @@ pub struct MultisigProposalsListResponseDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
-/// Request payload for fetching a single multisig proposal.
-pub struct MultisigProposalsGetRequestDto {
+#[norito(deny_unknown_fields)]
+/// Request payload for looking up a single multisig proposal.
+pub struct MultisigProposalLookupRequestDto {
     /// Alias-aware selector for the multisig authority that owns the proposal.
     #[norito(flatten)]
     pub selector: MultisigAccountSelectorDto,
@@ -28709,8 +30976,8 @@ pub struct MultisigProposalsGetRequestDto {
 
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
-/// Response payload for a resolved multisig proposal lookup.
-pub struct MultisigProposalGetResponseDto {
+/// Response payload for a selector-explicit multisig proposal read.
+pub struct MultisigProposalLookupResponseDto {
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     pub proposal_id: String,
     pub instructions_hash: String,
@@ -28732,21 +30999,22 @@ pub struct MultisigProposalGetResponseDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
-/// Request payload for listing approvals visible to the bearer signer.
-pub struct MultisigApprovalsListRequestDto {
-    /// Optional status filter list such as `COLLECTING_SIGNATURES`, `FINALIZED`, `CANCELED`, or `EXPIRED`.
+#[norito(deny_unknown_fields)]
+/// Request payload for querying approvals visible to the authenticated signer.
+pub struct MultisigApprovalsQueryRequestDto {
+    /// Optional canonical status filters.
     #[norito(default)]
     pub status: Vec<String>,
-    /// Optional canonical proposal type filter list such as `TRANSFER` or `MINT_REQUEST`.
+    /// Optional canonical proposal operation-type filters.
     #[norito(default)]
     pub operation_type: Vec<String>,
-    /// When true, return only proposals that still require one of the viewer accounts to sign.
+    /// Whether to return only proposals requiring a viewer signature.
     #[norito(default)]
     pub requires_my_signature: bool,
-    /// Opaque pagination cursor.
+    /// Opaque pagination cursor from a prior response.
     #[norito(default)]
     pub cursor: Option<String>,
-    /// Optional page size.
+    /// Optional requested page size.
     #[norito(default)]
     pub limit: Option<u64>,
 }
@@ -28755,17 +31023,26 @@ pub struct MultisigApprovalsListRequestDto {
 #[derive(
     Debug, Clone, PartialEq, Eq, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,
 )]
-/// Envelope describing a multisig approval visible to the bearer signer.
+/// Envelope describing a multisig approval visible to the authenticated signer.
 pub struct MultisigApprovalEntryDto {
+    /// Multisig account that owns the proposal.
     pub multisig_account_id: iroha_data_model::account::AccountId,
+    /// Current multisig authority specification.
     pub spec: iroha_executor_data_model::isi::multisig::MultisigSpec,
+    /// Stable proposal identifier.
     pub proposal_id: String,
+    /// Deterministic hash of the proposal instructions.
     pub instructions_hash: String,
+    /// Stored proposal value.
     pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+    /// Canonical operation type inferred from the proposal.
     pub operation_type: String,
+    /// Optional structured operation intent.
     #[norito(default)]
     pub intent: Option<IrohaJson>,
+    /// Current canonical proposal status.
     pub status: String,
+    /// Terminal transition time when the proposal is no longer active.
     #[norito(default)]
     pub terminal_at_ms: Option<u64>,
 }
@@ -28773,8 +31050,10 @@ pub struct MultisigApprovalEntryDto {
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 /// Response payload for signer-scoped multisig approvals.
-pub struct MultisigApprovalsListResponseDto {
+pub struct MultisigApprovalsQueryResponseDto {
+    /// Approval entries in deterministic pagination order.
     pub items: Vec<MultisigApprovalEntryDto>,
+    /// Opaque cursor for the next page, absent when this page is final.
     #[norito(default)]
     pub next_cursor: Option<String>,
 }
@@ -28782,16 +31061,20 @@ pub struct MultisigApprovalsListResponseDto {
 #[cfg(feature = "app_api")]
 #[derive(
     Debug,
-    Default,
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
-/// Request payload for fetching a single signer-visible multisig approval.
-pub struct MultisigApprovalsGetRequestDto {
+#[norito(deny_unknown_fields)]
+/// Request payload for looking up one signer-visible multisig approval.
+pub struct MultisigApprovalLookupRequestDto {
+    /// Exact multisig account that owns the selected proposal.
+    pub multisig_account_id: iroha_data_model::account::AccountId,
+    /// Optional stable proposal identifier.
     #[norito(default)]
     pub proposal_id: Option<String>,
+    /// Optional deterministic hash of the proposal instructions.
     #[norito(default)]
     pub instructions_hash: Option<String>,
 }
@@ -28799,7 +31082,8 @@ pub struct MultisigApprovalsGetRequestDto {
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 /// Response payload for a signer-visible multisig approval lookup.
-pub struct MultisigApprovalsGetResponseDto {
+pub struct MultisigApprovalLookupResponseDto {
+    /// Matching approval entry.
     pub item: MultisigApprovalEntryDto,
 }
 
@@ -39300,6 +41584,12 @@ pub(crate) struct TxHistoryVisibilityScope {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Debug, Clone)]
+pub(crate) struct MultisigApprovalsViewerScope {
+    pub viewer_account_ids: Vec<AccountId>,
+}
+
+#[cfg(feature = "app_api")]
 fn tx_matches_history_visibility_scope(
     tx: &iroha_data_model::query::CommittedTransaction,
     visibility: &TxHistoryVisibilityScope,
@@ -39311,12 +41601,6 @@ fn tx_matches_history_visibility_scope(
         .viewer_account_ids
         .iter()
         .any(|account_id| tx_references_account_id(tx, account_id))
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone)]
-pub(crate) struct MultisigApprovalsViewerScope {
-    pub viewer_account_ids: Vec<AccountId>,
 }
 
 #[cfg(feature = "app_api")]
@@ -40383,9 +42667,9 @@ pub const ENDPOINT_MULTISIG_CANCEL: &str = "/v1/multisig/cancel";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_SPEC: &str = "/v1/multisig/spec";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_MULTISIG_PROPOSALS_LIST: &str = "/v1/multisig/proposals/query";
+pub const ENDPOINT_MULTISIG_PROPOSALS_QUERY: &str = "/v1/multisig/proposals/query";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_MULTISIG_PROPOSALS_GET: &str = "/v1/multisig/proposals/lookup";
+pub const ENDPOINT_MULTISIG_PROPOSALS_LOOKUP: &str = "/v1/multisig/proposals/lookup";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
     "/v1/accounts/{account_id}/transactions/query";
@@ -51302,9 +53586,7 @@ pub fn stream_resume_unsupported_response() -> Response {
     );
     response
         .extensions_mut()
-        .insert(crate::utils::HttpErrorCode::new(
-            "stream_resume_unsupported",
-        ));
+        .insert(crate::ReviewedProtocolNativeError::StreamResumeUnsupported);
     response
 }
 
@@ -60272,9 +62554,15 @@ mod sse_stream_tests {
         assert_eq!(
             response
                 .extensions()
+                .get::<crate::ReviewedProtocolNativeError>(),
+            Some(&crate::ReviewedProtocolNativeError::StreamResumeUnsupported)
+        );
+        assert!(
+            response
+                .extensions()
                 .get::<crate::utils::HttpErrorCode>()
-                .map(crate::utils::HttpErrorCode::as_str),
-            Some("stream_resume_unsupported")
+                .is_none(),
+            "the response boundary assigns the public error code after validation"
         );
         assert_eq!(
             response

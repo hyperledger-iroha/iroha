@@ -27,7 +27,10 @@ internal object JsonNumbers {
         check(value is Number) { "$path must be a number" }
         return when (value) {
             is BigInteger -> checkedLong(value, path)
-            is BigDecimal -> checkedDecimalLong(value, path)
+            is BigDecimal -> {
+                check(allowFloatingPoint) { "$path must be an integer" }
+                checkedDecimalLong(value, path)
+            }
             is Double -> checkedFloatingLong(value, path, allowFloatingPoint)
             is Float -> checkedFloatingLong(value.toDouble(), path, allowFloatingPoint)
             else -> value.toLong()

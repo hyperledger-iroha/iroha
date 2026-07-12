@@ -41,14 +41,12 @@ public enum KagemushaRecursiveSpendProverError: Error, Equatable, LocalizedError
     }
 }
 
-public enum KagemushaOfflineSpendMode: String, Equatable, CaseIterable {
-    case recursiveSpendV2 = "recursive_spend_v2"
+public enum KagemushaOfflineSpendMode: String, Equatable, CaseIterable, Sendable {
+    case recursiveSpend = "recursive_spend_v2"
 }
 
 public enum KagemushaRecursiveSpendProver {
-    public static let requiredNativeBridgeAbiVersion: UInt32 = 6
-    public static let recursiveCompactRequiredNativeBridgeAbiVersion: UInt32 = 7
-    public static let topUpRequiredNativeBridgeAbiVersion: UInt32 = 15
+    public static let requiredNativeBridgeAbiVersion: UInt32 = 18
     public static let recursiveAggregationProofCircuitIdV1 = "kagemusha-recursive-aggregation-v1"
     public static let recursiveCompactCircuitIdV1 = "kagemusha-recursive-compact-v1"
     public static let recursiveAggregationProofBackend = "halo2/ipa"
@@ -110,13 +108,13 @@ public enum KagemushaRecursiveSpendProver {
     }
 
     public static var preferredMode: KagemushaOfflineSpendMode? {
-        preferredMode(pastaCycleV3BackendAvailable: KagemushaRecursiveSpendV2.isProofBackendAvailable)
+        preferredMode(pastaCycleV3BackendAvailable: KagemushaRecursiveSpend.isProofBackendAvailable)
     }
 
     public static func preferredMode(
         pastaCycleV3BackendAvailable: Bool
     ) -> KagemushaOfflineSpendMode? {
-        pastaCycleV3BackendAvailable ? .recursiveSpendV2 : nil
+        pastaCycleV3BackendAvailable ? .recursiveSpend : nil
     }
 
     /// The first release exposes the same single production mode for proving and spending.

@@ -13,11 +13,12 @@ use crate::{ChainId, nexus::LaneId, proof::ProofBox};
 pub mod sccp;
 mod sccp_registry;
 pub use sccp::{
+    SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1, SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
     SCCP_V1_JSON_SAFE_INTEGER_MAX, SccpEvmSourceEmitterV1, SccpInboundAnchorHighWaterKeyV1,
     SccpInboundMessageKeyV1, SccpInboundMessageRecordV1, SccpLaneIdV1, SccpNetworkV1,
-    SccpOutboundMessageContextV1, SccpOutboundMessageIndexKeyV1, SccpOutboundMessageKeyV1,
-    SccpOutboundMessageRecordV1, SccpOutboundProofRecordV1, SccpSourceEmitterV1,
-    SccpSourceIdentityV1, SccpTronSourceEmitterV1,
+    SccpOutboundMessageContextV1, SccpOutboundMessageDescriptorV1, SccpOutboundMessageIndexKeyV1,
+    SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1, SccpOutboundPendingUsageV1,
+    SccpOutboundProofRecordV1, SccpSourceEmitterV1, SccpSourceIdentityV1, SccpTronSourceEmitterV1,
 };
 pub use sccp_registry::{
     SCCP_V1_MAX_GOVERNED_LANES, SCCP_V1_MAX_KEY_BYTES, SCCP_V1_MAX_LIVE_GOVERNED_ROUTES,
@@ -1144,10 +1145,16 @@ mod tests {
             height: 1,
             view: 0,
         };
+        let execution_commitment = crate::block::consensus_v2::ExecutionCommitment::without_topups(
+            Hash::new(b"bridge v2 parent state"),
+            Hash::new(b"bridge v2 post state"),
+            Hash::new(b"bridge v2 ordinary writes"),
+        );
         let mut commit_qc = QuorumCertificate {
             round,
             phase: GlobalPhase::Commit,
             subject,
+            execution_commitment,
             signers: signer_indices.to_vec(),
             aggregate_signature: vec![1],
         };
@@ -1155,6 +1162,7 @@ mod tests {
             round,
             phase: GlobalPhase::Commit,
             subject,
+            execution_commitment,
             signer: signer_indices.first().copied().unwrap_or(0),
             signature: Vec::new(),
         }
@@ -1264,10 +1272,16 @@ mod tests {
             height,
             view: 0,
         };
+        let execution_commitment = wire::ExecutionCommitment::without_topups(
+            Hash::new(b"bridge v2 successor parent state"),
+            Hash::new(b"bridge v2 successor post state"),
+            Hash::new(b"bridge v2 successor ordinary writes"),
+        );
         let commit_qc = wire::QuorumCertificate {
             round,
             phase: wire::GlobalPhase::Commit,
             subject,
+            execution_commitment,
             signers: vec![0, 1, 2],
             aggregate_signature: vec![1],
         };
@@ -1294,6 +1308,7 @@ mod tests {
             round: artifact.commit_qc.round,
             phase: wire::GlobalPhase::Commit,
             subject: artifact.subject,
+            execution_commitment: artifact.commit_qc.execution_commitment,
             signer: artifact.commit_qc.signers[0],
             signature: Vec::new(),
         }
@@ -1672,14 +1687,16 @@ mod tests {
 
     #[test]
     fn sccp_outbound_message_record_roundtrip() {
-        let record = SccpOutboundMessageRecordV1 {
+        let record = SccpOutboundPendingMessageRecordV1 {
             destination_binding_hash: [0x23; 32],
             route_configuration_hash: [0x25; 32],
             payload_hash: [0x24; 32],
+            payload_bytes: vec![0x53, 0x43, 0x43, 0x50],
             recorded_at_height: 77,
+            commitment_index: 0,
         };
         let buf = record.encode();
-        let dec = SccpOutboundMessageRecordV1::decode_all(&mut &buf[..]).expect("decode");
+        let dec = SccpOutboundPendingMessageRecordV1::decode_all(&mut &buf[..]).expect("decode");
         assert_eq!(record, dec);
     }
 
@@ -2060,6 +2077,14 @@ mod tests {
                     Field("subject"),
                 ],
             ),
+            (
+                "execution commitment",
+                vec![
+                    Field("finality_artifact"),
+                    Field("commit_qc"),
+                    Field("execution_commitment"),
+                ],
+            ),
         ];
 
         for (name, path) in paths {
@@ -2407,8 +2432,8 @@ mod tests {
             .finality_artifact
             .commit_qc
             .aggregate_signature[0] ^= 0x80;
-        let mut verifier =
-            BridgeFinalityVerifier::with_context(context.chain_id.clone(), context.id());
+        let context_id = context.id();
+        let mut verifier = BridgeFinalityVerifier::with_context(context.chain_id, context_id);
 
         assert!(matches!(
             verifier.verify(&fixture.proof),

@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.client
 
+import java.math.BigInteger
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CompletableFuture
@@ -18,16 +19,34 @@ class SccpRecentQueryValidationTest {
         val executor = CountingExecutor()
         val transport = transport(executor)
 
-        for (from in listOf(Long.MIN_VALUE, -1L, 0L)) {
+        for (from in listOf(
+            BigInteger.valueOf(Long.MIN_VALUE),
+            BigInteger.valueOf(-1),
+            BigInteger.ZERO,
+            BigInteger.ONE.shiftLeft(64),
+        )) {
             assertFailsWith<IllegalArgumentException>("from=$from") {
-                transport.getSccpRecentMessages(from, 1)
+                transport.getSccpRecentMessages(from, null, 1)
             }
         }
         for (limit in listOf(Int.MIN_VALUE, -1, 0, 51, Int.MAX_VALUE)) {
             assertFailsWith<IllegalArgumentException>("limit=$limit") {
-                transport.getSccpRecentMessages(1, limit)
+                transport.getSccpRecentMessages(BigInteger.ONE, null, limit)
             }
         }
+        for (afterIndex in listOf(Int.MIN_VALUE, -1, 512, Int.MAX_VALUE)) {
+            assertFailsWith<IllegalArgumentException>("afterIndex=$afterIndex") {
+                transport.getSccpRecentMessages(BigInteger.ONE, afterIndex, 1)
+            }
+        }
+        assertFailsWith<IllegalArgumentException>("unpaired afterIndex") {
+            transport.getSccpRecentMessages(null, 0, 1)
+        }
+        assertFailsWith<IllegalArgumentException> { SccpRecentCursor(BigInteger.ZERO, 0) }
+        assertFailsWith<IllegalArgumentException> {
+            SccpRecentCursor(BigInteger.ONE.shiftLeft(64), 0)
+        }
+        assertFailsWith<IllegalArgumentException> { SccpRecentCursor(BigInteger.ONE, 512) }
 
         assertEquals(0, executor.requests.size, "invalid queries must not reach HTTP execution")
     }
@@ -37,15 +56,18 @@ class SccpRecentQueryValidationTest {
         val executor = CountingExecutor()
         val transport = transport(executor)
 
-        transport.getSccpRecentMessages(1, 1).join()
-        transport.getSccpRecentMessages(Long.MAX_VALUE, 50).join()
+        val maxU64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
+        transport.getSccpRecentMessages(BigInteger.ONE, null, 1).join()
+        transport.getSccpRecentMessages(maxU64, 0, 50).join()
+        transport.getSccpRecentMessages(SccpRecentCursor(BigInteger.valueOf(7), 511), 1).join()
 
-        assertEquals(2, executor.requests.size)
+        assertEquals(3, executor.requests.size)
         assertEquals("from=1&limit=1", executor.requests[0].uri.rawQuery)
         assertEquals(
-            "from=${Long.MAX_VALUE}&limit=50",
+            "from=$maxU64&after_index=0&limit=50",
             executor.requests[1].uri.rawQuery,
         )
+        assertEquals("from=7&after_index=511&limit=1", executor.requests[2].uri.rawQuery)
     }
 
     @Test
@@ -58,7 +80,7 @@ class SccpRecentQueryValidationTest {
         transport.getSccpRegistry()
         transport.getSccpMessageBundle(messageId)
         transport.getSccpProofRequest(messageId)
-        transport.getSccpRecentMessages(1, 1)
+        transport.getSccpRecentMessages(BigInteger.ONE, null, 1)
 
         assertEquals(
             listOf(
@@ -85,7 +107,7 @@ class SccpRecentQueryValidationTest {
         for (response in invalidResponses) {
             val executor = CountingExecutor(response)
             val failure = assertFailsWith<CompletionException> {
-                transport(executor).getSccpRecentMessages(1, 1).join()
+                transport(executor).getSccpRecentMessages(BigInteger.ONE, null, 1).join()
             }
             assertTrue(failure.cause is RuntimeException)
             assertEquals(1, executor.requests.size)

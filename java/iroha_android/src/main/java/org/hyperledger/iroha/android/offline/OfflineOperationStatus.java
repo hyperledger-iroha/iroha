@@ -130,18 +130,21 @@ public abstract class OfflineOperationStatus {
     private final BigInteger finalizedBlockHeight;
     private final BigInteger serverTimeMs;
     private final TopUpAnchor anchor;
+    private final TopUpFinalityProof finalityProof;
 
     public TopUpResult(
         final String transactionHash,
         final BigInteger finalizedBlockHeight,
         final BigInteger serverTimeMs,
-        final TopUpAnchor anchor) {
+        final TopUpAnchor anchor,
+        final TopUpFinalityProof finalityProof) {
       this.transactionHash =
           OfflineOperationCodec.requireTransactionHash(transactionHash, "transactionHash");
       this.finalizedBlockHeight =
           requirePositiveU64(finalizedBlockHeight, "finalizedBlockHeight");
       this.serverTimeMs = requirePositiveU64(serverTimeMs, "serverTimeMs");
       this.anchor = Objects.requireNonNull(anchor, "anchor");
+      this.finalityProof = Objects.requireNonNull(finalityProof, "finalityProof");
     }
 
     public String transactionHash() {
@@ -158,6 +161,10 @@ public abstract class OfflineOperationStatus {
 
     public TopUpAnchor anchor() {
       return anchor;
+    }
+
+    public TopUpFinalityProof finalityProof() {
+      return finalityProof;
     }
   }
 
@@ -205,6 +212,20 @@ public abstract class OfflineOperationStatus {
       this.archive = Arrays.copyOf(archive, archive.length);
     }
 
+    public byte[] noritoArchive() {
+      return Arrays.copyOf(archive, archive.length);
+    }
+  }
+
+  /** Opaque, schema-bound consensus proof for one finalized top-up anchor. */
+  public static final class TopUpFinalityProof {
+    private final byte[] archive;
+
+    TopUpFinalityProof(final byte[] archive) {
+      this.archive = Arrays.copyOf(archive, archive.length);
+    }
+
+    /** Return a defensive copy of the canonical finality-proof archive. */
     public byte[] noritoArchive() {
       return Arrays.copyOf(archive, archive.length);
     }

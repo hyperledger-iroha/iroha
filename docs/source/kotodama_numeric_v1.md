@@ -186,9 +186,9 @@ performs no speculative output-scale attempts and distinguishes:
 Rounded division requires an output scale and one of these stable modes:
 
 ```text
-decimal.div_round(divisor: decimal, scale: int, mode: rounding-mode) -> decimal
-quantity.div_round(divisor: decimal, scale: int, mode: rounding-mode) -> quantity
-quantity.ratio_round(divisor: quantity, scale: int, mode: rounding-mode) -> decimal
+decimal.div_round(decimal divisor, int scale, rounding-mode mode) -> decimal
+quantity.div_round(decimal divisor, int scale, rounding-mode mode) -> quantity
+quantity.ratio_round(quantity divisor, int scale, rounding-mode mode) -> decimal
 ```
 
 All three methods require the three argument names shown above. `rounding-mode`
@@ -237,10 +237,10 @@ modulo `2^512` and reinterpret the result in the signed domain. V1 does not
 inherit an `i64` or `u128` modulus from retired source types.
 
 ```text
-math::wrapping_neg(value: int) -> int
-math::wrapping_add(left: int, right: int) -> int
-math::wrapping_sub(left: int, right: int) -> int
-math::wrapping_mul(left: int, right: int) -> int
+math::wrapping_neg(int value) -> int
+math::wrapping_add(int left, int right) -> int
+math::wrapping_sub(int left, int right) -> int
+math::wrapping_mul(int left, int right) -> int
 ```
 
 The binary forms require the `left` and `right` argument names. These four
@@ -270,10 +270,28 @@ The schema names and 16-byte schema hashes are:
 | `decimal` | `iroha.numeric.DecimalValueV1` | `ba2ffed52e4d8ee16f17efefe1828524` |
 | `quantity` | `iroha.numeric.QuantityValueV1` | `e4769984c81ce0e8b678f2eb06274ee3` |
 
-The ABI V1 surface descriptor binds wire-format version 1, all three schema
-names and hashes, the complete frame and pointer-envelope layout strings, and
-the numeric error-precedence rule. Changing any of them changes the ABI hash;
-an implementation MUST NOT mutate the layout while retaining the old hash.
+ABI V1 descriptor format 4 embeds a versioned numeric-semantics record. It
+binds all three value domains, exact-intermediate and result-validation rules,
+the complete operator/conversion/wrapping rules, canonicalization, integer and
+decimal division behavior, and the ordered arithmetic and validation failure
+stages. It also binds the canonical JSON boundary as decoded JSON strings with
+these exact content grammars:
+
+```text
+int       0|-?[1-9][0-9]*
+decimal   -?(0|[1-9][0-9]*)(\.[0-9]*[1-9])?
+quantity  (0|[1-9][0-9]*)(\.[0-9]*[1-9])?
+```
+
+The grammar is followed by the type's scale, mantissa, and sign checks. JSON
+number tokens, leading plus signs or zeroes, negative zero, exponent spelling,
+and removable fractional zeroes are not alternate representations.
+
+The descriptor separately binds wire-format version 1, all three schema names
+and hashes, the complete frame and pointer-envelope layout strings, rounding,
+failure, arithmetic-fault, and pointer-fault names/tags. Changing any bound
+semantic or layout changes the V1 ABI hash; an implementation MUST NOT mutate
+behavior while retaining the old hash.
 
 The numeric body begins with a four-byte little-endian unsigned mantissa byte
 length, followed by the minimal little-endian two's-complement bytes. Decimal
@@ -289,6 +307,47 @@ With the fixed 40-byte canonical Norito V1 header, maximum frame sizes are 108 b
 seven-byte type/version/length header and a 32-byte `iroha_crypto::Hash::new`
 digest of the complete frame, for maxima of 147, 148, and 148 bytes
 respectively.
+
+### Typed durable-state identity
+
+The same ABI V1 descriptor binds aggregate durable values rather than merely
+the `STATE_VALUE_ENCODE` and `STATE_VALUE_DECODE` syscall signatures. The
+`StateValueSchemaV1` and `StateValueRecordV1` frames use stable nominal Norito
+schema names, and the descriptor contains their schema hashes, the exact
+`KOTODAMA_STATE_VALUE_SCHEMA_V1\0` schema-binding domain, every
+`StateValueKindV1`, `StateValueNodeV1`, and `StateValueAtomV1` name and explicit
+`u32` wire tag, each variant layout, leaf-to-pointer-type mapping, resource
+handle marker, preorder/active-payload traversal rules, Option/Result tag
+meaning, decoded word-table layout, and every node/word/byte/list cap.
+
+The enum variants carry explicit `#[codec(index = ...)]` discriminants, so a
+source reorder cannot silently alter persisted state. Any change to one of
+these durable wire identities changes the ABI V1 hash. This is still ABI
+version 1: first-release artifacts carrying an earlier hash are rejected at
+admission rather than interpreted under new semantics.
+
+The descriptor also binds the literal `CNTR` section marker and framing,
+nominal `EmbeddedContractInterfaceV1` and `EmbeddedStateTypeV1` schema names
+and hashes, the complete ordered table of all 20 one-byte state-type tags with
+canonical sample frames and layouts, the 256-node nesting limit, and the exact
+admission rules. A `StateMap` is a top-level durable collection only and cannot
+appear inside another state type. Its key must be one of the supported
+canonical scalar domains; tuples require at least two elements, structs must
+have a canonical nonempty name and canonical unique nonempty fields, and list
+capacity is `1..=64`. Admission rejects a CNTR tree that the runtime cannot
+reconstruct and validate.
+
+When CNTR metadata is present, `STATE_GET`, `STATE_SET`, `STATE_DEL`,
+`STATE_HAS`, and `STATE_LEN` accept only a declared scalar path or a canonical
+child of a declared `StateMap`; a bare map base is a collection prefix, not a
+value. `STATE_KEYS` and `STATE_COUNT` also accept that bare map base. Before a
+write mutates state, and before a present read publishes bytes to the guest,
+the host reconstructs the exact schema from CNTR and requires a canonical
+`StateValueRecordV1` whose schema hash, active atom stream, pointer types,
+pointer hashes, and leaf payloads all match it. Contract execution without its
+CNTR section fails closed. Generic non-contract VM tooling without CNTR retains
+bounded raw-path/raw-value behavior; it cannot be used as a contract-runtime
+fallback.
 
 The digest is the uniform pointer-ABI frame-integrity binding: it proves that
 the bounded frame snapshot subsequently decoded is exactly the frame carried
@@ -311,6 +370,12 @@ canonicalization. A numeric `StateMap` key's identity and hash input are its
 canonical encoded bytes, so alternate spellings of one value cannot create
 distinct keys. Deterministic `StateMap` iteration uses canonical encoded-key
 byte order; that order is not promised to match signed numeric magnitude.
+The VM binds map-key construction and iteration to the loaded CNTR declaration:
+the base must name exactly one declared `StateMap`, and numeric keys must be
+canonical pointer envelopes of that map's nominal `int`, `decimal`, or
+`quantity` key type. Missing schemas, malformed or noncanonical frames, and
+cross-type envelopes fail closed. Pre-release scalar path syscall `0x54` is
+permanently retired and is not part of ABI V1.
 SDKs MUST use arbitrary-precision integer or exact-decimal representations and
 MUST NOT map these values to JavaScript
 `number`, Java/Kotlin `double`, Swift `Double`, or another lossy host type.
@@ -338,9 +403,9 @@ string returns `Option::none`; it is never rounded or converted through a host
 floating-point type.
 
 The detailed signatures live in `crates/ivm/spec/syscalls.toml`. The retired
-Numeric and Amount syscall blocks are not in the V1 allowlist. Every host MUST
-implement the allowed blocks identically or reject an unknown number with
-`VMError::UnknownSyscall`.
+pre-release generic-`Numeric` and `Amount` syscall blocks are not in the V1
+allowlist. Every host MUST implement the allowed blocks identically or reject
+an unknown number with `VMError::UnknownSyscall`.
 
 Stable numeric fault tags are:
 
@@ -391,9 +456,13 @@ an unaffordable phase performs no work and leaves earlier phase charges
 consumed.
 
 The complete formula and stable OOG phase-tag map have gas-formula version 3.
-That version is an input to the canonical gas-schedule hash. Changing any
-logical-work formula, charge-point ordering, or phase tag MUST increment the
-version and regenerate the gas-schedule hash golden.
+That version is an input to gas-schedule descriptor format 3 under domain
+`iroha.ivm.gas-schedule.v3`. The descriptor also encodes every staged phase
+name and numeric tag directly, in tag order; the phase table is not represented
+only by an indirect formula-version constant. Changing any logical-work
+formula, charge-point ordering, phase name, or phase tag MUST increment the
+appropriate descriptor/formula version and regenerate the gas-schedule hash
+golden.
 
 The version-3 phase tags are `0 Entry`, `1 PointerHeader`,
 `2 PointerEnvelope`, `3 PayloadHash`, `4 NoritoDecode`,
@@ -437,9 +506,18 @@ Release calibration uses `cargo bench -p ivm --bench gas_calibration`. The
 `ivm-numeric-limb-cal` benchmark pins the formula's work denominator in every
 benchmark ID for one through eight input limbs, products through sixteen
 limbs, division/remainder, scale-28 rounded division, and minimum/maximum
-input/output envelope authentication, framing, and canonical decode. For each supported
+input/output envelope authentication, framing, and canonical decode. A failing
+numeric syscall with an invalid zero pointer separately measures the entry,
+dispatch/control, and seven-byte pointer-header boundary without performing
+payload work. Its calibration denominator is the staged `16 + 7` gas; the
+generic five-gas `SCALLX` instruction charge is asserted against the VM's total
+consumption but excluded from that denominator, so it cannot hide an
+underpriced numeric entry phase. For each supported
 baseline hardware tier, maintainers compare median time per declared work cell
-against the scalar IVM `ADD` baseline after subtracting harness overhead. The
+against the scalar IVM `ADD` baseline. `ADD` and the VM-based numeric entry
+pipeline subtract the measured `EMPTY_HARNESS` cost before normalization;
+direct bigint, decimal, and frame-codec benchmarks do not contain that VM
+harness and therefore are not adjusted by it. The
 rounded-up worst ratio, plus a minimum 25% safety margin, MUST remain no greater
 than `4`; bounded dispatch/control overhead MUST remain no greater than `16`
 baseline gas units. A failure requires increasing the constants, changing the
@@ -449,6 +527,15 @@ reference-calibration target is Apple M1 Ultra (`Mac13,2`, arm64), Rust 1.93.1;
 release records MUST retain the Criterion output alongside the build artifacts
 and repeat the run on the slowest supported tier. This specification does not
 claim that calibration has completed unless that archived output is present.
+The `numeric_v1_calibration.yml` release workflow repeats the gate on the
+supported GitHub runner matrix (Linux x86-64, Linux arm64, Apple Silicon, and
+Windows x86-64) and captures each exact host/toolchain identity, console
+transcript, and complete Criterion directory as a retained build artifact; tag
+publication must not proceed without the archived M1 Ultra reference record
+and every matrix run passing.
+`scripts/check_numeric_v1_calibration.py` applies that harness adjustment,
+normalizes every declared work/gas denominator, applies the 25% margin, and
+fails the workflow when factor `4` is insufficient.
 
 The fixed entry charge includes bounded register-contract checks (required-zero
 registers, failure mode, and rounding tag). It is not followed by hidden fixed

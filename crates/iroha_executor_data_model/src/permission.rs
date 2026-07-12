@@ -325,6 +325,30 @@ pub mod asset {
             pub asset: AssetId,
         }
     }
+
+    permission! {
+        /// Permission to set or clear transfer-freeze state for one asset definition.
+        pub struct CanSetAssetTransferFreeze {
+            /// Asset definition whose account freeze state may be managed.
+            pub asset_definition: AssetDefinitionId,
+            /// Canonical on-chain alias domain of accounts whose freeze state may be managed.
+            pub account_domain: iroha_data_model::account::rekey::AccountAliasDomain,
+            /// Exact dataspace containing the canonical on-chain account alias.
+            pub account_dataspace: iroha_data_model::nexus::DataSpaceId,
+        }
+    }
+
+    permission! {
+        /// Permission to set the daily transfer limit for one asset definition.
+        pub struct CanSetAssetTransferDailyLimit {
+            /// Asset definition whose daily account limits may be managed.
+            pub asset_definition: AssetDefinitionId,
+            /// Canonical on-chain alias domain of accounts whose daily limit may be managed.
+            pub account_domain: iroha_data_model::account::rekey::AccountAliasDomain,
+            /// Exact dataspace containing the canonical on-chain account alias.
+            pub account_dataspace: iroha_data_model::nexus::DataSpaceId,
+        }
+    }
 }
 
 /// Permission tokens covering ZK-ACE identity management.
@@ -493,6 +517,43 @@ pub mod smart_contract {
         /// Permission to register smart contract code artifacts.
         #[derive(Copy)]
         pub struct CanRegisterSmartContractCode;
+    }
+
+    permission! {
+        /// Permission to invoke one exact entrypoint of one deployed contract instance.
+        pub struct CanInvokeContractEntrypoint {
+            /// Immutable deployed contract address.
+            pub contract: ContractAddress,
+            /// Exact case-sensitive public entrypoint selector.
+            pub entrypoint: String,
+        }
+    }
+}
+
+/// Permission tokens governing native FX corridors.
+pub mod settlement {
+    use super::*;
+
+    permission! {
+        /// Root permission for delegating native FX corridor governance.
+        #[derive(Copy)]
+        pub struct CanManageFxCorridors;
+    }
+
+    permission! {
+        /// Permission to publish the next revision of one FX corridor policy.
+        pub struct CanSetFxCorridorPolicy {
+            /// Stable corridor policy identifier.
+            pub policy_id: Name,
+        }
+    }
+
+    permission! {
+        /// Permission to execute settlements under one FX corridor policy.
+        pub struct CanSettleFxCorridor {
+            /// Stable corridor policy identifier.
+            pub policy_id: Name,
+        }
     }
 }
 
@@ -748,13 +809,16 @@ pub mod oracle {
 #[cfg(test)]
 mod tests {
     use super::account::CanRegisterAccount;
+    use super::asset::{CanSetAssetTransferDailyLimit, CanSetAssetTransferFreeze};
     use super::escrow::CanResolveEscrowDispute;
     use super::oracle::{
         CanManageTwitterBindings, CanRegisterOracleFeed, CanVoteOracleChangeStage,
     };
     use crate::permission::Permission as _;
-    use iroha_data_model::DomainId;
     use iroha_data_model::oracle::OracleChangeStage;
+    use iroha_data_model::{
+        DomainId, account::rekey::AccountAliasDomain, asset::AssetDefinitionId, nexus::DataSpaceId,
+    };
 
     #[test]
     fn can_register_account_serializes_as_json_string_field() {
@@ -771,6 +835,58 @@ mod tests {
             norito::json!({
                 "domain": "wonderland.universal",
             })
+        );
+    }
+
+    #[test]
+    fn transfer_control_permissions_require_exact_domain_and_dataspace() {
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("currency", "sbp").expect("asset domain"),
+            "pkr".parse().expect("asset name"),
+        );
+        let account_domain = AccountAliasDomain::new("hbl".parse().expect("account domain"));
+        let account_dataspace = DataSpaceId::new(10);
+        let freeze = CanSetAssetTransferFreeze {
+            asset_definition: asset_definition.clone(),
+            account_domain: account_domain.clone(),
+            account_dataspace,
+        };
+        let daily_limit = CanSetAssetTransferDailyLimit {
+            asset_definition,
+            account_domain,
+            account_dataspace,
+        };
+
+        for value in [
+            norito::json::to_value(&freeze).expect("freeze permission JSON"),
+            norito::json::to_value(&daily_limit).expect("daily-limit permission JSON"),
+        ] {
+            let object = value.as_object().expect("permission payload object");
+            assert_eq!(
+                object.len(),
+                3,
+                "permission payload must have no hidden fields"
+            );
+            assert_eq!(object["account_domain"].as_str(), Some("hbl"));
+            assert_eq!(object["account_dataspace"].as_u64(), Some(10));
+        }
+
+        let missing_dataspace = norito::json!({
+            "asset_definition": freeze.asset_definition.to_string(),
+            "account_domain": "hbl",
+        });
+        assert!(
+            norito::json::from_value::<CanSetAssetTransferFreeze>(missing_dataspace).is_err(),
+            "first-release permission decoding must not accept domain-only legacy payloads",
+        );
+        let alias_string_dataspace = norito::json!({
+            "asset_definition": freeze.asset_definition.to_string(),
+            "account_domain": "hbl",
+            "account_dataspace": "sbp",
+        });
+        assert!(
+            norito::json::from_value::<CanSetAssetTransferFreeze>(alias_string_dataspace).is_err(),
+            "typed permission must require numeric DataSpaceId, not a browser alias",
         );
     }
 

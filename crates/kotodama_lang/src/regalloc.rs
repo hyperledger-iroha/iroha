@@ -1030,8 +1030,30 @@ fn collect_live_intervals(func: &Function) -> Vec<Interval> {
         for instr in &block.instrs {
             visit_instr_uses(instr, |temp| add_use(&mut intervals, temp, position));
             visit_instr_defs(instr, |dest| add_def(&mut intervals, dest, position));
-            if let Instr::TuplePack { dest, items } = instr {
-                tuple_defs.insert(*dest, items.clone());
+            match instr {
+                Instr::TuplePack { dest, items } => {
+                    tuple_defs.insert(*dest, items.clone());
+                }
+                Instr::Copy { dest, src } => {
+                    if let Some(items) = tuple_defs.get(src).cloned() {
+                        tuple_defs.insert(*dest, items);
+                    } else {
+                        tuple_defs.remove(dest);
+                    }
+                }
+                Instr::TupleGet { dest, tuple, index } => {
+                    let child_items = tuple_defs
+                        .get(tuple)
+                        .and_then(|items| items.get(*index))
+                        .and_then(|item| tuple_defs.get(item))
+                        .cloned();
+                    if let Some(items) = child_items {
+                        tuple_defs.insert(*dest, items);
+                    } else {
+                        tuple_defs.remove(dest);
+                    }
+                }
+                _ => {}
             }
             position = position.saturating_add(1);
         }
@@ -2028,6 +2050,17 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*account);
             f(*token);
         }
+        GrantContractEntrypoint {
+            account,
+            entrypoint,
+        }
+        | RevokeContractEntrypoint {
+            account,
+            entrypoint,
+        } => {
+            f(*account);
+            f(*entrypoint);
+        }
         GrantRole { account, name } | RevokeRole { account, name } => {
             f(*account);
             f(*name);
@@ -2261,10 +2294,6 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         }
         EncodeInt { value, .. } | PointerToNorito { value, .. } => f(*value),
         PointerFromNorito { blob, .. } => f(*blob),
-        PathMapKey { base, key, .. } => {
-            f(*base);
-            f(*key);
-        }
         PathMapKeyNorito { base, key_blob, .. } => {
             f(*base);
             f(*key_blob);
@@ -2317,18 +2346,7 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*left);
             f(*right);
         }
-        VrfVerify {
-            input,
-            public_key,
-            proof,
-            variant,
-            ..
-        } => {
-            f(*input);
-            f(*public_key);
-            f(*proof);
-            f(*variant);
-        }
+        VrfVerify { request, .. } => f(*request),
         VrfVerifyBatch { batch, .. } => f(*batch),
         AxtBegin { descriptor } => f(*descriptor),
         AxtTouch { dsid, manifest } => {
@@ -2475,7 +2493,6 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         Instr::JsonObject { dest, .. } => Some(*dest),
         Instr::JsonSetInt { dest, .. } => Some(*dest),
         Instr::JsonSetAccountId { dest, .. } => Some(*dest),
-        Instr::PathMapKey { dest, .. } => Some(*dest),
         Instr::PathMapKeyNorito { dest, .. } => Some(*dest),
         Instr::JsonEncode { dest, .. } => Some(*dest),
         Instr::JsonDecode { dest, .. } => Some(*dest),
@@ -2497,6 +2514,8 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         Instr::Call { dest, .. } | Instr::InvokeEntrypointAs { dest, .. } => dest.as_ref().copied(),
         Instr::GrantPermission { .. }
         | Instr::RevokePermission { .. }
+        | Instr::GrantContractEntrypoint { .. }
+        | Instr::RevokeContractEntrypoint { .. }
         | Instr::RegisterAsset { .. }
         | Instr::CreateNewAsset { .. }
         | Instr::TransferAsset { .. }
@@ -2610,6 +2629,77 @@ pub(crate) fn visit_instr_defs<F: FnMut(Temp)>(instruction: &Instr, mut visit: F
 mod tests {
     use super::*;
     use crate::ir::{self, BasicBlock, Instr, Terminator};
+
+    #[test]
+    fn virtual_tuple_copy_keeps_constant_field_live_until_state_value_extraction() {
+        let status = Temp(0);
+        let nested_record = Temp(1);
+        let record = Temp(2);
+        let record_copy = Temp(3);
+        let extracted_record = Temp(4);
+        let extracted_status = Temp(5);
+        let schema = Temp(6);
+        let encoded = Temp(7);
+        let function = Function {
+            name: "aggregate_constant_state".into(),
+            params: vec![],
+            blocks: vec![BasicBlock {
+                label: Label(0),
+                instrs: vec![
+                    Instr::DataRef {
+                        dest: status,
+                        kind: ir::DataRefKind::Int,
+                        value: "1".into(),
+                    },
+                    Instr::TuplePack {
+                        dest: nested_record,
+                        items: vec![status],
+                    },
+                    Instr::TuplePack {
+                        dest: record,
+                        items: vec![nested_record],
+                    },
+                    Instr::Copy {
+                        dest: record_copy,
+                        src: record,
+                    },
+                    Instr::TupleGet {
+                        dest: extracted_record,
+                        tuple: record_copy,
+                        index: 0,
+                    },
+                    Instr::TupleGet {
+                        dest: extracted_status,
+                        tuple: extracted_record,
+                        index: 0,
+                    },
+                    Instr::DataRef {
+                        dest: schema,
+                        kind: ir::DataRefKind::NoritoBytes,
+                        value: "0x00".into(),
+                    },
+                    Instr::StateValueEncode {
+                        dest: encoded,
+                        schema,
+                        words: vec![extracted_status],
+                    },
+                ],
+                terminator: Terminator::Return(Some(encoded)),
+            }],
+            entry: Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
+        };
+
+        let intervals = collect_live_intervals(&function);
+        let status_interval = intervals
+            .iter()
+            .find(|interval| interval.temp == status)
+            .expect("constant status field interval");
+        assert_eq!(
+            status_interval.end, 5,
+            "virtual tuple copies and nested projections must keep the source field live until TupleGet materializes it"
+        );
+    }
 
     #[test]
     fn reuse_registers_when_intervals_do_not_overlap() {

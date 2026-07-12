@@ -318,7 +318,10 @@ where
 }
 
 fn to_json_value<T: JsonSerialize>(value: &T, context: &'static str) -> Result<Value> {
-    json::to_value(value).map_err(|source| Error::SerializationFailure { context, source })
+    json::to_value(value).map_err(|source| Error::SerializationFailure {
+        context,
+        source: Box::new(source),
+    })
 }
 
 fn build_instruction_envelope(

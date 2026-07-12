@@ -1,11 +1,11 @@
 //! Helpers for bridge finality proofs built from commit certificates.
 
-use std::{collections::BTreeSet, fmt, num::NonZeroUsize, sync::Arc};
+use std::{collections::BTreeSet, fmt};
 
 use iroha_data_model::{
     ChainId,
     block::{
-        SignedBlock,
+        BlockHeader, SignedBlock,
         consensus_v2::finality::{V2FinalityArtifact, V2QuorumCertificateVerificationError},
     },
     bridge::{
@@ -17,10 +17,8 @@ use iroha_data_model::{
     transaction::{Executable, TransactionEntrypoint},
 };
 use iroha_sccp::{SccpHubCommitmentV1, SccpPayloadV1, TairaBridgeFinalityProofV1};
+use mv::storage::StorageReadOnly;
 use thiserror::Error;
-
-#[cfg(test)]
-use iroha_data_model::block::BlockHeader;
 
 use crate::{
     state::{State as CoreState, StateReadOnly},
@@ -31,27 +29,36 @@ use crate::{
 /// cryptography have already been verified.
 ///
 /// The wrapper is intentionally not decodable and exposes no mutable access.
-/// Untrusted implementations of [`BridgeStateReadOnly`] must call [`Self::verify`]
+/// Untrusted implementations of [`BridgeStateReadOnly`] must call [`Self::verify_for_header`]
 /// to mint it. Kura-backed implementations use the private constructor only
-/// after Kura's cache-backed verification boundary succeeds.
+/// after Kura's cache-backed verification boundary succeeds, and attach the
+/// header authenticated by Kura's private durable finality record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[must_use]
 pub struct VerifiedV2FinalityArtifact {
     artifact: V2FinalityArtifact,
+    retained_header: BlockHeader,
 }
 
 impl VerifiedV2FinalityArtifact {
-    /// Fully verify an untrusted artifact and return its proof-typed wrapper.
+    /// Fully verify an untrusted artifact against its exact retained header.
     ///
     /// # Errors
     ///
     /// Returns the canonical v2 verification error when structural, PoP, or
     /// CommitQC cryptographic validation fails.
-    pub fn verify(
+    pub fn verify_for_header(
+        retained_header: BlockHeader,
         artifact: V2FinalityArtifact,
     ) -> Result<Self, V2QuorumCertificateVerificationError> {
         artifact.verify()?;
-        Ok(Self { artifact })
+        artifact
+            .validate_for_header(&retained_header)
+            .map_err(V2QuorumCertificateVerificationError::InvalidArtifact)?;
+        Ok(Self {
+            artifact,
+            retained_header,
+        })
     }
 
     /// Borrow the verified artifact without allowing mutation.
@@ -66,8 +73,17 @@ impl VerifiedV2FinalityArtifact {
         self.artifact
     }
 
-    fn from_kura_verified(artifact: V2FinalityArtifact) -> Self {
-        Self { artifact }
+    /// Borrow Kura's authenticated retained header when one accompanied the artifact.
+    #[must_use]
+    pub const fn retained_header(&self) -> &BlockHeader {
+        &self.retained_header
+    }
+
+    fn from_kura_verified(block_header: BlockHeader, artifact: V2FinalityArtifact) -> Self {
+        Self {
+            artifact,
+            retained_header: block_header,
+        }
     }
 }
 
@@ -77,8 +93,6 @@ impl VerifiedV2FinalityArtifact {
 pub trait BridgeStateReadOnly {
     /// Chain identifier bound to the state snapshot.
     fn bridge_chain_id(&self) -> &ChainId;
-    /// Load a committed block at `height`.
-    fn bridge_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>>;
     /// Load an exact durable Sumeragi-v2 finality artifact whose structure,
     /// roster PoPs, and CommitQC cryptography have already been verified by the
     /// storage boundary.
@@ -86,6 +100,20 @@ pub trait BridgeStateReadOnly {
         &self,
         height: u64,
     ) -> Result<Option<VerifiedV2FinalityArtifact>, String>;
+    /// Load verified finality and Kura's immutable SCCP archive in one bounded pass.
+    ///
+    /// Implementations must authenticate the exact retained header and deterministic
+    /// commitment-index order without falling back to block bodies or mutable WSV payloads.
+    fn bridge_verified_v2_finality_with_sccp_archive(
+        &self,
+        height: u64,
+    ) -> Result<
+        Option<(
+            VerifiedV2FinalityArtifact,
+            Vec<ValidatedSccpOutboundMessageProjectionV1>,
+        )>,
+        String,
+    >;
 }
 
 impl<T: StateReadOnly> BridgeStateReadOnly for T {
@@ -93,17 +121,40 @@ impl<T: StateReadOnly> BridgeStateReadOnly for T {
         self.chain_id()
     }
 
-    fn bridge_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
-        self.kura().get_block(height)
-    }
-
     fn bridge_verified_v2_finality_artifact(
         &self,
         height: u64,
     ) -> Result<Option<VerifiedV2FinalityArtifact>, String> {
         self.kura()
-            .v2_finality_artifact(height)
-            .map(|artifact| artifact.map(VerifiedV2FinalityArtifact::from_kura_verified))
+            .v2_finality_artifact_with_header(height)
+            .map(|record| {
+                record.map(|(header, artifact)| {
+                    VerifiedV2FinalityArtifact::from_kura_verified(header, artifact)
+                })
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn bridge_verified_v2_finality_with_sccp_archive(
+        &self,
+        height: u64,
+    ) -> Result<
+        Option<(
+            VerifiedV2FinalityArtifact,
+            Vec<ValidatedSccpOutboundMessageProjectionV1>,
+        )>,
+        String,
+    > {
+        self.kura()
+            .v2_finality_artifact_with_archive(height)
+            .map(|record| {
+                record.map(|(header, artifact, archive)| {
+                    (
+                        VerifiedV2FinalityArtifact::from_kura_verified(header, artifact),
+                        archive,
+                    )
+                })
+            })
             .map_err(|error| error.to_string())
     }
 }
@@ -113,17 +164,40 @@ impl BridgeStateReadOnly for CoreState {
         self.chain_id_ref()
     }
 
-    fn bridge_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
-        self.block_by_height(height)
-    }
-
     fn bridge_verified_v2_finality_artifact(
         &self,
         height: u64,
     ) -> Result<Option<VerifiedV2FinalityArtifact>, String> {
         self.kura()
-            .v2_finality_artifact(height)
-            .map(|artifact| artifact.map(VerifiedV2FinalityArtifact::from_kura_verified))
+            .v2_finality_artifact_with_header(height)
+            .map(|record| {
+                record.map(|(header, artifact)| {
+                    VerifiedV2FinalityArtifact::from_kura_verified(header, artifact)
+                })
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn bridge_verified_v2_finality_with_sccp_archive(
+        &self,
+        height: u64,
+    ) -> Result<
+        Option<(
+            VerifiedV2FinalityArtifact,
+            Vec<ValidatedSccpOutboundMessageProjectionV1>,
+        )>,
+        String,
+    > {
+        self.kura()
+            .v2_finality_artifact_with_archive(height)
+            .map(|record| {
+                record.map(|(header, artifact, archive)| {
+                    (
+                        VerifiedV2FinalityArtifact::from_kura_verified(header, artifact),
+                        archive,
+                    )
+                })
+            })
             .map_err(|error| error.to_string())
     }
 }
@@ -154,6 +228,45 @@ pub(crate) struct ValidatedRecordedSccpMessage {
     pub key: SccpOutboundMessageKeyV1,
     /// Canonical SCCP hub commitment for the payload.
     pub commitment: SccpHubCommitmentV1,
+}
+
+/// Location-free, fully validated projection of one finalized SCCP outbox message.
+///
+/// The projection is safe for read APIs to render directly: Core has verified exact canonical
+/// payload framing and semantics, the lane-bound message identifier, all structural context
+/// roles, and the payload commitment against the supplied durable record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedSccpOutboundMessageProjectionV1 {
+    /// Zero-based position authenticated by the block's SCCP commitment root.
+    pub commitment_index: u32,
+    /// Exact outbound lane and governed binding context retained by the record.
+    pub context: iroha_data_model::bridge::SccpOutboundMessageContextV1,
+    /// Canonically decoded SCCP V1 application payload.
+    pub payload: SccpPayloadV1,
+    /// Recomputed lane-, context-, message-, and payload-bound hub commitment.
+    pub commitment: SccpHubCommitmentV1,
+}
+
+impl ValidatedRecordedSccpMessage {
+    /// Build the payload-bearing pending outbox record from this canonical validation result.
+    pub(crate) fn outbound_record(
+        &self,
+        recorded_at_height: u64,
+        commitment_index: u32,
+    ) -> Option<iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1> {
+        let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&self.payload).ok()?;
+        let record = iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
+            destination_binding_hash: self.context.destination_binding_hash,
+            route_configuration_hash: self.context.route_configuration_hash,
+            payload_hash: self.commitment.payload_hash,
+            payload_bytes,
+            recorded_at_height,
+            commitment_index,
+        };
+        validate_sccp_outbound_message_record_internal(&self.key, &record)
+            .is_ok()
+            .then_some(record)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -298,11 +411,15 @@ fn validate_recorded_sccp_payload(
         .ok_or(RecordedSccpMessageValidationError::InvalidContext)?;
     let commitment = iroha_sccp::hub_commitment_from_sccp_payload(context, &payload)
         .ok_or(RecordedSccpMessageValidationError::InvalidContext)?;
-    let durable = iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
+    let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&payload)
+        .map_err(|_| RecordedSccpMessageValidationError::InvalidPayload)?;
+    let durable = iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
         destination_binding_hash: context.destination_binding_hash,
         route_configuration_hash: context.route_configuration_hash,
         payload_hash: commitment.payload_hash,
+        payload_bytes,
         recorded_at_height: 1,
+        commitment_index: 0,
     };
     if !durable.is_well_formed_for_key(&key) {
         return Err(RecordedSccpMessageValidationError::HashRoleCollision);
@@ -319,9 +436,96 @@ pub(crate) fn validate_recorded_sccp_message_payload_bytes(
     context: iroha_data_model::bridge::SccpOutboundMessageContextV1,
     payload_bytes: &[u8],
 ) -> Result<ValidatedRecordedSccpMessage, RecordedSccpMessageValidationError> {
+    if payload_bytes.is_empty()
+        || payload_bytes.len()
+            > iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1
+    {
+        return Err(RecordedSccpMessageValidationError::InvalidPayload);
+    }
     let payload = decode_recorded_sccp_payload_bytes(payload_bytes)
         .ok_or(RecordedSccpMessageValidationError::InvalidPayload)?;
     validate_recorded_sccp_payload(context, payload)
+}
+
+/// Fully revalidate one payload-bearing pending SCCP outbox record against its replay key.
+///
+/// This is intentionally stronger than the data-model structural predicate: it decodes and
+/// re-encodes the retained payload, verifies SCCP V1 semantics, recomputes the lane-bound message
+/// identifier and payload commitment, and binds both governed context hashes to the record.
+fn validate_sccp_outbound_message_record_internal(
+    key: &SccpOutboundMessageKeyV1,
+    record: &iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1,
+) -> Result<ValidatedRecordedSccpMessage, RecordedSccpMessageValidationError> {
+    if !record.is_well_formed_for_key(key) {
+        return Err(RecordedSccpMessageValidationError::InvalidContext);
+    }
+    let context = iroha_data_model::bridge::SccpOutboundMessageContextV1 {
+        lane: key.lane,
+        destination_binding_hash: record.destination_binding_hash,
+        route_configuration_hash: record.route_configuration_hash,
+    };
+    let validated = validate_recorded_sccp_message_payload_bytes(context, &record.payload_bytes)?;
+    if validated.key != *key || validated.commitment.payload_hash != record.payload_hash {
+        return Err(RecordedSccpMessageValidationError::InvalidPayload);
+    }
+    Ok(validated)
+}
+
+/// Validate and project one payload-bearing pending SCCP outbox record.
+///
+/// Returns `None` unless the retained bytes are bounded, exact canonical SCCP V1 framing; decode
+/// to a structurally and semantically valid SORA-origin payload for the supplied lane; recompute
+/// the supplied lane-bound message identifier; and match the record's payload hash and governed
+/// context roles. Registry hydration separately proves those context hashes name one retained
+/// governed route before the state becomes observable.
+#[must_use]
+pub fn validate_sccp_outbound_message_record_v1(
+    key: &SccpOutboundMessageKeyV1,
+    record: &iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1,
+) -> Option<ValidatedSccpOutboundMessageProjectionV1> {
+    let validated = validate_sccp_outbound_message_record_internal(key, record).ok()?;
+    Some(ValidatedSccpOutboundMessageProjectionV1 {
+        commitment_index: record.commitment_index,
+        context: validated.context,
+        payload: validated.payload,
+        commitment: validated.commitment,
+    })
+}
+
+/// Return the next dense commitment index for one block height.
+///
+/// `None` means the height already contains the exact first-release maximum. The range includes
+/// writes staged by the current state transaction, so dropping a failed transaction also releases
+/// every index it tentatively allocated.
+pub(crate) fn next_sccp_outbound_commitment_index(
+    ordered: &impl StorageReadOnly<iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1, ()>,
+    height: u64,
+) -> Result<Option<u32>, String> {
+    if height == 0 {
+        return Err("SCCP outbound commitment height must be nonzero".to_owned());
+    }
+    let max = iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1;
+    let start =
+        iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::range_start_at_or_before(height);
+    let mut expected = 0_u32;
+    for (index, ()) in ordered.range(start..) {
+        if index.recorded_at_height != height {
+            break;
+        }
+        if expected >= max {
+            return Err(format!(
+                "SCCP outbound index at height {height} exceeds the {max}-message block bound"
+            ));
+        }
+        if !index.is_well_formed() || index.commitment_index != expected {
+            return Err(format!(
+                "SCCP outbound index at height {height} is not dense: expected {expected}, found {}",
+                index.commitment_index
+            ));
+        }
+        expected += 1;
+    }
+    Ok((expected < max).then_some(expected))
 }
 
 fn validate_recorded_sccp_message_payload_bytes_for_block_collection(
@@ -969,6 +1173,13 @@ pub(crate) enum SccpCommittedBlockValidationError {
     InvalidRecordInstruction(SccpRecordInstructionValidationError),
     /// The block contains more than one successful outbound message with the same replay key.
     DuplicateOutboundMessage(SccpOutboundMessageKeyV1),
+    /// The block contains more successful outbound messages than the fixed first-release bound.
+    TooManyOutboundMessages {
+        /// Number of successful outbound messages reconstructed from the block.
+        actual: usize,
+        /// Maximum successful outbound messages admitted per block.
+        max: usize,
+    },
     /// The block header commitment root does not match reconstructed SCCP records.
     CommitmentRootMismatch {
         /// Root recomputed from committed SCCP message records.
@@ -1023,6 +1234,14 @@ pub(crate) fn validate_sccp_commitment_root_for_signed_block(
     }
 
     let messages = collect_sccp_messages_from_signed_block(block);
+    let max = usize::try_from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1)
+        .expect("SCCP block bound fits usize");
+    if messages.len() > max {
+        return Err(SccpCommittedBlockValidationError::TooManyOutboundMessages {
+            actual: messages.len(),
+            max,
+        });
+    }
     let expected = sccp_commitment_root_from_messages(&messages);
     let actual = block.header().sccp_commitment_root();
     if actual == expected {
@@ -1045,12 +1264,9 @@ pub fn sccp_commitment_root_from_messages(messages: &[RecordedSccpMessage]) -> O
 #[allow(variant_size_differences)]
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum BridgeFinalityError {
-    /// The requested block height is zero or does not fit into the host pointer width.
+    /// The requested block height is zero.
     #[error("invalid block height {0}")]
     InvalidHeight(u64),
-    /// The block at the requested height was not found.
-    #[error("block at height {0} not found")]
-    BlockNotFound(u64),
     /// No durable Sumeragi-v2 finality artifact exists for the requested height.
     #[error("Sumeragi-v2 finality artifact for height {0} not found")]
     FinalityArtifactNotFound(u64),
@@ -1078,29 +1294,34 @@ pub enum BridgeFinalityError {
 ///
 /// # Errors
 ///
-/// Returns [`BridgeFinalityError`] when the height is invalid, the block or
-/// durable artifact is missing/malformed, or the exact v2 artifact fails
+/// Returns [`BridgeFinalityError`] when the height is zero, the durable retained-header artifact
+/// is missing/malformed, or the exact v2 artifact fails
 /// cryptographic verification.
 pub fn build_finality_proof(
     state: &impl BridgeStateReadOnly,
     height: u64,
 ) -> Result<BridgeFinalityProof, BridgeFinalityError> {
-    let height_usize: usize = height
-        .try_into()
-        .map_err(|_| BridgeFinalityError::InvalidHeight(height))?;
-    let nonzero_height =
-        NonZeroUsize::new(height_usize).ok_or(BridgeFinalityError::InvalidHeight(height))?;
+    if height == 0 {
+        return Err(BridgeFinalityError::InvalidHeight(height));
+    }
 
-    let block = state
-        .bridge_block_by_height(nonzero_height)
-        .ok_or(BridgeFinalityError::BlockNotFound(height))?;
-    let block_header = block.header();
-    let finality_artifact = state
+    let verified_finality = state
         .bridge_verified_v2_finality_artifact(height)
         .map_err(|reason| BridgeFinalityError::FinalityArtifactRead { height, reason })?
-        .ok_or(BridgeFinalityError::FinalityArtifactNotFound(height))?
-        .into_artifact();
-    if finality_artifact.height_context.chain_id != *state.bridge_chain_id()
+        .ok_or(BridgeFinalityError::FinalityArtifactNotFound(height))?;
+    build_finality_proof_from_verified(state.bridge_chain_id(), height, verified_finality)
+}
+
+fn build_finality_proof_from_verified(
+    chain_id: &ChainId,
+    height: u64,
+    verified_finality: VerifiedV2FinalityArtifact,
+) -> Result<BridgeFinalityProof, BridgeFinalityError> {
+    let block_header = verified_finality.retained_header().clone();
+    let finality_artifact = verified_finality.into_artifact();
+    if finality_artifact.height != height
+        || block_header.height().get() != height
+        || finality_artifact.height_context.chain_id != *chain_id
         || finality_artifact
             .validate_for_header(&block_header)
             .is_err()
@@ -1113,6 +1334,126 @@ pub fn build_finality_proof(
         block_header,
         finality_artifact,
     })
+}
+
+/// Fully authenticated finalized SCCP outbox projection for one exact block height.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedSccpFinalizedMessagesV1 {
+    /// Exact retained-header finality proof used to authenticate the projection.
+    pub finality_proof: BridgeFinalityProof,
+    /// Merkle root committed by the retained block header.
+    pub commitment_root: [u8; 32],
+    /// Canonical messages in zero-based commitment-index order.
+    pub messages: Vec<ValidatedSccpOutboundMessageProjectionV1>,
+}
+
+/// Reconstruct and authenticate all finalized SCCP messages at one exact height.
+///
+/// The scan is bounded by [`iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1`]
+/// and uses Kura's immutable, root-authenticated payload archive plus its exact retained-header
+/// finality record. Historical block bodies and mutable WSV payloads are deliberately outside this
+/// proof-serving boundary.
+///
+/// # Errors
+///
+/// Returns a bounded diagnostic when finality or the immutable archive is absent or malformed,
+/// the projection is not dense and canonical, or its reconstructed root differs from the
+/// finalized header.
+pub fn validated_sccp_finalized_messages_at_height(
+    state: &impl BridgeStateReadOnly,
+    height: u64,
+) -> Result<Option<ValidatedSccpFinalizedMessagesV1>, String> {
+    if height == 0 {
+        return Err(BridgeFinalityError::InvalidHeight(height).to_string());
+    }
+    let (verified_finality, messages) = state
+        .bridge_verified_v2_finality_with_sccp_archive(height)?
+        .ok_or_else(|| BridgeFinalityError::FinalityArtifactNotFound(height).to_string())?;
+    let finality_proof =
+        build_finality_proof_from_verified(state.bridge_chain_id(), height, verified_finality)
+            .map_err(|error| error.to_string())?;
+    let Some((commitment_root, messages)) = validate_sccp_outbound_projection_against_root(
+        height,
+        finality_proof.block_header.sccp_commitment_root(),
+        messages,
+    )?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(ValidatedSccpFinalizedMessagesV1 {
+        finality_proof,
+        commitment_root,
+        messages,
+    }))
+}
+
+fn validate_sccp_outbound_projection_against_root(
+    height: u64,
+    anchored_root: Option<[u8; 32]>,
+    messages: Vec<ValidatedSccpOutboundMessageProjectionV1>,
+) -> Result<Option<([u8; 32], Vec<ValidatedSccpOutboundMessageProjectionV1>)>, String> {
+    let max = usize::try_from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1)
+        .expect("SCCP block bound fits usize");
+    if messages.len() > max {
+        return Err(format!(
+            "SCCP outbox projection at height {height} contains {} messages, exceeding the fixed {max}-message bound",
+            messages.len()
+        ));
+    }
+    let mut message_ids = BTreeSet::new();
+    for (index, message) in messages.iter().enumerate() {
+        let expected_index = u32::try_from(index).expect("bounded SCCP index fits u32");
+        if message.commitment_index != expected_index {
+            return Err(format!(
+                "SCCP outbox projection at height {height} is not in dense commitment order: expected {expected_index}, found {}",
+                message.commitment_index
+            ));
+        }
+        if !message.context.is_well_formed()
+            || iroha_sccp::hub_commitment_from_sccp_payload(message.context, &message.payload)
+                .as_ref()
+                != Some(&message.commitment)
+        {
+            return Err(format!(
+                "SCCP outbox projection at height {height} contains a substituted context, payload, or commitment at index {expected_index}"
+            ));
+        }
+        if !message_ids.insert(message.commitment.message_id) {
+            return Err(format!(
+                "SCCP outbox projection at height {height} repeats message identifier {}",
+                hex::encode(message.commitment.message_id)
+            ));
+        }
+    }
+    if messages.is_empty() {
+        return if anchored_root.is_none() {
+            Ok(None)
+        } else {
+            Err(format!(
+                "finalized SCCP header at height {height} commits a root but the immutable outbox archive is empty"
+            ))
+        };
+    }
+    let commitment_root = anchored_root.ok_or_else(|| {
+        format!(
+            "immutable SCCP outbox archive exists at height {height} but the retained finalized header has no commitment root"
+        )
+    })?;
+    let commitments = messages
+        .iter()
+        .map(|message| message.commitment.clone())
+        .collect::<Vec<_>>();
+    let reconstructed = iroha_sccp::commitment_merkle_root(&commitments).ok_or_else(|| {
+        format!("failed to reconstruct the bounded SCCP commitment root at height {height}")
+    })?;
+    if reconstructed != commitment_root {
+        return Err(format!(
+            "immutable SCCP outbox archive at height {height} reconstructs root 0x{}, expected finalized root 0x{}",
+            hex::encode(reconstructed),
+            hex::encode(commitment_root)
+        ));
+    }
+    Ok(Some((commitment_root, messages)))
 }
 
 /// Build a compact commitment plus exact typed finality proof for `height`.
@@ -1195,6 +1536,7 @@ pub fn verify_finality_proof(
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_local_sccp_records_against_commitment_root(
     local_block: &SignedBlock,
     commitment_root: [u8; 32],
@@ -1278,39 +1620,19 @@ fn verify_structural_sccp_finality_proof_against_local_state(
 ) -> Result<BridgeFinalityProof, String> {
     let artifact = &finality.finality_artifact;
     let height = artifact.height;
-    let height_usize = usize::try_from(height)
-        .map_err(|_| format!("SCCP finality proof height {height} exceeds the host range"))?;
-    let height_index = NonZeroUsize::new(height_usize)
-        .ok_or_else(|| "SCCP finality proof height must be nonzero".to_owned())?;
     if artifact.height_context.chain_id != *state.bridge_chain_id() {
         return Err("SCCP finality proof chain id does not match local state".to_owned());
     }
 
-    let local_block = state
-        .bridge_block_by_height(height_index)
-        .ok_or_else(|| format!("SCCP finality proof block {height} is not available locally"))?;
-    if local_block.header() != finality.block_header || local_block.hash() != artifact.block_hash {
+    let local = validated_sccp_finalized_messages_at_height(state, height)?
+        .ok_or_else(|| format!("local finalized block at height {height} has no SCCP messages"))?;
+    if local.finality_proof.block_header != finality.block_header {
         return Err(
-            "SCCP finality proof block header does not match the local canonical block".to_owned(),
+            "SCCP finality proof block header does not match the retained local canonical header"
+                .to_owned(),
         );
     }
-    let commitment_root = finality
-        .block_header
-        .sccp_commitment_root()
-        .ok_or_else(|| "SCCP finality proof block has no SCCP commitment root".to_owned())?;
-    validate_local_sccp_records_against_commitment_root(&local_block, commitment_root)?;
-
-    let local_artifact = state
-        .bridge_verified_v2_finality_artifact(height)
-        .map_err(|reason| {
-            format!(
-                "failed to load local Sumeragi-v2 finality artifact at height {height}: {reason}"
-            )
-        })?
-        .ok_or_else(|| {
-            format!("local Sumeragi-v2 finality artifact at height {height} is missing")
-        })?;
-    if local_artifact.artifact() != artifact {
+    if local.finality_proof.finality_artifact != *artifact {
         return Err(
             "SCCP finality proof artifact does not match the exact durable local artifact"
                 .to_owned(),
@@ -1322,7 +1644,7 @@ fn verify_structural_sccp_finality_proof_against_local_state(
 
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
+    use std::{borrow::Cow, num::NonZeroU64};
 
     use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
     use iroha_data_model::{
@@ -1372,7 +1694,8 @@ mod tests {
     #[derive(Clone)]
     struct TestSccpFinalityState {
         chain_id: ChainId,
-        block: Option<Arc<SignedBlock>>,
+        retained_header: Option<BlockHeader>,
+        messages: Vec<ValidatedSccpOutboundMessageProjectionV1>,
         artifact: Option<V2FinalityArtifact>,
         artifact_error: Option<String>,
     }
@@ -1380,13 +1703,6 @@ mod tests {
     impl BridgeStateReadOnly for TestSccpFinalityState {
         fn bridge_chain_id(&self) -> &ChainId {
             &self.chain_id
-        }
-
-        fn bridge_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
-            self.block.as_ref().and_then(|block| {
-                (u64::try_from(height.get()).ok() == Some(block.header().height().get()))
-                    .then(|| Arc::clone(block))
-            })
         }
 
         fn bridge_verified_v2_finality_artifact(
@@ -1400,10 +1716,173 @@ mod tests {
                 .as_ref()
                 .filter(|artifact| artifact.height == height)
                 .cloned()
-                .map(VerifiedV2FinalityArtifact::verify)
+                .zip(self.retained_header.clone())
+                .map(|(artifact, header)| {
+                    VerifiedV2FinalityArtifact::verify_for_header(header, artifact)
+                })
                 .transpose()
                 .map_err(|error| error.to_string())
         }
+
+        fn bridge_verified_v2_finality_with_sccp_archive(
+            &self,
+            height: u64,
+        ) -> Result<
+            Option<(
+                VerifiedV2FinalityArtifact,
+                Vec<ValidatedSccpOutboundMessageProjectionV1>,
+            )>,
+            String,
+        > {
+            Ok(self
+                .bridge_verified_v2_finality_artifact(height)?
+                .map(|verified| (verified, self.messages.clone())))
+        }
+    }
+
+    fn test_sccp_projections_from_block(
+        block: &SignedBlock,
+    ) -> Vec<ValidatedSccpOutboundMessageProjectionV1> {
+        collect_sccp_messages_from_signed_block(block)
+            .into_iter()
+            .enumerate()
+            .map(
+                |(index, message)| ValidatedSccpOutboundMessageProjectionV1 {
+                    commitment_index: u32::try_from(index).expect("test SCCP index fits u32"),
+                    context: message.context,
+                    payload: message.payload,
+                    commitment: message.commitment,
+                },
+            )
+            .collect()
+    }
+
+    fn sample_sccp_projection_set(count: u64) -> Vec<ValidatedSccpOutboundMessageProjectionV1> {
+        let payloads = (0..count)
+            .map(|nonce| {
+                canonical_test_sccp_payload_bytes(&sample_transfer_payload(nonce + 1, [0x22; 20]))
+            })
+            .collect::<Vec<_>>();
+        let (block, _) = signed_block_with_sccp_payloads(&payloads, 1);
+        test_sccp_projections_from_block(&block)
+    }
+
+    fn projection_root(messages: &[ValidatedSccpOutboundMessageProjectionV1]) -> [u8; 32] {
+        iroha_sccp::commitment_merkle_root(
+            &messages
+                .iter()
+                .map(|message| message.commitment.clone())
+                .collect::<Vec<_>>(),
+        )
+        .expect("nonempty test projection has a Merkle root")
+    }
+
+    #[test]
+    fn finalized_projection_accepts_only_canonical_commitment_order() {
+        let messages = sample_sccp_projection_set(3);
+        let root = projection_root(&messages);
+
+        let (validated_root, validated) =
+            validate_sccp_outbound_projection_against_root(1, Some(root), messages.clone())
+                .expect("canonical projection validates")
+                .expect("nonempty projection is returned");
+
+        assert_eq!(validated_root, root);
+        assert_eq!(validated, messages);
+    }
+
+    #[test]
+    fn finalized_projection_rejects_reorder_gap_and_coordinated_index_swap() {
+        let messages = sample_sccp_projection_set(3);
+        let root = projection_root(&messages);
+
+        let mut reordered = messages.clone();
+        reordered.reverse();
+        let error = validate_sccp_outbound_projection_against_root(1, Some(root), reordered)
+            .expect_err("retained indices must reject reordered storage output");
+        assert!(error.contains("dense commitment order"), "{error}");
+
+        let mut gap = messages.clone();
+        gap[1].commitment_index = 2;
+        let error = validate_sccp_outbound_projection_against_root(1, Some(root), gap)
+            .expect_err("a commitment-index gap must fail closed");
+        assert!(error.contains("expected 1, found 2"), "{error}");
+
+        let mut coordinated_swap = messages;
+        coordinated_swap.swap(0, 2);
+        for (index, message) in coordinated_swap.iter_mut().enumerate() {
+            message.commitment_index = u32::try_from(index).expect("small test index");
+        }
+        let error = validate_sccp_outbound_projection_against_root(1, Some(root), coordinated_swap)
+            .expect_err("rewriting indices cannot rewrite the finalized Merkle order");
+        assert!(error.contains("reconstructs root"), "{error}");
+    }
+
+    #[test]
+    fn finalized_projection_rejects_duplicate_substituted_omitted_and_extra_messages() {
+        let messages = sample_sccp_projection_set(3);
+        let root = projection_root(&messages);
+
+        let mut duplicate = messages.clone();
+        duplicate[1] = duplicate[0].clone();
+        duplicate[1].commitment_index = 1;
+        let duplicate_root = projection_root(&duplicate);
+        let error =
+            validate_sccp_outbound_projection_against_root(1, Some(duplicate_root), duplicate)
+                .expect_err("duplicate message identifiers must fail before root acceptance");
+        assert!(error.contains("repeats message identifier"), "{error}");
+
+        let mut substituted = messages.clone();
+        substituted[1].commitment.message_id[0] ^= 1;
+        let error = validate_sccp_outbound_projection_against_root(1, Some(root), substituted)
+            .expect_err("payload-independent commitment substitution must fail closed");
+        assert!(
+            error.contains("substituted context, payload, or commitment"),
+            "{error}"
+        );
+
+        let mut omitted = messages.clone();
+        omitted.pop();
+        let error = validate_sccp_outbound_projection_against_root(1, Some(root), omitted)
+            .expect_err("omitting a finalized message must change the root");
+        assert!(error.contains("reconstructs root"), "{error}");
+
+        let extra = sample_sccp_projection_set(4);
+        let error = validate_sccp_outbound_projection_against_root(1, Some(root), extra)
+            .expect_err("appending a message must change the finalized root");
+        assert!(error.contains("reconstructs root"), "{error}");
+    }
+
+    #[test]
+    fn finalized_projection_enforces_empty_root_equivalence_and_fixed_bound() {
+        assert_eq!(
+            validate_sccp_outbound_projection_against_root(8, None, Vec::new())
+                .expect("empty rootless block validates"),
+            None
+        );
+
+        let error = validate_sccp_outbound_projection_against_root(8, Some([0xAA; 32]), Vec::new())
+            .expect_err("a rooted finalized header cannot have an empty projection");
+        assert!(error.contains("commits a root"), "{error}");
+
+        let one = sample_sccp_projection_set(1);
+        let error = validate_sccp_outbound_projection_against_root(8, None, one.clone())
+            .expect_err("a rootless finalized header cannot have an outbox record");
+        assert!(error.contains("has no commitment root"), "{error}");
+
+        let over_limit = vec![
+            one[0].clone();
+            usize::try_from(
+                iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 + 1,
+            )
+            .expect("protocol bound fits usize")
+        ];
+        let error = validate_sccp_outbound_projection_against_root(8, Some([0xBB; 32]), over_limit)
+            .expect_err("the validator must reject before processing an oversized vector");
+        assert!(
+            error.contains("exceeding the fixed 512-message bound"),
+            "{error}"
+        );
     }
 
     fn sample_transfer_payload(nonce: u64, recipient: [u8; 20]) -> SccpPayloadV1 {
@@ -1448,6 +1927,175 @@ mod tests {
                 .as_bytes()
                 .to_vec(),
         })
+    }
+
+    #[test]
+    fn durable_outbound_record_retains_and_revalidates_exact_canonical_payload() {
+        let payload = sample_transfer_payload(41, [0x31; 20]);
+        let payload_bytes = canonical_test_sccp_payload_bytes(&payload);
+        let context = test_sccp_outbound_context_for_payload_bytes(&payload_bytes);
+        let validated = validate_recorded_sccp_message_payload_bytes(context, &payload_bytes)
+            .expect("exact outbound payload validates");
+        let record = validated
+            .outbound_record(9, 3)
+            .expect("validated payload forms a durable record");
+
+        assert_eq!(record.payload_bytes, payload_bytes);
+        assert_eq!(
+            record.payload_hash,
+            iroha_sccp::payload_hash(&payload_bytes)
+        );
+        let projection = validate_sccp_outbound_message_record_v1(&validated.key, &record)
+            .expect("durable record fully revalidates");
+        assert_eq!(projection.context, validated.context);
+        assert_eq!(projection.commitment_index, 3);
+        assert_eq!(projection.payload, validated.payload);
+        assert_eq!(projection.commitment, validated.commitment);
+        assert!(validated.outbound_record(0, 0).is_none());
+        assert!(
+            validated
+                .outbound_record(
+                    9,
+                    iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn durable_outbound_record_rejects_payload_malleability_amplification_and_identity_drift() {
+        let payload = sample_transfer_payload(42, [0x32; 20]);
+        let payload_bytes = canonical_test_sccp_payload_bytes(&payload);
+        let context = test_sccp_outbound_context_for_payload_bytes(&payload_bytes);
+        let validated = validate_recorded_sccp_message_payload_bytes(context, &payload_bytes)
+            .expect("exact outbound payload validates");
+        let record = validated
+            .outbound_record(10, 0)
+            .expect("validated payload forms a durable record");
+
+        let mut malformed = record.clone();
+        malformed.payload_bytes[0] ^= 0x7f;
+        let mut trailing_alias = record.clone();
+        trailing_alias.payload_bytes.push(0);
+        let mut oversized = record.clone();
+        oversized.payload_bytes =
+            vec![0xA5; iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1 + 1];
+        let mut wrong_hash = record.clone();
+        wrong_hash.payload_hash = [0xA6; 32];
+        let wrong_key = SccpOutboundMessageKeyV1 {
+            message_id: [0xA7; 32],
+            ..validated.key
+        };
+        let wrong_lane_key = SccpOutboundMessageKeyV1 {
+            lane: iroha_data_model::bridge::SccpLaneIdV1 {
+                source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+                target: iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
+            },
+            ..validated.key
+        };
+        let mut aliased_asset_payload = payload;
+        let SccpPayloadV1::Transfer(transfer) = &mut aliased_asset_payload;
+        transfer.asset_id = b"xor#scope".to_vec();
+        let aliased_asset_bytes = canonical_test_sccp_payload_bytes(&aliased_asset_payload);
+        let aliased_asset_key = SccpOutboundMessageKeyV1::new(
+            context.lane,
+            iroha_sccp::sccp_message_id(context.lane, &aliased_asset_payload)
+                .expect("scoped-asset payload remains structurally lane-bound"),
+        )
+        .expect("scoped-asset payload forms a structural key");
+        let aliased_asset_record = iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
+            destination_binding_hash: context.destination_binding_hash,
+            route_configuration_hash: context.route_configuration_hash,
+            payload_hash: iroha_sccp::payload_hash(&aliased_asset_bytes),
+            payload_bytes: aliased_asset_bytes,
+            recorded_at_height: 10,
+            commitment_index: 0,
+        };
+        assert!(aliased_asset_record.is_well_formed_for_key(&aliased_asset_key));
+
+        for (key, hostile) in [
+            (validated.key, malformed),
+            (validated.key, trailing_alias),
+            (validated.key, oversized),
+            (validated.key, wrong_hash),
+            (wrong_key, record.clone()),
+            (wrong_lane_key, record),
+            (aliased_asset_key, aliased_asset_record),
+        ] {
+            assert!(
+                validate_sccp_outbound_message_record_v1(&key, &hostile).is_none(),
+                "hostile durable evidence unexpectedly validated: {hostile:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn outbound_commitment_index_allocation_is_dense_bounded_and_rollback_safe() {
+        use mv::storage::{Storage, StorageReadOnly};
+
+        let index_key = |index: u32, id: u32| {
+            let mut message_id = [0_u8; 32];
+            message_id[..4].copy_from_slice(&id.to_le_bytes());
+            iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1 {
+                recorded_at_height: 9,
+                commitment_index: index,
+                lane: iroha_data_model::bridge::SccpLaneIdV1 {
+                    source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+                    target: iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+                },
+                message_id,
+            }
+        };
+        let storage = Storage::new();
+        let mut block = storage.block();
+        assert_eq!(
+            next_sccp_outbound_commitment_index(&block, 9).expect("empty dense index"),
+            Some(0)
+        );
+        {
+            let mut transaction = block.transaction();
+            transaction.insert(index_key(0, 1), ());
+            assert_eq!(
+                next_sccp_outbound_commitment_index(&transaction, 9)
+                    .expect("transaction sees its staged index"),
+                Some(1)
+            );
+        }
+        assert!(
+            block.is_empty(),
+            "dropped transaction must revert its index"
+        );
+        assert_eq!(
+            next_sccp_outbound_commitment_index(&block, 9).expect("reverted index is reusable"),
+            Some(0)
+        );
+
+        for index in 0..iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 {
+            block.insert(index_key(index, index + 1), ());
+        }
+        assert_eq!(
+            next_sccp_outbound_commitment_index(&block, 9).expect("exactly full dense index"),
+            None
+        );
+        block.insert(
+            index_key(
+                iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
+                513,
+            ),
+            (),
+        );
+        assert!(next_sccp_outbound_commitment_index(&block, 9).is_err());
+
+        let gap = Storage::new();
+        let mut gap_block = gap.block();
+        gap_block.insert(index_key(1, 1), ());
+        assert!(next_sccp_outbound_commitment_index(&gap_block, 9).is_err());
+
+        let duplicate = Storage::new();
+        let mut duplicate_block = duplicate.block();
+        duplicate_block.insert(index_key(0, 1), ());
+        duplicate_block.insert(index_key(0, 2), ());
+        assert!(next_sccp_outbound_commitment_index(&duplicate_block, 9).is_err());
     }
 
     fn signed_transaction_with_executable(executable: Executable) -> SignedTransaction {
@@ -1668,9 +2316,11 @@ mod tests {
             .expect("fixture local block results");
         assert_eq!(block.hash(), finality.finality_artifact.block_hash);
 
+        let messages = test_sccp_projections_from_block(&block);
         TestSccpFinalityState {
             chain_id: finality.finality_artifact.height_context.chain_id.clone(),
-            block: Some(Arc::new(block)),
+            retained_header: Some(block.header()),
+            messages,
             artifact: Some(finality.finality_artifact.clone()),
             artifact_error: None,
         }
@@ -1710,20 +2360,38 @@ mod tests {
     }
 
     #[test]
-    fn sccp_finality_local_state_check_rejects_missing_block_before_artifact_lookup() {
+    fn sccp_finality_local_state_check_rejects_missing_retained_finality_record() {
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
         let finality =
             iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
                 .expect("exact fixture finality proof");
         let state = TestSccpFinalityState {
             chain_id: finality.finality_artifact.height_context.chain_id.clone(),
-            block: None,
+            retained_header: None,
+            messages: Vec::new(),
             artifact: None,
             artifact_error: None,
         };
         let err = verify_sccp_finality_proof_against_local_state(&state, &finality)
             .expect_err("unanchored SCCP finality must fail before local crypto");
-        assert!(err.contains("block 1 is not available locally"), "{err}");
+        assert!(err.contains("artifact for height 1 not found"), "{err}");
+    }
+
+    #[test]
+    fn finality_builder_never_substitutes_an_adjacent_retained_height() {
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                .expect("exact fixture finality proof");
+        let state = persisted_state_for_exact_sccp_fixture(&fixture, &finality);
+
+        assert_eq!(
+            build_finality_proof(&state, 2),
+            Err(BridgeFinalityError::FinalityArtifactNotFound(2))
+        );
+        let error = validated_sccp_finalized_messages_at_height(&state, 2)
+            .expect_err("an adjacent request must not reuse height-one finality/archive data");
+        assert!(error.contains("artifact for height 2 not found"), "{error}");
     }
 
     #[test]
@@ -1749,7 +2417,10 @@ mod tests {
 
         let mut attack = base.clone();
         attack.artifact = None;
-        assert_rejected(&attack, "artifact at height 1 is missing");
+        assert_rejected(
+            &attack,
+            "Sumeragi-v2 finality artifact for height 1 not found",
+        );
 
         let mut attack = base.clone();
         attack.artifact_error = Some("corrupt sidecar".to_owned());
@@ -1800,8 +2471,8 @@ mod tests {
             )
             .expect("hostile local block results");
         let mut attack = base;
-        attack.block = Some(Arc::new(hostile_block));
-        assert_rejected(&attack, "commitment root does not match local SCCP records");
+        attack.messages = test_sccp_projections_from_block(&hostile_block);
+        assert_rejected(&attack, "reconstructs root");
     }
 
     #[test]
@@ -1825,6 +2496,28 @@ mod tests {
         assert_eq!(
             sccp_commitment_root_from_messages(&messages),
             iroha_sccp::commitment_merkle_root(&commitments)
+        );
+    }
+
+    #[test]
+    fn committed_block_rejects_513_self_consistent_outbound_messages() {
+        let payloads = (0_u64
+            ..=u64::from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1))
+            .map(|nonce| {
+                canonical_test_sccp_payload_bytes(&sample_transfer_payload(nonce + 1, [0x22; 20]))
+            })
+            .collect::<Vec<_>>();
+        let (mut block, _) = signed_block_with_sccp_payloads(&payloads, 1);
+        let messages = collect_sccp_messages_from_signed_block(&block);
+        let root = sccp_commitment_root_from_messages(&messages).expect("nonempty SCCP root");
+        block.set_sccp_commitment_root(Some(root));
+
+        assert_eq!(
+            validate_sccp_commitment_root_for_signed_block(&block),
+            Err(SccpCommittedBlockValidationError::TooManyOutboundMessages {
+                actual: 513,
+                max: 512,
+            })
         );
     }
 
@@ -1899,6 +2592,50 @@ mod tests {
             iroha_sccp::merkle_root_from_commitment(&messages[1].commitment, &proof),
             root
         );
+    }
+
+    #[test]
+    fn commitment_paths_bind_first_middle_last_execution_indices_not_key_order() {
+        let candidates = (1..=5)
+            .map(|nonce| {
+                canonical_test_sccp_payload_bytes(&sample_transfer_payload(nonce, [0x22; 20]))
+            })
+            .collect::<Vec<_>>();
+        let (candidate_block, _) = signed_block_with_sccp_payloads(&candidates, 1);
+        let candidate_messages = collect_sccp_messages_from_signed_block(&candidate_block);
+        let mut ordered = candidates
+            .into_iter()
+            .zip(candidate_messages)
+            .collect::<Vec<_>>();
+        ordered.sort_by(|(_, left), (_, right)| {
+            right.commitment.message_id.cmp(&left.commitment.message_id)
+        });
+        let payloads = ordered
+            .into_iter()
+            .map(|(payload, _)| payload)
+            .collect::<Vec<_>>();
+        let (block, _) = signed_block_with_sccp_payloads(&payloads, 1);
+        let messages = collect_sccp_messages_from_signed_block(&block);
+        assert!(
+            messages
+                .windows(2)
+                .all(|pair| pair[0].commitment.message_id > pair[1].commitment.message_id),
+            "fixture execution order must deliberately oppose ascending replay-key order"
+        );
+        let commitments = messages
+            .iter()
+            .map(|message| message.commitment.clone())
+            .collect::<Vec<_>>();
+        let root = iroha_sccp::commitment_merkle_root(&commitments).expect("five-message root");
+        for index in [0, 2, 4] {
+            let proof = iroha_sccp::commitment_merkle_proof(&commitments, index)
+                .expect("first/middle/last path exists");
+            assert_eq!(
+                iroha_sccp::merkle_root_from_commitment(&messages[index].commitment, &proof),
+                root,
+                "execution-index path {index} must reconstruct the finalized root"
+            );
+        }
     }
 
     #[test]

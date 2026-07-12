@@ -12,7 +12,7 @@ public enum KagemushaInstructionTransactionError: Error, Equatable, LocalizedErr
         case .emptyInstructionArchive:
             return "Kagemusha instruction archive must not be empty."
         case .oversizedInstructionArchive:
-            return "Kagemusha instruction archive must not exceed \(KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes) bytes."
+            return "Kagemusha instruction archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
         case .invalidInstructionArchive:
             return "Kagemusha instruction archive must be a valid Norito instruction archive."
         case .unsupportedInstructionArchiveType:
@@ -162,7 +162,7 @@ public enum KagemushaRecursiveRedeemRequestArchiveError: Error, Equatable, Local
         case .emptyRequestArchive:
             return "Kagemusha recursive redeem request archive must not be empty."
         case .oversizedRequestArchive:
-            return "Kagemusha recursive redeem request archive must not exceed \(KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes) bytes."
+            return "Kagemusha recursive redeem request archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
         case .invalidRequestArchive:
             return "Kagemusha recursive redeem request archive must be a valid Norito archive."
         case .unsupportedRequestArchiveType:
@@ -182,7 +182,7 @@ public enum KagemushaRecursiveTopUpRequestArchiveError: Error, Equatable, Locali
         case .emptyRequestArchive:
             return "Kagemusha recursive top-up request archive must not be empty."
         case .oversizedRequestArchive:
-            return "Kagemusha recursive top-up request archive must not exceed \(KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes) bytes."
+            return "Kagemusha recursive top-up request archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
         case .invalidRequestArchive:
             return "Kagemusha recursive top-up request archive must be a valid Norito archive."
         case .unsupportedRequestArchiveType:
@@ -295,7 +295,7 @@ enum KagemushaInstructionTransactionEncoder {
         guard !archive.isEmpty else {
             throw KagemushaInstructionTransactionError.emptyInstructionArchive
         }
-        guard archive.count <= KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes else {
+        guard archive.count <= KagemushaRecursiveSpendProver.nativeArchiveMaxBytes else {
             throw KagemushaInstructionTransactionError.oversizedInstructionArchive
         }
         guard let frame = noritoDecodeFrame(archive),
@@ -472,7 +472,7 @@ private func validatedKagemushaRecursiveRequestArchiveFrame(
     guard !archive.isEmpty else {
         throw emptyError
     }
-    guard archive.count <= KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes else {
+    guard archive.count <= KagemushaRecursiveSpendProver.nativeArchiveMaxBytes else {
         throw oversizedError
     }
     guard let frame = noritoDecodeFrame(archive),

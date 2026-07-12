@@ -103,7 +103,7 @@ print(assets, txs, holders)
 
 ## 5. Offline readiness
 
-Use `GET /v1/offline/readiness` through `get_offline_readiness()` for offline feature discovery.
+Use `GET /v1/offline/readiness?asset_definition_id=xor%23wonderland` through `get_offline_readiness(asset_definition_id="xor#wonderland")` for offline feature discovery.
 Classic Offline Note issuance, redemption, and audit transaction paths are retired;
 Kagemusha readiness fields advertise the active offline payment implementation.
 
@@ -111,30 +111,26 @@ Kagemusha readiness fields advertise the active offline payment implementation.
 from iroha_python import ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080")
-readiness = client.get_offline_readiness()
-print("kagemusha", readiness.offline_kagemusha_recursive_compact_available)
+readiness = client.get_offline_readiness(asset_definition_id="xor#wonderland")
+print("offline ready", readiness.ready, readiness.blockers)
 ```
 ## 6. အဖြစ်အပျက်များကို တိုက်ရိုက်ကြည့်ရှုပါ။
 
-Torii SSE အဆုံးမှတ်များကို ဂျင်နရေတာများမှတစ်ဆင့် ဖော်ထုတ်ပါသည်။ SDK သည် အလိုအလျောက် ပြန်လည်စတင်သည်။
-`resume=True` နှင့် သင် `EventCursor` ကို ပေးသောအခါ။
+Torii SSE helpers return live-only generators. They may reconnect within the
+configured retry budget, but Torii retains no replay log: reconnects can leave
+a gap. Replay cursors and resume arguments are intentionally unsupported; query
+committed ledger state when complete history is required.
 
 ```python
-from iroha_python import PipelineEventFilterBox, EventCursor
-
-cursor = EventCursor()
-
 for event in client.stream_pipeline_blocks(
     status="Committed",
-    resume=True,
-    cursor=cursor,
     with_metadata=True,
 ):
     print("Block height", event.data.block.height)
 ```
 
-အခြားအဆင်ပြေသောနည်းလမ်းများမှာ `stream_pipeline_transactions`၊
-`stream_events` (ရိုက်ထည့်ထားသော filter တည်ဆောက်သူများ) နှင့် `stream_verifying_key_events`။
+Other convenience methods include `stream_pipeline_transactions`,
+`stream_events` (with typed filter builders), and `stream_verifying_key_events`.
 
 ## 7. နောက်အဆင့်များ
 

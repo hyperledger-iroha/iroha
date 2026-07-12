@@ -17,34 +17,15 @@ public final class KagemushaRecursiveSpendProverTest {
 
   @Test
   public void productionHarnessResolvesKagemushaRecursiveSpendSurface() {
-    assertEquals(6, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
-    assertEquals(7, KagemushaRecursiveSpendProver.RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
-    assertEquals(7, KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
-    assertTrue(
-        "ABI-6 recursive spend JNI bridge should load on the Android runtime",
-        KagemushaRecursiveSpendProver.isNativeAvailable());
-    assertTrue(
-        "ABI-7 recursive compact JNI prover/verifier bridge should load on the Android runtime",
-        KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable());
-    assertTrue(
-        "ABI-7 recursive compact verifier bridge should load on the Android runtime",
-        KagemushaRecursiveCompactPaymentTokenProver.isVerifierNativeAvailable());
-    assertTrue(
-        "ABI-7 recursive spend projection verifier bridge should load on the Android runtime",
-        KagemushaRecursiveCompactPaymentTokenProver.isProjectionVerifierNativeAvailable());
+    assertEquals(18, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
+    assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.MODE);
     assertEquals(
-        KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
-        KagemushaRecursiveSpendProver.preferredMode());
-    assertEquals(
-        KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
-        KagemushaRecursiveSpendProver.preferredMode(true, true));
-    assertEquals(
-        KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
-        KagemushaRecursiveSpendProver.preferredMode(false, true));
-    assertEquals(null, KagemushaRecursiveSpendProver.preferredMode(false, false));
-    assertEquals(
-        "kagemusha-recursive-compact-v1",
-        KagemushaRecursiveCompactPaymentTokenProver.RECURSIVE_COMPACT_CIRCUIT_ID_V1);
+        KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND,
+        KagemushaRecursiveSpendProver.preferredMode(true));
+    assertEquals(null, KagemushaRecursiveSpendProver.preferredMode(false));
+    assertTrue(KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_spend_v2"));
+    assertFalse(KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_spend_v1"));
+    assertFalse(KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_compact_v1"));
   }
 
   @Test

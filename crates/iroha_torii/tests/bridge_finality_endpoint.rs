@@ -25,8 +25,8 @@ use iroha_data_model::{
         BlockHeader, SignedBlock,
         consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-            GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate,
-            ValidatorPower, finality::V2FinalityArtifact,
+            ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
+            QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
         },
     },
     bridge::{
@@ -119,6 +119,11 @@ fn exact_v2_fixture(chain_id: ChainId) -> (Arc<SignedBlock>, V2FinalityArtifact)
         block_hash: block.hash(),
         payload_hash: Hash::new(b"Torii exact-v2 bridge payload"),
     };
+    let execution_commitment = ExecutionCommitment::without_topups(
+        Hash::new(b"Torii exact-v2 parent state"),
+        Hash::new(b"Torii exact-v2 post state"),
+        Hash::new(b"Torii exact-v2 ordinary writes"),
+    );
     let mut commit_qc = QuorumCertificate {
         round: ConsensusRound {
             context_id: context.id(),
@@ -127,6 +132,7 @@ fn exact_v2_fixture(chain_id: ChainId) -> (Arc<SignedBlock>, V2FinalityArtifact)
         },
         phase: GlobalPhase::Commit,
         subject,
+        execution_commitment,
         signers: vec![0, 1, 2],
         aggregate_signature: vec![1],
     };
@@ -171,8 +177,11 @@ fn endpoint_fixture(persist_artifact: bool) -> EndpointFixture {
     kura.store_block(Arc::clone(&block))
         .expect("store canonical endpoint block");
     if persist_artifact {
-        kura.store_v2_finality_artifact(&artifact)
+        let receipt = kura
+            .store_v2_finality_artifact(&artifact)
             .expect("persist exact v2 finality artifact");
+        assert_eq!(receipt.height(), artifact.height);
+        assert_eq!(receipt.block_hash(), artifact.block_hash);
     }
 
     let state = Arc::new(State::new_with_chain_for_testing(
@@ -291,27 +300,28 @@ async fn proof_and_bundle_endpoints_fail_closed_when_the_sidecar_is_missing() {
 }
 
 #[tokio::test]
-async fn proof_and_bundle_endpoints_fail_closed_for_a_forged_durable_qc() {
+async fn proof_and_bundle_endpoints_fail_closed_for_a_malformed_durable_envelope() {
     let fixture = endpoint_fixture(true);
-    let mut forged = fixture.artifact.clone();
-    forged.commit_qc.aggregate_signature[0] ^= 0x80;
-    forged
+    let mut malformed = fixture.artifact.clone();
+    malformed.commit_qc.aggregate_signature[0] ^= 0x80;
+    malformed
         .validate()
-        .expect("aggregate substitution remains structurally valid");
+        .expect("aggregate substitution remains structurally valid before envelope removal");
     let path = fixture
         .kura
         .store_root()
         .join("blocks")
         .join("v2_finality")
         .join("00000000000000000001.norito");
-    std::fs::write(&path, forged.encode()).expect("substitute forged durable artifact bytes");
+    std::fs::write(&path, malformed.encode())
+        .expect("replace the private versioned envelope with bare artifact bytes");
 
     for uri in ["/v1/bridge/finality/1", "/v1/bridge/finality/bundle/1"] {
         let (status, _) = get_norito(&fixture.app, uri).await;
         assert_eq!(
             status,
             StatusCode::INTERNAL_SERVER_ERROR,
-            "forged durable artifact must fail closed for {uri}"
+            "malformed durable envelope must fail closed for {uri}"
         );
     }
 }

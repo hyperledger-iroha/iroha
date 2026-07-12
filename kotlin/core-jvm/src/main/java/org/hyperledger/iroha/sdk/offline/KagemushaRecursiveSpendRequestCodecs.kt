@@ -2416,10 +2416,10 @@ private fun requireValidNestedArchive(archive: ByteArray, field: String) {
     require(archive.size <= KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES) {
         "$field must not exceed ${KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES} bytes"
     }
-    require(KagemushaCompactPaymentTokenProver.isValidNoritoArchive(archive)) {
+    require(NoritoArchiveValidation.isValidNoritoArchive(archive)) {
         "$field must be a valid Norito archive"
     }
-    require(KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(archive)) {
+    require(NoritoArchiveValidation.hasNonEmptyNoritoPayload(archive)) {
         "$field must contain a non-empty Norito payload"
     }
 }

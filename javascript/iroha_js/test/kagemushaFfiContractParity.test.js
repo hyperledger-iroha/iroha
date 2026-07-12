@@ -57,6 +57,9 @@ const REQUIRED_KAGEMUSHA_V2_PROTOCOL_SYMBOLS = Object.freeze([
   "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
   "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
   "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
+  "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3",
+  "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
+  "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
 ]);
 
 const REQUIRED_KAGEMUSHA_V2_NATIVE_SYMBOLS = Object.freeze([
@@ -88,6 +91,9 @@ const ADDITIVE_ABI18_V3_C_SYMBOLS = Object.freeze([
   "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
   "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
   "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
+  "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3",
+  "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
+  "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
 ]);
 
 const CURRENT_C_SYMBOLS = Object.freeze([
@@ -157,7 +163,6 @@ const REQUIRED_HEADER_NEGATIVE_CONTROL_MODES = Object.freeze([
   "--negative-control-missing-recursive-header",
   "--negative-control-bad-recursive-signature",
   "--negative-control-bad-recursive-v2-signature",
-  "--negative-control-bad-recursive-v2-artifact-signature",
   "--negative-control-missing-recursive-v2-export-pair",
   "--negative-control-missing-kagemusha-v2-protocol-export-pair",
   "--negative-control-bad-kagemusha-v2-receiver-key-signature",
@@ -679,7 +684,7 @@ test("recursive Kagemusha ABI-18 native host and SDK method names stay in parity
     ...swiftV2ProofInventory,
     ...swiftV2ProtocolInventory,
   ];
-  const kagemushaV2InventoryFamily = String.raw`connect_norito_kagemusha_(?:topup_finality_verify_v2|receiver_key_reference_v2|recipient_output_derive_v2|recipient_payment_request_(?:signing_bytes|create|verify)_v2|request_authorization_(?:signing_bytes|create)_v2|receiver_acknowledgement_(?:payload|signing_bytes|create|verify)_v2|recursive_spend_(?:capabilities_v1|(?:init|topup|append|redeem_change|verify|redeem|topup_unsigned_payload_digest|topup_finalize_request|redeem_unsigned_payload_digest|redeem_finalize_request|peer_payment_from_split|peer_payment_validate|bundle_summary|build_split_intent|build_redemption_intent)_v2|artifact_(?:begin|write|finalize|cancel)_v3))`;
+  const kagemushaV2InventoryFamily = String.raw`connect_norito_kagemusha_(?:topup_finality_verify_v2|receiver_key_reference_v2|recipient_output_derive_v2|recipient_payment_request_(?:signing_bytes|create|verify)_v2|request_authorization_(?:signing_bytes|create)_v2|receiver_acknowledgement_(?:payload|signing_bytes|create|verify)_v2|recursive_spend_(?:capabilities_v1|(?:init|topup|append|redeem_change|verify|redeem|topup_unsigned_payload_digest|topup_finalize_request|redeem_unsigned_payload_digest|redeem_finalize_request|peer_payment_from_split|peer_payment_validate|bundle_summary|build_split_intent|build_redemption_intent)_v2|artifact_(?:begin|write|finalize|cancel|set_(?:install|is_installed|uninstall))_v3))`;
   const rustV2Inventory = new Set(
     namesFromMatches(
       rustBridge,
@@ -703,8 +708,8 @@ test("recursive Kagemusha ABI-18 native host and SDK method names stay in parity
   );
   assert.equal(
     REQUIRED_KAGEMUSHA_V2_PROTOCOL_SYMBOLS.length,
-    27,
-    "ABI-18 must pin exactly twenty-seven Kagemusha V2 protocol symbols",
+    30,
+    "ABI-18 must pin exactly thirty Kagemusha V2 protocol symbols",
   );
   assert.equal(
     new Set(swiftV2NativeInventory).size,
@@ -737,12 +742,12 @@ test("recursive Kagemusha ABI-18 native host and SDK method names stay in parity
     "Swift V2 availability inventory must combine proof and protocol symbols",
   );
   const swiftV2Availability = swiftNativeBridgeCore.slice(
-    swiftNativeBridgeCore.indexOf("public var isKagemushaRecursiveSpendV2StubAvailable"),
+    swiftNativeBridgeCore.indexOf("public var hasKagemushaRecursiveSpendContractSymbols"),
     swiftNativeBridgeCore.indexOf("public var isPrivacyNativeAvailable"),
   );
   assert.match(
     swiftV2Availability,
-    /KagemushaRecursiveSpendV2\.requiredNativeSymbols \+ \["connect_norito_free"\][\s\S]*?\.allSatisfy \{ hasKagemushaV2Symbol\(\$0\) \}/u,
+    /KagemushaRecursiveSpend\.requiredNativeSymbols \+ \["connect_norito_free"\][\s\S]*?\.allSatisfy \{ hasKagemushaV2Symbol\(\$0\) \}/u,
     "Swift V2 availability must require every declared native symbol and the free function",
   );
   assert.doesNotMatch(
@@ -772,8 +777,8 @@ test("recursive Kagemusha ABI-18 native host and SDK method names stay in parity
   );
   assert.equal(
     REQUIRED_KAGEMUSHA_V2_NATIVE_SYMBOLS.length,
-    32,
-    "ABI-18 must pin the complete five-proof and twenty-seven-protocol inventory",
+    35,
+    "ABI-18 must pin the complete five-proof and thirty-protocol inventory",
   );
   assert.match(
     headerGuard,
@@ -1184,7 +1189,7 @@ test("Kagemusha mobile offline-note proof metadata rejects padded selectors", ()
       "Android Java Offline Note proof metadata",
     ],
     [
-      "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java",
+      "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/AttestedOfflineNote.java",
       "Android Java Offline Note V2 proof metadata",
     ],
     [
@@ -1192,7 +1197,7 @@ test("Kagemusha mobile offline-note proof metadata rejects padded selectors", ()
       "Kotlin Offline Note proof metadata",
     ],
     [
-      "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt",
+      "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/AttestedOfflineNote.kt",
       "Kotlin Offline Note V2 proof metadata",
     ],
   ]) {
@@ -1248,11 +1253,11 @@ test("Kagemusha mobile offline-note proof metadata rejects padded selectors", ()
     "Android Java proof metadata exactness tests",
   );
   assertContainsAll(
-    source("java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java"),
+    source("java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/AttestedOfflineNoteTest.java"),
     [
       "padded proof backend should throw",
-      'new OfflineNoteV2.VerifyingKeyIdReference(" halo2/ipa ", "vk")',
-      'new OfflineNoteV2.VerifyingKeyIdReference("halo2/ipa", " vk ")',
+      'new AttestedOfflineNote.VerifyingKeyIdReference(" halo2/ipa ", "vk")',
+      'new AttestedOfflineNote.VerifyingKeyIdReference("halo2/ipa", " vk ")',
       "padded verifier name should throw",
     ],
     "Android Java Offline Note V2 proof metadata exactness tests",
@@ -1271,11 +1276,11 @@ test("Kagemusha mobile offline-note proof metadata rejects padded selectors", ()
     "Kotlin proof metadata exactness tests",
   );
   assertContainsAll(
-    source("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt"),
+    source("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/AttestedOfflineNoteTest.kt"),
     [
-      'OfflineNoteV2.ProofBox("  ${OfflineNoteV2.RECURSIVE_BACKEND}  ", byteArrayOf(1))',
-      'OfflineNoteV2.VerifyingKeyIdReference(backend = " halo2/ipa ", name = "vk")',
-      'OfflineNoteV2.VerifyingKeyIdReference(backend = "halo2/ipa", name = " vk ")',
+      'AttestedOfflineNote.ProofBox("  ${AttestedOfflineNote.RECURSIVE_BACKEND}  ", byteArrayOf(1))',
+      'AttestedOfflineNote.VerifyingKeyIdReference(backend = " halo2/ipa ", name = "vk")',
+      'AttestedOfflineNote.VerifyingKeyIdReference(backend = "halo2/ipa", name = " vk ")',
     ],
     "Kotlin Offline Note V2 proof metadata exactness tests",
   );
@@ -1344,11 +1349,11 @@ test("Kagemusha mobile offline-note proof metadata rejects padded selectors", ()
 test("Kagemusha mobile Offline Note V2 OpenVerifyEnvelope decoders stay wired", () => {
   for (const [relative, label] of [
     [
-      "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Halo2Prover.java",
+      "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/AttestedOfflineNoteHalo2Prover.java",
       "Android Java Offline Note V2 Halo2 prover",
     ],
     [
-      "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Halo2Prover.java",
+      "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/AttestedOfflineNoteHalo2Prover.java",
       "Kotlin Offline Note V2 Halo2 prover",
     ],
   ]) {
@@ -1372,11 +1377,11 @@ test("Kagemusha mobile Offline Note V2 OpenVerifyEnvelope decoders stay wired", 
 
   for (const [relative, label] of [
     [
-      "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java",
+      "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/AttestedOfflineNoteTest.java",
       "Android Java Offline Note V2 tests",
     ],
     [
-      "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt",
+      "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/AttestedOfflineNoteTest.kt",
       "Kotlin Offline Note V2 tests",
     ],
   ]) {
@@ -3260,8 +3265,8 @@ test("Kagemusha JavaScript record-backed native builders stay in parity", () => 
         '"recordBundleArchive"',
         '"pallasOpenEnvelopesArchive"',
         '"previousBundleArchive"',
-        "Kagemusha compact payment-token prover requires native bridge ABI 6",
-        "Kagemusha recursive aggregation proof-bundle prover requires native bridge ABI 6",
+        "Kagemusha compact payment-token prover requires native bridge ABI 18",
+        "Kagemusha recursive aggregation proof-bundle prover requires native bridge ABI 18",
         "Kagemusha Pallas open-envelope builders require native bridge ABI 7",
       ],
       `${relative} record-backed Kagemusha and Pallas builder wrappers`,
@@ -3385,7 +3390,7 @@ test("Kagemusha JavaScript record-backed native builders stay in parity", () => 
   );
 });
 
-test("recursive Kagemusha ABI-6 availability probes require transition-profile, boundary, and lineage-witness helpers", () => {
+test("recursive Kagemusha ABI-18 availability probes require transition-profile, boundary, and lineage-witness helpers", () => {
   for (const relative of ["javascript/iroha_js/src/crypto.js", "javascript/iroha_js/dist/crypto.js"]) {
     assertContainsAll(
       source(relative),
@@ -3485,7 +3490,7 @@ test("recursive Kagemusha ABI probes reject unsafe and out-of-range versions", (
         "Number.POSITIVE_INFINITY",
         "Number.MAX_SAFE_INTEGER + 1",
         "0x1_0000_0000",
-        "6.5",
+        "18.5",
         "-1",
         "isKagemushaRecursiveCompactPaymentTokenNativeAvailable(), false",
       ],
@@ -3508,7 +3513,7 @@ test("recursive Kagemusha ABI probes reject unsafe and out-of-range versions", (
   assertContainsAll(
     source("javascript/iroha_js/test/package_dist.test.js"),
     [
-      "package dist Kagemusha recursive spend availability rejects partial ABI-6 surfaces",
+      "package dist Kagemusha recursive spend availability rejects partial ABI-18 surfaces",
       "const requiredMethods = [",
       '"kagemushaRecursiveSpendTransitionProfileInit"',
       '"kagemushaRecursiveSpendTransitionProfileAppend"',
@@ -3518,7 +3523,7 @@ test("recursive Kagemusha ABI probes reject unsafe and out-of-range versions", (
       "delete binding[missingMethod]",
       "preferredKagemushaOfflineSpendMode()",
     ],
-    "JavaScript package dist recursive spend partial ABI-6 availability tests",
+    "JavaScript package dist recursive spend partial ABI-18 availability tests",
   );
   assertContainsAll(
     source("javascript/iroha_js/test/package_dist.test.js"),
@@ -3604,9 +3609,9 @@ test("recursive Kagemusha ABI probes reject unsafe and out-of-range versions", (
   assertContainsAll(
     source("python/iroha_python/tests/kagemusha_test.py"),
     [
-      "test_recursive_kagemusha_availability_requires_bridge_abi_6",
-      '"6"',
-      "6.5",
+      "test_recursive_kagemusha_availability_requires_exact_bridge_abi_18",
+      '"18"',
+      "18.5",
       "0x1_0000_0000",
       "10**100",
       "is_kagemusha_recursive_compact_payment_token_prover_available",
@@ -4392,6 +4397,9 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-lineage-proof-readiness-direct-hash-read-failure",
     "--negative-control-sdk-default",
     "--negative-control-sdk-default-cross-sdk",
+    "--negative-control-v3-release-inventory",
+    "--negative-control-v3-native-ingest",
+    "--negative-control-v3-legacy-mode",
     "--negative-control-readiness-script-configured-default-wording",
     "--negative-control-readiness-script-abi6-recursive-unavailable-mode",
     "--negative-control-pallas-envelope-type",
@@ -7066,13 +7074,28 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-sdk-default",
-      /if recursive_compact_available[\s\S]*?KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*?"    ",/u,
-      "SDK default selector",
+      /Some\(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2\)[\s\S]*?"        None",/u,
+      "ABI-18 first-release selector",
     ],
     [
       "--negative-control-sdk-default-cross-sdk",
-      /KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*?void recursiveCompactAvailable;[\s\S]*?_ = recursive_compact_available[\s\S]*?KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*?\.recursiveCompactV1[\s\S]*?Mode\.RECURSIVE_COMPACT_V1[\s\S]*?KagemushaOfflineSpendMode\.RecursiveCompactV1/u,
-      "cross-SDK production default selector",
+      /KAGEMUSHA_RECURSIVE_SPEND_MODE_V2[\s\S]*?case recursiveSpend[\s\S]*?RECURSIVE_SPEND[\s\S]*?unsupported_mode/u,
+      "cross-SDK ABI-18\/V2 production selector",
+    ],
+    [
+      "--negative-control-v3-release-inventory",
+      /exact ten-file V3 release inventory[\s\S]*?manifest-extra\.json/u,
+      "exact ten-file V3 release inventory",
+    ],
+    [
+      "--negative-control-v3-native-ingest",
+      /complete ABI-18\/V3 native artifact-ingest surface[\s\S]*?artifact_cancel_removed/u,
+      "complete ABI-18/V3 native artifact-ingest surface",
+    ],
+    [
+      "--negative-control-v3-legacy-mode",
+      /retired first-release mode rejection[\s\S]*?case recursiveSpendV1[\s\S]*?case recursiveSpend/u,
+      "retired first-release mode rejection",
     ],
     [
       "--negative-control-readiness-script-configured-default-wording",
@@ -12357,7 +12380,7 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
       "crates/iroha_torii_shared/src/route_catalog.rs",
       'pub const REDEEM_PATH: &str = "/v1/offline/redeem";',
       "crates/iroha_torii_shared/src/offline_api.rs",
-      "KagemushaRecursiveSpendRedeemRequestV2 as OfflineRedeemRequest",
+      "KagemushaRecursiveSpendRedeemRequest as OfflineRedeemRequest",
       "iroha_torii_shared::offline_api::OfflineRedeemRequest,",
       "&route_catalog::offline::REDEEM,",
       "validate_kagemusha_v2_redeem_snapshot(&app, &redeem_request)?;",
@@ -15294,7 +15317,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-native-bridge-recursive-compact-invalid-proof-isolation",
     "--negative-control-bridge-zk1-i10p-parser-exactness",
     "--negative-control-kagemusha-abi-probe-bounds",
-    "--negative-control-js-package-dist-recursive-spend-partial-abi6",
+    "--negative-control-js-package-dist-recursive-spend-partial-abi18",
     "--negative-control-js-package-dist-compact-projection",
     "--negative-control-js-package-dist-record-backed-pallas-builders",
     "--negative-control-kagemusha-probe-rejection-shape",
@@ -16117,22 +16140,22 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /detect_negative_control\([\s\S]*?mobile Offline Note V2 retired instruction alias drift[\s\S]*?raise SystemExit\(0\)/u,
     "mobile Offline Note V2 retired instruction alias negative control must use shared detection fan-out",
   );
-  const offlineNoteV2CanonicalInstructionWireNamesBranch = guard.slice(
+  const attestedOfflineNoteCanonicalInstructionWireNamesBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-offline-note-v2-canonical-instruction-wire-names":'),
     guard.indexOf('if mode == "--negative-control-swift-offline-note-v2-decoder-placeholder":'),
   );
   assert.match(
-    offlineNoteV2CanonicalInstructionWireNamesBranch,
+    attestedOfflineNoteCanonicalInstructionWireNamesBranch,
     /def expected_offline_note_v2_canonical_instruction_wire_name_label\(target, old, label\):[\s\S]*?ISSUE_INSTRUCTION_SCHEMA[\s\S]*?iroha_data_model::isi::offline::IssueOfflineNote[\s\S]*?expected_label = expected_offline_note_v2_canonical_instruction_wire_name_label\(target, old, label\)[\s\S]*?if expected_label not in message:[\s\S]*?Offline Note V2 canonical instruction wire-name drift was rejected[\s\S]*?for the wrong reason/u,
     "Offline Note V2 canonical instruction wire-name negative control must require every exact SDK wire-name diagnostic",
   );
   assert.match(
-    offlineNoteV2CanonicalInstructionWireNamesBranch,
+    attestedOfflineNoteCanonicalInstructionWireNamesBranch,
     /finally:[\s\S]*?mutated\[target\]\s*=\s*current/u,
     "Offline Note V2 canonical instruction wire-name negative control must restore each target snapshot between mutations",
   );
   assert.match(
-    offlineNoteV2CanonicalInstructionWireNamesBranch,
+    attestedOfflineNoteCanonicalInstructionWireNamesBranch,
     /detected_messages\.append\(first_lines_for_labels\(message, \(expected_label,\)\)\[0\]\)[\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
     "Offline Note V2 canonical instruction wire-name negative control must print diagnostics for every mutated surface",
   );
@@ -16240,7 +16263,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "mobile Offline Note V2 retired instruction alias",
     ],
     [
-      offlineNoteV2CanonicalInstructionWireNamesBranch,
+      attestedOfflineNoteCanonicalInstructionWireNamesBranch,
       /Offline Note V2 canonical instruction wire-name drift was not detected for[\s\S]*?if not detected_messages:[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Offline Note V2 canonical instruction wire-name drift was not detected"\s*\)[\s\S]*?raise\s+SystemExit\(0\)/u,
       "Offline Note V2 canonical instruction wire-name",
     ],
@@ -17717,13 +17740,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     guard,
-    /KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";[\s\S]*?Swift ABI-18 Pasta-cycle mode V2 contract[\s\S]*?Kotlin ABI-18 Pasta-cycle mode V2 contract[\s\S]*?Android Java ABI-18 Pasta-cycle mode V2 contract[\s\S]*?native bridge ABI-18 Pasta-cycle mode V2 fixture[\s\S]*?ABI-18 recursion adapter contract mode/u,
+    /KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";[\s\S]*?Swift ABI-18 Pasta-cycle first-release mode V2 contract[\s\S]*?Kotlin ABI-18 Pasta-cycle first-release mode V2 contract[\s\S]*?Android Java ABI-18 Pasta-cycle first-release mode V2 contract[\s\S]*?native bridge ABI-18 Pasta-cycle first-release mode V2 fixture[\s\S]*?ABI-18 recursion adapter contract mode/u,
     "SDK parity guard must pin recursive_spend_v2 across every ABI-18 Pasta-cycle surface",
   );
   assert.match(
+    guard,
+    /KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 18;[\s\S]*?requiredNativeBridgeAbiVersion: UInt32 = 18[\s\S]*?REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18[\s\S]*?REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18;[\s\S]*?CONNECT_NORITO_BRIDGE_ABI_VERSION:\\s\*u32\\s\*=\\s\*18;[\s\S]*?ABI-18 recursion adapter contract mode/u,
+    "SDK parity guard must pin ABI 18 with the first-release V2 Pasta-cycle mode across Rust, Swift, Kotlin, Java, bridge, and docs",
+  );
+  assert.match(
     abi18PastaCycleModeBranch,
-    /recursive_spend_v2[\s\S]*?recursive_spend_v1[\s\S]*?for target, old, new, expected_label in cases:[\s\S]*?negative control rejected every one-sided ABI-18 Pasta-cycle V1 substitution/u,
-    "ABI-18 Pasta-cycle mode negative control must reject one-sided recursive_spend_v1 substitutions",
+    /recursive_spend_v2[\s\S]*?unsupported_mode[\s\S]*?for target, old, new, expected_label in cases:[\s\S]*?negative control rejected every one-sided ABI-18 Pasta-cycle V2 substitution/u,
+    "ABI-18 Pasta-cycle mode negative control must reject one-sided recursive_spend_v2 substitutions",
   );
   const nativeCBridgeAbiVersionBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-native-c-bridge-abi-version":'),
@@ -17750,8 +17778,13 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       'connect_norito_kagemusha_recursive_spend_capabilities_v1_removed',
       'KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE: bool = true;',
       'proof_backend_available: true,',
+      'authenticated_release_envelope',
+      'topup_finality_bound_init',
       'Rust C recursive Kagemusha exports drifted',
       'Rust ABI-18 V3 fail-closed capability contract missing',
+      'Swift ABI-18 V3 fail-closed capability contract missing',
+      'Rust ABI-18 release trust and init-finality gates',
+      'Swift ABI-18 release trust and init-finality gates',
       'finally:',
       'mutated[target] = original',
       'negative control rejected ABI-18 native capability drift',
@@ -17993,8 +18026,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     preferredModeFallbackBranch,
-    /Swift preferred Kagemusha compact-first mode policy[\s\S]*void recursiveCompactAvailable[\s\S]*_ = recursive_compact_available[\s\S]*Rust data-model preferred Kagemusha compact-first mode policy[\s\S]*fallback_mutations[\s\S]*return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1[\s\S]*\.checkedPrefoldV1[\s\S]*Mode\.CHECKED_PREFOLD_V1[\s\S]*KagemushaOfflineSpendMode\.CheckedPrefoldV1/u,
-    "preferred-mode fallback negative control must mutate compact-first and no-fallback policy across editable SDKs",
+    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*void recursiveCompactAvailable[\s\S]*del recursive_compact_available[\s\S]*C# preferred Kagemusha spend-again-only mode policy[\s\S]*checked_prefold_export_mutations[\s\S]*KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1[\s\S]*CheckedPrefoldV1/u,
+    "preferred-mode fallback negative control must mutate first-release spend-again selectors",
   );
   assert.match(
     guard,
@@ -18009,23 +18042,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   assertContainsAll(
     preferredModeFallbackBranch,
     [
-      "javascript/iroha_js/src/crypto.js preferred Kagemusha compact-first mode policy",
-      "javascript/iroha_js/dist/crypto.js preferred Kagemusha compact-first mode policy",
-      "javascript/iroha_js/src/crypto.browser.js preferred Kagemusha compact-first mode policy",
-      "javascript/iroha_js/dist/crypto.browser.js preferred Kagemusha compact-first mode policy",
-      "Python preferred Kagemusha compact-first mode policy",
-      "preferred Kagemusha compact-first mode policy missing pattern",
+      "javascript/iroha_js/src/crypto.js compact projection must not select spend-again cash",
+      "javascript/iroha_js/dist/crypto.js compact projection must not select spend-again cash",
+      "javascript/iroha_js/src/crypto.browser.js compact projection must not select spend-again cash",
+      "javascript/iroha_js/dist/crypto.browser.js compact projection must not select spend-again cash",
+      "Python compact projection must not select spend-again cash",
       "preferred Kagemusha single-argument fallback removal",
       "Python preferred Kagemusha explicit capability arity",
-      "Rust data-model preferred Kagemusha compact-first mode policy",
-      "C# preferred Kagemusha compact-first mode policy",
+      "C# preferred Kagemusha spend-again-only mode policy",
     ],
-    "preferred-mode fallback negative control must require every JS/Python/Rust/C# fallback drift label",
-  );
-  assert.match(
-    preferredModeFallbackBranch,
-    /Swift preferred Kagemusha compact-first mode policy[\s\S]*Android Java preferred Kagemusha compact-first mode policy[\s\S]*C# preferred Kagemusha compact-first mode policy/u,
-    "preferred-mode fallback negative control must expect compact-first labels across editable SDKs including C#",
+    "preferred-mode fallback negative control must require every retained JS/Python/C# fallback drift label",
   );
   assertPerMutationDetector(
     preferredModeFallbackBranch,
@@ -19587,9 +19613,9 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     [
       "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift",
       "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteHalo2Prover.java",
-      "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Halo2Prover.java",
+      "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/AttestedOfflineNoteHalo2Prover.java",
       "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteHalo2Prover.java",
-      "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Halo2Prover.java",
+      "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/AttestedOfflineNoteHalo2Prover.java",
       "trimmingCharacters(in: .whitespacesAndNewlines).lowercased()",
       "publicInputsHashHex.trim().toLowerCase(java.util.Locale.ROOT)",
     ],
@@ -20143,7 +20169,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftOfflineNotePayloadCertificateBranch,
-    /case OfflineNoteV2Constants\.androidKeyMintPlatform:[\s\S]*?platform\.contains\("android"\)[\s\S]*?for invalidPlatform in \["android", "android-keymint ", "Android-keymint", "ios-appattest-android"\][\s\S]*?for invalidPlatform in \["android"\]/u,
+    /case AttestedOfflineNoteConstants\.androidKeyMintPlatform:[\s\S]*?platform\.contains\("android"\)[\s\S]*?for invalidPlatform in \["android", "android-keymint ", "Android-keymint", "ios-appattest-android"\][\s\S]*?for invalidPlatform in \["android"\]/u,
     "Swift Offline Note payload certificate negative control must mutate exact platform matching and malformed platform coverage",
   );
   assert.match(
@@ -20200,7 +20226,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftOfflineNoteV2RegistrationCertificatePayloadBranch,
-    /OfflineNoteV2\.swift[\s\S]*?OfflineNoteV2Tests\.swift[\s\S]*?keyCertificatePayload\(\) throws -> OfflineNoteKeyCertificatePayloadV2[\s\S]*?keyCertificate\(\) throws -> OfflineNoteKeyCertificateV2[\s\S]*?issuerSignature: Data\(repeating: 0, count: 64\)[\s\S]*?keyCertificatePayload\(\)[\s\S]*?keyCertificate\(\)/u,
+    /OfflineNoteV2\.swift[\s\S]*?OfflineNoteV2Tests\.swift[\s\S]*?keyCertificatePayload\(\) throws -> AttestedOfflineNoteKeyCertificatePayload[\s\S]*?keyCertificate\(\) throws -> AttestedOfflineNoteKeyCertificate[\s\S]*?issuerSignature: Data\(repeating: 0, count: 64\)[\s\S]*?keyCertificatePayload\(\)[\s\S]*?keyCertificate\(\)/u,
     "Swift Offline Note V2 registration certificate payload negative control must mutate source and tests",
   );
   assert.match(
@@ -20240,7 +20266,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     mobileOfflineNoteV2RetiredIosAppAttestProfileBranch,
-    /OfflineNoteV2\.swift[\s\S]*?iosAppAttestLegacyPlatform[\s\S]*?OfflineNoteV2\.kt[\s\S]*?IOS_APP_ATTEST_LEGACY_PLATFORM[\s\S]*?OfflineNoteV2\.java[\s\S]*?IOS_APP_ATTEST_LEGACY_PLATFORM[\s\S]*?OfflineNoteV2Tests\.swift[\s\S]*?ecdsa-p256-sha256[\s\S]*?OfflineNoteV2Test\.kt[\s\S]*?ecdsa-p256-sha256[\s\S]*?OfflineNoteV2Test\.java[\s\S]*?retired iOS certificate payload profile should throw[\s\S]*?retired iOS certificate payload profile may pass/u,
+    /OfflineNoteV2\.swift[\s\S]*?iosAppAttestLegacyPlatform[\s\S]*?AttestedOfflineNote\.kt[\s\S]*?IOS_APP_ATTEST_LEGACY_PLATFORM[\s\S]*?AttestedOfflineNote\.java[\s\S]*?IOS_APP_ATTEST_LEGACY_PLATFORM[\s\S]*?OfflineNoteV2Tests\.swift[\s\S]*?ecdsa-p256-sha256[\s\S]*?AttestedOfflineNoteTest\.kt[\s\S]*?ecdsa-p256-sha256[\s\S]*?AttestedOfflineNoteTest\.java[\s\S]*?retired iOS certificate payload profile should throw[\s\S]*?retired iOS certificate payload profile may pass/u,
     "mobile Offline Note V2 retired iOS App Attest negative control must mutate Swift, Kotlin, and Java source/test snapshots",
   );
   assert.match(
@@ -20412,7 +20438,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "OfflineQrStreamTest.java",
       "OfflineToriiClient.kt",
       "OfflineToriiClient.java",
-      "OfflineNoteV2Test.java",
+      "AttestedOfflineNoteTest.java",
       "offline qr stream text codec rejects retired versioned prefix",
       "testQrStreamTextCodecRejectsRetiredVersionedPrefix",
       "qrTextCodecRejectsRetiredVersionedPrefix",
@@ -21702,7 +21728,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkReadmeRecursiveCompactUnavailableBranch,
-    /targets\s*=\s*\([\s\S]*?IrohaSwift\/README\.md[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?kotlin\/README\.md[\s\S]*?csharp\/README\.md[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?\)[\s\S]*?ABI-7 native state[\s\S]*?legacy reserved ABI-7 state[\s\S]*?reserved ABI-7 state[\s\S]*?run_checks\(mutated\)[\s\S]*?helper remains for older bridge[\s\S]*?run_checks\(mutated\)/u,
+    /targets\s*=\s*\([\s\S]*?java\/iroha_android\/README\.md[\s\S]*?kotlin\/README\.md[\s\S]*?csharp\/README\.md[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?\)[\s\S]*?swift_target\s*=\s*"IrohaSwift\/README\.md"[\s\S]*?The release directory has exactly ten files:[\s\S]*?run_checks\(mutated\)[\s\S]*?ABI-7 native state[\s\S]*?legacy reserved ABI-7 state[\s\S]*?reserved ABI-7 state[\s\S]*?run_checks\(mutated\)[\s\S]*?helper remains for older bridge[\s\S]*?run_checks\(mutated\)/u,
     "SDK README recursive compact negative control must mutate the ABI-7 one-hop boundary across SDK READMEs",
   );
   assert.match(
@@ -24619,22 +24645,46 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "docs/source/sdk/python/index.md",
       "docs/portal/docs/sdks/python.md",
       "readiness.\" + CANONICAL_KAGEMUSHA_READINESS_FIELD",
-      "readiness.\" + REMOVED_KAGEMUSHA_READINESS_ALIAS",
+      "readiness.\" + NEGATIVE_CONTROL_REMOVED_KAGEMUSHA_READINESS_ALIAS",
       "must not publish removed",
       "public docs removed readiness alias drift was rejected",
       "for the wrong reason",
+      "get_offline_readiness()",
+      "getOfflineReadiness()",
+      "resume=True",
+      "lastEventId",
     ],
-    "public docs removed readiness alias negative control must mutate README, source docs, and portal docs",
+    "public docs first-release Offline negative control must mutate README, source docs, portal readiness calls, and streaming options",
   );
   assert.match(
     guard,
-    /PUBLIC_KAGEMUSHA_READINESS_DOC_TRIGGER_PATHS = \([\s\S]*?docs\/source\/sdk\/\*\*[\s\S]*?docs\/portal\/docs\/sdks\/\*\*[\s\S]*?docs\/portal\/i18n\/\*\*[\s\S]*?PUBLIC_KAGEMUSHA_READINESS_DOC_ROOTS = tuple[\s\S]*?REMOVED_KAGEMUSHA_READINESS_ALIAS = "offline_kagemusha_abi7"[\s\S]*?CANONICAL_KAGEMUSHA_READINESS_FIELD = "offline_kagemusha_recursive_compact_available"/u,
+    /PUBLIC_KAGEMUSHA_READINESS_DOC_TRIGGER_PATHS = \([\s\S]*?docs\/source\/sdk\/\*\*[\s\S]*?docs\/portal\/docs\/sdks\/\*\*[\s\S]*?docs\/portal\/i18n\/\*\*[\s\S]*?PUBLIC_KAGEMUSHA_READINESS_DOC_ROOTS = tuple[\s\S]*?REMOVED_KAGEMUSHA_READINESS_ALIASES = \([\s\S]*?"offline_kagemusha_abi7"[\s\S]*?"offline_kagemusha_recursive_compact_available"[\s\S]*?NEGATIVE_CONTROL_REMOVED_KAGEMUSHA_READINESS_ALIAS[\s\S]*?CANONICAL_KAGEMUSHA_READINESS_FIELD = "ready"/u,
     "public docs removed readiness alias guard must scan source and portal SDK docs from workflow trigger paths",
   );
   assert.match(
     guard,
-    /def check_public_docs_removed_kagemusha_readiness_aliases\(texts, errors\):[\s\S]*?public_kagemusha_readiness_doc_paths\(\)[\s\S]*?REMOVED_KAGEMUSHA_READINESS_ALIAS not in text[\s\S]*?must not publish removed/u,
+    /def check_public_docs_removed_kagemusha_readiness_aliases\(texts, errors\):[\s\S]*?public_kagemusha_readiness_doc_paths\(\)[\s\S]*?for removed_alias in REMOVED_KAGEMUSHA_READINESS_ALIASES[\s\S]*?removed_alias not in text[\s\S]*?must not publish removed/u,
     "public docs removed readiness alias guard must reject stale ABI-7 aliases in public markdown",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "REMOVED_PUBLIC_OFFLINE_READINESS_CALLS",
+      "REMOVED_PUBLIC_PYTHON_STREAMING_OPTIONS",
+      "REMOVED_PUBLIC_JAVASCRIPT_STREAMING_OPTION_PATTERN",
+      "def current_portal_sdk_doc_paths():",
+      "docusaurus-plugin-content-docs/current/sdks",
+      "def current_portal_sdk_quickstart_paths(language):",
+      "def check_public_docs_offline_first_release_contract(texts, errors):",
+      "must pass asset_definition_id to Offline readiness",
+      "must not publish unsupported Python streaming option",
+      "Torii retains no replay log",
+      "Replay cursors and resume arguments are intentionally unsupported",
+      "must not publish unsupported JavaScript streaming option: lastEventId",
+      "must document JavaScript SSE as live-only without Last-Event-ID replay",
+      "check_public_docs_offline_first_release_contract(texts, errors)",
+    ],
+    "public docs guard must enforce the asset-scoped readiness and live-only Python/JavaScript streaming contract across current portal copies",
   );
   assert.match(
     publicDocsRemovedReadinessAliasBranch,
@@ -24657,8 +24707,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkReadmeCompactProjectionVerifierBranch,
-    /IrohaSwift\/README\.md[\s\S]*?verifyRecursiveSpendCompactPaymentTokenProjection\(compactTokenArchive:verifierRecordArchive:blockHeight:\)[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight\(\.\.\.\)[\s\S]*?kotlin\/README\.md[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection\(\.\.\.\)[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height\(\.\.\.\)[\s\S]*?run_checks\(mutated\)/u,
-    "SDK README compact projection verifier negative control must mutate every non-C# README signature",
+    /java\/iroha_android\/README\.md[\s\S]*?verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight\(\.\.\.\)[\s\S]*?kotlin\/README\.md[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection\(\.\.\.\)[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height\(\.\.\.\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK README compact projection verifier negative control must mutate every maintained non-C#/Swift README signature",
   );
   assert.doesNotMatch(
     sdkReadmeCompactProjectionVerifierBranch,
@@ -25864,7 +25914,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const kagemushaAbiProbeBoundsBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-kagemusha-abi-probe-bounds":'),
-    guard.indexOf('if mode == "--negative-control-js-package-dist-recursive-spend-partial-abi6":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-recursive-spend-partial-abi18":'),
   );
   assert.match(
     kagemushaAbiProbeBoundsBranch,
@@ -25901,12 +25951,12 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Kagemusha ABI probe bounds negative control must not unconditionally pass after run_checks",
   );
-  const jsPackageDistPartialAbi6Branch = guard.slice(
-    guard.indexOf('if mode == "--negative-control-js-package-dist-recursive-spend-partial-abi6":'),
+  const jsPackageDistPartialAbi18Branch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-package-dist-recursive-spend-partial-abi18":'),
     guard.indexOf('if mode == "--negative-control-js-package-dist-compact-projection":'),
   );
   assertContainsAll(
-    jsPackageDistPartialAbi6Branch,
+    jsPackageDistPartialAbi18Branch,
     [
       "javascript/iroha_js/test/package_dist.test.js",
       "delete binding[missingMethod]",
@@ -25947,7 +25997,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "package dist Kagemusha recursive spend helpers ignore native semantic rejections",
       "package dist Kagemusha recursive spend availability rejects broken and permissive native probes",
       "package dist Kagemusha recursive spend availability accepts broken and permissive native probes",
-      "JavaScript package dist recursive spend partial ABI-6 availability coverage",
+      "JavaScript package dist recursive spend partial ABI-18 availability coverage",
       "JavaScript package dist recursive spend broken/permissive probe coverage",
       "JavaScript package dist recursive spend unsafe native output coverage",
       "JavaScript package dist recursive spend invalid request archive coverage",
@@ -25955,37 +26005,37 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "JavaScript package dist recursive spend native semantic rejection coverage",
       "run_checks(mutated)",
     ],
-    "package dist recursive spend partial ABI-6 negative control must mutate availability, broken-probe, unsafe-output, invalid-request, missing-request, and semantic-rejection coverage",
+    "package dist recursive spend partial ABI-18 negative control must mutate availability, broken-probe, unsafe-output, invalid-request, missing-request, and semantic-rejection coverage",
   );
   assert.match(
-    jsPackageDistPartialAbi6Branch,
-    /def expected_js_package_dist_recursive_spend_partial_abi6_label\(old, label\):[\s\S]*?block start test\("\{old\}", \(\) => \{[\s\S]*?block_bounds = None[\s\S]*?package dist Kagemusha recursive spend helpers reject unsafe native outputs[\s\S]*?package dist Kagemusha recursive spend helpers reject invalid request archives before native dispatch[\s\S]*?old_count_before[\s\S]*?old_count_after[\s\S]*?old_count_before - old_count_after != 1/u,
-    "package dist recursive spend partial ABI-6 negative control must mutate each exact package-dist marker independently",
+    jsPackageDistPartialAbi18Branch,
+    /def expected_js_package_dist_recursive_spend_partial_abi18_label\(old, label\):[\s\S]*?block start test\("\{old\}", \(\) => \{[\s\S]*?block_bounds = None[\s\S]*?package dist Kagemusha recursive spend helpers reject unsafe native outputs[\s\S]*?package dist Kagemusha recursive spend helpers reject invalid request archives before native dispatch[\s\S]*?old_count_before[\s\S]*?old_count_after[\s\S]*?old_count_before - old_count_after != 1/u,
+    "package dist recursive spend partial ABI-18 negative control must mutate each exact package-dist marker independently",
   );
   assert.match(
-    jsPackageDistPartialAbi6Branch,
-    /expected = expected_js_package_dist_recursive_spend_partial_abi6_label\(old, label\)[\s\S]*?if expected not in message:[\s\S]*?package dist recursive spend partial ABI-6 drift was rejected for the wrong reason/u,
-    "package dist recursive spend partial ABI-6 negative control must require every exact mutated diagnostic",
+    jsPackageDistPartialAbi18Branch,
+    /expected = expected_js_package_dist_recursive_spend_partial_abi18_label\(old, label\)[\s\S]*?if expected not in message:[\s\S]*?package dist recursive spend partial ABI-18 drift was rejected for the wrong reason/u,
+    "package dist recursive spend partial ABI-18 negative control must require every exact mutated diagnostic",
   );
   assert.match(
-    jsPackageDistPartialAbi6Branch,
+    jsPackageDistPartialAbi18Branch,
     /detected_messages\.append\(first_lines_for_labels\(message, \(expected,\)\)\[0\]\)[\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
-    "package dist recursive spend partial ABI-6 negative control must print diagnostics for every mutated package-dist surface",
+    "package dist recursive spend partial ABI-18 negative control must print diagnostics for every mutated package-dist surface",
   );
   assert.match(
-    jsPackageDistPartialAbi6Branch,
+    jsPackageDistPartialAbi18Branch,
     /finally:[\s\S]*?mutated\[target\]\s*=\s*original/u,
-    "package dist recursive spend partial ABI-6 negative control must restore the package-dist snapshot between mutations",
+    "package dist recursive spend partial ABI-18 negative control must restore the package-dist snapshot between mutations",
   );
   assert.match(
-    jsPackageDistPartialAbi6Branch,
-    /package dist recursive spend partial ABI-6 drift was not detected for[\s\S]*?if not detected_messages:[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: package dist recursive spend partial ABI-6 drift was not detected"[\s\S]*?raise\s+SystemExit\(0\)/u,
-    "package dist recursive spend partial ABI-6 negative control must only pass after detecting every injected drift",
+    jsPackageDistPartialAbi18Branch,
+    /package dist recursive spend partial ABI-18 drift was not detected for[\s\S]*?if not detected_messages:[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: package dist recursive spend partial ABI-18 drift was not detected"[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "package dist recursive spend partial ABI-18 negative control must only pass after detecting every injected drift",
   );
   assert.doesNotMatch(
-    jsPackageDistPartialAbi6Branch,
+    jsPackageDistPartialAbi18Branch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
-    "package dist recursive spend partial ABI-6 negative control must not unconditionally pass after run_checks",
+    "package dist recursive spend partial ABI-18 negative control must not unconditionally pass after run_checks",
   );
   const jsPackageDistCompactProjectionBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-package-dist-compact-projection":'),
@@ -27584,12 +27634,12 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     kotlinOfflineWalletCompactCertificateProfileBranch,
-    /mutations\s*=\s*\([\s\S]*?BearerOfflineWalletModels\.kt[\s\S]*?require\(version == OfflineNoteV2\.KEY_CERTIFICATE_VERSION\)[\s\S]*?check\(version == OfflineNoteV2\.KEY_CERTIFICATE_VERSION\)[\s\S]*?require\(assertionScheme == expectedAssertionScheme\(platform\)\)[\s\S]*?check\(assertionScheme == expectedAssertionScheme\(platform\)\)[\s\S]*?require\(appAttestPublicKeyBase64 == null\)[\s\S]*?check\(appAttestPublicKeyBase64 == null\)[\s\S]*?require\(assertionUsageCountLimit == expectedAssertionUsageCountLimit\(platform\)\)[\s\S]*?check\(assertionUsageCountLimit == expectedAssertionUsageCountLimit\(platform\)\)[\s\S]*?val decodedPublicKey = requireCanonicalNonEmptyBase64\(publicKey, "public_key"\)[\s\S]*?public_key must not be empty[\s\S]*?require\(decodedPublicKey\.size == 32\)[\s\S]*?check\(decodedPublicKey\.size == 32\)[\s\S]*?val decodedAssertionPublicKey = requireCanonicalNonEmptyBase64\(assertionPublicKey, "assertion_public_key"\)[\s\S]*?assertion_public_key must not be empty[\s\S]*?require\(decodedAssertionPublicKey\.size == 65\)[\s\S]*?check\(decodedAssertionPublicKey\.size == 65\)[\s\S]*?require\(issuerSignature\.size == 64\)[\s\S]*?check\(issuerSignature\.size == 64\)[\s\S]*?OfflineNoteV2\.ANDROID_KEYMINT_PLATFORM -> OfflineNoteV2\.ANDROID_KEYMINT_ASSERTION_SCHEME[\s\S]*?platform\.contains\("android"\)[\s\S]*?BearerOfflineWalletModelsTest\.kt[\s\S]*?compactKeyCertificateRejectsNonCanonicalProfileFields[\s\S]*?compactKeyCertificatePreservesExplicitLegacyAssertionScheme[\s\S]*?compactKeyCertificate\(version = 2\)[\s\S]*?compactKeyCertificate\(version = 1\)[\s\S]*?for \(invalidPlatform in listOf\("android", "android-keymint ", "Android-keymint", "ios-appattest-android"\)\)[\s\S]*?for \(invalidPlatform in listOf\("android"\)\)[\s\S]*?assertionUsageCountLimit = 2[\s\S]*?assertionUsageCountLimit = 1[\s\S]*?compactKeyCertificateRejectsNonCanonicalBase64Fields[\s\S]*?compactKeyCertificateAcceptsNonCanonicalBase64Fields[\s\S]*?canonicalAssertionPublicKey\.dropLast\(1\)[\s\S]*?assertion_public_key must be 65 bytes/u,
+    /mutations\s*=\s*\([\s\S]*?BearerOfflineWalletModels\.kt[\s\S]*?require\(version == AttestedOfflineNote\.KEY_CERTIFICATE_VERSION\)[\s\S]*?check\(version == AttestedOfflineNote\.KEY_CERTIFICATE_VERSION\)[\s\S]*?require\(assertionScheme == expectedAssertionScheme\(platform\)\)[\s\S]*?check\(assertionScheme == expectedAssertionScheme\(platform\)\)[\s\S]*?require\(appAttestPublicKeyBase64 == null\)[\s\S]*?check\(appAttestPublicKeyBase64 == null\)[\s\S]*?require\(assertionUsageCountLimit == expectedAssertionUsageCountLimit\(platform\)\)[\s\S]*?check\(assertionUsageCountLimit == expectedAssertionUsageCountLimit\(platform\)\)[\s\S]*?val decodedPublicKey = requireCanonicalNonEmptyBase64\(publicKey, "public_key"\)[\s\S]*?public_key must not be empty[\s\S]*?require\(decodedPublicKey\.size == 32\)[\s\S]*?check\(decodedPublicKey\.size == 32\)[\s\S]*?val decodedAssertionPublicKey = requireCanonicalNonEmptyBase64\(assertionPublicKey, "assertion_public_key"\)[\s\S]*?assertion_public_key must not be empty[\s\S]*?require\(decodedAssertionPublicKey\.size == 65\)[\s\S]*?check\(decodedAssertionPublicKey\.size == 65\)[\s\S]*?require\(issuerSignature\.size == 64\)[\s\S]*?check\(issuerSignature\.size == 64\)[\s\S]*?AttestedOfflineNote\.ANDROID_KEYMINT_PLATFORM -> AttestedOfflineNote\.ANDROID_KEYMINT_ASSERTION_SCHEME[\s\S]*?platform\.contains\("android"\)[\s\S]*?BearerOfflineWalletModelsTest\.kt[\s\S]*?compactKeyCertificateRejectsNonCanonicalProfileFields[\s\S]*?compactKeyCertificatePreservesExplicitLegacyAssertionScheme[\s\S]*?compactKeyCertificate\(version = 2\)[\s\S]*?compactKeyCertificate\(version = 1\)[\s\S]*?for \(invalidPlatform in listOf\("android", "android-keymint ", "Android-keymint", "ios-appattest-android"\)\)[\s\S]*?for \(invalidPlatform in listOf\("android"\)\)[\s\S]*?assertionUsageCountLimit = 2[\s\S]*?assertionUsageCountLimit = 1[\s\S]*?compactKeyCertificateRejectsNonCanonicalBase64Fields[\s\S]*?compactKeyCertificateAcceptsNonCanonicalBase64Fields[\s\S]*?canonicalAssertionPublicKey\.dropLast\(1\)[\s\S]*?assertion_public_key must be 65 bytes/u,
     "Kotlin offline wallet compact certificate profile negative control must mutate source, exact platform, Base64, and test markers",
   );
   assert.match(
     kotlinOfflineWalletCompactCertificateProfileBranch,
-    /Kotlin offline wallet compact certificate profile source missing require\(version == OfflineNoteV2\.KEY_CERTIFICATE_VERSION\)[\s\S]*?Kotlin offline wallet compact certificate profile source block missing require\(assertionScheme == expectedAssertionScheme\(platform\)\)[\s\S]*?Kotlin offline wallet compact certificate profile source block missing require\(appAttestPublicKeyBase64 == null\)[\s\S]*?Kotlin offline wallet compact certificate profile source block missing require\(assertionUsageCountLimit == expectedAssertionUsageCountLimit\(platform\)\)[\s\S]*?Kotlin offline wallet compact certificate profile source missing val decodedPublicKey = requireCanonicalNonEmptyBase64\(publicKey, "public_key"\)[\s\S]*?Kotlin offline wallet compact certificate profile source missing require\(decodedPublicKey\.size == 32\)[\s\S]*?Kotlin offline wallet compact certificate profile source missing val decodedAssertionPublicKey = requireCanonicalNonEmptyBase64\(assertionPublicKey, "assertion_public_key"\)[\s\S]*?Kotlin offline wallet compact certificate profile source missing require\(decodedAssertionPublicKey\.size == 65\)[\s\S]*?Kotlin offline wallet compact certificate profile source missing require\(issuerSignature\.size == 64\)[\s\S]*?Kotlin offline wallet compact certificate exact platform profile source contains forbidden pattern[\s\S]*?Kotlin offline wallet compact certificate profile tests missing compactKeyCertificateRejectsNonCanonicalProfileFields[\s\S]*?Kotlin offline wallet compact certificate profile tests missing compactKeyCertificate\(version = 2\)[\s\S]*?Kotlin offline wallet compact certificate profile tests missing for \(invalidPlatform in listOf\("android", "android-keymint ", "Android-keymint", "ios-appattest-android"\)\)[\s\S]*?Kotlin offline wallet compact certificate profile tests missing assertionUsageCountLimit = 2[\s\S]*?Kotlin offline wallet compact certificate profile tests missing compactKeyCertificateRejectsNonCanonicalBase64Fields[\s\S]*?Kotlin offline wallet compact certificate profile tests missing canonicalAssertionPublicKey\.dropLast\(1\)[\s\S]*?Kotlin offline wallet compact certificate profile tests missing "assertion_public_key must be 65 bytes"/u,
+    /Kotlin offline wallet compact certificate profile source missing require\(version == AttestedOfflineNote\.KEY_CERTIFICATE_VERSION\)[\s\S]*?Kotlin offline wallet compact certificate profile source block missing require\(assertionScheme == expectedAssertionScheme\(platform\)\)[\s\S]*?Kotlin offline wallet compact certificate profile source block missing require\(appAttestPublicKeyBase64 == null\)[\s\S]*?Kotlin offline wallet compact certificate profile source block missing require\(assertionUsageCountLimit == expectedAssertionUsageCountLimit\(platform\)\)[\s\S]*?Kotlin offline wallet compact certificate profile source missing val decodedPublicKey = requireCanonicalNonEmptyBase64\(publicKey, "public_key"\)[\s\S]*?Kotlin offline wallet compact certificate profile source missing require\(decodedPublicKey\.size == 32\)[\s\S]*?Kotlin offline wallet compact certificate profile source missing val decodedAssertionPublicKey = requireCanonicalNonEmptyBase64\(assertionPublicKey, "assertion_public_key"\)[\s\S]*?Kotlin offline wallet compact certificate profile source missing require\(decodedAssertionPublicKey\.size == 65\)[\s\S]*?Kotlin offline wallet compact certificate profile source missing require\(issuerSignature\.size == 64\)[\s\S]*?Kotlin offline wallet compact certificate exact platform profile source contains forbidden pattern[\s\S]*?Kotlin offline wallet compact certificate profile tests missing compactKeyCertificateRejectsNonCanonicalProfileFields[\s\S]*?Kotlin offline wallet compact certificate profile tests missing compactKeyCertificate\(version = 2\)[\s\S]*?Kotlin offline wallet compact certificate profile tests missing for \(invalidPlatform in listOf\("android", "android-keymint ", "Android-keymint", "ios-appattest-android"\)\)[\s\S]*?Kotlin offline wallet compact certificate profile tests missing assertionUsageCountLimit = 2[\s\S]*?Kotlin offline wallet compact certificate profile tests missing compactKeyCertificateRejectsNonCanonicalBase64Fields[\s\S]*?Kotlin offline wallet compact certificate profile tests missing canonicalAssertionPublicKey\.dropLast\(1\)[\s\S]*?Kotlin offline wallet compact certificate profile tests missing "assertion_public_key must be 65 bytes"/u,
     "Kotlin offline wallet compact certificate profile negative control must require exact diagnostics",
   );
   assert.match(

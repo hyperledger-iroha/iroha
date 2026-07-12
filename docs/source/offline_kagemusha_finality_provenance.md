@@ -37,12 +37,20 @@ hash.
 
 The proof package contains:
 
-- the canonical Commit-QC fields and aggregate signature for the anchor's
-  block, omitting the validator roster already present in the trust artifact;
-- the ordinary-write root plus the anchor leaf index/count and canonical
-  balanced-Merkle siblings; and
-- the validator-set hash and activation window selected from the cached trust
-  artifact.
+- every non-roster field of the live Sumeragi-v2 `HeightContext`, including
+  chain id, epoch data, parent Commit QC, DA layout, leader seed, and the typed
+  context id;
+- the exact live Sumeragi-v2 Commit `QuorumCertificate`, including its subject,
+  execution commitment, signer indexes, and aggregate signature; and
+- the anchor leaf index/count and canonical balanced-Merkle siblings.
+
+The roster is deliberately not repeated in each peer proof. It comes only from
+the content-addressed release artifact. Native verification reconstructs the
+complete `HeightContext` from that authenticated roster window, validates it,
+and requires its recomputed identifier to equal the context id signed by the
+QC. The QC execution commitment supplies the ordinary-write root, top-up root
+and count, and consensus post-state root; the proof never carries a parallel
+root that could disagree with the signed certificate.
 
 The peer payload already carries the compact `(operation_id, anchor_digest)`
 reference. The initial recursive proof binds that digest to the complete anchor
@@ -57,22 +65,44 @@ peer-envelope proof budget.
 
 ## Trust and rotation
 
-An attacker-supplied validator set is not a trust anchor.
-Offline setup downloads a content-addressed consensus-roster artifact containing
-the accepted validator-set hashes, public keys, proofs of possession, and
-non-overlapping activation/withdrawal heights. Verification requires the proof
-height to fall inside exactly one cached window and the QC's recomputed roster
-hash to equal that window. A device whose cached roster window has expired
-cannot receive new offline cash until it refreshes while online.
+An attacker-supplied validator set is not a trust anchor. Offline setup
+downloads the canonical V3 release manifest and its content-addressed consensus
+roster artifact. Each non-overlapping roster window contains the exact ordered
+`ValidatorPower` entries, consensus mode, aligned BLS proofs of possession, and
+inclusive/exclusive activation bounds. The expected manifest SHA-256 must come
+from the authenticated release envelope; the manifest then selects the exact
+roster byte length and SHA-256.
+
+Verification requires the proof height to fall inside exactly one manifest
+release window and exactly one roster window. It reconstructs the full height
+context, validates signer quorum and ordering, verifies every roster proof of
+possession once per bounded exact-digest cache entry, and verifies the aggregate
+over the live `Vote::signature_preimage`. Chain, asset definition, scale,
+artifact generation, height, operation id, and complete anchor digest are bound
+before pairing work begins. A device whose cached release or roster window has
+expired cannot receive new offline cash until it refreshes while online.
 
 ## Lifecycle binding
 
-The current first-release Torii operation response returns the finalized top-up
-anchor; it does not yet publish `KagemushaTopUpFinalityProofV2`. The proof types
-and roster artifact define the future offline-verifiable provenance sidecar,
-but sidecar construction, durable publication, and client retrieval remain
-unwired. The local `initSpend` proof binds the anchor digest, and redemption
-resolves compact anchor references from chain state before crediting value.
+The first-release Torii applied top-up result returns both the typed finalized
+anchor and the typed `KagemushaTopUpFinalityProofV2`. It never reports an
+applied top-up from a height and anchor alone. Before either the block log or
+WSV advances, Kura durably stages the bounded witness-derived top-up tree and
+paths. After the exact cryptographically verified `V2FinalityArtifact` is
+durable, Kura promotes that stage to an immutable final sidecar bound to the
+artifact hash. Publication uses no-clobber atomic files, directory sync, stable
+file-identity checks, bounded decode limits, and idempotent exact retries;
+conflicting or missing crash-recovery state fails closed. Kura then builds the
+canonical proof for the exact `(height, operation_id)` while serving the
+canonical operation-status resource.
+
+There is no parallel finality-proof retrieval route and no base64 wrapper. If
+the local durable artifact or sidecar cannot produce the exact proof, Torii
+returns `503 offline_topup_finality_proof_unavailable`; the wallet retries the
+same operation status URI and must not run `initSpend`. The local init proof
+binds the verified anchor digest, and redemption resolves compact anchor
+references from chain state before crediting value. The native verifier remains
+fail-closed until the authenticated release-envelope trust root is available.
 
 `KagemushaRecursiveSpendPeerPaymentV2` intentionally contains only the
 recipient bundle. A future finality package must therefore remain a
@@ -82,28 +112,41 @@ not be added to the canonical one-field peer-payment wire.
 Receiver verification is ordered fail-closed:
 
 1. decode and re-encode every archive canonically;
-2. verify the cached roster window and Commit QC cryptographically;
-3. verify chain id, height, block hash, and QC `post_state_root` bindings;
-4. reconstruct the domain-separated post-state root from the ordinary-write
-   root and exact anchor inclusion path;
-5. require one proof per top-up reference and exact anchor/ref equality;
-6. verify the recursive spend proof, recipient request, scale, amount, hop
+2. require the authenticated manifest digest and its exact roster descriptor;
+3. validate the complete anchor and require exact proof anchor/ref equality;
+4. reconstruct the full height context from the selected roster window and
+   verify the exact Commit vote aggregate;
+5. reconstruct the domain-separated post-state root from the QC execution
+   commitment and exact anchor inclusion path;
+6. require one proof per top-up reference;
+7. verify the recursive spend proof, recipient request, scale, amount, hop
    limit, verifier activation, and lineage acceptance; and
-7. durably commit the received branch before acknowledging it.
+8. durably commit the received branch before acknowledging it.
 
 No marker, note, nullifier, commitment, or acknowledgement may be written before
-all checks through step 6 succeed.
+all checks through step 7 succeed.
 
 ## Durability and payload gate
 
-The execution witness needed to build inclusion paths must survive restart
-before this sidecar can ship. The intended Kura sidecar is immutable and
-block-hash-bound, stores the ordinary-write root plus canonical anchor leaves
-and paths, and is reproducible from the canonical block. Publication must fail
-closed unless the recovered root equals the Commit QC's `post_state_root`.
+The execution witness projection needed to build inclusion paths is persisted
+before WSV commit. The final Kura sidecar is immutable and block-hash-bound,
+stores the ordinary-write root plus canonical anchor leaves and paths, and is
+promoted only against an exact durable finality receipt. Publication and reads
+fail closed unless the reconstructed root equals the Commit QC's signed
+`post_state_root`; a sidecar path swap cannot reuse a successful cryptographic
+cache entry.
+
+The C/Swift verification boundary accepts five logical inputs: the canonical
+proof, canonical roster artifact, complete canonical top-up anchor, canonical
+V3 manifest, and the manifest's expected non-zero SHA-256. Native ingress
+applies separate proof, roster, anchor, and manifest byte caps before copying
+or decoding. The public symbol currently returns the unavailable error before
+decoding otherwise valid inputs: a content address is not a release trust root,
+and recursive init does not yet consume a verified-finality capability. Both
+gates must be implemented before this boundary can become callable.
 
 Current size goldens cover the canonical peer-payment wire at depths 1, 2, 4,
-8, and 64 with one or two branch claims. They do not include provenance
-packages, roster bitmaps, or top-up-count proofs. A future sidecar transport
-must add separate size and retrieval gates without changing the 9,211-byte raw
-/ 12-KiB peer-payment limits.
+8, and 64 with one or two branch claims. Provenance remains a deduplicated
+sidecar and is not counted against that peer-payment wire. Any future Torii
+transport must add separate response-size and retrieval gates without changing
+the 9,211-byte raw / 12-KiB peer-payment limits.

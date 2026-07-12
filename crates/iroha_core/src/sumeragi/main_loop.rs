@@ -4188,6 +4188,7 @@ fn validation_reject_reason_label(err: &BlockValidationError) -> &'static str {
         | BlockValidationError::SccpTransactionResultCountMismatch { .. }
         | BlockValidationError::SccpInvalidOutboundRecord { .. }
         | BlockValidationError::SccpDuplicateOutboundMessage { .. }
+        | BlockValidationError::SccpTooManyOutboundMessages { .. }
         | BlockValidationError::ExecutionContextInvalid(_)
         | BlockValidationError::CommittedFragmentCountMismatch { .. }
         | BlockValidationError::TransactionAccept(_)

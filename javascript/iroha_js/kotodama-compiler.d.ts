@@ -71,10 +71,10 @@ export interface KotodamaCompiledKotobaEntry {
 
 export type KotodamaCompiledEntrypointValueKindName =
   | "Int"
-  | "U128"
+  | "Decimal"
+  | "Quantity"
   | "Bool"
   | "String"
-  | "Amount"
   | "Json"
   | "Name"
   | "AccountId"

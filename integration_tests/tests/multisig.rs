@@ -15,7 +15,7 @@ use integration_tests::{
     sandbox,
 };
 use iroha::{
-    client::{Client, MultisigApprovalEntry, MultisigApprovalsListRequest},
+    client::{Client, MultisigProposalEntry, MultisigProposalsQueryRequest},
     config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
     crypto::{ExposedPrivateKey, KeyPair},
     data_model::{
@@ -31,8 +31,8 @@ use iroha_test_samples::{
     ALICE_ID, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, gen_account_in, load_sample_ivm,
 };
 use iroha_torii::{
-    MultisigAccountSelectorDto, MultisigCancelRequestDto, MultisigProposalsGetRequestDto,
-    MultisigProposalsListRequestDto,
+    MultisigAccountSelectorDto, MultisigCancelRequestDto, MultisigProposalsLookupRequestDto,
+    MultisigProposalsQueryRequestDto,
 };
 use norito::json::Value as JsonValue;
 use reqwest::header::CONTENT_TYPE;
@@ -302,7 +302,7 @@ fn wait_for_multisig_proposal_status(
         match post_torii_app_json(
             rt,
             &endpoint,
-            &MultisigProposalsGetRequestDto {
+            &MultisigProposalsLookupRequestDto {
                 selector: selector.clone(),
                 proposal_id: Some(proposal_id.to_owned()),
                 instructions_hash: None,
@@ -438,20 +438,22 @@ fn multisig_role_suffix(role: &RoleId) -> Option<&str> {
 
 const COLLECTING_SIGNATURES_STATUS: &str = "COLLECTING_SIGNATURES";
 
-fn collect_authority_multisig_approvals(client: &Client) -> Result<Vec<MultisigApprovalEntry>> {
+fn collect_multisig_proposals(
+    client: &Client,
+    multisig_account_id: &AccountId,
+) -> Result<Vec<MultisigProposalEntry>> {
     let mut cursor = None;
     let mut items = Vec::new();
 
     loop {
-        let response =
-            client.query_multisig_approvals_for_authority(&MultisigApprovalsListRequest {
-                status: vec![COLLECTING_SIGNATURES_STATUS.to_owned()],
-                operation_type: Vec::new(),
-                requires_my_signature: false,
-                cursor: cursor.clone(),
-                limit: Some(100),
-            })?;
-        items.extend(response.items);
+        let response = client.post_multisig_proposals_query(&MultisigProposalsQueryRequest {
+            multisig_account_id: Some(multisig_account_id.clone()),
+            multisig_account_alias: None,
+            status: vec![COLLECTING_SIGNATURES_STATUS.to_owned()],
+            cursor: cursor.clone(),
+            limit: Some(100),
+        })?;
+        items.extend(response.proposals);
         let Some(next_cursor) = response.next_cursor else {
             break;
         };
@@ -461,24 +463,25 @@ fn collect_authority_multisig_approvals(client: &Client) -> Result<Vec<MultisigA
     Ok(items)
 }
 
-fn wait_for_authority_multisig_approvals(
+fn wait_for_multisig_proposals(
     client: &Client,
+    multisig_account_id: &AccountId,
     minimum_count: usize,
-) -> Result<Vec<MultisigApprovalEntry>> {
+) -> Result<Vec<MultisigProposalEntry>> {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut last_count = 0_usize;
 
     while Instant::now() < deadline {
-        let approvals = collect_authority_multisig_approvals(client)?;
-        if approvals.len() >= minimum_count {
-            return Ok(approvals);
+        let proposals = collect_multisig_proposals(client, multisig_account_id)?;
+        if proposals.len() >= minimum_count {
+            return Ok(proposals);
         }
-        last_count = approvals.len();
+        last_count = proposals.len();
         std::thread::sleep(Duration::from_millis(250));
     }
 
     Err(eyre!(
-        "timed out waiting for at least {minimum_count} authority-scoped approvals; last count {last_count}"
+        "timed out waiting for at least {minimum_count} proposals for explicit multisig selector; last count {last_count}"
     ))
 }
 
@@ -487,6 +490,7 @@ fn run_multisig_list_all_cli(
     client: &Client,
     account_domain: &DomainId,
     key_pair: &KeyPair,
+    multisig_selector: &str,
     extra_args: &[&str],
 ) -> Result<std::process::Output> {
     let cli_dir = tempfile::tempdir().wrap_err("create CLI working directory")?;
@@ -521,6 +525,8 @@ fn run_multisig_list_all_cli(
         .arg("multisig")
         .arg("list")
         .arg("all")
+        .arg("--multisig-selector")
+        .arg(multisig_selector)
         .args(list_args);
     output_with_timeout(&mut command, process_timeout())
         .wrap_err("run `iroha ledger multisig list all`")
@@ -603,7 +609,7 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
         .submit_blocking::<InstructionBox>(
             MultisigPropose::new(multisig_account_id.clone(), instructions, None).into(),
         )
-        .wrap_err("submit target multisig proposal")?;
+        .wrap_err("submit tarlookup multisig proposal")?;
 
     let selector = MultisigAccountSelectorDto {
         multisig_account_id: Some(multisig_account_id.clone()),
@@ -705,9 +711,11 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
     let canceled_list = post_torii_app_json(
         &rt,
         &format!("{torii_base}/v1/multisig/proposals/query"),
-        &MultisigProposalsListRequestDto {
+        &MultisigProposalsQueryRequestDto {
             selector,
             status: vec!["CANCELED".to_owned()],
+            cursor: None,
+            limit: None,
         },
     )?;
     let proposals = canceled_list
@@ -822,15 +830,20 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
         expected_proposal_ids.push(proposal_id);
     }
 
-    let expected_approvals =
-        wait_for_authority_multisig_approvals(&proposer_client, expected_proposal_ids.len())
-            .wrap_err("wait for authority-scoped approvals before invoking CLI")?;
+    let expected_proposals = wait_for_multisig_proposals(
+        &proposer_client,
+        &multisig_account_id,
+        expected_proposal_ids.len(),
+    )
+    .wrap_err("wait for selector-explicit proposals before invoking CLI")?;
+    let multisig_selector = multisig_account_id.to_string();
 
     let json_output = run_multisig_list_all_cli(
         &cli_program,
         &proposer_client,
         &domain,
         &proposer.1,
+        &multisig_selector,
         &["--output-format", "json"],
     )?;
     assert!(
@@ -847,8 +860,8 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
         .expect("CLI multisig list should emit a JSON array");
     assert_eq!(
         proposals.len(),
-        expected_approvals.len(),
-        "CLI JSON output should mirror the authority-scoped approvals page set"
+        expected_proposals.len(),
+        "CLI JSON output should mirror the selector-explicit proposal page set"
     );
     let expected_multisig_id = multisig_account_id.to_string();
     let proposal = proposals
@@ -864,18 +877,18 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
                 "CLI should surface the pending proposal discovered via the hashed role suffix; expected proposal ids {expected_proposal_ids:?}, payload {payload:?}"
             );
         });
-    let expected_entry = expected_approvals
+    let expected_entry = expected_proposals
         .iter()
         .find(|entry| {
             Some(entry.proposal_id.as_str()) == expected_proposal_ids.first().map(String::as_str)
         })
-        .expect("expected approval entry");
+        .expect("expected proposal entry");
     assert!(
         proposals.iter().all(|entry| {
             entry.get("multisig_account_id").and_then(JsonValue::as_str)
                 == Some(expected_multisig_id.as_str())
         }),
-        "every CLI approval entry should resolve through the authority-scoped multisig account id"
+        "every CLI proposal entry should remain bound to the explicit multisig account id"
     );
     assert_eq!(
         proposal.get("status").and_then(JsonValue::as_str),
@@ -895,6 +908,7 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
         &proposer_client,
         &domain,
         &proposer.1,
+        &multisig_selector,
         &["--output-format", "text"],
     )?;
     assert!(
@@ -907,14 +921,11 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
     let blocks = text.trim().split("\n\n").collect::<Vec<_>>();
     assert_eq!(
         blocks.len(),
-        expected_approvals.len(),
-        "text output should contain one block per approval entry"
+        expected_proposals.len(),
+        "text output should contain one block per proposal entry"
     );
-    let first_text_entry = &expected_approvals[0];
-    assert!(blocks[0].contains(&format!(
-        "multisig_account_id: {}",
-        first_text_entry.multisig_account_id
-    )));
+    let first_text_entry = &expected_proposals[0];
+    assert!(blocks[0].contains(&format!("multisig_account_id: {}", multisig_account_id)));
     assert!(blocks[0].contains(&format!("proposal_id: {}", first_text_entry.proposal_id)));
     assert!(blocks[0].contains("status: COLLECTING_SIGNATURES"));
     assert!(blocks[0].contains(&format!(
@@ -931,6 +942,7 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
         &proposer_client,
         &domain,
         &proposer.1,
+        &multisig_selector,
         &[
             "--output-format",
             "json",
@@ -963,7 +975,7 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
                 .to_owned()
         })
         .collect::<Vec<_>>();
-    let expected_paged_ids = expected_approvals
+    let expected_paged_ids = expected_proposals
         .iter()
         .skip(1)
         .take(2)

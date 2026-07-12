@@ -9,12 +9,90 @@ import {
 const OPERATION_ID = "11".repeat(32);
 const TRANSACTION_HASH = "22".repeat(32);
 
+function fixedBytes(byte) {
+  return Array(32).fill(byte);
+}
+
+function topUpAnchor(overrides = {}) {
+  const amount = overrides.amount ?? { atomic_units: 17, scale: 4 };
+  const currentNote = overrides.current_note ?? {
+    chain_id: "wonderland",
+    asset: "xor",
+    note_commitment: fixedBytes(0x41),
+    spend_nullifier: fixedBytes(0x51),
+    amount: { ...amount },
+  };
+  return {
+    version: 2,
+    chain_id: "wonderland",
+    payer: "alice",
+    asset: "xor##alice",
+    asset_scale: amount.scale,
+    amount,
+    initial_root: fixedBytes(0x10),
+    finalized_root: fixedBytes(0x20),
+    topup_anchor_nullifiers: [fixedBytes(0x31)],
+    current_note: currentNote,
+    topup_operation_id: fixedBytes(0x11),
+    transfer_verifier_id: { backend: "halo2/ipa", name: "offline-transfer" },
+    transfer_verifier_commitment: fixedBytes(0x61),
+    artifact_generation: "generation-1",
+    finalized_height: 12,
+    finalized_tx_hash: fixedBytes(0x22),
+    anchor_digest: fixedBytes(0x71),
+    ...overrides,
+  };
+}
+
+function topUpFinalityProof(anchor, finalizedHeight) {
+  return {
+    version: 1,
+    anchor: {
+      topup_operation_id: [...anchor.topup_operation_id],
+      anchor_digest: [...anchor.anchor_digest],
+    },
+    commit_qc: {
+      height_context: { height: finalizedHeight },
+      certificate: { round: { height: finalizedHeight, view: 0 } },
+    },
+    anchor_path: { leaf_index: 0, leaf_count: 1, siblings: [] },
+  };
+}
+
+function appliedTopUpStatus(anchor = topUpAnchor(), overrides = {}) {
+  const finalizedHeight = overrides.finalized_block_height ?? 12;
+  return {
+    state: "applied",
+    value: {
+      operation_id: OPERATION_ID,
+      result: {
+        kind: "top_up",
+        result: {
+          transaction_hash: TRANSACTION_HASH,
+          finalized_block_height: finalizedHeight,
+          server_time_ms: 13,
+          anchor,
+          finality_proof: topUpFinalityProof(anchor, finalizedHeight),
+          ...overrides,
+        },
+      },
+    },
+  };
+}
+
+function stringifyWideJson(value) {
+  return JSON.stringify(value, (_key, item) =>
+    typeof item === "bigint" ? `__wide_integer_${item}` : item)
+    .replace(/"__wide_integer_([0-9]+)"/gu, "$1");
+}
+
 test("Offline lossless JSON parser preserves wide integer tokens", () => {
   const parsed = parseOfflineJson(
     "{\"safe\":9007199254740991,\"wide\":9007199254740993,"
       + "\"max_u64\":18446744073709551615,"
       + "\"max_u128\":340282366920938463463374607431768211455,"
-      + "\"fraction\":1.25,\"negative\":-9007199254740993}",
+      + "\"fraction\":1.25,\"exponent\":1e3,"
+      + "\"negative\":-9007199254740993}",
   );
 
   assert.equal(parsed.safe, Number.MAX_SAFE_INTEGER);
@@ -22,6 +100,7 @@ test("Offline lossless JSON parser preserves wide integer tokens", () => {
   assert.equal(parsed.max_u64, 18_446_744_073_709_551_615n);
   assert.equal(parsed.max_u128, (1n << 128n) - 1n);
   assert.equal(parsed.fraction, 1.25);
+  assert.equal(parsed.exponent, 1000);
   assert.equal(parsed.negative, -9_007_199_254_740_993n);
 });
 
@@ -53,30 +132,139 @@ test("Offline lossless JSON parser does not allow prototype mutation", () => {
   assert.equal(parsed.constructor, 7);
 });
 
+test("Offline integer normalization rejects negative zero in values and byte arrays", () => {
+  const negativeHeight = appliedTopUpStatus();
+  negativeHeight.value.result.result.finalized_block_height = -0;
+  assert.throws(
+    () => normalizeOfflineOperationStatus(negativeHeight, OPERATION_ID),
+    /lossless integer/u,
+  );
+
+  const negativeByte = appliedTopUpStatus();
+  negativeByte.value.result.result.anchor.topup_operation_id[0] = -0;
+  assert.throws(
+    () => normalizeOfflineOperationStatus(negativeByte, OPERATION_ID),
+    /integer byte/u,
+  );
+});
+
+test("Offline typed integers reject fraction and exponent wire lexemes", () => {
+  for (const replacement of ["2.0", "2e0", "2E+0"]) {
+    const encoded = stringifyWideJson(appliedTopUpStatus())
+      .replace('"version":2', `"version":${replacement}`);
+    const parsed = parseOfflineJson(encoded);
+    assert.throws(
+      () => normalizeOfflineOperationStatus(parsed, OPERATION_ID),
+      /JSON integer token/u,
+      `replacement=${replacement}`,
+    );
+  }
+
+  const exponentByte = stringifyWideJson(appliedTopUpStatus())
+    .replace('"topup_operation_id":[17,', '"topup_operation_id":[1.7e1,');
+  assert.throws(
+    () => normalizeOfflineOperationStatus(parseOfflineJson(exponentByte), OPERATION_ID),
+    /JSON integer token/u,
+  );
+});
+
 test("Offline status normalization retains wide heights and nested amounts", () => {
-  const parsed = parseOfflineJson(`{
-    "state":"applied",
-    "value":{
-      "operation_id":"${OPERATION_ID}",
-      "result":{
-        "kind":"top_up",
-        "result":{
-          "transaction_hash":"${TRANSACTION_HASH}",
-          "finalized_block_height":18446744073709551615,
-          "server_time_ms":9007199254740993,
-          "anchor":{"amount":{"atomic_units":340282366920938463463374607431768211455}}
-        }
-      }
-    }
-  }`);
+  const maxU128 = (1n << 128n) - 1n;
+  const maxU64 = (1n << 64n) - 1n;
+  const amount = { atomic_units: maxU128, scale: 4 };
+  const parsed = parseOfflineJson(stringifyWideJson(appliedTopUpStatus(
+    topUpAnchor({
+      amount,
+      current_note: {
+        chain_id: "wonderland",
+        asset: "xor",
+        note_commitment: fixedBytes(0x41),
+        spend_nullifier: fixedBytes(0x51),
+        amount,
+      },
+      finalized_height: maxU64,
+    }),
+    { finalized_block_height: maxU64, server_time_ms: 9_007_199_254_740_993n },
+  )));
   const status = normalizeOfflineOperationStatus(parsed, OPERATION_ID);
 
-  assert.equal(status.value.result.result.finalized_block_height, (1n << 64n) - 1n);
+  assert.equal(status.value.result.result.finalized_block_height, maxU64);
   assert.equal(status.value.result.result.server_time_ms, 9_007_199_254_740_993n);
-  assert.equal(
-    status.value.result.result.anchor.amount.atomic_units,
-    (1n << 128n) - 1n,
+  assert.equal(status.value.result.result.anchor.amount.atomic_units, maxU128);
+});
+
+test("Offline top-up anchors are decoded into the closed typed contract", () => {
+  const anchor = topUpAnchor({ unknown_member: { attacker_controlled: true } });
+  const status = normalizeOfflineOperationStatus(appliedTopUpStatus(anchor), OPERATION_ID);
+  const normalized = status.value.result.result.anchor;
+
+  assert.equal(normalized.version, 2);
+  assert.equal(normalized.asset_scale, 4);
+  assert.deepEqual(normalized.transfer_verifier_id, {
+    backend: "halo2/ipa",
+    name: "offline-transfer",
+  });
+  assert.deepEqual(normalized.topup_operation_id, fixedBytes(0x11));
+  assert.equal(Object.hasOwn(normalized, "unknown_member"), false);
+});
+
+test("Offline top-up anchors reject malformed and cross-resource-conflicting fields", () => {
+  const invalid = [];
+  const missingDigest = topUpAnchor();
+  delete missingDigest.anchor_digest;
+  invalid.push(
+    missingDigest,
+    topUpAnchor({ version: 1 }),
+    topUpAnchor({ asset_scale: 29 }),
+    topUpAnchor({ asset_scale: 3 }),
+    topUpAnchor({ finalized_root: fixedBytes(0x10) }),
+    topUpAnchor({ topup_anchor_nullifiers: [] }),
+    topUpAnchor({
+      topup_anchor_nullifiers: [fixedBytes(0x31), fixedBytes(0x32), fixedBytes(0x33)],
+    }),
+    topUpAnchor({ topup_anchor_nullifiers: [fixedBytes(0x31), fixedBytes(0x31)] }),
+    topUpAnchor({ topup_anchor_nullifiers: [fixedBytes(0x32), fixedBytes(0x31)] }),
+    topUpAnchor({ topup_anchor_nullifiers: [fixedBytes(0x41)] }),
+    topUpAnchor({ topup_operation_id: fixedBytes(0x12) }),
+    topUpAnchor({ finalized_height: 11 }),
+    topUpAnchor({ finalized_tx_hash: fixedBytes(0x23) }),
+    topUpAnchor({ anchor_digest: fixedBytes(0) }),
+    topUpAnchor({ transfer_verifier_id: { backend: "", name: "offline-transfer" } }),
+    topUpAnchor({ transfer_verifier_id: { backend: "halo2/ipa", name: "v".repeat(257) } }),
+    topUpAnchor({ transfer_verifier_commitment: fixedBytes(0) }),
+    topUpAnchor({ artifact_generation: "é".repeat(65) }),
+    topUpAnchor({
+      current_note: {
+        chain_id: "wonderland",
+        asset: "xor",
+        note_commitment: fixedBytes(0x41),
+        spend_nullifier: fixedBytes(0x41),
+        amount: { atomic_units: 17, scale: 4 },
+      },
+    }),
+    topUpAnchor({
+      current_note: {
+        chain_id: "other-chain",
+        asset: "xor",
+        note_commitment: fixedBytes(0x41),
+        spend_nullifier: fixedBytes(0x51),
+        amount: { atomic_units: 17, scale: 4 },
+      },
+    }),
+    topUpAnchor({
+      current_note: {
+        chain_id: "wonderland",
+        asset: "xor",
+        note_commitment: fixedBytes(0x41),
+        spend_nullifier: fixedBytes(0x51),
+        amount: { atomic_units: 18, scale: 4 },
+      },
+    }),
   );
+
+  for (const anchor of invalid) {
+    assert.throws(() => normalizeOfflineOperationStatus(appliedTopUpStatus(anchor), OPERATION_ID));
+  }
 });
 
 test("Offline applied statuses reject zero finality fields", () => {
@@ -89,7 +277,9 @@ test("Offline applied statuses reject zero finality fields", () => {
           server_time_ms: 1,
         };
         result[field] = zero;
-        if (kind === "top_up") result.anchor = {};
+        if (kind === "top_up") {
+          result.anchor = topUpAnchor({ finalized_height: result.finalized_block_height });
+        }
         const status = {
           state: "applied",
           value: {

@@ -21,8 +21,8 @@ import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
 
-/** Native JVM implementation of Iroha Offline Note V2 canonical Norito encodings. */
-object OfflineNoteV2 {
+/** Native JVM implementation of Iroha Attested Offline Note canonical Norito encodings. */
+object AttestedOfflineNote {
     const val KEY_CERTIFICATE_PAYLOAD_DOMAIN: String =
         "iroha:offline-note:key-certificate-payload"
     const val ISSUED_CLAIM_DOMAIN: String = "iroha:offline-note:issued-claim"
@@ -73,6 +73,8 @@ object OfflineNoteV2 {
         "iroha_data_model::offline::OfflineDeviceAttestationRegistration"
     private const val DEVICE_ATTESTATION_CHALLENGE_PREIMAGE_SCHEMA =
         "iroha_data_model::offline::OfflineDeviceAttestationChallengePreimage"
+    private const val ANDROID_KEYMINT_CHALLENGE_PREIMAGE_SCHEMA =
+        "iroha_data_model::offline::OfflineAndroidKeyMintChallengePreimage"
     private const val ISSUE_SCHEMA = "iroha_data_model::offline::model::OfflineNoteIssue"
     private const val ISSUED_CLAIM_SCHEMA =
         "iroha_data_model::offline::model::OfflineNoteIssuedClaim"
@@ -97,15 +99,15 @@ object OfflineNoteV2 {
         "iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation"
 
     @JvmStatic
-    fun encodeCertificatePayload(value: KeyCertificatePayloadV2): ByteArray =
+    fun encodeCertificatePayload(value: KeyCertificatePayload): ByteArray =
         encodeWithHeader(value, KEY_CERTIFICATE_PAYLOAD_SCHEMA, KeyCertificatePayloadAdapter)
 
     @JvmStatic
-    fun encodeCertificate(value: KeyCertificateV2): ByteArray =
+    fun encodeCertificate(value: KeyCertificate): ByteArray =
         encodeWithHeader(value, KEY_CERTIFICATE_SCHEMA, KeyCertificateAdapter)
 
     @JvmStatic
-    fun encodeDeviceAttestationRegistration(value: DeviceAttestationRegistrationV2): ByteArray =
+    fun encodeDeviceAttestationRegistration(value: DeviceAttestationRegistration): ByteArray =
         encodeWithHeader(
             value,
             DEVICE_ATTESTATION_REGISTRATION_SCHEMA,
@@ -113,39 +115,39 @@ object OfflineNoteV2 {
         )
 
     @JvmStatic
-    fun encodeIssue(value: IssueV2): ByteArray =
+    fun encodeIssue(value: Issue): ByteArray =
         encodeWithHeader(value, ISSUE_SCHEMA, IssueAdapter)
 
     @JvmStatic
-    fun encodeIssuedClaim(value: IssuedClaimV2): ByteArray =
+    fun encodeIssuedClaim(value: IssuedClaim): ByteArray =
         encodeWithHeader(value, ISSUED_CLAIM_SCHEMA, IssuedClaimAdapter)
 
     @JvmStatic
-    fun encodeAuditOutputClaim(value: AuditOutputClaimV2): ByteArray =
+    fun encodeAuditOutputClaim(value: AuditOutputClaim): ByteArray =
         encodeWithHeader(value, AUDIT_OUTPUT_CLAIM_SCHEMA, AuditOutputClaimAdapter)
 
     @JvmStatic
-    fun encodeRecursiveProof(value: RecursiveProofV2): ByteArray =
+    fun encodeRecursiveProof(value: RecursiveProof): ByteArray =
         encodeWithHeader(value, RECURSIVE_PROOF_SCHEMA, RecursiveProofAdapter)
 
     @JvmStatic
-    fun encodeRedeem(value: RedeemV2): ByteArray =
+    fun encodeRedeem(value: Redeem): ByteArray =
         encodeWithHeader(value, REDEEM_SCHEMA, RedeemAdapter)
 
     @JvmStatic
-    fun encodeRedeemPublicInputs(value: RedeemPublicInputsV2): ByteArray =
+    fun encodeRedeemPublicInputs(value: RedeemPublicInputs): ByteArray =
         encodeWithHeader(value, REDEEM_PUBLIC_INPUTS_SCHEMA, RedeemPublicInputsAdapter)
 
     @JvmStatic
-    fun encodeAudit(value: AuditBundleV2): ByteArray =
+    fun encodeAudit(value: AuditBundle): ByteArray =
         encodeWithHeader(value, AUDIT_SCHEMA, AuditAdapter)
 
     @JvmStatic
-    fun encodeAuditPublicInputs(value: AuditPublicInputsV2): ByteArray =
+    fun encodeAuditPublicInputs(value: AuditPublicInputs): ByteArray =
         encodeWithHeader(value, AUDIT_PUBLIC_INPUTS_SCHEMA, AuditPublicInputsAdapter)
 
     @JvmStatic
-    fun issueInstruction(value: IssueV2): InstructionBox =
+    fun issueInstruction(value: Issue): InstructionBox =
         InstructionBox.fromWirePayload(
             ISSUE_INSTRUCTION_SCHEMA,
             encodeInstructionWrapper(
@@ -155,7 +157,7 @@ object OfflineNoteV2 {
         )
 
     @JvmStatic
-    fun redeemInstruction(value: RedeemV2): InstructionBox {
+    fun redeemInstruction(value: Redeem): InstructionBox {
         value.validateProofBinding()
         return InstructionBox.fromWirePayload(
             REDEEM_INSTRUCTION_SCHEMA,
@@ -167,7 +169,7 @@ object OfflineNoteV2 {
     }
 
     @JvmStatic
-    fun auditInstruction(value: AuditBundleV2): InstructionBox {
+    fun auditInstruction(value: AuditBundle): InstructionBox {
         value.validateProofBinding()
         return InstructionBox.fromWirePayload(
             AUDIT_INSTRUCTION_SCHEMA,
@@ -179,22 +181,22 @@ object OfflineNoteV2 {
     }
 
     @JvmStatic
-    fun registerDeviceAttestationInstruction(value: DeviceAttestationRegistrationV2): InstructionBox =
+    fun registerDeviceAttestationInstruction(value: DeviceAttestationRegistration): InstructionBox =
         InstructionBox.fromWirePayload(
             REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
             encodeRegisterDeviceAttestationInstructionPayload(value),
         )
 
     @JvmStatic
-    fun decodeCertificatePayload(bytes: ByteArray): KeyCertificatePayloadV2 =
+    fun decodeCertificatePayload(bytes: ByteArray): KeyCertificatePayload =
         decodeWithHeader(bytes, KEY_CERTIFICATE_PAYLOAD_SCHEMA, KeyCertificatePayloadAdapter)
 
     @JvmStatic
-    fun decodeCertificate(bytes: ByteArray): KeyCertificateV2 =
+    fun decodeCertificate(bytes: ByteArray): KeyCertificate =
         decodeWithHeader(bytes, KEY_CERTIFICATE_SCHEMA, KeyCertificateAdapter)
 
     @JvmStatic
-    fun decodeDeviceAttestationRegistration(bytes: ByteArray): DeviceAttestationRegistrationV2 =
+    fun decodeDeviceAttestationRegistration(bytes: ByteArray): DeviceAttestationRegistration =
         decodeWithHeader(
             bytes,
             DEVICE_ATTESTATION_REGISTRATION_SCHEMA,
@@ -202,39 +204,39 @@ object OfflineNoteV2 {
         )
 
     @JvmStatic
-    fun decodeIssue(bytes: ByteArray): IssueV2 =
+    fun decodeIssue(bytes: ByteArray): Issue =
         decodeWithHeader(bytes, ISSUE_SCHEMA, IssueAdapter)
 
     @JvmStatic
-    fun decodeIssuedClaim(bytes: ByteArray): IssuedClaimV2 =
+    fun decodeIssuedClaim(bytes: ByteArray): IssuedClaim =
         decodeWithHeader(bytes, ISSUED_CLAIM_SCHEMA, IssuedClaimAdapter)
 
     @JvmStatic
-    fun decodeAuditOutputClaim(bytes: ByteArray): AuditOutputClaimV2 =
+    fun decodeAuditOutputClaim(bytes: ByteArray): AuditOutputClaim =
         decodeWithHeader(bytes, AUDIT_OUTPUT_CLAIM_SCHEMA, AuditOutputClaimAdapter)
 
     @JvmStatic
-    fun decodeRecursiveProof(bytes: ByteArray): RecursiveProofV2 =
+    fun decodeRecursiveProof(bytes: ByteArray): RecursiveProof =
         decodeWithHeader(bytes, RECURSIVE_PROOF_SCHEMA, RecursiveProofAdapter)
 
     @JvmStatic
-    fun decodeRedeem(bytes: ByteArray): RedeemV2 =
+    fun decodeRedeem(bytes: ByteArray): Redeem =
         decodeWithHeader(bytes, REDEEM_SCHEMA, RedeemAdapter)
 
     @JvmStatic
-    fun decodeRedeemPublicInputs(bytes: ByteArray): RedeemPublicInputsV2 =
+    fun decodeRedeemPublicInputs(bytes: ByteArray): RedeemPublicInputs =
         decodeWithHeader(bytes, REDEEM_PUBLIC_INPUTS_SCHEMA, RedeemPublicInputsAdapter)
 
     @JvmStatic
-    fun decodeAudit(bytes: ByteArray): AuditBundleV2 =
+    fun decodeAudit(bytes: ByteArray): AuditBundle =
         decodeWithHeader(bytes, AUDIT_SCHEMA, AuditAdapter)
 
     @JvmStatic
-    fun decodeAuditPublicInputs(bytes: ByteArray): AuditPublicInputsV2 =
+    fun decodeAuditPublicInputs(bytes: ByteArray): AuditPublicInputs =
         decodeWithHeader(bytes, AUDIT_PUBLIC_INPUTS_SCHEMA, AuditPublicInputsAdapter)
 
     @JvmStatic
-    fun decodeIssueInstruction(bytes: ByteArray): IssueV2 =
+    fun decodeIssueInstruction(bytes: ByteArray): Issue =
         decodeInstructionModel(
             bytes,
             ISSUE_INSTRUCTION_SCHEMA,
@@ -243,7 +245,7 @@ object OfflineNoteV2 {
         )
 
     @JvmStatic
-    fun decodeRedeemInstruction(bytes: ByteArray): RedeemV2 =
+    fun decodeRedeemInstruction(bytes: ByteArray): Redeem =
         decodeInstructionModel(
             bytes,
             REDEEM_INSTRUCTION_SCHEMA,
@@ -252,7 +254,7 @@ object OfflineNoteV2 {
         )
 
     @JvmStatic
-    fun decodeAuditInstruction(bytes: ByteArray): AuditBundleV2 =
+    fun decodeAuditInstruction(bytes: ByteArray): AuditBundle =
         decodeInstructionModel(
             bytes,
             AUDIT_INSTRUCTION_SCHEMA,
@@ -261,7 +263,7 @@ object OfflineNoteV2 {
         )
 
     @JvmStatic
-    fun decodeRegisterDeviceAttestationInstruction(bytes: ByteArray): DeviceAttestationRegistrationV2 =
+    fun decodeRegisterDeviceAttestationInstruction(bytes: ByteArray): DeviceAttestationRegistration =
         decodeRegisterDeviceAttestationInstructionModel(bytes)
 
     @JvmStatic
@@ -289,7 +291,7 @@ object OfflineNoteV2 {
         framedModelPayload: ByteArray,
     ): ByteArray {
         require(isNoritoFrame(framedModelPayload)) {
-            "Offline Note V2 framed model payload is invalid"
+            "Attested Offline Note framed model payload is invalid"
         }
         val modelPayload = NoritoCodec.fromBytesView(framedModelPayload, null)
         return NoritoCodec.encode(
@@ -301,7 +303,7 @@ object OfflineNoteV2 {
     }
 
     private fun encodeRegisterDeviceAttestationInstructionPayload(
-        value: DeviceAttestationRegistrationV2,
+        value: DeviceAttestationRegistration,
     ): ByteArray =
         NoritoCodec.encode(
             value,
@@ -312,7 +314,7 @@ object OfflineNoteV2 {
 
     private fun decodeRegisterDeviceAttestationInstructionModel(
         bytes: ByteArray,
-    ): DeviceAttestationRegistrationV2 {
+    ): DeviceAttestationRegistration {
         val wirePayload = extractInstructionWirePayload(
             bytes,
             listOf(REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA),
@@ -354,10 +356,10 @@ object OfflineNoteV2 {
         val decoder = NoritoDecoder(bytes, flags)
         val wireName = readField(decoder) { readString(it) }
         require(wireName in expectedWireNames) {
-            "Offline Note V2 instruction wire name mismatch: $wireName"
+            "Attested Offline Note instruction wire name mismatch: $wireName"
         }
         val wirePayload = readField(decoder) { readBytesVec(it) }
-        require(decoder.remaining() == 0) { "Trailing bytes after Offline Note V2 instruction envelope" }
+        require(decoder.remaining() == 0) { "Trailing bytes after Attested Offline Note instruction envelope" }
         wirePayload
     } catch (_: RuntimeException) {
         null
@@ -383,7 +385,7 @@ object OfflineNoteV2 {
                 val decoder = NoritoDecoder(bytes, attemptFlags)
                 val value = modelAdapter.decode(decoder)
                 require(decoder.remaining() == 0) {
-                    "Trailing bytes after Offline Note V2 instruction model decode"
+                    "Trailing bytes after Attested Offline Note instruction model decode"
                 }
                 return value
             } catch (ex: RuntimeException) {
@@ -424,7 +426,7 @@ object OfflineNoteV2 {
         fun bytes(): ByteArray = _bytes.copyOf()
     }
 
-    class RecursiveProofV2 @JvmOverloads constructor(
+    class RecursiveProof @JvmOverloads constructor(
         val verifierKeyId: VerifyingKeyIdReference = VerifyingKeyIdReference(),
         publicInputsHash: ByteArray,
         val proof: ProofBox,
@@ -438,7 +440,7 @@ object OfflineNoteV2 {
         fun publicInputsHash(): ByteArray = _publicInputsHash.copyOf()
     }
 
-    class KeyCertificatePayloadV2 @JvmOverloads constructor(
+    class KeyCertificatePayload @JvmOverloads constructor(
         val domain: String = KEY_CERTIFICATE_PAYLOAD_DOMAIN,
         val version: Int,
         val platform: String,
@@ -480,7 +482,7 @@ object OfflineNoteV2 {
         fun payloadHash(): ByteArray = hash(noritoEncoded())
     }
 
-    class KeyCertificateV2 @JvmOverloads constructor(
+    class KeyCertificate @JvmOverloads constructor(
         val version: Int = KEY_CERTIFICATE_VERSION,
         val platform: String,
         val keyId: String,
@@ -519,7 +521,7 @@ object OfflineNoteV2 {
         fun assertionPublicKey(): ByteArray = _assertionPublicKey.copyOf()
         fun issuerSignature(): ByteArray = _issuerSignature.copyOf()
 
-        fun signingPayload(): KeyCertificatePayloadV2 = KeyCertificatePayloadV2(
+        fun signingPayload(): KeyCertificatePayload = KeyCertificatePayload(
             version = version,
             platform = platform,
             keyId = keyId,
@@ -538,7 +540,7 @@ object OfflineNoteV2 {
         fun noritoEncoded(): ByteArray = encodeCertificate(this)
     }
 
-    class DeviceAttestationRegistrationV2(
+    class DeviceAttestationRegistration(
         val version: Int = KEY_CERTIFICATE_VERSION,
         val platform: String,
         val keyId: String,
@@ -567,11 +569,12 @@ object OfflineNoteV2 {
     ) {
         companion object {
             /**
-             * Build the platform challenge before App Attest reveals its assertion public key.
+             * Build the canonical platform challenge before the assertion public key is available.
              *
-             * Chain admission later binds the credential and certificate keys from the returned
-             * attestation evidence to [DeviceAttestationRegistrationV2.assertionPublicKey], so the
-             * assertion key is deliberately absent from this pre-attestation input.
+             * Android uses a separate Norito schema that also excludes `keyId`, because KeyMint
+             * creates the public key from which that identifier is derived while processing this
+             * challenge. Chain admission still binds the returned certificate key to the final
+             * lowercase SHA-256 key id.
              */
             @JvmStatic
             fun preAttestationChallengeHash(
@@ -618,6 +621,33 @@ object OfflineNoteV2 {
                     }
                 }
                 requireHash(checkedRecentBlockHash, "recent_block_hash")
+                if (platform == ANDROID_KEYMINT_PLATFORM) {
+                    val checkedAndroidPackageName = requireNotNull(androidPackageName) {
+                        "android_package_name is required for Android KeyMint"
+                    }
+                    val checkedAndroidSigningCertificate = requireNotNull(checkedSigningCertificate) {
+                        "android_signing_certificate_sha256 is required for Android KeyMint"
+                    }
+                    return androidPreKeyGenerationChallengeHash(
+                        version = version,
+                        deviceId = deviceId,
+                        accountId = accountId,
+                        assetDefinitionId = assetDefinitionId,
+                        iosTeamId = iosTeamId,
+                        iosBundleId = iosBundleId,
+                        iosEnvironment = iosEnvironment,
+                        androidPackageName = checkedAndroidPackageName,
+                        androidSigningCertificateSha256 = checkedAndroidSigningCertificate,
+                        publicKey = checkedPublicKey,
+                        assertionScheme = assertionScheme,
+                        assertionKeyAlgorithm = assertionKeyAlgorithm,
+                        assertionUsageCountLimit = assertionUsageCountLimit,
+                        oneUse = oneUse,
+                        recentBlockHeight = recentBlockHeight,
+                        recentBlockHash = checkedRecentBlockHash,
+                        expiresAtMs = expiresAtMs,
+                    )
+                }
                 return hash(NoritoCodec.encode(
                     DeviceAttestationChallengePreimage(
                         version = version,
@@ -642,6 +672,82 @@ object OfflineNoteV2 {
                     ),
                     DEVICE_ATTESTATION_CHALLENGE_PREIMAGE_SCHEMA,
                     DeviceAttestationChallengePreimageAdapter,
+                    NoritoHeader.COMPACT_LEN,
+                ))
+            }
+
+            /**
+             * Build the Android KeyMint challenge before KeyMint generates the attested key.
+             *
+             * The canonical preimage has no key id or assertion public key. Final registration
+             * validation derives and checks both values from the returned certificate chain.
+             */
+            @JvmStatic
+            fun androidPreKeyGenerationChallengeHash(
+                version: Int = KEY_CERTIFICATE_VERSION,
+                deviceId: String,
+                accountId: String,
+                assetDefinitionId: String? = null,
+                iosTeamId: String? = null,
+                iosBundleId: String? = null,
+                iosEnvironment: String? = null,
+                androidPackageName: String,
+                androidSigningCertificateSha256: ByteArray,
+                publicKey: ByteArray,
+                assertionScheme: String = ANDROID_KEYMINT_ASSERTION_SCHEME,
+                assertionKeyAlgorithm: String = ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+                assertionUsageCountLimit: Int? = 1,
+                oneUse: Boolean = true,
+                recentBlockHeight: Long,
+                recentBlockHash: ByteArray,
+                expiresAtMs: Long,
+            ): ByteArray {
+                val checkedPublicKey = publicKey.copyOf()
+                val checkedRecentBlockHash = recentBlockHash.copyOf()
+                val checkedSigningCertificate = androidSigningCertificateSha256.copyOf()
+                requireCertificateCore(version, accountId, checkedPublicKey, oneUse)
+                requireAttestationDeviceId(deviceId)
+                requireOptionalAttestationMetadata(
+                    iosTeamId = iosTeamId,
+                    iosBundleId = iosBundleId,
+                    iosEnvironment = iosEnvironment,
+                    androidPackageName = androidPackageName,
+                )
+                assetDefinitionId?.let { AssetDefinitionIdEncoder.parseAddressBytes(it) }
+                requireNonBlankUnpadded(androidPackageName, "android_package_name")
+                require(
+                    assertionScheme == ANDROID_KEYMINT_ASSERTION_SCHEME &&
+                        assertionKeyAlgorithm == ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM &&
+                        assertionUsageCountLimit == 1
+                ) {
+                    "Android KeyMint pre-key challenge requires the canonical one-use P-256 assertion profile"
+                }
+                require(checkedSigningCertificate.size == 32) {
+                    "android_signing_certificate_sha256 must be 32 bytes"
+                }
+                requireHash(checkedRecentBlockHash, "recent_block_hash")
+                return hash(NoritoCodec.encode(
+                    AndroidKeyMintChallengePreimage(
+                        version = version,
+                        deviceId = deviceId,
+                        accountId = accountId,
+                        assetDefinitionId = assetDefinitionId,
+                        iosTeamId = iosTeamId,
+                        iosBundleId = iosBundleId,
+                        iosEnvironment = iosEnvironment,
+                        androidPackageName = androidPackageName,
+                        androidSigningCertificateSha256 = checkedSigningCertificate,
+                        publicKey = checkedPublicKey,
+                        assertionScheme = assertionScheme,
+                        assertionKeyAlgorithm = assertionKeyAlgorithm,
+                        assertionUsageCountLimit = assertionUsageCountLimit,
+                        oneUse = oneUse,
+                        recentBlockHeight = recentBlockHeight,
+                        recentBlockHash = checkedRecentBlockHash,
+                        expiresAtMs = expiresAtMs,
+                    ),
+                    ANDROID_KEYMINT_CHALLENGE_PREIMAGE_SCHEMA,
+                    AndroidKeyMintChallengePreimageAdapter,
                     NoritoHeader.COMPACT_LEN,
                 ))
             }
@@ -739,7 +845,7 @@ object OfflineNoteV2 {
             attestationReport: ByteArray,
             evidence: ByteArray,
             challengeHash: ByteArray? = null,
-        ): DeviceAttestationRegistrationV2 = DeviceAttestationRegistrationV2(
+        ): DeviceAttestationRegistration = DeviceAttestationRegistration(
             version = version,
             platform = platform,
             keyId = keyId,
@@ -765,7 +871,7 @@ object OfflineNoteV2 {
             expiresAtMs = expiresAtMs,
         )
 
-        fun keyCertificatePayload(): KeyCertificatePayloadV2 = KeyCertificatePayloadV2(
+        fun keyCertificatePayload(): KeyCertificatePayload = KeyCertificatePayload(
             version = KEY_CERTIFICATE_VERSION,
             platform = platform,
             keyId = keyId,
@@ -836,9 +942,48 @@ object OfflineNoteV2 {
         fun recentBlockHash(): ByteArray = _recentBlockHash.copyOf()
     }
 
-    class IssueV2(
+    private class AndroidKeyMintChallengePreimage(
+        val domain: String = DEVICE_ATTESTATION_CHALLENGE_DOMAIN,
+        val version: Int,
+        val platform: String = ANDROID_KEYMINT_PLATFORM,
+        val deviceId: String,
+        val accountId: String,
+        val assetDefinitionId: String?,
+        val iosTeamId: String?,
+        val iosBundleId: String?,
+        val iosEnvironment: String?,
+        val androidPackageName: String?,
+        androidSigningCertificateSha256: ByteArray?,
+        publicKey: ByteArray,
+        val assertionScheme: String,
+        val assertionKeyAlgorithm: String,
+        val assertionUsageCountLimit: Int?,
+        val oneUse: Boolean,
+        val recentBlockHeight: Long,
+        recentBlockHash: ByteArray,
+        val expiresAtMs: Long,
+    ) {
+        private val _androidSigningCertificateSha256 = androidSigningCertificateSha256?.copyOf()
+        private val _publicKey = publicKey.copyOf()
+        private val _recentBlockHash = recentBlockHash.copyOf()
+
+        init {
+            require(domain == DEVICE_ATTESTATION_CHALLENGE_DOMAIN) {
+                "domain must be $DEVICE_ATTESTATION_CHALLENGE_DOMAIN"
+            }
+            require(platform == ANDROID_KEYMINT_PLATFORM) {
+                "platform must be $ANDROID_KEYMINT_PLATFORM"
+            }
+        }
+
+        fun androidSigningCertificateSha256(): ByteArray? = _androidSigningCertificateSha256?.copyOf()
+        fun publicKey(): ByteArray = _publicKey.copyOf()
+        fun recentBlockHash(): ByteArray = _recentBlockHash.copyOf()
+    }
+
+    class Issue(
         noteCommitment: ByteArray,
-        val keyCertificate: KeyCertificateV2,
+        val keyCertificate: KeyCertificate,
         val assetId: String,
         val amount: String,
     ) {
@@ -851,7 +996,7 @@ object OfflineNoteV2 {
         }
 
         fun noteCommitment(): ByteArray = _noteCommitment.copyOf()
-        fun issuedClaim(): IssuedClaimV2 = IssuedClaimV2(
+        fun issuedClaim(): IssuedClaim = IssuedClaim(
             noteCommitment = noteCommitment(),
             keyCertificatePayloadHash = keyCertificate.payloadHash(),
             assetId = assetId,
@@ -860,7 +1005,7 @@ object OfflineNoteV2 {
         fun noritoEncoded(): ByteArray = encodeIssue(this)
     }
 
-    class IssuedClaimV2 @JvmOverloads constructor(
+    class IssuedClaim @JvmOverloads constructor(
         val domain: String = ISSUED_CLAIM_DOMAIN,
         noteCommitment: ByteArray,
         keyCertificatePayloadHash: ByteArray,
@@ -884,9 +1029,9 @@ object OfflineNoteV2 {
         fun claimHash(): ByteArray = hash(noritoEncoded())
     }
 
-    class AuditOutputClaimV2(
+    class AuditOutputClaim(
         noteCommitment: ByteArray,
-        val keyCertificate: KeyCertificateV2,
+        val keyCertificate: KeyCertificate,
         val assetId: String,
         val amount: String,
     ) {
@@ -899,7 +1044,7 @@ object OfflineNoteV2 {
         }
 
         fun noteCommitment(): ByteArray = _noteCommitment.copyOf()
-        fun issuedClaim(): IssuedClaimV2 = IssuedClaimV2(
+        fun issuedClaim(): IssuedClaim = IssuedClaim(
             noteCommitment = noteCommitment(),
             keyCertificatePayloadHash = keyCertificate.payloadHash(),
             assetId = assetId,
@@ -907,7 +1052,7 @@ object OfflineNoteV2 {
         )
     }
 
-    class RedeemPublicInputsV2 @JvmOverloads constructor(
+    class RedeemPublicInputs @JvmOverloads constructor(
         val domain: String = REDEEM_PUBLIC_INPUTS_DOMAIN,
         sourceNoteCommitment: ByteArray,
         inputNullifiers: List<ByteArray>,
@@ -937,14 +1082,14 @@ object OfflineNoteV2 {
         fun publicInputsHash(): ByteArray = hash(noritoEncoded())
     }
 
-    class RedeemV2(
+    class Redeem(
         sourceNoteCommitment: ByteArray,
         inputNullifiers: List<ByteArray>,
-        val senderKeyCertificate: KeyCertificateV2,
+        val senderKeyCertificate: KeyCertificate,
         val recipient: String,
         val assetId: String,
         val amount: String,
-        val recursiveProof: RecursiveProofV2,
+        val recursiveProof: RecursiveProof,
     ) {
         private val _sourceNoteCommitment = sourceNoteCommitment.copyOf()
         private val _inputNullifiers = inputNullifiers.map { it.copyOf() }
@@ -959,7 +1104,7 @@ object OfflineNoteV2 {
 
         fun sourceNoteCommitment(): ByteArray = _sourceNoteCommitment.copyOf()
         fun inputNullifiers(): List<ByteArray> = _inputNullifiers.map { it.copyOf() }
-        fun publicInputs(): RedeemPublicInputsV2 = RedeemPublicInputsV2(
+        fun publicInputs(): RedeemPublicInputs = RedeemPublicInputs(
             sourceNoteCommitment = sourceNoteCommitment(),
             inputNullifiers = inputNullifiers(),
             keyCertificatePayloadHash = senderKeyCertificate.payloadHash(),
@@ -974,7 +1119,7 @@ object OfflineNoteV2 {
             }
         }
 
-        fun replacingRecursiveProof(recursiveProof: RecursiveProofV2): RedeemV2 = RedeemV2(
+        fun replacingRecursiveProof(recursiveProof: RecursiveProof): Redeem = Redeem(
             sourceNoteCommitment = sourceNoteCommitment(),
             inputNullifiers = inputNullifiers(),
             senderKeyCertificate = senderKeyCertificate,
@@ -987,14 +1132,14 @@ object OfflineNoteV2 {
         fun noritoEncoded(): ByteArray = encodeRedeem(this)
     }
 
-    class AuditPublicInputsV2 @JvmOverloads constructor(
+    class AuditPublicInputs @JvmOverloads constructor(
         val domain: String = AUDIT_PUBLIC_INPUTS_DOMAIN,
         tokenId: ByteArray,
         keyCertificatePayloadHash: ByteArray,
         inputNullifiers: List<ByteArray>,
-        val inputClaims: List<IssuedClaimV2>,
+        val inputClaims: List<IssuedClaim>,
         outputCommitments: List<ByteArray>,
-        val outputClaims: List<IssuedClaimV2>,
+        val outputClaims: List<IssuedClaim>,
     ) {
         private val _tokenId = tokenId.copyOf()
         private val _keyCertificatePayloadHash = keyCertificatePayloadHash.copyOf()
@@ -1028,14 +1173,14 @@ object OfflineNoteV2 {
         fun publicInputsHash(): ByteArray = hash(noritoEncoded())
     }
 
-    class AuditBundleV2(
+    class AuditBundle(
         tokenId: ByteArray,
-        val senderKeyCertificate: KeyCertificateV2,
+        val senderKeyCertificate: KeyCertificate,
         inputNullifiers: List<ByteArray>,
-        val inputClaims: List<IssuedClaimV2>,
+        val inputClaims: List<IssuedClaim>,
         outputCommitments: List<ByteArray>,
-        val outputClaims: List<AuditOutputClaimV2>,
-        val recursiveProof: RecursiveProofV2,
+        val outputClaims: List<AuditOutputClaim>,
+        val recursiveProof: RecursiveProof,
     ) {
         private val _tokenId = tokenId.copyOf()
         private val _inputNullifiers = inputNullifiers.map { it.copyOf() }
@@ -1061,7 +1206,7 @@ object OfflineNoteV2 {
         fun tokenId(): ByteArray = _tokenId.copyOf()
         fun inputNullifiers(): List<ByteArray> = _inputNullifiers.map { it.copyOf() }
         fun outputCommitments(): List<ByteArray> = _outputCommitments.map { it.copyOf() }
-        fun publicInputs(): AuditPublicInputsV2 = AuditPublicInputsV2(
+        fun publicInputs(): AuditPublicInputs = AuditPublicInputs(
             tokenId = tokenId(),
             keyCertificatePayloadHash = senderKeyCertificate.payloadHash(),
             inputNullifiers = inputNullifiers(),
@@ -1076,7 +1221,7 @@ object OfflineNoteV2 {
             }
         }
 
-        fun replacingRecursiveProof(recursiveProof: RecursiveProofV2): AuditBundleV2 = AuditBundleV2(
+        fun replacingRecursiveProof(recursiveProof: RecursiveProof): AuditBundle = AuditBundle(
             tokenId = tokenId(),
             senderKeyCertificate = senderKeyCertificate,
             inputNullifiers = inputNullifiers(),
@@ -1118,7 +1263,7 @@ object OfflineNoteV2 {
 
     object InstanceBuilder {
         @JvmStatic
-        fun redeemInstanceValues(redemption: RedeemV2): InstanceValues {
+        fun redeemInstanceValues(redemption: Redeem): InstanceValues {
             val inputCount = validateCount(
                 redemption.inputNullifiers().size,
                 MAX_INPUT_AMOUNTS,
@@ -1129,7 +1274,7 @@ object OfflineNoteV2 {
             )
             val inputSum = normalizedAmounts[0]
             val outputSum = normalizedAmounts[1]
-            val issuedClaimHash = IssuedClaimV2(
+            val issuedClaimHash = IssuedClaim(
                 noteCommitment = redemption.sourceNoteCommitment(),
                 keyCertificatePayloadHash = redemption.senderKeyCertificate.payloadHash(),
                 assetId = redemption.assetId,
@@ -1157,7 +1302,7 @@ object OfflineNoteV2 {
         }
 
         @JvmStatic
-        fun auditInstanceValues(audit: AuditBundleV2): InstanceValues {
+        fun auditInstanceValues(audit: AuditBundle): InstanceValues {
             val inputCount = validateCount(audit.inputClaims.size, MAX_INPUT_AMOUNTS, "audit input")
             val outputCount = validateCount(audit.outputClaims.size, MAX_OUTPUT_AMOUNTS, "audit output")
             require(audit.inputNullifiers().size == audit.inputClaims.size) {
@@ -1223,17 +1368,17 @@ object OfflineNoteV2 {
     private val InstructionWrapperPayloadAdapter: TypeAdapter<InstructionModelPayload> =
         InstructionWrapperAdapter
 
-    private object RegisterDeviceAttestationInstructionAdapter : TypeAdapter<DeviceAttestationRegistrationV2> {
-        override fun encode(encoder: NoritoEncoder, value: DeviceAttestationRegistrationV2) {
+    private object RegisterDeviceAttestationInstructionAdapter : TypeAdapter<DeviceAttestationRegistration> {
+        override fun encode(encoder: NoritoEncoder, value: DeviceAttestationRegistration) {
             writeField(encoder) { DeviceAttestationRegistrationAdapter.encode(it, value) }
         }
 
-        override fun decode(decoder: NoritoDecoder): DeviceAttestationRegistrationV2 =
+        override fun decode(decoder: NoritoDecoder): DeviceAttestationRegistration =
             readField(decoder) { DeviceAttestationRegistrationAdapter.decode(it) }
     }
 
-    private object KeyCertificatePayloadAdapter : TypeAdapter<KeyCertificatePayloadV2> {
-        override fun encode(encoder: NoritoEncoder, value: KeyCertificatePayloadV2) {
+    private object KeyCertificatePayloadAdapter : TypeAdapter<KeyCertificatePayload> {
+        override fun encode(encoder: NoritoEncoder, value: KeyCertificatePayload) {
             writeField(encoder) { writeString(it, value.domain) }
             writeField(encoder) { it.writeUInt(value.version.toLong(), 16) }
             writeField(encoder) { writeString(it, value.platform) }
@@ -1248,8 +1393,8 @@ object OfflineNoteV2 {
             writeField(encoder) { it.writeByte(if (value.oneUse) 1 else 0) }
         }
 
-        override fun decode(decoder: NoritoDecoder): KeyCertificatePayloadV2 =
-            KeyCertificatePayloadV2(
+        override fun decode(decoder: NoritoDecoder): KeyCertificatePayload =
+            KeyCertificatePayload(
                 domain = readField(decoder) { readString(it) },
                 version = readField(decoder) { it.readUInt(16).toInt() },
                 platform = readField(decoder) { readString(it) },
@@ -1265,8 +1410,8 @@ object OfflineNoteV2 {
             )
     }
 
-    private object KeyCertificateAdapter : TypeAdapter<KeyCertificateV2> {
-        override fun encode(encoder: NoritoEncoder, value: KeyCertificateV2) {
+    private object KeyCertificateAdapter : TypeAdapter<KeyCertificate> {
+        override fun encode(encoder: NoritoEncoder, value: KeyCertificate) {
             writeField(encoder) { it.writeUInt(value.version.toLong(), 16) }
             writeField(encoder) { writeString(it, value.platform) }
             writeField(encoder) { writeString(it, value.keyId) }
@@ -1281,8 +1426,8 @@ object OfflineNoteV2 {
             writeField(encoder) { writeConstVec(it, value.issuerSignature()) }
         }
 
-        override fun decode(decoder: NoritoDecoder): KeyCertificateV2 =
-            KeyCertificateV2(
+        override fun decode(decoder: NoritoDecoder): KeyCertificate =
+            KeyCertificate(
                 version = readField(decoder) { it.readUInt(16).toInt() },
                 platform = readField(decoder) { readString(it) },
                 keyId = readField(decoder) { readString(it) },
@@ -1298,8 +1443,8 @@ object OfflineNoteV2 {
             )
     }
 
-    private object DeviceAttestationRegistrationAdapter : TypeAdapter<DeviceAttestationRegistrationV2> {
-        override fun encode(encoder: NoritoEncoder, value: DeviceAttestationRegistrationV2) {
+    private object DeviceAttestationRegistrationAdapter : TypeAdapter<DeviceAttestationRegistration> {
+        override fun encode(encoder: NoritoEncoder, value: DeviceAttestationRegistration) {
             writeField(encoder) { it.writeUInt(value.version.toLong(), 16) }
             writeField(encoder) { writeString(it, value.platform) }
             writeField(encoder) { writeString(it, value.keyId) }
@@ -1327,8 +1472,8 @@ object OfflineNoteV2 {
             writeField(encoder) { it.writeUInt(value.expiresAtMs, 64) }
         }
 
-        override fun decode(decoder: NoritoDecoder): DeviceAttestationRegistrationV2 =
-            DeviceAttestationRegistrationV2(
+        override fun decode(decoder: NoritoDecoder): DeviceAttestationRegistration =
+            DeviceAttestationRegistration(
                 version = readField(decoder) { it.readUInt(16).toInt() },
                 platform = readField(decoder) { readString(it) },
                 keyId = readField(decoder) { readString(it) },
@@ -1406,31 +1551,78 @@ object OfflineNoteV2 {
             )
     }
 
-    private object RecursiveProofAdapter : TypeAdapter<RecursiveProofV2> {
-        override fun encode(encoder: NoritoEncoder, value: RecursiveProofV2) {
+    private object RecursiveProofAdapter : TypeAdapter<RecursiveProof> {
+        override fun encode(encoder: NoritoEncoder, value: RecursiveProof) {
             writeField(encoder) { writeVerifyingKeyId(it, value.verifierKeyId) }
             writeField(encoder) { it.writeBytes(value.publicInputsHash()) }
             writeField(encoder) { writeProofBox(it, value.proof) }
         }
 
-        override fun decode(decoder: NoritoDecoder): RecursiveProofV2 =
-            RecursiveProofV2(
+        override fun decode(decoder: NoritoDecoder): RecursiveProof =
+            RecursiveProof(
                 verifierKeyId = readField(decoder) { readVerifyingKeyId(it) },
                 publicInputsHash = readField(decoder) { readHash(it, "public_inputs_hash") },
                 proof = readField(decoder) { readProofBox(it) },
             )
     }
 
-    private object IssueAdapter : TypeAdapter<IssueV2> {
-        override fun encode(encoder: NoritoEncoder, value: IssueV2) {
+    private object AndroidKeyMintChallengePreimageAdapter : TypeAdapter<AndroidKeyMintChallengePreimage> {
+        override fun encode(encoder: NoritoEncoder, value: AndroidKeyMintChallengePreimage) {
+            writeField(encoder) { writeString(it, value.domain) }
+            writeField(encoder) { it.writeUInt(value.version.toLong(), 16) }
+            writeField(encoder) { writeString(it, value.platform) }
+            writeField(encoder) { writeString(it, value.deviceId) }
+            writeField(encoder) { writeAccountId(it, value.accountId) }
+            writeField(encoder) { writeOptionAssetDefinitionId(it, value.assetDefinitionId) }
+            writeField(encoder) { writeOptionString(it, value.iosTeamId) }
+            writeField(encoder) { writeOptionString(it, value.iosBundleId) }
+            writeField(encoder) { writeOptionString(it, value.iosEnvironment) }
+            writeField(encoder) { writeOptionString(it, value.androidPackageName) }
+            writeField(encoder) { writeOptionBytesVec(it, value.androidSigningCertificateSha256()) }
+            writeField(encoder) { writeBytesVec(it, value.publicKey()) }
+            writeField(encoder) { writeString(it, value.assertionScheme) }
+            writeField(encoder) { writeString(it, value.assertionKeyAlgorithm) }
+            writeField(encoder) { writeOptionU32(it, value.assertionUsageCountLimit) }
+            writeField(encoder) { it.writeByte(if (value.oneUse) 1 else 0) }
+            writeField(encoder) { it.writeUInt(value.recentBlockHeight, 64) }
+            writeField(encoder) { it.writeBytes(value.recentBlockHash()) }
+            writeField(encoder) { it.writeUInt(value.expiresAtMs, 64) }
+        }
+
+        override fun decode(decoder: NoritoDecoder): AndroidKeyMintChallengePreimage =
+            AndroidKeyMintChallengePreimage(
+                domain = readField(decoder) { readString(it) },
+                version = readField(decoder) { it.readUInt(16).toInt() },
+                platform = readField(decoder) { readString(it) },
+                deviceId = readField(decoder) { readString(it) },
+                accountId = readField(decoder) { readAccountId(it) },
+                assetDefinitionId = readField(decoder) { readOptionAssetDefinitionId(it) },
+                iosTeamId = readField(decoder) { readOptionString(it) },
+                iosBundleId = readField(decoder) { readOptionString(it) },
+                iosEnvironment = readField(decoder) { readOptionString(it) },
+                androidPackageName = readField(decoder) { readOptionString(it) },
+                androidSigningCertificateSha256 = readField(decoder) { readOptionBytesVec(it) },
+                publicKey = readField(decoder) { readBytesVec(it) },
+                assertionScheme = readField(decoder) { readString(it) },
+                assertionKeyAlgorithm = readField(decoder) { readString(it) },
+                assertionUsageCountLimit = readField(decoder) { readOptionU32(it) },
+                oneUse = readField(decoder) { readBool(it) },
+                recentBlockHeight = readField(decoder) { it.readUInt(64) },
+                recentBlockHash = readField(decoder) { readHash(it, "recent_block_hash") },
+                expiresAtMs = readField(decoder) { it.readUInt(64) },
+            )
+    }
+
+    private object IssueAdapter : TypeAdapter<Issue> {
+        override fun encode(encoder: NoritoEncoder, value: Issue) {
             writeField(encoder) { it.writeBytes(value.noteCommitment()) }
             writeField(encoder) { KeyCertificateAdapter.encode(it, value.keyCertificate) }
             writeField(encoder) { writeAssetId(it, value.assetId) }
             writeField(encoder) { writeNumeric(it, value.canonicalAmount) }
         }
 
-        override fun decode(decoder: NoritoDecoder): IssueV2 =
-            IssueV2(
+        override fun decode(decoder: NoritoDecoder): Issue =
+            Issue(
                 noteCommitment = readField(decoder) { readHash(it, "note_commitment") },
                 keyCertificate = readField(decoder) { KeyCertificateAdapter.decode(it) },
                 assetId = readField(decoder) { readAssetId(it) },
@@ -1438,8 +1630,8 @@ object OfflineNoteV2 {
             )
     }
 
-    private object IssuedClaimAdapter : TypeAdapter<IssuedClaimV2> {
-        override fun encode(encoder: NoritoEncoder, value: IssuedClaimV2) {
+    private object IssuedClaimAdapter : TypeAdapter<IssuedClaim> {
+        override fun encode(encoder: NoritoEncoder, value: IssuedClaim) {
             writeField(encoder) { writeString(it, value.domain) }
             writeField(encoder) { it.writeBytes(value.noteCommitment()) }
             writeField(encoder) { it.writeBytes(value.keyCertificatePayloadHash()) }
@@ -1447,8 +1639,8 @@ object OfflineNoteV2 {
             writeField(encoder) { writeNumeric(it, value.canonicalAmount) }
         }
 
-        override fun decode(decoder: NoritoDecoder): IssuedClaimV2 =
-            IssuedClaimV2(
+        override fun decode(decoder: NoritoDecoder): IssuedClaim =
+            IssuedClaim(
                 domain = readField(decoder) { readString(it) },
                 noteCommitment = readField(decoder) { readHash(it, "note_commitment") },
                 keyCertificatePayloadHash = readField(decoder) {
@@ -1459,16 +1651,16 @@ object OfflineNoteV2 {
             )
     }
 
-    private object AuditOutputClaimAdapter : TypeAdapter<AuditOutputClaimV2> {
-        override fun encode(encoder: NoritoEncoder, value: AuditOutputClaimV2) {
+    private object AuditOutputClaimAdapter : TypeAdapter<AuditOutputClaim> {
+        override fun encode(encoder: NoritoEncoder, value: AuditOutputClaim) {
             writeField(encoder) { it.writeBytes(value.noteCommitment()) }
             writeField(encoder) { KeyCertificateAdapter.encode(it, value.keyCertificate) }
             writeField(encoder) { writeAssetId(it, value.assetId) }
             writeField(encoder) { writeNumeric(it, value.canonicalAmount) }
         }
 
-        override fun decode(decoder: NoritoDecoder): AuditOutputClaimV2 =
-            AuditOutputClaimV2(
+        override fun decode(decoder: NoritoDecoder): AuditOutputClaim =
+            AuditOutputClaim(
                 noteCommitment = readField(decoder) { readHash(it, "note_commitment") },
                 keyCertificate = readField(decoder) { KeyCertificateAdapter.decode(it) },
                 assetId = readField(decoder) { readAssetId(it) },
@@ -1476,8 +1668,8 @@ object OfflineNoteV2 {
             )
     }
 
-    private object RedeemPublicInputsAdapter : TypeAdapter<RedeemPublicInputsV2> {
-        override fun encode(encoder: NoritoEncoder, value: RedeemPublicInputsV2) {
+    private object RedeemPublicInputsAdapter : TypeAdapter<RedeemPublicInputs> {
+        override fun encode(encoder: NoritoEncoder, value: RedeemPublicInputs) {
             writeField(encoder) { writeString(it, value.domain) }
             writeField(encoder) { it.writeBytes(value.sourceNoteCommitment()) }
             writeField(encoder) { writeVec(it, value.inputNullifiers()) { out, bytes -> out.writeBytes(bytes) } }
@@ -1487,8 +1679,8 @@ object OfflineNoteV2 {
             writeField(encoder) { writeNumeric(it, value.canonicalAmount) }
         }
 
-        override fun decode(decoder: NoritoDecoder): RedeemPublicInputsV2 =
-            RedeemPublicInputsV2(
+        override fun decode(decoder: NoritoDecoder): RedeemPublicInputs =
+            RedeemPublicInputs(
                 domain = readField(decoder) { readString(it) },
                 sourceNoteCommitment = readField(decoder) { readHash(it, "source_note_commitment") },
                 inputNullifiers = readField(decoder) {
@@ -1503,8 +1695,8 @@ object OfflineNoteV2 {
             )
     }
 
-    private object RedeemAdapter : TypeAdapter<RedeemV2> {
-        override fun encode(encoder: NoritoEncoder, value: RedeemV2) {
+    private object RedeemAdapter : TypeAdapter<Redeem> {
+        override fun encode(encoder: NoritoEncoder, value: Redeem) {
             writeField(encoder) { it.writeBytes(value.sourceNoteCommitment()) }
             writeField(encoder) { writeVec(it, value.inputNullifiers()) { out, bytes -> out.writeBytes(bytes) } }
             writeField(encoder) { KeyCertificateAdapter.encode(it, value.senderKeyCertificate) }
@@ -1514,8 +1706,8 @@ object OfflineNoteV2 {
             writeField(encoder) { RecursiveProofAdapter.encode(it, value.recursiveProof) }
         }
 
-        override fun decode(decoder: NoritoDecoder): RedeemV2 =
-            RedeemV2(
+        override fun decode(decoder: NoritoDecoder): Redeem =
+            Redeem(
                 sourceNoteCommitment = readField(decoder) { readHash(it, "source_note_commitment") },
                 inputNullifiers = readField(decoder) {
                     readVec(it) { child -> readHash(child, "input_nullifier") }
@@ -1528,8 +1720,8 @@ object OfflineNoteV2 {
             )
     }
 
-    private object AuditPublicInputsAdapter : TypeAdapter<AuditPublicInputsV2> {
-        override fun encode(encoder: NoritoEncoder, value: AuditPublicInputsV2) {
+    private object AuditPublicInputsAdapter : TypeAdapter<AuditPublicInputs> {
+        override fun encode(encoder: NoritoEncoder, value: AuditPublicInputs) {
             writeField(encoder) { writeString(it, value.domain) }
             writeField(encoder) { it.writeBytes(value.tokenId()) }
             writeField(encoder) { it.writeBytes(value.keyCertificatePayloadHash()) }
@@ -1539,8 +1731,8 @@ object OfflineNoteV2 {
             writeField(encoder) { writeVec(it, value.outputClaims) { out, claim -> IssuedClaimAdapter.encode(out, claim) } }
         }
 
-        override fun decode(decoder: NoritoDecoder): AuditPublicInputsV2 =
-            AuditPublicInputsV2(
+        override fun decode(decoder: NoritoDecoder): AuditPublicInputs =
+            AuditPublicInputs(
                 domain = readField(decoder) { readString(it) },
                 tokenId = readField(decoder) { readHash(it, "token_id") },
                 keyCertificatePayloadHash = readField(decoder) {
@@ -1561,8 +1753,8 @@ object OfflineNoteV2 {
             )
     }
 
-    private object AuditAdapter : TypeAdapter<AuditBundleV2> {
-        override fun encode(encoder: NoritoEncoder, value: AuditBundleV2) {
+    private object AuditAdapter : TypeAdapter<AuditBundle> {
+        override fun encode(encoder: NoritoEncoder, value: AuditBundle) {
             writeField(encoder) { it.writeBytes(value.tokenId()) }
             writeField(encoder) { KeyCertificateAdapter.encode(it, value.senderKeyCertificate) }
             writeField(encoder) { writeVec(it, value.inputNullifiers()) { out, bytes -> out.writeBytes(bytes) } }
@@ -1572,8 +1764,8 @@ object OfflineNoteV2 {
             writeField(encoder) { RecursiveProofAdapter.encode(it, value.recursiveProof) }
         }
 
-        override fun decode(decoder: NoritoDecoder): AuditBundleV2 =
-            AuditBundleV2(
+        override fun decode(decoder: NoritoDecoder): AuditBundle =
+            AuditBundle(
                 tokenId = readField(decoder) { readHash(it, "token_id") },
                 senderKeyCertificate = readField(decoder) { KeyCertificateAdapter.decode(it) },
                 inputNullifiers = readField(decoder) {
@@ -1634,7 +1826,7 @@ object OfflineNoteV2 {
         val length = checkedLength(parent.readLength(compact(parent)), "field length")
         val child = NoritoDecoder(parent.readBytes(length), parent.flags, parent.flagsHint)
         val value = readPayload(child)
-        require(child.remaining() == 0) { "Trailing bytes after Offline Note V2 field decode" }
+        require(child.remaining() == 0) { "Trailing bytes after Attested Offline Note field decode" }
         return value
     }
 
@@ -2137,16 +2329,20 @@ object OfflineNoteV2 {
 
     private fun requireCertificateCore(version: Int, accountId: String, publicKey: ByteArray, oneUse: Boolean) {
         require(version == KEY_CERTIFICATE_VERSION) {
-            "Offline Note V2 key certificate version must be $KEY_CERTIFICATE_VERSION"
+            "Attested Offline Note key certificate version must be $KEY_CERTIFICATE_VERSION"
         }
-        require(oneUse) { "Offline Note V2 key certificate must be one-use" }
-        require(publicKey.size == 32) { "Offline Note V2 note public key must be 32 bytes" }
+        require(oneUse) { "Attested Offline Note key certificate must be one-use" }
+        require(publicKey.size == 32) { "Attested Offline Note public key must be 32 bytes" }
         encodeAccountIdPayload(accountId)
     }
 
     private fun requireAttestationIdentity(keyId: String, deviceId: String) {
         require(keyId.trim().isNotEmpty()) { "attestation key_id must not be empty" }
         require(keyId.trim() == keyId) { "attestation key_id must not contain surrounding whitespace" }
+        requireAttestationDeviceId(deviceId)
+    }
+
+    private fun requireAttestationDeviceId(deviceId: String) {
         require(deviceId.trim().isNotEmpty()) { "attestation device_id must not be empty" }
         require(deviceId.trim() == deviceId) { "attestation device_id must not contain surrounding whitespace" }
     }

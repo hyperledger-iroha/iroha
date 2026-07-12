@@ -9,7 +9,6 @@ from typing import Any, Dict
 import pytest
 
 import iroha_python.client as client_module
-
 from iroha_python import (
     ContractEntrypointKind,
     ContractManifest,
@@ -19,7 +18,6 @@ from iroha_python import (
     EntrypointValueTypeV1,
 )
 
-
 _QUERY_VIEW_LAYOUTS = {
     "AccountView": (
         ["id", "metadata"],
@@ -27,7 +25,7 @@ _QUERY_VIEW_LAYOUTS = {
     ),
     "AssetView": (
         ["id", "amount"],
-        ["AssetId", "Amount"],
+        ["AssetId", "Quantity"],
     ),
     "AssetDefinitionView": (
         [
@@ -43,7 +41,7 @@ _QUERY_VIEW_LAYOUTS = {
             "String",
             ("Option", "String"),
             "AccountId",
-            "Amount",
+            "Quantity",
             "Json",
         ],
     ),
@@ -134,7 +132,7 @@ def _full_manifest_payload() -> Dict[str, Any]:
                                     },
                                     {
                                         "kind": "Leaf",
-                                        "value": {"kind": "Amount", "value": None},
+                                        "value": {"kind": "Quantity", "value": None},
                                     },
                                     {"kind": "Option", "value": None},
                                     {
@@ -164,7 +162,7 @@ def _full_manifest_payload() -> Dict[str, Any]:
                         },
                     ]
                 },
-                "return_type": "Result<(bool, u128), string>",
+                "return_type": "Result<(bool, int), string>",
                 "return_schema": {
                     "nodes": [
                         {"kind": "Result", "value": None},
@@ -175,7 +173,7 @@ def _full_manifest_payload() -> Dict[str, Any]:
                         },
                         {
                             "kind": "Leaf",
-                            "value": {"kind": "U128", "value": None},
+                            "value": {"kind": "Int", "value": None},
                         },
                         {
                             "kind": "Leaf",
@@ -200,7 +198,7 @@ def _full_manifest_payload() -> Dict[str, Any]:
                 ],
             }
         ],
-        "states": [{"name": "Balances", "type_name": "StateMap<AccountId, Amount>"}],
+        "states": [{"name": "Balances", "type_name": "StateMap<AccountId, quantity>"}],
         "error_codes": [
             {"namespace": "TransferError", "name": "InsufficientFunds", "code": 1001}
         ],
@@ -240,6 +238,12 @@ def test_contract_manifest_keywords_match_normative_kotodama_grammar() -> None:
     )
     assert type_table is not None
     type_names = set(re.findall(r'"([A-Za-z_][A-Za-z0-9_]*)"', type_table.group(1)))
+    intrinsic_names = set(
+        re.findall(
+            r'pub\(crate\) const [A-Z0-9_]+_INTRINSIC: &str = "([^"]+)";',
+            semantic,
+        )
+    )
     assert client_module._KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS == type_names | {
         "AxtDescriptor",
         "AssetHandle",
@@ -247,7 +251,7 @@ def test_contract_manifest_keywords_match_normative_kotodama_grammar() -> None:
         "SoracloudRequest",
         "SoracloudResponse",
         "state_map_get",
-    }
+    } | intrinsic_names
 
 
 def test_contract_manifest_preserves_exact_v1_interface_shape() -> None:
@@ -275,7 +279,7 @@ def test_contract_manifest_preserves_exact_v1_interface_shape() -> None:
     assert entrypoint.triggers[0]["callback"]["entrypoint"] == "transfer"
     assert entrypoint.triggers[0]["metadata"]["round"] == 7
     assert manifest.states is not None
-    assert manifest.states[0].type_name == "StateMap<AccountId, Amount>"
+    assert manifest.states[0].type_name == "StateMap<AccountId, quantity>"
     assert manifest.error_codes is not None
     assert manifest.error_codes[0].code == 1001
     assert manifest.kotoba is not None
@@ -343,6 +347,31 @@ def test_entrypoint_ordinary_struct_keeps_its_nominal_struct_prefix() -> None:
     assert schema.canonical_type_name == "struct Pair"
 
 
+@pytest.mark.parametrize(
+    ("wire_kind", "source_name"),
+    [("Int", "int"), ("Decimal", "decimal"), ("Quantity", "quantity")],
+)
+def test_entrypoint_numeric_leaves_use_only_exact_v1_names(
+    wire_kind: str, source_name: str
+) -> None:
+    schema = EntrypointValueTypeV1.from_payload({"nodes": [_leaf_node(wire_kind)]})
+    assert schema.canonical_type_name == source_name
+
+
+@pytest.mark.parametrize("retired", ["U128", "Amount", "I64", "Float"])
+def test_entrypoint_rejects_retired_numeric_leaf_kinds(retired: str) -> None:
+    with pytest.raises(TypeError, match="unsupported Kotodama boundary value kind"):
+        EntrypointValueTypeV1.from_payload({"nodes": [_leaf_node(retired)]})
+
+
+@pytest.mark.parametrize("retired", ["i64", "u128", "Amount", "num", "number", "float", "money"])
+def test_manifest_rejects_retired_numeric_type_spellings(retired: str) -> None:
+    payload = _full_manifest_payload()
+    payload["states"][0]["type_name"] = f"StateMap<AccountId, {retired}>"
+    with pytest.raises(TypeError, match="retired Kotodama numeric type"):
+        ContractManifest.from_payload(payload)
+
+
 def test_entrypoint_flat_list_schema_enforces_the_exact_depth_boundary() -> None:
     at_limit = {
         "nodes": [
@@ -397,6 +426,7 @@ def test_entrypoint_flat_list_schema_enforces_the_exact_depth_boundary() -> None
         with pytest.raises(TypeError):
             EntrypointValueTypeV1.from_payload(malformed)
 
+
 @pytest.mark.parametrize(
     ("filename", "expected_name"),
     [
@@ -427,8 +457,11 @@ def test_contract_manifest_decodes_checked_in_canonical_kotodama_manifests(
         " Ledger ",
         "seiyaku",
         "match",
-        "i64",
+        "int",
         "state_map_get",
+        "__kotodama_quantity_ratio_round",
+        "__kotodama_decimal_to_int_trunc",
+        "__kotodama_decimal_to_int_round",
         "__kotodama_link_forged",
         "始まり",
         7,

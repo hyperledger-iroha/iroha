@@ -22,7 +22,7 @@ import org.hyperledger.iroha.norito.NoritoEncoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.TypeAdapter;
 
-public final class OfflineNoteV2Test {
+public final class AttestedOfflineNoteTest {
   private static final String RETIRED_ISSUE_INSTRUCTION_ALIAS_SCHEMA =
       "iroha_data_model::isi::offline::IssueOfflineNoteV2";
   private static final String RETIRED_REDEEM_INSTRUCTION_ALIAS_SCHEMA =
@@ -30,18 +30,18 @@ public final class OfflineNoteV2Test {
   private static final String RETIRED_AUDIT_INSTRUCTION_ALIAS_SCHEMA =
       "iroha_data_model::isi::offline::AuditOfflineNoteV2";
 
-  private OfflineNoteV2Test() {}
+  private AttestedOfflineNoteTest() {}
 
   public static void main(final String[] args) throws Exception {
     certificateSigningBytesMatchRustVector();
-    offlineNoteV2ModelsMatchRustNoritoVectors();
-    offlineNoteV2DecodersRoundTripRustNoritoVectors();
-    offlineNoteV2DecodersRejectMalformedPayloads();
-    offlineNoteV2InstructionWrappersProduceSchemaBoundPayloads();
-    offlineNoteV2InstructionWrappersRejectProofMismatches();
-    offlineNoteV2InstructionDecodersReadExplorerEnvelopeBytes();
-    offlineNoteV2InstructionDecodersRejectRetiredAliasEnvelopeBytes();
-    offlineNoteV2InstructionDecodersRejectWrongEnvelopeShapes();
+    attestedOfflineNoteModelsMatchRustNoritoVectors();
+    attestedOfflineNoteDecodersRoundTripRustNoritoVectors();
+    attestedOfflineNoteDecodersRejectMalformedPayloads();
+    attestedOfflineNoteInstructionWrappersProduceSchemaBoundPayloads();
+    attestedOfflineNoteInstructionWrappersRejectProofMismatches();
+    attestedOfflineNoteInstructionDecodersReadExplorerEnvelopeBytes();
+    attestedOfflineNoteInstructionDecodersRejectRetiredAliasEnvelopeBytes();
+    attestedOfflineNoteInstructionDecodersRejectWrongEnvelopeShapes();
     publicInputHashesMatchRustVectors();
     proofBindingRejectsMismatch();
     proofVerifierAndHashValidationRejectsMalformedValues();
@@ -50,22 +50,23 @@ public final class OfflineNoteV2Test {
     certificateValidationRejectsMalformedValues();
     offlineDeviceAttestationRegistrationMatchesRustVectors();
     offlineDeviceAttestationRegistrationDraftBuildsChallengeBeforeEvidence();
+    androidKeyMintChallengeBuildsBeforeKeyGeneration();
     offlineDeviceAttestationRegistrationValidationRejectsMalformedValues();
     offlineDeviceAttestationRegistrationDefensivelyCopiesMutableByteArrays();
     auditBundleRejectsInvalidShapesAndUncommittedOutputs();
     issueRedeemPublicInputsAndInstancesRejectMalformedValues();
-    offlineNoteV2DomainsRejectSubstitutionAndPadding();
-    offlineNoteV2AssetScopeDataspaceIdsRejectNonCanonicalForms();
+    attestedOfflineNoteDomainsRejectSubstitutionAndPadding();
+    attestedOfflineNoteAssetScopeDataspaceIdsRejectNonCanonicalForms();
     instanceValuesMatchRustVectors();
     nativeHalo2ProverProducesVerifyingPayloadWhenRequested();
     nativeHalo2ProverPerformanceWhenRequested();
     qrFixtureUsesSdkTextPrefix();
-    System.out.println("[IrohaAndroid] OfflineNoteV2Test passed.");
+    System.out.println("[IrohaAndroid] AttestedOfflineNoteTest passed.");
   }
 
   private static void certificateSigningBytesMatchRustVector() throws Exception {
     final Map<String, Object> fixture = loadFixture();
-    final OfflineNoteV2.KeyCertificateV2 sender =
+    final AttestedOfflineNote.KeyCertificate sender =
         certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
     final Map<String, Object> certificates = obj(obj(fixture, "chain_vectors"), "certificates");
 
@@ -79,7 +80,7 @@ public final class OfflineNoteV2Test {
         "sender certificate payload hash");
   }
 
-  private static void offlineNoteV2ModelsMatchRustNoritoVectors() throws Exception {
+  private static void attestedOfflineNoteModelsMatchRustNoritoVectors() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> chain = obj(fixture, "chain_vectors");
 
@@ -101,22 +102,22 @@ public final class OfflineNoteV2Test {
         "device attestation registration norito");
   }
 
-  private static void offlineNoteV2DecodersRoundTripRustNoritoVectors() throws Exception {
+  private static void attestedOfflineNoteDecodersRoundTripRustNoritoVectors() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> chain = obj(fixture, "chain_vectors");
-    final OfflineNoteV2.KeyCertificateV2 sender =
+    final AttestedOfflineNote.KeyCertificate sender =
         certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
-    final OfflineNoteV2.IssueV2 issue = issue(fixture);
-    final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
-    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
-    final OfflineNoteV2.DeviceAttestationRegistrationV2 registration =
+    final AttestedOfflineNote.Issue issue = issue(fixture);
+    final AttestedOfflineNote.AuditBundle audit = audit(fixture);
+    final AttestedOfflineNote.Redeem redeem = redeem(fixture);
+    final AttestedOfflineNote.DeviceAttestationRegistration registration =
         attestationRegistration(fixture);
 
     final byte[] certificatePayloadBytes = sender.signingPayload().noritoEncoded();
     final byte[] certificateBytes = sender.noritoEncoded();
     final byte[] issuedClaimBytes = issue.issuedClaim().noritoEncoded();
-    final byte[] auditOutputClaimBytes = OfflineNoteV2.encodeAuditOutputClaim(audit.outputClaims().get(0));
-    final byte[] recursiveProofBytes = OfflineNoteV2.encodeRecursiveProof(audit.recursiveProof());
+    final byte[] auditOutputClaimBytes = AttestedOfflineNote.encodeAuditOutputClaim(audit.outputClaims().get(0));
+    final byte[] recursiveProofBytes = AttestedOfflineNote.encodeRecursiveProof(audit.recursiveProof());
     final byte[] redeemPublicInputsBytes = redeem.publicInputs().noritoEncoded();
     final byte[] auditPublicInputsBytes = audit.publicInputs().noritoEncoded();
     final byte[] issueBytes = base64Bytes(string(obj(chain, "issue"), "norito_base64"));
@@ -127,217 +128,217 @@ public final class OfflineNoteV2Test {
 
     assertEquals(
         base64(certificatePayloadBytes),
-        base64(OfflineNoteV2.decodeCertificatePayload(certificatePayloadBytes).noritoEncoded()),
+        base64(AttestedOfflineNote.decodeCertificatePayload(certificatePayloadBytes).noritoEncoded()),
         "decoded certificate payload");
     assertEquals(
         base64(certificateBytes),
-        base64(OfflineNoteV2.decodeCertificate(certificateBytes).noritoEncoded()),
+        base64(AttestedOfflineNote.decodeCertificate(certificateBytes).noritoEncoded()),
         "decoded certificate");
     assertEquals(
         base64(issuedClaimBytes),
-        base64(OfflineNoteV2.decodeIssuedClaim(issuedClaimBytes).noritoEncoded()),
+        base64(AttestedOfflineNote.decodeIssuedClaim(issuedClaimBytes).noritoEncoded()),
         "decoded issued claim");
     assertEquals(
         base64(auditOutputClaimBytes),
         base64(
-            OfflineNoteV2.encodeAuditOutputClaim(
-                OfflineNoteV2.decodeAuditOutputClaim(auditOutputClaimBytes))),
+            AttestedOfflineNote.encodeAuditOutputClaim(
+                AttestedOfflineNote.decodeAuditOutputClaim(auditOutputClaimBytes))),
         "decoded audit output claim");
     assertEquals(
         base64(recursiveProofBytes),
         base64(
-            OfflineNoteV2.encodeRecursiveProof(
-                OfflineNoteV2.decodeRecursiveProof(recursiveProofBytes))),
+            AttestedOfflineNote.encodeRecursiveProof(
+                AttestedOfflineNote.decodeRecursiveProof(recursiveProofBytes))),
         "decoded recursive proof");
     assertEquals(
         base64(redeemPublicInputsBytes),
-        base64(OfflineNoteV2.decodeRedeemPublicInputs(redeemPublicInputsBytes).noritoEncoded()),
+        base64(AttestedOfflineNote.decodeRedeemPublicInputs(redeemPublicInputsBytes).noritoEncoded()),
         "decoded redeem public inputs");
     assertEquals(
         base64(auditPublicInputsBytes),
-        base64(OfflineNoteV2.decodeAuditPublicInputs(auditPublicInputsBytes).noritoEncoded()),
+        base64(AttestedOfflineNote.decodeAuditPublicInputs(auditPublicInputsBytes).noritoEncoded()),
         "decoded audit public inputs");
     assertEquals(
         base64(issueBytes),
-        base64(OfflineNoteV2.decodeIssue(issueBytes).noritoEncoded()),
+        base64(AttestedOfflineNote.decodeIssue(issueBytes).noritoEncoded()),
         "decoded issue");
 
-    final OfflineNoteV2.AuditBundleV2 decodedAudit = OfflineNoteV2.decodeAudit(auditBytes);
+    final AttestedOfflineNote.AuditBundle decodedAudit = AttestedOfflineNote.decodeAudit(auditBytes);
     decodedAudit.validateProofBinding();
     assertEquals(base64(auditBytes), base64(decodedAudit.noritoEncoded()), "decoded audit");
 
-    final OfflineNoteV2.RedeemV2 decodedRedeem = OfflineNoteV2.decodeRedeem(redeemBytes);
+    final AttestedOfflineNote.Redeem decodedRedeem = AttestedOfflineNote.decodeRedeem(redeemBytes);
     decodedRedeem.validateProofBinding();
     assertEquals(base64(redeemBytes), base64(decodedRedeem.noritoEncoded()), "decoded redeem");
 
     assertEquals(
         base64(registrationBytes),
         base64(
-            OfflineNoteV2.decodeDeviceAttestationRegistration(registrationBytes)
+            AttestedOfflineNote.decodeDeviceAttestationRegistration(registrationBytes)
                 .noritoEncoded()),
         "decoded device attestation registration");
   }
 
-  private static void offlineNoteV2DecodersRejectMalformedPayloads() throws Exception {
+  private static void attestedOfflineNoteDecodersRejectMalformedPayloads() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> chain = obj(fixture, "chain_vectors");
     final byte[] issueBytes = base64Bytes(string(obj(chain, "issue"), "norito_base64"));
-    final OfflineNoteV2.KeyCertificateV2 sender =
+    final AttestedOfflineNote.KeyCertificate sender =
         certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
     final byte[] certificatePayloadBytes = sender.signingPayload().noritoEncoded();
 
     assertThrows(
-        () -> OfflineNoteV2.decodeIssue(Arrays.copyOf(issueBytes, issueBytes.length - 1)),
+        () -> AttestedOfflineNote.decodeIssue(Arrays.copyOf(issueBytes, issueBytes.length - 1)),
         "truncated issue decode should fail");
     assertThrows(
-        () -> OfflineNoteV2.decodeRedeem(issueBytes),
+        () -> AttestedOfflineNote.decodeRedeem(issueBytes),
         "schema-mismatched issue decode should fail");
     final byte[] corruptedIssue = Arrays.copyOf(issueBytes, issueBytes.length);
     corruptedIssue[corruptedIssue.length - 1] ^= 0x01;
     assertThrows(
-        () -> OfflineNoteV2.decodeIssue(corruptedIssue),
+        () -> AttestedOfflineNote.decodeIssue(corruptedIssue),
         "checksum-corrupted issue decode should fail");
     assertThrows(
-        () -> OfflineNoteV2.decodeCertificate(certificatePayloadBytes),
+        () -> AttestedOfflineNote.decodeCertificate(certificatePayloadBytes),
         "certificate payload cannot decode as full certificate");
   }
 
-  private static void offlineNoteV2InstructionWrappersProduceSchemaBoundPayloads()
+  private static void attestedOfflineNoteInstructionWrappersProduceSchemaBoundPayloads()
       throws Exception {
     final Map<String, Object> fixture = loadFixture();
-    final OfflineNoteV2.IssueV2 issue = issue(fixture);
-    final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
-    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
-    final OfflineNoteV2.DeviceAttestationRegistrationV2 registration =
+    final AttestedOfflineNote.Issue issue = issue(fixture);
+    final AttestedOfflineNote.AuditBundle audit = audit(fixture);
+    final AttestedOfflineNote.Redeem redeem = redeem(fixture);
+    final AttestedOfflineNote.DeviceAttestationRegistration registration =
         attestationRegistration(fixture);
 
     assertEquals(
         "iroha_data_model::isi::offline::IssueOfflineNote",
-        OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA,
+        AttestedOfflineNote.ISSUE_INSTRUCTION_SCHEMA,
         "canonical issue instruction wire name");
     assertEquals(
         "iroha_data_model::isi::offline::RedeemOfflineNote",
-        OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA,
+        AttestedOfflineNote.REDEEM_INSTRUCTION_SCHEMA,
         "canonical redeem instruction wire name");
     assertEquals(
         "iroha_data_model::isi::offline::AuditOfflineNote",
-        OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA,
+        AttestedOfflineNote.AUDIT_INSTRUCTION_SCHEMA,
         "canonical audit instruction wire name");
     assertEquals(
         "iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation",
-        OfflineNoteV2.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+        AttestedOfflineNote.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
         "canonical device attestation registration instruction wire name");
     assertTrue(
-        !OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA.endsWith("V2"),
+        !AttestedOfflineNote.ISSUE_INSTRUCTION_SCHEMA.endsWith("V2"),
         "issue instruction wire name must be chain-canonical");
     assertTrue(
-        !OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA.endsWith("V2"),
+        !AttestedOfflineNote.REDEEM_INSTRUCTION_SCHEMA.endsWith("V2"),
         "redeem instruction wire name must be chain-canonical");
     assertTrue(
-        !OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA.endsWith("V2"),
+        !AttestedOfflineNote.AUDIT_INSTRUCTION_SCHEMA.endsWith("V2"),
         "audit instruction wire name must be chain-canonical");
     assertTrue(
-        !OfflineNoteV2.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA.endsWith("V2"),
+        !AttestedOfflineNote.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA.endsWith("V2"),
         "device attestation instruction wire name must be chain-canonical");
 
     assertInstructionWrapper(
-        OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA,
-        OfflineNoteV2.encodeIssue(issue),
-        OfflineNoteV2.issueInstruction(issue));
+        AttestedOfflineNote.ISSUE_INSTRUCTION_SCHEMA,
+        AttestedOfflineNote.encodeIssue(issue),
+        AttestedOfflineNote.issueInstruction(issue));
     assertInstructionWrapper(
-        OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA,
-        OfflineNoteV2.encodeAudit(audit),
-        OfflineNoteV2.auditInstruction(audit));
+        AttestedOfflineNote.AUDIT_INSTRUCTION_SCHEMA,
+        AttestedOfflineNote.encodeAudit(audit),
+        AttestedOfflineNote.auditInstruction(audit));
     assertInstructionWrapper(
-        OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA,
-        OfflineNoteV2.encodeRedeem(redeem),
-        OfflineNoteV2.redeemInstruction(redeem));
+        AttestedOfflineNote.REDEEM_INSTRUCTION_SCHEMA,
+        AttestedOfflineNote.encodeRedeem(redeem),
+        AttestedOfflineNote.redeemInstruction(redeem));
     assertEquals(
         string(obj(obj(fixture, "chain_vectors"), "attestation_registration"), "instruction_norito_base64"),
-        base64(wirePayloadBytes(OfflineNoteV2.registerDeviceAttestationInstruction(registration))),
+        base64(wirePayloadBytes(AttestedOfflineNote.registerDeviceAttestationInstruction(registration))),
         "register device attestation instruction norito");
   }
 
-  private static void offlineNoteV2InstructionWrappersRejectProofMismatches()
+  private static void attestedOfflineNoteInstructionWrappersRejectProofMismatches()
       throws Exception {
     final Map<String, Object> fixture = loadFixture();
-    final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
-    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
-    final OfflineNoteV2.RecursiveProofV2 badProof =
-        new OfflineNoteV2.RecursiveProofV2(
-            OfflineNoteV2.hash("wrong-public-inputs".getBytes(StandardCharsets.UTF_8)),
-            new OfflineNoteV2.ProofBox(
-                OfflineNoteV2.RECURSIVE_BACKEND,
+    final AttestedOfflineNote.AuditBundle audit = audit(fixture);
+    final AttestedOfflineNote.Redeem redeem = redeem(fixture);
+    final AttestedOfflineNote.RecursiveProof badProof =
+        new AttestedOfflineNote.RecursiveProof(
+            AttestedOfflineNote.hash("wrong-public-inputs".getBytes(StandardCharsets.UTF_8)),
+            new AttestedOfflineNote.ProofBox(
+                AttestedOfflineNote.RECURSIVE_BACKEND,
                 "offline-v2-forged-proof".getBytes(StandardCharsets.UTF_8)));
 
     assertThrows(
-        () -> OfflineNoteV2.redeemInstruction(redeem.replacingRecursiveProof(badProof)),
+        () -> AttestedOfflineNote.redeemInstruction(redeem.replacingRecursiveProof(badProof)),
         "forged redeem instruction should throw");
     assertThrows(
-        () -> OfflineNoteV2.auditInstruction(audit.replacingRecursiveProof(badProof)),
+        () -> AttestedOfflineNote.auditInstruction(audit.replacingRecursiveProof(badProof)),
         "forged audit instruction should throw");
   }
 
-  private static void offlineNoteV2InstructionDecodersReadExplorerEnvelopeBytes()
+  private static void attestedOfflineNoteInstructionDecodersReadExplorerEnvelopeBytes()
       throws Exception {
     final Map<String, Object> fixture = loadFixture();
-    final OfflineNoteV2.IssueV2 issue = issue(fixture);
-    final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
-    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
-    final OfflineNoteV2.DeviceAttestationRegistrationV2 registration =
+    final AttestedOfflineNote.Issue issue = issue(fixture);
+    final AttestedOfflineNote.AuditBundle audit = audit(fixture);
+    final AttestedOfflineNote.Redeem redeem = redeem(fixture);
+    final AttestedOfflineNote.DeviceAttestationRegistration registration =
         attestationRegistration(fixture);
-    final byte[] issueWirePayload = wirePayloadBytes(OfflineNoteV2.issueInstruction(issue));
-    final byte[] auditWirePayload = wirePayloadBytes(OfflineNoteV2.auditInstruction(audit));
-    final byte[] redeemWirePayload = wirePayloadBytes(OfflineNoteV2.redeemInstruction(redeem));
+    final byte[] issueWirePayload = wirePayloadBytes(AttestedOfflineNote.issueInstruction(issue));
+    final byte[] auditWirePayload = wirePayloadBytes(AttestedOfflineNote.auditInstruction(audit));
+    final byte[] redeemWirePayload = wirePayloadBytes(AttestedOfflineNote.redeemInstruction(redeem));
     final byte[] registrationWirePayload =
-        wirePayloadBytes(OfflineNoteV2.registerDeviceAttestationInstruction(registration));
+        wirePayloadBytes(AttestedOfflineNote.registerDeviceAttestationInstruction(registration));
 
     assertEquals(
         base64(issue.noritoEncoded()),
         base64(
-            OfflineNoteV2.decodeIssueInstruction(
-                    rawInstructionPair(OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload))
+            AttestedOfflineNote.decodeIssueInstruction(
+                    rawInstructionPair(AttestedOfflineNote.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload))
                 .noritoEncoded()),
         "decoded issue instruction");
     assertEquals(
         base64(issue.noritoEncoded()),
         base64(
-            OfflineNoteV2.decodeIssueInstruction(
-                    rawInstructionPair(OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload, false))
+            AttestedOfflineNote.decodeIssueInstruction(
+                    rawInstructionPair(AttestedOfflineNote.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload, false))
                 .noritoEncoded()),
         "decoded non-compact issue instruction");
     assertEquals(
         base64(issue.noritoEncoded()),
-        base64(OfflineNoteV2.decodeIssueInstruction(issueWirePayload).noritoEncoded()),
+        base64(AttestedOfflineNote.decodeIssueInstruction(issueWirePayload).noritoEncoded()),
         "decoded direct issue instruction payload");
     assertEquals(
         base64(registration.noritoEncoded()),
         base64(
-            OfflineNoteV2.decodeRegisterDeviceAttestationInstruction(
+            AttestedOfflineNote.decodeRegisterDeviceAttestationInstruction(
                     rawInstructionPair(
-                        OfflineNoteV2.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+                        AttestedOfflineNote.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
                         registrationWirePayload))
                 .noritoEncoded()),
         "decoded register device attestation instruction");
     assertEquals(
         base64(registration.noritoEncoded()),
         base64(
-            OfflineNoteV2.decodeRegisterDeviceAttestationInstruction(registrationWirePayload)
+            AttestedOfflineNote.decodeRegisterDeviceAttestationInstruction(registrationWirePayload)
                 .noritoEncoded()),
         "decoded direct register device attestation instruction payload");
 
-    final OfflineNoteV2.AuditBundleV2 decodedAudit =
-        OfflineNoteV2.decodeAuditInstruction(
-            rawInstructionPair(OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA, auditWirePayload));
+    final AttestedOfflineNote.AuditBundle decodedAudit =
+        AttestedOfflineNote.decodeAuditInstruction(
+            rawInstructionPair(AttestedOfflineNote.AUDIT_INSTRUCTION_SCHEMA, auditWirePayload));
     decodedAudit.validateProofBinding();
     assertEquals(
         base64(audit.noritoEncoded()),
         base64(decodedAudit.noritoEncoded()),
         "decoded audit instruction");
 
-    final OfflineNoteV2.RedeemV2 decodedRedeem =
-        OfflineNoteV2.decodeRedeemInstruction(
-            rawInstructionPair(OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA, redeemWirePayload));
+    final AttestedOfflineNote.Redeem decodedRedeem =
+        AttestedOfflineNote.decodeRedeemInstruction(
+            rawInstructionPair(AttestedOfflineNote.REDEEM_INSTRUCTION_SCHEMA, redeemWirePayload));
     decodedRedeem.validateProofBinding();
     assertEquals(
         base64(redeem.noritoEncoded()),
@@ -345,94 +346,94 @@ public final class OfflineNoteV2Test {
         "decoded redeem instruction");
   }
 
-  private static void offlineNoteV2InstructionDecodersRejectRetiredAliasEnvelopeBytes()
+  private static void attestedOfflineNoteInstructionDecodersRejectRetiredAliasEnvelopeBytes()
       throws Exception {
     final Map<String, Object> fixture = loadFixture();
-    final OfflineNoteV2.IssueV2 issue = issue(fixture);
-    final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
-    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
+    final AttestedOfflineNote.Issue issue = issue(fixture);
+    final AttestedOfflineNote.AuditBundle audit = audit(fixture);
+    final AttestedOfflineNote.Redeem redeem = redeem(fixture);
     final byte[] issueAliasWirePayload =
-        encodeInstructionWrapper(RETIRED_ISSUE_INSTRUCTION_ALIAS_SCHEMA, OfflineNoteV2.encodeIssue(issue));
+        encodeInstructionWrapper(RETIRED_ISSUE_INSTRUCTION_ALIAS_SCHEMA, AttestedOfflineNote.encodeIssue(issue));
     final byte[] auditAliasWirePayload =
-        encodeInstructionWrapper(RETIRED_AUDIT_INSTRUCTION_ALIAS_SCHEMA, OfflineNoteV2.encodeAudit(audit));
+        encodeInstructionWrapper(RETIRED_AUDIT_INSTRUCTION_ALIAS_SCHEMA, AttestedOfflineNote.encodeAudit(audit));
     final byte[] redeemAliasWirePayload =
-        encodeInstructionWrapper(RETIRED_REDEEM_INSTRUCTION_ALIAS_SCHEMA, OfflineNoteV2.encodeRedeem(redeem));
+        encodeInstructionWrapper(RETIRED_REDEEM_INSTRUCTION_ALIAS_SCHEMA, AttestedOfflineNote.encodeRedeem(redeem));
 
     assertThrows(
-        () -> OfflineNoteV2.decodeIssueInstruction(issueAliasWirePayload),
+        () -> AttestedOfflineNote.decodeIssueInstruction(issueAliasWirePayload),
         "retired issue instruction alias should throw");
     assertThrows(
-        () -> OfflineNoteV2.decodeAuditInstruction(auditAliasWirePayload),
+        () -> AttestedOfflineNote.decodeAuditInstruction(auditAliasWirePayload),
         "retired audit instruction alias should throw");
     assertThrows(
-        () -> OfflineNoteV2.decodeRedeemInstruction(redeemAliasWirePayload),
+        () -> AttestedOfflineNote.decodeRedeemInstruction(redeemAliasWirePayload),
         "retired redeem instruction alias should throw");
     assertThrows(
         () ->
-            OfflineNoteV2.decodeIssueInstruction(
+            AttestedOfflineNote.decodeIssueInstruction(
                 rawInstructionPair(RETIRED_ISSUE_INSTRUCTION_ALIAS_SCHEMA, issueAliasWirePayload)),
         "retired issue instruction alias envelope should throw");
     assertThrows(
         () ->
-            OfflineNoteV2.decodeAuditInstruction(
+            AttestedOfflineNote.decodeAuditInstruction(
                 rawInstructionPair(RETIRED_AUDIT_INSTRUCTION_ALIAS_SCHEMA, auditAliasWirePayload)),
         "retired audit instruction alias envelope should throw");
     assertThrows(
         () ->
-            OfflineNoteV2.decodeRedeemInstruction(
+            AttestedOfflineNote.decodeRedeemInstruction(
                 rawInstructionPair(RETIRED_REDEEM_INSTRUCTION_ALIAS_SCHEMA, redeemAliasWirePayload)),
         "retired redeem instruction alias envelope should throw");
   }
 
-  private static void offlineNoteV2InstructionDecodersRejectWrongEnvelopeShapes()
+  private static void attestedOfflineNoteInstructionDecodersRejectWrongEnvelopeShapes()
       throws Exception {
     final Map<String, Object> fixture = loadFixture();
-    final OfflineNoteV2.IssueV2 issue = issue(fixture);
-    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
-    final OfflineNoteV2.DeviceAttestationRegistrationV2 registration =
+    final AttestedOfflineNote.Issue issue = issue(fixture);
+    final AttestedOfflineNote.Redeem redeem = redeem(fixture);
+    final AttestedOfflineNote.DeviceAttestationRegistration registration =
         attestationRegistration(fixture);
-    final byte[] issueWirePayload = wirePayloadBytes(OfflineNoteV2.issueInstruction(issue));
-    final byte[] redeemWirePayload = wirePayloadBytes(OfflineNoteV2.redeemInstruction(redeem));
+    final byte[] issueWirePayload = wirePayloadBytes(AttestedOfflineNote.issueInstruction(issue));
+    final byte[] redeemWirePayload = wirePayloadBytes(AttestedOfflineNote.redeemInstruction(redeem));
     final byte[] retiredRegisterWrapperPayload =
         encodeInstructionWrapper(
-            OfflineNoteV2.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
-            OfflineNoteV2.encodeDeviceAttestationRegistration(registration));
+            AttestedOfflineNote.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+            AttestedOfflineNote.encodeDeviceAttestationRegistration(registration));
     final byte[] issuePair =
-        rawInstructionPair(OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload);
+        rawInstructionPair(AttestedOfflineNote.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload);
 
     assertThrows(
         () ->
-            OfflineNoteV2.decodeIssueInstruction(
-                rawInstructionPair(OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA, issueWirePayload)),
+            AttestedOfflineNote.decodeIssueInstruction(
+                rawInstructionPair(AttestedOfflineNote.REDEEM_INSTRUCTION_SCHEMA, issueWirePayload)),
         "wrong issue wire name should throw");
     assertThrows(
-        () -> OfflineNoteV2.decodeRedeemInstruction(issuePair),
+        () -> AttestedOfflineNote.decodeRedeemInstruction(issuePair),
         "wrong instruction model schema should throw");
     assertThrows(
-        () -> OfflineNoteV2.decodeIssueInstruction(issue.noritoEncoded()),
+        () -> AttestedOfflineNote.decodeIssueInstruction(issue.noritoEncoded()),
         "direct model frame should not decode as instruction wrapper");
     assertThrows(
-        () -> OfflineNoteV2.decodeIssueInstruction(Arrays.copyOf(issuePair, issuePair.length - 1)),
+        () -> AttestedOfflineNote.decodeIssueInstruction(Arrays.copyOf(issuePair, issuePair.length - 1)),
         "truncated instruction envelope should throw");
     final byte[] corruptedWirePayload = Arrays.copyOf(issueWirePayload, issueWirePayload.length);
     corruptedWirePayload[corruptedWirePayload.length - 1] ^= 0x01;
     assertThrows(
-        () -> OfflineNoteV2.decodeIssueInstruction(corruptedWirePayload),
+        () -> AttestedOfflineNote.decodeIssueInstruction(corruptedWirePayload),
         "checksum-corrupted instruction payload should throw");
     assertThrows(
         () ->
-            OfflineNoteV2.decodeAuditInstruction(
-                rawInstructionPair(OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA, redeemWirePayload)),
+            AttestedOfflineNote.decodeAuditInstruction(
+                rawInstructionPair(AttestedOfflineNote.AUDIT_INSTRUCTION_SCHEMA, redeemWirePayload)),
         "wrong audit instruction model schema should throw");
     assertThrows(
         () ->
-            OfflineNoteV2.decodeRegisterDeviceAttestationInstruction(retiredRegisterWrapperPayload),
+            AttestedOfflineNote.decodeRegisterDeviceAttestationInstruction(retiredRegisterWrapperPayload),
         "retired register device attestation generic wrapper should throw");
     assertThrows(
         () ->
-            OfflineNoteV2.decodeRegisterDeviceAttestationInstruction(
+            AttestedOfflineNote.decodeRegisterDeviceAttestationInstruction(
                 rawInstructionPair(
-                    OfflineNoteV2.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+                    AttestedOfflineNote.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
                     retiredRegisterWrapperPayload)),
         "retired register device attestation generic wrapper envelope should throw");
   }
@@ -440,8 +441,8 @@ public final class OfflineNoteV2Test {
   private static void publicInputHashesMatchRustVectors() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> chain = obj(fixture, "chain_vectors");
-    final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
-    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
+    final AttestedOfflineNote.AuditBundle audit = audit(fixture);
+    final AttestedOfflineNote.Redeem redeem = redeem(fixture);
 
     assertEquals(
         string(obj(chain, "audit"), "public_inputs_hash"),
@@ -459,15 +460,15 @@ public final class OfflineNoteV2Test {
 
   private static void proofBindingRejectsMismatch() throws Exception {
     final Map<String, Object> fixture = loadFixture();
-    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
-    final OfflineNoteV2.RecursiveProofV2 badProof =
-        new OfflineNoteV2.RecursiveProofV2(
-            OfflineNoteV2.hash("wrong-public-inputs".getBytes(StandardCharsets.UTF_8)),
-            new OfflineNoteV2.ProofBox(
-                OfflineNoteV2.RECURSIVE_BACKEND,
+    final AttestedOfflineNote.Redeem redeem = redeem(fixture);
+    final AttestedOfflineNote.RecursiveProof badProof =
+        new AttestedOfflineNote.RecursiveProof(
+            AttestedOfflineNote.hash("wrong-public-inputs".getBytes(StandardCharsets.UTF_8)),
+            new AttestedOfflineNote.ProofBox(
+                AttestedOfflineNote.RECURSIVE_BACKEND,
                 "offline-v2-vector-redeem-proof".getBytes(StandardCharsets.UTF_8)));
-    final OfflineNoteV2.RedeemV2 forged =
-        new OfflineNoteV2.RedeemV2(
+    final AttestedOfflineNote.Redeem forged =
+        new AttestedOfflineNote.Redeem(
             redeem.sourceNoteCommitment(),
             redeem.inputNullifiers(),
             redeem.senderKeyCertificate(),
@@ -481,73 +482,73 @@ public final class OfflineNoteV2Test {
 
   private static void proofVerifierAndHashValidationRejectsMalformedValues() throws Exception {
     final byte[] publicInputsHash = audit(loadFixture()).publicInputsHash();
-    final OfflineNoteV2.ProofBox proof =
-        new OfflineNoteV2.ProofBox(OfflineNoteV2.RECURSIVE_BACKEND, new byte[] {1});
-    assertEquals(OfflineNoteV2.RECURSIVE_BACKEND, proof.backend(), "exact proof backend");
+    final AttestedOfflineNote.ProofBox proof =
+        new AttestedOfflineNote.ProofBox(AttestedOfflineNote.RECURSIVE_BACKEND, new byte[] {1});
+    assertEquals(AttestedOfflineNote.RECURSIVE_BACKEND, proof.backend(), "exact proof backend");
 
     assertThrows(
-        () -> new OfflineNoteV2.ProofBox("  " + OfflineNoteV2.RECURSIVE_BACKEND + "  ", new byte[] {1}),
+        () -> new AttestedOfflineNote.ProofBox("  " + AttestedOfflineNote.RECURSIVE_BACKEND + "  ", new byte[] {1}),
         "padded proof backend should throw");
     assertThrows(
-        () -> new OfflineNoteV2.ProofBox(" \n ", new byte[] {1}),
+        () -> new AttestedOfflineNote.ProofBox(" \n ", new byte[] {1}),
         "blank proof backend should throw");
     assertThrows(
-        () -> new OfflineNoteV2.ProofBox(OfflineNoteV2.RECURSIVE_BACKEND, new byte[0]),
+        () -> new AttestedOfflineNote.ProofBox(AttestedOfflineNote.RECURSIVE_BACKEND, new byte[0]),
         "empty proof bytes should throw");
     assertThrows(
         () ->
-            new OfflineNoteV2.RecursiveProofV2(
+            new AttestedOfflineNote.RecursiveProof(
                 new byte[31],
-                new OfflineNoteV2.ProofBox(OfflineNoteV2.RECURSIVE_BACKEND, new byte[] {1})),
+                new AttestedOfflineNote.ProofBox(AttestedOfflineNote.RECURSIVE_BACKEND, new byte[] {1})),
         "short public input hash should throw");
     final byte[] nonCanonicalHash = Arrays.copyOf(publicInputsHash, publicInputsHash.length);
     nonCanonicalHash[31] = (byte) (nonCanonicalHash[31] & 0xFE);
     assertThrows(
         () ->
-            new OfflineNoteV2.RecursiveProofV2(
+            new AttestedOfflineNote.RecursiveProof(
                 nonCanonicalHash,
-                new OfflineNoteV2.ProofBox(OfflineNoteV2.RECURSIVE_BACKEND, new byte[] {1})),
+                new AttestedOfflineNote.ProofBox(AttestedOfflineNote.RECURSIVE_BACKEND, new byte[] {1})),
         "noncanonical public input hash should throw");
     assertThrows(
-        () -> new OfflineNoteV2.VerifyingKeyIdReference("", "vk"),
+        () -> new AttestedOfflineNote.VerifyingKeyIdReference("", "vk"),
         "blank verifier backend should throw");
     assertThrows(
-        () -> new OfflineNoteV2.VerifyingKeyIdReference(" halo2/ipa ", "vk"),
+        () -> new AttestedOfflineNote.VerifyingKeyIdReference(" halo2/ipa ", "vk"),
         "padded verifier backend should throw");
     assertThrows(
-        () -> new OfflineNoteV2.VerifyingKeyIdReference("halo2/ipa", " vk "),
+        () -> new AttestedOfflineNote.VerifyingKeyIdReference("halo2/ipa", " vk "),
         "padded verifier name should throw");
     assertThrows(
-        () -> new OfflineNoteV2.VerifyingKeyIdReference("halo2:ipa", "vk"),
+        () -> new AttestedOfflineNote.VerifyingKeyIdReference("halo2:ipa", "vk"),
         "colon verifier backend should throw");
     assertThrows(
-        () -> new OfflineNoteV2.VerifyingKeyIdReference("halo2/ipa", "bad:vk"),
+        () -> new AttestedOfflineNote.VerifyingKeyIdReference("halo2/ipa", "bad:vk"),
         "colon verifier name should throw");
   }
 
   private static void openVerifyEnvelopeDecoderRejectsMalformedV2EnvelopeFields()
       throws Exception {
     final long[] values =
-        OfflineNoteV2.InstanceBuilder.auditInstanceValues(audit(loadFixture())).publicValues();
+        AttestedOfflineNote.InstanceBuilder.auditInstanceValues(audit(loadFixture())).publicValues();
     final byte[] payload = fakeZk1ProofPayload(new byte[] {1, 2, 3}, values);
-    final byte[] envelope = OfflineNoteV2Halo2Prover.openVerifyEnvelope(payload);
+    final byte[] envelope = AttestedOfflineNoteHalo2Prover.openVerifyEnvelope(payload);
 
     assertTrue(
-        !OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(envelope, repeat("00", 32)),
+        !AttestedOfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(envelope, repeat("00", 32)),
         "mismatched public input hash should decode the envelope and return false");
 
     assertIllegalArgumentContains(
         () ->
-            OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(
-                OfflineNoteV2Halo2Prover.openVerifyEnvelope(new byte[0]),
+            AttestedOfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(
+                AttestedOfflineNoteHalo2Prover.openVerifyEnvelope(new byte[0]),
                 repeat("00", 32)),
         "OpenVerifyEnvelope proof payload is empty");
 
     assertIllegalArgumentContains(
         () ->
-            OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(
+            AttestedOfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(
                 rawOpenVerifyEnvelopeWithCircuitPayload(
-                    concat(openEnvelopeStringPayload(OfflineNoteV2Halo2Prover.CIRCUIT_ID),
+                    concat(openEnvelopeStringPayload(AttestedOfflineNoteHalo2Prover.CIRCUIT_ID),
                         new byte[] {0})),
                 values),
         "Trailing bytes after OpenVerifyEnvelope field decode");
@@ -557,7 +558,7 @@ public final class OfflineNoteV2Test {
     final String canonicalHash = repeat("ab", 32);
     for (final String rejectedHash : nonExactPublicInputHashes(canonicalHash)) {
       assertTrue(
-          !OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(new byte[0], rejectedHash),
+          !AttestedOfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(new byte[0], rejectedHash),
           "Java Offline V2 Halo2 helper rejects non-exact public input hash before decoding");
     }
   }
@@ -570,8 +571,8 @@ public final class OfflineNoteV2Test {
 
     assertThrows(
         () ->
-            new OfflineNoteV2.KeyCertificateV2(
-                OfflineNoteV2.KEY_CERTIFICATE_VERSION + 1,
+            new AttestedOfflineNote.KeyCertificate(
+                AttestedOfflineNote.KEY_CERTIFICATE_VERSION + 1,
                 string(cert, "platform"),
                 string(cert, "key_id"),
                 string(cert, "device_id"),
@@ -586,8 +587,8 @@ public final class OfflineNoteV2Test {
         "bad certificate version should throw");
     assertThrows(
         () ->
-            new OfflineNoteV2.KeyCertificateV2(
-                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+            new AttestedOfflineNote.KeyCertificate(
+                AttestedOfflineNote.KEY_CERTIFICATE_VERSION,
                 string(cert, "platform"),
                 string(cert, "key_id"),
                 string(cert, "device_id"),
@@ -602,8 +603,8 @@ public final class OfflineNoteV2Test {
         "non-one-use certificate should throw");
     assertThrows(
         () ->
-            new OfflineNoteV2.KeyCertificateV2(
-                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+            new AttestedOfflineNote.KeyCertificate(
+                AttestedOfflineNote.KEY_CERTIFICATE_VERSION,
                 string(cert, "platform"),
                 string(cert, "key_id"),
                 string(cert, "device_id"),
@@ -618,8 +619,8 @@ public final class OfflineNoteV2Test {
         "short note public key should throw");
     assertThrows(
         () ->
-            new OfflineNoteV2.KeyCertificateV2(
-                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+            new AttestedOfflineNote.KeyCertificate(
+                AttestedOfflineNote.KEY_CERTIFICATE_VERSION,
                 string(cert, "platform"),
                 "\u00A0\u2003",
                 string(cert, "device_id"),
@@ -634,8 +635,8 @@ public final class OfflineNoteV2Test {
         "blank certificate key_id should throw");
     assertThrows(
         () ->
-            new OfflineNoteV2.KeyCertificatePayloadV2(
-                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+            new AttestedOfflineNote.KeyCertificatePayload(
+                AttestedOfflineNote.KEY_CERTIFICATE_VERSION,
                 string(cert, "platform"),
                 string(cert, "key_id"),
                 "\u00A0\u2003",
@@ -649,8 +650,8 @@ public final class OfflineNoteV2Test {
         "blank certificate payload device_id should throw");
     assertThrows(
         () ->
-            new OfflineNoteV2.KeyCertificateV2(
-                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+            new AttestedOfflineNote.KeyCertificate(
+                AttestedOfflineNote.KEY_CERTIFICATE_VERSION,
                 string(cert, "platform"),
                 string(cert, "key_id"),
                 string(cert, "device_id"),
@@ -665,8 +666,8 @@ public final class OfflineNoteV2Test {
         "negative assertion usage limit should throw");
     assertThrows(
         () ->
-            new OfflineNoteV2.KeyCertificateV2(
-                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+            new AttestedOfflineNote.KeyCertificate(
+                AttestedOfflineNote.KEY_CERTIFICATE_VERSION,
                 string(cert, "platform"),
                 string(cert, "key_id"),
                 string(cert, "device_id"),
@@ -681,8 +682,8 @@ public final class OfflineNoteV2Test {
         "short issuer signature should throw");
     assertThrows(
         () ->
-            new OfflineNoteV2.KeyCertificateV2(
-                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+            new AttestedOfflineNote.KeyCertificate(
+                AttestedOfflineNote.KEY_CERTIFICATE_VERSION,
                 string(cert, "platform"),
                 string(cert, "key_id"),
                 string(cert, "device_id"),
@@ -697,8 +698,8 @@ public final class OfflineNoteV2Test {
         "off-curve assertion public key should throw");
     assertThrows(
         () ->
-            new OfflineNoteV2.KeyCertificateV2(
-                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+            new AttestedOfflineNote.KeyCertificate(
+                AttestedOfflineNote.KEY_CERTIFICATE_VERSION,
                 string(cert, "platform"),
                 string(cert, "key_id"),
                 string(cert, "device_id"),
@@ -713,8 +714,8 @@ public final class OfflineNoteV2Test {
         "spliced iOS certificate profile should throw");
     assertThrows(
         () ->
-            new OfflineNoteV2.KeyCertificatePayloadV2(
-                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+            new AttestedOfflineNote.KeyCertificatePayload(
+                AttestedOfflineNote.KEY_CERTIFICATE_VERSION,
                 "ios-app-attest",
                 string(cert, "key_id"),
                 string(cert, "device_id"),
@@ -728,8 +729,8 @@ public final class OfflineNoteV2Test {
         "retired iOS certificate payload profile should throw");
     assertThrows(
         () ->
-            new OfflineNoteV2.KeyCertificateV2(
-                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+            new AttestedOfflineNote.KeyCertificate(
+                AttestedOfflineNote.KEY_CERTIFICATE_VERSION,
                 "ios-app-attest",
                 string(cert, "key_id"),
                 string(cert, "device_id"),
@@ -744,8 +745,8 @@ public final class OfflineNoteV2Test {
         "retired iOS certificate profile should throw");
     assertThrows(
         () ->
-            new OfflineNoteV2.KeyCertificatePayloadV2(
-                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+            new AttestedOfflineNote.KeyCertificatePayload(
+                AttestedOfflineNote.KEY_CERTIFICATE_VERSION,
                 string(cert, "platform"),
                 string(cert, "key_id"),
                 string(cert, "device_id"),
@@ -764,7 +765,7 @@ public final class OfflineNoteV2Test {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> vector =
         obj(obj(fixture, "chain_vectors"), "attestation_registration");
-    final OfflineNoteV2.DeviceAttestationRegistrationV2 registration =
+    final AttestedOfflineNote.DeviceAttestationRegistration registration =
         attestationRegistration(fixture);
 
     assertEquals(
@@ -783,7 +784,7 @@ public final class OfflineNoteV2Test {
         string(vector, "key_certificate_payload_hash"),
         hex(registration.keyCertificatePayloadHash()),
         "device attestation key certificate payload hash");
-    final OfflineNoteV2.KeyCertificatePayloadV2 keyCertificatePayload =
+    final AttestedOfflineNote.KeyCertificatePayload keyCertificatePayload =
         registration.keyCertificatePayload();
     assertEquals(
         string(vector, "key_certificate_payload_hash"),
@@ -792,7 +793,7 @@ public final class OfflineNoteV2Test {
     assertEquals(
         base64(keyCertificatePayload.noritoEncoded()),
         base64(
-            OfflineNoteV2.decodeCertificatePayload(keyCertificatePayload.noritoEncoded())
+            AttestedOfflineNote.decodeCertificatePayload(keyCertificatePayload.noritoEncoded())
                 .noritoEncoded()),
         "registration key certificate payload helper round-trip");
     assertEquals(
@@ -809,7 +810,7 @@ public final class OfflineNoteV2Test {
     final String androidSigningDigestHex =
         nullableString(vector, "android_signing_certificate_sha256");
     final byte[] preAttestationChallenge =
-        OfflineNoteV2.DeviceAttestationRegistrationV2.preAttestationChallengeHash(
+        AttestedOfflineNote.DeviceAttestationRegistration.preAttestationChallengeHash(
             intValue(vector, "version"),
             string(vector, "platform"),
             string(vector, "key_id"),
@@ -829,8 +830,8 @@ public final class OfflineNoteV2Test {
             longValue(vector, "recent_block_height"),
             hexBytes(string(vector, "recent_block_hash")),
             longValue(vector, "expires_at_ms"));
-    final OfflineNoteV2.DeviceAttestationRegistrationV2 draft =
-        new OfflineNoteV2.DeviceAttestationRegistrationV2(
+    final AttestedOfflineNote.DeviceAttestationRegistration draft =
+        new AttestedOfflineNote.DeviceAttestationRegistration(
             intValue(vector, "version"),
             string(vector, "platform"),
             string(vector, "key_id"),
@@ -856,7 +857,7 @@ public final class OfflineNoteV2Test {
             longValue(vector, "recent_block_height"),
             hexBytes(string(vector, "recent_block_hash")),
             longValue(vector, "expires_at_ms"));
-    final byte[] emptyReportHash = OfflineNoteV2.hash(new byte[0]);
+    final byte[] emptyReportHash = AttestedOfflineNote.hash(new byte[0]);
     final byte[] expectedEvidence = attestationEvidence(emptyReportHash);
 
     assertEquals(
@@ -875,7 +876,85 @@ public final class OfflineNoteV2Test {
     assertArrayEquals(new byte[0], draft.attestationReport(), "draft report");
     assertArrayEquals(expectedEvidence, draft.evidence(), "draft evidence");
     assertArrayEquals(
-        OfflineNoteV2.hash(expectedEvidence), draft.evidenceHash(), "draft evidence hash");
+        AttestedOfflineNote.hash(expectedEvidence), draft.evidenceHash(), "draft evidence hash");
+  }
+
+  private static void androidKeyMintChallengeBuildsBeforeKeyGeneration() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> vector =
+        obj(obj(fixture, "chain_vectors"), "android_keymint_challenge");
+    final byte[] signingDigest =
+        hexBytes(string(vector, "android_signing_certificate_sha256"));
+    final byte[] challenge =
+        AttestedOfflineNote.DeviceAttestationRegistration.androidPreKeyGenerationChallengeHash(
+            intValue(vector, "version"),
+            string(vector, "device_id"),
+            string(vector, "account_id"),
+            nullableString(vector, "asset_definition_id"),
+            nullableString(vector, "ios_team_id"),
+            nullableString(vector, "ios_bundle_id"),
+            nullableString(vector, "ios_environment"),
+            string(vector, "android_package_name"),
+            signingDigest,
+            base64Bytes(string(vector, "public_key")),
+            string(vector, "assertion_scheme"),
+            string(vector, "assertion_key_algorithm"),
+            nullableInt(vector, "assertion_usage_count_limit"),
+            bool(vector, "one_use"),
+            longValue(vector, "recent_block_height"),
+            hexBytes(string(vector, "recent_block_hash")),
+            longValue(vector, "expires_at_ms"));
+    assertEquals(
+        string(vector, "challenge_hash"),
+        hex(challenge),
+        "Android pre-key-generation challenge must match the Rust vector");
+
+    final byte[] changedDigest = Arrays.copyOf(signingDigest, signingDigest.length);
+    changedDigest[0] ^= 0x01;
+    final byte[] changedChallenge =
+        AttestedOfflineNote.DeviceAttestationRegistration.androidPreKeyGenerationChallengeHash(
+            intValue(vector, "version"),
+            string(vector, "device_id"),
+            string(vector, "account_id"),
+            nullableString(vector, "asset_definition_id"),
+            nullableString(vector, "ios_team_id"),
+            nullableString(vector, "ios_bundle_id"),
+            nullableString(vector, "ios_environment"),
+            string(vector, "android_package_name"),
+            changedDigest,
+            base64Bytes(string(vector, "public_key")),
+            string(vector, "assertion_scheme"),
+            string(vector, "assertion_key_algorithm"),
+            nullableInt(vector, "assertion_usage_count_limit"),
+            bool(vector, "one_use"),
+            longValue(vector, "recent_block_height"),
+            hexBytes(string(vector, "recent_block_hash")),
+            longValue(vector, "expires_at_ms"));
+    assertTrue(
+        !Arrays.equals(challenge, changedChallenge),
+        "Android signing identity substitution must change the challenge");
+    assertThrows(
+        () ->
+            AttestedOfflineNote.DeviceAttestationRegistration
+                .androidPreKeyGenerationChallengeHash(
+                    intValue(vector, "version"),
+                    string(vector, "device_id"),
+                    string(vector, "account_id"),
+                    nullableString(vector, "asset_definition_id"),
+                    nullableString(vector, "ios_team_id"),
+                    nullableString(vector, "ios_bundle_id"),
+                    nullableString(vector, "ios_environment"),
+                    string(vector, "android_package_name"),
+                    signingDigest,
+                    base64Bytes(string(vector, "public_key")),
+                    "android-keymint-ecdsa-p256-usage-limit",
+                    string(vector, "assertion_key_algorithm"),
+                    nullableInt(vector, "assertion_usage_count_limit"),
+                    bool(vector, "one_use"),
+                    longValue(vector, "recent_block_height"),
+                    hexBytes(string(vector, "recent_block_hash")),
+                    longValue(vector, "expires_at_ms")),
+        "retired Android assertion profile must not produce a challenge");
   }
 
   private static void offlineDeviceAttestationRegistrationValidationRejectsMalformedValues()
@@ -913,7 +992,7 @@ public final class OfflineNoteV2Test {
                 fixture,
                 null,
                 null,
-                OfflineNoteV2.hash(forgedEvidence),
+                AttestedOfflineNote.hash(forgedEvidence),
                 null,
                 null,
                 null,
@@ -1029,39 +1108,39 @@ public final class OfflineNoteV2Test {
         () ->
             attestationRegistrationWithProfile(
                 fixture,
-                OfflineNoteV2.ANDROID_KEYMINT_PLATFORM,
-                OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME,
-                OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+                AttestedOfflineNote.ANDROID_KEYMINT_PLATFORM,
+                AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_SCHEME,
+                AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
                 null),
         "Android device attestation without usage limit should throw");
     assertThrows(
         () ->
             attestationRegistrationWithProfile(
                 fixture,
-                OfflineNoteV2.ANDROID_KEYMINT_PLATFORM,
+                AttestedOfflineNote.ANDROID_KEYMINT_PLATFORM,
                 "android-keymint-ecdsa-p256-usage-limit",
-                OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+                AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
                 Integer.valueOf(1)),
         "Android device attestation retired scheme should throw");
     assertThrows(
         () ->
             attestationRegistrationWithProfileAndKeyId(
                 fixture,
-                OfflineNoteV2.ANDROID_KEYMINT_PLATFORM,
+                AttestedOfflineNote.ANDROID_KEYMINT_PLATFORM,
                 "0000000000000000000000000000000000000000000000000000000000000000",
-                OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME,
-                OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+                AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_SCHEME,
+                AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
                 Integer.valueOf(1)),
         "Android device attestation key_id mismatch should throw");
     assertThrows(
         () ->
             attestationRegistrationWithProfileAndKeyId(
                 fixture,
-                OfflineNoteV2.ANDROID_KEYMINT_PLATFORM,
+                AttestedOfflineNote.ANDROID_KEYMINT_PLATFORM,
                 hex(sha256(base64Bytes(string(vector, "assertion_public_key"))))
                     .toUpperCase(Locale.ROOT),
-                OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME,
-                OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+                AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_SCHEME,
+                AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
                 Integer.valueOf(1)),
         "Android device attestation uppercase key_id should throw");
     assertThrows(
@@ -1085,7 +1164,7 @@ public final class OfflineNoteV2Test {
     final byte[] attestationReport = base64Bytes(string(vector, "attestation_report_base64"));
     final byte[] evidence = base64Bytes(string(vector, "evidence_base64"));
     final byte[] recentBlockHash = hexBytes(string(vector, "recent_block_hash"));
-    final OfflineNoteV2.DeviceAttestationRegistrationV2 registration =
+    final AttestedOfflineNote.DeviceAttestationRegistration registration =
         attestationRegistration(
             fixture,
             null,
@@ -1119,10 +1198,10 @@ public final class OfflineNoteV2Test {
   }
 
   private static void auditBundleRejectsInvalidShapesAndUncommittedOutputs() throws Exception {
-    final OfflineNoteV2.AuditBundleV2 audit = audit(loadFixture());
+    final AttestedOfflineNote.AuditBundle audit = audit(loadFixture());
     assertThrows(
         () ->
-            new OfflineNoteV2.AuditBundleV2(
+            new AttestedOfflineNote.AuditBundle(
                 audit.tokenId(),
                 audit.senderKeyCertificate(),
                 Collections.emptyList(),
@@ -1133,7 +1212,7 @@ public final class OfflineNoteV2Test {
         "empty audit input nullifiers should throw");
     assertThrows(
         () ->
-            new OfflineNoteV2.AuditBundleV2(
+            new AttestedOfflineNote.AuditBundle(
                 audit.tokenId(),
                 audit.senderKeyCertificate(),
                 audit.inputNullifiers(),
@@ -1146,7 +1225,7 @@ public final class OfflineNoteV2Test {
     tooManyNullifiers.add(audit.inputNullifiers().get(0));
     assertThrows(
         () ->
-            new OfflineNoteV2.AuditBundleV2(
+            new AttestedOfflineNote.AuditBundle(
                 audit.tokenId(),
                 audit.senderKeyCertificate(),
                 tooManyNullifiers,
@@ -1157,7 +1236,7 @@ public final class OfflineNoteV2Test {
         "audit input count mismatch should throw");
     assertThrows(
         () ->
-            new OfflineNoteV2.AuditBundleV2(
+            new AttestedOfflineNote.AuditBundle(
                 audit.tokenId(),
                 audit.senderKeyCertificate(),
                 audit.inputNullifiers(),
@@ -1168,7 +1247,7 @@ public final class OfflineNoteV2Test {
         "empty audit output commitments should throw");
     assertThrows(
         () ->
-            new OfflineNoteV2.AuditBundleV2(
+            new AttestedOfflineNote.AuditBundle(
                 audit.tokenId(),
                 audit.senderKeyCertificate(),
                 audit.inputNullifiers(),
@@ -1177,15 +1256,15 @@ public final class OfflineNoteV2Test {
                 Collections.emptyList(),
                 audit.recursiveProof()),
         "empty audit output claims should throw");
-    final OfflineNoteV2.AuditOutputClaimV2 uncommittedOutput =
-        new OfflineNoteV2.AuditOutputClaimV2(
-            OfflineNoteV2.hash("uncommitted-output".getBytes(StandardCharsets.UTF_8)),
+    final AttestedOfflineNote.AuditOutputClaim uncommittedOutput =
+        new AttestedOfflineNote.AuditOutputClaim(
+            AttestedOfflineNote.hash("uncommitted-output".getBytes(StandardCharsets.UTF_8)),
             audit.outputClaims().get(0).keyCertificate(),
             audit.outputClaims().get(0).assetId(),
             audit.outputClaims().get(0).amount());
     assertThrows(
         () ->
-            new OfflineNoteV2.AuditBundleV2(
+            new AttestedOfflineNote.AuditBundle(
                 audit.tokenId(),
                 audit.senderKeyCertificate(),
                 audit.inputNullifiers(),
@@ -1198,23 +1277,23 @@ public final class OfflineNoteV2Test {
 
   private static void issueRedeemPublicInputsAndInstancesRejectMalformedValues() throws Exception {
     final Map<String, Object> fixture = loadFixture();
-    final OfflineNoteV2.KeyCertificateV2 cert =
+    final AttestedOfflineNote.KeyCertificate cert =
         certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
-    final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
-    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
+    final AttestedOfflineNote.AuditBundle audit = audit(fixture);
+    final AttestedOfflineNote.Redeem redeem = redeem(fixture);
 
     assertThrows(
-        () -> new OfflineNoteV2.IssueV2(new byte[31], cert, redeem.assetId(), "5"),
+        () -> new AttestedOfflineNote.Issue(new byte[31], cert, redeem.assetId(), "5"),
         "short issue commitment should throw");
     assertThrows(
-        () -> new OfflineNoteV2.IssueV2(redeem.sourceNoteCommitment(), cert, "cash#branch.sbp", "5"),
+        () -> new AttestedOfflineNote.Issue(redeem.sourceNoteCommitment(), cert, "cash#branch.sbp", "5"),
         "bad issue asset id should throw");
     assertThrows(
-        () -> new OfflineNoteV2.IssueV2(redeem.sourceNoteCommitment(), cert, redeem.assetId(), "not-a-number"),
+        () -> new AttestedOfflineNote.Issue(redeem.sourceNoteCommitment(), cert, redeem.assetId(), "not-a-number"),
         "bad issue amount should throw");
     assertThrows(
         () ->
-            new OfflineNoteV2.RedeemV2(
+            new AttestedOfflineNote.Redeem(
                 redeem.sourceNoteCommitment(),
                 Collections.emptyList(),
                 redeem.senderKeyCertificate(),
@@ -1225,7 +1304,7 @@ public final class OfflineNoteV2Test {
         "empty redeem nullifiers should throw");
     assertThrows(
         () ->
-            new OfflineNoteV2.RedeemPublicInputsV2(
+            new AttestedOfflineNote.RedeemPublicInputs(
                 new byte[31],
                 redeem.inputNullifiers(),
                 redeem.senderKeyCertificate().payloadHash(),
@@ -1235,7 +1314,7 @@ public final class OfflineNoteV2Test {
         "short redeem source commitment should throw");
     assertThrows(
         () ->
-            new OfflineNoteV2.RedeemPublicInputsV2(
+            new AttestedOfflineNote.RedeemPublicInputs(
                 redeem.sourceNoteCommitment(),
                 redeem.inputNullifiers(),
                 new byte[31],
@@ -1245,7 +1324,7 @@ public final class OfflineNoteV2Test {
         "short redeem key-certificate hash should throw");
     assertThrows(
         () ->
-            new OfflineNoteV2.RedeemPublicInputsV2(
+            new AttestedOfflineNote.RedeemPublicInputs(
                 redeem.sourceNoteCommitment(),
                 redeem.inputNullifiers(),
                 redeem.senderKeyCertificate().payloadHash(),
@@ -1254,19 +1333,19 @@ public final class OfflineNoteV2Test {
                 redeem.amount()),
         "bad redeem recipient should throw");
 
-    final OfflineNoteV2.AuditOutputClaimV2 overLimitOutput =
-        new OfflineNoteV2.AuditOutputClaimV2(
-            OfflineNoteV2.hash("third-output".getBytes(StandardCharsets.UTF_8)),
+    final AttestedOfflineNote.AuditOutputClaim overLimitOutput =
+        new AttestedOfflineNote.AuditOutputClaim(
+            AttestedOfflineNote.hash("third-output".getBytes(StandardCharsets.UTF_8)),
             audit.outputClaims().get(0).keyCertificate(),
             audit.outputClaims().get(0).assetId(),
             "0");
     final List<byte[]> tooManyCommitments = new ArrayList<>(audit.outputCommitments());
     tooManyCommitments.add(overLimitOutput.noteCommitment());
-    final List<OfflineNoteV2.AuditOutputClaimV2> tooManyClaims =
+    final List<AttestedOfflineNote.AuditOutputClaim> tooManyClaims =
         new ArrayList<>(audit.outputClaims());
     tooManyClaims.add(overLimitOutput);
-    final OfflineNoteV2.AuditBundleV2 tooManyOutputs =
-        new OfflineNoteV2.AuditBundleV2(
+    final AttestedOfflineNote.AuditBundle tooManyOutputs =
+        new AttestedOfflineNote.AuditBundle(
             audit.tokenId(),
             audit.senderKeyCertificate(),
             audit.inputNullifiers(),
@@ -1275,17 +1354,17 @@ public final class OfflineNoteV2Test {
             tooManyClaims,
             audit.recursiveProof());
     assertThrows(
-        () -> OfflineNoteV2.InstanceBuilder.auditInstanceValues(tooManyOutputs),
+        () -> AttestedOfflineNote.InstanceBuilder.auditInstanceValues(tooManyOutputs),
         "too many audit outputs should throw");
 
-    final OfflineNoteV2.AuditOutputClaimV2 unconservedOutput =
-        new OfflineNoteV2.AuditOutputClaimV2(
+    final AttestedOfflineNote.AuditOutputClaim unconservedOutput =
+        new AttestedOfflineNote.AuditOutputClaim(
             audit.outputClaims().get(0).noteCommitment(),
             audit.outputClaims().get(0).keyCertificate(),
             audit.outputClaims().get(0).assetId(),
             "6");
-    final OfflineNoteV2.AuditBundleV2 unconservedAudit =
-        new OfflineNoteV2.AuditBundleV2(
+    final AttestedOfflineNote.AuditBundle unconservedAudit =
+        new AttestedOfflineNote.AuditBundle(
             audit.tokenId(),
             audit.senderKeyCertificate(),
             audit.inputNullifiers(),
@@ -1294,24 +1373,24 @@ public final class OfflineNoteV2Test {
             Arrays.asList(unconservedOutput, audit.outputClaims().get(1)),
             audit.recursiveProof());
     assertThrows(
-        () -> OfflineNoteV2.InstanceBuilder.auditInstanceValues(unconservedAudit),
+        () -> AttestedOfflineNote.InstanceBuilder.auditInstanceValues(unconservedAudit),
         "unconserved audit amounts should throw");
   }
 
-  private static void offlineNoteV2DomainsRejectSubstitutionAndPadding() throws Exception {
+  private static void attestedOfflineNoteDomainsRejectSubstitutionAndPadding() throws Exception {
     final Map<String, Object> fixture = loadFixture();
-    final OfflineNoteV2.KeyCertificateV2 certificate =
+    final AttestedOfflineNote.KeyCertificate certificate =
         certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
-    final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
-    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
-    final OfflineNoteV2.IssuedClaimV2 claim = audit.inputClaims().get(0);
-    final OfflineNoteV2.AuditPublicInputsV2 auditPublic = audit.publicInputs();
-    final OfflineNoteV2.RedeemPublicInputsV2 redeemPublic = redeem.publicInputs();
+    final AttestedOfflineNote.AuditBundle audit = audit(fixture);
+    final AttestedOfflineNote.Redeem redeem = redeem(fixture);
+    final AttestedOfflineNote.IssuedClaim claim = audit.inputClaims().get(0);
+    final AttestedOfflineNote.AuditPublicInputs auditPublic = audit.publicInputs();
+    final AttestedOfflineNote.RedeemPublicInputs redeemPublic = redeem.publicInputs();
 
     assertThrows(
         () ->
-            new OfflineNoteV2.KeyCertificatePayloadV2(
-                OfflineNoteV2.KEY_CERTIFICATE_PAYLOAD_DOMAIN + " ",
+            new AttestedOfflineNote.KeyCertificatePayload(
+                AttestedOfflineNote.KEY_CERTIFICATE_PAYLOAD_DOMAIN + " ",
                 certificate.version(),
                 certificate.platform(),
                 certificate.keyId(),
@@ -1326,8 +1405,8 @@ public final class OfflineNoteV2Test {
         "padded key-certificate payload domain must be rejected");
     assertThrows(
         () ->
-            new OfflineNoteV2.IssuedClaimV2(
-                OfflineNoteV2.ISSUED_CLAIM_DOMAIN + "\n",
+            new AttestedOfflineNote.IssuedClaim(
+                AttestedOfflineNote.ISSUED_CLAIM_DOMAIN + "\n",
                 claim.noteCommitment(),
                 claim.keyCertificatePayloadHash(),
                 claim.assetId(),
@@ -1335,8 +1414,8 @@ public final class OfflineNoteV2Test {
         "padded issued-claim domain must be rejected");
     assertThrows(
         () ->
-            new OfflineNoteV2.RedeemPublicInputsV2(
-                "forged:" + OfflineNoteV2.REDEEM_PUBLIC_INPUTS_DOMAIN,
+            new AttestedOfflineNote.RedeemPublicInputs(
+                "forged:" + AttestedOfflineNote.REDEEM_PUBLIC_INPUTS_DOMAIN,
                 redeemPublic.sourceNoteCommitment(),
                 redeemPublic.inputNullifiers(),
                 redeemPublic.keyCertificatePayloadHash(),
@@ -1346,8 +1425,8 @@ public final class OfflineNoteV2Test {
         "forged redeem-public-inputs domain must be rejected");
     assertThrows(
         () ->
-            new OfflineNoteV2.AuditPublicInputsV2(
-                " " + OfflineNoteV2.AUDIT_PUBLIC_INPUTS_DOMAIN,
+            new AttestedOfflineNote.AuditPublicInputs(
+                " " + AttestedOfflineNote.AUDIT_PUBLIC_INPUTS_DOMAIN,
                 auditPublic.tokenId(),
                 auditPublic.keyCertificatePayloadHash(),
                 auditPublic.inputNullifiers(),
@@ -1357,16 +1436,16 @@ public final class OfflineNoteV2Test {
         "padded audit-public-inputs domain must be rejected");
   }
 
-  private static void offlineNoteV2AssetScopeDataspaceIdsRejectNonCanonicalForms()
+  private static void attestedOfflineNoteAssetScopeDataspaceIdsRejectNonCanonicalForms()
       throws Exception {
-    final OfflineNoteV2.IssueV2 issue = issue(loadFixture());
+    final AttestedOfflineNote.Issue issue = issue(loadFixture());
 
-    new OfflineNoteV2.IssueV2(
+    new AttestedOfflineNote.Issue(
         issue.noteCommitment(),
         issue.keyCertificate(),
         issue.assetId() + "#dataspace:0",
         issue.amount());
-    new OfflineNoteV2.IssueV2(
+    new AttestedOfflineNote.Issue(
         issue.noteCommitment(),
         issue.keyCertificate(),
         issue.assetId() + "#dataspace:1",
@@ -1383,7 +1462,7 @@ public final class OfflineNoteV2Test {
             "dataspace:9223372036854775808")) {
       assertThrows(
           () ->
-              new OfflineNoteV2.IssueV2(
+              new AttestedOfflineNote.Issue(
                   issue.noteCommitment(),
                   issue.keyCertificate(),
                   issue.assetId() + "#" + rejected,
@@ -1395,10 +1474,10 @@ public final class OfflineNoteV2Test {
   private static void instanceValuesMatchRustVectors() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> chain = obj(fixture, "chain_vectors");
-    final OfflineNoteV2.InstanceValues auditValues =
-        OfflineNoteV2.InstanceBuilder.auditInstanceValues(audit(fixture));
-    final OfflineNoteV2.InstanceValues redeemValues =
-        OfflineNoteV2.InstanceBuilder.redeemInstanceValues(redeem(fixture));
+    final AttestedOfflineNote.InstanceValues auditValues =
+        AttestedOfflineNote.InstanceBuilder.auditInstanceValues(audit(fixture));
+    final AttestedOfflineNote.InstanceValues redeemValues =
+        AttestedOfflineNote.InstanceBuilder.redeemInstanceValues(redeem(fixture));
     final long[] auditPublic = auditValues.publicValues();
     final long[] redeemPublic = redeemValues.publicValues();
 
@@ -1426,62 +1505,63 @@ public final class OfflineNoteV2Test {
     assertEquals(5L, redeemValues.inputAmounts()[0], "redeem input amount");
     assertEquals(5L, redeemValues.outputAmounts()[0], "redeem output amount");
     assertEquals(
-        hex(OfflineNoteV2.instanceScalarBytes(auditPublic[0])),
+        hex(AttestedOfflineNote.instanceScalarBytes(auditPublic[0])),
         hex(auditValues.publicInstanceColumns().get(0)),
         "audit first instance scalar");
   }
 
   private static void nativeHalo2ProverProducesVerifyingPayloadWhenRequested() throws Exception {
-    if (!"1".equals(System.getenv("IROHA_JAVA_OFFLINE_V2_PROVER_TEST"))) {
+    if (!"1".equals(System.getenv("IROHA_JAVA_ATTESTED_OFFLINE_NOTE_PROVER_TEST"))) {
       return;
     }
     final Map<String, Object> fixture = loadFixture();
-    final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
-    final OfflineNoteV2.InstanceValues values =
-        OfflineNoteV2.InstanceBuilder.auditInstanceValues(audit);
-    OfflineNoteV2Halo2Prover.prewarm();
-    final byte[] payload = OfflineNoteV2Halo2Prover.proveZk1Payload(values);
+    final AttestedOfflineNote.AuditBundle audit = audit(fixture);
+    final AttestedOfflineNote.InstanceValues values =
+        AttestedOfflineNote.InstanceBuilder.auditInstanceValues(audit);
+    AttestedOfflineNoteHalo2Prover.prewarm();
+    final byte[] payload = AttestedOfflineNoteHalo2Prover.proveZk1Payload(values);
 
     assertTrue(
-        OfflineNoteV2Halo2Prover.verifyZk1Payload(payload, values.publicValues()),
+        AttestedOfflineNoteHalo2Prover.verifyZk1Payload(payload, values.publicValues()),
         "Java Offline V2 Halo2 payload verifies");
-    final OfflineNoteV2.RecursiveProofV2 proof = OfflineNoteV2Halo2Prover.proveAudit(audit);
+    final AttestedOfflineNote.RecursiveProof proof = AttestedOfflineNoteHalo2Prover.proveAudit(audit);
     audit.replacingRecursiveProof(proof).validateProofBinding();
     assertTrue(
-        proof.proof().bytes().length <= OfflineNoteV2Halo2Prover.MAX_ENVELOPE_BYTES,
+        proof.proof().bytes().length <= AttestedOfflineNoteHalo2Prover.MAX_ENVELOPE_BYTES,
         "Java Offline V2 Halo2 envelope fits QR budget");
     final String publicInputsHashHex = hex(proof.publicInputsHash());
     assertTrue(
-        OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(
+        AttestedOfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(
             proof.proof().bytes(), publicInputsHashHex),
         "Java Offline V2 Halo2 SDK envelope helper verifies public input hash");
     for (final String rejectedHash : nonExactPublicInputHashes(publicInputsHashHex)) {
       assertTrue(
-          !OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(proof.proof().bytes(), rejectedHash),
+          !AttestedOfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(proof.proof().bytes(), rejectedHash),
           "Java Offline V2 Halo2 SDK envelope helper rejects non-exact public input hash");
     }
   }
 
   private static void nativeHalo2ProverPerformanceWhenRequested() throws Exception {
-    if (!"1".equals(System.getenv("IROHA_JAVA_OFFLINE_V2_BENCH"))) {
+    if (!"1".equals(System.getenv("IROHA_JAVA_ATTESTED_OFFLINE_NOTE_BENCH"))) {
       return;
     }
-    final String configuredIterations = System.getenv("IROHA_JAVA_OFFLINE_V2_BENCH_ITERATIONS");
+    final String configuredIterations =
+        System.getenv("IROHA_JAVA_ATTESTED_OFFLINE_NOTE_BENCH_ITERATIONS");
     final int iterations =
         configuredIterations == null ? 20 : Integer.parseInt(configuredIterations);
     assertTrue(iterations > 0, "Java Offline V2 benchmark iterations must be positive");
 
     final Map<String, Object> fixture = loadFixture();
-    final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
-    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
-    OfflineNoteV2Halo2Prover.prewarm();
-    OfflineNoteV2Halo2Prover.proveAudit(audit);
-    OfflineNoteV2Halo2Prover.proveRedeem(redeem);
+    final AttestedOfflineNote.AuditBundle audit = audit(fixture);
+    final AttestedOfflineNote.Redeem redeem = redeem(fixture);
+    AttestedOfflineNoteHalo2Prover.prewarm();
+    AttestedOfflineNoteHalo2Prover.proveAudit(audit);
+    AttestedOfflineNoteHalo2Prover.proveRedeem(redeem);
 
     final double[] auditSeconds =
-        benchmarkSeconds(iterations, () -> OfflineNoteV2Halo2Prover.proveAudit(audit));
+        benchmarkSeconds(iterations, () -> AttestedOfflineNoteHalo2Prover.proveAudit(audit));
     final double[] redeemSeconds =
-        benchmarkSeconds(iterations, () -> OfflineNoteV2Halo2Prover.proveRedeem(redeem));
+        benchmarkSeconds(iterations, () -> AttestedOfflineNoteHalo2Prover.proveRedeem(redeem));
     System.out.println(
         "offline_note_v2_java_bench audit="
             + summary(auditSeconds)
@@ -1494,63 +1574,63 @@ public final class OfflineNoteV2Test {
     assertEquals("iroha:qr1:", string(fountain, "frame_prefix"), "fountain QR prefix");
   }
 
-  private static OfflineNoteV2.IssueV2 issue(final Map<String, Object> fixture) {
+  private static AttestedOfflineNote.Issue issue(final Map<String, Object> fixture) {
     final Map<String, Object> chainIssue = obj(obj(fixture, "chain_vectors"), "issue");
-    return new OfflineNoteV2.IssueV2(
+    return new AttestedOfflineNote.Issue(
         hexBytes(string(chainIssue, "note_commitment")),
         certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate")),
         string(chainIssue, "asset_id"),
         string(chainIssue, "amount"));
   }
 
-  private static OfflineNoteV2.RedeemV2 redeem(final Map<String, Object> fixture) {
+  private static AttestedOfflineNote.Redeem redeem(final Map<String, Object> fixture) {
     final Map<String, Object> vector = obj(obj(fixture, "chain_vectors"), "redeem");
     final Map<String, Object> payment = obj(fixture, "payment_token");
-    return new OfflineNoteV2.RedeemV2(
+    return new AttestedOfflineNote.Redeem(
         hexBytes(string(vector, "source_note_commitment")),
         hexList(vector, "input_nullifiers"),
         certificate(obj(payment, "recipient_key_certificate")),
         string(payment, "recipient_account_id"),
         string(vector, "asset_id"),
         string(vector, "amount"),
-        new OfflineNoteV2.RecursiveProofV2(
+        new AttestedOfflineNote.RecursiveProof(
             hexBytes(string(vector, "public_inputs_hash")),
-            new OfflineNoteV2.ProofBox(
-                OfflineNoteV2.RECURSIVE_BACKEND,
+            new AttestedOfflineNote.ProofBox(
+                AttestedOfflineNote.RECURSIVE_BACKEND,
                 "offline-v2-vector-redeem-proof".getBytes(StandardCharsets.UTF_8))));
   }
 
-  private static OfflineNoteV2.AuditBundleV2 audit(final Map<String, Object> fixture) {
+  private static AttestedOfflineNote.AuditBundle audit(final Map<String, Object> fixture) {
     final Map<String, Object> vector = obj(obj(fixture, "chain_vectors"), "audit");
     final Map<String, Object> payment = obj(fixture, "payment_token");
-    final List<OfflineNoteV2.IssuedClaimV2> inputClaims = new ArrayList<>();
+    final List<AttestedOfflineNote.IssuedClaim> inputClaims = new ArrayList<>();
     for (final Object item : list(payment, "input_claims")) {
       inputClaims.add(issuedClaim(asMap(item, "input claim")));
     }
-    final List<OfflineNoteV2.AuditOutputClaimV2> outputClaims = new ArrayList<>();
+    final List<AttestedOfflineNote.AuditOutputClaim> outputClaims = new ArrayList<>();
     for (final Object item : list(payment, "output_claims")) {
       outputClaims.add(auditOutputClaim(asMap(item, "output claim")));
     }
-    return new OfflineNoteV2.AuditBundleV2(
+    return new AttestedOfflineNote.AuditBundle(
         hexBytes(string(vector, "token_id")),
         certificate(obj(payment, "sender_key_certificate")),
         hexList(vector, "input_nullifiers"),
         inputClaims,
         hexList(vector, "output_commitments"),
         outputClaims,
-        new OfflineNoteV2.RecursiveProofV2(
+        new AttestedOfflineNote.RecursiveProof(
             hexBytes(string(vector, "public_inputs_hash")),
-            new OfflineNoteV2.ProofBox(
-                OfflineNoteV2.RECURSIVE_BACKEND,
+            new AttestedOfflineNote.ProofBox(
+                AttestedOfflineNote.RECURSIVE_BACKEND,
                 "offline-v2-vector-audit-proof".getBytes(StandardCharsets.UTF_8))));
   }
 
-  private static OfflineNoteV2.DeviceAttestationRegistrationV2 attestationRegistration(
+  private static AttestedOfflineNote.DeviceAttestationRegistration attestationRegistration(
       final Map<String, Object> fixture) {
     return attestationRegistration(fixture, null, null, null);
   }
 
-  private static OfflineNoteV2.DeviceAttestationRegistrationV2 attestationRegistration(
+  private static AttestedOfflineNote.DeviceAttestationRegistration attestationRegistration(
       final Map<String, Object> fixture,
       final byte[] challengeHash,
       final byte[] attestationReportHash,
@@ -1570,7 +1650,7 @@ public final class OfflineNoteV2Test {
         null);
   }
 
-  private static OfflineNoteV2.DeviceAttestationRegistrationV2 attestationRegistration(
+  private static AttestedOfflineNote.DeviceAttestationRegistration attestationRegistration(
       final Map<String, Object> fixture,
       final byte[] challengeHash,
       final byte[] attestationReportHash,
@@ -1602,7 +1682,7 @@ public final class OfflineNoteV2Test {
         null);
   }
 
-  private static OfflineNoteV2.DeviceAttestationRegistrationV2 attestationRegistrationWithProfile(
+  private static AttestedOfflineNote.DeviceAttestationRegistration attestationRegistrationWithProfile(
       final Map<String, Object> fixture,
       final String platform,
       final String assertionScheme,
@@ -1627,7 +1707,7 @@ public final class OfflineNoteV2Test {
         assertionUsageCountLimit);
   }
 
-  private static OfflineNoteV2.DeviceAttestationRegistrationV2
+  private static AttestedOfflineNote.DeviceAttestationRegistration
       attestationRegistrationWithProfileAndKeyId(
           final Map<String, Object> fixture,
           final String platform,
@@ -1656,7 +1736,7 @@ public final class OfflineNoteV2Test {
         null);
   }
 
-  private static OfflineNoteV2.DeviceAttestationRegistrationV2
+  private static AttestedOfflineNote.DeviceAttestationRegistration
       attestationRegistrationWithDeviceId(
           final Map<String, Object> fixture,
           final String deviceId) {
@@ -1681,7 +1761,7 @@ public final class OfflineNoteV2Test {
         deviceId);
   }
 
-  private static OfflineNoteV2.DeviceAttestationRegistrationV2
+  private static AttestedOfflineNote.DeviceAttestationRegistration
       attestationRegistrationWithMetadata(
           final Map<String, Object> fixture,
           final String iosTeamId,
@@ -1713,7 +1793,7 @@ public final class OfflineNoteV2Test {
         androidPackageName);
   }
 
-  private static OfflineNoteV2.DeviceAttestationRegistrationV2 attestationRegistration(
+  private static AttestedOfflineNote.DeviceAttestationRegistration attestationRegistration(
       final Map<String, Object> fixture,
       final byte[] challengeHash,
       final byte[] attestationReportHash,
@@ -1751,7 +1831,7 @@ public final class OfflineNoteV2Test {
         null);
   }
 
-  private static OfflineNoteV2.DeviceAttestationRegistrationV2 attestationRegistration(
+  private static AttestedOfflineNote.DeviceAttestationRegistration attestationRegistration(
       final Map<String, Object> fixture,
       final byte[] challengeHash,
       final byte[] attestationReportHash,
@@ -1795,7 +1875,7 @@ public final class OfflineNoteV2Test {
         null);
   }
 
-  private static OfflineNoteV2.DeviceAttestationRegistrationV2 attestationRegistration(
+  private static AttestedOfflineNote.DeviceAttestationRegistration attestationRegistration(
       final Map<String, Object> fixture,
       final byte[] challengeHash,
       final byte[] attestationReportHash,
@@ -1822,7 +1902,7 @@ public final class OfflineNoteV2Test {
         obj(obj(fixture, "chain_vectors"), "attestation_registration");
     final String androidSigningDigestHex =
         nullableString(vector, "android_signing_certificate_sha256");
-    return new OfflineNoteV2.DeviceAttestationRegistrationV2(
+    return new AttestedOfflineNote.DeviceAttestationRegistration(
         intValue(vector, "version"),
         platform == null ? string(vector, "platform") : platform,
         keyId == null ? string(vector, "key_id") : keyId,
@@ -1862,8 +1942,8 @@ public final class OfflineNoteV2Test {
         longValue(vector, "expires_at_ms"));
   }
 
-  private static OfflineNoteV2.KeyCertificateV2 certificate(final Map<String, Object> json) {
-    return new OfflineNoteV2.KeyCertificateV2(
+  private static AttestedOfflineNote.KeyCertificate certificate(final Map<String, Object> json) {
+    return new AttestedOfflineNote.KeyCertificate(
         intValue(json, "version"),
         string(json, "platform"),
         string(json, "key_id"),
@@ -1878,8 +1958,8 @@ public final class OfflineNoteV2Test {
         base64Bytes(string(json, "issuer_signature_base64")));
   }
 
-  private static OfflineNoteV2.IssuedClaimV2 issuedClaim(final Map<String, Object> json) {
-    return new OfflineNoteV2.IssuedClaimV2(
+  private static AttestedOfflineNote.IssuedClaim issuedClaim(final Map<String, Object> json) {
+    return new AttestedOfflineNote.IssuedClaim(
         string(json, "domain"),
         hexBytes(string(json, "note_commitment")),
         hexBytes(string(json, "key_certificate_payload_hash")),
@@ -1887,9 +1967,9 @@ public final class OfflineNoteV2Test {
         string(json, "amount"));
   }
 
-  private static OfflineNoteV2.AuditOutputClaimV2 auditOutputClaim(
+  private static AttestedOfflineNote.AuditOutputClaim auditOutputClaim(
       final Map<String, Object> json) {
-    return new OfflineNoteV2.AuditOutputClaimV2(
+    return new AttestedOfflineNote.AuditOutputClaim(
         hexBytes(string(json, "note_commitment")),
         certificate(obj(json, "key_certificate")),
         string(json, "asset_definition_id") + "#" + string(json, "account_id"),
@@ -1900,7 +1980,7 @@ public final class OfflineNoteV2Test {
       final String schema, final byte[] modelPayload, final InstructionBox instruction) {
     assertEquals(schema, instruction.name(), "instruction wire name");
     if (!(instruction.payload() instanceof InstructionBox.WirePayload wire)) {
-      throw new AssertionError("Offline Note V2 instruction must use a wire payload");
+      throw new AssertionError("Attested Offline Note instruction must use a wire payload");
     }
     assertEquals(schema, wire.wireName(), "instruction payload wire name");
     final NoritoHeader.DecodeResult outerFrame = NoritoHeader.decode(wire.payloadBytes(), null);
@@ -1915,7 +1995,7 @@ public final class OfflineNoteV2Test {
 
   private static byte[] wirePayloadBytes(final InstructionBox instruction) {
     if (!(instruction.payload() instanceof InstructionBox.WirePayload wire)) {
-      throw new AssertionError("Offline Note V2 instruction must use a wire payload");
+      throw new AssertionError("Attested Offline Note instruction must use a wire payload");
     }
     return wire.payloadBytes();
   }
@@ -1928,7 +2008,7 @@ public final class OfflineNoteV2Test {
     writeUInt32Le(instances, 16);
     writeUInt32Le(instances, 1);
     for (final long value : publicValues) {
-      instances.writeBytes(OfflineNoteV2.instanceScalarBytes(value));
+      instances.writeBytes(AttestedOfflineNote.instanceScalarBytes(value));
     }
     appendTlv(out, "I10P", instances.toByteArray());
     return out.toByteArray();
@@ -1959,7 +2039,7 @@ public final class OfflineNoteV2Test {
           public void encode(final NoritoEncoder encoder, final String value) {
             writeOpenEnvelopeField(
                 encoder,
-                child -> child.writeUInt(OfflineNoteV2Halo2Prover.BACKEND_TAG, 32));
+                child -> child.writeUInt(AttestedOfflineNoteHalo2Prover.BACKEND_TAG, 32));
             writeOpenEnvelopeRawField(encoder, circuitFieldPayload);
           }
 
@@ -2180,7 +2260,7 @@ public final class OfflineNoteV2Test {
   private static byte[] attestationEvidence(final byte[] attestationReportHash) {
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     out.writeBytes(
-        OfflineNoteV2.DEVICE_ATTESTATION_EVIDENCE_PREFIX.getBytes(StandardCharsets.UTF_8));
+        AttestedOfflineNote.DEVICE_ATTESTATION_EVIDENCE_PREFIX.getBytes(StandardCharsets.UTF_8));
     out.writeBytes(attestationReportHash);
     return out.toByteArray();
   }

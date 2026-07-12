@@ -600,6 +600,14 @@ mod tests {
         state_block.commit().expect("commit synthetic state block");
     }
 
+    fn execution_commitment(seed: u8) -> wire::ExecutionCommitment {
+        wire::ExecutionCommitment::without_topups(
+            Hash::new([seed, 1]),
+            Hash::new([seed, 2]),
+            Hash::new([seed, 3]),
+        )
+    }
+
     fn artifact_for(
         context: wire::HeightContext,
         block: &SignedBlock,
@@ -617,6 +625,7 @@ mod tests {
             },
             phase: wire::GlobalPhase::Commit,
             subject,
+            execution_commitment: execution_commitment(0xB4),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0xB4; 48],
         };
@@ -643,6 +652,7 @@ mod tests {
             round,
             phase: wire::GlobalPhase::Commit,
             subject,
+            execution_commitment: execution_commitment(0xB6),
             signer: 0,
             signature: Vec::new(),
         };
@@ -660,6 +670,7 @@ mod tests {
             round,
             phase: wire::GlobalPhase::Commit,
             subject,
+            execution_commitment: execution_commitment(0xB6),
             signers: vec![0, 1, 2],
             aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
                 .expect("aggregate CommitQC"),

@@ -443,6 +443,10 @@ class _MockState:
                     "max_retained_native_trust_anchors_per_lane": 4_096,
                 },
                 "resource_limits": {
+                    "max_outbound_messages_per_block": 512,
+                    "max_outbound_message_payload_bytes": 4_096,
+                    "max_pending_outbound_messages": 65_536,
+                    "max_pending_outbound_payload_bytes": 256 * 1024 * 1024,
                     "max_proofs_per_transaction": 1,
                     "max_proofs_per_block": 4,
                     "max_proof_bytes_per_proof": 8 * 1024 * 1024,

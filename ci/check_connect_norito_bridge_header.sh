@@ -13,6 +13,7 @@ usage() {
 usage: ci/check_connect_norito_bridge_header.sh [negative-control]
 
 negative-control:
+  --negative-control-bad-bridge-abi
   --negative-control-missing-recursive-header
   --negative-control-bad-recursive-signature
   --negative-control-bad-recursive-v2-signature
@@ -54,11 +55,11 @@ swift_v2_contract_text = swift_v2_contract.read_text(encoding="utf-8")
 
 recursive_export_pattern = re.compile(
     r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
-    r'(connect_norito_kagemusha_(?:recursive_spend_|topup_finality_)[a-z0-9_]+)\s*\('
+    r'(connect_norito_kagemusha_(?:recursive_spend_|topup_(?:finality|shield)_)[a-z0-9_]+)\s*\('
 )
 recursive_declaration_pattern = re.compile(
     r'int32_t\s+'
-    r'(connect_norito_kagemusha_(?:recursive_spend_|topup_finality_)[a-z0-9_]+)\s*\('
+    r'(connect_norito_kagemusha_(?:recursive_spend_|topup_(?:finality|shield)_)[a-z0-9_]+)\s*\('
 )
 privacy_export_pattern = re.compile(
     r'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+'
@@ -93,6 +94,10 @@ bridge_abi_declaration = re.search(
     r"uint32_t\s+connect_norito_bridge_abi_version\s*\(\s*void\s*\)\s*;",
     header_text,
 ) is not None
+bridge_abi_constant = re.search(
+    r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*([0-9]+)\s*;",
+    rust_text,
+)
 
 required_kagemusha_v2_proof_exports = {
     "connect_norito_kagemusha_recursive_spend_init_v2",
@@ -104,6 +109,7 @@ required_kagemusha_v2_proof_exports = {
 required_kagemusha_v2_protocol_exports = {
     "connect_norito_kagemusha_recursive_spend_capabilities_v1",
     "connect_norito_kagemusha_topup_finality_verify_v2",
+    "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
     "connect_norito_kagemusha_recursive_spend_topup_v2",
     "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2",
     "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2",
@@ -129,6 +135,9 @@ required_kagemusha_v2_protocol_exports = {
     "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
     "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
     "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
 }
 required_kagemusha_native_exports = (
     required_kagemusha_v2_proof_exports | required_kagemusha_v2_protocol_exports
@@ -137,11 +146,11 @@ required_kagemusha_native_exports = (
 kagemusha_native_export_pattern = re.compile(
     r'#\[unsafe\(no_mangle\)\]\s*'
     r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
-    r'(connect_norito_kagemusha_(?:recursive_spend|topup_finality|receiver|recipient|request)_[a-z0-9_]+)\s*\('
+    r'(connect_norito_kagemusha_(?:recursive_spend|topup_finality|topup_shield|receiver|recipient|request)_[a-z0-9_]+)\s*\('
 )
 kagemusha_native_declaration_pattern = re.compile(
     r'int32_t\s+'
-    r'(connect_norito_kagemusha_(?:recursive_spend|topup_finality|receiver|recipient|request)_[a-z0-9_]+)\s*\('
+    r'(connect_norito_kagemusha_(?:recursive_spend|topup_finality|topup_shield|receiver|recipient|request)_[a-z0-9_]+)\s*\('
 )
 rust_kagemusha_native_exports = set(kagemusha_native_export_pattern.findall(rust_text))
 header_kagemusha_native_declarations = set(
@@ -169,6 +178,12 @@ def const_char_ptr(name):
 
 def u8_out_ptr(name):
     return rf"uint8_t\s*\*\*\s*{name}"
+
+def u8_ptr(name):
+    return rf"uint8_t\s*\*\s*{name}"
+
+def const_u64_ptr(name):
+    return rf"const\s+uint64_t\s*\*\s*{name}"
 
 def ulong(name):
     return rf"unsigned\s+long\s+{name}"
@@ -232,14 +247,17 @@ def rust_ulong_ptr(name):
 def rust_u8(name):
     return rust_param(name, r"u8")
 
-def rust_u32(name):
-    return rust_param(name, r"u32")
-
 def rust_u64(name):
     return rust_param(name, r"u64")
 
 def rust_u64_ptr(name):
     return rust_param(name, r"\*mut\s+u64")
+
+def rust_u8_ptr(name):
+    return rust_param(name, r"\*mut\s+u8")
+
+def rust_const_u64_ptr(name):
+    return rust_param(name, r"\*const\s+u64")
 
 def rust_archive_out_signature(name, input_name, output_name):
     return rust_signature(
@@ -294,9 +312,18 @@ expected_recursive_signatures = {
             ulong("proof_norito_len"),
             const_u8_ptr("roster_norito_ptr"),
             ulong("roster_norito_len"),
-            const_u8_ptr("expected_roster_sha256_ptr"),
-            ulong("expected_roster_sha256_len"),
+            const_u8_ptr("anchor_norito_ptr"),
+            ulong("anchor_norito_len"),
+            const_u8_ptr("manifest_norito_ptr"),
+            ulong("manifest_norito_len"),
+            const_u8_ptr("expected_manifest_sha256_ptr"),
+            ulong("expected_manifest_sha256_len"),
         ],
+    ),
+    "connect_norito_kagemusha_topup_shield_build_unsigned_v2": recursive_request_signature(
+        "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
+        "out_unsigned_ptr",
+        "out_unsigned_len",
     ),
     "connect_norito_kagemusha_recursive_spend_artifact_begin_v3": c_signature(
         "int32_t",
@@ -330,34 +357,36 @@ expected_recursive_signatures = {
         "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
         [r"uint64_t\s+handle"],
     ),
-    "connect_norito_kagemusha_recursive_spend_artifact_begin_v2": c_signature(
+    "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3": c_signature(
         "int32_t",
-        "connect_norito_kagemusha_recursive_spend_artifact_begin_v2",
+        "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3",
         [
-            const_u8_ptr("reference_norito_ptr"),
-            ulong("reference_norito_len"),
-            r"uint32_t\s+expected_role",
-            r"uint64_t\s*\*\s*out_handle",
+            const_u8_ptr("manifest_norito_ptr"),
+            ulong("manifest_norito_len"),
+            const_u8_ptr("expected_manifest_sha256_ptr"),
+            ulong("expected_manifest_sha256_len"),
+            const_u64_ptr("handles_ptr"),
+            ulong("handles_len"),
         ],
     ),
-    "connect_norito_kagemusha_recursive_spend_artifact_write_v2": c_signature(
+    "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3": c_signature(
         "int32_t",
-        "connect_norito_kagemusha_recursive_spend_artifact_write_v2",
+        "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
         [
-            r"uint64_t\s+handle",
-            const_u8_ptr("chunk_ptr"),
-            ulong("chunk_len"),
+            const_u8_ptr("manifest_norito_ptr"),
+            ulong("manifest_norito_len"),
+            const_u8_ptr("expected_manifest_sha256_ptr"),
+            ulong("expected_manifest_sha256_len"),
+            u8_ptr("out_installed"),
         ],
     ),
-    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2": c_signature(
+    "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3": c_signature(
         "int32_t",
-        "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2",
-        [r"uint64_t\s+handle"],
-    ),
-    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2": c_signature(
-        "int32_t",
-        "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2",
-        [r"uint64_t\s+handle"],
+        "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
+        [
+            const_u8_ptr("expected_manifest_sha256_ptr"),
+            ulong("expected_manifest_sha256_len"),
+        ],
     ),
     "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2": recursive_request_signature(
         "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2",
@@ -528,19 +557,21 @@ expected_recursive_signatures = {
         "out_instruction_len",
     ),
 }
+# The dictionary also documents retired unsuffixed signatures for historical
+# negative-control fixtures. Only the exact ABI-18/V3 export inventory is a
+# required first-release surface.
+expected_recursive_signatures = {
+    name: signature
+    for name, signature in expected_recursive_signatures.items()
+    if name in required_kagemusha_native_exports
+}
 required_recursive_ffi = set(expected_recursive_signatures)
 
 expected_kagemusha_v2_signatures = {
     name: expected_recursive_signatures[name]
     for name in (
         required_kagemusha_v2_proof_exports
-        | {
-            "connect_norito_kagemusha_recursive_spend_bundle_summary_v2",
-            "connect_norito_kagemusha_recursive_spend_artifact_begin_v2",
-            "connect_norito_kagemusha_recursive_spend_artifact_write_v2",
-            "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2",
-            "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2",
-        }
+        | {"connect_norito_kagemusha_recursive_spend_bundle_summary_v2"}
     )
 }
 expected_kagemusha_v2_signatures.update(
@@ -692,8 +723,17 @@ expected_kagemusha_v2_rust_signatures = {
         [
             rust_const_u8_ptr("proof_norito_ptr"), rust_ulong("proof_norito_len"),
             rust_const_u8_ptr("roster_norito_ptr"), rust_ulong("roster_norito_len"),
-            rust_const_u8_ptr("expected_roster_sha256_ptr"),
-            rust_ulong("expected_roster_sha256_len"),
+            rust_const_u8_ptr("anchor_norito_ptr"), rust_ulong("anchor_norito_len"),
+            rust_const_u8_ptr("manifest_norito_ptr"), rust_ulong("manifest_norito_len"),
+            rust_const_u8_ptr("expected_manifest_sha256_ptr"),
+            rust_ulong("expected_manifest_sha256_len"),
+        ],
+    ),
+    "connect_norito_kagemusha_topup_shield_build_unsigned_v2": rust_signature(
+        "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
+        [
+            rust_const_u8_ptr("request_norito_ptr"), rust_ulong("request_norito_len"),
+            rust_u8_out_ptr("out_unsigned_ptr"), rust_ulong_ptr("out_unsigned_len"),
         ],
     ),
     "connect_norito_kagemusha_recursive_spend_artifact_begin_v3": rust_signature(
@@ -715,6 +755,30 @@ expected_kagemusha_v2_rust_signatures = {
     ),
     "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3": rust_signature(
         "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3", [rust_u64("handle")]
+    ),
+    "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3": rust_signature(
+        "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3",
+        [
+            rust_const_u8_ptr("manifest_norito_ptr"), rust_ulong("manifest_norito_len"),
+            rust_const_u8_ptr("expected_manifest_sha256_ptr"),
+            rust_ulong("expected_manifest_sha256_len"),
+            rust_const_u64_ptr("handles_ptr"), rust_ulong("handles_len"),
+        ],
+    ),
+    "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3": rust_signature(
+        "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
+        [
+            rust_const_u8_ptr("manifest_norito_ptr"), rust_ulong("manifest_norito_len"),
+            rust_const_u8_ptr("expected_manifest_sha256_ptr"),
+            rust_ulong("expected_manifest_sha256_len"), rust_u8_ptr("out_installed"),
+        ],
+    ),
+    "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3": rust_signature(
+        "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
+        [
+            rust_const_u8_ptr("expected_manifest_sha256_ptr"),
+            rust_ulong("expected_manifest_sha256_len"),
+        ],
     ),
     "connect_norito_kagemusha_recursive_spend_topup_v2": rust_archive_out_signature(
         "connect_norito_kagemusha_recursive_spend_topup_v2", "request_norito", "instruction"
@@ -820,23 +884,13 @@ expected_kagemusha_v2_rust_signatures = {
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v2": rust_archive_out_signature(
         "connect_norito_kagemusha_recursive_spend_bundle_summary_v2", "bundle_norito", "summary"
     ),
-    "connect_norito_kagemusha_recursive_spend_artifact_begin_v2": rust_signature(
-        "connect_norito_kagemusha_recursive_spend_artifact_begin_v2",
-        [
-            rust_const_u8_ptr("reference_norito_ptr"), rust_ulong("reference_norito_len"),
-            rust_u32("expected_role"), rust_u64_ptr("out_handle"),
-        ],
-    ),
-    "connect_norito_kagemusha_recursive_spend_artifact_write_v2": rust_signature(
-        "connect_norito_kagemusha_recursive_spend_artifact_write_v2",
-        [rust_u64("handle"), rust_const_u8_ptr("chunk_ptr"), rust_ulong("chunk_len")],
-    ),
-    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2": rust_signature(
-        "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2", [rust_u64("handle")]
-    ),
-    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2": rust_signature(
-        "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2", [rust_u64("handle")]
-    ),
+}
+
+retired_kagemusha_v2_artifact_ingest = {
+    "connect_norito_kagemusha_recursive_spend_artifact_begin_v2",
+    "connect_norito_kagemusha_recursive_spend_artifact_write_v2",
+    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2",
+    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2",
 }
 
 expected_connect_norito_free_header_signature = c_signature(
@@ -948,10 +1002,40 @@ stale_sorafs_reference_header_declarations = sorted(
 )
 
 errors = []
+retired_rust_exports = sorted(retired_kagemusha_v2_artifact_ingest & rust_exports)
+retired_header_declarations = sorted(
+    retired_kagemusha_v2_artifact_ingest & header_declarations
+)
+if retired_rust_exports:
+    errors.append(
+        "retired Rust Kagemusha V2 artifact-ingest exports reintroduced: "
+        + ", ".join(retired_rust_exports)
+    )
+if retired_header_declarations:
+    errors.append(
+        "retired C header Kagemusha V2 artifact-ingest declarations reintroduced: "
+        + ", ".join(retired_header_declarations)
+    )
+retired_role_macros = sorted(
+    name
+    for name in (
+        "CONNECT_NORITO_KAGEMUSHA_ARTIFACT_ROLE_LINEAGE_INIT_V2",
+        "CONNECT_NORITO_KAGEMUSHA_ARTIFACT_ROLE_LINEAGE_APPEND_V2",
+        "CONNECT_NORITO_KAGEMUSHA_ARTIFACT_ROLE_REDEEM_CHANGE_V2",
+    )
+    if name in header_text
+)
+if retired_role_macros:
+    errors.append(
+        "retired C header Kagemusha V2 artifact-ingest role macros reintroduced: "
+        + ", ".join(retired_role_macros)
+    )
+if "KagemushaRecursiveSpendArtifactIngestV2" in swift_v2_contract_text:
+    errors.append("retired Swift Kagemusha V2 artifact-ingest wrapper reintroduced")
 if len(required_kagemusha_v2_proof_exports) != 5:
     errors.append("internal ABI-18 Kagemusha V2 proof inventory must contain exactly 5 symbols")
-if len(required_kagemusha_v2_protocol_exports) != 27:
-    errors.append("internal ABI-18 Kagemusha V2 protocol inventory must contain exactly 27 symbols")
+if len(required_kagemusha_v2_protocol_exports) != 31:
+    errors.append("internal ABI-18 Kagemusha V2 protocol inventory must contain exactly 31 symbols")
 if swift_v2_proof_inventory is None:
     errors.append("Swift ABI-18 Kagemusha V2 requiredProofSymbols inventory is missing")
 elif len(swift_v2_proof_inventory) != len(set(swift_v2_proof_inventory)):
@@ -1067,6 +1151,8 @@ if not bridge_abi_export:
     errors.append("missing Rust C export: connect_norito_bridge_abi_version")
 if not bridge_abi_declaration:
     errors.append("missing C header declaration: connect_norito_bridge_abi_version")
+if bridge_abi_constant is None or bridge_abi_constant.group(1) != "18":
+    errors.append("first-release connect_norito bridge ABI must be exactly 18")
 if '#include "connect_norito_bridge.h"' not in umbrella_text:
     errors.append("NoritoBridge.h must include connect_norito_bridge.h")
 
@@ -1128,8 +1214,16 @@ if [[ "${MODE}" == --negative-control-* ]]; then
   trap 'rm -rf "${tmp}"' EXIT
 
   case "${MODE}" in
+    --negative-control-bad-bridge-abi)
+      perl -0pi -e 's/(CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*)18/${1}17/ or die "missing exact bridge ABI target\n"' "${tmp}/lib.rs"
+      expect_contract_rejection \
+        "first-release connect_norito bridge ABI must be exactly 18" \
+        "${tmp}/lib.rs" \
+        "${tmp}/connect_norito_bridge.h" \
+        "${tmp}/NoritoBridge.h"
+      ;;
     --negative-control-missing-recursive-header)
-      perl -0pi -e 's/int32_t\s+connect_norito_kagemusha_recursive_spend_redeem\s*\([^;]*\);\n//s or die "missing recursive declaration target\n"' "${tmp}/connect_norito_bridge.h"
+      perl -0pi -e 's/int32_t\s+connect_norito_kagemusha_recursive_spend_redeem_v2\s*\([^;]*\);\n//s or die "missing recursive declaration target\n"' "${tmp}/connect_norito_bridge.h"
       expect_contract_rejection \
         "missing required C header declarations" \
         "${tmp}/lib.rs" \
@@ -1153,9 +1247,9 @@ if [[ "${MODE}" == --negative-control-* ]]; then
         "${tmp}/NoritoBridge.h"
       ;;
     --negative-control-bad-recursive-v2-artifact-signature)
-      perl -0pi -e 's/(connect_norito_kagemusha_recursive_spend_artifact_begin_v2\s*\([^;]*?)uint64_t\*\s+out_handle/${1}uint32_t* out_handle/s or die "missing recursive V2 artifact signature target\n"' "${tmp}/connect_norito_bridge.h"
+      perl -0pi -e 's|(// ---------------- Legacy V2 protocol scaffolding ----------------)|int32_t connect_norito_kagemusha_recursive_spend_artifact_begin_v2(const uint8_t* reference_norito_ptr, unsigned long reference_norito_len, uint32_t expected_role, uint64_t* out_handle);\n\n$1|s or die "missing legacy V2 protocol section target\n"' "${tmp}/connect_norito_bridge.h"
       expect_contract_rejection \
-        "C header recursive-spend declaration has wrong signature: connect_norito_kagemusha_recursive_spend_artifact_begin_v2" \
+        "retired C header Kagemusha V2 artifact-ingest declarations reintroduced: connect_norito_kagemusha_recursive_spend_artifact_begin_v2" \
         "${tmp}/lib.rs" \
         "${tmp}/connect_norito_bridge.h" \
         "${tmp}/NoritoBridge.h"
@@ -1215,7 +1309,7 @@ if [[ "${MODE}" == --negative-control-* ]]; then
         "${tmp}/NoritoBridge.h"
       ;;
     --negative-control-missing-rust-export)
-      perl -0pi -e 's/pub\s+unsafe\s+extern\s+"C"\s+fn\s+connect_norito_kagemusha_recursive_spend_lineage_append_boundary\s*\(/pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_lineage_append_boundary_removed(/s or die "missing Rust export target\n"' "${tmp}/lib.rs"
+      perl -0pi -e 's/pub\s+unsafe\s+extern\s+"C"\s+fn\s+connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3\s*\(/pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3_removed(/s or die "missing Rust export target\n"' "${tmp}/lib.rs"
       expect_contract_rejection \
         "missing required Rust recursive-spend exports" \
         "${tmp}/lib.rs" \

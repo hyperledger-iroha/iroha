@@ -20,7 +20,7 @@ public final class RegisterOfflineDeviceAttestation {
 
   private final String chainId;
   private final String authority;
-  private final OfflineNoteV2.DeviceAttestationRegistrationV2 registration;
+  private final AttestedOfflineNote.DeviceAttestationRegistration registration;
   private final long creationTimeMs;
   private final Long timeToLiveMs;
   private final Integer nonce;
@@ -29,7 +29,7 @@ public final class RegisterOfflineDeviceAttestation {
   public RegisterOfflineDeviceAttestation(
       final String chainId,
       final String authority,
-      final OfflineNoteV2.DeviceAttestationRegistrationV2 registration,
+      final AttestedOfflineNote.DeviceAttestationRegistration registration,
       final long creationTimeMs,
       final Long timeToLiveMs,
       final Integer nonce,
@@ -56,14 +56,14 @@ public final class RegisterOfflineDeviceAttestation {
   public RegisterOfflineDeviceAttestation(
       final String chainId,
       final String authority,
-      final OfflineNoteV2.DeviceAttestationRegistrationV2 registration,
+      final AttestedOfflineNote.DeviceAttestationRegistration registration,
       final long creationTimeMs) {
     this(chainId, authority, registration, creationTimeMs, null, null, Collections.emptyMap());
   }
 
   /** Exact native instruction carried by this transaction. */
   public InstructionBox instruction() {
-    return OfflineNoteV2.registerDeviceAttestationInstruction(registration);
+    return AttestedOfflineNote.registerDeviceAttestationInstruction(registration);
   }
 
   /** Build the canonical transaction payload without exporting account key material. */

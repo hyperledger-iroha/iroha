@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.offline;
 
 import java.io.IOException;
+import java.lang.reflect.Constructor;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -71,7 +72,10 @@ public final class KagemushaRecursiveSpendProverTest {
 
   public static void main(final String[] args) {
     firstReleaseApiDoesNotExposeProofOutputOnlyFoldBuilder();
+    malformedArtifactInputsFailBeforeNativeDispatch();
+    artifactInstallSessionRejectsPartialAndClosedUse();
     exposesStableModesAndCircuitIds();
+    publicSurfaceOmitsRetiredRecursiveApis();
     lineageKeyArtifactPackagesValidateReleaseProfiles();
     sharedRecursiveSpendAbi6FixtureMatchesSdkSurface();
     sharedRecursiveSpendAbi7FixtureManifestMatchesArchiveFixture();
@@ -89,7 +93,8 @@ public final class KagemushaRecursiveSpendProverTest {
     rejectsEmptyArchivesBeforeNativeDispatch();
     copiesNativeInputArchivesBeforeDispatch();
     rejectsMalformedAndEmptyPayloadArchivesBeforeNativeDispatch();
-    nativeProbeRequiresAbiSixAndAllSymbols();
+    nativeProbeRequiresAbiEighteenAndAllSymbols();
+    pastaCycleV3CapabilityProbesAreIndependentFromLegacyRecursiveJni();
     rejectsNullAndEmptyNativeRedeemOutput();
     System.out.println("[IrohaAndroid] KagemushaRecursiveSpendProverTest passed.");
   }
@@ -105,12 +110,61 @@ public final class KagemushaRecursiveSpendProverTest {
         : "Android SDK exposes a proof-output-only fold builder";
   }
 
+  private static void malformedArtifactInputsFailBeforeNativeDispatch() {
+    final byte[] digest = repeat((byte) 1, 32);
+    assertThrows(() -> KagemushaRecursiveSpendProver.beginArtifactInstallSession(null, digest));
+    assertThrows(
+        () -> KagemushaRecursiveSpendProver.beginArtifactInstallSession(new byte[0], digest));
+    assertThrows(
+        () ->
+            KagemushaRecursiveSpendProver.beginArtifactInstallSession(
+                new byte[KagemushaRecursiveSpendProver.MAX_MANIFEST_BYTES + 1], digest));
+    assertThrows(
+        () ->
+            KagemushaRecursiveSpendProver.beginArtifactInstallSession(new byte[] {1}, null));
+    assertThrows(
+        () ->
+            KagemushaRecursiveSpendProver.beginArtifactInstallSession(
+                new byte[] {1}, new byte[31]));
+    assertThrows(
+        () ->
+            KagemushaRecursiveSpendProver.beginArtifactInstallSession(
+                new byte[] {1}, new byte[32]));
+    assertThrows(
+        () ->
+            KagemushaRecursiveSpendProver.beginArtifactIngest(
+                new byte[] {1}, digest, new byte[32]));
+  }
+
+  private static void artifactInstallSessionRejectsPartialAndClosedUse() {
+    try {
+      final Constructor<KagemushaRecursiveSpendProver.ArtifactInstallSession> constructor =
+          KagemushaRecursiveSpendProver.ArtifactInstallSession.class.getDeclaredConstructor(
+              byte[].class, byte[].class);
+      constructor.setAccessible(true);
+      final KagemushaRecursiveSpendProver.ArtifactInstallSession session =
+          constructor.newInstance(new byte[] {1}, repeat((byte) 1, 32));
+      assertIllegalState(session::install, "artifact set must contain exactly six streams");
+      session.close();
+      assert !session.isInstalled();
+      assertIllegalState(
+          () -> session.beginArtifact(repeat((byte) 2, 32)),
+          "artifact install session is not pending");
+    } catch (final ReflectiveOperationException error) {
+      throw new AssertionError("failed to construct artifact session test fixture", error);
+    }
+  }
+
   private static void exposesStableModesAndCircuitIds() {
-    assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 6;
+    assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 18;
+    assert KagemushaRecursiveSpendProver.isExactBridgeAbi(18);
+    assert !KagemushaRecursiveSpendProver.isExactBridgeAbi(17);
+    assert !KagemushaRecursiveSpendProver.isExactBridgeAbi(19);
     assert KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 18;
     assert "kagemusha.offline.recursive_spend.artifact_manifest.v3"
         .equals(KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA);
     assert "recursive_spend_v2".equals(KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_MODE);
+    assert "recursive_spend_v2".equals(KagemushaRecursiveSpendProver.MODE);
     assert "halo2/ipa-pasta-cycle-v1"
         .equals(KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_PROOF_BACKEND);
     assert "kagemusha-pasta-cycle-poseidon-v1"
@@ -414,11 +468,14 @@ public final class KagemushaRecursiveSpendProverTest {
     assert !KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(null, 1);
     assert !KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend("", 1);
     assert "recursive_spend_v2"
-        .equals(KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V2.wireName());
+        .equals(KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND.wireName());
     assert KagemushaRecursiveSpendProver.Mode.values().length == 1;
     assert KagemushaRecursiveSpendProver.preferredMode(true)
-        == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V2;
+        == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND;
     assert KagemushaRecursiveSpendProver.preferredMode(false) == null;
+    assert KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_spend_v2");
+    assert !KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_spend_v1");
+    assert !KagemushaRecursiveSpendProver.isSpendAgainMode(null);
     assert KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 7;
     assert "kagemusha-recursive-compact-v1"
         .equals(KagemushaRecursiveCompactPaymentTokenProver.RECURSIVE_COMPACT_CIRCUIT_ID_V1);
@@ -699,6 +756,31 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveCompactPaymentTokenProver
                 .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
                     validRecursiveCompactInput, validRecursiveCompactInput, (BigInteger) null));
+  }
+
+  private static void publicSurfaceOmitsRetiredRecursiveApis() {
+    final java.util.Set<String> publicMethods =
+        Arrays.stream(KagemushaRecursiveSpendProver.class.getDeclaredMethods())
+            .filter(method -> java.lang.reflect.Modifier.isPublic(method.getModifiers()))
+            .map(java.lang.reflect.Method::getName)
+            .collect(java.util.stream.Collectors.toSet());
+    for (final String retired :
+        new String[] {
+          "initSpend",
+          "appendSpend",
+          "topUpSpend",
+          "verifySpend",
+          "redeemSpend",
+          "transitionProfileInit",
+          "transitionProfileAppend",
+          "lineageAppendBoundary",
+          "lineageWitnessFromInitResult",
+          "lineageWitnessAppendResult",
+          "buildPallasOpenEnvelopesArchive",
+          "buildPreviousProofOpenEnvelopesArchive"
+        }) {
+      assert !publicMethods.contains(retired) : "retired public method remains: " + retired;
+    }
   }
 
   private static void lineageKeyArtifactPackagesValidateReleaseProfiles() {
@@ -1164,7 +1246,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assertContains(manifest, "\"schema\": \"iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1\"");
     assertContains(
         manifest,
-        "\"native_bridge_abi_version\": " + KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
+        "\"native_bridge_abi_version\": 6");
     assertContains(manifest, "\"operation_count\": 9");
     assertContains(
         manifest,
@@ -4551,7 +4633,7 @@ public final class KagemushaRecursiveSpendProverTest {
                 validArchive, validArchive, oversizedArchive));
   }
 
-  private static void nativeProbeRequiresAbiSixAndAllSymbols() {
+  private static void nativeProbeRequiresAbiEighteenAndAllSymbols() {
     assert KagemushaRecursiveSpendProver.expectIllegalArgumentProbe(
         () -> {
           throw new IllegalArgumentException("malformed probe");
@@ -4565,10 +4647,12 @@ public final class KagemushaRecursiveSpendProverTest {
                 }),
         "accepted malformed probe before backend work");
 
-    assert KagemushaRecursiveSpendProver.detectNativeAvailability(
+    assert !KagemushaRecursiveSpendProver.detectNativeAvailability(
         () -> {}, () -> 6, () -> true);
-    assert KagemushaRecursiveSpendProver.detectNativeAvailability(
+    assert !KagemushaRecursiveSpendProver.detectNativeAvailability(
         () -> {}, () -> 7, () -> true);
+    assert KagemushaRecursiveSpendProver.detectNativeAvailability(
+        () -> {}, () -> 18, () -> true);
     final boolean[] loadedInvalidRequiredAbi = {false};
     assert !KagemushaRecursiveSpendProver.detectNativeAvailability(
         () -> loadedInvalidRequiredAbi[0] = true, () -> 7, () -> true, 0);
@@ -4647,6 +4731,52 @@ public final class KagemushaRecursiveSpendProverTest {
         () -> {
           throw new IllegalStateException("bad malformed probe");
         });
+  }
+
+  private static void pastaCycleV3CapabilityProbesAreIndependentFromLegacyRecursiveJni() {
+    final boolean legacyAvailable =
+        KagemushaRecursiveSpendProver.detectNativeAvailability(
+            () -> {},
+            () -> 18,
+            () -> {
+              throw new UnsatisfiedLinkError("missing legacy recursive JNI");
+            });
+    assert !legacyAvailable;
+
+    assert KagemushaRecursiveSpendProver.detectExactNativeAvailability(
+        () -> {}, () -> 18, () -> true, 18);
+    assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
+        () -> {},
+        () -> 17,
+        () -> {
+          throw new AssertionError("wrong ABI must not probe V3 symbols");
+        },
+        18);
+    assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
+        () -> {},
+        () -> 19,
+        () -> {
+          throw new AssertionError("newer ABI must not be accepted implicitly");
+        },
+        18);
+    assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
+        () -> {},
+        () -> 18,
+        () -> {
+          throw new UnsatisfiedLinkError("missing V3 symbol");
+        },
+        18);
+    assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
+        () -> {
+          throw new UnsatisfiedLinkError("missing bridge");
+        },
+        () -> {
+          throw new AssertionError("must not inspect ABI");
+        },
+        () -> {
+          throw new AssertionError("must not probe V3 symbols");
+        },
+        18);
   }
 
   private static void rejectsNullAndEmptyNativeRedeemOutput() {

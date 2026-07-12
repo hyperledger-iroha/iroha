@@ -24,6 +24,10 @@ use crate::{
 use ed25519_dalek::{Signature as Ed25519Signature, Verifier as _};
 use ed25519_dalek::{Signer as _, SigningKey};
 use iroha_data_model::prelude::{Mintable, Name};
+use iroha_data_model::{
+    nexus::DataSpaceId,
+    smart_contract::{CHAIN_DISCRIMINANT_MAINNET, ContractAddress},
+};
 use iroha_primitives::{json::Json, numeric::Numeric, numeric_abi::DecimalValueV1};
 use ivm_abi::entrypoint::EntrypointArgumentSchemaV1;
 use ivm_abi::state_value::{
@@ -116,6 +120,7 @@ struct CompiledSuite {
 struct RuntimeEntrypoint {
     pc: u64,
     argument_schema: Option<EntrypointArgumentSchemaV1>,
+    permission: Option<String>,
 }
 
 #[derive(Clone)]
@@ -150,6 +155,7 @@ struct KotoTestHost {
     base_public_inputs: BTreeMap<Name, Vec<u8>>,
     entrypoints: HashMap<String, RuntimeEntrypoint>,
     program: Option<Vec<u8>>,
+    contract_address: ContractAddress,
     last_test_error: Option<String>,
     supplemental_trace_pcs: Vec<u64>,
     supplemental_delta_trace: Vec<crate::zk::DeltaEntry>,
@@ -652,6 +658,7 @@ fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSu
                                 RuntimeEntrypoint {
                                     pc: runtime_pc_base.saturating_add(entry.entry_pc),
                                     argument_schema: entry.argument_schema.clone(),
+                                    permission: entry.permission.clone(),
                                 },
                             )
                         })
@@ -935,6 +942,41 @@ fn apply_fixture_action(
             }
             Err("fixture action `grant_permission` expects 1 or 2 arguments".to_string())
         }
+        "grant_contract_entrypoint_permission" => {
+            expect_arg_count(action, 2)?;
+            let alias = eval_actor_alias_expr(&action.args[0])?;
+            let entrypoint = eval_string_expr(&action.args[1])?;
+            if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
+                return Err(
+                    "fixture contract entrypoint permission requires a non-empty canonical selector"
+                        .to_owned(),
+                );
+            }
+            let account = host
+                .actor_account(&alias)
+                .ok_or_else(|| format!("unknown actor `{alias}`"))?;
+            let permission = PermissionToken::ContractEntrypoint {
+                contract: host.contract_address.clone(),
+                entrypoint,
+            };
+            host.inner_mut().wsv.grant_permission(&account, permission);
+            Ok(())
+        }
+        "grant_contract_effect_permission" => {
+            expect_arg_count(action, 1)?;
+            let permission = eval_permission_expr(&action.args[0])?;
+            let contract_subject = host.contract_subject();
+            host.inner_mut()
+                .wsv
+                .grant_permission(&contract_subject, permission);
+            Ok(())
+        }
+        "register_account_alias" => {
+            expect_arg_count(action, 2)?;
+            let alias = eval_string_expr(&action.args[0])?;
+            let account = eval_fixture_account_or_actor(&action.args[1], host)?;
+            host.inner_mut().register_account_alias(alias, account)
+        }
         "register_domain" => {
             expect_arg_count(action, 1)?;
             let domain = eval_domain_expr(&action.args[0])?;
@@ -1053,12 +1095,24 @@ impl KotoTestHost {
         program: Option<Vec<u8>>,
         entrypoints: HashMap<String, RuntimeEntrypoint>,
     ) -> Self {
+        let contract_address = ContractAddress::derive(
+            CHAIN_DISCRIMINANT_MAINNET,
+            &inner.caller_subject(),
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("Kotodama test contract address derivation must be deterministic");
+        let mut inner = inner;
+        inner
+            .wsv
+            .add_account_unchecked(contract_address.subject_id());
         Self {
             inner,
             actors: HashMap::new(),
             base_public_inputs: BTreeMap::new(),
             entrypoints,
             program,
+            contract_address,
             last_test_error: None,
             supplemental_trace_pcs: Vec::new(),
             supplemental_delta_trace: Vec::new(),
@@ -1075,6 +1129,10 @@ impl KotoTestHost {
 
     fn set_caller_subject(&mut self, caller: AccountId) {
         self.inner.set_caller_subject(caller);
+    }
+
+    fn contract_subject(&self) -> AccountId {
+        self.contract_address.subject_id()
     }
 
     fn actor_account(&self, alias: &str) -> Option<AccountId> {
@@ -1263,19 +1321,27 @@ impl KotoTestHost {
                 ));
             }
         };
+        if runtime_entrypoint.permission.as_deref() == Some("CanInvokeContractEntrypoint") {
+            let permission = PermissionToken::ContractEntrypoint {
+                contract: self.contract_address.clone(),
+                entrypoint: entrypoint.clone(),
+            };
+            if !self.inner.wsv.has_permission(&actor.account, &permission) {
+                if expect_reject {
+                    vm.set_register(10, 0);
+                    return Ok(0);
+                }
+                return self.fail_test(format!(
+                    "actor `{actor_alias}` lacks exact CanInvokeContractEntrypoint permission for `{entrypoint}`"
+                ));
+            }
+        }
         let Some(program) = self.program.as_deref() else {
             return self.fail_test(format!(
                 "runtime entrypoint `{entrypoint}` has no compiled runtime artifact"
             ));
         };
 
-        let rollback = self
-            .inner
-            .checkpoint()
-            .ok_or(crate::VMError::HostUnavailable)?;
-        let previous_caller = self.inner.caller_subject();
-
-        self.inner.set_caller_subject(actor.account.clone());
         let mut nested_inputs = self.base_public_inputs.clone();
         if let Some(schema) = runtime_entrypoint.argument_schema.as_ref() {
             let trigger_name: Name = "trigger_event_json"
@@ -1287,7 +1353,6 @@ impl KotoTestHost {
                 make_tlv(PointerType::NoritoBytes, &encoded_payload),
             );
         }
-        self.inner.set_public_inputs(nested_inputs);
 
         let mut nested_vm = IVM::new(u64::MAX);
         nested_vm.reset();
@@ -1304,6 +1369,20 @@ impl KotoTestHost {
         nested_vm.set_register(1, nested_vm.memory.code_len().saturating_sub(4));
         nested_vm.set_trace_mode(vm.trace_mode());
         nested_vm.set_max_cycles(0);
+
+        let rollback = self
+            .inner
+            .checkpoint()
+            .ok_or(crate::VMError::HostUnavailable)?;
+        let previous_caller = self.inner.caller_subject();
+        if let Err(message) = self.inner.bind_contract_runtime_context(
+            actor.account.clone(),
+            self.contract_address.clone(),
+            entrypoint.clone(),
+        ) {
+            return self.fail_test(message);
+        }
+        self.inner.set_public_inputs(nested_inputs);
         let nested_outcome = nested_vm.run_with_host(&mut self.inner);
         self.record_nested_trace(&nested_vm);
 
@@ -1316,7 +1395,7 @@ impl KotoTestHost {
                 ))
             }
             Ok(()) => {
-                self.inner.set_caller_subject(previous_caller);
+                self.inner.clear_contract_runtime_context(previous_caller);
                 self.restore_public_inputs();
                 for idx in 0..return_arity {
                     let value = nested_vm.register(10 + idx);
@@ -1491,6 +1570,15 @@ fn eval_actor_alias_expr(expr: &Expr) -> Result<String, String> {
         Expr::String(raw) | Expr::Ident(raw) => Ok(raw.clone()),
         other => Err(format!("expected actor alias expression, got {other:?}")),
     }
+}
+
+fn eval_fixture_account_or_actor(expr: &Expr, host: &KotoTestHost) -> Result<AccountId, String> {
+    if let Expr::String(raw) | Expr::Ident(raw) = expr
+        && let Some(account) = host.actor_account(raw)
+    {
+        return Ok(account);
+    }
+    eval_account_expr(expr)
 }
 
 fn decode_hex_or_raw_bytes(raw: &str) -> Result<Vec<u8>, String> {
@@ -2691,6 +2779,10 @@ mod tests {
             "contracts/contract_flow_demo.ko",
             r#"
             seiyaku Demo {
+                error enum DemoError {
+                    Rejected = 1,
+                }
+
                 state int counter;
                 state AccountId last_actor;
 
@@ -2712,7 +2804,7 @@ mod tests {
                 }
 
                 kotoage fn reject_me() authorize("Test") {
-                    test::assert_eq(actual: 1, expected: 2);
+                    require(false, DemoError::Rejected);
                 }
             }
             "#,
@@ -2901,6 +2993,10 @@ mod tests {
             "contracts/contract_flow_demo.ko",
             r#"
             seiyaku Demo {
+                error enum DemoError {
+                    Rejected = 1,
+                }
+
                 state int counter;
                 state AccountId last_actor;
 
@@ -2922,7 +3018,7 @@ mod tests {
                 }
 
                 kotoage fn reject_me() authorize("Test") {
-                    test::assert_eq(actual: 1, expected: 2);
+                    require(false, DemoError::Rejected);
                 }
             }
             "#,
@@ -2945,8 +3041,8 @@ mod tests {
 
                     let pk = test::actor_public_key("issuer");
                     let sig = test::actor_sign("issuer", b"native-flow");
-                    test::assert(codec::tlv_len(pk) > 0);
-                    test::assert(codec::tlv_len(sig) > 0);
+                    test::assert(pk != b"");
+                    test::assert(sig != b"");
                 }}
 
                 #[test(fixture="actors")]
@@ -3261,6 +3357,183 @@ mod tests {
             host.actors["seller"].seed.expect("stored actor seed"),
             actor_seed
         );
+    }
+
+    #[test]
+    fn fixture_entrypoint_grant_is_address_and_selector_scoped() {
+        let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
+        let actor = caller.clone();
+        let mut host = KotoTestHost::new(
+            WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new()),
+            None,
+            HashMap::new(),
+        );
+        host.register_actor("operator".to_owned(), actor.clone())
+            .expect("register fixture actor");
+        let mut public_inputs = BTreeMap::new();
+        apply_fixture_action(
+            &FixtureAction {
+                name: "grant_contract_entrypoint_permission".to_owned(),
+                args: vec![
+                    Expr::String("operator".to_owned()),
+                    Expr::String("apply".to_owned()),
+                ],
+            },
+            &mut host,
+            &mut public_inputs,
+        )
+        .expect("grant exact fixture permission");
+
+        let exact = PermissionToken::ContractEntrypoint {
+            contract: host.contract_address.clone(),
+            entrypoint: "apply".to_owned(),
+        };
+        let wrong_selector = PermissionToken::ContractEntrypoint {
+            contract: host.contract_address.clone(),
+            entrypoint: "other".to_owned(),
+        };
+        assert!(host.inner.wsv.has_permission(&actor, &exact));
+        assert!(!host.inner.wsv.has_permission(&actor, &wrong_selector));
+
+        host.inner.wsv.grant_permission(
+            &actor,
+            PermissionToken::Custom("CanInvokeContractEntrypoint".to_owned()),
+        );
+        assert!(
+            !host.inner.wsv.has_permission(&actor, &wrong_selector),
+            "name-only grants must never materialize a scoped entrypoint capability"
+        );
+    }
+
+    #[test]
+    fn fixture_contract_effect_grant_targets_only_the_immutable_contract_subject() {
+        let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
+        let mut host = KotoTestHost::new(
+            WsvHost::new_with_subject(
+                MockWorldStateView::default(),
+                caller.clone(),
+                HashMap::new(),
+            ),
+            None,
+            HashMap::new(),
+        );
+        host.register_actor("app".to_owned(), caller.clone())
+            .expect("register app actor");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("effects", "universal").expect("domain"),
+            "unit".parse().expect("asset name"),
+        );
+        let permission = PermissionToken::MintAsset(asset.clone());
+        let mut public_inputs = BTreeMap::new();
+        apply_fixture_action(
+            &FixtureAction {
+                name: "grant_contract_effect_permission".to_owned(),
+                args: vec![Expr::String(format!("mint_asset:{asset}"))],
+            },
+            &mut host,
+            &mut public_inputs,
+        )
+        .expect("grant contract effect permission");
+
+        assert!(
+            host.inner
+                .wsv
+                .has_permission(&host.contract_subject(), &permission)
+        );
+        assert!(
+            !host.inner.wsv.has_permission(&caller, &permission),
+            "contract effect grants must never leak onto the invoking application authority"
+        );
+    }
+
+    #[test]
+    fn fixture_account_alias_registration_is_canonical_unique_and_resolvable() {
+        let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
+        let other = AccountId::new(
+            iroha_crypto::KeyPair::from_seed(vec![0x91; 32], iroha_crypto::Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let mut host = KotoTestHost::new(
+            WsvHost::new_with_subject(
+                MockWorldStateView::default(),
+                caller.clone(),
+                HashMap::new(),
+            ),
+            None,
+            HashMap::new(),
+        );
+        host.register_actor("merchant".to_owned(), caller.clone())
+            .expect("register merchant actor");
+        host.register_actor("other".to_owned(), other)
+            .expect("register other actor");
+        let mut public_inputs = BTreeMap::new();
+        let registration = FixtureAction {
+            name: "register_account_alias".to_owned(),
+            args: vec![
+                Expr::String("merchant@hbl.sbp".to_owned()),
+                Expr::String("merchant".to_owned()),
+            ],
+        };
+        apply_fixture_action(&registration, &mut host, &mut public_inputs)
+            .expect("register canonical domain-scoped account alias");
+
+        let mut vm = IVM::new(u64::MAX);
+        let pointer = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Blob, b"merchant@hbl.sbp"))
+            .expect("allocate alias argument");
+        vm.set_register(10, pointer);
+        host.inner
+            .syscall(crate::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS, &mut vm)
+            .expect("resolve seeded alias");
+        let resolved_tlv = vm
+            .validate_tlv(vm.register(10))
+            .expect("resolved account TLV");
+        assert_eq!(resolved_tlv.type_id, PointerType::AccountId);
+        let resolved: AccountId =
+            norito::decode_from_bytes(resolved_tlv.payload).expect("decode resolved account");
+        assert_eq!(resolved, caller);
+
+        let duplicate = apply_fixture_action(&registration, &mut host, &mut public_inputs)
+            .expect_err("duplicate alias registration must fail");
+        assert!(duplicate.contains("duplicate account alias registration"));
+        let conflict = apply_fixture_action(
+            &FixtureAction {
+                name: "register_account_alias".to_owned(),
+                args: vec![
+                    Expr::String("merchant@hbl.sbp".to_owned()),
+                    Expr::String("other".to_owned()),
+                ],
+            },
+            &mut host,
+            &mut public_inputs,
+        )
+        .expect_err("conflicting alias registration must fail");
+        assert!(conflict.contains("conflicting account alias registration"));
+
+        for alias in [
+            "merchant",
+            "merchant@@sbp",
+            "merchant@",
+            "@sbp",
+            "merchant@hbl.sbp.extra",
+            " merchant@sbp",
+            "merchant@sbp ",
+        ] {
+            let error = apply_fixture_action(
+                &FixtureAction {
+                    name: "register_account_alias".to_owned(),
+                    args: vec![
+                        Expr::String(alias.to_owned()),
+                        Expr::String("merchant".to_owned()),
+                    ],
+                },
+                &mut host,
+                &mut public_inputs,
+            )
+            .expect_err("noncanonical alias registration must fail");
+            assert!(!error.is_empty(), "missing rejection for `{alias}`");
+        }
     }
 
     #[test]

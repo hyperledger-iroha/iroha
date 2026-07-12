@@ -23,6 +23,30 @@ const OFFLINE_OPERATION_BYTES = Array.from({ length: 32 }, () => 0x11);
 const OFFLINE_OPERATION_ID = "11".repeat(32);
 const OFFLINE_TRANSACTION_HASH = "22".repeat(32);
 const OFFLINE_STATUS_URI = `/v1/offline/operations/${OFFLINE_OPERATION_ID}`;
+const OFFLINE_CANONICAL_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
+
+function browserActiveTransferVerifier() {
+  return {
+    id: { backend: "halo2-ipa-pasta", name: "transfer-v2" },
+    version: 7,
+    circuit_id: "confidential-transfer-v2",
+    commitment: "44".repeat(32),
+    public_inputs_schema_hash: "55".repeat(32),
+    max_proof_bytes: 4096,
+    activation_height: 1,
+    withdrawal_height: null,
+  };
+}
+
+function browserActiveTopUpShieldVerifier() {
+  return {
+    ...browserActiveTransferVerifier(),
+    id: { backend: "halo2-ipa-pasta", name: "topup-shield-v2" },
+    circuit_id: "kagemusha-topup-shield-v2",
+    commitment: "66".repeat(32),
+    public_inputs_schema_hash: "77".repeat(32),
+  };
+}
 
 function jsonResponse(payload, init = {}) {
   return new Response(JSON.stringify(payload), {
@@ -52,9 +76,12 @@ test("ToriiBrowserClient implements the complete first-release Offline JSON flow
     requests.push({ parsed, init });
     if (parsed.pathname === "/v1/offline/readiness") {
       return jsonResponse({
-        asset_definition_id: "xor#sora",
+        asset_definition_id: OFFLINE_CANONICAL_ASSET_DEFINITION_ID,
+        asset_scale: 4,
         evaluated_block_height: 7,
         evaluated_block_hash: "ab".repeat(32),
+        active_transfer_verifier: browserActiveTransferVerifier(),
+        active_topup_shield_verifier: browserActiveTopUpShieldVerifier(),
         ready: true,
         blockers: [],
       });
@@ -102,8 +129,11 @@ test("ToriiBrowserClient implements the complete first-release Offline JSON flow
 
 test("ToriiBrowserClient preserves wide Offline response integers", async () => {
   const fetchImpl = async () => new Response(
-    '{"asset_definition_id":"xor#sora",'
-      + `"evaluated_block_height":18446744073709551615,"evaluated_block_hash":"${"ab".repeat(32)}","ready":true,"blockers":[]}`,
+    `{"asset_definition_id":"${OFFLINE_CANONICAL_ASSET_DEFINITION_ID}",`
+      + `"asset_scale":4,"evaluated_block_height":18446744073709551615,"evaluated_block_hash":"${"ab".repeat(32)}",`
+      + `"active_transfer_verifier":${JSON.stringify(browserActiveTransferVerifier())},`
+      + `"active_topup_shield_verifier":${JSON.stringify(browserActiveTopUpShieldVerifier())},`
+      + '"ready":true,"blockers":[]}',
     { status: 200, headers: { "content-type": "application/json" } },
   );
   const client = new ToriiBrowserClient("https://torii.example", { fetchImpl });
@@ -130,6 +160,18 @@ test("ToriiBrowserClient rejects adversarial Offline inputs before fetch", async
       authorization: { operation_id: Array(32).fill(0x12) },
     })),
     /must match/,
+  );
+  await assert.rejects(
+    () => client.submitOfflineTopUp(browserOfflineTopUpRequest({
+      amount: { atomic_units: 1, scale: 29 },
+    })),
+    /scale/,
+  );
+  await assert.rejects(
+    () => client.submitOfflineTopUp(browserOfflineTopUpRequest({
+      artifact_generation: "é".repeat(65),
+    })),
+    /128/,
   );
   await assert.rejects(
     () => client.getOfflineOperationStatus("AB".repeat(32)),
@@ -338,6 +380,22 @@ test("ToriiBrowserClient does not statically import Node-only Norito code", () =
   assert.doesNotMatch(source, /from\s+["']\.\/norito\.js["']/);
 });
 
+test("ToriiBrowserClient source and dist use only first-release multisig proposal routes", () => {
+  for (const relativePath of [
+    "../src/toriiBrowserClient.js",
+    "../dist/toriiBrowserClient.js",
+  ]) {
+    const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
+    assert.doesNotMatch(
+      source,
+      /["']\/v1\/multisig\/proposals\/(?:list|get)["']/,
+      `${relativePath} must not retain retired multisig proposal paths`,
+    );
+    assert.match(source, /["']\/v1\/multisig\/proposals\/query["']/);
+    assert.match(source, /["']\/v1\/multisig\/proposals\/lookup["']/);
+  }
+});
+
 test("ToriiBrowserClient resolves aliases with JSON body", async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(String(url), "https://torii.example/v1/aliases/resolve");
@@ -350,7 +408,7 @@ test("ToriiBrowserClient resolves aliases with JSON body", async () => {
   assert.deepEqual(payload, { resolved: true, account_id: "account" });
 });
 
-test("ToriiBrowserClient posts multisig proposal lookups to registered routes", async () => {
+test("ToriiBrowserClient posts selector-explicit multisig proposal reads", async () => {
   const calls = [];
   const fetchImpl = async (url, init) => {
     calls.push({ url: String(url), init });
@@ -367,11 +425,13 @@ test("ToriiBrowserClient posts multisig proposal lookups to registered routes", 
   };
   const client = new ToriiBrowserClient("https://torii.example", { fetchImpl });
 
-  await client.listMultisigProposals({
+  await client.queryMultisigProposals({
     multisigAccountAlias: "cbdc@banka",
-    status: ["COLLECTING_SIGNATURES"],
+    status: ["collecting_signatures"],
+    cursor: "page-1",
+    limit: 25,
   });
-  await client.getMultisigProposal({
+  await client.lookupMultisigProposal({
     multisigAccountAlias: "cbdc@banka",
     instructionsHash: "a".repeat(64),
   });
@@ -381,6 +441,8 @@ test("ToriiBrowserClient posts multisig proposal lookups to registered routes", 
   assert.deepEqual(JSON.parse(calls[0].init.body), {
     multisig_account_alias: "cbdc@banka",
     status: ["COLLECTING_SIGNATURES"],
+    cursor: "page-1",
+    limit: 25,
   });
   assert.equal(calls[1].url, "https://torii.example/v1/multisig/proposals/lookup");
   assert.equal(calls[1].init.method, "POST");
@@ -390,91 +452,55 @@ test("ToriiBrowserClient posts multisig proposal lookups to registered routes", 
   });
 });
 
-test("ToriiBrowserClient preserves legacy multisig proposal lookup signature", async () => {
-  let captured;
-  const fetchImpl = async (url, init) => {
-    captured = { url: String(url), init };
-    return jsonResponse({
-      resolved_multisig_account_id: FIXTURE_ALICE_ID,
-      proposal_id: "b".repeat(64),
-      instructions_hash: "b".repeat(64),
-      proposal: { approvals: [], proposed_at_ms: 1 },
-    });
-  };
-  const client = new ToriiBrowserClient("https://torii.example", { fetchImpl });
-  await client.getMultisigProposal(FIXTURE_ALICE_ID, "b".repeat(64));
-
-  assert.equal(captured.url, "https://torii.example/v1/multisig/proposals/lookup");
-  assert.deepEqual(JSON.parse(captured.init.body), {
-    multisig_account_id: FIXTURE_ALICE_ID,
-    proposal_id: "b".repeat(64),
+test("ToriiBrowserClient rejects unsupported multisig proposal statuses before fetch", () => {
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => {
+      throw new Error("fetch should not be invoked");
+    },
   });
+
+  assert.throws(
+    () =>
+      client.queryMultisigProposals({
+        multisigAccountAlias: "cbdc@banka",
+        status: ["READY_TO_SUBMIT"],
+      }),
+    /must be one of COLLECTING_SIGNATURES, FINALIZED, CANCELED, EXPIRED/,
+  );
 });
 
-test("ToriiBrowserClient posts multisig approvals to registered routes", async () => {
-  const calls = [];
-  const fetchImpl = async (url, init) => {
-    calls.push({ url: String(url), init });
-    return jsonResponse(
-      calls.length === 1
-        ? { items: [], next_cursor: null }
-        : {
-            item: {
-              multisig_account_id: FIXTURE_ALICE_ID,
-              spec: { signatories: {}, quorum: 1, transaction_ttl_ms: 60000 },
-              proposal_id: "c".repeat(64),
-              instructions_hash: "c".repeat(64),
-              proposal: { approvals: [], proposed_at_ms: 1 },
-              operation_type: "TRANSFER",
-              status: "COLLECTING_SIGNATURES",
-            },
-          },
-    );
-  };
-  const client = new ToriiBrowserClient("https://torii.example", { fetchImpl });
-
-  await client.listMultisigApprovals({
-    status: ["COLLECTING_SIGNATURES"],
-    operationType: ["TRANSFER"],
-    requiresMySignature: true,
-    limit: 5,
+test("ToriiBrowserClient rejects implicit and ambiguous multisig selectors before fetch", () => {
+  let calls = 0;
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => {
+      calls += 1;
+      throw new Error("fetch should not be invoked");
+    },
   });
-  await client.getMultisigApproval({ proposalId: "c".repeat(64) });
 
-  assert.equal(calls[0].url, "https://torii.example/v1/multisig/approvals/query");
-  assert.deepEqual(JSON.parse(calls[0].init.body), {
-    status: ["COLLECTING_SIGNATURES"],
-    operation_type: ["TRANSFER"],
-    requires_my_signature: true,
-    limit: 5,
-  });
-  assert.equal(calls[1].url, "https://torii.example/v1/multisig/approvals/lookup");
-  assert.deepEqual(JSON.parse(calls[1].init.body), {
-    proposal_id: "c".repeat(64),
-  });
-});
-
-test("ToriiBrowserClient maps pending approval compatibility helpers to approval POST routes", async () => {
-  const calls = [];
-  const fetchImpl = async (url, init) => {
-    calls.push({ url: String(url), init });
-    return jsonResponse(calls.length === 1 ? { items: [] } : { item: {} });
-  };
-  const client = new ToriiBrowserClient("https://torii.example", { fetchImpl });
-
-  await client.listPendingMultisigApprovals({ operationType: ["MINT"], limit: 3 });
-  await client.getPendingMultisigApproval("d".repeat(64));
-
-  assert.equal(calls[0].url, "https://torii.example/v1/multisig/approvals/query");
-  assert.deepEqual(JSON.parse(calls[0].init.body), {
-    operation_type: ["MINT"],
-    limit: 3,
-    status: ["COLLECTING_SIGNATURES"],
-  });
-  assert.equal(calls[1].url, "https://torii.example/v1/multisig/approvals/lookup");
-  assert.deepEqual(JSON.parse(calls[1].init.body), {
-    proposal_id: "d".repeat(64),
-  });
+  assert.throws(() => client.queryMultisigProposals({}), /requires exactly one/);
+  assert.throws(
+    () =>
+      client.queryMultisigProposals({
+        multisigAccountId: FIXTURE_ALICE_ID,
+        multisigAccountAlias: "cbdc@banka",
+      }),
+    /requires exactly one/,
+  );
+  assert.throws(
+    () => client.lookupMultisigProposal(FIXTURE_ALICE_ID, "b".repeat(64)),
+    /must be an object/,
+  );
+  assert.throws(
+    () =>
+      client.lookupMultisigProposal({
+        multisigAccountId: FIXTURE_ALICE_ID,
+        proposalId: "b".repeat(64),
+        instructionsHash: "b".repeat(64),
+      }),
+    /requires exactly one/,
+  );
+  assert.equal(calls, 0);
 });
 
 test("ToriiBrowserClient submits multisig Norito payloads to registered routes", async () => {

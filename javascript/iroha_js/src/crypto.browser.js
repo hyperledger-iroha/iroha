@@ -422,8 +422,8 @@ export function deriveConfidentialNullifierV2() {
 }
 
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1 = "recursive_compact_v1";
-export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6;
+export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2 = "recursive_spend_v2";
+export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7;
 export const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 15;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1 = "kagemusha-recursive-compact-v1";
@@ -508,37 +508,25 @@ export function isKagemushaRecursiveCompactUnavailable(error) {
 }
 
 export function preferredKagemushaOfflineSpendMode(
-  recursiveCompactAvailable,
-  recursiveSpendAvailable,
+  pastaCycleV3BackendAvailable,
 ) {
   if (arguments.length === 0) {
-    return preferredKagemushaOfflineSpendModeForCapabilities(
-      isKagemushaRecursiveCompactPaymentTokenNativeAvailable(),
-      isKagemushaRecursiveSpendNativeAvailable(),
-    );
+    return isKagemushaRecursiveSpendNativeAvailable()
+      ? KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2
+      : null;
   }
-  if (arguments.length !== 2) {
+  if (arguments.length !== 1 || typeof pastaCycleV3BackendAvailable !== "boolean") {
     throw new TypeError(
-      "preferredKagemushaOfflineSpendMode requires either zero arguments or both recursiveCompactAvailable and recursiveSpendAvailable",
+      "preferredKagemushaOfflineSpendMode requires zero arguments or one boolean pastaCycleV3BackendAvailable argument",
     );
   }
-  return preferredKagemushaOfflineSpendModeForCapabilities(
-    recursiveCompactAvailable,
-    recursiveSpendAvailable,
-  );
+  return pastaCycleV3BackendAvailable
+    ? KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2
+    : null;
 }
 
-export function preferredKagemushaOfflineSpendModeForCapabilities(
-  recursiveCompactAvailable,
-  recursiveSpendAvailable,
-) {
-  if (recursiveCompactAvailable) {
-    return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1;
-  }
-  if (recursiveSpendAvailable) {
-    return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1;
-  }
-  return null;
+export function isKagemushaSpendAgainMode(value) {
+  return value === KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2;
 }
 
 export function canRedeemKagemushaRecursiveSpendWitnessless(proofCircuitId, hopCount) {

@@ -2375,9 +2375,9 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     require(
         archive.length <= KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES,
         field + " must not exceed " + KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES + " bytes");
-    require(KagemushaCompactPaymentTokenProver.isValidNoritoArchive(archive),
+    require(NoritoArchiveValidation.isValidNoritoArchive(archive),
         field + " must be a valid Norito archive");
-    require(KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(archive),
+    require(NoritoArchiveValidation.hasNonEmptyNoritoPayload(archive),
         field + " must contain a non-empty Norito payload");
   }
 

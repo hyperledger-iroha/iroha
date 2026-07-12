@@ -187,7 +187,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             Data(repeating: 0x01, count: 32),
             Data(repeating: 0x02, count: 32)
         ]
-        let copiedSummary = try KagemushaRecursiveSpendBundleSummary(
+        let copiedSummary = try KagemushaRecursiveProofBundleSummary(
             hopCount: 1,
             proofCircuitId: KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1,
             asset: "hex:11111111111111111111111111111111",
@@ -218,8 +218,8 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 Data(repeating: 0x01, count: 32),
                 Data(repeating: 0x02, count: 32)
             ]
-        ) throws -> KagemushaRecursiveSpendBundleSummary {
-            try KagemushaRecursiveSpendBundleSummary(
+        ) throws -> KagemushaRecursiveProofBundleSummary {
+            try KagemushaRecursiveProofBundleSummary(
                 hopCount: hopCount,
                 proofCircuitId: proofCircuitId,
                 asset: asset,
@@ -238,7 +238,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         )
         XCTAssertEqual(try buildDirectSummary(asset: canonicalSummaryAsset).asset, canonicalSummaryAsset)
         let malformedDirectSummaryCases: [
-            (String, KagemushaRecursiveSpendRequestCodecError, () throws -> KagemushaRecursiveSpendBundleSummary)
+            (String, KagemushaRecursiveSpendRequestCodecError, () throws -> KagemushaRecursiveProofBundleSummary)
         ] = [
             (
                 "direct summary hop count zero",
@@ -879,7 +879,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         let note = try Self.sampleNote()
 
         let initArchive = try KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(
-            KagemushaRecursiveSpendInitRequest(
+            KagemushaRecursiveProofInitRequest(
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
                 currentNote: note,
@@ -933,7 +933,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         )
 
         let initWithoutBlockHeightArchive = try KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(
-            KagemushaRecursiveSpendInitRequest(
+            KagemushaRecursiveProofInitRequest(
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
                 currentNote: note,
@@ -950,7 +950,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         try Self.assertOptionNone(initWithoutBlockHeightFields[5])
 
         let semanticInitArchive = try KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(
-            KagemushaRecursiveSpendInitRequest(
+            KagemushaRecursiveProofInitRequest(
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
                 currentNote: note,
@@ -1005,7 +1005,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         XCTAssertEqual(topUpInitSummary.assetDefinitionId, assetDefinitionId)
         XCTAssertEqual(topUpInitSummary.amount, note.amount)
         let topUpArchive = try KagemushaRecursiveSpendRequestCodecs.encodeTopUpRequest(
-            KagemushaRecursiveSpendTopUpRequest(
+            KagemushaTopUpInstructionDerivationRequest(
                 accountId: try Self.sampleRecipient(),
                 assetDefinitionId: assetDefinitionId,
                 amount: note.amount,
@@ -1048,7 +1048,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
 
         try Self.assertArchiveSchema(
             KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(
-                KagemushaRecursiveSpendAppendRequest(
+                KagemushaRecursiveProofAppendRequest(
                     previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                     recordBundle: recordBundle,
                     pallasOpenEnvelopes: pallasOpenEnvelopes,
@@ -1082,7 +1082,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         XCTAssertEqual(copiedVerifierRecordBytes, copiedVerifierRecord.recordBytes)
         let changeOutput = Data((0..<32).map { UInt8(0x80 + $0) })
         let redeemArchive = try KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(
-            KagemushaRecursiveSpendRedeemRequest(
+            KagemushaRecursiveProofRedemptionRequest(
                 bundle: redeemBundle,
                 recipient: try Self.sampleRecipient(),
                 publicAmount: "6",
@@ -1127,7 +1127,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
 
         let exactRedeemFields = try Self.requestFields(
             KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(
-                KagemushaRecursiveSpendRedeemRequest(
+                KagemushaRecursiveProofRedemptionRequest(
                     bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                     recipient: try Self.sampleRecipient(),
                     publicAmount: "7",
@@ -1159,7 +1159,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
 
         let pluralRedeemFields = try Self.requestFields(
             KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(
-                try KagemushaRecursiveSpendRedeemRequest(
+                try KagemushaRecursiveProofRedemptionRequest(
                     bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                     recipient: try Self.sampleRecipient(),
                     publicAmount: "7",
@@ -1183,7 +1183,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         )
 
         var mutableLineageVerifierRecords = [lineageVerifierRecord, lineageVerifierRecord]
-        let copiedPluralRedeemRequest = try KagemushaRecursiveSpendRedeemRequest(
+        let copiedPluralRedeemRequest = try KagemushaRecursiveProofRedemptionRequest(
             bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
             recipient: try Self.sampleRecipient(),
             publicAmount: "7",
@@ -1203,7 +1203,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
 
         let verifyFields = try Self.requestFields(
             KagemushaRecursiveSpendRequestCodecs.encodeVerifyRequest(
-                try KagemushaRecursiveSpendVerifyRequest(
+                try KagemushaRecursiveProofVerificationRequest(
                     bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                     lineageVerifierRecord: lineageVerifierRecord
                 )
@@ -1267,7 +1267,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 )
             }
             assertTypedRequestInvalidField("publicAmount") {
-                _ = try KagemushaRecursiveSpendRedeemRequest(
+                _ = try KagemushaRecursiveProofRedemptionRequest(
                     bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                     recipient: Self.sampleRecipient(),
                     publicAmount: amount,
@@ -1307,7 +1307,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         }
         func assertRedeemRequestInvalidField(
             _ expectedField: String,
-            _ makeRequest: () throws -> KagemushaRecursiveSpendRedeemRequest
+            _ makeRequest: () throws -> KagemushaRecursiveProofRedemptionRequest
         ) {
             XCTAssertThrowsError(try makeRequest()) { error in
                 guard case let KagemushaRecursiveSpendRequestCodecError.invalidField(field) = error else {
@@ -1319,7 +1319,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         }
         for changeOutput in [Data(repeating: 1, count: 31), Data(repeating: 0, count: 32)] {
             assertRedeemRequestInvalidField("changeOutput") {
-                try KagemushaRecursiveSpendRedeemRequest(
+                try KagemushaRecursiveProofRedemptionRequest(
                     bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
                     recipient: Self.sampleRecipient(),
                     publicAmount: "7",
@@ -1339,7 +1339,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             partialSummary.topupAnchorNullifiers[0]
         ] {
             assertRedeemRequestInvalidField("changeOutput") {
-                try KagemushaRecursiveSpendRedeemRequest(
+                try KagemushaRecursiveProofRedemptionRequest(
                     bundle: partialBundle,
                     recipient: Self.sampleRecipient(),
                     publicAmount: "6",
@@ -1351,7 +1351,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             }
         }
         assertRedeemRequestInvalidField("changeOutput") {
-            try KagemushaRecursiveSpendRedeemRequest(
+            try KagemushaRecursiveProofRedemptionRequest(
                 bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
                 recipient: Self.sampleRecipient(),
                 publicAmount: "6",
@@ -1361,7 +1361,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         assertRedeemRequestInvalidField("lineageWitness") {
-            try KagemushaRecursiveSpendRedeemRequest(
+            try KagemushaRecursiveProofRedemptionRequest(
                 bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
                 recipient: Self.sampleRecipient(),
                 publicAmount: "7",
@@ -1371,7 +1371,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         assertRedeemRequestInvalidField("lineageVerifierRecord") {
-            try KagemushaRecursiveSpendRedeemRequest(
+            try KagemushaRecursiveProofRedemptionRequest(
                 bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                 recipient: Self.sampleRecipient(),
                 publicAmount: "7",
@@ -1382,7 +1382,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         }
         let reservedMissingRecordMasksMalformedWitness = Data([0])
         assertRedeemRequestInvalidField("lineageVerifierRecord") {
-            try KagemushaRecursiveSpendRedeemRequest(
+            try KagemushaRecursiveProofRedemptionRequest(
                 bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                 recipient: Self.sampleRecipient(),
                 publicAmount: "7",
@@ -1393,7 +1393,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendRedeemRequest(
+            try KagemushaRecursiveProofRedemptionRequest(
                 bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                 recipient: Self.sampleRecipient(),
                 publicAmount: "7",
@@ -1413,7 +1413,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             XCTAssertFalse(field.isEmpty)
         }
         assertRedeemRequestInvalidField("lineageVerifierRecord") {
-            try KagemushaRecursiveSpendRedeemRequest(
+            try KagemushaRecursiveProofRedemptionRequest(
                 bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
                 recipient: Self.sampleRecipient(),
                 publicAmount: "7",
@@ -1424,7 +1424,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         assertRedeemRequestInvalidField("lineageVerifierRecord") {
-            try KagemushaRecursiveSpendRedeemRequest(
+            try KagemushaRecursiveProofRedemptionRequest(
                 bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
                 recipient: Self.sampleRecipient(),
                 publicAmount: "7",
@@ -1438,7 +1438,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         assertRedeemRequestInvalidField("lineageVerifierRecord") {
-            try KagemushaRecursiveSpendRedeemRequest(
+            try KagemushaRecursiveProofRedemptionRequest(
                 bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
                 recipient: Self.sampleRecipient(),
                 publicAmount: "7",
@@ -1453,7 +1453,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         assertRedeemRequestInvalidField("publicAmount") {
-            try KagemushaRecursiveSpendRedeemRequest(
+            try KagemushaRecursiveProofRedemptionRequest(
                 bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
                 recipient: Self.sampleRecipient(),
                 publicAmount: "8",
@@ -1463,7 +1463,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         assertRedeemRequestInvalidField("publicAmount") {
-            try KagemushaRecursiveSpendRedeemRequest(
+            try KagemushaRecursiveProofRedemptionRequest(
                 bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
                 recipient: Self.sampleRecipient(),
                 publicAmount: "7",
@@ -1474,7 +1474,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         assertRedeemRequestInvalidField("publicAmount") {
-            try KagemushaRecursiveSpendRedeemRequest(
+            try KagemushaRecursiveProofRedemptionRequest(
                 bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
                 recipient: Self.sampleRecipient(),
                 publicAmount: "8",
@@ -1486,7 +1486,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         }
         func assertVerifyRequestInvalidField(
             _ expectedField: String,
-            _ makeRequest: () throws -> KagemushaRecursiveSpendVerifyRequest
+            _ makeRequest: () throws -> KagemushaRecursiveProofVerificationRequest
         ) {
             XCTAssertThrowsError(try makeRequest()) { error in
                 guard case let KagemushaRecursiveSpendRequestCodecError.invalidField(field) = error else {
@@ -1499,7 +1499,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         assertVerifyRequestInvalidField(
             "lineageVerifierRecord",
             {
-                try KagemushaRecursiveSpendVerifyRequest(
+                try KagemushaRecursiveProofVerificationRequest(
                     bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle")
                 )
             }
@@ -1507,7 +1507,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         assertVerifyRequestInvalidField(
             "lineageVerifierRecord",
             {
-                try KagemushaRecursiveSpendVerifyRequest(
+                try KagemushaRecursiveProofVerificationRequest(
                     bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
                     lineageVerifierRecord: try Self.sampleVerifierRecord()
                 )
@@ -1520,7 +1520,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         let pallasOpenEnvelopes = Self.syntheticPallasOpenEnvelopesArchive()
         let (lineageVerifierKey, lineageProvingKeyArchive) = try Self.sharedInitLineageKeyMaterial()
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendInitRequest(
+            try KagemushaRecursiveProofInitRequest(
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
                 currentNote: Self.sampleNote(),
@@ -1534,7 +1534,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendInitRequest(
+            try KagemushaRecursiveProofInitRequest(
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
                 currentNote: Self.sampleNote(),
@@ -1547,7 +1547,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendInitRequest(
+            try KagemushaRecursiveProofInitRequest(
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
                 currentNote: Self.sampleNote(),
@@ -1560,7 +1560,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendInitRequest(
+            try KagemushaRecursiveProofInitRequest(
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
                 currentNote: Self.sampleNote(),
@@ -1574,7 +1574,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendInitRequest(
+            try KagemushaRecursiveProofInitRequest(
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
                 currentNote: Self.sampleNote(),
@@ -1588,7 +1588,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendInitRequest(
+            try KagemushaRecursiveProofInitRequest(
                 recordBundle: recordBundleWithOverLimitStepCount,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
                 currentNote: Self.sampleNote(),
@@ -1628,7 +1628,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             XCTAssertEqual(error as? KagemushaRecursiveSpendRequestCodecError, .invalidArchive("pallasOpenEnvelopes"))
         }
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendTopUpRequest(
+            try KagemushaTopUpInstructionDerivationRequest(
                 accountId: try Self.sampleRecipient(),
                 assetDefinitionId: assetDefinitionId,
                 amount: "18",
@@ -1643,7 +1643,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             AssetDefinitionAddress.encode(uuidBytes: mismatchedAssetBytes)
         )
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendTopUpRequest(
+            try KagemushaTopUpInstructionDerivationRequest(
                 accountId: try Self.sampleRecipient(),
                 assetDefinitionId: mismatchedAssetDefinitionId,
                 amount: "17",
@@ -1653,7 +1653,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             XCTAssertEqual(error as? KagemushaRecursiveSpendRequestCodecError, .invalidField("assetId"))
         }
         let lineageInitArchive = try KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(
-            KagemushaRecursiveSpendInitRequest(
+            KagemushaRecursiveProofInitRequest(
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
                 currentNote: Self.sampleNote(),
@@ -1662,7 +1662,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         )
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendTopUpRequest(
+            try KagemushaTopUpInstructionDerivationRequest(
                 accountId: try Self.sampleRecipient(),
                 assetDefinitionId: assetDefinitionId,
                 amount: "17",
@@ -1673,7 +1673,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         }
 
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendInitRequest(
+            try KagemushaRecursiveProofInitRequest(
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
                 currentNote: Self.sampleNote(),
@@ -1687,7 +1687,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendInitRequest(
+            try KagemushaRecursiveProofInitRequest(
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
                 currentNote: Self.sampleNote(),
@@ -1701,7 +1701,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendAppendRequest(
+            try KagemushaRecursiveProofAppendRequest(
                 previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
@@ -1718,7 +1718,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendAppendRequest(
+            try KagemushaRecursiveProofAppendRequest(
                 previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
@@ -1735,7 +1735,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendAppendRequest(
+            try KagemushaRecursiveProofAppendRequest(
                 previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
@@ -1750,7 +1750,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendAppendRequest(
+            try KagemushaRecursiveProofAppendRequest(
                 previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
@@ -1766,7 +1766,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendAppendRequest(
+            try KagemushaRecursiveProofAppendRequest(
                 previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
@@ -1782,7 +1782,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         }
 
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendInitRequest(
+            try KagemushaRecursiveProofInitRequest(
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: Self.syntheticArchive(schema: "test.PallasOpenEnvelopes"),
                 currentNote: Self.sampleNote(),
@@ -1796,7 +1796,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendInitRequest(
+            try KagemushaRecursiveProofInitRequest(
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: Self.syntheticPallasOpenEnvelopesArchive(count: 2),
                 currentNote: Self.sampleNote(),
@@ -1810,7 +1810,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendInitRequest(
+            try KagemushaRecursiveProofInitRequest(
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: Self.syntheticPallasOpenEnvelopesArchive(
                     includeDomainTag: false
@@ -1827,7 +1827,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         }
         for transcriptLabel in ["", String(repeating: "\u{00e9}", count: 65)] {
             XCTAssertThrowsError(
-                try KagemushaRecursiveSpendInitRequest(
+                try KagemushaRecursiveProofInitRequest(
                     recordBundle: recordBundle,
                     pallasOpenEnvelopes: Self.syntheticPallasOpenEnvelopesArchive(
                         transcriptLabel: transcriptLabel
@@ -1901,7 +1901,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         ]
         for (metadataField, archive) in malformedPallasMetadataArchives {
             XCTAssertThrowsError(
-                try KagemushaRecursiveSpendInitRequest(
+                try KagemushaRecursiveProofInitRequest(
                     recordBundle: recordBundle,
                     pallasOpenEnvelopes: archive,
                     currentNote: Self.sampleNote(),
@@ -1913,6 +1913,26 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 XCTAssertEqual(
                     error as? KagemushaRecursiveSpendRequestCodecError,
                     .invalidArchive("pallasOpenEnvelopes.\(metadataField)"),
+                    metadataField
+                )
+            }
+            XCTAssertThrowsError(
+                try KagemushaRecursiveProofAppendRequest(
+                    previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+                    recordBundle: recordBundle,
+                    pallasOpenEnvelopes: pallasOpenEnvelopes,
+                    currentNote: Self.sampleNote(seed: 0x41),
+                    outputProofCircuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1,
+                    previousLineageVerifierRecord: Self.sampleVerifierRecord(),
+                    previousProofOpenEnvelopes: archive,
+                    lineageVerifierKey: Data(repeating: 0x6b, count: 64),
+                    lineageProvingKeyArchive: Self.syntheticArchive(schema: "test.LineageProvingKeyArchive")
+                ),
+                metadataField
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveSpendRequestCodecError,
+                    .invalidField("outputProofCircuitId"),
                     metadataField
                 )
             }
@@ -1933,7 +1953,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         ]
         for (sequenceField, archive) in malformedPallasSequenceArchives {
             XCTAssertThrowsError(
-                try KagemushaRecursiveSpendInitRequest(
+                try KagemushaRecursiveProofInitRequest(
                     recordBundle: recordBundle,
                     pallasOpenEnvelopes: archive,
                     currentNote: Self.sampleNote(),
@@ -1948,12 +1968,32 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                     sequenceField
                 )
             }
+            XCTAssertThrowsError(
+                try KagemushaRecursiveProofAppendRequest(
+                    previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+                    recordBundle: recordBundle,
+                    pallasOpenEnvelopes: pallasOpenEnvelopes,
+                    currentNote: Self.sampleNote(seed: 0x41),
+                    outputProofCircuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1,
+                    previousLineageVerifierRecord: Self.sampleVerifierRecord(),
+                    previousProofOpenEnvelopes: archive,
+                    lineageVerifierKey: Data(repeating: 0x6b, count: 64),
+                    lineageProvingKeyArchive: Self.syntheticArchive(schema: "test.LineageProvingKeyArchive")
+                ),
+                sequenceField
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveSpendRequestCodecError,
+                    .invalidField("outputProofCircuitId"),
+                    sequenceField
+                )
+            }
         }
 
         var corrupted = Self.syntheticPallasOpenEnvelopesArchive()
         corrupted[corrupted.count - 1] ^= 0x01
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendInitRequest(
+            try KagemushaRecursiveProofInitRequest(
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: corrupted,
                 currentNote: Self.sampleNote(),
@@ -1967,7 +2007,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendVerifyRequest(
+            try KagemushaRecursiveProofVerificationRequest(
                 bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "verify_result")
             )
         ) { error in
@@ -1990,7 +2030,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         // fail-closed output-circuit check must precede every optional lineage
         // artifact or previous-proof parser, including adversarial archives.
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendAppendRequest(
+            try KagemushaRecursiveProofAppendRequest(
                 previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
@@ -2008,7 +2048,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendAppendRequest(
+            try KagemushaRecursiveProofAppendRequest(
                 previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
@@ -2026,7 +2066,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         }
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendAppendRequest(
+            try KagemushaRecursiveProofAppendRequest(
                 previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
@@ -2045,7 +2085,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         }
         for transcriptLabel in ["", String(repeating: "\u{00e9}", count: 65)] {
             XCTAssertThrowsError(
-                try KagemushaRecursiveSpendAppendRequest(
+                try KagemushaRecursiveProofAppendRequest(
                     previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                     recordBundle: recordBundle,
                     pallasOpenEnvelopes: pallasOpenEnvelopes,
@@ -2067,7 +2107,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         }
         for (metadataField, archive) in malformedPallasMetadataArchives {
             XCTAssertThrowsError(
-                try KagemushaRecursiveSpendAppendRequest(
+                try KagemushaRecursiveProofAppendRequest(
                     previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                     recordBundle: recordBundle,
                     pallasOpenEnvelopes: pallasOpenEnvelopes,
@@ -2089,7 +2129,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         }
         for (sequenceField, archive) in malformedPallasSequenceArchives {
             XCTAssertThrowsError(
-                try KagemushaRecursiveSpendAppendRequest(
+                try KagemushaRecursiveProofAppendRequest(
                     previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                     recordBundle: recordBundle,
                     pallasOpenEnvelopes: pallasOpenEnvelopes,
@@ -2123,7 +2163,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
 
         for archive in [packed, constVec] {
             XCTAssertNoThrow(
-                try KagemushaRecursiveSpendInitRequest(
+                try KagemushaRecursiveProofInitRequest(
                     recordBundle: recordBundle,
                     pallasOpenEnvelopes: archive,
                     currentNote: Self.sampleNote(),

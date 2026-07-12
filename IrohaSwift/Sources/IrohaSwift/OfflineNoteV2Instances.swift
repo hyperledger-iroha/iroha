@@ -1,6 +1,6 @@
 import Foundation
 
-public struct OfflineNoteV2InstanceValues: Equatable, Sendable {
+public struct AttestedOfflineNoteInstanceValues: Equatable, Sendable {
     public static let publicValueCount = 16
     public static let maxInputAmounts = 4
     public static let maxOutputAmounts = 2
@@ -11,13 +11,13 @@ public struct OfflineNoteV2InstanceValues: Equatable, Sendable {
 
     public init(publicValues: [UInt64], inputAmounts: [UInt64], outputAmounts: [UInt64]) throws {
         guard publicValues.count == Self.publicValueCount else {
-            throw OfflineNoteV2InstanceError.invalidPublicValueCount(publicValues.count)
+            throw AttestedOfflineNoteInstanceError.invalidPublicValueCount(publicValues.count)
         }
         guard inputAmounts.count == Self.maxInputAmounts else {
-            throw OfflineNoteV2InstanceError.invalidInputAmountCount(inputAmounts.count)
+            throw AttestedOfflineNoteInstanceError.invalidInputAmountCount(inputAmounts.count)
         }
         guard outputAmounts.count == Self.maxOutputAmounts else {
-            throw OfflineNoteV2InstanceError.invalidOutputAmountCount(outputAmounts.count)
+            throw AttestedOfflineNoteInstanceError.invalidOutputAmountCount(outputAmounts.count)
         }
         self.publicValues = publicValues
         self.inputAmounts = inputAmounts
@@ -38,7 +38,7 @@ public struct OfflineNoteV2InstanceValues: Equatable, Sendable {
         return out
     }
 }
-public enum OfflineNoteV2InstanceError: Error, LocalizedError, Equatable {
+public enum AttestedOfflineNoteInstanceError: Error, LocalizedError, Equatable {
     case invalidPublicValueCount(Int)
     case invalidInputAmountCount(Int)
     case invalidOutputAmountCount(Int)
@@ -52,37 +52,37 @@ public enum OfflineNoteV2InstanceError: Error, LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case let .invalidPublicValueCount(count):
-            return "Offline V2 public instance count must be 16 (found \(count))."
+            return "Attested Offline Note public instance count must be 16 (found \(count))."
         case let .invalidInputAmountCount(count):
-            return "Offline V2 input amount witness count must be 4 (found \(count))."
+            return "Attested Offline Note input amount witness count must be 4 (found \(count))."
         case let .invalidOutputAmountCount(count):
-            return "Offline V2 output amount witness count must be 2 (found \(count))."
+            return "Attested Offline Note output amount witness count must be 2 (found \(count))."
         case let .invalidCount(label, count, max):
-            return "Offline V2 \(label) count \(count) must be in 1...\(max)."
+            return "Attested Offline Note \(label) count \(count) must be in 1...\(max)."
         case let .amountDoesNotFitUInt64(amount):
-            return "Offline V2 amount \(amount) does not fit the u64 witness corridor."
+            return "Attested Offline Note amount \(amount) does not fit the u64 witness corridor."
         case let .negativeAmount(amount):
-            return "Offline V2 amount \(amount) must not be negative."
+            return "Attested Offline Note amount \(amount) must not be negative."
         case let .amountSumOverflow(label):
-            return "Offline V2 \(label) amount sum overflows u64 witness units."
+            return "Attested Offline Note \(label) amount sum overflows u64 witness units."
         case let .amountConservationMismatch(input, output):
-            return "Offline V2 audit amounts are not conserved: input \(input), output \(output)."
+            return "Attested Offline Note audit amounts are not conserved: input \(input), output \(output)."
         case let .auditInputCountMismatch(nullifiers, claims):
-            return "Offline V2 audit input nullifier count \(nullifiers) must match input claim count \(claims)."
+            return "Attested Offline Note audit input nullifier count \(nullifiers) must match input claim count \(claims)."
         }
     }
 }
 
-public enum OfflineNoteV2InstanceBuilder {
+public enum AttestedOfflineNoteInstanceBuilder {
     private static let modeRedeem: UInt64 = 1
     private static let modeAudit: UInt64 = 2
 
     public static func redeemInstanceValues(
-        for redemption: OfflineNoteRedeemV2
-    ) throws -> OfflineNoteV2InstanceValues {
+        for redemption: AttestedOfflineNoteRedeem
+    ) throws -> AttestedOfflineNoteInstanceValues {
         let inputCount = try validateCount(
             redemption.inputNullifiers.count,
-            max: OfflineNoteV2InstanceValues.maxInputAmounts,
+            max: AttestedOfflineNoteInstanceValues.maxInputAmounts,
             label: "redemption input"
         )
         let outputCount: UInt64 = 1
@@ -107,11 +107,11 @@ public enum OfflineNoteV2InstanceBuilder {
             inputClaimHashSum: hashLimb0(issuedClaimHash),
             outputClaimHashSum: 0
         )
-        var inputAmounts = [UInt64](repeating: 0, count: OfflineNoteV2InstanceValues.maxInputAmounts)
+        var inputAmounts = [UInt64](repeating: 0, count: AttestedOfflineNoteInstanceValues.maxInputAmounts)
         inputAmounts[0] = inputSum
-        var outputAmounts = [UInt64](repeating: 0, count: OfflineNoteV2InstanceValues.maxOutputAmounts)
+        var outputAmounts = [UInt64](repeating: 0, count: AttestedOfflineNoteInstanceValues.maxOutputAmounts)
         outputAmounts[0] = outputSum
-        return try OfflineNoteV2InstanceValues(
+        return try AttestedOfflineNoteInstanceValues(
             publicValues: publicValues,
             inputAmounts: inputAmounts,
             outputAmounts: outputAmounts
@@ -119,20 +119,20 @@ public enum OfflineNoteV2InstanceBuilder {
     }
 
     public static func auditInstanceValues(
-        for audit: OfflineNoteAuditBundleV2
-    ) throws -> OfflineNoteV2InstanceValues {
+        for audit: AttestedOfflineNoteAuditBundle
+    ) throws -> AttestedOfflineNoteInstanceValues {
         let inputCount = try validateCount(
             audit.inputClaims.count,
-            max: OfflineNoteV2InstanceValues.maxInputAmounts,
+            max: AttestedOfflineNoteInstanceValues.maxInputAmounts,
             label: "audit input"
         )
         let outputCount = try validateCount(
             audit.outputClaims.count,
-            max: OfflineNoteV2InstanceValues.maxOutputAmounts,
+            max: AttestedOfflineNoteInstanceValues.maxOutputAmounts,
             label: "audit output"
         )
         guard audit.inputNullifiers.count == audit.inputClaims.count else {
-            throw OfflineNoteV2InstanceError.auditInputCountMismatch(
+            throw AttestedOfflineNoteInstanceError.auditInputCountMismatch(
                 nullifiers: audit.inputNullifiers.count,
                 claims: audit.inputClaims.count
             )
@@ -142,7 +142,7 @@ public enum OfflineNoteV2InstanceBuilder {
         let keyCertificatePayloadHash = try audit.senderKeyCertificate.payloadHash()
         let inputClaimHashes = try audit.inputClaims.map { try $0.claimHash() }
         let outputClaimHashes = try audit.outputClaims.map {
-            try OfflineNoteIssuedClaimV2.fromAuditOutput($0).claimHash()
+            try AttestedOfflineNoteIssuedClaim.fromAuditOutput($0).claimHash()
         }
         let amountStrings = audit.inputClaims.map(\.amount) + audit.outputClaims.map(\.amount)
         let normalizedAmounts = try normalizedAmountUnits(amountStrings)
@@ -151,14 +151,14 @@ public enum OfflineNoteV2InstanceBuilder {
         let inputSum = try checkedSum(inputUnits, label: "input")
         let outputSum = try checkedSum(outputUnits, label: "output")
         guard inputSum == outputSum else {
-            throw OfflineNoteV2InstanceError.amountConservationMismatch(input: inputSum, output: outputSum)
+            throw AttestedOfflineNoteInstanceError.amountConservationMismatch(input: inputSum, output: outputSum)
         }
 
-        var inputAmounts = [UInt64](repeating: 0, count: OfflineNoteV2InstanceValues.maxInputAmounts)
+        var inputAmounts = [UInt64](repeating: 0, count: AttestedOfflineNoteInstanceValues.maxInputAmounts)
         for (idx, amount) in inputUnits.enumerated() {
             inputAmounts[idx] = amount
         }
-        var outputAmounts = [UInt64](repeating: 0, count: OfflineNoteV2InstanceValues.maxOutputAmounts)
+        var outputAmounts = [UInt64](repeating: 0, count: AttestedOfflineNoteInstanceValues.maxOutputAmounts)
         for (idx, amount) in outputUnits.enumerated() {
             outputAmounts[idx] = amount
         }
@@ -177,7 +177,7 @@ public enum OfflineNoteV2InstanceBuilder {
             inputClaimHashSum: hashLimb0Sum(inputClaimHashes),
             outputClaimHashSum: hashLimb0Sum(outputClaimHashes)
         )
-        return try OfflineNoteV2InstanceValues(
+        return try AttestedOfflineNoteInstanceValues(
             publicValues: values,
             inputAmounts: inputAmounts,
             outputAmounts: outputAmounts
@@ -186,7 +186,7 @@ public enum OfflineNoteV2InstanceBuilder {
 
     private static func validateCount(_ count: Int, max: Int, label: String) throws -> UInt64 {
         guard count >= 1, count <= max else {
-            throw OfflineNoteV2InstanceError.invalidCount(label: label, count: count, max: max)
+            throw AttestedOfflineNoteInstanceError.invalidCount(label: label, count: count, max: max)
         }
         return UInt64(count)
     }
@@ -231,12 +231,12 @@ public enum OfflineNoteV2InstanceBuilder {
         let targetScale = trimmed.map(\.scale).max() ?? 0
         return try trimmed.map { numeric in
             guard !numeric.isNegative else {
-                throw OfflineNoteV2InstanceError.negativeAmount(numeric.original)
+                throw AttestedOfflineNoteInstanceError.negativeAmount(numeric.original)
             }
             let scaleDelta = Int(targetScale - numeric.scale)
             let aligned = numeric.digits + String(repeating: "0", count: scaleDelta)
             guard let value = UInt64(aligned) else {
-                throw OfflineNoteV2InstanceError.amountDoesNotFitUInt64(numeric.original)
+                throw AttestedOfflineNoteInstanceError.amountDoesNotFitUInt64(numeric.original)
             }
             return value
         }
@@ -266,7 +266,7 @@ public enum OfflineNoteV2InstanceBuilder {
         try values.reduce(UInt64(0)) { partial, value in
             let (sum, overflow) = partial.addingReportingOverflow(value)
             guard !overflow else {
-                throw OfflineNoteV2InstanceError.amountSumOverflow(label)
+                throw AttestedOfflineNoteInstanceError.amountSumOverflow(label)
             }
             return sum
         }

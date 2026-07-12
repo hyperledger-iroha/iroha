@@ -80,6 +80,26 @@ fn require_registered_syscall_metering(
 ) -> Result<SyscallMetering, VMError> {
     metering.ok_or(VMError::UnknownSyscall(number))
 }
+
+fn resolve_syscall_metering(
+    host: &dyn IVMHost,
+    policy: SyscallPolicy,
+    number: u32,
+) -> Result<SyscallMetering, VMError> {
+    let registered = host_syscall_metering_spec(policy, number).map(|spec| spec.metering);
+    if registered.is_some() || crate::syscalls::is_syscall_allowed(policy, number) {
+        return require_registered_syscall_metering(number, registered);
+    }
+
+    // Tooling hosts may explicitly opt in to host-private syscalls without
+    // publishing them in the consensus ABI registry. Keep those calls on the
+    // reserved path so the host must provide a deterministic quote before it
+    // can perform work. Public ABI calls still fail closed above when their
+    // mandatory registry entry is missing.
+    host.allows_syscall(policy, number)
+        .then_some(SyscallMetering::Reserved)
+        .ok_or(VMError::UnknownSyscall(number))
+}
 /// Maximum protected direct-call depth for deployable contract artifacts.
 ///
 /// Kotodama V1 rejects recursion, so legitimate programs remain well below
@@ -1479,6 +1499,7 @@ pub(crate) fn prepare_instruction_stream(
 struct ProgramLoadImage<'a> {
     code_region: &'a [u8],
     metadata: ProgramMetadata,
+    contract_interface: Option<Arc<crate::metadata::EmbeddedContractInterfaceV1>>,
     contract_debug: Option<EmbeddedContractDebugInfoV1>,
     literal_table: DecodedLiteralTable,
     predecoded: Option<Arc<[crate::ivm_cache::DecodedOp]>>,
@@ -1571,6 +1592,7 @@ pub struct IVM {
     max_cycles: u64,
     metadata: ProgramMetadata,
     code_hash: [u8; 32],
+    contract_interface: Option<Arc<crate::metadata::EmbeddedContractInterfaceV1>>,
     contract_debug: Option<EmbeddedContractDebugInfoV1>,
     literal_table: DecodedLiteralTable,
     predecoded: Option<Arc<[crate::ivm_cache::DecodedOp]>>,
@@ -1665,6 +1687,7 @@ impl Clone for IVM {
             max_cycles: self.max_cycles,
             metadata: self.metadata.clone(),
             code_hash: self.code_hash,
+            contract_interface: self.contract_interface.clone(),
             contract_debug: self.contract_debug.clone(),
             literal_table: self.literal_table.clone(),
             predecoded: self.predecoded.clone(),
@@ -1994,6 +2017,7 @@ impl IVM {
             max_cycles: 0,
             metadata: ProgramMetadata::default(),
             code_hash: [0u8; 32],
+            contract_interface: None,
             contract_debug: None,
             literal_table: DecodedLiteralTable::empty(),
             predecoded: None,
@@ -2745,6 +2769,7 @@ impl IVM {
         self.entrypoint_pc = Some(0);
         self.program_prefix_len = 0;
         self.contract_debug = None;
+        self.contract_interface = None;
         self.literal_table = DecodedLiteralTable::empty();
         self.last_diagnostic = None;
         self.predecoded = None;
@@ -2805,6 +2830,7 @@ impl IVM {
         self.install_program(ProgramLoadImage {
             code_region,
             metadata: meta,
+            contract_interface: parsed.contract_interface.map(Arc::new),
             contract_debug: parsed.contract_debug,
             literal_table,
             predecoded,
@@ -2828,6 +2854,7 @@ impl IVM {
         self.install_program(ProgramLoadImage {
             code_region: contract.code_region(),
             metadata: contract.metadata().clone(),
+            contract_interface: Some(contract.shared_contract_interface()),
             contract_debug: None,
             literal_table: contract.literal_table().clone(),
             predecoded: Some(Arc::clone(contract.decoded())),
@@ -2848,6 +2875,7 @@ impl IVM {
             return Err(VMError::PrivacyViolation);
         }
         self.metadata = image.metadata.clone();
+        self.contract_interface = image.contract_interface;
         self.contract_debug = image.contract_debug;
         self.literal_table = image.literal_table;
         self.vector_enabled = image.metadata.mode & crate::metadata::mode::VECTOR != 0;
@@ -3108,6 +3136,16 @@ impl IVM {
     /// Access the parsed program metadata for the currently loaded program.
     pub fn metadata(&self) -> &ProgramMetadata {
         &self.metadata
+    }
+
+    /// Return the self-describing contract interface retained for the loaded image.
+    ///
+    /// Compiler-internal host helpers use the declared durable-state schema to
+    /// validate typed state paths. Generic 1.0 programs have no interface and
+    /// therefore cannot use schema-bound helpers such as `StateMap` key codecs.
+    #[must_use]
+    pub fn contract_interface(&self) -> Option<&crate::metadata::EmbeddedContractInterfaceV1> {
+        self.contract_interface.as_deref()
     }
 
     /// Returns `true` when the VM is executing in zero-knowledge mode.
@@ -4660,10 +4698,7 @@ impl IVM {
 
     #[inline]
     fn execute_syscall(&mut self, host: &mut dyn IVMHost, number: u32) -> Result<(), VMError> {
-        let metering = require_registered_syscall_metering(
-            number,
-            host_syscall_metering_spec(self.syscall_policy(), number).map(|spec| spec.metering),
-        )?;
+        let metering = resolve_syscall_metering(host, self.syscall_policy(), number)?;
         match metering {
             SyscallMetering::Reserved => self.execute_reserved_syscall(host, number),
             SyscallMetering::Staged => self.execute_staged_syscall(host, number),
@@ -8157,6 +8192,69 @@ mod tests {
             require_registered_syscall_metering(number, None),
             Err(VMError::UnknownSyscall(number))
         );
+    }
+
+    #[test]
+    fn explicitly_allowed_host_private_syscall_uses_reserved_metering() {
+        struct ToolingHost {
+            prepared: Cell<bool>,
+            dispatched: bool,
+        }
+
+        impl IVMHost for ToolingHost {
+            fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+                assert_eq!(
+                    number,
+                    crate::syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS
+                );
+                self.prepared.set(true);
+                Ok(0)
+            }
+
+            fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+                assert_eq!(
+                    number,
+                    crate::syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS
+                );
+                self.dispatched = true;
+                Ok(0)
+            }
+
+            fn allows_syscall(&self, policy: SyscallPolicy, number: u32) -> bool {
+                number == crate::syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS
+                    || crate::syscalls::is_syscall_allowed(policy, number)
+            }
+
+            fn as_any(&mut self) -> &mut dyn Any
+            where
+                Self: 'static,
+            {
+                self
+            }
+        }
+
+        let number = crate::syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS;
+        assert!(!crate::syscalls::is_syscall_allowed(
+            SyscallPolicy::AbiV1,
+            number
+        ));
+        assert!(host_syscall_metering_spec(SyscallPolicy::AbiV1, number).is_none());
+
+        let mut code = Vec::new();
+        code.extend_from_slice(&crate::encoding::wide::encode_syscallx(number).to_le_bytes());
+        code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_code(&code)
+            .expect("load host-private syscall program");
+        let mut host = ToolingHost {
+            prepared: Cell::new(false),
+            dispatched: false,
+        };
+
+        vm.run_with_host(&mut host)
+            .expect("explicitly allowed host-private syscall must run");
+        assert!(host.prepared.get());
+        assert!(host.dispatched);
     }
 
     #[test]

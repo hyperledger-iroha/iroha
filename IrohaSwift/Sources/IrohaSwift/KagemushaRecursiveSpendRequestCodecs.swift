@@ -117,7 +117,7 @@ public struct KagemushaVerifiedFoldHopEvidence: Equatable, Sendable {
     }
 }
 
-public struct KagemushaRecursiveSpendInitRequest: Equatable, Sendable {
+public struct KagemushaRecursiveProofInitRequest: Equatable, Sendable {
     public let recordBundle: Data
     public let pallasOpenEnvelopes: Data
     public let currentNote: KagemushaRecursiveSpendableNoteDescriptor
@@ -231,7 +231,7 @@ struct KagemushaRecursiveSpendV2TransferFragmentSummary: Equatable, Sendable {
     let verifierKeyCommitment: Data
 }
 
-public struct KagemushaRecursiveSpendTopUpRequest: Equatable, Sendable {
+public struct KagemushaTopUpInstructionDerivationRequest: Equatable, Sendable {
     public let assetId: String
     public let amount: String
     public let initRequestArchive: Data
@@ -283,7 +283,7 @@ public struct KagemushaRecursiveSpendTopUpRequest: Equatable, Sendable {
     }
 }
 
-public struct KagemushaRecursiveSpendAppendRequest: Equatable, Sendable {
+public struct KagemushaRecursiveProofAppendRequest: Equatable, Sendable {
     public let previousBundle: Data
     public let recordBundle: Data
     public let pallasOpenEnvelopes: Data
@@ -308,6 +308,16 @@ public struct KagemushaRecursiveSpendAppendRequest: Equatable, Sendable {
         blockHeight: UInt64? = nil
     ) throws {
         let previousSummary = try KagemushaRecursiveSpendRequestCodecs.decodeBundle(previousBundle)
+        let normalizedOutput = KagemushaRecursiveSpendProver.normalizedAppendOutputCircuitId(
+            outputProofCircuitId
+        )
+        guard KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
+            previousProofCircuitId: previousSummary.proofCircuitId,
+            outputCircuitId: normalizedOutput,
+            previousHopCount: UInt32(previousSummary.hopCount)
+        ) else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidField("outputProofCircuitId")
+        }
         let recordBundlePayload = try KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
             recordBundle,
             schema: KagemushaRecursiveSpendRequestCodecs.recordBundleWireName,
@@ -323,9 +333,6 @@ public struct KagemushaRecursiveSpendAppendRequest: Equatable, Sendable {
             field: "pallasOpenEnvelopes",
             maxBytes: KagemushaRecursiveSpendProver.nativeArchiveMaxBytes
         )
-        let normalizedOutput = KagemushaRecursiveSpendProver.normalizedAppendOutputCircuitId(
-            outputProofCircuitId
-        )
         let appendNeedsPreviousProofOpenEnvelopes =
             KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(
                 outputCircuitId: normalizedOutput,
@@ -339,13 +346,6 @@ public struct KagemushaRecursiveSpendAppendRequest: Equatable, Sendable {
             KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(
                 outputCircuitId: normalizedOutput
             )
-        guard KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
-            previousProofCircuitId: previousSummary.proofCircuitId,
-            outputCircuitId: normalizedOutput,
-            previousHopCount: UInt32(previousSummary.hopCount)
-        ) else {
-            throw KagemushaRecursiveSpendRequestCodecError.invalidField("outputProofCircuitId")
-        }
         let suppliedLineageKeyMaterial = lineageVerifierKey != nil || lineageProvingKeyArchive != nil
         guard !suppliedLineageKeyMaterial || appendNeedsLineageKeyArtifacts else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidField("lineageKeyArtifacts")
@@ -397,7 +397,7 @@ public struct KagemushaRecursiveSpendAppendRequest: Equatable, Sendable {
     }
 }
 
-public struct KagemushaRecursiveSpendVerifyRequest: Equatable, Sendable {
+public struct KagemushaRecursiveProofVerificationRequest: Equatable, Sendable {
     public let bundle: Data
     public let lineageVerifierRecord: KagemushaRecursiveSpendVerifierRecordRef?
     public let blockHeight: UInt64?
@@ -424,7 +424,7 @@ public struct KagemushaRecursiveSpendVerifyRequest: Equatable, Sendable {
     }
 }
 
-public struct KagemushaRecursiveSpendVerifyResult: Equatable, Sendable {
+public struct KagemushaRecursiveProofVerificationResult: Equatable, Sendable {
     public let valid: Bool
     public let hopCount: UInt32
     public let encodedBytes: UInt32
@@ -435,7 +435,7 @@ public struct KagemushaRecursiveSpendVerifyResult: Equatable, Sendable {
     public let lineageWitnessRequiredForRedeem: Bool
 }
 
-public struct KagemushaRecursiveSpendRedeemRequest: Equatable, Sendable {
+public struct KagemushaRecursiveProofRedemptionRequest: Equatable, Sendable {
     public let bundle: Data
     public let recipient: String
     public let publicAmount: String
@@ -525,7 +525,7 @@ public struct KagemushaRecursiveSpendRedeemRequest: Equatable, Sendable {
     }
 }
 
-public struct KagemushaRecursiveSpendBundleSummary: Equatable, Sendable {
+public struct KagemushaRecursiveProofBundleSummary: Equatable, Sendable {
     public let hopCount: Int
     public let proofCircuitId: String
     public let asset: String
@@ -645,17 +645,17 @@ public struct KagemushaRecursiveSpendBundleSummary: Equatable, Sendable {
 
 public enum KagemushaRecursiveSpendRequestCodecs {
     public static let initRequestWireName =
-        "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1"
+        "iroha_data_model::offline::model::KagemushaRecursiveProofInitRequestV1"
     public static let topUpRequestWireName =
-        "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1"
+        "iroha_data_model::offline::model::KagemushaTopUpInstructionDerivationRequestV1"
     public static let appendRequestWireName =
-        "iroha_data_model::offline::model::KagemushaRecursiveSpendAppendRequestV1"
+        "iroha_data_model::offline::model::KagemushaRecursiveProofAppendRequestV1"
     public static let verifyRequestWireName =
-        "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyRequestV1"
+        "iroha_data_model::offline::model::KagemushaRecursiveProofVerificationRequestV1"
     public static let verifyResultWireName =
-        "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyResultV1"
+        "iroha_data_model::offline::model::KagemushaRecursiveProofVerificationResultV1"
     public static let redeemRequestWireName =
-        "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1"
+        "iroha_data_model::offline::model::KagemushaRecursiveProofRedemptionRequestV1"
     public static let bundleWireName =
         "iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV1"
     public static let recordBundleWireName =
@@ -705,7 +705,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
     private static let pallasOpenEnvelopeMaxN = 1 << pallasOpenEnvelopeMaxK
     private static let pallasOpenEnvelopeMaxTranscriptLabelBytes = 128
 
-    public static func encodeInitRequest(_ request: KagemushaRecursiveSpendInitRequest) throws -> Data {
+    public static func encodeInitRequest(_ request: KagemushaRecursiveProofInitRequest) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(try compactPayloadForRequest(
             request.recordBundle,
@@ -735,7 +735,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         return noritoEncode(typeName: initRequestWireName, payload: writer.data, flags: requestFlags)
     }
 
-    public static func encodeTopUpRequest(_ request: KagemushaRecursiveSpendTopUpRequest) throws -> Data {
+    public static func encodeTopUpRequest(_ request: KagemushaTopUpInstructionDerivationRequest) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(try assetIdPayload(request.assetId))
         writer.writeField(try encodeNumeric(request.amount))
@@ -753,7 +753,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         dataspaceId: UInt64? = nil
     ) throws -> Data {
         let summary = try topUpInitRequestSummary(initRequestArchive)
-        return try encodeTopUpRequest(KagemushaRecursiveSpendTopUpRequest(
+        return try encodeTopUpRequest(KagemushaTopUpInstructionDerivationRequest(
             accountId: accountId,
             assetDefinitionId: summary.assetDefinitionId,
             amount: summary.amount,
@@ -799,7 +799,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
 
     public static func decodeInitRequest(
         _ archive: Data
-    ) throws -> KagemushaRecursiveSpendInitRequest {
+    ) throws -> KagemushaRecursiveProofInitRequest {
         let payload = try compactPayloadForRequest(
             archive,
             schema: initRequestWireName,
@@ -861,7 +861,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
               (lineageVerifierKey == nil) == (lineageProvingKey == nil) else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("initRequest")
         }
-        return try KagemushaRecursiveSpendInitRequest(
+        return try KagemushaRecursiveProofInitRequest(
             recordBundle: noritoEncode(
                 typeName: recordBundleWireName,
                 payload: recordPayload,
@@ -904,7 +904,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         )
     }
 
-    public static func encodeAppendRequest(_ request: KagemushaRecursiveSpendAppendRequest) throws -> Data {
+    public static func encodeAppendRequest(_ request: KagemushaRecursiveProofAppendRequest) throws -> Data {
         let normalizedOutput = KagemushaRecursiveSpendProver.normalizedAppendOutputCircuitId(
             request.outputProofCircuitId
         )
@@ -939,7 +939,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         return noritoEncode(typeName: appendRequestWireName, payload: writer.data, flags: requestFlags)
     }
 
-    public static func encodeVerifyRequest(_ request: KagemushaRecursiveSpendVerifyRequest) throws -> Data {
+    public static func encodeVerifyRequest(_ request: KagemushaRecursiveProofVerificationRequest) throws -> Data {
         let bundleSummary = try decodeBundle(request.bundle)
         guard !KagemushaRecursiveSpendProver.isLineageProofCircuitId(bundleSummary.proofCircuitId)
             || request.lineageVerifierRecord != nil
@@ -970,7 +970,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         return noritoEncode(typeName: verifyRequestWireName, payload: writer.data, flags: requestFlags)
     }
 
-    public static func encodeRedeemRequest(_ request: KagemushaRecursiveSpendRedeemRequest) throws -> Data {
+    public static func encodeRedeemRequest(_ request: KagemushaRecursiveProofRedemptionRequest) throws -> Data {
         var lineageWitnessPayload: Data?
         if let lineageWitness = request.lineageWitness {
             lineageWitnessPayload = try compactPayloadForRequest(
@@ -1101,7 +1101,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         )
     }
 
-    public static func decodeVerifyResult(_ archive: Data) throws -> KagemushaRecursiveSpendVerifyResult {
+    public static func decodeVerifyResult(_ archive: Data) throws -> KagemushaRecursiveProofVerificationResult {
         let payload = try payloadArchive(archive, schema: verifyResultWireName, field: "verifyResult")
         guard payload.flags == requestFlags else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("verifyResult")
@@ -1118,7 +1118,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         guard reader.remaining == 0 else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("verifyResult")
         }
-        return KagemushaRecursiveSpendVerifyResult(
+        return KagemushaRecursiveProofVerificationResult(
             valid: valid,
             hopCount: hopCount,
             encodedBytes: encodedBytes,
@@ -1130,7 +1130,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         )
     }
 
-    public static func decodeBundle(_ archive: Data) throws -> KagemushaRecursiveSpendBundleSummary {
+    public static func decodeBundle(_ archive: Data) throws -> KagemushaRecursiveProofBundleSummary {
         let payload = try payloadArchive(archive, schema: bundleWireName, field: "bundle")
         guard payload.flags == requestFlags else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle")
@@ -1149,7 +1149,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
                 "bundle.proof_circuit_id"
             )
         }
-        return try KagemushaRecursiveSpendBundleSummary(
+        return try KagemushaRecursiveProofBundleSummary(
             hopCount: accumulator.hopCount,
             proofCircuitId: proofCircuitId,
             asset: accumulator.asset,
@@ -1272,27 +1272,27 @@ public enum KagemushaRecursiveSpendRequestCodecs {
 }
 
 public extension KagemushaRecursiveSpendProver {
-    static func initSpend(request: KagemushaRecursiveSpendInitRequest) throws -> Data {
+    static func initSpend(request: KagemushaRecursiveProofInitRequest) throws -> Data {
         try initSpend(requestArchive: KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(request))
     }
 
-    static func appendSpend(request: KagemushaRecursiveSpendAppendRequest) throws -> Data {
+    static func appendSpend(request: KagemushaRecursiveProofAppendRequest) throws -> Data {
         try appendSpend(requestArchive: KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(request))
     }
 
     static func verifySpend(
-        request: KagemushaRecursiveSpendVerifyRequest
-    ) throws -> KagemushaRecursiveSpendVerifyResult {
+        request: KagemushaRecursiveProofVerificationRequest
+    ) throws -> KagemushaRecursiveProofVerificationResult {
         try KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
             verifySpend(requestArchive: KagemushaRecursiveSpendRequestCodecs.encodeVerifyRequest(request))
         )
     }
 
-    static func redeemSpend(request: KagemushaRecursiveSpendRedeemRequest) throws -> Data {
+    static func redeemSpend(request: KagemushaRecursiveProofRedemptionRequest) throws -> Data {
         try redeemSpend(requestArchive: KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(request))
     }
 
-    static func topUpSpend(request: KagemushaRecursiveSpendTopUpRequest) throws -> Data {
+    static func topUpSpend(request: KagemushaTopUpInstructionDerivationRequest) throws -> Data {
         try topUpSpend(requestArchive: KagemushaRecursiveSpendRequestCodecs.encodeTopUpRequest(request))
     }
 }
@@ -2876,7 +2876,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
 
     static func requireRedeemChangeOutputNotReserved(
         _ changeOutput: Data,
-        bundleSummary: KagemushaRecursiveSpendBundleSummary
+        bundleSummary: KagemushaRecursiveProofBundleSummary
     ) throws {
         let reserved = [bundleSummary.currentNote.noteCommitment, bundleSummary.currentNote.spendNullifier]
             + bundleSummary.topupAnchorNullifiers

@@ -17,7 +17,7 @@ Non‑Goals
 
 Definitions
 - ABI Version: Small integer declared in `ProgramMetadata.abi_version`. In the first release, this is fixed to `1` and always selects the canonical v1 syscall/pointer surface.
-- ABI Hash: Deterministic digest of the ABI surface for a given version: syscall list (numbers+shapes), pointer‑type IDs/allowlist, and policy flags; computed by `ivm::syscalls::compute_abi_hash`.
+- ABI Hash: Deterministic digest of the complete ABI surface for a given version: syscall list (numbers+shapes), pointer-type IDs/allowlist, policy flags, numeric domains/rules/JSON/fault ordering, and typed durable-state wire identities/caps; computed by `ivm::syscalls::compute_abi_hash`. Descriptor-format hardening during the first release changes the canonical V1 hash without introducing ABI v2; stale hashes are rejected.
 - Syscall Policy: The fixed first-release host allowlist for ABI v1.
 - Activation Window: Half‑open block‑height interval `[start, end)` in which activation is valid exactly once at `start`.
 

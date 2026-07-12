@@ -700,56 +700,51 @@ offline payments use Kagemusha flows. When an injected test issuer path is
 used, `load` records issued notes as `.issuePending` until `sync()`
 observes matching `IssueOfflineNote` finality; rejected issue outcomes cancel
 the pending note.
-`KagemushaCompactPaymentTokenProver` exposes the native record-backed compact
-token prover for shielded offline-offline payments. Pass a Norito-encoded
-`KagemushaVerifiedFoldRecordBundle`; the bridge verifies each private hop proof
-against its verifier record and returns a Norito-encoded
-`KagemushaCompactPaymentToken` when an ABI 6-or-later `NoritoBridge` is
-available and its Kagemusha entry point rejects the malformed availability probe.
-`KagemushaRecursiveAggregationProofBundleProver` exposes the matching
-admission-neutral recursive proof-bundle path. Pass the same record-bundle
-archive plus a Norito-encoded Pallas open-envelope archive to receive a
-Norito-encoded `KagemushaRecursiveAggregationProofBundle`.
-`KagemushaRecursiveCompactPaymentTokenProver` exposes the ABI 7
-`recursive_compact_v1` compact-token surface and probes
-`kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend. Use
-`proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes`
-with record-bundle, Pallas open-envelope, and recursive compact key-artifact
-archives, and `verifyRecursiveCompactPaymentToken` with compact-token and
-recursive compact verifier-key archives; gate them with `isNativeAvailable`
-and `isVerifierNativeAvailable`. The recursive-spend compact projection
-verifier is exposed separately as
-`verifyRecursiveSpendCompactPaymentTokenProjection(compactTokenArchive:verifierRecordArchive:blockHeight:)`;
-gate it with `isProjectionVerifierNativeAvailable`. It accepts raw Norito
-compact-token and verifier-record archives, rejects empty, malformed, or
-oversized archives before bridge dispatch, accepts only the type-safe optional
-`UInt64` `blockHeight`, and returns the native boolean receiver result. ABI 7
-now carries the one-hop LEN=4
-compact-token proof path when the native bundle includes the packaged compact
-one-hop proving-key archive and matching verifier-slice material. Production
-defaults still stay on ABI 6 Reserved-lineage recursive spend until that
-archive is shipped and signed for release. The proof-composition reservation
-remains fail-closed for a missing packaged key, the generic compact-token
-reservation, and the multi-hop verifier-batch reservation; those cases are
-reserved ABI-7 state. The Swift wrapper maps the native
-recursive-compact-unavailable bridge code to
-`KagemushaRecursiveCompactPaymentTokenProverError.recursiveCompactUnavailable`
-so wallet code can distinguish reserved admission from malformed inputs. Swift accepts additive native bridge ABI
-versions at or above ABI 6 so ABI 7 bundles keep the minimum-ABI-6 privacy and
-recursive-spend helpers usable.
-`KagemushaRecursiveSpendProver` exposes the ABI 6 spend-again-offline cash
-surface. Pass raw Norito archives to initialize the first recursive spend
-bundle, append each offline hop, verify a received bundle, and build the online
-redeem archive without reimplementing the accumulator or proof internals in
-Swift. `KagemushaRecursiveSpendProver.preferredMode` selects
-`recursive_spend_v1` when an ABI 6-or-later bridge exposes init, append, both
-transition-profile helpers, the append-boundary helper, both lineage-witness
-helpers, verify, and redeem, and every required symbol rejects the malformed
-availability probe without returning output bytes. It returns `nil` when no
-recursive-capable production bridge is available. `transitionProfileInit(requestArchive:)` and
-`transitionProfileAppend(requestArchive:)` return the canonical
-Reserved-lineage accumulator transition profile as raw Norito archives for
-fixture generation and circuit preflight.
+The first release exposes one Kagemusha production mode: `recursive_spend_v2`.
+Selection requires the exact native bridge ABI 18
+capability archive, a validated `proof_backend_available` value, and the full
+native symbol inventory. `KagemushaRecursiveSpendProver.preferredMode` returns
+`.recursiveSpend` only when that ABI-18 backend is ready; otherwise it returns
+`nil`. Older proof modes and symbol-presence probes are not release fallbacks.
+
+`KagemushaRecursiveSpend` consumes the canonical V3 release manifest and its
+content address. The release directory has exactly ten files:
+
+- `manifest.json`
+- `manifest.norito`
+- `manifest.norito.sha256`
+- `transition-eq.parameters.krv3`
+- `transition-eq.proving-key.krv3`
+- `transition-eq.verifying-key.krv3`
+- `state-ep.parameters.krv3`
+- `state-ep.proving-key.krv3`
+- `state-ep.verifying-key.krv3`
+- `topup-finality-roster.norito`
+
+Treat `manifest.norito` as the canonical runtime object and verify its SHA-256
+before ingesting any payload. JSON is an operator view, not a trust anchor. For
+each of the six `KRV3KEY\0` files, begin a manifest-bound streaming ingest with
+`KagemushaRecursiveSpendArtifactInstallSessionV3.beginArtifact`, write bounded
+chunks, finalize only after the complete file has been validated, and cancel
+the handle on every error path.
+The native begin/write/finalize/cancel operations bind the manifest digest,
+artifact digest, framing header, descriptor, payload size, and payload digest.
+Successful ingestion alone does not advertise proof readiness. The six finalized
+streams must be installed atomically through
+`KagemushaRecursiveSpendArtifactInstallSessionV3`; partial generations remain
+unavailable and failed installation retains the prior active generation.
+The SDK also exposes the recursive-spend compact projection verifier for raw
+Norito compact-token and verifier-record archives. Call
+`verifyRecursiveSpendCompactPaymentTokenProjection(compactTokenArchive:verifierRecordArchive:blockHeight:)`
+and require its native boolean receiver result; use
+`isProjectionVerifierNativeAvailable` to probe that verifier surface before
+dispatch.
+
+Top-up admission also requires the manifest-bound finality roster and a final
+committed Torii result. An accepted submission, an unknown operation state, or
+an inconclusive status poll is not finality. Wallets must retain the operation
+identifier, poll the direct Torii status surface, and stop on rejection or an
+ambiguous terminal outcome rather than submitting the same operation again.
 Transaction builders expose the same Kagemusha instruction surface without
 asking wallet code to reframe native archives. Use
 `KagemushaInstructionTransactionRequest` for a typed `KagemushaTransfer` or
@@ -761,8 +756,8 @@ archive, and use
 from a native recursive redeem request before signing. These builders require
 valid Norito archives, reject empty, malformed, tampered, or wrong-type
 instruction archives, and keep recursive top-up/redeem derivation inside the
-native bridge. The ABI-6 helper surface is separate experimental machinery and
-is not a compatibility input to the first-release V2 DTOs.
+native bridge. Experimental helper symbols are not compatibility inputs to the
+first-release ABI-18/V2 DTOs and cannot be selected as a release mode.
 
 The first-release V2 surface uses the flat,
 `KagemushaRecursiveSpendInitRequestV2` contract instead. Its five fields are the
@@ -782,6 +777,7 @@ and recipient-request digest are derived from that bundle's recipient
 `PeerSplit` transition and are never duplicated beside it. A V2 split accepts
 one or two canonical parents; semantic redemption carries the bounded canonical
 lineage DAG needed to verify cross-top-up joins.
+For protocol preflight, the append-boundary helper
 `lineageAppendBoundary(profileArchive:)` derives the compact append-boundary
 Norito archive from a full append transition profile with native opening
 preflight material; wallet code should treat the boundary bytes as opaque
@@ -856,18 +852,32 @@ builder; Pallas opening evidence is required to validate every hop.
 
 For confidential-unshield redemption, fetch the exact verifier record from
 Torii and keep it bound to the native proof through the complete
-request-to-redeem flow. The high-level helper performs the fetch, canonical
-Norito archive conversion, proof construction, and local proof verification:
+request-to-redeem flow. The first-release API keeps each trust boundary
+explicit: `ToriiClient.getVerifyingKey` rejects a response whose identifier
+does not match the requested key, the exact canonical record archive is carried
+forward unchanged, and the attachment builder verifies the native proof before
+returning an attachment:
 
 ```swift
 let unshieldVerifierKeyId = try ToriiVerifyingKeyId(
     backend: "halo2/ipa",
     name: "vk_unshield"
 )
-let redeemProof = try await sdk
-    .buildKagemushaConfidentialUnshieldRedeemProofAttachment(
-        witness: unshieldWitness,
-        verifierKeyId: unshieldVerifierKeyId,
+let verifierDetail = try await torii.getVerifyingKey(
+    backend: unshieldVerifierKeyId.backend,
+    name: unshieldVerifierKeyId.name
+)
+let verifierRecord = try verifierDetail
+    .asKagemushaRecursiveSpendVerifierRecordRef()
+let proofRequest = try PrivacyConfidentialWitnessCodecs
+    .buildConfidentialUnshieldProofRequestV2(witness: unshieldWitness)
+let proofOutput = try PrivacyNativeBridge.buildConfidentialUnshieldProofV3(
+    requestArchive: proofRequest
+)
+let redeemProof = try KagemushaRecursiveSpendRequestCodecs
+    .buildRedeemProofAttachment(
+        unshieldProofOutputArchive: proofOutput,
+        unshieldVerifierRecord: verifierRecord,
         blockHeight: currentBlockHeight
     )
 let redeemRequest = try KagemushaRecursiveSpendRedeemRequest(
@@ -885,12 +895,8 @@ let redeemRequestArchive = try KagemushaRecursiveSpendRequestCodecs
     .encodeRedeemRequest(redeemRequest)
 ```
 
-For lower-level integrations, fetch with
-`ToriiClient.getVerifyingKey(backend:name:)`, then call
-`ToriiVerifyingKeyDetail.asKagemushaRecursiveSpendVerifierRecordRef()` before
-passing the result to `buildRedeemProofAttachment`. Torii's
-`record_norito_base64` is the authoritative record archive; the SDK does not
-reconstruct it from the JSON projection.
+Torii's `record_norito_base64` is the authoritative record archive; the SDK
+does not reconstruct it from the JSON projection.
 
 The unshield witness builder rejects transfer outputs, permits zero or one
 private change output, accepts every canonical `u128` public amount, and binds
@@ -970,7 +976,7 @@ admitted production privacy entrypoints, including
 `buildZkAceAuthorizationProofV1(requestArchive:)`, dispatch through the same
 production archive paths and remain fail-closed while the privacy rows are
 gated. Planned catalog entrypoints stay unexported until their production gates
-pass. Native availability requires ABI 6 or later, the privacy
+pass. Native availability in the first release requires exact ABI 18, the privacy
 capability/build/verify symbols, and successful Norito probe outputs whose
 operation-specific result schema bytes match the called entry point.
 

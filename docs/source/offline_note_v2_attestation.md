@@ -200,7 +200,7 @@ recent_block_hash
 expires_at_ms
 ```
 
-`challenge_hash` is not arbitrary. It must equal
+`challenge_hash` is not arbitrary. iOS App Attest uses
 `Hash::new(norito::to_bytes(OfflineDeviceAttestationChallengePreimage))`, where
 the preimage fields are:
 
@@ -220,7 +220,6 @@ android_signing_certificate_sha256
 public_key
 assertion_scheme
 assertion_key_algorithm
-assertion_public_key
 assertion_usage_count_limit
 one_use
 recent_block_height
@@ -228,9 +227,21 @@ recent_block_hash
 expires_at_ms
 ```
 
-The challenge preimage excludes `attestation_report_hash`,
-`attestation_report`, `evidence_hash`, and `evidence`, because the platform must
-receive the challenge before it creates the attestation report.
+Android KeyMint uses the distinct Norito schema
+`OfflineAndroidKeyMintChallengePreimage`. Its field order is identical except
+that `key_id` is absent. KeyMint creates the assertion key while processing the
+challenge, while the canonical Android `key_id` is the lowercase SHA-256 of
+that key, so including it would create an impossible circular dependency. The
+Java, Kotlin/JVM, and Swift SDKs expose
+`androidPreKeyGenerationChallengeHash(...)` without a key-id or assertion-key
+argument. The completed registration recomputes the same platform-specific
+hash; consensus then validates the returned leaf-certificate public key against
+`assertion_public_key` and validates `key_id` against that public key.
+
+Both challenge preimages exclude `assertion_public_key`,
+`attestation_report_hash`, `attestation_report`, `evidence_hash`, and `evidence`,
+because the platform must receive the challenge before it creates the
+attestation key and report.
 For pre-attestation drafts, the Swift, Kotlin/JVM, and Java Android SDK
 constructors therefore allow the default empty `attestation_report` plus empty
 `evidence` inputs and synthesize the deterministic empty-report evidence

@@ -196,8 +196,15 @@ FORBIDDEN_FIXTURE_PUBLIC_KEYS = frozenset(
         # External release-role seal prepared on 2026-07-12.
         "b38b424605d0a3d4a4718f497dde90932444e7f96f48539a7f5a9b6ad8ef0fdd",
         "4fceb3bc8a659bce4beba05fe63c79671a4430a112c4c5448e69deeec1d52770",
+        # Circuit-auditor keys retained by that fixture generation.
         "38861629012e021d8fcfc202ae485b431adff8aa87d5b0b3b8c92048461c1779",
         "330dde2b028c8853134e29aa3ae92832df2ecbe1a5d36f4d800a233fd7e8f4ae",
+        # Latest ephemeral in-memory release-role seal.
+        "dbbcfd7c3b1c494e9bf8e52d76c4d388d45a4f62da5b36dead40a852e7693bb3",
+        "971e807f423e356f0b14adc7a933448b409b97e2f59e75f74e9999875daf384c",
+        # Post-merge ephemeral in-memory release-role seal.
+        "fe2b875714f38b99fdfc116fa3f86baba2377602c08f91818f115042afa9360b",
+        "28606717bbb2ad7b0540afc392dda40c1df589161243f06b3ab84455d3ceae52",
     )
 )
 
