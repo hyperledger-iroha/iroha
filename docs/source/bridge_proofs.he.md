@@ -4,9 +4,9 @@ direction: rtl
 source: docs/source/bridge_proofs.md
 status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 69c9a740261d0c367d52870fc1f48775ae48307056ba9b79d2f811e0c0849f20
-source_last_modified: "2026-07-11"
-translation_last_reviewed: 2026-07-11
+source_hash: 74e29801129deccb6d5640d414289c47cf13fa9e0229fb55212b6c7710d7c5f7
+source_last_modified: "2026-07-12T07:38:49.568351+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-assisted
 ---
 
@@ -49,6 +49,13 @@ anchor, מונע מהממשל לבחור checkpoint יורש הנמוך מקוא
 אינדקס חסר, מיושן, פגום או חסר גיבוי נדחה. גם מזהי הודעות שכבר נוצלו נשמרים
 כדי למנוע replay.
 
+נתיב המקור של TRON משתמש בדיוק ב־ABI
+`transferToTaira(bytes,uint256,uint64 expectedNonce)`. ביצוע מצליח מחייב
+`expectedNonce == transferNonce`; לאחר מכן אותו ערך נכתב אל ה־canonical payload
+לפני הגדלת ה־storage. קבלת native משחזרת את קריאת ה־ABI המלאה מתוך ה־recipient
+שב־payload, הסכום לאחר scaling וה־nonce. לכן ה־selector הישן בעל שני הארגומנטים,
+nonce ישן או עתידי ו־nonce מסוג `uint64` שמוצה נדחים כולם באופן fail-closed.
+
 ## אימות במעבר יחיד ומגבלות עבודה
 
 הוכחות destination ו־native נבנות פעם אחת, נקשרות פעם אחת ושומרות מראש תקציב
@@ -79,6 +86,24 @@ secp256k1, בדיקות BLS aggregate ותרומות מפתחות, ובדיקו�
 
 proof יחיד יכול להכיל לכל היותר 8 MiB של canonical bytes. עבודה שנשמרה עבור
 transaction שננטשה או נדחתה אינה זולגת אל ה־block.
+
+## התחייבות outbound, שמירה וגילוי
+
+כל הודעת outbound שהצליחה מקבלת `commitment_index` צפוף לפי סדר הביצוע בבלוק
+(`0..=511`). ב־V1 המגבלות הקבועות הן 512 הודעות לבלוק ו־4,096 בתים של payload
+קנוני להודעה. `[zk.sccp]` מגביל יחד את מצב ה־payload הממתין באמצעות
+`max_pending_outbound_messages` (ברירת מחדל `65536`) ו־
+`max_pending_outbound_payload_bytes` (ברירת מחדל `268435456`).
+
+לפני פרסום finality או פינוי גוף הבלוק, Kura שומר באופן immutable את ה־canonical
+header המדויק ואת ארכיון SCCP המאומת בשורש. שחזור proof, bundle, proof request
+והיסטוריה אחרונה אינו קורא גוף בלוק היסטורי או עותק payload משתנה מן ה־WSV.
+כאשר destination proof מתקבל, ה־pending payload והחיוב שלו נמחקים atomically
+ומוחלפים ב־fixed terminal descriptor תוך שמירת locator/index. המצב הממתין חסום;
+רשומות terminal והיסטוריית Kura הבלתי־משתנה גדלות בכוונה להגנת replay קבועה.
+`GET /v1/sccp/messages/recent` משתמש בסמן המורכב `{ from, after_index }`.
+הראיות הבלתי־משתנות נספרות בשימוש הדיסק הכולל/של המפעיל, אך לא בתקציב גופי הבלוקים
+הניתנים לפינוי.
 
 ## מגבלות Torii ו־HTTP
 

@@ -113,9 +113,11 @@ revisions even if the verifier is shared. Route constructors take one typed
 ## Release requirements
 
 A successful pairing only establishes the statement encoded by its circuit.
-The checked-in labeled-signal circuit is a test fixture and is not production
-evidence. Production activation requires a signed independent audit and
-reproducible circuit, witness-generator, proving-key, and verifying-key
+The checked-in labeled-signal circuit is a diagnostic-only artifact and is not
+production evidence; production validators reject its identifier,
+classification, and exact published digest. Production activation requires a
+signed independent audit and reproducible circuit, witness-generator,
+proving-key, and verifying-key
 commitments proving canonical payload semantics, message-leaf derivation,
 Merkle inclusion, the block-header commitment root, commit-QC finality, exact
 chain identity, and validator-set continuity rooted in the governed SORA

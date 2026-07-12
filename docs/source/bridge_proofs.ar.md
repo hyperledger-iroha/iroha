@@ -4,9 +4,9 @@ direction: rtl
 source: docs/source/bridge_proofs.md
 status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 69c9a740261d0c367d52870fc1f48775ae48307056ba9b79d2f811e0c0849f20
-source_last_modified: "2026-07-11"
-translation_last_reviewed: 2026-07-11
+source_hash: 74e29801129deccb6d5640d414289c47cf13fa9e0229fb55212b6c7710d7c5f7
+source_last_modified: "2026-07-12T07:38:49.568351+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-assisted
 ---
 
@@ -49,6 +49,14 @@ hash، أعلى إحداثي مقبول؛ لذلك لا تستطيع الحوك�
 وتشترط التطابق التام، فترفض الفهرس المفقود أو القديم أو المشوّه أو غير المسنود.
 وتبقى معرفات الرسائل المستهلكة دائمة لمنع replay.
 
+يستخدم route المصدر في TRON واجهة ABI الدقيقة
+`transferToTaira(bytes,uint256,uint64 expectedNonce)`. ولا ينجح التنفيذ إلا إذا
+كان `expectedNonce == transferNonce`، ثم يكتب القيمة نفسها في canonical payload
+قبل زيادة storage. وتعيد native admission بناء نداء ABI كاملاً من recipient في
+الـpayload والمقدار بعد scaling والـnonce؛ لذلك تُرفض بصورة fail-closed كل من
+واجهة selector القديمة ذات الوسيطين، وأي nonce قديم أو مستقبلي، واستنفاد نطاق
+`uint64` للـnonce.
+
 ## تحقق أحادي المرور وحدود العمل
 
 تُفك بنية إثباتات destination وnative مرة واحدة، وتُربط مرة واحدة، ويُحجز العمل
@@ -78,6 +86,24 @@ secp256k1، وفحوص BLS aggregate ومساهمات المفاتيح، وفح�
 
 لا يجوز أن يتجاوز proof واحد 8 MiB من canonical bytes. ولا يتسرب العمل المحجوز
 من transaction متروكة أو مرفوضة إلى block.
+
+## التزام الرسائل الصادرة والاحتفاظ والاكتشاف
+
+تحصل كل رسالة صادرة ناجحة على `commitment_index` كثيف بترتيب تنفيذ الكتلة
+(`0..=511`). يثبت V1 حداً قدره 512 رسالة لكل كتلة و4,096 بايت canonical payload
+لكل رسالة. ويحد `[zk.sccp]` حالة الـpayload المعلقة معاً بواسطة
+`max_pending_outbound_messages` (الافتراضي `65536`) و
+`max_pending_outbound_payload_bytes` (الافتراضي `268435456`).
+
+قبل نشر finality أو إخلاء block body، يحفظ Kura بصورة immutable الـcanonical header
+الدقيق وأرشيف SCCP موثَّقاً بالـroot. لذلك لا تحتاج إعادة بناء proof أو bundle أو
+proof request أو recent history إلى block body تاريخي أو نسخة WSV قابلة للتغيير.
+عند قبول destination proof تُحذف الـpending payload وتكلفتها atomically ويحل محلها
+fixed terminal descriptor مع بقاء locator/index. الحالة المعلقة محدودة، أما سجلات
+terminal وتاريخ Kura immutable فينميان عمداً للحماية الدائمة من replay. يستخدم
+`GET /v1/sccp/messages/recent` المؤشر المركب `{ from, after_index }`. تُحتسب
+immutable evidence ضمن total/operator disk usage ولكنها مستثناة من
+evictable-body budget.
 
 ## حدود Torii وHTTP
 

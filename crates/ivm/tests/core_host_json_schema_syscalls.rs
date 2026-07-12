@@ -211,7 +211,7 @@ fn json_encode_decode_roundtrip() {
 }
 
 #[test]
-fn json_decode_accepts_blob() {
+fn json_decode_rejects_retired_blob_carrier() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let json = br#"{"a":1,"b":[2,3]}"#;
@@ -231,12 +231,8 @@ fn json_decode_accepts_blob() {
     );
     vm.set_register(10, p_blob);
     vm.load_program(&dec_prog).unwrap();
-    vm.run().unwrap();
-    let p_out = vm.register(10);
-    let tlv_j = vm.memory.validate_tlv(p_out).unwrap();
-    assert_eq!(tlv_j.type_id, PointerType::Json);
-    let parsed: iroha_primitives::json::Json = norito::decode_from_bytes(tlv_j.payload).unwrap();
-    assert_eq!(parsed.get(), r#"{"a":1,"b":[2,3]}"#);
+    assert_eq!(vm.run(), Err(ivm::VMError::NoritoInvalid));
+    assert_eq!(vm.register(10), p_blob);
 }
 
 #[test]

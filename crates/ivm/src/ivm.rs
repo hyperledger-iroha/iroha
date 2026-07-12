@@ -4678,10 +4678,17 @@ impl IVM {
 
     #[inline]
     fn execute_syscall(&mut self, host: &mut dyn IVMHost, number: u32) -> Result<(), VMError> {
-        let metering = require_registered_syscall_metering(
-            number,
-            host_syscall_metering_spec(self.syscall_policy(), number).map(|spec| spec.metering),
-        )?;
+        // Local test helpers are deliberately absent from the production ABI
+        // registry. They still use the reserved quote protocol after an
+        // explicitly test-capable host admits them.
+        let metering = if crate::syscalls::is_koto_test_syscall(number) {
+            SyscallMetering::Reserved
+        } else {
+            require_registered_syscall_metering(
+                number,
+                host_syscall_metering_spec(self.syscall_policy(), number).map(|spec| spec.metering),
+            )?
+        };
         match metering {
             SyscallMetering::Reserved => self.execute_reserved_syscall(host, number),
             SyscallMetering::Staged => self.execute_staged_syscall(host, number),
@@ -9309,10 +9316,14 @@ mod tests {
     #[test]
     fn runtime_trap_populates_last_diagnostic() {
         set_banner_enabled(false);
+        // A durable write survives optimization and guarantees that execution
+        // reaches a metered instruction; an otherwise empty contract is HALT-only.
         let source = r#"
 seiyaku Demo {
+  state int value;
+
   hajimari() {
-    let x = 1;
+    value = 1;
   }
 }
 "#;
@@ -9326,15 +9337,32 @@ seiyaku Demo {
         assert!(output.report.source_map.iter().all(|entry| {
             entry.source.source_path.as_deref() == Some("contracts/runtime_trap.ko")
         }));
+        let metadata = ProgramMetadata::parse(&output.artifact).expect("parse compiled metadata");
+        let lifecycle = metadata
+            .contract_interface
+            .as_ref()
+            .and_then(|interface| {
+                interface
+                    .entrypoints
+                    .iter()
+                    .find(|entrypoint| entrypoint.name == "hajimari")
+            })
+            .expect("compiled hajimari entrypoint");
+        let entrypoint_pc = u64::try_from(metadata.prefix_len())
+            .expect("metadata prefix fits u64")
+            .checked_add(lifecycle.entry_pc)
+            .expect("entrypoint PC fits u64");
         let mut vm = IVM::new(0);
         vm.load_program(&output.artifact)
             .expect("load compiled program");
+        vm.set_program_counter(entrypoint_pc)
+            .expect("select hajimari entrypoint");
         let err = vm.run().expect_err("zero gas should trap");
         assert_eq!(err, VMError::OutOfGas);
         let diag = vm.last_diagnostic().expect("diagnostic should be captured");
         assert_eq!(diag.trap_kind, VmTrapKind::OutOfGas);
         assert_eq!(diag.budget.gas_limit, 0);
-        assert_eq!(diag.context.entrypoint_pc, Some(vm.pc()));
+        assert_eq!(diag.context.entrypoint_pc, Some(entrypoint_pc));
         assert!(
             diag.source.is_none(),
             "deployable artifacts exclude source maps; tooling resolves the hash-keyed sidecar"

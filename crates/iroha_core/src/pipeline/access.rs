@@ -547,6 +547,7 @@ where
                             let identity = code::BoundContractIdentity {
                                 contract_address: record.contract_address.clone(),
                                 contract_alias: record.contract_alias.clone(),
+                                contract_alias_binding: record.contract_alias_binding.clone(),
                                 code_hash: record.code_hash,
                             };
                             let authorization =

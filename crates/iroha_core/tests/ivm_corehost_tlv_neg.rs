@@ -28,6 +28,60 @@ fn quantity_tlv(value: u64) -> Vec<u8> {
 }
 
 #[test]
+fn get_authority_spills_to_owned_heap_after_input_exhaustion() {
+    let authority = ALICE_ID.clone();
+    let mut host = CoreHost::new(authority.clone());
+    let mut vm = IVM::new(u64::MAX);
+    vm.alloc_input_tlv(&vec![0; Memory::INPUT_SIZE as usize])
+        .expect("fill INPUT arena");
+
+    host.syscall(syscalls::SYSCALL_GET_AUTHORITY, &mut vm)
+        .expect("return authority from owned HEAP");
+    let pointer = vm.register(10);
+    assert!(
+        (Memory::HEAP_START..Memory::HEAP_START + Memory::HEAP_SIZE).contains(&pointer),
+        "authority output must spill into HEAP after INPUT exhaustion"
+    );
+    let tlv = vm.validate_tlv(pointer).expect("validate owned HEAP TLV");
+    assert_eq!(tlv.type_id, PointerType::AccountId);
+    let decoded: AccountId = norito::decode_from_bytes(tlv.payload).expect("decode authority");
+    assert_eq!(decoded, authority);
+}
+
+#[test]
+fn execute_instruction_rejects_retired_blob_carriers_without_register_mutation() {
+    use iroha_crypto::Hash;
+
+    let authority = ALICE_ID.clone();
+    let instruction = InstructionBox::from(RegisterSmartContractBytes {
+        code_hash: Hash::new(b"strict-instruction-carrier"),
+        code: vec![0x01, 0x02, 0x03],
+    });
+    let canonical = norito::to_bytes(&instruction).expect("encode instruction");
+
+    for (label, payload) in [
+        ("raw binary", canonical.clone()),
+        ("hex text", hex::encode(&canonical).into_bytes()),
+    ] {
+        let mut host = CoreHost::new(authority.clone());
+        let mut vm = IVM::new(u64::MAX);
+        let envelope = build_tlv(PointerType::Blob as u16, 1, &payload, false);
+        let pointer = vm
+            .alloc_input_tlv(&envelope)
+            .unwrap_or_else(|error| panic!("allocate {label} Blob carrier: {error:?}"));
+        vm.set_register(10, pointer);
+        vm.set_register(11, 0);
+
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm,),
+            Err(ivm::VMError::NoritoInvalid),
+            "{label} Blob carrier must be rejected before instruction dispatch"
+        );
+        assert_eq!(vm.register(10), pointer);
+    }
+}
+
+#[test]
 fn mint_asset_rejects_assetid_tlv_instead_of_assetdefinitionid() {
     // Authority and host
     let authority: AccountId = ALICE_ID.clone();

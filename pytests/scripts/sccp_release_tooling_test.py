@@ -37,6 +37,36 @@ PRODUCTION_CLIS = (
     SCRIPTS / "sccp_release_readiness_report.py",
 )
 
+CORRIDOR_PHASES = (
+    "rust-sccp",
+    "evidence-scripts",
+    "js-sdk",
+    "python-sdk",
+    "swift-sdk",
+    "kotlin-sdk",
+    "java-android",
+    "dotnet-sdk",
+    "contract-smoke",
+    "tvm-contract-smoke",
+    "core-admission",
+    "runtime-api",
+)
+
+
+def test_release_evidence_requires_every_production_corridor_phase() -> None:
+    """Keep signed evidence inventory identical to the executable corridor."""
+
+    listed = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "check_sccp_production_corridor.sh"), "--list"],
+        cwd=ROOT,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert tuple(line.strip() for line in listed.stdout.splitlines()[1:]) == CORRIDOR_PHASES
+    assert common.REQUIRED_PHASES == CORRIDOR_PHASES
+
 
 def validator_path() -> Path:
     """Return the corridor-built production validator or skip integration checks."""
@@ -873,7 +903,7 @@ def test_bundle_index_accepts_exact_fixture_and_production_inventory(
         )
         == index
     )
-    expected_artifacts = 13
+    expected_artifacts = len(common.REQUIRED_PHASES) + len(common.PROFILE_ORDER)
     if production_semantics:
         expected_artifacts += (
             len(common.PROFILE_ORDER) * len(common.SEMANTIC_ARTIFACT_ROLES)

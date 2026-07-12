@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_proofs.md
 status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 69c9a740261d0c367d52870fc1f48775ae48307056ba9b79d2f811e0c0849f20
-source_last_modified: "2026-07-11T15:09:39+04:00"
-translation_last_reviewed: 2026-07-11
+source_hash: 74e29801129deccb6d5640d414289c47cf13fa9e0229fb55212b6c7710d7c5f7
+source_last_modified: "2026-07-12T07:38:49.568351+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-assisted
 ---
 
@@ -39,6 +39,14 @@ translator: machine-assisted
   индексийг бүрэн дахин тооцож, дутуу, хуучирсан эсвэл илүү утгыг татгалзана.
   Message id давтах болон replay-г мөн татгалзана.
 
+TRON эх үүсвэрийн route нь яг
+`transferToTaira(bytes,uint256,uint64 expectedNonce)` ABI-г хэрэглэнэ. Амжилттай
+гүйцэтгэхийн тулд `expectedNonce == transferNonce` байх ёстой бөгөөд дараа нь
+storage-ийг нэмэхээс өмнө уг утгыг canonical payload-д бичнэ. Native admission
+нь payload recipient, хэмжээсжүүлсэн дүн болон nonce-оос бүтэн ABI call-ыг сэргээн
+байгуулна. Иймээс хуучин хоёр-argument selector, stale эсвэл future nonce, мөн
+хязгаар нь дууссан `uint64` nonce бүгд аюулгүйгээр татгалзагдана.
+
 ## Нэг удаагийн шалгалт ба детерминист хязгаар
 
 - Native болон destination нотолгоог каноноор нэг удаа decode хийж, үнэтэй
@@ -49,6 +57,24 @@ translator: machine-assisted
   contributions, BN254 pairing-product checks-д заавал тэгээс их per-proof,
   per-transaction, per-block хязгаар тогтооно. Эдгээр admission limit нь
   consensus-bound тул бүх validator ижил утгатай байна.
+
+## Outbound commitment, хадгалалт ба илрүүлэлт
+
+Амжилттай outbound message бүр block execution order-ийн дагуу нягт
+`commitment_index` (`0..=511`) авна. V1-ийн тогтмол хязгаар нь нэг block-д 512
+message, нэг message-д 4,096 canonical payload byte байна. `[zk.sccp]` pending
+payload state-ийг `max_pending_outbound_messages` (default `65536`) болон
+`max_pending_outbound_payload_bytes` (default `268435456`) хоёроор хамтад нь хязгаарлана.
+
+Kura finality нийтлэх эсвэл block body-г eviction хийхээс өмнө яг canonical header
+болон root-authenticated SCCP archive-ийг immutable хадгална. Proof, bundle, proof
+request, recent history сэргээхдээ түүхэн block body эсвэл mutable WSV payload copy
+уншихгүй. Destination proof хүлээн авахад pending payload ба түүний charge atomically
+арилж, locator/index-ээ хадгалсан fixed terminal descriptor үлдэнэ. Pending state
+хязгаартай; terminal records болон immutable Kura history нь байнгын replay protection-д
+зориулан өснө. `GET /v1/sccp/messages/recent` нь `{ from, after_index }` compound
+cursor ашиглана. Immutable evidence total/operator disk usage-д тооцогдох боловч
+evictable-body budget-д орохгүй.
 
 ## Torii-ийн хязгаар
 

@@ -5563,16 +5563,21 @@ view fn main() {
                 ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
                 "INPUT_PUBLISH_TLV",
             ),
+            (
+                ivm_abi::syscalls::SYSCALL_NORMALIZE_NORITO_BYTES,
+                "NORMALIZE_NORITO_BYTES",
+            ),
             (ivm_abi::syscalls::SYSCALL_VRF_VERIFY, "VRF_VERIFY"),
             (
                 ivm_abi::syscalls::SYSCALL_VRF_VERIFY_BATCH,
                 "VRF_VERIFY_BATCH",
             ),
         ] {
-            let needle = encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                u8::try_from(syscall).expect("VRF syscall id fits in u8"),
-            )
+            let needle = if let Ok(imm8) = u8::try_from(syscall) {
+                encoding::wide::encode_sys(instruction::wide::system::SCALL, imm8)
+            } else {
+                encoding::wide::encode_syscallx(syscall)
+            }
             .to_le_bytes();
             assert!(
                 code.windows(needle.len()).any(|window| window == needle),
@@ -5593,6 +5598,33 @@ view fn main() {
             2,
             "single and batch VRF verification each publish exactly one request envelope"
         );
+
+        let syscall_words = code
+            .chunks_exact(4)
+            .filter_map(|chunk| {
+                let word = u32::from_le_bytes(chunk.try_into().expect("four-byte instruction"));
+                match instruction::wide::opcode(word) {
+                    instruction::wide::system::SCALL => {
+                        Some(u32::from(encoding::wide::decode_sys(word).1))
+                    }
+                    instruction::wide::system::SYSTEM => {
+                        Some(encoding::wide::decode_syscallx(word))
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
+        for operation in [
+            ivm_abi::syscalls::SYSCALL_VRF_VERIFY,
+            ivm_abi::syscalls::SYSCALL_VRF_VERIFY_BATCH,
+        ] {
+            assert!(
+                syscall_words.windows(2).any(|window| {
+                    window == [ivm_abi::syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, operation]
+                }),
+                "NORMALIZE_NORITO_BYTES must immediately precede VRF syscall {operation:#x}"
+            );
+        }
     }
 
     #[test]
@@ -6912,7 +6944,8 @@ kotoage fn apply(AccountId account, AssetDefinitionId asset, Option<quantity> ca
   ledger::asset::set_transfer_freeze(account: account, asset_definition: asset, frozen: true);
   ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: cap);
   ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: Option::some(replacement_cap));
-  ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: Option::none);
+  let Option<quantity> no_cap = Option::none;
+  ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: no_cap);
   ledger::account::recovery::propose(alias: alias, replacement: replacement);
   ledger::account::recovery::approve(alias: alias);
   ledger::account::recovery::cancel(alias: alias);
@@ -12550,8 +12583,16 @@ impl Compiler {
                             let tuple_items = tuple_map.get(tuple).cloned();
                             if let Some(items) = tuple_items {
                                 if let Some(src_t) = items.get(*index) {
-                                    let rs = src_reg(src_t, scratch1, &mut code)?;
-                                    emit_addi(&mut code, rd, rs, 0);
+                                    if let (Some(kind), Some(literal)) = (
+                                        dataref_kind_map.get(&(func_idx, *src_t)).copied(),
+                                        string_map.get(&(func_idx, *src_t)).cloned(),
+                                    ) {
+                                        let key = data_key_for_pointer(kind, &literal);
+                                        emit_literal_load(&mut code, &fixups, rd, key);
+                                    } else {
+                                        let rs = src_reg(src_t, scratch1, &mut code)?;
+                                        emit_addi(&mut code, rd, rs, 0);
+                                    }
                                     if let Some(child_items) = tuple_map.get(src_t).cloned() {
                                         tuple_map.insert(*dest, child_items);
                                     } else {
@@ -17584,6 +17625,7 @@ impl Compiler {
                                 push_word(&mut code, encode_addi(10, r, 0)?);
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_NORMALIZE_NORITO_BYTES);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_VRF_VERIFY as u8,
@@ -17606,6 +17648,7 @@ impl Compiler {
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_NORMALIZE_NORITO_BYTES);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_VRF_VERIFY_BATCH as u8,

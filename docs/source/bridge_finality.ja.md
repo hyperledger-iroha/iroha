@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
-source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+source_hash: 1cbd248fe14e63d00f002f09e1663181f3ab9bd99124ffeb89c56763b784046b
+source_last_modified: "2026-07-12"
 translation_last_reviewed: 2026-07-12
 ---
 
@@ -45,10 +45,14 @@ snapshot は context id の一部なので、子 roster を許可する前に親
 
 ## 永続化と検証
 
-Sumeragi v2 の apply path は artifact を検証し、不変な Kura sidecar として保存します。
-proof builder は canonical block とその sidecar を読み、現在の可変 world state から
-過去の PoP や certificate を再構成しません。sidecar の欠落、破損、競合、検証失敗は
-fail closed です。最近の in-memory history window による保持制限はありません。
+Kura は finality 公開または block body eviction より前に、正確な canonical header と
+root-authenticated SCCP archive を immutable retained-block record に書き、その後 exact
+V2 artifact を別の immutable finality record に保存します。両方とも idempotent な
+no-clobber write であり、同じ height の競合を拒否します。`build_finality_proof` が読むのは
+retained header と verified finality record だけで、historical block body や mutable world
+state の PoP は読みません。Restart では header/archive/artifact/hash association を再検証します。
+Body eviction で有効な proof が利用不能になることはなく、欠落、破損、競合、検証失敗は
+fail closed です。
 
 stateless verifier は version、chain、高さ、header hash、canonical predecessor、view、
 context、subject、CommitQC を
@@ -79,5 +83,6 @@ commitment は正確に
 - `GET /v1/bridge/finality/{height}` は `BridgeFinalityProof` を返します。
 - `GET /v1/bridge/finality/bundle/{height}` は `BridgeFinalityBundle` を返します。
 
-block または正確な永続 v2 artifact が存在しないか無効なら、両 endpoint は fail closed
-になります。未知の field、version、retired proof shape は拒否しなければなりません。
+retained canonical header または正確な永続 v2 artifact が存在しないか無効なら、両
+endpoint は fail closed になります。Historical block body eviction で有効な proof が
+利用不能になることはありません。未知の field、version、retired proof shape は拒否しなければなりません。

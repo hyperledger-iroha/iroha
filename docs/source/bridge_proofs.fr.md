@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_proofs.md
 status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 69c9a740261d0c367d52870fc1f48775ae48307056ba9b79d2f811e0c0849f20
-source_last_modified: "2026-07-11"
-translation_last_reviewed: 2026-07-11
+source_hash: 74e29801129deccb6d5640d414289c47cf13fa9e0229fb55212b6c7710d7c5f7
+source_last_modified: "2026-07-12T07:38:49.568351+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-assisted
 ---
 
@@ -54,6 +54,14 @@ une égalité exacte ; un index absent, périmé, mal formé ou sans justificati
 est rejeté. Les identifiants de messages consommés restent également durables
 afin d'empêcher le rejeu.
 
+La route source TRON utilise l’ABI exacte
+`transferToTaira(bytes,uint256,uint64 expectedNonce)`. L’exécution ne réussit
+que si `expectedNonce == transferNonce`, puis écrit cette même valeur dans le
+canonical payload avant d’incrémenter le storage. L’admission native reconstruit
+l’appel ABI complet à partir du recipient du payload, du montant mis à l’échelle
+et du nonce. Le selector retiré à deux arguments, un nonce ancien ou futur et
+un nonce `uint64` épuisé sont donc tous rejetés de manière sûre.
+
 ## Vérification en un seul passage et limites de travail
 
 Les preuves destination et native sont structurées une fois, liées une fois et
@@ -86,6 +94,27 @@ Les limites par défaut de la première version sont :
 
 Une proof peut contenir au plus 8 MiB de canonical bytes. Le travail réservé
 par une transaction abandonnée ou rejetée ne se propage pas au bloc.
+
+## Engagement outbound, rétention et découverte
+
+Chaque message outbound réussi reçoit un `commitment_index` dense dans l'ordre
+d'exécution du bloc (`0..=511`). V1 fixe les limites immuables à 512 messages par
+bloc et 4 096 octets de payload canonique par message. `[zk.sccp]` borne
+conjointement les payloads en attente avec `max_pending_outbound_messages`
+(valeur par défaut `65536`) et `max_pending_outbound_payload_bytes` (valeur par
+défaut `268435456`).
+
+Avant de publier la finalité ou d'évincer le corps du bloc, Kura conserve de façon
+immuable le header canonique exact et l'archive SCCP authentifiée par la racine. La
+reconstruction des proofs, bundles, proof requests et de l'historique récent ne lit
+ni le corps historique ni une copie mutable du payload dans le WSV. L'acceptation
+de la destination proof supprime atomiquement le payload en attente et sa charge,
+puis laisse un descripteur terminal de taille fixe avec son locator/index. L'état
+en attente est borné ; les enregistrements terminaux et l'historique Kura immuable
+croissent volontairement pour la protection permanente contre le rejeu.
+`GET /v1/sccp/messages/recent` emploie le curseur composé
+`{ from, after_index }`. Les preuves immuables comptent dans l'usage disque total
+et opérateur, mais pas dans le budget des corps évictables.
 
 ## Limites Torii et HTTP
 

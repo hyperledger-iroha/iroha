@@ -4517,9 +4517,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return isKagemushaRecursiveSpendAvailable
-            && loadedBridgeAbiVersion.map {
-                $0 >= KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion
-            } == true
+            && loadedBridgeAbiVersion == KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion
             && kagemushaRecursiveSpendTopUpFn != nil
             && kagemushaRecursiveSpendTopUpNativeProbeOk
         #else

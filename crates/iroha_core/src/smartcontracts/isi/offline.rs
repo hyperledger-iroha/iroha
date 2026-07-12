@@ -10190,7 +10190,9 @@ pub mod isi {
             zk.halo2.enabled = true;
             zk.halo2.max_envelope_bytes = usize::MAX;
             zk.halo2.max_proof_bytes = usize::MAX;
-            state.set_zk(zk);
+            state
+                .set_zk(zk)
+                .expect("empty SCCP outbox accepts offline test configuration");
 
             let mut proof_attachment = ProofAttachment::new_ref(
                 crate::zk::ZK_BACKEND_HALO2_IPA.into(),
@@ -10914,7 +10916,9 @@ pub mod isi {
             zk.halo2.enabled = true;
             zk.halo2.max_envelope_bytes = usize::MAX;
             zk.halo2.max_proof_bytes = usize::MAX;
-            state.set_zk(zk);
+            state
+                .set_zk(zk)
+                .expect("empty SCCP outbox accepts offline test configuration");
 
             RecursiveKagemushaRedeemTestFixture {
                 state,
@@ -11079,7 +11083,9 @@ pub mod isi {
             zk.halo2.enabled = true;
             zk.halo2.max_envelope_bytes = usize::MAX;
             zk.halo2.max_proof_bytes = usize::MAX;
-            state.set_zk(zk);
+            state
+                .set_zk(zk)
+                .expect("empty SCCP outbox accepts offline test configuration");
 
             RecursiveKagemushaRedeemTestFixture {
                 state,
@@ -16163,7 +16169,9 @@ pub mod isi {
             zk.halo2.enabled = true;
             zk.halo2.max_envelope_bytes = usize::MAX;
             zk.halo2.max_proof_bytes = usize::MAX;
-            state.set_zk(zk);
+            state
+                .set_zk(zk)
+                .expect("empty SCCP outbox accepts offline test configuration");
 
             let input_certificate =
                 signed_sample_certificate(&issuer, authority.clone(), 0x75, "topup-input-key");

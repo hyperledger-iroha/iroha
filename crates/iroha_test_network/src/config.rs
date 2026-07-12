@@ -920,7 +920,7 @@ fn populate_genesis_results(
     iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &block.0, dataspace_catalog);
     let mut state = State::with_telemetry(world, kura, query_handle, StateTelemetry::default());
     if let Some(zk_config) = zk_config {
-        state.set_zk(zk_config.clone());
+        state.set_zk(zk_config.clone()).map_err(Report::from)?;
     }
     apply_preexec_nexus_overrides(
         &mut state,

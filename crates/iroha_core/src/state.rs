@@ -2922,6 +2922,50 @@ pub enum LaneLifecycleError {
     Storage(String),
 }
 
+/// Errors surfaced while installing runtime ZK configuration into committed state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ThisError)]
+pub enum ZkConfigInstallError {
+    /// Consensus-accounted pending usage has an impossible counter combination.
+    #[error("committed SCCP pending outbound usage is structurally invalid: {usage:?}")]
+    InvalidSccpPendingUsage {
+        /// Persisted usage observed at the configuration boundary.
+        usage: SccpOutboundPendingUsageV1,
+    },
+    /// A pending outbound record does not carry a nonempty payload length that
+    /// can be represented by the consensus usage counters.
+    #[error("committed SCCP pending outbound state contains an invalid payload length")]
+    InvalidSccpPendingPayloadLength,
+    /// Recomputing pending outbound usage from payload-bearing records
+    /// overflowed its fixed-width consensus counters.
+    #[error(
+        "committed SCCP pending outbound usage overflows while recomputing payload-bearing state"
+    )]
+    SccpPendingUsageOverflow,
+    /// The persisted usage cell does not exactly describe the payload-bearing
+    /// pending outbound map.
+    #[error(
+        "committed SCCP pending outbound usage differs from payload-bearing state: expected {expected:?}, found {usage:?}"
+    )]
+    SccpPendingUsageMismatch {
+        /// Persisted usage observed at the configuration boundary.
+        usage: SccpOutboundPendingUsageV1,
+        /// Usage recomputed from every pending payload-bearing record.
+        expected: SccpOutboundPendingUsageV1,
+    },
+    /// Candidate pending-outbox caps are below already committed usage.
+    #[error(
+        "committed SCCP pending outbound usage exceeds configured limits: usage={usage:?}, maxima messages={max_messages} bytes={max_payload_bytes}"
+    )]
+    SccpPendingUsageLimitExceeded {
+        /// Persisted usage observed at the configuration boundary.
+        usage: SccpOutboundPendingUsageV1,
+        /// Candidate maximum number of payload-bearing pending messages.
+        max_messages: NonZeroU64,
+        /// Candidate maximum aggregate pending payload bytes.
+        max_payload_bytes: NonZeroU64,
+    },
+}
+
 struct LaneGeometryCatalogPublicationFailure {
     error: LaneLifecycleError,
     rollback_safe: bool,
@@ -9205,10 +9249,16 @@ pub struct State {
     da_shard_cursor_persistor: DaShardCursorJournalPersistor,
     /// Durable commit-roster journal reconstructed at startup for block sync.
     pub commit_roster_journal: parking_lot::RwLock<CommitRosterJournal>,
+    /// Serializes the complete commit-roster journal persistence and accounting scope.
+    commit_roster_journal_persistence_lock: parking_lot::Mutex<()>,
     /// Durable latest query-index snapshot marker reconstructed at startup.
     query_index_journal: parking_lot::RwLock<QueryIndexJournal>,
+    /// Serializes the complete query-index journal persistence and accounting scope.
+    query_index_journal_persistence_lock: parking_lot::Mutex<()>,
     /// Durable latest query projection checkpoint descriptor reconstructed at startup.
     query_projection_checkpoint_journal: parking_lot::RwLock<QueryProjectionCheckpointJournal>,
+    /// Serializes the complete projection-checkpoint journal persistence and accounting scope.
+    query_projection_checkpoint_journal_persistence_lock: parking_lot::Mutex<()>,
     /// In-memory DA pin intent index mirrored from the on-chain registry.
     pub da_pin_intents: parking_lot::RwLock<DaPinStore>,
     /// In-memory lane relay envelope cache used for merge/telemetry.
@@ -9312,6 +9362,82 @@ pub struct State {
     view_generation: AtomicU64,
     /// Aggregates repeated view-generation contention warnings to avoid log spam under write pressure.
     view_lock_contention_log: parking_lot::Mutex<ViewLockContentionLog>,
+}
+
+struct LoadedStateJournals {
+    commit_roster: CommitRosterJournal,
+    query_index: QueryIndexJournal,
+    query_projection_checkpoint: QueryProjectionCheckpointJournal,
+}
+
+fn load_state_journals(
+    kura: &Kura,
+    canonical_query_index_status: Option<QueryIndexStatus>,
+) -> LoadedStateJournals {
+    let accounting_mutation = kura.begin_total_disk_usage_mutation();
+    let store_root = kura.store_root();
+    let roster_retention = kura.block_sync_roster_retention();
+
+    let commit_roster_path = CommitRosterJournal::journal_path(&store_root);
+    let commit_roster =
+        match CommitRosterJournal::load(commit_roster_path.clone(), roster_retention) {
+            Ok(journal) => journal,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %commit_roster_path.display(),
+                    "failed to load commit roster journal; starting empty"
+                );
+                CommitRosterJournal::new(commit_roster_path, roster_retention)
+            }
+        };
+
+    let query_index_path = QueryIndexJournal::journal_path(&store_root);
+    let mut query_index = match QueryIndexJournal::load(query_index_path.clone()) {
+        Ok(journal) => journal,
+        Err(err) => {
+            warn!(
+                ?err,
+                path = %query_index_path.display(),
+                "failed to load query index journal; starting empty"
+            );
+            QueryIndexJournal::new(query_index_path)
+        }
+    };
+    if let Some(status) = canonical_query_index_status {
+        query_index.set_latest(status.indexed_height, status.indexed_block_hash);
+    }
+
+    let query_projection_checkpoint_path =
+        QueryProjectionCheckpointJournal::journal_path(&store_root);
+    let query_projection_checkpoint =
+        match QueryProjectionCheckpointJournal::load(query_projection_checkpoint_path.clone()) {
+            Ok(journal) => journal,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %query_projection_checkpoint_path.display(),
+                    "failed to load query projection checkpoint journal; starting empty"
+                );
+                QueryProjectionCheckpointJournal::new(query_projection_checkpoint_path)
+            }
+        };
+
+    // Loading a valid temp journal can replace and remove files. Dropping an unpublished
+    // mutation invalidates both caches before the synchronous stable scan republishes them.
+    drop(accounting_mutation);
+    if let Err(err) = kura.refresh_disk_usage_bytes() {
+        warn!(
+            ?err,
+            "failed to reconcile Kura disk usage after state journal recovery"
+        );
+    }
+
+    LoadedStateJournals {
+        commit_roster,
+        query_index,
+        query_projection_checkpoint,
+    }
 }
 
 /// Deterministic SCCP verifier work reserved by accepted transactions.
@@ -23135,12 +23261,13 @@ impl State {
         indexed_height: u64,
         indexed_block_hash: Option<HashOf<BlockHeader>>,
     ) {
+        let _persistence_guard = self.query_index_journal_persistence_lock.lock();
         let path = self.query_index_journal_path();
         self.set_query_index_status(indexed_height, indexed_block_hash);
         if path.as_os_str().is_empty() {
             return;
         }
-        self.persist_query_index_status_snapshot(&path);
+        self.persist_query_index_status_snapshot_locked(&path);
     }
 
     fn set_query_index_status(
@@ -23154,6 +23281,11 @@ impl State {
     }
 
     fn persist_query_index_status_snapshot(&self, path: &Path) {
+        let _persistence_guard = self.query_index_journal_persistence_lock.lock();
+        self.persist_query_index_status_snapshot_locked(path);
+    }
+
+    fn persist_query_index_status_snapshot_locked(&self, path: &Path) {
         let tmp_path = path.with_extension("norito.tmp");
         let measure_bytes = |path: &Path| -> Option<u64> {
             match std::fs::metadata(path) {
@@ -23169,6 +23301,7 @@ impl State {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
             _ => None,
         };
+        let accounting_mutation = self.kura.begin_total_disk_usage_mutation();
         if let Err(err) = self.query_index_journal.read().persist() {
             warn!(
                 ?err,
@@ -23182,6 +23315,15 @@ impl State {
         };
         if let (Some(before_bytes), Some(after_bytes)) = (before_bytes, after_bytes) {
             self.kura.update_disk_usage_delta(before_bytes, after_bytes);
+            accounting_mutation.finish();
+        } else {
+            drop(accounting_mutation);
+            if let Err(err) = self.kura.refresh_disk_usage_bytes() {
+                warn!(
+                    ?err,
+                    "failed to reconcile Kura disk usage after query index journal persistence"
+                );
+            }
         }
     }
 
@@ -23202,6 +23344,9 @@ impl State {
         &self,
         checkpoint: Option<QueryProjectionCheckpoint>,
     ) {
+        let _persistence_guard = self
+            .query_projection_checkpoint_journal_persistence_lock
+            .lock();
         let path = self.query_projection_checkpoint_journal_path();
         let mut journal = self.query_projection_checkpoint_journal.write();
         journal.set_latest(checkpoint);
@@ -23227,6 +23372,7 @@ impl State {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
             _ => None,
         };
+        let accounting_mutation = self.kura.begin_total_disk_usage_mutation();
         if let Err(err) = journal.persist() {
             warn!(
                 ?err,
@@ -23240,6 +23386,15 @@ impl State {
         };
         if let (Some(before_bytes), Some(after_bytes)) = (before_bytes, after_bytes) {
             self.kura.update_disk_usage_delta(before_bytes, after_bytes);
+            accounting_mutation.finish();
+        } else {
+            drop(accounting_mutation);
+            if let Err(err) = self.kura.refresh_disk_usage_bytes() {
+                warn!(
+                    ?err,
+                    "failed to reconcile Kura disk usage after projection checkpoint journal persistence"
+                );
+            }
         }
     }
 
@@ -23318,6 +23473,7 @@ impl State {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) {
+        let _persistence_guard = self.commit_roster_journal_persistence_lock.lock();
         let path = self.commit_roster_journal_path();
         let mut journal = self.commit_roster_journal.write();
         journal.upsert(commit_qc.clone(), checkpoint.clone(), stake_snapshot);
@@ -23339,6 +23495,7 @@ impl State {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
             _ => None,
         };
+        let accounting_mutation = self.kura.begin_total_disk_usage_mutation();
         if let Err(err) = journal.persist_buffered() {
             warn!(
                 ?err,
@@ -23352,6 +23509,15 @@ impl State {
         };
         if let (Some(before_bytes), Some(after_bytes)) = (before_bytes, after_bytes) {
             self.kura.update_disk_usage_delta(before_bytes, after_bytes);
+            accounting_mutation.finish();
+        } else {
+            drop(accounting_mutation);
+            if let Err(err) = self.kura.refresh_disk_usage_bytes() {
+                warn!(
+                    ?err,
+                    "failed to reconcile Kura disk usage after commit roster journal persistence"
+                );
+            }
         }
     }
 
@@ -24881,48 +25047,11 @@ impl State {
             codec: iroha_config::parameters::actual::StreamingCodec::from_defaults(),
         };
         let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
-        let store_root = kura.store_root();
-        let roster_retention = kura.block_sync_roster_retention();
-        let commit_roster_journal_path = CommitRosterJournal::journal_path(&store_root);
-        let commit_roster_journal =
-            match CommitRosterJournal::load(commit_roster_journal_path.clone(), roster_retention) {
-                Ok(journal) => journal,
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        path = %commit_roster_journal_path.display(),
-                        "failed to load commit roster journal; starting empty"
-                    );
-                    CommitRosterJournal::new(commit_roster_journal_path, roster_retention)
-                }
-            };
-        let query_index_journal_path = QueryIndexJournal::journal_path(&store_root);
-        let query_index_journal = match QueryIndexJournal::load(query_index_journal_path.clone()) {
-            Ok(journal) => journal,
-            Err(err) => {
-                warn!(
-                    ?err,
-                    path = %query_index_journal_path.display(),
-                    "failed to load query index journal; starting empty"
-                );
-                QueryIndexJournal::new(query_index_journal_path)
-            }
-        };
-        let query_projection_checkpoint_journal_path =
-            QueryProjectionCheckpointJournal::journal_path(&store_root);
-        let query_projection_checkpoint_journal = match QueryProjectionCheckpointJournal::load(
-            query_projection_checkpoint_journal_path.clone(),
-        ) {
-            Ok(journal) => journal,
-            Err(err) => {
-                warn!(
-                    ?err,
-                    path = %query_projection_checkpoint_journal_path.display(),
-                    "failed to load query projection checkpoint journal; starting empty"
-                );
-                QueryProjectionCheckpointJournal::new(query_projection_checkpoint_journal_path)
-            }
-        };
+        let LoadedStateJournals {
+            commit_roster: commit_roster_journal,
+            query_index: query_index_journal,
+            query_projection_checkpoint: query_projection_checkpoint_journal,
+        } = load_state_journals(&kura, None);
         let pipeline = iroha_config::parameters::actual::Pipeline {
             ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
                 enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
@@ -25026,10 +25155,13 @@ impl State {
             da_shard_cursor_persistor: DaShardCursorJournalPersistor::new(),
             da_receipt_cursors: parking_lot::RwLock::new(DaReceiptCursorIndex::default()),
             commit_roster_journal: parking_lot::RwLock::new(commit_roster_journal),
+            commit_roster_journal_persistence_lock: parking_lot::Mutex::new(()),
             query_index_journal: parking_lot::RwLock::new(query_index_journal),
+            query_index_journal_persistence_lock: parking_lot::Mutex::new(()),
             query_projection_checkpoint_journal: parking_lot::RwLock::new(
                 query_projection_checkpoint_journal,
             ),
+            query_projection_checkpoint_journal_persistence_lock: parking_lot::Mutex::new(()),
             da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
             lane_relays: parking_lot::RwLock::new(LaneRelayStore::default()),
             settled_nexus_fee_receipts: parking_lot::RwLock::new(BTreeSet::new()),
@@ -34797,10 +34929,41 @@ impl State {
     }
 
     /// Update zero-knowledge verification settings using loaded configuration.
-    pub fn set_zk(&mut self, zk: iroha_config::parameters::actual::Zk) {
+    ///
+    /// The candidate configuration is checked against committed payload-bearing
+    /// SCCP outbox state before either the process-wide gas schedule or this
+    /// state instance is mutated. This is the startup boundary where the actual
+    /// node configuration is available; snapshot decoding intentionally checks
+    /// only configuration-independent SCCP invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when committed SCCP pending usage exceeds either
+    /// candidate outbox limit, or when the committed usage counters are
+    /// structurally invalid.
+    pub fn set_zk(
+        &mut self,
+        zk: iroha_config::parameters::actual::Zk,
+    ) -> core::result::Result<(), ZkConfigInstallError> {
+        let pending_usage = *self.world.sccp_outbound_pending_usage.view().get();
+        if !pending_usage.is_structurally_valid() {
+            return Err(ZkConfigInstallError::InvalidSccpPendingUsage {
+                usage: pending_usage,
+            });
+        }
+        let expected_pending_usage =
+            recompute_sccp_pending_usage(self.world.sccp_outbound_pending_messages.view().iter())?;
+        if pending_usage != expected_pending_usage {
+            return Err(ZkConfigInstallError::SccpPendingUsageMismatch {
+                usage: pending_usage,
+                expected: expected_pending_usage,
+            });
+        }
+        validate_sccp_pending_usage_against_config(pending_usage, &zk.sccp)?;
         crate::gas::configure_confidential_gas(zk.gas.into());
         self.zk = zk;
         self.confidential_digest_cache.bump();
+        Ok(())
     }
 
     /// Install a fully validated SCCP registry directly for deterministic tests.
@@ -34870,11 +35033,16 @@ impl State {
         if world.sccp_outbound_message_index.get(&index).is_some() {
             return Err("test SCCP outbound index key already exists".to_owned());
         }
-        let next_usage = world
-            .sccp_outbound_pending_usage
-            .get()
+        let current_usage = *world.sccp_outbound_pending_usage.get();
+        if !current_usage.is_structurally_valid() {
+            return Err("test SCCP pending usage is structurally corrupt".to_owned());
+        }
+        let next_usage = current_usage
             .checked_add_payload(record.payload_bytes.len())
             .ok_or_else(|| "test SCCP pending usage overflow".to_owned())?;
+        if !next_usage.is_structurally_valid() {
+            return Err("test SCCP pending usage became structurally corrupt".to_owned());
+        }
         if next_usage.message_count > self.zk.sccp.max_pending_outbound_messages.get()
             || next_usage.payload_bytes > self.zk.sccp.max_pending_outbound_payload_bytes.get()
         {
@@ -34886,6 +35054,61 @@ impl State {
             .insert(key.message_id, key);
         world.sccp_outbound_message_index.insert(index, ());
         *world.sccp_outbound_pending_usage.get_mut() = next_usage;
+        world.commit();
+        Ok(())
+    }
+
+    /// Move one test SCCP message from payload-bearing pending state to its fixed terminal receipt.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn transition_sccp_outbound_message_to_terminal_for_testing(
+        &self,
+        key: SccpOutboundMessageKeyV1,
+        terminal: SccpOutboundProofRecordV1,
+    ) -> core::result::Result<(), String> {
+        if !terminal.is_well_formed_for_key(&key) {
+            return Err("test SCCP terminal record is malformed".to_owned());
+        }
+        let mut world = self.world.block();
+        if world.sccp_outbound_proofs.get(&key).is_some() {
+            return Err("test SCCP terminal record already exists".to_owned());
+        }
+        let pending = world
+            .sccp_outbound_pending_messages
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| "test SCCP pending record is missing".to_owned())?;
+        if pending.descriptor() != terminal.descriptor() {
+            return Err("test SCCP pending and terminal descriptors differ".to_owned());
+        }
+        let expected_index = SccpOutboundMessageIndexKeyV1::new(key, &pending)
+            .ok_or_else(|| "test SCCP pending record cannot form its index".to_owned())?;
+        if world
+            .sccp_outbound_message_index
+            .get(&expected_index)
+            .is_none()
+            || world.sccp_outbound_message_locator.get(&key.message_id) != Some(&key)
+        {
+            return Err("test SCCP pending locator or index is missing".to_owned());
+        }
+        let current_usage = *world.sccp_outbound_pending_usage.get();
+        if !current_usage.is_structurally_valid() {
+            return Err("test SCCP pending usage is structurally corrupt".to_owned());
+        }
+        let next_usage = current_usage
+            .checked_remove_payload(pending.payload_bytes.len())
+            .ok_or_else(|| "test SCCP pending usage underflow".to_owned())?;
+        if !next_usage.is_structurally_valid() {
+            return Err("test SCCP pending usage became structurally corrupt".to_owned());
+        }
+        let removed = world
+            .sccp_outbound_pending_messages
+            .remove(key)
+            .ok_or_else(|| "test SCCP pending record disappeared".to_owned())?;
+        if removed != pending {
+            return Err("test SCCP removed pending record changed".to_owned());
+        }
+        *world.sccp_outbound_pending_usage.get_mut() = next_usage;
+        world.sccp_outbound_proofs.insert(key, terminal);
         world.commit();
         Ok(())
     }
@@ -37810,10 +38033,81 @@ fn validate_sccp_inbound_anchor_high_water_index(
     Ok(())
 }
 
+fn validate_sccp_pending_usage_against_config(
+    pending_usage: SccpOutboundPendingUsageV1,
+    config: &iroha_config::parameters::actual::Sccp,
+) -> core::result::Result<(), ZkConfigInstallError> {
+    if !pending_usage.is_structurally_valid() {
+        return Err(ZkConfigInstallError::InvalidSccpPendingUsage {
+            usage: pending_usage,
+        });
+    }
+    if pending_usage.message_count > config.max_pending_outbound_messages.get()
+        || pending_usage.payload_bytes > config.max_pending_outbound_payload_bytes.get()
+    {
+        return Err(ZkConfigInstallError::SccpPendingUsageLimitExceeded {
+            usage: pending_usage,
+            max_messages: config.max_pending_outbound_messages,
+            max_payload_bytes: config.max_pending_outbound_payload_bytes,
+        });
+    }
+    Ok(())
+}
+
+fn checked_accumulate_sccp_pending_usage(
+    usage: SccpOutboundPendingUsageV1,
+    payload_len: usize,
+) -> core::result::Result<SccpOutboundPendingUsageV1, ZkConfigInstallError> {
+    let payload_bytes = u64::try_from(payload_len)
+        .map_err(|_| ZkConfigInstallError::InvalidSccpPendingPayloadLength)?;
+    if payload_bytes == 0 {
+        return Err(ZkConfigInstallError::InvalidSccpPendingPayloadLength);
+    }
+    Ok(SccpOutboundPendingUsageV1 {
+        message_count: usage
+            .message_count
+            .checked_add(1)
+            .ok_or(ZkConfigInstallError::SccpPendingUsageOverflow)?,
+        payload_bytes: usage
+            .payload_bytes
+            .checked_add(payload_bytes)
+            .ok_or(ZkConfigInstallError::SccpPendingUsageOverflow)?,
+    })
+}
+
+fn recompute_sccp_pending_usage<'a>(
+    mut records: impl Iterator<
+        Item = (
+            &'a SccpOutboundMessageKeyV1,
+            &'a SccpOutboundPendingMessageRecordV1,
+        ),
+    >,
+) -> core::result::Result<SccpOutboundPendingUsageV1, ZkConfigInstallError> {
+    records.try_fold(
+        SccpOutboundPendingUsageV1::default(),
+        |usage, (_, record)| {
+            checked_accumulate_sccp_pending_usage(usage, record.payload_bytes.len())
+        },
+    )
+}
+
 /// Validate chain-profile ownership of hydrated SCCP governance and replay state.
 pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::Result<(), String> {
+    let committed_height = u64::try_from(state.committed_height())
+        .map_err(|_| "committed WSV height does not fit the SCCP height domain".to_owned())?;
+    let retained_archive_inventory = state
+        .kura()
+        .retained_nonempty_sccp_archive_inventory_at_or_below(committed_height)
+        .map_err(|error| {
+            format!(
+                "failed to inventory immutable Kura SCCP archives through committed WSV height {committed_height}: {error}"
+            )
+        })?;
     let registry = state.sccp_registry_snapshot();
-    let has_sccp_state = !registry.lanes().is_empty()
+    let pending_usage = *state.world.sccp_outbound_pending_usage.view().get();
+    let has_sccp_state = !retained_archive_inventory.is_empty()
+        || !registry.lanes().is_empty()
+        || pending_usage != SccpOutboundPendingUsageV1::default()
         || state
             .world
             .sccp_outbound_pending_messages
@@ -37824,6 +38118,20 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
         || state
             .world
             .sccp_outbound_proofs
+            .view()
+            .iter()
+            .next()
+            .is_some()
+        || state
+            .world
+            .sccp_outbound_message_locator
+            .view()
+            .iter()
+            .next()
+            .is_some()
+        || state
+            .world
+            .sccp_outbound_message_index
             .view()
             .iter()
             .next()
@@ -37851,16 +38159,15 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
             state.chain_id
         )
     })?;
-    let pending_usage = *state.world.sccp_outbound_pending_usage.view().get();
-    if pending_usage.message_count > state.zk.sccp.max_pending_outbound_messages.get()
-        || pending_usage.payload_bytes > state.zk.sccp.max_pending_outbound_payload_bytes.get()
-    {
+    let mut expected_pending_usage = SccpOutboundPendingUsageV1::default();
+    for (_, record) in state.world.sccp_outbound_pending_messages.view().iter() {
+        expected_pending_usage = expected_pending_usage
+            .checked_add_payload(record.payload_bytes.len())
+            .ok_or_else(|| "restored SCCP pending outbound usage overflows".to_owned())?;
+    }
+    if !pending_usage.is_structurally_valid() || pending_usage != expected_pending_usage {
         return Err(format!(
-            "restored SCCP pending outbound usage exceeds configured limits: messages={} bytes={}, maxima messages={} bytes={}",
-            pending_usage.message_count,
-            pending_usage.payload_bytes,
-            state.zk.sccp.max_pending_outbound_messages,
-            state.zk.sccp.max_pending_outbound_payload_bytes,
+            "restored SCCP pending outbound usage differs from payload-bearing state: expected {expected_pending_usage:?}, found {pending_usage:?}"
         ));
     }
     validate_sccp_inbound_anchor_high_water_index(
@@ -37891,6 +38198,19 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
         validate_sccp_outbound_payload_for_retained_route(&projection, route)?;
     }
     for (key, record) in state.world.sccp_outbound_proofs.view().iter() {
+        if !record.is_well_formed_for_key(key) {
+            return Err(format!(
+                "terminal SCCP replay record {} is malformed for its exact outbound key",
+                hex::encode(key.message_id)
+            ));
+        }
+        if record.accepted_at_height > committed_height {
+            return Err(format!(
+                "terminal SCCP replay record {} was accepted at future local height {} above committed WSV height {committed_height}",
+                hex::encode(key.message_id),
+                record.accepted_at_height
+            ));
+        }
         if key.lane.source != local {
             return Err(format!(
                 "SCCP outbound proof key source profile `{}` does not match local profile `{}`",
@@ -37906,29 +38226,170 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
             "proof record",
         )?;
     }
+    let pending = state.world.sccp_outbound_pending_messages.view();
     let terminal = state.world.sccp_outbound_proofs.view();
+    let locator = state.world.sccp_outbound_message_locator.view();
     let ordered = state.world.sccp_outbound_message_index.view();
+    let retained_union_len = pending
+        .len()
+        .checked_add(terminal.len())
+        .ok_or_else(|| "SCCP pending/terminal union cardinality overflows".to_owned())?;
+    if locator.len() != retained_union_len {
+        return Err(format!(
+            "SCCP outbound global locator cardinality {} differs from pending/terminal union cardinality {retained_union_len}",
+            locator.len()
+        ));
+    }
+    if ordered.len() != retained_union_len {
+        return Err(format!(
+            "SCCP outbound ordered index cardinality {} differs from pending/terminal union cardinality {retained_union_len}",
+            ordered.len()
+        ));
+    }
+    let mut retained_union_counts = BTreeMap::<u64, u32>::new();
+    for (key, record) in pending.iter() {
+        let descriptor = record.descriptor();
+        if descriptor.recorded_at_height > committed_height {
+            return Err(format!(
+                "pending SCCP replay record {} is above committed WSV height {committed_height}",
+                hex::encode(key.message_id)
+            ));
+        }
+        if locator.get(&key.message_id) != Some(key) {
+            return Err(format!(
+                "pending SCCP replay record {} is missing its exact global locator",
+                hex::encode(key.message_id)
+            ));
+        }
+        let index = SccpOutboundMessageIndexKeyV1::from_descriptor(*key, descriptor)
+            .ok_or_else(|| "pending SCCP descriptor cannot form an ordered index".to_owned())?;
+        if ordered.get(&index).is_none() {
+            return Err(format!(
+                "pending SCCP replay record {} is missing its exact ordered index",
+                hex::encode(key.message_id)
+            ));
+        }
+        let count = retained_union_counts
+            .entry(descriptor.recorded_at_height)
+            .or_default();
+        *count = count
+            .checked_add(1)
+            .ok_or_else(|| "SCCP retained union count overflows".to_owned())?;
+    }
+    for (key, record) in terminal.iter() {
+        let descriptor = record.descriptor();
+        if descriptor.recorded_at_height > committed_height {
+            return Err(format!(
+                "terminal SCCP replay record {} is above committed WSV height {committed_height}",
+                hex::encode(key.message_id)
+            ));
+        }
+        if pending.get(key).is_some() {
+            return Err(format!(
+                "SCCP replay record {} is present in both pending and terminal state",
+                hex::encode(key.message_id)
+            ));
+        }
+        if locator.get(&key.message_id) != Some(key) {
+            return Err(format!(
+                "terminal SCCP replay record {} is missing its exact global locator",
+                hex::encode(key.message_id)
+            ));
+        }
+        let index = SccpOutboundMessageIndexKeyV1::from_descriptor(*key, descriptor)
+            .ok_or_else(|| "terminal SCCP descriptor cannot form an ordered index".to_owned())?;
+        if ordered.get(&index).is_none() {
+            return Err(format!(
+                "terminal SCCP replay record {} is missing its exact ordered index",
+                hex::encode(key.message_id)
+            ));
+        }
+        let count = retained_union_counts
+            .entry(descriptor.recorded_at_height)
+            .or_default();
+        *count = count
+            .checked_add(1)
+            .ok_or_else(|| "SCCP retained union count overflows".to_owned())?;
+    }
+    let mut retained_archive_by_height = BTreeMap::new();
+    for summary in retained_archive_inventory {
+        if retained_archive_by_height
+            .insert(summary.height, (summary.block_hash, summary.message_count))
+            .is_some()
+        {
+            return Err(format!(
+                "immutable Kura SCCP archive inventory repeats height {}",
+                summary.height
+            ));
+        }
+        let actual = retained_union_counts
+            .get(&summary.height)
+            .copied()
+            .unwrap_or(0);
+        if actual != summary.message_count {
+            return Err(format!(
+                "immutable Kura SCCP archive at height {} retains {} messages but committed WSV retains {actual}",
+                summary.height, summary.message_count
+            ));
+        }
+    }
+    for (&height, &count) in &retained_union_counts {
+        let Some((_, archived_count)) = retained_archive_by_height.get(&height) else {
+            return Err(format!(
+                "committed WSV retains {count} SCCP messages at height {height} but Kura has no nonempty immutable archive"
+            ));
+        };
+        if *archived_count != count {
+            return Err(format!(
+                "committed WSV retains {count} SCCP messages at height {height} but Kura retains {archived_count}"
+            ));
+        }
+    }
     let mut archive_height = None;
     let mut archive_block_hash = None;
     let mut archive_messages = Vec::new();
+    let mut archive_positions_checked = 0_usize;
     for (index, ()) in ordered.iter() {
         let key = index.message_key();
-        let Some(record) = terminal.get(&key) else {
-            continue;
+        let pending_record = pending.get(&key);
+        let terminal_record = terminal.get(&key);
+        let descriptor = match (pending_record, terminal_record) {
+            (Some(record), None) => record.descriptor(),
+            (None, Some(record)) => record.descriptor(),
+            (None, None) => {
+                return Err(format!(
+                    "ordered SCCP replay position {}:{} resolves no pending or terminal descriptor",
+                    index.recorded_at_height, index.commitment_index
+                ));
+            }
+            (Some(_), Some(_)) => {
+                return Err(format!(
+                    "ordered SCCP replay position {}:{} resolves both pending and terminal descriptors",
+                    index.recorded_at_height, index.commitment_index
+                ));
+            }
         };
         if archive_height != Some(index.recorded_at_height) {
+            if let Some(previous_height) = archive_height
+                && archive_positions_checked != archive_messages.len()
+            {
+                return Err(format!(
+                    "SCCP replay state at height {previous_height} retains {archive_positions_checked} positions but its immutable Kura archive retains {}",
+                    archive_messages.len()
+                ));
+            }
             let (header, artifact, messages) = state
                 .kura()
                 .v2_finality_artifact_with_archive(index.recorded_at_height)
                 .map_err(|error| {
                     format!(
-                        "failed to validate Kura SCCP archive for terminal height {}: {error}",
+                        "failed to validate Kura SCCP archive for outbound height {}: {error}",
                         index.recorded_at_height
                     )
                 })?
                 .ok_or_else(|| {
                     format!(
-                        "terminal SCCP replay state at height {} has no immutable Kura finality/archive record",
+                        "SCCP replay state at height {} has no immutable Kura finality/archive record",
                         index.recorded_at_height
                     )
                 })?;
@@ -37937,46 +38398,99 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
                 || artifact.block_hash != header.hash()
             {
                 return Err(format!(
-                    "Kura SCCP archive/finality header association is inconsistent at terminal height {}",
+                    "Kura SCCP archive/finality header association is inconsistent at outbound height {}",
+                    index.recorded_at_height
+                ));
+            }
+            let Some((inventory_block_hash, inventory_count)) =
+                retained_archive_by_height.get(&index.recorded_at_height)
+            else {
+                return Err(format!(
+                    "SCCP replay state at height {} is absent from the bounded Kura archive inventory",
+                    index.recorded_at_height
+                ));
+            };
+            if *inventory_block_hash != artifact.block_hash
+                || usize::try_from(*inventory_count).ok() != Some(messages.len())
+            {
+                return Err(format!(
+                    "bounded Kura SCCP archive inventory differs from finality/archive material at height {}",
                     index.recorded_at_height
                 ));
             }
             archive_height = Some(index.recorded_at_height);
             archive_block_hash = Some(artifact.block_hash);
             archive_messages = messages;
+            archive_positions_checked = 0;
         }
-        let expected_block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-            record.finality_block_hash,
-        ));
-        if archive_block_hash != Some(expected_block_hash) {
+        if SccpOutboundMessageIndexKeyV1::from_descriptor(key, descriptor) != Some(*index) {
             return Err(format!(
-                "terminal SCCP replay record {} names a different finalized block than Kura",
-                hex::encode(key.message_id)
+                "ordered SCCP replay position {}:{} differs from its pending-or-terminal descriptor",
+                index.recorded_at_height, index.commitment_index
             ));
         }
-        let archive_index = usize::try_from(record.commitment_index)
+        if let Some(record) = terminal_record {
+            let expected_block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed(record.finality_block_hash),
+            );
+            if archive_block_hash != Some(expected_block_hash) {
+                return Err(format!(
+                    "terminal SCCP replay record {} names a different finalized block than Kura",
+                    hex::encode(key.message_id)
+                ));
+            }
+        }
+        let archive_index = usize::try_from(descriptor.commitment_index)
             .expect("well-formed SCCP commitment index fits usize");
+        if archive_index != archive_positions_checked {
+            return Err(format!(
+                "SCCP replay state at height {} is not contiguous at immutable archive position {}",
+                index.recorded_at_height, archive_positions_checked
+            ));
+        }
         let message = archive_messages.get(archive_index).ok_or_else(|| {
             format!(
-                "terminal SCCP replay record {} names missing Kura archive index {}",
+                "SCCP replay record {} names missing Kura archive index {}",
                 hex::encode(key.message_id),
-                record.commitment_index
+                descriptor.commitment_index
             )
         })?;
-        if message.commitment_index != record.commitment_index
+        if message.commitment_index != descriptor.commitment_index
             || message.commitment.message_id != key.message_id
             || message.context.lane != key.lane
-            || message.context.destination_binding_hash != record.destination_binding_hash
-            || message.context.route_configuration_hash != record.route_configuration_hash
-            || message.commitment.payload_hash != record.payload_hash
+            || message.context.destination_binding_hash != descriptor.destination_binding_hash
+            || message.context.route_configuration_hash != descriptor.route_configuration_hash
+            || message.commitment.payload_hash != descriptor.payload_hash
         {
             return Err(format!(
-                "terminal SCCP replay record {} differs from its immutable Kura archive entry",
+                "SCCP replay record {} differs from its immutable Kura archive entry",
                 hex::encode(key.message_id)
             ));
         }
+        archive_positions_checked += 1;
+    }
+    if let Some(last_height) = archive_height
+        && archive_positions_checked != archive_messages.len()
+    {
+        return Err(format!(
+            "SCCP replay state at height {last_height} retains {archive_positions_checked} positions but its immutable Kura archive retains {}",
+            archive_messages.len()
+        ));
     }
     for (key, record) in state.world.sccp_inbound_messages.view().iter() {
+        if !key.is_well_formed() || !record.is_well_formed_for_lane(key.lane) {
+            return Err(format!(
+                "inbound SCCP replay record {} is malformed for its exact inbound key",
+                hex::encode(key.message_id)
+            ));
+        }
+        if record.admitted_at_height > committed_height {
+            return Err(format!(
+                "inbound SCCP replay record {} was admitted at future local height {} above committed WSV height {committed_height}",
+                hex::encode(key.message_id),
+                record.admitted_at_height
+            ));
+        }
         if key.lane.target != local {
             return Err(format!(
                 "SCCP inbound replay key target profile `{}` does not match local profile `{}`",
@@ -43270,6 +43784,13 @@ mod tiered_snapshot_diff_tests {
             LiveQueryStore::start_test(),
             ChainId::from(chain_id),
         );
+        let (fixture, _) = exact_sccp_finalized_block_fixture();
+        let finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                .expect("exact SCCP finality fixture decodes");
+        let mut block_hashes = state.block_hashes.block();
+        block_hashes.push_for_tests(finality.finality_artifact.block_hash);
+        block_hashes.commit_for_tests();
         norito::json::to_value(&state).expect("serialize authoritative state snapshot")
     }
 
@@ -43292,49 +43813,89 @@ mod tiered_snapshot_diff_tests {
         .into_state_from_json(value)
     }
 
-    fn exact_sccp_finality_kura() -> Arc<Kura> {
+    fn direct_sccp_state_at_height_one(world: World, kura: Arc<Kura>) -> State {
+        let state = State::new_with_chain(
+            world,
+            kura,
+            LiveQueryStore::start_test(),
+            ChainId::from(SCCP_SNAPSHOT_CHAIN_ID),
+        );
+        let (fixture, _) = exact_sccp_finalized_block_fixture();
+        let finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                .expect("exact SCCP finality fixture decodes");
+        let mut block_hashes = state.block_hashes.block();
+        block_hashes.push_for_tests(finality.finality_artifact.block_hash);
+        block_hashes.commit_for_tests();
+        state
+    }
+
+    fn exact_sccp_finalized_block_fixture()
+    -> (iroha_sccp::SccpExactOutboundTestFixtureV1, Arc<SignedBlock>) {
+        static EXACT: std::sync::LazyLock<(
+            iroha_sccp::SccpExactOutboundTestFixtureV1,
+            SignedBlock,
+        )> = std::sync::LazyLock::new(build_exact_sccp_finalized_block_fixture);
+        let (fixture, block) = &*EXACT;
+        (fixture.clone(), Arc::new(block.clone()))
+    }
+
+    fn build_exact_sccp_finalized_block_fixture()
+    -> (iroha_sccp::SccpExactOutboundTestFixtureV1, SignedBlock) {
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
-        let finality = iroha_sccp::decode_taira_bridge_finality_proof(
-            &fixture.bundle.finality_proof,
-        )
-        .expect("exact SCCP finality fixture decodes");
+        let provisional_finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                .expect("exact provisional SCCP finality fixture decodes");
         let payload = iroha_sccp::canonical_sccp_payload_bytes(&fixture.bundle.payload)
             .expect("exact SCCP payload encodes");
-        let key_pair = checked_keypair();
+        let instruction = crate::bridge::test_record_sccp_message(payload);
+        assert_eq!(
+            instruction.context, fixture.bundle.commitment.context,
+            "exact retained block instruction must preserve the bundle context"
+        );
+        let key_pair = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
+            .expect("derive exact SCCP transaction fixture key");
         let authority = AccountId::new(key_pair.public_key().clone());
-        let transaction = TransactionBuilder::new(
+        let mut transaction = TransactionBuilder::new(
             ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
             authority,
-        )
-        .with_executable(iroha_data_model::transaction::Executable::IvmProved(
-            iroha_data_model::transaction::IvmProved {
-                bytecode: iroha_data_model::transaction::IvmBytecode::from_compiled(vec![
-                    0x01, 0x02, 0x03,
-                ]),
-                overlay: vec![InstructionBox::from(crate::bridge::test_record_sccp_message(
-                    payload,
-                ))]
-                .into(),
-                events_commitment: Hash::new(b"events"),
-                gas_policy_commitment: Hash::new(b"gas"),
-            },
-        ))
-        .sign(key_pair.private_key());
+        );
+        transaction.set_creation_time(core::time::Duration::from_millis(1));
+        let transaction = transaction
+            .with_executable(iroha_data_model::transaction::Executable::IvmProved(
+                iroha_data_model::transaction::IvmProved {
+                    bytecode: iroha_data_model::transaction::IvmBytecode::from_compiled(vec![
+                        0x01, 0x02, 0x03,
+                    ]),
+                    overlay: vec![InstructionBox::from(instruction)].into(),
+                    events_commitment: Hash::new(b"events"),
+                    gas_policy_commitment: Hash::new(b"gas"),
+                },
+            ))
+            .sign(key_pair.private_key());
         let entry_hash = transaction.hash_as_entrypoint();
-        let block_signer = checked_keypair();
+        let block_signer = KeyPair::try_from_seed(vec![0x72; 32], Algorithm::Ed25519)
+            .expect("derive exact SCCP block fixture key");
+        let template_header = provisional_finality.block_header;
+        let mut provisional_header = iroha_data_model::block::BlockHeader::new(
+            template_header.height(),
+            template_header.prev_block_hash(),
+            None,
+            None,
+            u64::try_from(template_header.creation_time().as_millis())
+                .expect("fixture creation time fits u64"),
+            template_header.view_change_index(),
+        );
+        provisional_header.set_sccp_commitment_root(template_header.sccp_commitment_root());
         let signature = iroha_data_model::block::BlockSignature::new(
             0,
             iroha_crypto::SignatureOf::try_from_hash(
                 block_signer.private_key(),
-                finality.block_header.hash(),
+                provisional_header.hash(),
             )
-            .expect("sign exact retained SCCP header"),
+            .expect("sign provisional retained SCCP header"),
         );
-        let mut block = SignedBlock::presigned(
-            signature,
-            finality.block_header.clone(),
-            vec![transaction],
-        );
+        let mut block = SignedBlock::presigned(signature, provisional_header, vec![transaction]);
         block
             .set_transaction_results(
                 Vec::new(),
@@ -43344,14 +43905,207 @@ mod tiered_snapshot_diff_tests {
                 )],
             )
             .expect("exact retained SCCP block results");
-        assert_eq!(block.hash(), finality.finality_artifact.block_hash);
+        assert!(
+            provisional_finality
+                .finality_artifact
+                .validate_for_header(&block.header())
+                .is_err(),
+            "pre-finalization SCCP artifact must reject the completed retained block"
+        );
+        let signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::try_from_hash(block_signer.private_key(), block.hash())
+                .expect("sign completed retained SCCP header"),
+        );
+        block
+            .replace_signatures([signature].into_iter().collect())
+            .expect("replace provisional retained SCCP signature");
+        block
+            .signatures()
+            .next()
+            .expect("completed retained SCCP signature")
+            .signature()
+            .verify_hash(block_signer.public_key(), block.hash())
+            .expect("completed retained SCCP signature verifies");
+        crate::bridge::validate_sccp_commitment_root_for_signed_block(&block)
+            .expect("completed retained block authenticates its exact SCCP message");
 
+        let fixture = fixture.with_finalized_block(&block, None);
+        let finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                .expect("exact completed SCCP finality fixture decodes");
+        assert_eq!(block.header(), finality.block_header);
+        assert_eq!(block.hash(), finality.finality_artifact.block_hash);
+        assert_eq!(
+            fixture.request.public_inputs.finality_block_hash,
+            <[u8; 32]>::from(Hash::from(block.hash()))
+        );
+        finality
+            .finality_artifact
+            .validate_for_header(&block.header())
+            .expect("completed retained SCCP artifact binds the exact block header");
+        finality
+            .finality_artifact
+            .verify()
+            .expect("completed retained SCCP artifact is cryptographically valid");
+
+        (fixture, block)
+    }
+
+    fn exact_sccp_finality_kura() -> Arc<Kura> {
+        let (fixture, block) = exact_sccp_finalized_block_fixture();
+        let finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                .expect("exact completed SCCP finality fixture decodes");
         let kura = Kura::blank_kura_for_testing();
-        kura.persist_block_with_retained_archive_for_tests(&Arc::new(block))
+        kura.persist_block_with_retained_archive_for_tests(&block)
             .expect("persist exact SCCP block and archive");
-        kura.store_v2_finality_artifact(&finality.finality_artifact)
+        let _ = kura
+            .store_v2_finality_artifact(&finality.finality_artifact)
             .expect("persist exact SCCP finality artifact");
         kura
+    }
+
+    fn retained_sccp_archive_block(
+        previous: Option<&SignedBlock>,
+        nonce: u64,
+    ) -> (
+        Arc<SignedBlock>,
+        SccpOutboundMessageKeyV1,
+        SccpOutboundPendingMessageRecordV1,
+    ) {
+        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce,
+            route_revision: 1,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+            asset_id: b"xor".to_vec(),
+            amount: 77,
+            sender_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+            sender: b"sora:retained-archive".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
+            recipient: [0x22; 20].to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+            route_id: iroha_sccp::SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1
+                .as_bytes()
+                .to_vec(),
+        });
+        let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&payload)
+            .expect("retained SCCP inventory payload encodes canonically");
+        let isi = crate::bridge::test_record_sccp_message(payload_bytes.clone());
+        let projection = crate::bridge::validate_recorded_sccp_message_payload_bytes(
+            isi.context,
+            &isi.payload_bytes,
+        )
+        .expect("retained SCCP inventory payload validates");
+
+        let key_pair = checked_keypair();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let transaction = TransactionBuilder::new(
+            ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+            authority,
+        )
+        .with_instructions([isi])
+        .sign(key_pair.private_key());
+        let entry_hash = transaction.hash_as_entrypoint();
+        let accepted =
+            crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(transaction));
+        let root = iroha_sccp::commitment_merkle_root(&[projection.commitment]);
+        let signer = checked_keypair();
+        let mut block: SignedBlock = crate::block::BlockBuilder::new(vec![accepted])
+            .chain(0, previous)
+            .with_sccp_commitment_root(root)
+            .sign(signer.private_key())
+            .unpack(|_| {})
+            .into();
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[entry_hash],
+                vec![iroha_data_model::transaction::TransactionResultInner::Ok(
+                    iroha_data_model::transaction::DataTriggerSequence::default(),
+                )],
+            )
+            .expect("retained SCCP inventory block results match its entrypoint");
+        crate::bridge::validate_sccp_commitment_root_for_signed_block(&block)
+            .expect("retained SCCP inventory block authenticates its message");
+
+        let key = SccpOutboundMessageKeyV1::new(
+            projection.context.lane,
+            projection.commitment.message_id,
+        )
+        .expect("retained SCCP inventory key is canonical");
+        let record = SccpOutboundPendingMessageRecordV1 {
+            destination_binding_hash: projection.context.destination_binding_hash,
+            route_configuration_hash: projection.context.route_configuration_hash,
+            payload_hash: projection.commitment.payload_hash,
+            payload_bytes,
+            recorded_at_height: block.header().height().get(),
+            commitment_index: 0,
+        };
+        crate::bridge::validate_sccp_outbound_message_record_v1(&key, &record)
+            .expect("retained SCCP inventory WSV record is canonical");
+        (Arc::new(block), key, record)
+    }
+
+    fn rootless_retained_block(previous: Option<&SignedBlock>) -> Arc<SignedBlock> {
+        Arc::new(
+            crate::block::BlockBuilder::new(Vec::<crate::tx::AcceptedTransaction<'static>>::new())
+                .chain(0, previous)
+                .sign(checked_keypair().private_key())
+                .unpack(|_| {})
+                .into(),
+        )
+    }
+
+    fn snapshot_with_whole_sccp_height_removed(
+        removed_position: usize,
+    ) -> (norito::json::Value, Arc<Kura>, u64) {
+        let kura = Kura::blank_kura_for_testing();
+        let mut previous = None;
+        let mut blocks = Vec::new();
+        let mut records = Vec::new();
+        for nonce in [101_u64, 202, 303] {
+            let (block, key, record) = retained_sccp_archive_block(previous.as_deref(), nonce);
+            kura.persist_block_with_retained_archive_for_tests(&block)
+                .expect("persist retained SCCP inventory block");
+            previous = Some(Arc::clone(&block));
+            blocks.push(block);
+            records.push((key, record));
+        }
+
+        let (mut world, _, _) = world_with_valid_pending_sccp_outbound();
+        world.sccp_outbound_pending_usage = Cell::default();
+        world.sccp_outbound_pending_messages = Storage::default();
+        world.sccp_outbound_message_locator = Storage::default();
+        world.sccp_outbound_message_index = Storage::default();
+        world.sccp_outbound_proofs = Storage::default();
+        let removed_height = records[removed_position].1.recorded_at_height;
+        for (position, (key, record)) in records.into_iter().enumerate() {
+            if position != removed_position {
+                insert_complete_sccp_outbound_record(&mut world, key, record);
+            }
+        }
+
+        let state = State::new_with_chain(
+            world,
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            ChainId::from(SCCP_SNAPSHOT_CHAIN_ID),
+        );
+        let mut block_hashes = state.block_hashes.block();
+        for block in blocks {
+            block_hashes.push_for_tests(block.hash());
+        }
+        block_hashes.commit_for_tests();
+        (
+            norito::json::to_value(&state).expect("serialize whole-height deletion snapshot"),
+            kura,
+            removed_height,
+        )
     }
 
     fn decode_terminal_sccp_world_snapshot(world: World) -> Result<State, norito::json::Error> {
@@ -43402,7 +44156,7 @@ mod tiered_snapshot_diff_tests {
             source_finality_height: 300_000_001,
             source_finality_hash: [0x93; 32],
             source_proof_commitment: [0x94; 32],
-            admitted_at_height: 17,
+            admitted_at_height: 1,
         };
         (key, record)
     }
@@ -43518,18 +44272,21 @@ mod tiered_snapshot_diff_tests {
         SccpOutboundProofRecordV1,
     ) {
         let (key, message, index) = sample_sccp_outbound();
+        let (exact, block) = exact_sccp_finalized_block_fixture();
+        assert_eq!(exact.bundle.commitment.message_id, key.message_id);
+        assert_eq!(
+            exact.request.public_inputs.finality_block_hash,
+            <[u8; 32]>::from(Hash::from(block.hash()))
+        );
         let proof_record = SccpOutboundProofRecordV1 {
             payload_hash: message.payload_hash,
             destination_binding_hash: message.destination_binding_hash,
             route_configuration_hash: message.route_configuration_hash,
-            finality_block_hash: iroha_sccp::sccp_exact_outbound_test_fixture_v1()
-                .request
-                .public_inputs
-                .finality_block_hash,
+            finality_block_hash: exact.request.public_inputs.finality_block_hash,
             destination_proof_commitment: [0x86; 32],
             finality_height: message.recorded_at_height,
             commitment_index: message.commitment_index,
-            accepted_at_height: message.recorded_at_height + 3,
+            accepted_at_height: message.recorded_at_height,
         };
         assert!(proof_record.is_well_formed_for_key(&key));
         (key, message, index, proof_record)
@@ -43774,9 +44531,13 @@ mod tiered_snapshot_diff_tests {
     }
 
     #[test]
-    fn sccp_outbound_record_locator_and_index_apply_and_commit_atomically() {
+    fn sccp_outbound_pending_to_terminal_transition_applies_and_commits_atomically() {
         let (key, record, index, proof_record) = sample_sccp_outbound_proof();
-        let world = World::default();
+        let mut world = World::default();
+        insert_complete_sccp_outbound_record(&mut world, key, record.clone());
+        let pending_usage = SccpOutboundPendingUsageV1::default()
+            .checked_add_payload(record.payload_bytes.len())
+            .expect("one pending payload has bounded usage");
         {
             let mut block = world.block();
             {
@@ -43784,19 +44545,22 @@ mod tiered_snapshot_diff_tests {
                     iroha_config::parameters::actual::LaneConfig::default(),
                     0,
                 );
-                transaction
-                    .sccp_outbound_pending_messages
-                    .insert(key, record.clone());
-                transaction
-                    .sccp_outbound_message_locator
-                    .insert(key.message_id, key);
-                transaction.sccp_outbound_message_index.insert(index, ());
-                transaction.sccp_outbound_proofs.insert(key, proof_record);
+                assert_eq!(
+                    *transaction.sccp_outbound_pending_usage.get(),
+                    pending_usage
+                );
+                transition_sccp_outbound_record_in_transaction(
+                    &mut transaction,
+                    key,
+                    &record,
+                    proof_record,
+                );
                 transaction.apply();
             }
+            assert!(block.sccp_outbound_pending_messages.get(&key).is_none());
             assert_eq!(
-                block.sccp_outbound_pending_messages.get(&key),
-                Some(&record)
+                *block.sccp_outbound_pending_usage.get(),
+                SccpOutboundPendingUsageV1::default()
             );
             assert_eq!(
                 block.sccp_outbound_message_locator.get(&key.message_id),
@@ -43808,7 +44572,11 @@ mod tiered_snapshot_diff_tests {
         }
 
         let view = world.view();
-        assert_eq!(view.sccp_outbound_pending_messages.get(&key), Some(&record));
+        assert!(view.sccp_outbound_pending_messages.get(&key).is_none());
+        assert_eq!(
+            *view.sccp_outbound_pending_usage.get(),
+            SccpOutboundPendingUsageV1::default()
+        );
         assert_eq!(
             view.sccp_outbound_message_locator.get(&key.message_id),
             Some(&key)
@@ -43855,7 +44623,8 @@ mod tiered_snapshot_diff_tests {
         };
 
         let mut world = World::default();
-        insert_complete_sccp_outbound_record(&mut world, key, message);
+        insert_complete_sccp_outbound_record(&mut world, key, message.clone());
+        let pending_usage = *world.sccp_outbound_pending_usage.view().get();
         {
             let mut fork = world.block();
             {
@@ -43864,9 +44633,19 @@ mod tiered_snapshot_diff_tests {
                     0,
                 );
                 abandoned.insert_proof_record(proof_record.clone());
-                abandoned.sccp_outbound_proofs.insert(key, outbound_proof);
+                transition_sccp_outbound_record_in_transaction(
+                    &mut abandoned,
+                    key,
+                    &message,
+                    outbound_proof,
+                );
                 assert!(abandoned.proofs.get(&proof_id).is_some());
                 assert!(abandoned.sccp_outbound_proofs.get(&key).is_some());
+                assert!(abandoned.sccp_outbound_pending_messages.get(&key).is_none());
+                assert_eq!(
+                    *abandoned.sccp_outbound_pending_usage.get(),
+                    SccpOutboundPendingUsageV1::default()
+                );
             }
 
             let mut retry = fork.transaction_without_telemetry(
@@ -43875,15 +44654,38 @@ mod tiered_snapshot_diff_tests {
             );
             assert!(retry.proofs.get(&proof_id).is_none());
             assert!(retry.sccp_outbound_proofs.get(&key).is_none());
+            assert_eq!(
+                retry.sccp_outbound_pending_messages.get(&key),
+                Some(&message)
+            );
+            assert_eq!(*retry.sccp_outbound_pending_usage.get(), pending_usage);
             retry.insert_proof_record(proof_record.clone());
-            retry.sccp_outbound_proofs.insert(key, outbound_proof);
+            transition_sccp_outbound_record_in_transaction(
+                &mut retry,
+                key,
+                &message,
+                outbound_proof,
+            );
             retry.apply();
             assert!(fork.proofs.get(&proof_id).is_some());
             assert!(fork.sccp_outbound_proofs.get(&key).is_some());
+            assert!(fork.sccp_outbound_pending_messages.get(&key).is_none());
+            assert_eq!(
+                *fork.sccp_outbound_pending_usage.get(),
+                SccpOutboundPendingUsageV1::default()
+            );
         }
 
         assert!(world.proofs.view().get(&proof_id).is_none());
         assert!(world.sccp_outbound_proofs.view().get(&key).is_none());
+        assert_eq!(
+            world.sccp_outbound_pending_messages.view().get(&key),
+            Some(&message)
+        );
+        assert_eq!(
+            *world.sccp_outbound_pending_usage.view().get(),
+            pending_usage
+        );
         {
             let mut retry_fork = world.block();
             let mut retry = retry_fork.transaction_without_telemetry(
@@ -43891,7 +44693,12 @@ mod tiered_snapshot_diff_tests {
                 0,
             );
             retry.insert_proof_record(proof_record.clone());
-            retry.sccp_outbound_proofs.insert(key, outbound_proof);
+            transition_sccp_outbound_record_in_transaction(
+                &mut retry,
+                key,
+                &message,
+                outbound_proof,
+            );
             retry.apply();
             retry_fork.commit();
         }
@@ -43899,6 +44706,31 @@ mod tiered_snapshot_diff_tests {
         assert_eq!(
             world.sccp_outbound_proofs.view().get(&key),
             Some(&outbound_proof)
+        );
+        assert!(
+            world
+                .sccp_outbound_pending_messages
+                .view()
+                .get(&key)
+                .is_none()
+        );
+        assert_eq!(
+            *world.sccp_outbound_pending_usage.view().get(),
+            SccpOutboundPendingUsageV1::default()
+        );
+        assert_eq!(
+            world
+                .sccp_outbound_message_locator
+                .view()
+                .get(&key.message_id),
+            Some(&key)
+        );
+        assert!(
+            world
+                .sccp_outbound_message_index
+                .view()
+                .iter()
+                .any(|(index, ())| index.message_key() == key && index.commitment_index == 0)
         );
     }
 
@@ -43966,6 +44798,122 @@ mod tiered_snapshot_diff_tests {
         assert_eq!(view.world.sccp_outbound_pending_messages.len(), 1);
         assert_eq!(view.world.sccp_outbound_message_locator.len(), 1);
         assert_eq!(view.world.sccp_outbound_message_index.len(), 1);
+        assert_eq!(view.world.sccp_outbound_proofs.len(), 0);
+        assert_eq!(
+            *view.world.sccp_outbound_pending_usage.get(),
+            SccpOutboundPendingUsageV1::default()
+                .checked_add_payload(record.payload_bytes.len())
+                .expect("one bounded fixture payload")
+        );
+    }
+
+    #[test]
+    fn sccp_outbound_api_terminal_transition_is_exact_and_atomic() {
+        let (key, pending, index, terminal) = sample_sccp_outbound_proof();
+        let state = State::new_with_chain(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+        );
+        state
+            .insert_sccp_outbound_message_for_testing(key, pending.clone())
+            .expect("insert exact pending fixture");
+        let pending_usage = SccpOutboundPendingUsageV1::default()
+            .checked_add_payload(pending.payload_bytes.len())
+            .expect("one bounded fixture payload");
+
+        let mut mismatched = terminal;
+        mismatched.payload_hash = [0xC4; 32];
+        assert!(mismatched.is_well_formed_for_key(&key));
+        assert_ne!(mismatched.descriptor(), pending.descriptor());
+        let error = state
+            .transition_sccp_outbound_message_to_terminal_for_testing(key, mismatched)
+            .expect_err("descriptor substitution must fail before mutation");
+        assert!(error.contains("descriptors differ"), "{error}");
+        {
+            let view = state.view();
+            assert_eq!(
+                view.world.sccp_outbound_pending_messages.get(&key),
+                Some(&pending)
+            );
+            assert_eq!(*view.world.sccp_outbound_pending_usage.get(), pending_usage);
+            assert!(view.world.sccp_outbound_proofs.get(&key).is_none());
+            assert_eq!(
+                view.world
+                    .sccp_outbound_message_locator
+                    .get(&key.message_id),
+                Some(&key)
+            );
+            assert_eq!(
+                view.world.sccp_outbound_message_index.get(&index),
+                Some(&())
+            );
+        }
+
+        state
+            .transition_sccp_outbound_message_to_terminal_for_testing(key, terminal)
+            .expect("exact pending descriptor transitions to terminal state");
+        {
+            let view = state.view();
+            assert!(
+                view.world
+                    .sccp_outbound_pending_messages
+                    .get(&key)
+                    .is_none()
+            );
+            assert_eq!(
+                *view.world.sccp_outbound_pending_usage.get(),
+                SccpOutboundPendingUsageV1::default()
+            );
+            assert_eq!(view.world.sccp_outbound_proofs.get(&key), Some(&terminal));
+            assert_eq!(
+                view.world
+                    .sccp_outbound_message_locator
+                    .get(&key.message_id),
+                Some(&key)
+            );
+            assert_eq!(
+                view.world.sccp_outbound_message_index.get(&index),
+                Some(&())
+            );
+        }
+
+        let replay = state
+            .transition_sccp_outbound_message_to_terminal_for_testing(key, terminal)
+            .expect_err("terminal transition replay must fail closed");
+        assert!(replay.contains("already exists"), "{replay}");
+    }
+
+    #[test]
+    fn sccp_outbound_api_terminal_transition_rejects_corrupt_usage_atomically() {
+        let (key, pending, _, terminal) = sample_sccp_outbound_proof();
+        let mut world = World::default();
+        insert_complete_sccp_outbound_record(&mut world, key, pending.clone());
+        let corrupt_usage = SccpOutboundPendingUsageV1 {
+            message_count: 2,
+            payload_bytes: 1,
+        };
+        assert!(!corrupt_usage.is_structurally_valid());
+        world.sccp_outbound_pending_usage = Cell::new(corrupt_usage);
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+        );
+
+        let error = state
+            .transition_sccp_outbound_message_to_terminal_for_testing(key, terminal)
+            .expect_err("corrupt usage must fail before terminal mutation");
+        assert!(error.contains("structurally corrupt"), "{error}");
+        let view = state.view();
+        assert_eq!(
+            view.world.sccp_outbound_pending_messages.get(&key),
+            Some(&pending)
+        );
+        assert_eq!(*view.world.sccp_outbound_pending_usage.get(), corrupt_usage);
+        assert!(view.world.sccp_outbound_proofs.get(&key).is_none());
     }
 
     #[test]
@@ -44027,6 +44975,11 @@ mod tiered_snapshot_diff_tests {
             assert!(view.world.sccp_outbound_pending_messages.is_empty());
             assert!(view.world.sccp_outbound_message_locator.is_empty());
             assert!(view.world.sccp_outbound_message_index.is_empty());
+            assert!(view.world.sccp_outbound_proofs.is_empty());
+            assert_eq!(
+                *view.world.sccp_outbound_pending_usage.get(),
+                SccpOutboundPendingUsageV1::default()
+            );
         }
     }
 
@@ -44236,9 +45189,13 @@ mod tiered_snapshot_diff_tests {
     }
 
     #[test]
-    fn sccp_pending_usage_snapshot_is_exact_and_config_bounded() {
+    fn sccp_pending_usage_snapshot_is_exact_and_actual_config_is_fail_closed() {
         let (world, _, message) = world_with_valid_pending_sccp_outbound();
-        decode_sccp_world_snapshot(world).expect("exact pending usage hydrates");
+        decode_state_snapshot_value_with_kura(
+            sccp_state_snapshot_value(world, SCCP_SNAPSHOT_CHAIN_ID),
+            exact_sccp_finality_kura(),
+        )
+        .expect("exact pending usage and immutable archive descriptor hydrate");
 
         let payload_bytes = u64::try_from(message.payload_bytes.len()).expect("small payload");
         for hostile in [
@@ -44272,23 +45229,432 @@ mod tiered_snapshot_diff_tests {
         }
 
         let (world, _, _) = world_with_valid_pending_sccp_outbound();
+        let mut state = decode_state_snapshot_value_with_kura(
+            sccp_state_snapshot_value(world, SCCP_SNAPSHOT_CHAIN_ID),
+            exact_sccp_finality_kura(),
+        )
+        .expect("configuration-independent SCCP snapshot hydration succeeds");
+
+        // Snapshot hydration must not consult the placeholder/default runtime
+        // configuration: the actual node configuration is installed only after
+        // decoding. A raised actual cap must therefore be able to accept state
+        // that would exceed a placeholder cap.
+        state.zk.sccp.max_pending_outbound_messages = NonZeroU64::new(1).expect("one is nonzero");
+        state.zk.sccp.max_pending_outbound_payload_bytes =
+            NonZeroU64::new(payload_bytes - 1).expect("fixture payload exceeds one byte");
+        validate_sccp_state_local_profile(&state)
+            .expect("hydration validation is independent of runtime SCCP caps");
+
+        let mut raised = state.zk_snapshot();
+        raised.sccp.max_pending_outbound_messages = NonZeroU64::new(2).expect("two is nonzero");
+        raised.sccp.max_pending_outbound_payload_bytes =
+            NonZeroU64::new(payload_bytes + 1).expect("raised fixture cap is nonzero");
+        state
+            .set_zk(raised.clone())
+            .expect("actual raised pending caps accept hydrated state");
+        assert_eq!(state.zk_snapshot().sccp, raised.sccp);
+
+        let mut lowered = raised.clone();
+        lowered.sccp.max_pending_outbound_payload_bytes =
+            NonZeroU64::new(payload_bytes - 1).expect("fixture payload exceeds one byte");
+        let error = state
+            .set_zk(lowered)
+            .expect_err("actual cap below hydrated usage must fail closed");
+        assert_eq!(
+            error,
+            ZkConfigInstallError::SccpPendingUsageLimitExceeded {
+                usage: SccpOutboundPendingUsageV1 {
+                    message_count: 1,
+                    payload_bytes,
+                },
+                max_messages: NonZeroU64::new(2).expect("two is nonzero"),
+                max_payload_bytes: NonZeroU64::new(payload_bytes - 1)
+                    .expect("fixture payload exceeds one byte"),
+            }
+        );
+        assert_eq!(
+            state.zk_snapshot().sccp,
+            raised.sccp,
+            "rejected config must not partially mutate state"
+        );
+    }
+
+    #[test]
+    fn set_zk_rejects_structurally_corrupt_pending_usage_without_mutation() {
+        let corrupt_usage = SccpOutboundPendingUsageV1 {
+            message_count: 0,
+            payload_bytes: 1,
+        };
+        let mut world = World::default();
+        world.sccp_outbound_pending_usage = Cell::new(corrupt_usage);
         let mut state = State::new_with_chain(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             ChainId::from(SCCP_SNAPSHOT_CHAIN_ID),
         );
-        state.zk.sccp.max_pending_outbound_messages =
-            NonZeroU64::new(1).expect("one is nonzero");
-        state.zk.sccp.max_pending_outbound_payload_bytes =
-            NonZeroU64::new(payload_bytes).expect("fixture payload is nonzero");
-        validate_sccp_state_local_profile(&state).expect("exact configured pending cap validates");
+        let installed = state.zk_snapshot();
+        let mut candidate = installed.clone();
+        candidate.sccp.max_pending_outbound_messages = NonZeroU64::new(1).expect("one is nonzero");
 
-        state.zk.sccp.max_pending_outbound_payload_bytes =
-            NonZeroU64::new(payload_bytes - 1).expect("fixture payload exceeds one byte");
+        assert_eq!(
+            state
+                .set_zk(candidate)
+                .expect_err("structurally corrupt pending usage must fail closed"),
+            ZkConfigInstallError::InvalidSccpPendingUsage {
+                usage: corrupt_usage,
+            }
+        );
+        assert_eq!(state.zk_snapshot().sccp, installed.sccp);
+    }
+
+    #[test]
+    fn set_zk_rejects_structurally_valid_usage_drift_without_global_or_state_mutation() {
+        let _gas_guard = crate::gas::lock_confidential_gas_for_tests();
+        let (_, _, message) = world_with_valid_pending_sccp_outbound();
+        let expected = SccpOutboundPendingUsageV1::default()
+            .checked_add_payload(message.payload_bytes.len())
+            .expect("fixture pending usage is representable");
+        let hostile = [
+            (
+                "undercount",
+                SccpOutboundPendingUsageV1 {
+                    message_count: expected.message_count,
+                    payload_bytes: expected.payload_bytes - 1,
+                },
+            ),
+            (
+                "overcount",
+                SccpOutboundPendingUsageV1 {
+                    message_count: expected.message_count + 1,
+                    payload_bytes: expected.payload_bytes + 1,
+                },
+            ),
+        ];
+
+        for (label, usage) in hostile {
+            assert!(
+                usage.is_structurally_valid(),
+                "{label} fixture is structural"
+            );
+            let (mut world, _, _) = world_with_valid_pending_sccp_outbound();
+            world.sccp_outbound_pending_usage = Cell::new(usage);
+            let mut state = State::new_with_chain(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+                ChainId::from(SCCP_SNAPSHOT_CHAIN_ID),
+            );
+            let installed = state.zk_snapshot();
+            let gas_before = crate::gas::confidential_gas_schedule_for_tests();
+            let mut candidate = installed.clone();
+            candidate.gas.proof_base = gas_before.base_verify ^ 1;
+
+            assert_eq!(
+                state
+                    .set_zk(candidate)
+                    .expect_err("usage drift must fail before any configuration mutation"),
+                ZkConfigInstallError::SccpPendingUsageMismatch { usage, expected },
+                "unexpected {label} error"
+            );
+            let after = state.zk_snapshot();
+            assert_eq!(after.sccp, installed.sccp, "{label} changed SCCP config");
+            assert_eq!(
+                after.gas.proof_base, installed.gas.proof_base,
+                "{label} changed state gas config"
+            );
+            assert_eq!(
+                crate::gas::confidential_gas_schedule_for_tests(),
+                gas_before,
+                "{label} changed the process-wide gas schedule"
+            );
+        }
+    }
+
+    #[test]
+    fn pending_usage_accumulator_rejects_zero_length_and_counter_overflow() {
+        assert_eq!(
+            checked_accumulate_sccp_pending_usage(SccpOutboundPendingUsageV1::default(), 0),
+            Err(ZkConfigInstallError::InvalidSccpPendingPayloadLength)
+        );
+        assert_eq!(
+            checked_accumulate_sccp_pending_usage(
+                SccpOutboundPendingUsageV1 {
+                    message_count: u64::MAX,
+                    payload_bytes: u64::MAX,
+                },
+                1,
+            ),
+            Err(ZkConfigInstallError::SccpPendingUsageOverflow)
+        );
+    }
+
+    #[test]
+    fn sccp_snapshot_rejects_first_middle_and_last_whole_archive_height_omission() {
+        for removed_position in 0..3 {
+            let (snapshot, kura, removed_height) =
+                snapshot_with_whole_sccp_height_removed(removed_position);
+            let error = match decode_state_snapshot_value_with_kura(snapshot, kura) {
+                Ok(_) => panic!("whole retained SCCP archive height omission must fail closed"),
+                Err(error) => error,
+            };
+            let message = error.to_string();
+            assert!(
+                message.contains(&format!("height {removed_height}"))
+                    && message.contains("committed WSV retains 0"),
+                "unexpected whole-height omission error at position {removed_position}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn sccp_snapshot_allows_rootless_committed_height_and_nonempty_kura_suffix() {
+        let kura = Kura::blank_kura_for_testing();
+        let rootless = rootless_retained_block(None);
+        kura.persist_block_with_retained_archive_for_tests(&rootless)
+            .expect("persist rootless committed block");
+        let (suffix, _, _) = retained_sccp_archive_block(Some(rootless.as_ref()), 404);
+        kura.persist_block_with_retained_archive_for_tests(&suffix)
+            .expect("persist nonempty retained Kura suffix");
+
+        let state = State::new_with_chain(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            ChainId::from("rootless-with-kura-suffix"),
+        );
+        let mut block_hashes = state.block_hashes.block();
+        block_hashes.push_for_tests(rootless.hash());
+        block_hashes.commit_for_tests();
+        let snapshot =
+            norito::json::to_value(&state).expect("serialize rootless/suffix SCCP snapshot");
+
+        let restored = decode_state_snapshot_value_with_kura(snapshot, kura)
+            .expect("rootless committed height and Kura-ahead suffix are both admissible");
+        assert_eq!(restored.committed_height(), 1);
+    }
+
+    #[test]
+    fn sccp_snapshot_rejects_fabricated_wsv_message_at_rootless_height() {
+        let kura = Kura::blank_kura_for_testing();
+        let rootless = rootless_retained_block(None);
+        kura.persist_block_with_retained_archive_for_tests(&rootless)
+            .expect("persist rootless committed block");
+        let (world, _, _) = world_with_valid_pending_sccp_outbound();
+        let state = State::new_with_chain(
+            world,
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            ChainId::from(SCCP_SNAPSHOT_CHAIN_ID),
+        );
+        let mut block_hashes = state.block_hashes.block();
+        block_hashes.push_for_tests(rootless.hash());
+        block_hashes.commit_for_tests();
+        let snapshot = norito::json::to_value(&state)
+            .expect("serialize fabricated rootless-height SCCP snapshot");
+
+        let error = match decode_state_snapshot_value_with_kura(snapshot, kura) {
+            Ok(_) => panic!("rootless Kura height cannot back a fabricated WSV message"),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+        assert!(
+            message.contains("committed WSV retains 1 SCCP messages at height 1")
+                && message.contains("Kura has no nonempty immutable archive"),
+            "unexpected rootless-height fabrication error: {message}"
+        );
+    }
+
+    #[test]
+    fn sccp_pending_snapshot_rejects_coordinated_record_and_index_substitution() {
+        let (mut world, original_key, original_record) = world_with_valid_pending_sccp_outbound();
+        let alternate = iroha_sccp::sccp_exact_outbound_test_fixture_for_nonce_v1(8);
+        let alternate_key = SccpOutboundMessageKeyV1::new(
+            alternate.bundle.commitment.context.lane,
+            alternate.bundle.commitment.message_id,
+        )
+        .expect("alternate fixture forms an exact outbound key");
+        let alternate_record = SccpOutboundPendingMessageRecordV1 {
+            destination_binding_hash: alternate.bundle.commitment.context.destination_binding_hash,
+            route_configuration_hash: alternate.bundle.commitment.context.route_configuration_hash,
+            payload_hash: alternate.bundle.commitment.payload_hash,
+            payload_bytes: iroha_sccp::canonical_sccp_payload_bytes(&alternate.bundle.payload)
+                .expect("alternate payload encodes canonically"),
+            recorded_at_height: original_record.recorded_at_height,
+            commitment_index: original_record.commitment_index,
+        };
+        assert_ne!(alternate_key, original_key);
+        assert_ne!(alternate_record.payload_hash, original_record.payload_hash);
+        assert_eq!(alternate_key.lane, original_key.lane);
+        assert_eq!(
+            alternate_record.destination_binding_hash,
+            original_record.destination_binding_hash
+        );
+        assert_eq!(
+            alternate_record.route_configuration_hash,
+            original_record.route_configuration_hash
+        );
+        crate::bridge::validate_sccp_outbound_message_record_v1(&alternate_key, &alternate_record)
+            .expect("coordinated alternate record remains structurally canonical");
+
+        world.sccp_outbound_pending_usage = Cell::default();
+        world.sccp_outbound_pending_messages = Storage::default();
+        world.sccp_outbound_message_locator = Storage::default();
+        world.sccp_outbound_message_index = Storage::default();
+        world.sccp_outbound_proofs = Storage::default();
+        insert_complete_sccp_outbound_record(&mut world, alternate_key, alternate_record.clone());
+        let alternate_index = SccpOutboundMessageIndexKeyV1::new(alternate_key, &alternate_record)
+            .expect("coordinated alternate index remains dense and self-consistent");
+        assert_eq!(alternate_index.commitment_index, 0);
+        assert_eq!(world.sccp_outbound_message_index.view().len(), 1);
+
+        let error = match decode_state_snapshot_value_with_kura(
+            sccp_state_snapshot_value(world, SCCP_SNAPSHOT_CHAIN_ID),
+            exact_sccp_finality_kura(),
+        ) {
+            Ok(_) => panic!(
+                "a structurally dense coordinated pending/index substitution must fail Kura binding"
+            ),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("differs from its immutable Kura archive entry"),
+            "unexpected coordinated pending/index substitution error: {error}"
+        );
+    }
+
+    #[test]
+    fn sccp_local_profile_rejects_standalone_pending_usage_without_payload_state() {
+        let mut world = World::default();
+        world.sccp_outbound_pending_usage = Cell::new(SccpOutboundPendingUsageV1 {
+            message_count: 1,
+            payload_bytes: 1,
+        });
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from(SCCP_SNAPSHOT_CHAIN_ID),
+        );
+
         let error = validate_sccp_state_local_profile(&state)
-            .expect_err("restored usage above configured byte cap must fail");
-        assert!(error.contains("exceeds configured limits"), "{error}");
+            .expect_err("standalone usage counters must not bypass profile validation");
+        assert!(
+            error.contains("differs from payload-bearing state"),
+            "unexpected standalone usage error: {error}"
+        );
+    }
+
+    #[test]
+    fn sccp_local_profile_rejects_orphan_outbound_locator_without_records() {
+        let (key, _, _) = sample_sccp_outbound();
+        let mut world = World::default();
+        world
+            .sccp_outbound_message_locator
+            .insert(key.message_id, key);
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from(SCCP_SNAPSHOT_CHAIN_ID),
+        );
+
+        let error = validate_sccp_state_local_profile(&state)
+            .expect_err("orphan SCCP locator must not bypass the empty-state fast path");
+        assert!(
+            error.contains("global locator cardinality 1")
+                && error.contains("pending/terminal union cardinality 0"),
+            "unexpected orphan-locator error: {error}"
+        );
+    }
+
+    #[test]
+    fn sccp_local_profile_rejects_orphan_outbound_index_without_records() {
+        let (_, _, index) = sample_sccp_outbound();
+        let mut world = World::default();
+        world.sccp_outbound_message_index.insert(index, ());
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from(SCCP_SNAPSHOT_CHAIN_ID),
+        );
+
+        let error = validate_sccp_state_local_profile(&state)
+            .expect_err("orphan SCCP ordered index must not bypass the empty-state fast path");
+        assert!(
+            error.contains("ordered index cardinality 1")
+                && error.contains("pending/terminal union cardinality 0"),
+            "unexpected orphan-index error: {error}"
+        );
+    }
+
+    #[test]
+    fn sccp_local_profile_rejects_malformed_direct_terminal_record() {
+        let (mut world, key, message, mut proof, _, _) = world_with_valid_sccp_outbound_history();
+        proof.accepted_at_height = 0;
+        replace_complete_sccp_outbound_history(&mut world, key, message, proof);
+        let state = direct_sccp_state_at_height_one(world, exact_sccp_finality_kura());
+
+        let error = validate_sccp_state_local_profile(&state)
+            .expect_err("direct State construction must not bypass terminal validation");
+        assert!(
+            error.contains("terminal SCCP replay record") && error.contains("malformed"),
+            "unexpected malformed-terminal error: {error}"
+        );
+    }
+
+    #[test]
+    fn sccp_local_profile_rejects_future_terminal_acceptance_height() {
+        let (mut world, key, message, mut proof, _, _) = world_with_valid_sccp_outbound_history();
+        proof.accepted_at_height = 2;
+        assert!(proof.is_well_formed_for_key(&key));
+        replace_complete_sccp_outbound_history(&mut world, key, message, proof);
+        let state = direct_sccp_state_at_height_one(world, exact_sccp_finality_kura());
+
+        let error = validate_sccp_state_local_profile(&state)
+            .expect_err("future terminal acceptance height must fail closed");
+        assert!(
+            error.contains("accepted at future local height 2")
+                && error.contains("committed WSV height 1"),
+            "unexpected future-terminal error: {error}"
+        );
+    }
+
+    #[test]
+    fn sccp_local_profile_rejects_malformed_direct_inbound_record() {
+        let (mut world, key, mut record, _, _) = world_with_valid_sccp_inbound_history();
+        record.admitted_at_height = 0;
+        world.sccp_inbound_messages.insert(key, record);
+        rebuild_sccp_inbound_anchor_high_water(&mut world);
+        let state = direct_sccp_state_at_height_one(world, Kura::blank_kura_for_testing());
+
+        let error = validate_sccp_state_local_profile(&state)
+            .expect_err("direct State construction must not bypass inbound validation");
+        assert!(
+            error.contains("inbound SCCP replay record") && error.contains("malformed"),
+            "unexpected malformed-inbound error: {error}"
+        );
+    }
+
+    #[test]
+    fn sccp_local_profile_rejects_future_inbound_admission_height() {
+        let (mut world, key, mut record, _, _) = world_with_valid_sccp_inbound_history();
+        record.admitted_at_height = 2;
+        assert!(record.is_well_formed_for_lane(key.lane));
+        world.sccp_inbound_messages.insert(key, record);
+        rebuild_sccp_inbound_anchor_high_water(&mut world);
+        let state = direct_sccp_state_at_height_one(world, Kura::blank_kura_for_testing());
+
+        let error = validate_sccp_state_local_profile(&state)
+            .expect_err("future inbound admission height must fail closed");
+        assert!(
+            error.contains("admitted at future local height 2")
+                && error.contains("committed WSV height 1"),
+            "unexpected future-inbound error: {error}"
+        );
     }
 
     #[test]
@@ -44645,9 +46011,15 @@ mod tiered_snapshot_diff_tests {
         world: World,
         chain_id: &str,
     ) -> Result<State, norito::json::Error> {
-        let has_terminal_outbound = world.sccp_outbound_proofs.view().iter().next().is_some();
+        let has_outbound = world
+            .sccp_outbound_pending_messages
+            .view()
+            .iter()
+            .next()
+            .is_some()
+            || world.sccp_outbound_proofs.view().iter().next().is_some();
         let encoded = sccp_state_snapshot_value(world, chain_id);
-        let kura = if has_terminal_outbound {
+        let kura = if has_outbound {
             exact_sccp_finality_kura()
         } else {
             Kura::blank_kura_for_testing()
@@ -45029,6 +46401,25 @@ mod tiered_snapshot_diff_tests {
             .insert(key.message_id, key);
         world.sccp_outbound_message_index.insert(index, ());
         world.sccp_outbound_pending_usage = Cell::new(usage);
+    }
+
+    fn transition_sccp_outbound_record_in_transaction(
+        transaction: &mut WorldTransaction<'_, '_>,
+        key: SccpOutboundMessageKeyV1,
+        pending: &SccpOutboundPendingMessageRecordV1,
+        terminal: SccpOutboundProofRecordV1,
+    ) {
+        assert_eq!(pending.descriptor(), terminal.descriptor());
+        let current_usage = *transaction.sccp_outbound_pending_usage.get();
+        let next_usage = current_usage
+            .checked_remove_payload(pending.payload_bytes.len())
+            .expect("pending transition usage cannot underflow");
+        assert_eq!(
+            transaction.sccp_outbound_pending_messages.remove(key),
+            Some(pending.clone())
+        );
+        *transaction.sccp_outbound_pending_usage.get_mut() = next_usage;
+        transaction.sccp_outbound_proofs.insert(key, terminal);
     }
 
     #[test]
@@ -54004,61 +55395,18 @@ pub(crate) mod deserialize {
         };
         let da_receipt_cursors = parking_lot::RwLock::new(DaReceiptCursorIndex::default());
         let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
-        let store_root = kura.store_root();
-        let roster_retention = kura.block_sync_roster_retention();
-        let commit_roster_journal_path = CommitRosterJournal::journal_path(&store_root);
-        let commit_roster_journal =
-            match CommitRosterJournal::load(commit_roster_journal_path.clone(), roster_retention) {
-                Ok(journal) => journal,
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        path = %commit_roster_journal_path.display(),
-                        "failed to load commit roster journal; starting empty"
-                    );
-                    CommitRosterJournal::new(commit_roster_journal_path, roster_retention)
-                }
-            };
-        let query_index_journal_path = QueryIndexJournal::journal_path(&store_root);
-        let query_index_journal = match QueryIndexJournal::load(query_index_journal_path.clone()) {
-            Ok(mut journal) => {
-                let height = u64::try_from(block_hashes.committed_height()).unwrap_or(u64::MAX);
-                let hash = block_hashes.view().last().copied();
-                if height > 0 {
-                    journal.set_latest(height, hash);
-                }
-                journal
-            }
-            Err(err) => {
-                warn!(
-                    ?err,
-                    path = %query_index_journal_path.display(),
-                    "failed to load query index journal; starting empty"
-                );
-                let mut journal = QueryIndexJournal::new(query_index_journal_path);
-                let height = u64::try_from(block_hashes.committed_height()).unwrap_or(u64::MAX);
-                let hash = block_hashes.view().last().copied();
-                if height > 0 {
-                    journal.set_latest(height, hash);
-                }
-                journal
-            }
+        let canonical_query_index_status = {
+            let indexed_height = u64::try_from(block_hashes.committed_height()).unwrap_or(u64::MAX);
+            (indexed_height > 0).then(|| QueryIndexStatus {
+                indexed_height,
+                indexed_block_hash: block_hashes.view().last().copied(),
+            })
         };
-        let query_projection_checkpoint_journal_path =
-            QueryProjectionCheckpointJournal::journal_path(&store_root);
-        let query_projection_checkpoint_journal = match QueryProjectionCheckpointJournal::load(
-            query_projection_checkpoint_journal_path.clone(),
-        ) {
-            Ok(journal) => journal,
-            Err(err) => {
-                warn!(
-                    ?err,
-                    path = %query_projection_checkpoint_journal_path.display(),
-                    "failed to load query projection checkpoint journal; starting empty"
-                );
-                QueryProjectionCheckpointJournal::new(query_projection_checkpoint_journal_path)
-            }
-        };
+        let LoadedStateJournals {
+            commit_roster: commit_roster_journal,
+            query_index: query_index_journal,
+            query_projection_checkpoint: query_projection_checkpoint_journal,
+        } = load_state_journals(&kura, canonical_query_index_status);
         let pipeline = default_pipeline();
         let pipeline_parallelism = PipelineParallelism::new(&pipeline);
         let stateless_cache_cap = pipeline.stateless_cache_cap;
@@ -54087,10 +55435,13 @@ pub(crate) mod deserialize {
             da_shard_cursors,
             da_shard_cursor_persistor: DaShardCursorJournalPersistor::new(),
             commit_roster_journal: parking_lot::RwLock::new(commit_roster_journal),
+            commit_roster_journal_persistence_lock: parking_lot::Mutex::new(()),
             query_index_journal: parking_lot::RwLock::new(query_index_journal),
+            query_index_journal_persistence_lock: parking_lot::Mutex::new(()),
             query_projection_checkpoint_journal: parking_lot::RwLock::new(
                 query_projection_checkpoint_journal,
             ),
+            query_projection_checkpoint_journal_persistence_lock: parking_lot::Mutex::new(()),
             da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
             lane_relays: parking_lot::RwLock::new(LaneRelayStore::default()),
             settled_nexus_fee_receipts: parking_lot::RwLock::new(BTreeSet::new()),
@@ -54611,7 +55962,7 @@ mod tests {
     use std::{
         borrow::Cow,
         collections::{BTreeMap, BTreeSet},
-        sync::Arc,
+        sync::{Arc, Barrier},
     };
 
     use iroha_config::{
@@ -58390,7 +59741,9 @@ mod tests {
         let before = state.sccp_registry_snapshot();
         let mut zk = state.zk_snapshot();
         zk.max_public_inputs = zk.max_public_inputs.saturating_add(1);
-        state.set_zk(zk);
+        state
+            .set_zk(zk)
+            .expect("empty SCCP outbox accepts updated ZK configuration");
         let after = state.sccp_registry_snapshot();
 
         assert!(Arc::ptr_eq(&before, &after));
@@ -92209,6 +93562,309 @@ mod tests {
         );
     }
 
+    fn state_journal_test_kura(store_root: &std::path::Path) -> Arc<Kura> {
+        let catalog =
+            LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root.to_path_buf()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        Kura::new(&kura_cfg, &lane_config)
+            .expect("initialize journal test Kura")
+            .0
+    }
+
+    fn state_journal_test_projection_checkpoint(
+        seed: u8,
+        shard_count: u32,
+    ) -> QueryProjectionCheckpoint {
+        QueryProjectionCheckpoint::from_index_status(
+            QueryIndexStatus {
+                indexed_height: u64::from(seed),
+                indexed_block_hash: Some(HashOf::from_untyped_unchecked(Hash::prehashed([
+                    seed;
+                    Hash::LENGTH
+                ]))),
+            },
+            u64::from(seed).saturating_mul(1_000),
+            (0..shard_count)
+                .map(|partition_id| {
+                    crate::query::projection_checkpoint::QueryProjectionCheckpointShard {
+                        resource: crate::query::projection_checkpoint::QueryProjectionResourceKind::Accounts,
+                        partition_id,
+                        asset_definition_id: None,
+                        manifest_digest: BlobDigest::new([seed.wrapping_add(1); 32]),
+                        storage_ticket: StorageTicketId::new([seed.wrapping_add(2); 32]),
+                        blob_hash: BlobDigest::new([seed.wrapping_add(3); 32]),
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    fn state_journal_test_roster(height: u64, view: u64, seed: u8) -> (Qc, ValidatorSetCheckpoint) {
+        let keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let roster = vec![PeerId::new(keypair.public_key().clone())];
+        let block_hash = BlockHeader::new(
+            NonZeroU64::new(height).expect("nonzero journal height"),
+            None,
+            None,
+            None,
+            0,
+            view,
+        )
+        .hash();
+        let parent_state_root = Hash::prehashed([seed; Hash::LENGTH]);
+        let post_state_root = Hash::prehashed([seed.wrapping_add(1); Hash::LENGTH]);
+        let signers_bitmap = vec![1];
+        let aggregate_signature = vec![seed; 96];
+        let commit_qc = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root,
+            post_state_root,
+            height,
+            view,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: aggregate_signature.clone(),
+            },
+        };
+        let checkpoint = ValidatorSetCheckpoint::new(
+            height,
+            view,
+            block_hash,
+            parent_state_root,
+            post_state_root,
+            roster,
+            signers_bitmap,
+            aggregate_signature,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        (commit_qc, checkpoint)
+    }
+
+    struct ExpectedStateJournalRecovery {
+        query_index: QueryIndexStatus,
+        projection: QueryProjectionCheckpoint,
+        roster_qc: Qc,
+    }
+
+    fn seed_distinct_state_journal_main_and_temp_files(
+        kura: &Kura,
+    ) -> ExpectedStateJournalRecovery {
+        let root = kura.store_root();
+
+        let query_path = QueryIndexJournal::journal_path(&root);
+        let mut query_main = QueryIndexJournal::new(query_path.clone());
+        query_main.set_latest(1, None);
+        query_main.persist().expect("persist query-index main");
+        let query_temp_source = root.join("query-index-recovery-source.norito");
+        let query_index = QueryIndexStatus {
+            indexed_height: 29,
+            indexed_block_hash: Some(HashOf::from_untyped_unchecked(Hash::prehashed(
+                [0x29; Hash::LENGTH],
+            ))),
+        };
+        let mut query_temp = QueryIndexJournal::new(query_temp_source.clone());
+        query_temp.set_latest(query_index.indexed_height, query_index.indexed_block_hash);
+        query_temp
+            .persist()
+            .expect("persist query-index temp source");
+        std::fs::rename(query_temp_source, query_path.with_extension("norito.tmp"))
+            .expect("install query-index temp");
+
+        let projection_path = QueryProjectionCheckpointJournal::journal_path(&root);
+        let mut projection_main = QueryProjectionCheckpointJournal::new(projection_path.clone());
+        projection_main.set_latest(Some(state_journal_test_projection_checkpoint(3, 1)));
+        projection_main
+            .persist()
+            .expect("persist projection checkpoint main");
+        let projection = state_journal_test_projection_checkpoint(31, 5);
+        let projection_temp_source = root.join("projection-recovery-source.norito");
+        let mut projection_temp =
+            QueryProjectionCheckpointJournal::new(projection_temp_source.clone());
+        projection_temp.set_latest(Some(projection.clone()));
+        projection_temp
+            .persist()
+            .expect("persist projection checkpoint temp source");
+        std::fs::rename(
+            projection_temp_source,
+            projection_path.with_extension("norito.tmp"),
+        )
+        .expect("install projection checkpoint temp");
+
+        let roster_path = CommitRosterJournal::journal_path(&root);
+        let retention = kura.block_sync_roster_retention();
+        let (main_qc, main_checkpoint) = state_journal_test_roster(2, 1, 0x11);
+        let mut roster_main = CommitRosterJournal::new(roster_path.clone(), retention);
+        roster_main.upsert(main_qc, main_checkpoint, None);
+        roster_main.persist().expect("persist commit-roster main");
+        let roster_temp_source = root.join("commit-roster-recovery-source.norito");
+        let mut roster_temp = CommitRosterJournal::new(roster_temp_source.clone(), retention);
+        let (first_temp_qc, first_temp_checkpoint) = state_journal_test_roster(7, 2, 0x21);
+        roster_temp.upsert(first_temp_qc, first_temp_checkpoint, None);
+        let (roster_qc, roster_checkpoint) = state_journal_test_roster(8, 3, 0x31);
+        roster_temp.upsert(roster_qc.clone(), roster_checkpoint, None);
+        roster_temp
+            .persist()
+            .expect("persist commit-roster temp source");
+        std::fs::rename(roster_temp_source, roster_path.with_extension("norito.tmp"))
+            .expect("install commit-roster temp");
+
+        ExpectedStateJournalRecovery {
+            query_index,
+            projection,
+            roster_qc,
+        }
+    }
+
+    #[test]
+    fn both_state_constructors_account_exactly_for_distinct_journal_temp_promotions() {
+        let snapshot_value = {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            norito::json::to_value(&state).expect("serialize state constructor fixture")
+        };
+
+        for deserialize_snapshot in [false, true] {
+            let temp_dir = tempfile::tempdir().expect("temp dir");
+            let kura = state_journal_test_kura(temp_dir.path().join("kura").as_path());
+            let expected = seed_distinct_state_journal_main_and_temp_files(&kura);
+            let state = if deserialize_snapshot {
+                deserialize::KuraSeed {
+                    kura: Arc::clone(&kura),
+                    query_handle: LiveQueryStore::start_test(),
+                    #[cfg(feature = "telemetry")]
+                    telemetry: crate::telemetry::StateTelemetry::default(),
+                }
+                .into_state_from_json(snapshot_value.clone())
+                .expect("deserialize state through snapshot constructor")
+            } else {
+                State::new_for_testing(
+                    World::default(),
+                    Arc::clone(&kura),
+                    LiveQueryStore::start_test(),
+                )
+            };
+
+            assert_eq!(state.query_index_status_snapshot(), expected.query_index);
+            assert_eq!(
+                state.query_projection_checkpoint_snapshot(),
+                Some(expected.projection)
+            );
+            assert!(
+                state
+                    .commit_roster_journal
+                    .read()
+                    .get(
+                        expected.roster_qc.height,
+                        expected.roster_qc.subject_block_hash
+                    )
+                    .is_some(),
+                "temp commit-roster journal must replace the distinct main journal"
+            );
+            for path in [
+                state.query_index_journal_path(),
+                state.query_projection_checkpoint_journal_path(),
+                state.commit_roster_journal_path(),
+            ] {
+                assert!(path.exists(), "promoted journal main must exist: {path:?}");
+                assert!(
+                    !path.with_extension("norito.tmp").exists(),
+                    "promoted journal temp must be consumed: {path:?}"
+                );
+            }
+
+            let usage = kura
+                .disk_usage_accounting_snapshot_for_tests()
+                .expect("read raw and exact Kura disk usage");
+            assert!(usage.enforced_initialized);
+            assert!(usage.total_initialized);
+            assert_eq!(usage.cached_enforced_bytes, usage.exact_enforced_bytes);
+            assert_eq!(usage.cached_total_bytes, usage.exact_total_bytes);
+        }
+    }
+
+    #[test]
+    fn concurrent_query_index_persistence_keeps_raw_disk_usage_exact() {
+        const WORKERS: usize = 6;
+        const ROUNDS: usize = 8;
+
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let kura = state_journal_test_kura(temp_dir.path().join("kura").as_path());
+        let state = Arc::new(State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        ));
+        let barrier = Arc::new(Barrier::new(WORKERS));
+        let handles = (0..WORKERS)
+            .map(|worker| {
+                let state = Arc::clone(&state);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    for round in 0..ROUNDS {
+                        barrier.wait();
+                        let marker = u8::try_from(worker * ROUNDS + round + 1)
+                            .expect("journal marker fits in one byte");
+                        state.persist_query_index_status(
+                            u64::from(marker),
+                            Some(HashOf::from_untyped_unchecked(Hash::prehashed(
+                                [marker; Hash::LENGTH],
+                            ))),
+                        );
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().expect("query-index persistence worker");
+        }
+
+        // This accessor reads atomics and scans the filesystem without refreshing either cache.
+        let usage = kura
+            .disk_usage_accounting_snapshot_for_tests()
+            .expect("read raw and exact Kura disk usage");
+        assert!(usage.enforced_initialized);
+        assert!(usage.total_initialized);
+        assert_eq!(usage.cached_enforced_bytes, usage.exact_enforced_bytes);
+        assert_eq!(usage.cached_total_bytes, usage.exact_total_bytes);
+
+        let path = state.query_index_journal_path();
+        assert!(!path.with_extension("norito.tmp").exists());
+        let persisted = QueryIndexJournal::load(path)
+            .expect("load concurrently persisted query-index journal")
+            .snapshot();
+        assert_eq!(persisted, state.query_index_status_snapshot());
+    }
+
     #[test]
     fn state_commit_persists_query_index_status_journal() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
@@ -100780,7 +102436,7 @@ mod tests {
             seiyaku ProtectedRawTrigger {
               kotoage fn main(Json event) authorize("raw_trigger_run") {
                 ledger::account::set_detail(
-                  account: context::authority(),
+                  account: context::contract_subject(),
                   key: Name::parse("raw_trigger_marker"),
                   value: event
                 );
@@ -100799,6 +102455,7 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive raw trigger contract address");
+        let contract_subject = contract_address.subject_id();
 
         let block1 = new_dummy_block_with_payload(|header| {
             header.set_height(NonZeroU64::new(1).unwrap());
@@ -100816,6 +102473,15 @@ mod tests {
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
+            Register::account(Account::new(contract_subject.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register raw trigger contract subject");
+            let deployment_permission: Permission =
+                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                    .into();
+            Grant::account_permission(deployment_permission, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant contract deployment permission");
             let registered_hash = register_code_bytes(&ALICE_ID, program, &mut stx)
                 .expect("register raw trigger bytecode");
             assert_eq!(registered_hash, code_hash);
@@ -100866,7 +102532,11 @@ mod tests {
             let event = ExecuteTriggerEvent {
                 trigger_id: trigger_id.clone(),
                 authority: ALICE_ID.clone(),
-                args: Json::from(norito::json!({ "marker": "authorized" })),
+                // Trigger event arguments use the same named-field object as direct
+                // contract calls. The `event` field itself remains arbitrary JSON.
+                args: Json::from(norito::json!({
+                    "event": { "marker": "authorized" }
+                })),
             };
             let denied_events_before = stx.world.external_event_buf.len();
             ivm::reset_argument_record_decode_count();
@@ -100874,8 +102544,12 @@ mod tests {
                 .execute_called_trigger(&trigger_id, &event)
                 .expect_err("raw IVM trigger must enforce its kotoage permission before decoding");
             assert!(
-                denied.to_string().contains(REQUIRED_PERMISSION),
-                "unexpected raw trigger authorization error: {denied}"
+                matches!(
+                    &denied,
+                    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                        if message.contains(REQUIRED_PERMISSION)
+                ),
+                "unexpected raw trigger authorization error: {denied:?}"
             );
             assert_eq!(
                 ivm::argument_record_decode_count(),
@@ -100884,8 +102558,8 @@ mod tests {
             );
             assert!(
                 stx.world
-                    .account(&ALICE_ID)
-                    .expect("trigger authority account")
+                    .account(&contract_subject)
+                    .expect("raw trigger contract subject account")
                     .metadata()
                     .get(&metadata_marker)
                     .is_none(),
@@ -100910,24 +102584,27 @@ mod tests {
             );
             let authorized_marker = stx
                 .world
-                .account(&ALICE_ID)
-                .expect("trigger authority account")
+                .account(&contract_subject)
+                .expect("raw trigger contract subject account")
                 .metadata()
                 .get(&metadata_marker)
                 .cloned()
                 .expect("authorized raw trigger writes its metadata marker");
-            let authorized_events = stx.world.external_event_buf.len();
-
             Revoke::account_permission(callback_permission.clone(), ALICE_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("revoke raw IVM trigger entrypoint permission");
+            let revoked_events_before = stx.world.external_event_buf.len();
             ivm::reset_argument_record_decode_count();
             let revoked = stx
                 .execute_called_trigger(&trigger_id, &event)
                 .expect_err("revoked raw IVM trigger permission must deny callback dispatch");
             assert!(
-                revoked.to_string().contains(REQUIRED_PERMISSION),
-                "unexpected revoked raw trigger error: {revoked}"
+                matches!(
+                    &revoked,
+                    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                        if message.contains(REQUIRED_PERMISSION)
+                ),
+                "unexpected revoked raw trigger error: {revoked:?}"
             );
             assert_eq!(
                 ivm::argument_record_decode_count(),
@@ -100936,8 +102613,8 @@ mod tests {
             );
             assert_eq!(
                 stx.world
-                    .account(&ALICE_ID)
-                    .expect("trigger authority account")
+                    .account(&contract_subject)
+                    .expect("raw trigger contract subject account")
                     .metadata()
                     .get(&metadata_marker),
                 Some(&authorized_marker),
@@ -100945,7 +102622,7 @@ mod tests {
             );
             assert_eq!(
                 stx.world.external_event_buf.len(),
-                authorized_events,
+                revoked_events_before,
                 "revoked raw IVM trigger must emit no completion event"
             );
 
@@ -100955,13 +102632,18 @@ mod tests {
             stx.world
                 .contract_instances
                 .remove(contract_address.clone());
+            let deactivated_events_before = stx.world.external_event_buf.len();
             ivm::reset_argument_record_decode_count();
             let deactivated = stx
                 .execute_called_trigger(&trigger_id, &event)
                 .expect_err("deactivated raw IVM trigger target must deny callback dispatch");
             assert!(
-                deactivated.to_string().contains("not found"),
-                "unexpected deactivated raw trigger error: {deactivated}"
+                matches!(
+                    &deactivated,
+                    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                        if message.contains("not found")
+                ),
+                "unexpected deactivated raw trigger error: {deactivated:?}"
             );
             assert_eq!(
                 ivm::argument_record_decode_count(),
@@ -100970,8 +102652,8 @@ mod tests {
             );
             assert_eq!(
                 stx.world
-                    .account(&ALICE_ID)
-                    .expect("trigger authority account")
+                    .account(&contract_subject)
+                    .expect("raw trigger contract subject account")
                     .metadata()
                     .get(&metadata_marker),
                 Some(&authorized_marker),
@@ -100979,7 +102661,7 @@ mod tests {
             );
             assert_eq!(
                 stx.world.external_event_buf.len(),
-                authorized_events,
+                deactivated_events_before,
                 "deactivated raw IVM trigger must emit no completion event"
             );
             stx.apply();
@@ -101069,10 +102751,12 @@ seiyaku IdentitylessRawCallback {
             .execute_called_trigger(&trigger_id, &event)
             .expect_err("raw callback without a live identity must fail closed");
         assert!(
-            error
-                .to_string()
-                .contains("requires a live contract_address or contract_alias"),
-            "unexpected identity-less raw trigger error: {error}"
+            matches!(
+                &error,
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                    if message.contains("requires a live contract_address or contract_alias")
+            ),
+            "unexpected identity-less raw trigger error: {error:?}"
         );
         assert_eq!(
             ivm::argument_record_decode_count(),
@@ -101116,11 +102800,10 @@ seiyaku IdentitylessRawCallback {
             seiyaku ProtectedContractCallTrigger {
               kotoage fn run(int marker) authorize("contract_trigger_run") {
                 let _marker = marker;
-                let event = context::trigger_event();
                 ledger::account::set_detail(
-                  account: context::authority(),
+                  account: context::contract_subject(),
                   key: Name::parse("contract_trigger_marker"),
-                  value: event
+                  value: Json::parse("{\"authorized\":true}")
                 );
               }
 
@@ -101160,6 +102843,7 @@ seiyaku IdentitylessRawCallback {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
+        let contract_subject = contract_address.subject_id();
 
         let block1 = new_dummy_block_with_payload(|header| {
             header.set_height(NonZeroU64::new(1).unwrap());
@@ -101177,6 +102861,15 @@ seiyaku IdentitylessRawCallback {
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
+            Register::account(Account::new(contract_subject.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register ContractCall trigger contract subject");
+            let deployment_permission: Permission =
+                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                    .into();
+            Grant::account_permission(deployment_permission, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant contract deployment permission");
             let code_hash =
                 register_code_bytes(&ALICE_ID, code, &mut stx).expect("register contract bytecode");
             manifest.code_hash = Some(code_hash);
@@ -101229,8 +102922,12 @@ seiyaku IdentitylessRawCallback {
                 .execute_called_trigger(&trigger_id, &event)
                 .expect_err("trigger authority without the entrypoint permission must be denied");
             assert!(
-                denied.to_string().contains(REQUIRED_PERMISSION),
-                "unexpected trigger authorization error: {denied}"
+                matches!(
+                    &denied,
+                    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                        if message.contains(REQUIRED_PERMISSION)
+                ),
+                "unexpected trigger authorization error: {denied:?}"
             );
             assert_eq!(
                 ivm::argument_record_decode_count(),
@@ -101239,8 +102936,8 @@ seiyaku IdentitylessRawCallback {
             );
             assert!(
                 stx.world
-                    .account(&ALICE_ID)
-                    .expect("trigger authority account")
+                    .account(&contract_subject)
+                    .expect("ContractCall trigger contract subject account")
                     .metadata()
                     .get(&metadata_marker)
                     .is_none(),
@@ -101257,7 +102954,7 @@ seiyaku IdentitylessRawCallback {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("grant trigger entrypoint permission");
             stx.execute_called_trigger(&trigger_id, &event)
-                .expect("granted contract-call trigger should read by-call args via trigger_event");
+                .expect("granted contract-call trigger should consume its canonical arguments");
             assert_eq!(
                 ivm::argument_record_decode_count(),
                 1,
@@ -101265,24 +102962,27 @@ seiyaku IdentitylessRawCallback {
             );
             let authorized_marker = stx
                 .world
-                .account(&ALICE_ID)
-                .expect("trigger authority account")
+                .account(&contract_subject)
+                .expect("ContractCall trigger contract subject account")
                 .metadata()
                 .get(&metadata_marker)
                 .cloned()
                 .expect("authorized trigger writes its metadata marker");
-            let authorized_events = stx.world.external_event_buf.len();
-
             Revoke::account_permission(callback_permission.clone(), ALICE_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("revoke trigger entrypoint permission");
+            let revoked_events_before = stx.world.external_event_buf.len();
             ivm::reset_argument_record_decode_count();
             let revoked = stx
                 .execute_called_trigger(&trigger_id, &event)
                 .expect_err("revoked ContractCall trigger permission must deny callback dispatch");
             assert!(
-                revoked.to_string().contains(REQUIRED_PERMISSION),
-                "unexpected revoked trigger authorization error: {revoked}"
+                matches!(
+                    &revoked,
+                    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                        if message.contains(REQUIRED_PERMISSION)
+                ),
+                "unexpected revoked trigger authorization error: {revoked:?}"
             );
             assert_eq!(
                 ivm::argument_record_decode_count(),
@@ -101291,8 +102991,8 @@ seiyaku IdentitylessRawCallback {
             );
             assert_eq!(
                 stx.world
-                    .account(&ALICE_ID)
-                    .expect("trigger authority account")
+                    .account(&contract_subject)
+                    .expect("ContractCall trigger contract subject account")
                     .metadata()
                     .get(&metadata_marker),
                 Some(&authorized_marker),
@@ -101300,7 +103000,7 @@ seiyaku IdentitylessRawCallback {
             );
             assert_eq!(
                 stx.world.external_event_buf.len(),
-                authorized_events,
+                revoked_events_before,
                 "revoked ContractCall trigger must emit no completion event"
             );
 
@@ -101310,13 +103010,18 @@ seiyaku IdentitylessRawCallback {
             stx.world
                 .contract_instances
                 .remove(contract_address.clone());
+            let deactivated_events_before = stx.world.external_event_buf.len();
             ivm::reset_argument_record_decode_count();
             let deactivated = stx
                 .execute_called_trigger(&trigger_id, &event)
                 .expect_err("deactivated ContractCall trigger target must deny callback dispatch");
             assert!(
-                deactivated.to_string().contains("not found"),
-                "unexpected deactivated trigger error: {deactivated}"
+                matches!(
+                    &deactivated,
+                    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                        if message.contains("not found")
+                ),
+                "unexpected deactivated trigger error: {deactivated:?}"
             );
             assert_eq!(
                 ivm::argument_record_decode_count(),
@@ -101325,8 +103030,8 @@ seiyaku IdentitylessRawCallback {
             );
             assert_eq!(
                 stx.world
-                    .account(&ALICE_ID)
-                    .expect("trigger authority account")
+                    .account(&contract_subject)
+                    .expect("ContractCall trigger contract subject account")
                     .metadata()
                     .get(&metadata_marker),
                 Some(&authorized_marker),
@@ -101334,7 +103039,7 @@ seiyaku IdentitylessRawCallback {
             );
             assert_eq!(
                 stx.world.external_event_buf.len(),
-                authorized_events,
+                deactivated_events_before,
                 "deactivated ContractCall trigger must emit no completion event"
             );
         }

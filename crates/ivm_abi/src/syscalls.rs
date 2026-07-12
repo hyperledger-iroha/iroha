@@ -81,7 +81,7 @@ pub const SYSCALL_NFT_BURN_ASSET: u32 = 0x28;
 ///
 /// Pointer-ABI arguments: paths use `&Name` TLV; values use `&NoritoBytes` TLV.
 ///
-/// GET:  r10 = &Name path  -> On success, r10 = &NoritoBytes value (mirrored into INPUT); if missing, r10 = 0.
+/// GET:  r10 = &Name path  -> On success, r10 = &NoritoBytes value in host-owned memory; if missing, r10 = 0.
 /// SET:  r10 = &Name path, r11 = &NoritoBytes value  -> stores value, returns 0.
 /// DEL:  r10 = &Name path  -> deletes value if present, returns 0.
 pub const SYSCALL_STATE_GET: u32 = 0x50;
@@ -181,17 +181,17 @@ pub const SYSCALL_JSON_GET_ASSET_DEFINITION_ID: u32 = 0x80;
 /// Construct an empty JSON object.
 ///
 /// Args: none
-/// Ret:  r10 = &Json (INPUT pointer)
+/// Ret:  r10 = host-owned &Json
 pub const SYSCALL_JSON_OBJECT: u32 = 0x81;
 /// Insert or replace an integer field in a JSON object.
 ///
 /// Args: r10 = &Json object, r11 = &Name key, r12 = value (i64 as u64)
-/// Ret:  r10 = &Json (INPUT pointer)
+/// Ret:  r10 = host-owned &Json
 pub const SYSCALL_JSON_SET_I64: u32 = 0x82;
 /// Insert or replace an account-id field in a JSON object using canonical string encoding.
 ///
 /// Args: r10 = &Json object, r11 = &Name key, r12 = &AccountId
-/// Ret:  r10 = &Json (INPUT pointer)
+/// Ret:  r10 = host-owned &Json
 pub const SYSCALL_JSON_SET_ACCOUNT_ID: u32 = 0x83;
 /// Direct JSON object getter that accepts validated TLVs from any allowed pointer region.
 pub const SYSCALL_JSON_GET_JSON_DIRECT: u32 = 0x85;
@@ -219,7 +219,7 @@ pub const SYSCALL_SCHEMA_INFO_DIRECT: u32 = 0x8F;
 /// V1 adaptive numeric map keys use [`SYSCALL_BUILD_PATH_KEY_NORITO`] with a
 /// canonical nominal pointer envelope. This number must never be reassigned.
 pub const RETIRED_SYSCALL_BUILD_PATH_MAP_KEY: u32 = 0x54;
-/// Encode a 64-bit signed integer in ASCII decimal and return a `&NoritoBytes` TLV pointer in INPUT.
+/// Encode a 64-bit signed integer in ASCII decimal and return a host-owned `&NoritoBytes` TLV.
 ///
 /// Args: r10 = value (i64 as u64)
 /// Ret:  r10 = &NoritoBytes (ASCII decimal)
@@ -232,7 +232,7 @@ pub const SYSCALL_ENCODE_INT: u32 = 0x55;
 /// [`STATE_MAP_MAX_KEY_BYTES`] are rejected.
 ///
 /// Args: r10 = &Name base, r11 = &NoritoBytes key
-/// Ret:  r10 = &Name (INPUT pointer)
+/// Ret:  r10 = host-owned &Name
 pub const SYSCALL_BUILD_PATH_KEY_NORITO: u32 = 0x56;
 /// JSON <-> NoritoBytes helpers (developer convenience):
 /// ENCODE_JSON: r10 = &Json -> r10 = &NoritoBytes (minified JSON bytes)
@@ -249,10 +249,10 @@ pub const SYSCALL_SCHEMA_INFO: u32 = 0x5B;
 pub const SYSCALL_SCHEMA_ENCODE_DIRECT: u32 = 0xD0;
 /// Direct schema decode helper that accepts validated TLVs from any allowed pointer region.
 pub const SYSCALL_SCHEMA_DECODE_DIRECT: u32 = 0xD1;
-/// Decode a Name from a NoritoBytes TLV (UTF-8) and return a `&Name` TLV pointer in INPUT.
+/// Decode a canonical Norito-framed `Name` from `NoritoBytes` and return a host-owned `&Name` TLV.
 ///
-/// Args: r10 = &NoritoBytes (UTF-8 string)
-/// Ret:  r10 = &Name (minified string)
+/// Args: r10 = &NoritoBytes (canonical Norito `Name` frame)
+/// Ret:  r10 = host-owned &Name
 pub const SYSCALL_NAME_DECODE: u32 = 0x5C;
 /// Encode an arbitrary pointer-ABI TLV into NoritoBytes by copying its envelope bytes.
 ///
@@ -391,7 +391,7 @@ pub const SYSCALL_IROHA_HASH: u32 = 0x9A;
 pub const SYSCALL_INPUT_PUBLISH_TLV: u32 = 0xE0;
 
 // Smart-contract host shims (development API)
-/// Execute a built-in instruction from an IVM smart contract (pointer-ABI).
+/// Execute an operation-tagged instruction from canonical `&NoritoBytes(InstructionBox)`.
 pub const SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION: u32 = 0xA0;
 /// `r11` operation tag authorizing a decoded `SubmitBallot` instruction for syscall `0xA0`.
 pub const SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT: u64 = 1;
@@ -399,14 +399,14 @@ pub const SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT: u64 = 1;
 pub const SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD: u64 = 2;
 /// `r11` operation tag authorizing a decoded `RecordSccpMessage` instruction for syscall `0xA0`.
 pub const SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE: u64 = 3;
-/// Execute a query from an IVM smart contract (pointer-ABI).
+/// Execute a query from canonical `&NoritoBytes(QueryRequest)`.
 pub const SYSCALL_SMARTCONTRACT_EXECUTE_QUERY: u32 = 0xA1;
 /// Convenience syscall used by samples: create one NFT per known account.
 pub const SYSCALL_CREATE_NFTS_FOR_ALL_USERS: u32 = 0xA2;
 /// Set SmartContract execution depth parameter to the value in `x10`.
 /// Development/testing helper for trigger samples.
 pub const SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH: u32 = 0xA3;
-/// Get current authority AccountId (writes a Norito-encoded blob to INPUT and returns pointer in x10)
+/// Get the current authority as a host-owned `&AccountId` pointer in `x10`.
 pub const SYSCALL_GET_AUTHORITY: u32 = 0xA4;
 /// Execute subscription billing based on trigger metadata and subscription state.
 pub const SYSCALL_SUBSCRIPTION_BILL: u32 = 0xA5;
@@ -491,11 +491,11 @@ pub const SYSCALL_CORE_QUERY_GET: u32 = 0x01_0001;
 ///
 /// [`CoreQueryEntityTagV1`]: crate::core_query::CoreQueryEntityTagV1
 pub const SYSCALL_CORE_QUERY_PAGE: u32 = 0x01_0002;
-/// Read one runtime/system/custom parameter by canonical name.
+/// Read one runtime/system/custom parameter from `r10=&Name`.
 pub const SYSCALL_QUERY_GET_PARAMETER: u32 = 0x01_0006;
-/// Read one contract manifest by code hash.
+/// Read one contract manifest from `r10=&NoritoBytes(Hash)`.
 pub const SYSCALL_QUERY_GET_CONTRACT_MANIFEST: u32 = 0x01_0007;
-/// Read one contract instance by address/alias.
+/// Read one contract instance from `r10=&NoritoBytes(ContractAddress)` or `r10=&Name(alias)`.
 pub const SYSCALL_QUERY_GET_CONTRACT_INSTANCE: u32 = 0x01_0008;
 
 /// Return the current chain id as a pointer-ABI `Blob` TLV.
@@ -515,6 +515,12 @@ pub const SYSCALL_SYSVAR_ENTRYPOINT: u32 = 0x01_0025;
 /// The result is an `AccountId` TLV in `r10`. Calls outside a deployed-contract
 /// scope fail closed instead of falling back to transaction authority.
 pub const SYSCALL_SYSVAR_CONTRACT_SUBJECT: u32 = 0x01_0027;
+/// Retag one public bytes carrier as canonical `NoritoBytes`.
+///
+/// Args: r10 = a validated public `&Blob` or `&NoritoBytes` TLV.
+/// Ret: r10 = a fresh host-owned `&NoritoBytes` TLV with the identical payload.
+/// Null, malformed, disallowed, and non-bytes pointer types are rejected.
+pub const SYSCALL_NORMALIZE_NORITO_BYTES: u32 = 0x01_0028;
 /// Decode a complete schema-bound public argument record.
 ///
 /// Args: r10 = `&NoritoBytes(EntrypointArgumentRecordV1)` for raw hosts, or
@@ -1012,6 +1018,7 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_SYSVAR_CONTRACT_ADDRESS
             | SYSCALL_SYSVAR_CONTRACT_SUBJECT
             | SYSCALL_SYSVAR_ENTRYPOINT
+            | SYSCALL_NORMALIZE_NORITO_BYTES
             | SYSCALL_DECODE_ARGUMENT_RECORD
     ) {
         return Some(SyscallAccess::None);
@@ -1275,6 +1282,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_SYSVAR_CONTRACT_ADDRESS,
             SYSCALL_SYSVAR_CONTRACT_SUBJECT,
             SYSCALL_SYSVAR_ENTRYPOINT,
+            SYSCALL_NORMALIZE_NORITO_BYTES,
             SYSCALL_DECODE_ARGUMENT_RECORD,
             SYSCALL_SUBSCRIPTION_BILL,
             SYSCALL_SUBSCRIPTION_RECORD_USAGE,
@@ -1504,6 +1512,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_SYSVAR_CONTRACT_ADDRESS => "SYSVAR_CONTRACT_ADDRESS",
         SYSCALL_SYSVAR_CONTRACT_SUBJECT => "SYSVAR_CONTRACT_SUBJECT",
         SYSCALL_SYSVAR_ENTRYPOINT => "SYSVAR_ENTRYPOINT",
+        SYSCALL_NORMALIZE_NORITO_BYTES => "NORMALIZE_NORITO_BYTES",
         SYSCALL_DECODE_ARGUMENT_RECORD => "DECODE_ARGUMENT_RECORD",
         SYSCALL_INT_FROM_I64 => "INT_FROM_I64",
         SYSCALL_INT_FROM_U64 => "INT_FROM_U64",
@@ -3097,7 +3106,7 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
         kind(
             StateValueKindV1::Bytes,
             "Bytes",
-            "one-u64-pointer-word;complete-canonical-TLV;payload-is-raw-bytes",
+            "one-u64-pointer-word;source-is-complete-canonical-Blob-or-NoritoBytes-TLV;persisted-pointer-atom-is-canonical-Blob-TLV;payload-is-raw-bytes",
         ),
         kind(
             StateValueKindV1::AccountId,

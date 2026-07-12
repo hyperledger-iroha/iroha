@@ -10839,6 +10839,7 @@ async fn handler_offline_readiness(
 #[cfg(all(test, feature = "app_api"))]
 mod offline_kagemusha_readiness_tests {
     use iroha_data_model::asset::AssetDefinitionId;
+    use mv::storage::StorageReadOnly;
 
     use super::{
         encode_offline_readiness_representation, offline_kagemusha_asset_transfer_verifier_record,
@@ -10874,13 +10875,15 @@ mod offline_kagemusha_readiness_tests {
         record.withdraw_height = withdrawal_height;
         record.max_proof_bytes = 4096;
 
-        let mut world = iroha_core::state::World::new();
-        world
+        let world = iroha_core::state::World::new();
+        let mut block = world.block();
+        block
             .verifying_keys_mut_for_testing()
             .insert(id.clone(), record);
-        world
+        block
             .verifying_keys_by_circuit_mut_for_testing()
             .insert((circuit_id.to_owned(), version), id);
+        block.commit();
         world
     }
 
@@ -10938,9 +10941,10 @@ mod offline_kagemusha_readiness_tests {
     fn readiness_exposes_the_exact_active_transfer_verifier_window() {
         let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
         let world = transfer_verifier_world(7, Some(5), Some(10));
+        let view = world.view();
 
         let selected = offline_kagemusha_readiness_verifier_record(
-            &world,
+            &view,
             9,
             circuit_id,
             iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
@@ -10959,7 +10963,7 @@ mod offline_kagemusha_readiness_tests {
 
         assert!(
             offline_kagemusha_readiness_verifier_record(
-                &world,
+                &view,
                 10,
                 circuit_id,
                 iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
@@ -10973,10 +10977,13 @@ mod offline_kagemusha_readiness_tests {
     #[test]
     fn readiness_does_not_substitute_a_global_verifier_for_the_asset_binding() {
         let world = transfer_verifier_world(7, None, None);
-        let asset: AssetDefinitionId = "xor#wonderland".parse().expect("asset definition id");
+        let asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("canonical asset definition id");
+        let view = world.view();
 
         assert!(
-            offline_kagemusha_asset_transfer_verifier_record(&world, &asset, 9)
+            offline_kagemusha_asset_transfer_verifier_record(&view, &asset, 9)
                 .expect("evaluate asset-bound transfer verifier")
                 .is_none(),
             "a globally active circuit is not the verifier selected by an unbound asset"
@@ -10986,17 +10993,18 @@ mod offline_kagemusha_readiness_tests {
     #[test]
     fn readiness_rejects_a_stale_verifier_index_version() {
         let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
-        let mut world = transfer_verifier_world(7, None, None);
-        let id = world
+        let world = transfer_verifier_world(7, None, None);
+        let mut block = world.block();
+        let id = block
             .verifying_keys_by_circuit_mut_for_testing()
-            .remove(&(circuit_id.to_owned(), 7))
+            .remove((circuit_id.to_owned(), 7))
             .expect("indexed verifier id");
-        world
+        block
             .verifying_keys_by_circuit_mut_for_testing()
             .insert((circuit_id.to_owned(), 8), id);
 
         let error = offline_kagemusha_readiness_verifier_record(
-            &world,
+            &block,
             9,
             circuit_id,
             iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
@@ -11008,20 +11016,21 @@ mod offline_kagemusha_readiness_tests {
     #[test]
     fn readiness_rejects_an_active_verifier_without_proof_metadata() {
         let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
-        let mut world = transfer_verifier_world(7, None, None);
-        let id = world
+        let world = transfer_verifier_world(7, None, None);
+        let mut block = world.block();
+        let id = block
             .verifying_keys_by_circuit_mut_for_testing()
             .get(&(circuit_id.to_owned(), 7))
             .expect("indexed verifier id")
             .clone();
-        world
+        block
             .verifying_keys_mut_for_testing()
             .get_mut(&id)
             .expect("verifier record")
             .max_proof_bytes = 0;
 
         let error = offline_kagemusha_readiness_verifier_record(
-            &world,
+            &block,
             9,
             circuit_id,
             iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
@@ -60058,7 +60067,8 @@ pub(crate) mod tests_runtime_handlers {
 
         store_block(&app, block);
         if persist_finality {
-            app.kura
+            let _receipt = app
+                .kura
                 .store_v2_finality_artifact(&artifact)
                 .expect("persist exact SCCP v2 finality artifact");
         }
@@ -60071,7 +60081,7 @@ pub(crate) mod tests_runtime_handlers {
         );
         state.insert_commit_qc_for_testing(block_hash, legacy_qc);
         assert!(
-            state.world.commit_qcs().get(&block_hash).is_some(),
+            state.world_view().commit_qcs().get(&block_hash).is_some(),
             "SCCP adversarial fixture retains a valid legacy QC"
         );
         (app, message_id, artifact)

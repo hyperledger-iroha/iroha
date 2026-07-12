@@ -812,6 +812,8 @@ pub struct BoundContractRecord {
     pub contract_subject: AccountId,
     /// Optional stable alias currently bound to the instance.
     pub contract_alias: Option<ContractAlias>,
+    /// Complete alias binding record captured with the instance, including lease provenance.
+    pub contract_alias_binding: Option<crate::state::ContractAliasBindingRecord>,
     /// Code hash currently bound to the instance.
     pub code_hash: Hash,
     /// Stored manifest for the bound code hash.
@@ -827,6 +829,8 @@ pub struct BoundContractIdentity {
     pub contract_address: ContractAddress,
     /// Optional stable alias currently bound to the instance.
     pub contract_alias: Option<ContractAlias>,
+    /// Complete alias binding record captured with the instance, including lease provenance.
+    pub contract_alias_binding: Option<crate::state::ContractAliasBindingRecord>,
     /// Code hash currently bound to the instance.
     pub code_hash: Hash,
 }
@@ -896,10 +900,13 @@ pub fn fetch_bound_contract_identity(
 ) -> Option<BoundContractIdentity> {
     let code_hash = fetch_instance_binding(state, contract_address)?;
     fetch_bound_contract_subject(state, contract_address)?;
-    let contract_alias = state
+    let contract_alias_binding = state
         .world()
         .contract_alias_bindings()
         .get(contract_address)
+        .cloned();
+    let contract_alias = contract_alias_binding
+        .as_ref()
         .map(|binding| binding.alias.clone());
     if let Some(alias) = contract_alias.as_ref()
         && state.world().contract_aliases().get(alias) != Some(contract_address)
@@ -909,6 +916,7 @@ pub fn fetch_bound_contract_identity(
     Some(BoundContractIdentity {
         contract_address: contract_address.clone(),
         contract_alias,
+        contract_alias_binding,
         code_hash,
     })
 }
@@ -943,16 +951,25 @@ pub fn fetch_bound_contract_record(
     subject_binding.validate_for(contract_address).ok()?;
     let manifest = fetch_manifest(state, &code_hash)?;
     let code_bytes = fetch_code_bytes(state, &code_hash)?;
-    let contract_alias = state
+    let contract_alias_binding = state
         .world()
         .contract_alias_bindings()
         .get(contract_address)
+        .cloned();
+    let contract_alias = contract_alias_binding
+        .as_ref()
         .map(|binding| binding.alias.clone());
+    if let Some(alias) = contract_alias.as_ref()
+        && state.world().contract_aliases().get(alias) != Some(contract_address)
+    {
+        return None;
+    }
 
     Some(BoundContractRecord {
         contract_address: contract_address.clone(),
         contract_subject: subject_binding.subject.clone(),
         contract_alias,
+        contract_alias_binding,
         code_hash,
         manifest,
         code_bytes,
@@ -1105,10 +1122,12 @@ mod tests {
         let account = Account::new(auth.clone()).build(&auth);
         let mut world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
         let mut permissions = permission::Permissions::new();
-        assert!(permissions.insert(permission::Permission::new(
-            iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME.to_owned(),
-            Json::new(()),
-        )));
+        assert!(
+            permissions.insert(
+                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                    .into(),
+            )
+        );
         world
             .account_permissions_mut_for_testing()
             .insert(auth.clone(), permissions);

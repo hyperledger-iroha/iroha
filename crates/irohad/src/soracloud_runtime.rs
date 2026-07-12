@@ -1869,7 +1869,7 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
                 SoraServiceHealthStatusV1::Degraded,
             ));
         }
-        match vm.alloc_input_tlv(&mailbox_payload_tlv) {
+        match vm.alloc_host_tlv(&mailbox_payload_tlv) {
             Ok(ptr) => vm.set_register(10, ptr),
             Err(error) => {
                 return Ok(deterministic_mailbox_failure_result(
@@ -7201,7 +7201,7 @@ fn execute_query_local_read(
         )
     })?;
 
-    let body_ptr = vm.alloc_input_tlv(&body_tlv).map_err(|error| {
+    let body_ptr = vm.alloc_host_tlv(&body_tlv).map_err(|error| {
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
             format!(
@@ -7212,7 +7212,7 @@ fn execute_query_local_read(
             ),
         )
     })?;
-    let metadata_ptr = vm.alloc_input_tlv(&metadata_tlv).map_err(|error| {
+    let metadata_ptr = vm.alloc_host_tlv(&metadata_tlv).map_err(|error| {
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
             format!(

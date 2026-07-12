@@ -1322,7 +1322,7 @@ impl DurableStateReadSnapshot {
     {
         if !matches!(
             tx.instructions(),
-            Executable::ContractCall(_) | Executable::Ivm(_)
+            Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_)
         ) {
             return None;
         }
@@ -1565,6 +1565,10 @@ impl TxOverlay {
         ivm_gas_used: u64,
         completed_axt: Vec<ivm::axt::HostAxtState>,
         durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+        durable_state_authorizations: BTreeMap<
+            Name,
+            Option<ContractEntrypointAuthorizationSnapshot>,
+        >,
         source: TxOverlaySource,
     ) -> Self {
         let mut instructions = Vec::with_capacity(queued.len());
@@ -1577,11 +1581,6 @@ impl TxOverlay {
                 entrypoint_authorization: queued.entrypoint_authorization,
             });
         }
-        let durable_state_authorizations = durable_state_overlay
-            .keys()
-            .cloned()
-            .map(|path| (path, None))
-            .collect();
         Self {
             instructions,
             execution_contexts: Some(execution_contexts),
@@ -1601,12 +1600,17 @@ impl TxOverlay {
         ivm_gas_used: u64,
         completed_axt: Vec<ivm::axt::HostAxtState>,
         durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+        durable_state_authorizations: BTreeMap<
+            Name,
+            Option<ContractEntrypointAuthorizationSnapshot>,
+        >,
     ) -> Self {
         Self::from_queued_execution(
             queued,
             ivm_gas_used,
             completed_axt,
             durable_state_overlay,
+            durable_state_authorizations,
             TxOverlaySource::IvmProved,
         )
     }
@@ -1749,12 +1753,20 @@ impl TxOverlay {
             ));
         }
         for (path, authorization) in &self.durable_state_authorizations {
-            if Self::durable_path_requires_authorization(path) && authorization.is_none() {
+            if (self.source == TxOverlaySource::IvmProved
+                || Self::durable_path_requires_authorization(path))
+                && authorization.is_none()
+            {
                 return Err(ValidationFail::NotPermitted(format!(
                     "scoped durable state path `{path}` is missing its contract authorization snapshot"
                 )));
             }
             if let Some(authorization) = authorization {
+                if !authorization.owns_durable_state_path(path) {
+                    return Err(ValidationFail::NotPermitted(format!(
+                        "durable state path `{path}` does not belong to its contract authorization snapshot"
+                    )));
+                }
                 authorization.validate(world)?;
             }
         }
@@ -2001,6 +2013,8 @@ fn tx_overlay_from_ivm_proved_replay<R: StateReadOnly>(
         queued: replay_queued,
         completed_axt,
         durable_state_overlay,
+        durable_state_authorizations,
+        access_log: _,
         gas_used,
         events_commitment: _,
         trace_hash: _,
@@ -2034,7 +2048,13 @@ fn tx_overlay_from_ivm_proved_replay<R: StateReadOnly>(
             }
         })
         .collect();
-    TxOverlay::from_ivm_proved_execution(queued, gas_used, completed_axt, durable_state_overlay)
+    TxOverlay::from_ivm_proved_execution(
+        queued,
+        gas_used,
+        completed_axt,
+        durable_state_overlay,
+        durable_state_authorizations,
+    )
 }
 
 /// Build an overlay for a signed transaction without mutating state.
@@ -3040,14 +3060,19 @@ where
                 )
                 .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
 
+            let amx_analysis = cached_amx_analysis(ivm_cache, &summary, proved.bytecode.as_ref())?;
+            let access_fence = VmAccessFence::from_program_analysis(&amx_analysis);
+            let force_live_rebuild = VmAccessFence::requires_live_rebuild(&amx_analysis);
+
             enforce_manifest_is_pre_registered(state_ro, tx, summary.code_hash)?;
             let replay = verify_ivm_proved_execution(state_ro, tx, proved, &summary)?;
+            let access_log = replay.access_log.clone();
             Ok(PreparedTxOverlay::new(
                 tx_overlay_from_ivm_proved_replay(state_ro, replay)
                     .with_entrypoint_authorization(Some(entrypoint_authorization)),
-                None,
-                VmAccessFence::None,
-                false,
+                access_log,
+                access_fence,
+                force_live_rebuild,
             ))
         }
     }
@@ -3474,6 +3499,14 @@ mod tests_overlay_manifest {
         assert!(
             !OverlayBuildError::IvmLoad(ivm::VMError::InvalidMetadata).may_change_with_live_state()
         );
+        assert!(
+            OverlayBuildError::IvmProvedReplay("state-dependent replay".to_owned())
+                .may_change_with_live_state()
+        );
+        assert!(
+            !OverlayBuildError::ZkProof("cryptographic failure".to_owned())
+                .may_change_with_live_state()
+        );
     }
 
     fn malformed_sccp_record_instruction() -> InstructionBox {
@@ -3751,6 +3784,7 @@ mod tests_overlay_manifest {
             &code::BoundContractIdentity {
                 contract_address: contract_address.clone(),
                 contract_alias: None,
+                contract_alias_binding: None,
                 code_hash,
             },
         );
@@ -3863,9 +3897,11 @@ mod tests_overlay_manifest {
             .contract_instances
             .insert(contract_address.clone(), code_hash);
         let mut permissions = Permissions::new();
-        assert!(permissions.insert(Permission::new(
-            iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME.to_owned(),
-            Json::new(()),
+        assert!(permissions.insert(Permission::from(
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: contract_address.clone(),
+                entrypoint: "hajimari".to_owned(),
+            },
         )));
         world
             .account_permissions_mut_for_testing()
@@ -4301,7 +4337,7 @@ seiyaku ProtectedParameterizedOverlay {
             transaction::executable::ContractInvocation,
         };
 
-        const REQUIRED_PERMISSION: &str = "CanWriteGuardedState";
+        const REQUIRED_PERMISSION: &str = "CanInvokeContractEntrypoint";
         let (authority, keypair) = gen_account_in("wonderland");
         let contract_address = ContractAddress::derive(
             iroha_data_model::account::address::chain_discriminant(),
@@ -4319,6 +4355,12 @@ seiyaku ProtectedParameterizedOverlay {
             "universal",
         )
         .expect("valid contract alias");
+        let entrypoint_permission = Permission::from(
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: contract_address.clone(),
+                entrypoint: "main".to_owned(),
+            },
+        );
 
         let make_state = |authorized: bool| {
             let domain = iroha_data_model::domain::Domain::new(
@@ -4337,10 +4379,7 @@ seiyaku ProtectedParameterizedOverlay {
                 .expect("bind guarded contract alias");
             if authorized {
                 let mut permissions = Permissions::new();
-                assert!(permissions.insert(Permission::new(
-                    REQUIRED_PERMISSION.to_owned(),
-                    Json::new(()),
-                )));
+                assert!(permissions.insert(entrypoint_permission.clone()));
                 world
                     .account_permissions_mut_for_testing()
                     .insert(authority.clone(), permissions);
@@ -4380,7 +4419,11 @@ seiyaku ProtectedParameterizedOverlay {
         let authorized_state = make_state(true);
         let mut overlay = build_overlay_for_transaction(&transaction, &authorized_state.view())
             .expect("granted caller may prepare the protected call");
-        let guarded_path: Name = "guarded/write".parse().expect("valid state path");
+        let contract_state_digest =
+            hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
+        let guarded_path: Name = format!("sc/{contract_state_digest}/guarded/write")
+            .parse()
+            .expect("valid scoped contract state path");
         let queued_key: Name = "guarded_queued".parse().expect("valid metadata key");
         overlay.instructions.push(
             iroha_data_model::isi::SetKeyValue::account(
@@ -4485,6 +4528,8 @@ seiyaku ProtectedParameterizedOverlay {
                 .is_none(),
             "authorization must be checked before any queued instruction is applied"
         );
+        drop(revoked_transaction);
+        drop(revoked_block);
 
         let mut revoked_proved_block = unauthorized_state.block(header.clone());
         let mut revoked_proved_transaction = revoked_proved_block.transaction();
@@ -4501,6 +4546,8 @@ seiyaku ProtectedParameterizedOverlay {
                 .is_none(),
             "proved replay authorization must run before any queued instruction"
         );
+        drop(revoked_proved_transaction);
+        drop(revoked_proved_block);
 
         let mut deactivated_proved_block = authorized_state.block(header.clone());
         let mut deactivated_proved_transaction = deactivated_proved_block.transaction();
@@ -4521,6 +4568,8 @@ seiyaku ProtectedParameterizedOverlay {
                 .is_none(),
             "proved replay binding validation must run before any queued instruction"
         );
+        drop(deactivated_proved_transaction);
+        drop(deactivated_proved_block);
 
         let mut authorized_proved_block = authorized_state.block(header.clone());
         let mut authorized_proved_transaction = authorized_proved_block.transaction();
@@ -4537,6 +4586,8 @@ seiyaku ProtectedParameterizedOverlay {
                 .is_some(),
             "granted proved replay authorization must allow queued instructions"
         );
+        drop(authorized_proved_transaction);
+        drop(authorized_proved_block);
 
         let mut revoked_context_block = unauthorized_state.block(header.clone());
         let mut revoked_context_transaction = revoked_context_block.transaction();
@@ -4558,6 +4609,8 @@ seiyaku ProtectedParameterizedOverlay {
                     .is_none(),
             "queued-context authorization must reject before every prepared effect"
         );
+        drop(revoked_context_transaction);
+        drop(revoked_context_block);
 
         let mut deactivated_block = authorized_state.block(header.clone());
         let mut deactivated_transaction = deactivated_block.transaction();
@@ -4594,6 +4647,8 @@ seiyaku ProtectedParameterizedOverlay {
                 .is_none(),
             "deactivation must be checked before any queued instruction is applied"
         );
+        drop(deactivated_transaction);
+        drop(deactivated_block);
 
         let mut rebound_block = authorized_state.block(header.clone());
         let mut rebound_transaction = rebound_block.transaction();
@@ -4627,6 +4682,8 @@ seiyaku ProtectedParameterizedOverlay {
                     .is_none(),
             "a changed code binding must apply zero prepared effects"
         );
+        drop(rebound_transaction);
+        drop(rebound_block);
 
         let mut realias_block = authorized_state.block(header.clone());
         let mut realias_transaction = realias_block.transaction();
@@ -4666,15 +4723,12 @@ seiyaku ProtectedParameterizedOverlay {
                     .is_none(),
             "a changed alias binding must apply zero prepared effects"
         );
+        drop(realias_transaction);
+        drop(realias_block);
 
         let mut revoking_overlay = overlay.clone();
-        revoking_overlay.instructions = vec![
-            Revoke::account_permission(
-                Permission::new(REQUIRED_PERMISSION.to_owned(), Json::new(())),
-                authority.clone(),
-            )
-            .into(),
-        ];
+        revoking_overlay.instructions =
+            vec![Revoke::account_permission(entrypoint_permission, authority.clone()).into()];
         revoking_overlay.execution_contexts = Some(vec![
             overlay
                 .execution_contexts
@@ -4704,6 +4758,8 @@ seiyaku ProtectedParameterizedOverlay {
                 .is_none(),
             "authorization must be rechecked after queued instructions and before durable writes"
         );
+        drop(revoking_transaction);
+        drop(revoking_block);
 
         let mut authorized_block = authorized_state.block(header);
         let mut authorized_transaction = authorized_block.transaction();
@@ -4735,7 +4791,7 @@ seiyaku ProtectedParameterizedOverlay {
         use iroha_data_model::permission::{Permission, Permissions};
 
         const ROOT_PERMISSION: &str = "CanInvokeRoot";
-        const CHILD_PERMISSION: &str = "CanInvokeChild";
+        const CHILD_PERMISSION: &str = "CanInvokeContractEntrypoint";
         let (authority, _) = gen_account_in("wonderland");
         let root_address = ContractAddress::derive(
             iroha_data_model::account::address::chain_discriminant(),
@@ -4766,6 +4822,13 @@ seiyaku ProtectedParameterizedOverlay {
         let root_code_hash = Hash::new(b"root-authorization-code");
         let child_code_hash = Hash::new(b"child-authorization-code");
         let root_contract_subject = root_address.subject_id();
+        let child_contract_subject = child_address.subject_id();
+        let child_entrypoint_permission = Permission::from(
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: child_address.clone(),
+                entrypoint: "child".to_owned(),
+            },
+        );
 
         let make_state = |grant_root: bool, grant_child: bool, child_active: bool| {
             let domain = iroha_data_model::domain::Domain::new(
@@ -4774,8 +4837,12 @@ seiyaku ProtectedParameterizedOverlay {
             .build(&authority);
             let account = build_wonderland_account(&authority);
             let root_contract_account = build_wonderland_account(&root_contract_subject);
-            let mut world =
-                crate::state::World::with([domain], [account, root_contract_account], []);
+            let child_contract_account = build_wonderland_account(&child_contract_subject);
+            let mut world = crate::state::World::with(
+                [domain],
+                [account, root_contract_account, child_contract_account],
+                [],
+            );
             world
                 .contract_instances
                 .insert(root_address.clone(), root_code_hash);
@@ -4799,23 +4866,23 @@ seiyaku ProtectedParameterizedOverlay {
                         .insert(Permission::new(ROOT_PERMISSION.to_owned(), Json::new(()),))
                 );
             }
-            let mut child_permissions = Permissions::new();
+            let mut root_contract_permissions = Permissions::new();
             if grant_child {
-                assert!(
-                    child_permissions
-                        .insert(Permission::new(CHILD_PERMISSION.to_owned(), Json::new(()),))
-                );
-                assert!(child_permissions.insert(Permission::new(
-                    iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME.to_owned(),
-                    Json::new(()),
-                )));
+                assert!(root_contract_permissions.insert(child_entrypoint_permission.clone()));
             }
+            let mut child_contract_permissions = Permissions::new();
+            assert!(child_contract_permissions.insert(Permission::from(
+                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode,
+            )));
             world
                 .account_permissions_mut_for_testing()
                 .insert(authority.clone(), root_permissions);
             world
                 .account_permissions_mut_for_testing()
-                .insert(root_contract_subject.clone(), child_permissions);
+                .insert(root_contract_subject.clone(), root_contract_permissions);
+            world
+                .account_permissions_mut_for_testing()
+                .insert(child_contract_subject.clone(), child_contract_permissions);
             State::new_for_testing(
                 world,
                 crate::kura::Kura::blank_kura_for_testing(),
@@ -4830,6 +4897,12 @@ seiyaku ProtectedParameterizedOverlay {
             &code::BoundContractIdentity {
                 contract_address: root_address.clone(),
                 contract_alias: Some(root_alias.clone()),
+                contract_alias_binding: Some(crate::state::ContractAliasBindingRecord {
+                    alias: root_alias.clone(),
+                    lease_expiry_ms: None,
+                    grace_until_ms: None,
+                    bound_at_ms: 0,
+                }),
                 code_hash: root_code_hash,
             },
         );
@@ -4840,6 +4913,12 @@ seiyaku ProtectedParameterizedOverlay {
             &code::BoundContractIdentity {
                 contract_address: child_address.clone(),
                 contract_alias: Some(child_alias.clone()),
+                contract_alias_binding: Some(crate::state::ContractAliasBindingRecord {
+                    alias: child_alias.clone(),
+                    lease_expiry_ms: None,
+                    grace_until_ms: None,
+                    bound_at_ms: 0,
+                }),
                 code_hash: child_code_hash,
             },
         );
@@ -4865,7 +4944,7 @@ seiyaku ProtectedParameterizedOverlay {
             TxOverlay::from_host_execution(
                 vec![instruction.clone()],
                 vec![OverlayInstructionExecutionContext {
-                    authority: root_contract_subject.clone(),
+                    authority: child_contract_subject.clone(),
                     contract_runtime_context: Some(
                         crate::executor::ContractRuntimeExecutionContext {
                             contract_subject: child_address.subject_id(),
@@ -4964,6 +5043,12 @@ seiyaku ProtectedParameterizedOverlay {
             &code::BoundContractIdentity {
                 contract_address: child_address.clone(),
                 contract_alias: Some(child_alias.clone()),
+                contract_alias_binding: Some(crate::state::ContractAliasBindingRecord {
+                    alias: child_alias.clone(),
+                    lease_expiry_ms: None,
+                    grace_until_ms: None,
+                    bound_at_ms: 0,
+                }),
                 code_hash: child_code_hash,
             },
         )
@@ -4975,7 +5060,7 @@ seiyaku ProtectedParameterizedOverlay {
         let forged_overlay = TxOverlay::from_host_execution(
             vec![instruction.clone()],
             vec![OverlayInstructionExecutionContext {
-                authority: authority.clone(),
+                authority: child_contract_subject.clone(),
                 contract_runtime_context: Some(crate::executor::ContractRuntimeExecutionContext {
                     contract_subject: child_address.subject_id(),
                     contract_address: child_address.clone(),
@@ -5003,7 +5088,7 @@ seiyaku ProtectedParameterizedOverlay {
             TxOverlay::from_host_execution(
                 vec![instruction],
                 vec![OverlayInstructionExecutionContext {
-                    authority: root_contract_subject.clone(),
+                    authority: child_contract_subject.clone(),
                     contract_runtime_context: Some(
                         crate::executor::ContractRuntimeExecutionContext {
                             contract_subject: child_address.subject_id(),
@@ -5016,8 +5101,8 @@ seiyaku ProtectedParameterizedOverlay {
                 }],
                 0,
                 Vec::new(),
-                BTreeMap::new(),
-                BTreeMap::new(),
+                BTreeMap::from([(durable_path.clone(), Some(vec![0xD1]))]),
+                BTreeMap::from([(durable_path.clone(), Some(child_authorization.clone()))]),
             )
             .with_entrypoint_authorization(Some(root_authorization.clone()))
         };
@@ -5027,7 +5112,7 @@ seiyaku ProtectedParameterizedOverlay {
         let mut self_revoking_tx = self_revoking_block.transaction();
         let error = build_single_effect_overlay(
             Revoke::account_permission(
-                Permission::new(CHILD_PERMISSION.to_owned(), Json::new(())),
+                child_entrypoint_permission.clone(),
                 root_contract_subject.clone(),
             )
             .into(),
@@ -5038,6 +5123,33 @@ seiyaku ProtectedParameterizedOverlay {
             error,
             ValidationFail::NotPermitted(message) if message.contains(CHILD_PERMISSION)
         ));
+        assert!(
+            self_revoking_tx
+                .world
+                .smart_contract_state
+                .get(&durable_path)
+                .is_none(),
+            "permission revocation must reject before the guarded durable write"
+        );
+        drop(self_revoking_tx);
+        drop(self_revoking_block);
+        let self_revoking_view = self_revoking_state.view();
+        assert!(
+            self_revoking_view
+                .world
+                .account_permissions()
+                .get(&root_contract_subject)
+                .is_some_and(|permissions| permissions.contains(&child_entrypoint_permission)),
+            "a rejected self-revocation must not persist outside its discarded transaction"
+        );
+        assert!(
+            self_revoking_view
+                .world
+                .smart_contract_state()
+                .get(&durable_path)
+                .is_none(),
+            "a rejected self-revocation must persist no guarded durable write"
+        );
 
         let self_deactivating_state = make_state(true, true, true);
         let mut self_deactivating_block = self_deactivating_state.block(BlockHeader::new(
@@ -5062,6 +5174,33 @@ seiyaku ProtectedParameterizedOverlay {
             error,
             ValidationFail::NotPermitted(message) if message.contains("no longer active")
         ));
+        assert!(
+            self_deactivating_tx
+                .world
+                .smart_contract_state
+                .get(&durable_path)
+                .is_none(),
+            "contract deactivation must reject before the guarded durable write"
+        );
+        drop(self_deactivating_tx);
+        drop(self_deactivating_block);
+        let self_deactivating_view = self_deactivating_state.view();
+        assert_eq!(
+            self_deactivating_view
+                .world
+                .contract_instances()
+                .get(&child_address),
+            Some(&child_code_hash),
+            "a rejected self-deactivation must not persist outside its discarded transaction"
+        );
+        assert!(
+            self_deactivating_view
+                .world
+                .smart_contract_state()
+                .get(&durable_path)
+                .is_none(),
+            "a rejected self-deactivation must persist no guarded durable write"
+        );
     }
 
     #[test]
@@ -5309,6 +5448,8 @@ mod tests {
                 queued: Vec::new(),
                 completed_axt: vec![completed],
                 durable_state_overlay: BTreeMap::new(),
+                durable_state_authorizations: BTreeMap::new(),
+                access_log: None,
                 events_commitment: Hash::new(b"events"),
                 gas_used: 1,
                 trace_hash: Hash::new(b"trace"),
@@ -5516,7 +5657,11 @@ mod tests {
             .compile_source_with_manifest(
                 r#"
 seiyaku ProtectedProvedOverlay {
+  state StateMap<int, int> Values;
+
   kotoage fn open() -> int authorize("CanBuildProvedOverlay") {
+    let current = Values.get(7).unwrap_or(0);
+    Values[7] = current + 11;
     ledger::account::set_detail(
       account: context::authority(),
       key: Name::parse("proved_overlay_applied"),
@@ -5680,6 +5825,32 @@ seiyaku ProtectedProvedOverlay {
 
         let overlay_built =
             build_overlay_for_transaction(&tx, &state.view()).expect("proved execution overlay");
+        let prepared_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let prepared = build_prepared_overlay_for_transaction_with_accounts_zk(
+            &tx,
+            state.view().accounts_snapshot(),
+            &state.view(),
+            true,
+            &prepared_header,
+            StreamingOverlayMetadata::default(),
+            &mut ivm_cache,
+            true,
+            None,
+        )
+        .expect("prepare proved execution overlay with access capture");
+        assert_eq!(
+            prepared.access_fence,
+            VmAccessFence::Global,
+            "the proved program's ledger write must retain a global scheduler fence"
+        );
+        assert!(
+            prepared.force_live_rebuild,
+            "proved programs with ledger access must be replayed against live scheduler state"
+        );
+        let prepared_reads =
+            DurableStateReadSnapshot::capture(&tx, prepared.access_log.as_ref(), &state.view())
+                .expect("proved StateMap read must produce a durable-state snapshot");
+        assert!(prepared_reads.is_current(&state.view()));
         let marker: Name = "proved_overlay_applied"
             .parse()
             .expect("valid proved-overlay marker");
@@ -5692,10 +5863,20 @@ seiyaku ProtectedProvedOverlay {
         .into();
         assert_eq!(built, vec![expected_instruction]);
         assert_eq!(built.as_slice(), proved.overlay.as_ref());
-        assert!(
-            overlay_built.durable_state_overlay.is_empty(),
-            "the canonical proved overlay must contain no StateMap writes"
+        assert_eq!(
+            overlay_built.durable_state_overlay.len(),
+            1,
+            "deterministic proved replay must retain the StateMap write"
         );
+        let (durable_path, durable_value) = overlay_built
+            .durable_state_overlay
+            .iter()
+            .next()
+            .expect("one proved StateMap write");
+        let durable_path = durable_path.clone();
+        let durable_value = durable_value
+            .clone()
+            .expect("the proved StateMap operation stores a value");
         let authorization = overlay_built
             .entrypoint_authorization
             .as_ref()
@@ -5708,6 +5889,15 @@ seiyaku ProtectedProvedOverlay {
         assert_eq!(&authorization.contract_address, &contract_address);
         assert_eq!(authorization.contract_alias.as_ref(), Some(&contract_alias));
         assert_eq!(authorization.code_hash, summary.code_hash);
+        assert_eq!(
+            overlay_built
+                .durable_state_authorizations
+                .get(&durable_path)
+                .and_then(Option::as_ref),
+            Some(authorization),
+            "the proved StateMap write must retain the complete root authorization snapshot"
+        );
+        assert!(authorization.owns_durable_state_path(&durable_path));
 
         let execution_contexts = overlay_built
             .execution_contexts
@@ -5741,6 +5931,7 @@ seiyaku ProtectedProvedOverlay {
             ("instance", "no longer active"),
             ("code", "changed code binding"),
             ("alias", "changed alias binding"),
+            ("alias_lease", "changed alias binding"),
         ] {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
@@ -5773,6 +5964,18 @@ seiyaku ProtectedProvedOverlay {
                         )
                         .expect("replace proved-overlay contract alias");
                 }
+                "alias_lease" => {
+                    state_tx
+                        .world
+                        .bind_contract_alias(
+                            &contract_address,
+                            contract_alias.clone(),
+                            Some(10),
+                            Some(20),
+                            1,
+                        )
+                        .expect("refresh the same alias with different lease provenance");
+                }
                 _ => unreachable!("complete mutation fixture"),
             }
 
@@ -5797,23 +6000,68 @@ seiyaku ProtectedProvedOverlay {
                     .is_none(),
                 "{mutation} mutation must reject before the proved metadata write"
             );
+            assert!(
+                state_tx
+                    .world
+                    .smart_contract_state
+                    .get(&durable_path)
+                    .is_none(),
+                "{mutation} mutation must reject before the proved StateMap write"
+            );
         }
 
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut state_tx = block.transaction();
-        overlay_built
-            .apply(&mut state_tx, &authority)
-            .expect("unchanged permission and binding must apply the proved host write");
+        {
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut state_tx = block.transaction();
+            overlay_built
+                .apply(&mut state_tx, &authority)
+                .expect("unchanged permission and binding must apply the proved host write");
+            assert!(
+                state_tx
+                    .world
+                    .account(&authority)
+                    .expect("authority account")
+                    .metadata()
+                    .get(&marker)
+                    .is_some(),
+                "granted proved authorization must apply the queued metadata write"
+            );
+            assert_eq!(
+                state_tx.world.smart_contract_state.get(&durable_path),
+                Some(&durable_value),
+                "granted proved authorization must apply the replayed StateMap write"
+            );
+        }
+
+        state
+            .world
+            .smart_contract_state_mut_for_testing()
+            .insert(durable_path, durable_value);
         assert!(
-            state_tx
-                .world
-                .account(&authority)
-                .expect("authority account")
-                .metadata()
-                .get(&marker)
-                .is_some(),
-            "granted proved authorization must apply the queued metadata write"
+            !prepared_reads.is_current(&state.view()),
+            "a conflicting predecessor write must invalidate the proved replay read snapshot"
+        );
+        let error = build_prepared_overlay_for_transaction_with_accounts_zk(
+            &tx,
+            state.view().accounts_snapshot(),
+            &state.view(),
+            true,
+            &prepared_header,
+            StreamingOverlayMetadata::default(),
+            &mut ivm_cache,
+            true,
+            None,
+        )
+        .expect_err("the original proof must not authorize replay after a predecessor conflict");
+        assert!(
+            matches!(
+                &error,
+                OverlayBuildError::IvmProvedReplay(message)
+                    if message.contains("commitment mismatch")
+                        || message.contains("deterministic IVM replay")
+            ),
+            "unexpected predecessor-conflict error: {error:?}"
         );
     }
 
@@ -6440,7 +6688,8 @@ seiyaku ProtectedProvedOverlay {
         assert!(
             matches!(
                 &err,
-                OverlayBuildError::ZkProof(msg) if msg.contains("events commitment mismatch")
+                OverlayBuildError::IvmProvedReplay(msg)
+                    if msg.contains("events commitment mismatch")
             ),
             "unexpected error: {err:?}"
         );
@@ -6455,7 +6704,8 @@ seiyaku ProtectedProvedOverlay {
         assert!(
             matches!(
                 &err,
-                OverlayBuildError::ZkProof(msg) if msg.contains("gas policy commitment mismatch")
+                OverlayBuildError::IvmProvedReplay(msg)
+                    if msg.contains("gas policy commitment mismatch")
             ),
             "unexpected error: {err:?}"
         );
@@ -6948,7 +7198,8 @@ seiyaku ProtectedProvedOverlay {
         assert!(
             matches!(
                 &err,
-                OverlayBuildError::ZkProof(msg) if msg.contains("deterministic IVM replay")
+                OverlayBuildError::IvmProvedReplay(msg)
+                    if msg.contains("deterministic IVM replay")
             ),
             "unexpected error: {err:?}"
         );
@@ -7235,6 +7486,7 @@ seiyaku DeriveDispatch {
             &code::BoundContractIdentity {
                 contract_address: root_address.clone(),
                 contract_alias: None,
+                contract_alias_binding: None,
                 code_hash: Hash::new(b"proved-root-code"),
             },
         );
@@ -7280,6 +7532,7 @@ seiyaku DeriveDispatch {
             &code::BoundContractIdentity {
                 contract_address: child_address.clone(),
                 contract_alias: None,
+                contract_alias_binding: None,
                 code_hash: Hash::new(b"proved-child-code"),
             },
         )
@@ -8692,17 +8945,22 @@ pub enum OverlayBuildError {
     QuarantineOverflow,
     /// ZK proof-related rejection (missing/invalid/unsupported).
     ZkProof(String),
+    /// A cryptographically valid IVM proof no longer matches deterministic
+    /// replay against the current state view.
+    IvmProvedReplay(String),
 }
 
 impl OverlayBuildError {
     /// Return whether rebuilding against a later serial state may change the
-    /// result. Structural, policy, gas, proof, and quarantine failures are
-    /// invariant and must remain rejected without another execution attempt.
+    /// result. Structural, policy, gas, cryptographic-proof, and quarantine
+    /// failures are invariant and must remain rejected without another
+    /// execution attempt. A proved replay mismatch is state-dependent because
+    /// an earlier transaction in the block can change the replayed trace.
     #[must_use]
     pub(crate) const fn may_change_with_live_state(&self) -> bool {
         matches!(
             self,
-            Self::ContractCall(_) | Self::IvmRun(_) | Self::AxtReject(_)
+            Self::ContractCall(_) | Self::IvmRun(_) | Self::AxtReject(_) | Self::IvmProvedReplay(_)
         )
     }
 }
@@ -8720,6 +8978,7 @@ impl core::fmt::Display for OverlayBuildError {
             OverlayBuildError::AmxBudgetViolation(v) => write!(f, "{}", amx_timeout_message(v)),
             OverlayBuildError::QuarantineOverflow => write!(f, "quarantine overflow"),
             OverlayBuildError::ZkProof(msg) => write!(f, "zk_proof: {msg}"),
+            OverlayBuildError::IvmProvedReplay(msg) => write!(f, "zk_proof: {msg}"),
         }
     }
 }
@@ -9165,6 +9424,43 @@ fn validate_ivm_proved_queued_authorization(
     Ok(())
 }
 
+pub(crate) fn validate_ivm_proved_durable_authorizations(
+    world: &impl WorldReadOnly,
+    durable_state_overlay: &BTreeMap<Name, Option<Vec<u8>>>,
+    durable_state_authorizations: &BTreeMap<Name, Option<ContractEntrypointAuthorizationSnapshot>>,
+    root_authorization: &ContractEntrypointAuthorizationSnapshot,
+) -> Result<(), ValidationFail> {
+    if durable_state_overlay.len() != durable_state_authorizations.len()
+        || !durable_state_overlay
+            .keys()
+            .eq(durable_state_authorizations.keys())
+    {
+        return Err(ValidationFail::InternalError(
+            "Executable::IvmProved replay produced structurally inconsistent durable-state authorization metadata"
+                .to_owned(),
+        ));
+    }
+    for (path, authorization) in durable_state_authorizations {
+        let authorization = authorization.as_ref().ok_or_else(|| {
+            ValidationFail::NotPermitted(format!(
+                "Executable::IvmProved durable state path `{path}` is missing its contract authorization snapshot"
+            ))
+        })?;
+        if !authorization.descends_from(root_authorization) {
+            return Err(ValidationFail::NotPermitted(format!(
+                "Executable::IvmProved durable state path `{path}` does not retain the root invocation chain"
+            )));
+        }
+        if !authorization.owns_durable_state_path(path) {
+            return Err(ValidationFail::NotPermitted(format!(
+                "Executable::IvmProved durable state path `{path}` does not belong to its contract authorization snapshot"
+            )));
+        }
+        authorization.validate(world)?;
+    }
+    Ok(())
+}
+
 fn replay_ivm_proved_overlay<R>(
     state_ro: &R,
     tx: &SignedTransaction,
@@ -9217,9 +9513,12 @@ where
     host.set_chain_id(state_ro.chain_id());
     host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
         .map_err(OverlayBuildError::IvmRun)?;
+    host = host.with_access_logging();
+    begin_overlay_access_log(&mut host, true)?;
     vm.set_gas_limit(gas_limit);
     apply_contract_call_execution_context(&mut vm, Some(&contract_call_context))?;
     run_vm_with_host(&mut vm, &mut host)?;
+    let access_log = finish_overlay_access_log(&mut host, true)?;
     let gas_used = gas_limit.saturating_sub(vm.remaining_gas());
     let trace_bundle = build_ivm_trace_bundle(&vm);
     let trace_hash = expected_ivm_trace_hash(&trace_bundle)?;
@@ -9231,12 +9530,17 @@ where
     let (durable_state_overlay, durable_state_authorizations) =
         host.drain_durable_state_overlay_with_authorizations();
     let completed_axt = host.drain_completed_axt_states();
-    if !durable_state_overlay.is_empty() {
-        return Err(OverlayBuildError::ZkProof(
-            "Executable::IvmProved cannot carry durable StateMap writes in ABI V1".to_owned(),
-        ));
-    }
-    debug_assert!(durable_state_authorizations.is_empty());
+    validate_ivm_proved_durable_authorizations(
+        state_ro.world(),
+        &durable_state_overlay,
+        &durable_state_authorizations,
+        &entrypoint_authorization,
+    )
+    .map_err(|error| {
+        OverlayBuildError::ZkProof(format!(
+            "Executable::IvmProved replay produced invalid durable-state authorization metadata: {error}"
+        ))
+    })?;
     validate_ivm_proved_queued_authorization(
         &queued,
         tx.authority(),
@@ -9276,6 +9580,8 @@ where
         queued,
         completed_axt,
         durable_state_overlay,
+        durable_state_authorizations,
+        access_log,
         events_commitment,
         gas_used,
         trace_hash,
@@ -9287,6 +9593,9 @@ pub(crate) struct IvmProvedReplay {
     pub(crate) queued: Vec<crate::smartcontracts::ivm::host::QueuedInstruction>,
     pub(crate) completed_axt: Vec<ivm::axt::HostAxtState>,
     pub(crate) durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+    pub(crate) durable_state_authorizations:
+        BTreeMap<Name, Option<ContractEntrypointAuthorizationSnapshot>>,
+    pub(crate) access_log: Option<ivm::host::AccessLog>,
     pub(crate) events_commitment: Hash,
     pub(crate) gas_used: u64,
     pub(crate) trace_hash: Hash,
@@ -9609,7 +9918,7 @@ where
     }
     let replay = replay_ivm_proved_overlay(state_ro, tx, summary, tx_gas_limit, overlay_hash)?;
     if proved.events_commitment != replay.events_commitment {
-        return Err(OverlayBuildError::ZkProof(
+        return Err(OverlayBuildError::IvmProvedReplay(
             "events commitment mismatch".to_owned(),
         ));
     }
@@ -9624,7 +9933,7 @@ where
         replay.trace_hash,
     );
     if proved.gas_policy_commitment != expected_gas_policy_commitment {
-        return Err(OverlayBuildError::ZkProof(
+        return Err(OverlayBuildError::IvmProvedReplay(
             "gas policy commitment mismatch".to_owned(),
         ));
     }
@@ -9637,7 +9946,7 @@ where
     let mut provided_overlay: Vec<InstructionBox> = proved.overlay.iter().cloned().collect();
     prune_redundant_contract_ops(state_ro, &mut provided_overlay);
     if replay_overlay != provided_overlay {
-        return Err(OverlayBuildError::ZkProof(
+        return Err(OverlayBuildError::IvmProvedReplay(
             "proved overlay does not match deterministic IVM replay".to_owned(),
         ));
     }
@@ -9911,12 +10220,17 @@ where
     ));
     let (durable_state_overlay, durable_state_authorizations) =
         host.drain_durable_state_overlay_with_authorizations();
-    if !durable_state_overlay.is_empty() {
-        return Err(OverlayBuildError::ZkProof(
-            "proved payload derivation cannot encode durable StateMap writes in ABI V1".to_owned(),
-        ));
-    }
-    debug_assert!(durable_state_authorizations.is_empty());
+    validate_ivm_proved_durable_authorizations(
+        state_ro.world(),
+        &durable_state_overlay,
+        &durable_state_authorizations,
+        &entrypoint_authorization,
+    )
+    .map_err(|error| {
+        OverlayBuildError::ZkProof(format!(
+            "proved payload derivation produced invalid durable-state authorization metadata: {error}"
+        ))
+    })?;
     validate_ivm_proved_queued_authorization(
         &queued,
         tx.authority(),

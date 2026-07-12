@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_proofs.md
 status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 69c9a740261d0c367d52870fc1f48775ae48307056ba9b79d2f811e0c0849f20
-source_last_modified: "2026-07-11"
-translation_last_reviewed: 2026-07-11
+source_hash: 74e29801129deccb6d5640d414289c47cf13fa9e0229fb55212b6c7710d7c5f7
+source_last_modified: "2026-07-12T07:38:49.568351+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-assisted
 ---
 
@@ -51,6 +51,14 @@ high-water ինդեքսը թույլ չի տալիս կառավարմանը ըն
 հնացած, սխալ կամ չհիմնավորված ինդեքսը։ Օգտագործված message id-ները նույնպես
 մշտապես պահվում են replay-ը կանխելու համար։
 
+TRON-ի աղբյուր route-ը կիրառում է ճշգրիտ
+`transferToTaira(bytes,uint256,uint64 expectedNonce)` ABI-ն։ Հաջող կատարումը
+պահանջում է `expectedNonce == transferNonce`, այնուհետև նույն արժեքը գրվում է
+canonical payload-ում՝ storage-ն ավելացնելուց առաջ։ Native admission-ը payload-ի
+recipient-ից, մասշտաբավորված գումարից և nonce-ից վերակառուցում է ամբողջ ABI call-ը։
+Ուստի հին երկու-argument selector-ը, stale կամ future nonce-ը և սպառված `uint64`
+nonce-ը մերժվում են անվտանգ փակ եղանակով։
+
 ## Մեկ անցումով ստուգում և աշխատանքի սահմաններ
 
 Destination և native ապացույցները կառուցվածքավորվում են մեկ անգամ, կապվում են
@@ -82,6 +90,25 @@ variable override գոյություն չունի։
 
 Մեկ proof-ը կարող է պարունակել առավելագույնը 8 MiB canonical bytes։ Լքված կամ
 մերժված transaction-ի համար պահուստավորված աշխատանքը block չի անցնում։
+
+## Outbound commitment, պահպանում և հայտնաբերում
+
+Յուրաքանչյուր հաջող outbound message ստանում է խիտ `commitment_index`՝ block-ի
+execution order-ով (`0..=511`)։ V1-ի անփոփոխ սահմաններն են 512 message մեկ block-ում
+և 4,096 canonical payload byte մեկ message-ում։ `[zk.sccp]`-ը pending payload state-ը
+միաժամանակ սահմանափակում է `max_pending_outbound_messages` (default `65536`) և
+`max_pending_outbound_payload_bytes` (default `268435456`) արժեքներով։
+
+Մինչ finality-ի հրապարակումը կամ block body-ի հեռացումը Kura-ն immutable ձևով
+պահպանում է ճշգրիտ canonical header-ը և root-authenticated SCCP archive-ը։ Proof,
+bundle, proof request և recent history վերականգնելիս պատմական block body կամ mutable
+WSV payload պատճեն չի կարդացվում։ Destination proof-ի ընդունման պահին pending
+payload-ը և դրա charge-ը atomically հեռացվում են, իսկ fixed terminal descriptor-ը
+locator/index-ի հետ մնում է։ Pending state-ը սահմանափակ է, սակայն terminal records-ը
+և immutable Kura history-ն միտումնավոր աճում են մշտական replay protection-ի համար։
+`GET /v1/sccp/messages/recent`-ը օգտագործում է `{ from, after_index }` compound
+cursor։ Immutable evidence-ը հաշվվում է total/operator disk usage-ում, բայց ոչ
+evictable-body budget-ում։
 
 ## Torii և HTTP սահմաններ
 

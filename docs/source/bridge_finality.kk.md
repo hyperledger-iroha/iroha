@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
-source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+source_hash: 1cbd248fe14e63d00f002f09e1663181f3ab9bd99124ffeb89c56763b784046b
+source_last_modified: "2026-07-12"
 translation_last_reviewed: 2026-07-12
 translator: machine-google-reviewed
 ---
@@ -45,11 +45,14 @@ epoch, roster, `DualQuorum`, DA орналасуы, leader seed және бас�
 
 ## Тұрақты сақтау және тексеру
 
-Sumeragi v2 apply жолы артефактты тексеріп, өзгермейтін Kura sidecar ретінде сақтайды.
-Дәлел құрастырушысы канондық блок пен оның sidecar-ын оқиды; тарихи PoP не сертификатты
-өзгермелі ағымдағы world state-тен қайта жасамайды. Жоқ, бүлінген, қайшы немесе
-тексерілмейтін sidecar жабық түрде қабылданбайды; қолжетімділік соңғы in-memory тарих
-терезесімен шектелмейді.
+Finality жарияланғанға немесе block body шығарылғанға дейін Kura нақты canonical header
+мен root-authenticated SCCP archive-ті immutable retained-block record-қа жазады, кейін
+exact V2 artifact-ті бөлек immutable finality record-та сақтайды. Екі жазба да
+idempotent және сол height-тағы қайшылықты қабылдамайды. `build_finality_proof` тек
+retained header және verified finality record-ты оқиды; historical block body немесе
+mutable world state PoP-ын ешқашан қолданбайды. Restart кезінде
+header/archive/artifact/hash association қайта тексеріледі. Body eviction дұрыс proof-ты
+қолжетімсіз етпейді; жоқ, бүлінген, қайшы немесе тексерілмейтін record fail closed.
 
 Stateless тексергіш version, chain, height, header hash, header-дің canonical predecessor-ы
 және view-ы, context, subject және CommitQC-ді дәл сәйкестендіріп, артефакттағы барлық PoP-ты
@@ -80,6 +83,7 @@ SCCP сол `BridgeFinalityProof` түрін қолданады. Хабар бе
 - `GET /v1/bridge/finality/{height}` `BridgeFinalityProof` қайтарады;
 - `GET /v1/bridge/finality/bundle/{height}` `BridgeFinalityBundle` қайтарады.
 
-Блок немесе нақты тұрақты v2 артефакты жоқ не жарамсыз болса, екі endpoint те жабық
-түрде сәтсіз аяқталады. Белгісіз өрістер, қолдаусыз нұсқалар және ескірген дәлел
-пішімдері қабылданбауы керек.
+Retained canonical header немесе нақты тұрақты v2 артефакты жоқ не жарамсыз болса, екі
+endpoint те жабық түрде сәтсіз аяқталады. Historical block body eviction дұрыс proof-ты
+қолжетімсіз етпейді. Белгісіз өрістер, қолдаусыз нұсқалар және ескірген дәлел пішімдері
+қабылданбауы керек.

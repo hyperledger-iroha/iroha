@@ -155,6 +155,7 @@ def test_signed_512_bit_endpoints_and_neighbors() -> None:
 
 def test_authenticated_inputs_reject_truncation_and_tampering() -> None:
     frame = NumericV1Codec.encode_int_frame(KotodamaInt("128"))
+    assert NumericV1Codec.decode_int_frame(memoryview(frame)) == KotodamaInt("128")
     for length in range(len(frame)):
         with pytest.raises(NumericV1Error):
             NumericV1Codec.decode_int_frame(frame[:length])

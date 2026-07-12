@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_proofs.md
 status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 69c9a740261d0c367d52870fc1f48775ae48307056ba9b79d2f811e0c0849f20
-source_last_modified: "2026-07-11"
-translation_last_reviewed: 2026-07-11
+source_hash: 74e29801129deccb6d5640d414289c47cf13fa9e0229fb55212b6c7710d7c5f7
+source_last_modified: "2026-07-12T07:38:49.568351+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-assisted
 ---
 
@@ -48,6 +48,14 @@ high-water индексы элек ҡабул ителгән координат�
 теүәл тигеҙлек талап итә; юғалған, иҫкергән, боҙолған йәки нигеҙһеҙ индекс кире
 ҡағыла. Ҡулланылған message id-ҙар replay-ҙы туҡтатыу өсөн даими һаҡлана.
 
+TRON сығанаҡ route-ы теүәл
+`transferToTaira(bytes,uint256,uint64 expectedNonce)` ABI-һын ҡуллана. Уңышлы
+башҡарыу өсөн `expectedNonce == transferNonce` булырға тейеш; шунан storage
+арттырылғанға тиклем шул уҡ ҡиммәт canonical payload-ҡа яҙыла. Native admission
+тулы ABI саҡырыуын payload recipient-ы, масштабланған сумма һәм nonce буйынса
+яңынан төҙөй; шуға күрә иҫке ике-argument selector, stale йәки future nonce һәм
+сигенә еткән `uint64` nonce хәүефһеҙ рәүештә кире ҡағыла.
+
 ## Бер үтеүле тикшереү һәм эш сиктәре
 
 Destination һәм native иҫбатлауҙары бер тапҡыр структуралана, бер тапҡыр
@@ -78,6 +86,24 @@ pairing checks өсөн нулдән ҙур transaction һәм block лимит�
 
 Бер proof иң күбе 8 MiB canonical bytes тота ала. Туҡтатылған йәки кире ҡағылған
 transaction өсөн резервланған эш block эсенә үтмәй.
+
+## Outbound йөкләмәһе, һаҡлау һәм табыу
+
+Һәр уңышлы outbound message block execution order буйынса тығыҙ
+`commitment_index` (`0..=511`) ала. V1 өсөн үҙгәрмәҫ сиктәр: бер block-та 512
+message һәм бер message-та 4,096 canonical payload byte. `[zk.sccp]` pending
+payload state-ты `max_pending_outbound_messages` (default `65536`) һәм
+`max_pending_outbound_payload_bytes` (default `268435456`) менән бергә сикләй.
+
+Kura finality баҫтырылғанға йәки block body сығарылғанға тиклем теүәл canonical
+header һәм root-authenticated SCCP archive-ты immutable һаҡлай. Proof, bundle,
+proof request һәм recent history өсөн тарихи block body йәки mutable WSV payload
+күсермәһе кәрәкмәй. Destination proof ҡабул ителһә, pending payload һәм уның
+charge-ы atomically юйыла, ә fixed terminal descriptor locator/index менән ҡала.
+Pending state сикләнгән; terminal records һәм immutable Kura history даими replay
+һағы өсөн аңлы рәүештә үҫә. `GET /v1/sccp/messages/recent` составлы
+`{ from, after_index }` cursor ҡуллана. Immutable evidence total/operator disk
+usage эсенә инә, әммә evictable-body budget-тан сығарыла.
 
 ## Torii һәм HTTP сиктәре
 

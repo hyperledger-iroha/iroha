@@ -79,7 +79,7 @@ const SEMANTIC_ARTIFACT_ROLES: [(&str, &str, &str); 7] = [
     ("honest-witness", "honest-witness", "honest-witness.bin"),
     ("honest-proof", "honest-proof", "honest-proof.norito"),
 ];
-const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 39] = [
+const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 47] = [
     "3908a9df4eb45c2c3eb744f5a5fde5af87f346a59a4995378e95c3895b9e2d5d",
     "4baed4d3a15b3269ab5e710393de6f01944c3af9691dc7a8661474ced9a033f2",
     "0ffb0e0e942b1f2250eb5674aa5674334cb0e84a7374369cc9d9ec636392198e",
@@ -119,8 +119,16 @@ const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 39] = [
     "971e807f423e356f0b14adc7a933448b409b97e2f59e75f74e9999875daf384c",
     "fe2b875714f38b99fdfc116fa3f86baba2377602c08f91818f115042afa9360b",
     "28606717bbb2ad7b0540afc392dda40c1df589161243f06b3ab84455d3ceae52",
+    "c3515b02fa51a33640b346dcf9d2cb60b16c362b7e95b4dbd38711923635dfb3",
+    "f32dc052551832ded5f27d9ca3234ec984b1c07bb540368beb8163c3f2c1c480",
+    "15eaf0882db809a33a3fb533353b4afe43af0ffde1e86c5fd13f91e943b6ee00",
+    "453ed15553be21331012655ee17d1dfaca6b86a87df7d0e6c040e87a23396c9e",
+    "7ddb0a311b568eb3875864f641b0993ab5303c952278166a40d8e7e658fb9908",
+    "a7e7cbae831e6b2cce0a80f072608a8d441ffcd78e519163cbf604f02abc6eb7",
+    "5896c7ec6a3c44685efec5c23bea9e0c79026e8c844de5df3e9f723abc53dadd",
+    "04f866e68e71310baba066fd1d0005d08885c04e5557c356a0a8a7e1270a3937",
 ];
-const REQUIRED_PHASES: [&str; 10] = [
+const REQUIRED_PHASES: [&str; 12] = [
     "rust-sccp",
     "evidence-scripts",
     "js-sdk",
@@ -130,7 +138,9 @@ const REQUIRED_PHASES: [&str; 10] = [
     "java-android",
     "dotnet-sdk",
     "contract-smoke",
+    "tvm-contract-smoke",
     "core-admission",
+    "runtime-api",
 ];
 const FORBIDDEN_ALGEBRAIC_SMOKE_VK: [u8; 32] = [
     0x9e, 0xf8, 0x06, 0x7d, 0x26, 0x05, 0x32, 0xf8, 0x8e, 0x60, 0xcf, 0xa4, 0xb4, 0x58, 0xfe, 0x67,

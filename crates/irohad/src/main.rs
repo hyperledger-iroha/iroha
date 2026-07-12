@@ -4090,6 +4090,7 @@ fn snapshot_read_error_is_recoverable_for_bootstrap(
         TryReadSnapshotError::NotFound => true,
         TryReadSnapshotError::IO(_, _) => false,
         TryReadSnapshotError::ChainIdMismatch { .. } => false,
+        TryReadSnapshotError::ZkConfigInstall(_) => false,
         TryReadSnapshotError::MismatchedHeight { .. } => hard_fork_snapshot_bootstrap,
         _ => true,
     }
@@ -4120,7 +4121,6 @@ fn apply_state_config_before_kura_replay(
     // from block metadata during `apply_without_execution`.
     state.set_crypto(config.crypto.clone());
     state.set_pipeline(config.pipeline.clone());
-    state.set_zk(config.zk.clone());
     state.set_sumeragi_pacing_governor(config.sumeragi.pacing_governor);
     let restored_runtime = state
         .nexus_runtime_restored_from_snapshot()
@@ -4141,6 +4141,15 @@ fn apply_state_config_before_kura_replay(
             })?;
     }
     Ok(())
+}
+
+fn install_zk_config_before_kura_replay(
+    state: &mut State,
+    config: &Config,
+) -> ReportResult<(), StartError> {
+    state
+        .set_zk(config.zk.clone())
+        .map_err(|error| Report::new(error).change_context(StartError::InitKura))
 }
 
 fn nexus_config_for_startup_replay(
@@ -4223,6 +4232,23 @@ mod snapshot_read_error_tests {
                 expected: ChainId::from("expected-chain"),
                 actual: ChainId::from("actual-chain"),
             }
+        ));
+
+        let incompatible_zk = TryReadSnapshotError::ZkConfigInstall(
+            iroha_core::state::ZkConfigInstallError::InvalidSccpPendingUsage {
+                usage: iroha_data_model::bridge::SccpOutboundPendingUsageV1 {
+                    message_count: 0,
+                    payload_bytes: 1,
+                },
+            },
+        );
+        assert!(!snapshot_read_error_is_recoverable_for_bootstrap(
+            &incompatible_zk,
+            false,
+        ));
+        assert!(!snapshot_read_error_is_recoverable_for_bootstrap(
+            &incompatible_zk,
+            true,
         ));
 
         assert!(snapshot_read_error_is_recoverable(
@@ -4658,6 +4684,7 @@ impl Iroha {
             config.snapshot.merkle_chunk_size_bytes,
             verification_key,
             &config.common.chain,
+            &config.zk,
             #[cfg(feature = "telemetry")]
             state_telemetry.clone(),
         ) {
@@ -4745,6 +4772,12 @@ impl Iroha {
         }
         // Thread chain id into state for VRF prehash binding.
         state.chain_id = config.common.chain.clone();
+        if !loaded_state_from_snapshot {
+            // Snapshot candidates install this at their post-decode,
+            // pre-reconciliation boundary. Fresh and Kura-rebuilt state has no
+            // snapshot boundary, so install it exactly once here before replay.
+            install_zk_config_before_kura_replay(&mut state, &config)?;
+        }
         apply_state_config_before_kura_replay(&mut state, &config)?;
 
         if loaded_state_from_snapshot && block_count.0 > state.committed_height() {
@@ -5037,8 +5070,7 @@ impl Iroha {
         // Use WSV Sumeragi parameters (canonical JSON) so fingerprint is stable across peers
         let (computed_mode_tag, computed_bls_domain, consensus_caps, confidential_features) = {
             let view = state.view();
-            let height =
-                u64::try_from(view.block_hashes().len()).expect("height fits into u64");
+            let height = u64::try_from(view.block_hashes().len()).expect("height fits into u64");
             let confidential_features = iroha_core::state::compute_confidential_feature_digest(
                 view.world(),
                 &view.zk,
@@ -5492,7 +5524,9 @@ impl Iroha {
         #[cfg(feature = "telemetry")]
         log_startup_trace("irohad.telemetry.ready", startup_trace_started_at);
 
-        // Thread tiered state, pipeline, and ZK (Halo2) preferences from config into runtime state.
+        // Thread the remaining runtime preferences from config into state. ZK
+        // configuration was installed once before Kura replay so hydrated SCCP
+        // usage was checked against the actual configured caps at startup.
         // Use cloned config values to keep `config` borrowable later.
         let tiered_state_cfg = config.tiered_state.clone();
         let pipeline_cfg = config.pipeline.clone();
@@ -5516,7 +5550,6 @@ impl Iroha {
         state.set_oracle(oracle_cfg);
         state.set_streaming(streaming_cfg);
         state.set_fraud_monitoring(fraud_cfg);
-        state.set_zk(zk_cfg.clone());
         state.set_settlement(settlement_cfg);
         state.set_gov(gov_cfg);
         state.set_merge_ledger_cache_capacity(merge_cache_capacity);
@@ -9969,6 +10002,57 @@ mod tests {
 
             assert_eq!(state.pacing_governor.window_blocks, 7);
             assert_eq!(state.pacing_governor.step_up_bps, 1_234);
+        }
+
+        #[test]
+        fn installs_actual_zk_config_for_fresh_state_before_kura_replay() {
+            let config_table = toml::toml! {
+                chain = "00000000-0000-0000-0000-000000000000"
+                public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+                private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+
+                [network]
+                address = "addr:127.0.0.1:1337#8F78"
+                public_address = "addr:127.0.0.1:1337#8F78"
+
+                [genesis]
+                public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
+                file = "./genesis.signed.nrt"
+
+                [streaming]
+                identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+                identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
+
+                [torii]
+                address = "addr:127.0.0.1:8080#8942"
+            };
+            let mut config = ConfigReader::new()
+                .with_toml_source(TomlSource::inline(config_table))
+                .read_and_complete::<UserConfig>()
+                .expect("sample config should be readable")
+                .parse()
+                .expect("sample config should parse");
+            config.zk.sccp.max_pending_outbound_messages =
+                std::num::NonZeroU64::new(7).expect("nonzero message cap");
+            config.zk.sccp.max_pending_outbound_payload_bytes =
+                std::num::NonZeroU64::new(11).expect("nonzero byte cap");
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+
+            install_zk_config_before_kura_replay(&mut state, &config)
+                .expect("fresh state accepts actual ZK configuration");
+
+            let installed = state.zk_snapshot();
+            assert_eq!(
+                installed.sccp.max_pending_outbound_messages,
+                config.zk.sccp.max_pending_outbound_messages
+            );
+            assert_eq!(
+                installed.sccp.max_pending_outbound_payload_bytes,
+                config.zk.sccp.max_pending_outbound_payload_bytes
+            );
         }
     }
 

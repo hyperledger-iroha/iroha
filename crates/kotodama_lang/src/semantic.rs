@@ -427,6 +427,12 @@ pub struct FunctionSignature {
     /// This is part of the exported module interface because an importing
     /// source unit cannot inspect the callee body to recover its effects.
     pub requires_named_arguments: bool,
+    /// Whether the function is an externally invocable contract entrypoint.
+    ///
+    /// Standalone test modules use this bit to distinguish a target contract's
+    /// public lifecycle/view surface from its private helpers without importing
+    /// or reanalyzing the target body.
+    pub is_runtime_entrypoint: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -966,6 +972,7 @@ impl SemanticContext {
                     return_type,
                     requires_named_arguments: function.params.len() >= 3
                         && (privileged || effectful),
+                    is_runtime_entrypoint: function_is_runtime_entrypoint(&function.modifiers),
                 },
             );
         }
@@ -5240,32 +5247,7 @@ fn analyze_invoke_entrypoint_call(
         });
     }
 
-    let Some(modifiers) = context
-        .function_modifiers
-        .borrow()
-        .get(&target_name)
-        .cloned()
-    else {
-        return Err(SemanticError {
-            code: "K2002",
-            message: format!("invoke_entrypoint targets unknown function `{target_name}`"),
-        });
-    };
-    if !function_is_runtime_entrypoint(&modifiers) {
-        return Err(SemanticError {
-            code: "E_TEST_ENTRYPOINT_KIND",
-            message: format!(
-                "invoke_entrypoint may only target kotoage/view/hajimari/kaizen entrypoints, got `{target_name}`"
-            ),
-        });
-    }
-
-    let ret_ty = context
-        .function_returns
-        .borrow()
-        .get(&target_name)
-        .cloned()
-        .unwrap_or(Type::Unit);
+    let ret_ty = runtime_entrypoint_return_type(context, &target_name)?;
 
     Ok(TypedExpr {
         expr: ExprKind::Call {
@@ -5280,31 +5262,49 @@ fn runtime_entrypoint_return_type(
     context: &SemanticContext,
     target_name: &str,
 ) -> Result<Type, SemanticError> {
-    let Some(modifiers) = context
+    if let Some(modifiers) = context
         .function_modifiers
         .borrow()
         .get(target_name)
         .cloned()
-    else {
-        return Err(SemanticError {
-            code: "K2002",
-            message: format!("unknown runtime entrypoint `{target_name}`"),
-        });
-    };
-    if !function_is_runtime_entrypoint(&modifiers) {
-        return Err(SemanticError {
-            code: "E_TEST_ENTRYPOINT_KIND",
-            message: format!(
-                "runtime test helpers may only target kotoage/view/hajimari/kaizen entrypoints, got `{target_name}`"
-            ),
-        });
+    {
+        if !function_is_runtime_entrypoint(&modifiers) {
+            return Err(SemanticError {
+                code: "E_TEST_ENTRYPOINT_KIND",
+                message: format!(
+                    "runtime test helpers may only target kotoage/view/hajimari/kaizen entrypoints, got `{target_name}`"
+                ),
+            });
+        }
+        return Ok(context
+            .function_returns
+            .borrow()
+            .get(target_name)
+            .cloned()
+            .unwrap_or(Type::Unit));
     }
-    Ok(context
-        .function_returns
+
+    if let Some(signature) = context
+        .external_functions
         .borrow()
         .get(target_name)
         .cloned()
-        .unwrap_or(Type::Unit))
+    {
+        if !signature.is_runtime_entrypoint {
+            return Err(SemanticError {
+                code: "E_TEST_ENTRYPOINT_KIND",
+                message: format!(
+                    "runtime test helpers may only target kotoage/view/hajimari/kaizen entrypoints, got `{target_name}`"
+                ),
+            });
+        }
+        return Ok(signature.return_type);
+    }
+
+    Err(SemanticError {
+        code: "K2002",
+        message: format!("unknown runtime entrypoint `{target_name}`"),
+    })
 }
 
 fn analyze_invoke_entrypoint_as_call(
@@ -12099,9 +12099,17 @@ fn analyze_expr_expected_inner(
                     })
                 }
                 _ => {
-                    if let Some(modifiers) = context.function_modifiers.borrow().get(&name)
-                        && modifiers.kind != FunctionKind::Private
-                    {
+                    let local_runtime_entrypoint = context
+                        .function_modifiers
+                        .borrow()
+                        .get(&name)
+                        .is_some_and(|modifiers| modifiers.kind != FunctionKind::Private);
+                    let external_runtime_entrypoint = context
+                        .external_functions
+                        .borrow()
+                        .get(&name)
+                        .is_some_and(|signature| signature.is_runtime_entrypoint);
+                    if local_runtime_entrypoint || external_runtime_entrypoint {
                         return Err(SemanticError {
                             code: "K2004",
                             message: format!(
@@ -17109,6 +17117,77 @@ mod tests {
         )
         .expect("parse tuple invoke_entrypoint_as");
         analyze_test(&program).expect("tuple-returning target should type-check");
+    }
+
+    #[test]
+    fn standalone_test_helpers_preserve_external_entrypoint_kind() {
+        let target = parse(
+            r#"
+            seiyaku Demo {
+                hajimari() {}
+                fn helper() {}
+            }
+            "#,
+        )
+        .expect("parse target contract");
+        let signatures = SemanticContext::with_capabilities(false, true)
+            .resolve_function_signatures(&target)
+            .expect("resolve target signatures");
+
+        let accepted = parse(
+            r#"
+            module Tests {
+                #[test]
+                fn invokes_lifecycle() {
+                    test::invoke_entrypoint_as(
+                        actor: "issuer",
+                        entrypoint: "hajimari",
+                        arguments: Json::parse("{}"),
+                    );
+                }
+            }
+            "#,
+        )
+        .expect("parse standalone test module");
+        SemanticContext::with_capabilities(false, true)
+            .analyze_with_external_functions(&accepted, &signatures)
+            .expect("external lifecycle entrypoint should retain its kind");
+
+        let rejected = parse(
+            r#"
+            module Tests {
+                #[test]
+                fn invokes_private_helper() {
+                    test::invoke_entrypoint_as(
+                        actor: "issuer",
+                        entrypoint: "helper",
+                        arguments: Json::parse("{}"),
+                    );
+                }
+            }
+            "#,
+        )
+        .expect("parse private-helper test module");
+        let error = SemanticContext::with_capabilities(false, true)
+            .analyze_with_external_functions(&rejected, &signatures)
+            .expect_err("private target helper must not become an entrypoint");
+        assert_eq!(error.code(), "E_TEST_ENTRYPOINT_KIND");
+
+        let direct_call = parse(
+            r#"
+            module Tests {
+                #[test]
+                fn bypasses_contract_boundary() {
+                    hajimari();
+                }
+            }
+            "#,
+        )
+        .expect("parse direct external-entrypoint call");
+        let error = SemanticContext::with_capabilities(false, true)
+            .analyze_with_external_functions(&direct_call, &signatures)
+            .expect_err("external entrypoints must retain the contract-call boundary");
+        assert_eq!(error.code(), "K2004");
     }
 
     #[test]

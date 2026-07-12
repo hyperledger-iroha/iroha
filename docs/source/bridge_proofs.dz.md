@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_proofs.md
 status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 69c9a740261d0c367d52870fc1f48775ae48307056ba9b79d2f811e0c0849f20
-source_last_modified: "2026-07-11"
-translation_last_reviewed: 2026-07-11
+source_hash: 74e29801129deccb6d5640d414289c47cf13fa9e0229fb55212b6c7710d7c5f7
+source_last_modified: "2026-07-12T07:38:49.568351+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-assisted
 ---
 
@@ -52,6 +52,16 @@ anchor གི successor checkpoint དང་ཏག་ཏག་འདྲ་དག
 གིས་ index འདི་རྒྱུན་བརྟན་ཐོ་ལས་ལོག་རྩིས་བཏོན་ཏེ་ ཏག་ཏག་འདྲ་དགོ།
 མེད་པ་ རྙིངམ་ མེདཔ་བཏང་མི་ ཡང་ན་རྒྱབ་རྟེན་མེད་པའི index ངོས་ལེན་མི་འབད།
 
+TRON གི་འབྱུང་ཁུངས་ route གིས་
+`transferToTaira(bytes,uint256,uint64 expectedNonce)` ཟེར་མི་ ABI ཏག་ཏག་
+ལག་ལེན་འཐབ། ལཱ་མཐར་འཁྱོལ་ནི་ལུ་ `expectedNonce == transferNonce`
+འདྲ་མཉམ་དགོཔ་དང་ དེ་ལས་ storage ཡར་སེང་མ་འབད་བའི་ཧེ་མ་ གྲངས་ཐང་
+དེ་རང་ canonical payload ནང་འབྲིཝ་ཨིན། Native admission གིས་ payload
+recipient, ཚད་སྒྱུར་འབད་མི་དངུལ་བསྡོམས་ དང་ nonce ལས་ ABI call ཆ་ཚང་
+ལོག་བཟོཝ་ཨིན། དེ་འབདཝ་ལས་ argument གཉིས་ཅན་གྱི selector རྙིངམ་
+དང་ nonce རྙིངམ་ཡང་ན་མ་འོངས་པ་ དེ་ལས་ `uint64` nonce རྫོགས་མི་ཚུ་
+ཉེན་སྲུང་ཐོག་ལས་ངོས་ལེན་མི་འབད།
+
 ## ཐེངས་གཅིག་གི་བདེན་དཔྱད་དང་ ལཱ་གི་ཚད།
 
 Destination དང་ native བདེན་དཔང་ཚུ་ ཐེངས་གཅིག་བཀྲལ་ ཐེངས་གཅིག་བསྡམས་
@@ -82,6 +92,24 @@ config file ནང་གནས་གོང་གཅིག་པ་དགོ། E
 
 Proof གཅིག་ནང་ canonical bytes 8 MiB ལས་མང་མི་ཆོག། བཀོག་བཞག་པ་
 ཡང་ན་ངོས་ལེན་མ་འབད་བའི transaction གི་ reserved work འདི་ block ནང་མི་འཛུལ།
+
+## Outbound commitment, retention དང་ discovery།
+
+Outbound message མཐར་འཁྱོལ་རེ་ལུ་ block execution order ནང་ dense
+`commitment_index` (`0..=511`) ཐོབ་ཨིན། V1 གི་གཏན་འཇགས་ཚད་འདི་ block རེ་ལུ་
+message 512 དང་ message རེ་ལུ་ canonical payload byte 4,096 ཨིན།
+`[zk.sccp]` གིས་ pending payload state འདི་ `max_pending_outbound_messages`
+(default `65536`) དང་ `max_pending_outbound_payload_bytes`
+(default `268435456`) གཉིས་ཀྱིས་ཚད་བཟུངམ་ཨིན།
+
+Finality མ་སྤེལ་བའི་ཧེ་མའམ་ block body མ་ཕྱིར་བཏོན་པའི་ཧེ་མ་ Kura གིས་
+canonical header ངེས་ཏིག་དང་ root-authenticated SCCP archive འདི་ immutable
+སྦེ་བསག་བཞགཔ་ཨིན། Proof, bundle, proof request དང་ recent history བསྐྱར་བཟོ་ལུ་
+སྔོན་གྱི block body ཡང་ན་ mutable WSV payload མི་དགོ། Destination proof
+ངོས་ལེན་འབདཝ་ད་ pending payload དང་ charge འདི་ atomically བཏོན་ཏེ་ fixed
+terminal descriptor དང་ locator/index བཞགཔ་ཨིན། Pending state ཚད་ཅན་ཨིན་རུང་
+terminal records དང་ immutable Kura history འདི་ replay protection དོན་ལུ་ཡར་འཕེལ་འགྱོཝ་ཨིན།
+`GET /v1/sccp/messages/recent` གིས་ `{ from, after_index }` cursor ལག་ལེན་འཐབ་ཨིན།
 
 ## Torii དང་ HTTP ཚད།
 

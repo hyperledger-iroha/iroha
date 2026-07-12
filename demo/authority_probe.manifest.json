@@ -1,7 +1,7 @@
 {
   "seiyaku_name": "AuthorityProbe",
   "code_hash": "hash:9A461BEBC906AEC0F18D5F92661944E8334795C1C1F8C062434D5511BE973175#CE9E",
-  "abi_hash": "hash:05E6F898ECC5C88B11E2DD7F784F2C90E730B5D8A0825901FD2F35502AD8AD09#B33A",
+  "abi_hash": "hash:AE5BB302D5946C938AB40BCA4A234DAFF2D8975CE261D352B1437B51F90467CB#4B88",
   "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
   "features_bitmap": 0,
   "access_set_hints": {

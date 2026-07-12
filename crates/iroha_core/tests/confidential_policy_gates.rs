@@ -397,7 +397,9 @@ fn policy_transition_reaches_shielded_only_on_schedule() {
     let mut zk_cfg = state.zk.clone();
     zk_cfg.policy_transition_delay_blocks = 1;
     zk_cfg.policy_transition_window_blocks = 1;
-    state.set_zk(zk_cfg);
+    state
+        .set_zk(zk_cfg)
+        .expect("empty SCCP outbox accepts policy test configuration");
 
     let mut block = state.block(header);
     let mut stx = block.transaction();
