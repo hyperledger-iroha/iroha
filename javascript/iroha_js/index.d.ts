@@ -6819,6 +6819,9 @@ export interface ToriiOfflineActiveTransferVerifier {
   withdrawal_height: number | bigint | null;
 }
 
+export type ToriiOfflineActiveTopUpShieldVerifier =
+  ToriiOfflineActiveTransferVerifier;
+
 export interface ToriiOfflineReadinessResponse {
   asset_definition_id: string;
   /** Authoritative live u32 scale; values above 28 accompany asset_scale_unsupported. */
@@ -6826,6 +6829,7 @@ export interface ToriiOfflineReadinessResponse {
   evaluated_block_height: number | bigint;
   evaluated_block_hash: string;
   active_transfer_verifier: ToriiOfflineActiveTransferVerifier | null;
+  active_topup_shield_verifier: ToriiOfflineActiveTopUpShieldVerifier | null;
   ready: boolean;
   blockers: ToriiOfflineReadinessBlocker[];
 }

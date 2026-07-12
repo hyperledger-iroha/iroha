@@ -541,6 +541,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         let expectedProtocolSymbols = [
             "connect_norito_kagemusha_recursive_spend_capabilities_v1",
             "connect_norito_kagemusha_topup_finality_verify_v2",
+            "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
             "connect_norito_kagemusha_recursive_spend_topup_v2",
             "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2",
             "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2",
@@ -660,15 +661,15 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         )
         XCTAssertEqual(
             KagemushaRecursiveSpend.splitIntentWireName,
-            "iroha_data_model::offline::model::KagemushaRecursiveSpendSplitIntent"
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendSplitIntentV2"
         )
         XCTAssertEqual(
             KagemushaRecursiveSpend.branchWireName,
-            "iroha_data_model::offline::model::KagemushaRecursiveSpendBranch"
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendBranchV2"
         )
         XCTAssertEqual(
             KagemushaRecursiveSpend.splitResultWireName,
-            "iroha_data_model::offline::model::KagemushaRecursiveSpendSplitResult"
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendSplitResultV2"
         )
         XCTAssertThrowsError(try KagemushaRecursiveSpend.ensureProofBackendAvailable()) { error in
             XCTAssertEqual(error as? KagemushaRecursiveSpendError, .proofBackendUnavailable)
@@ -1111,7 +1112,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
     }
 
     private func fixed32Sequence(_ values: [Data]) -> Data {
-        sequence(values)
+        sequence(values.map(constVector))
     }
 
     private func byteVector(_ value: Data) -> Data {

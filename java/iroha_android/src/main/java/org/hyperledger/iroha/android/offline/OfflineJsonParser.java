@@ -38,6 +38,8 @@ public final class OfflineJsonParser {
             "evaluated_block_height");
     final Object rawActiveTransferVerifier =
         required(object, "active_transfer_verifier", "root");
+    final Object rawActiveTopUpShieldVerifier =
+        required(object, "active_topup_shield_verifier", "root");
     return new OfflineReadiness(
         asExactReadinessString(
             required(object, "asset_definition_id", "root"), "asset_definition_id"),
@@ -51,6 +53,12 @@ public final class OfflineJsonParser {
                 rawActiveTransferVerifier,
                 evaluatedBlockHeight,
                 "active_transfer_verifier"),
+        rawActiveTopUpShieldVerifier == null
+            ? null
+            : parseActiveTransferVerifier(
+                rawActiveTopUpShieldVerifier,
+                evaluatedBlockHeight,
+                "active_topup_shield_verifier"),
         asBoolean(required(object, "ready", "root"), "ready"),
         blockers);
   }

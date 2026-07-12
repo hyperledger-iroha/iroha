@@ -193,8 +193,6 @@ on:
       - "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/PrivacyConfidentialWitnessTests.swift"
-      - "IrohaSwift/Tests/IrohaSwiftTests/ConfidentialUnshieldRedeemNativeTests.swift"
-      - "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKConfidentialUnshieldWorkflowTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/NoritoTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
@@ -910,7 +908,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: "true"
-      - name: Swift confidential-unshield redeem SDK and native interoperability
+      - name: Swift confidential-unshield current SDK and native interoperability
         run: ci/check_swift_confidential_unshield_redeem_e2e.sh
 
   kagemusha_csharp_sdk_tests:

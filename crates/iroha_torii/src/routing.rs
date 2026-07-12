@@ -18097,6 +18097,14 @@ fn multisig_selector_validation_error(message: impl Into<String>) -> Error {
 }
 
 #[cfg(feature = "app_api")]
+fn multisig_cursor_validation_error(message: impl Into<String>) -> Error {
+    Error::AppQueryValidation {
+        code: "multisig_cursor_invalid",
+        message: message.into(),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn multisig_selector_forbidden_error(code: &'static str, message: impl Into<String>) -> Error {
     Error::AppForbidden {
         code,
@@ -18756,65 +18764,65 @@ fn decode_multisig_proposals_cursor(
         || raw.trim() != raw
         || !raw.is_ascii()
     {
-        return Err(multisig_selector_validation_error(
+        return Err(multisig_cursor_validation_error(
             "cursor must be a non-empty canonical base64url value within the advertised bound",
         ));
     }
     let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(raw.as_bytes())
-        .map_err(|_| multisig_selector_validation_error("cursor is not canonical base64url"))?;
+        .map_err(|_| multisig_cursor_validation_error("cursor is not canonical base64url"))?;
     let decoded = String::from_utf8(decoded)
-        .map_err(|_| multisig_selector_validation_error("cursor payload is not UTF-8"))?;
+        .map_err(|_| multisig_cursor_validation_error("cursor payload is not UTF-8"))?;
     let mut parts = decoded.split('|');
     if parts.next() != Some("v1") {
-        return Err(multisig_selector_validation_error(
+        return Err(multisig_cursor_validation_error(
             "cursor version is not supported",
         ));
     }
     let account_literal = parts
         .next()
-        .ok_or_else(|| multisig_selector_validation_error("cursor payload is incomplete"))?;
+        .ok_or_else(|| multisig_cursor_validation_error("cursor payload is incomplete"))?;
     let proposed_at_literal = parts
         .next()
-        .ok_or_else(|| multisig_selector_validation_error("cursor payload is incomplete"))?;
+        .ok_or_else(|| multisig_cursor_validation_error("cursor payload is incomplete"))?;
     let instructions_hash_literal = parts
         .next()
-        .ok_or_else(|| multisig_selector_validation_error("cursor payload is incomplete"))?;
+        .ok_or_else(|| multisig_cursor_validation_error("cursor payload is incomplete"))?;
     let status_fingerprint = parts
         .next()
-        .ok_or_else(|| multisig_selector_validation_error("cursor payload is incomplete"))?;
+        .ok_or_else(|| multisig_cursor_validation_error("cursor payload is incomplete"))?;
     if parts.next().is_some() {
-        return Err(multisig_selector_validation_error(
+        return Err(multisig_cursor_validation_error(
             "cursor payload contains trailing fields",
         ));
     }
 
     let expected_account_literal = multisig_account_id.to_string();
     if account_literal != expected_account_literal {
-        return Err(multisig_selector_validation_error(
+        return Err(multisig_cursor_validation_error(
             "cursor does not belong to the resolved multisig account",
         ));
     }
     let proposed_at_ms = proposed_at_literal.parse::<u64>().map_err(|_| {
-        multisig_selector_validation_error("cursor proposed_at_ms is not a canonical u64")
+        multisig_cursor_validation_error("cursor proposed_at_ms is not a canonical u64")
     })?;
     if proposed_at_ms.to_string() != proposed_at_literal {
-        return Err(multisig_selector_validation_error(
+        return Err(multisig_cursor_validation_error(
             "cursor proposed_at_ms is not canonically encoded",
         ));
     }
     let instructions_hash = instructions_hash_literal
         .parse::<HashOf<Vec<iroha_data_model::isi::InstructionBox>>>()
-        .map_err(|_| multisig_selector_validation_error("cursor instructions_hash is invalid"))?;
+        .map_err(|_| multisig_cursor_validation_error("cursor instructions_hash is invalid"))?;
     let canonical_instructions_hash = instructions_hash.to_string();
     if canonical_instructions_hash != instructions_hash_literal {
-        return Err(multisig_selector_validation_error(
+        return Err(multisig_cursor_validation_error(
             "cursor instructions_hash is not canonically encoded",
         ));
     }
     let expected_status_fingerprint = multisig_status_fingerprint(requested_statuses);
     if status_fingerprint != expected_status_fingerprint {
-        return Err(multisig_selector_validation_error(
+        return Err(multisig_cursor_validation_error(
             "cursor does not belong to the requested status filter",
         ));
     }
@@ -18826,7 +18834,7 @@ fn decode_multisig_proposals_cursor(
         status_fingerprint: expected_status_fingerprint,
     };
     if encode_multisig_proposals_cursor(&cursor) != raw {
-        return Err(multisig_selector_validation_error(
+        return Err(multisig_cursor_validation_error(
             "cursor is not canonically encoded",
         ));
     }
@@ -18873,6 +18881,15 @@ fn multisig_proposal_is_after_cursor(
         ),
         Ordering::Greater
     )
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_proposal_matches_cursor(
+    entry: &MultisigProposalEntryDto,
+    cursor: &MultisigProposalsCursor,
+) -> bool {
+    entry.proposal.proposed_at_ms == cursor.proposed_at_ms
+        && entry.instructions_hash == cursor.instructions_hash
 }
 
 #[cfg(feature = "app_api")]
@@ -21982,9 +21999,14 @@ mod multisig_selector_tests {
     async fn multisig_spec_rejects_metadata_without_native_account_state() {
         let (mut world, multisig_account_id, _signer_one, _signer_two, _alias, _active_hash) =
             multisig_test_world();
-        world
-            .smart_contract_state_mut_for_testing()
-            .remove(multisig_account_state_contract_key(&multisig_account_id));
+        let mut smart_contract_state = world.smart_contract_state_mut_for_testing().block();
+        assert!(
+            smart_contract_state
+                .remove(multisig_account_state_contract_key(&multisig_account_id))
+                .is_some(),
+            "fixture must contain native multisig account state"
+        );
+        smart_contract_state.commit();
 
         let error = handle_post_multisig_spec(
             build_state(world),
@@ -22221,7 +22243,7 @@ mod multisig_selector_tests {
             assert!(matches!(
                 error,
                 Error::AppQueryValidation {
-                    code: "multisig_selector_invalid",
+                    code: "multisig_cursor_invalid",
                     ..
                 }
             ));
@@ -22235,6 +22257,63 @@ mod multisig_selector_tests {
             decode_multisig_proposals_cursor(&cursor, &other_account, &BTreeSet::new()).is_err(),
             "cursor must not replay across multisig accounts"
         );
+
+        let nonexistent_hash = HashOf::new(&vec![dm::InstructionBox::from(dm::Log::new(
+            dm::Level::INFO,
+            "nonexistent cursor boundary".to_owned(),
+        ))])
+        .to_string();
+        let expired_statuses = BTreeSet::from(["EXPIRED".to_owned()]);
+        for forged in [
+            MultisigProposalsCursor {
+                multisig_account_id: multisig_account_id.to_string(),
+                proposed_at_ms: 1_700_000_000_000,
+                instructions_hash: nonexistent_hash,
+                status_fingerprint: multisig_status_fingerprint(&BTreeSet::new()),
+            },
+            MultisigProposalsCursor {
+                multisig_account_id: multisig_account_id.to_string(),
+                proposed_at_ms: 1_700_000_000_001,
+                instructions_hash: active_hash.clone(),
+                status_fingerprint: multisig_status_fingerprint(&BTreeSet::new()),
+            },
+        ] {
+            let error = handle_post_multisig_proposals_list(
+                state.clone(),
+                NoritoJson(MultisigProposalsListRequestDto {
+                    selector: concrete_selector(multisig_account_id.clone()),
+                    status: Vec::new(),
+                    cursor: Some(encode_multisig_proposals_cursor(&forged)),
+                    limit: Some(1),
+                }),
+            )
+            .await
+            .expect_err("a canonical cursor for a nonexistent boundary must fail closed");
+            let message = expect_app_validation(error, "multisig_cursor_invalid");
+            assert!(message.contains("boundary is not present"));
+        }
+
+        let filter_rebound_cursor = encode_multisig_proposals_cursor(&MultisigProposalsCursor {
+            multisig_account_id: multisig_account_id.to_string(),
+            proposed_at_ms: 1_700_000_000_000,
+            instructions_hash: active_hash,
+            status_fingerprint: multisig_status_fingerprint(&expired_statuses),
+        });
+        let error = handle_post_multisig_proposals_list(
+            state.clone(),
+            NoritoJson(MultisigProposalsListRequestDto {
+                selector: concrete_selector(multisig_account_id.clone()),
+                status: vec!["EXPIRED".to_owned()],
+                cursor: Some(filter_rebound_cursor),
+                limit: Some(1),
+            }),
+        )
+        .await
+        .expect_err(
+            "recomputing the filter fingerprint must not admit a boundary excluded by that filter",
+        );
+        let message = expect_app_validation(error, "multisig_cursor_invalid");
+        assert!(message.contains("boundary is not present"));
 
         for limit in [0, MULTISIG_PROPOSALS_MAX_PAGE_LIMIT + 1] {
             let error = handle_post_multisig_proposals_list(
@@ -24957,6 +25036,14 @@ fn multisig_proposals_list_response(
         &requested_statuses,
     )?;
     if let Some(cursor) = cursor.as_ref() {
+        if !proposals
+            .iter()
+            .any(|entry| multisig_proposal_matches_cursor(entry, cursor))
+        {
+            return Err(multisig_cursor_validation_error(
+                "cursor boundary is not present in the requested proposal result set",
+            ));
+        }
         proposals.retain(|entry| multisig_proposal_is_after_cursor(entry, cursor));
     }
     let next_cursor = (proposals.len() > page_limit).then(|| {

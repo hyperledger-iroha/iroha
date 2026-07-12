@@ -46,11 +46,12 @@ context id གི་ཆ་ཤས་ཨིནམ་ལས་ parent CommitQC ག�
 
 ## རྒྱུན་བརྟན་བསགས་བཞག་དང་བདེན་དཔྱད།
 
-Sumeragi v2 apply path གིས་ artifact བདེན་དཔྱད་འབད་དེ་ མི་འགྱུར་བའི་ Kura sidecar སྦེ་བསགས་བཞགཔ་ཨིན།
-Proof builder གིས་ canonical block དང་དེའི་ sidecar ལྷགཔ་ཨིནམ་མ་གཏོགས་ historical PoP ཡང་ན་
-certificate འདི་ འགྱུར་བ་ཅན་གྱི་ད་ལྟའི་ world state ལས་ལོག་མི་བཟོ། Sidecar མེད་པ་ མེདཔ་ཐལ་བ་
-འགལ་བ་ཡང་ན་བདེན་དཔྱད་མི་ཚུགས་པ་ཨིན་པ་ཅིན་ fail closed ཨིན། ཐོབ་ཚུགས་མི་འདི་ in-memory
-history window ཉེ་འདབས་ལུ་མི་ཚད།
+Kura གིས་ finality མ་སྤེལ་བའམ་ block body མ་ཕྱིར་འདོན་པའི་ཧེ་མ་ canonical header ངེས་ཏིག་དང་
+`commitment_index` གོ་རིམ་གྱི་ SCCP archive འདི་ immutable retained record ནང་བསགས་བཞགཔ་ཨིན།
+Finality artifact འདི་དེ་ལས་ header གཅིག་པ་དང་གཅིག་ཁར་ immutable record སོ་སོར་བསགས་བཞགཔ་ཨིན།
+Proof builder གིས་ retained header དང་ finality record རྐྱངམ་ཅིག་ལྷགཔ་ཨིན། Historical block body
+ཡང་ན་ mutable WSV payload མི་དགོ། Record མེད་པ་ མེདཔ་ཐལ་བ་ འགལ་བ་ཡང་ན་བདེན་དཔྱད་མི་ཚུགས་པ་
+ཨིན་པ་ཅིན་ fail closed ཨིན།
 
 Stateless verifier གིས་ version, chain, height, header hash, canonical predecessor, view, context,
 subject དང་ CommitQC ངེས་ཏིག་
@@ -81,5 +82,6 @@ message artifact ཚུན་ immediate successor རེ་རེ་བདེན
 - `GET /v1/bridge/finality/{height}` གིས་ `BridgeFinalityProof` སླར་ལོག་འབདཝ་ཨིན།
 - `GET /v1/bridge/finality/bundle/{height}` གིས་ `BridgeFinalityBundle` སླར་ལོག་འབདཝ་ཨིན།
 
-Block ཡང་ན་ v2 artifact རྒྱུན་བརྟན་ངེས་ཏིག་མེད་པ་ ཡང་ན་ཆ་མེད་ཨིན་པ་ཅིན་ endpoint གཉིས་ཆ་ fail closed
-ཨིན། ངོ་མ་ཤེས་པའི་ས་སྒོ་ རྒྱབ་སྐྱོར་མེད་པའི་ version དང་ retired proof shape ཚུ་ཆ་མེད་བཟོ་དགོ།
+Retained canonical header ཡང་ན་ v2 artifact རྒྱུན་བརྟན་ངེས་ཏིག་མེད་པ་ ཡང་ན་ཆ་མེད་ཨིན་པ་ཅིན་ endpoint
+གཉིས་ཆ་ fail closed ཨིན། Block-body eviction གིས་ proof ཆ་གནས་ཅན་མི་བརླག། ངོ་མ་ཤེས་པའི་ས་སྒོ་
+རྒྱབ་སྐྱོར་མེད་པའི་ version དང་ retired proof shape ཚུ་ཆ་མེད་བཟོ་དགོ།

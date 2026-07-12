@@ -131,6 +131,13 @@ impl PreparedContract {
         .map_err(|err| {
             ContractArtifactError::invalid(format!("literal index validation failed: {err}"))
         })?;
+        validate_indexed_literal_instructions(decoded.as_ref(), literal_table.entries()).map_err(
+            |err| {
+                ContractArtifactError::invalid(format!(
+                    "literal instruction validation failed: {err}"
+                ))
+            },
+        )?;
         let instruction_entry_pc = u64::try_from(parsed.prefix_len()).map_err(|_| {
             ContractArtifactError::invalid("executable stream offset does not fit a VM address")
         })?;

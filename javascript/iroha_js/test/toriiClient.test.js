@@ -23838,6 +23838,16 @@ function offlineActiveTransferVerifier(overrides = {}) {
   };
 }
 
+function offlineActiveTopUpShieldVerifier(overrides = {}) {
+  return offlineActiveTransferVerifier({
+    id: { backend: "halo2-ipa-pasta", name: "topup-shield-v2" },
+    circuit_id: "kagemusha-topup-shield-v2",
+    commitment: "66".repeat(32),
+    public_inputs_schema_hash: "77".repeat(32),
+    ...overrides,
+  });
+}
+
 function offlineReadinessPayload(overrides = {}) {
   return {
     asset_definition_id: OFFLINE_CANONICAL_ASSET_DEFINITION_ID,
@@ -23845,6 +23855,7 @@ function offlineReadinessPayload(overrides = {}) {
     evaluated_block_height: 42,
     evaluated_block_hash: OFFLINE_EVALUATED_BLOCK_HASH,
     active_transfer_verifier: offlineActiveTransferVerifier(),
+    active_topup_shield_verifier: offlineActiveTopUpShieldVerifier(),
     ready: true,
     blockers: [],
     ...overrides,
@@ -23985,6 +23996,7 @@ test("getOfflineReadiness parses a full-range u64 without rounding", async () =>
       textBody: `{"asset_definition_id":"${OFFLINE_CANONICAL_ASSET_DEFINITION_ID}",`
         + `"asset_scale":4,"evaluated_block_height":18446744073709551615,"evaluated_block_hash":"${OFFLINE_EVALUATED_BLOCK_HASH}",`
         + `"active_transfer_verifier":${JSON.stringify(offlineActiveTransferVerifier())},`
+        + `"active_topup_shield_verifier":${JSON.stringify(offlineActiveTopUpShieldVerifier())},`
         + '"ready":true,"blockers":[]}',
       headers: { "content-type": "application/json" },
     }),
@@ -24030,6 +24042,8 @@ test("getOfflineReadiness rejects invalid selectors and contradictory snapshots"
       blockers: [{ code: "not_ready", message: "missing scale" }],
     }),
     offlineReadinessPayload({ active_transfer_verifier: null }),
+    offlineReadinessPayload({ active_topup_shield_verifier: undefined }),
+    offlineReadinessPayload({ active_topup_shield_verifier: null }),
     offlineReadinessPayload({
       active_transfer_verifier: offlineActiveTransferVerifier({ max_proof_bytes: 0 }),
     }),
@@ -24041,6 +24055,15 @@ test("getOfflineReadiness rejects invalid selectors and contradictory snapshots"
     }),
     offlineReadinessPayload({
       active_transfer_verifier: offlineActiveTransferVerifier({ commitment: "AA".repeat(32) }),
+    }),
+    offlineReadinessPayload({
+      active_topup_shield_verifier: offlineActiveTopUpShieldVerifier({ max_proof_bytes: 0 }),
+    }),
+    offlineReadinessPayload({
+      active_topup_shield_verifier: offlineActiveTopUpShieldVerifier({ activation_height: 43 }),
+    }),
+    offlineReadinessPayload({
+      active_topup_shield_verifier: offlineActiveTopUpShieldVerifier({ withdrawal_height: 42 }),
     }),
     offlineReadinessPayload({
       ready: false,
@@ -24095,6 +24118,25 @@ test("getOfflineReadiness rejects invalid selectors and contradictory snapshots"
     Object.hasOwn(expectedUnavailable.active_transfer_verifier, "ignored_verifier_field"),
     false,
   );
+
+  const topUpShieldUnavailableClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: offlineReadinessPayload({
+        active_topup_shield_verifier: null,
+        ready: false,
+        blockers: [{
+          code: "topup_shield_verifier_unavailable",
+          message: "top-up shield verifier unavailable",
+        }],
+      }),
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  const topUpUnavailable = await topUpShieldUnavailableClient.getOfflineReadiness(
+    OFFLINE_ASSET_DEFINITION_ID,
+  );
+  assert.equal(topUpUnavailable.active_topup_shield_verifier, null);
 
   const wrongMediaTypeClient = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({

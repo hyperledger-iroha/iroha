@@ -146,6 +146,8 @@ public enum KagemushaRecursiveSpend {
     public static let nativeCapabilitiesWireName =
         wire("KagemushaRecursiveSpendNativeCapabilitiesV1")
     public static let initRequestWireName = wire("KagemushaRecursiveSpendInitRequestV2")
+    public static let topUpShieldBuildRequestWireName =
+        "connect_norito_bridge::KagemushaTopUpShieldBuildRequestV2"
     public static let topUpShieldEvidenceWireName = wire("KagemushaTopUpShieldEvidenceV2")
     public static let topUpUnsignedWireName = wire("KagemushaRecursiveSpendTopUpUnsignedV2")
     public static let topUpRequestWireName = "iroha.torii.v1.offline.top_up.request"
@@ -197,6 +199,8 @@ public enum KagemushaRecursiveSpend {
     public static let semanticCircuitID = "kagemusha-recursive-spend-semantic-v2"
     public static let reservedRedeemChangeCircuitID =
         "kagemusha-recursive-spend-reserved-redeem-change-v2"
+    public static let topUpShieldCircuitID =
+        "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2"
     public static let lineageArtifactType = "KagemushaRecursiveSpendPastaCycleArtifactsV3"
     public static let maximumPeerTextEnvelopeBytes = 12 * 1024
     /// Largest raw archive whose unpadded base64url representation plus the
@@ -224,6 +228,7 @@ public enum KagemushaRecursiveSpend {
     public static let requiredProtocolSymbols = [
         "connect_norito_kagemusha_recursive_spend_capabilities_v1",
         "connect_norito_kagemusha_topup_finality_verify_v2",
+        "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
         "connect_norito_kagemusha_recursive_spend_topup_v2",
         "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2",
         "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2",
@@ -1112,6 +1117,128 @@ public struct KagemushaRequestAuthorization: Equatable, Sendable {
         self.fields = fields
         self.signature = Data(signature)
         self.archive = Data(archive)
+    }
+}
+
+/// Local-only proof request for a zero-input public-to-confidential top-up.
+///
+/// The request must be built from Torii's verified `next_zero_path` snapshot.
+/// It contains note secrets and therefore must never be persisted, logged, or
+/// submitted to Torii; native code returns only the canonical unsigned top-up.
+public struct KagemushaTopUpShieldBuildRequest: Equatable, Sendable {
+    public let chainID: String
+    public let assetID: String
+    public let amount: KagemushaScaledAmount
+    public let payer: String
+    public let operationID: Data
+    public let spendKey: Data
+    public let rho: Data
+    public let diversifier: Data
+    public let leafIndex: UInt32
+    public let zeroPath: PrivacyConfidentialMerklePathWitnessV2
+    public let shieldVerifierID: String
+    public let shieldVerifierCommitment: Data
+    public let artifactGeneration: String
+
+    public init(
+        chainID: String,
+        assetID: String,
+        amount: KagemushaScaledAmount,
+        payer: String,
+        operationID: Data,
+        spendKey: Data,
+        rho: Data,
+        diversifier: Data,
+        leafIndex: UInt32,
+        zeroPath: PrivacyConfidentialMerklePathWitnessV2,
+        shieldVerifierID: String,
+        shieldVerifierCommitment: Data,
+        artifactGeneration: String
+    ) throws {
+        let canonicalAssetID = try KagemushaRecursiveSpendCodecs.canonicalAssetID(assetID)
+        let assetParts = canonicalAssetID.split(separator: "#", omittingEmptySubsequences: false)
+        guard assetParts.count == 2 || assetParts.count == 3,
+              String(assetParts[1]) == payer,
+              leafIndex < UInt32(ToriiZkMerklePathResponse.confidentialTreeCapacityV2),
+              zeroPath.root != Data(repeating: 0, count: 32) else {
+            throw KagemushaRecursiveSpendError.invalidField("topUpShieldBuildRequest")
+        }
+        try KagemushaRecursiveSpend.requirePortableText(chainID, field: "chainID")
+        try KagemushaRecursiveSpend.requirePortableText(payer, field: "payer")
+        try KagemushaRecursiveSpend.requirePortableText(
+            shieldVerifierID,
+            field: "shieldVerifierID"
+        )
+        try KagemushaRecursiveSpend.requirePortableText(
+            artifactGeneration,
+            field: "artifactGeneration"
+        )
+        for (field, value) in [
+            ("operationID", operationID),
+            ("spendKey", spendKey),
+            ("rho", rho),
+            ("diversifier", diversifier),
+            ("shieldVerifierCommitment", shieldVerifierCommitment),
+        ] {
+            try KagemushaRecursiveSpend.requireNonzeroFixed32(value, field: field)
+        }
+        self.chainID = chainID
+        self.assetID = canonicalAssetID
+        self.amount = amount
+        self.payer = payer
+        self.operationID = Data(operationID)
+        self.spendKey = Data(spendKey)
+        self.rho = Data(rho)
+        self.diversifier = Data(diversifier)
+        self.leafIndex = leafIndex
+        self.zeroPath = zeroPath
+        self.shieldVerifierID = shieldVerifierID
+        self.shieldVerifierCommitment = Data(shieldVerifierCommitment)
+        self.artifactGeneration = artifactGeneration
+    }
+
+    public init(
+        chainID: String,
+        assetID: String,
+        amount: KagemushaScaledAmount,
+        payer: String,
+        operationID: Data,
+        spendKey: Data,
+        rho: Data,
+        diversifier: Data,
+        zeroPath: ZkAssetMerklePath,
+        shieldVerifierID: String,
+        shieldVerifierCommitment: Data,
+        artifactGeneration: String
+    ) throws {
+        guard zeroPath.leafIndex <= UInt64(UInt32.max) else {
+            throw KagemushaRecursiveSpendError.invalidField("leafIndex")
+        }
+        try self.init(
+            chainID: chainID,
+            assetID: assetID,
+            amount: amount,
+            payer: payer,
+            operationID: operationID,
+            spendKey: spendKey,
+            rho: rho,
+            diversifier: diversifier,
+            leafIndex: UInt32(zeroPath.leafIndex),
+            zeroPath: PrivacyConfidentialMerklePathWitnessV2(path: zeroPath),
+            shieldVerifierID: shieldVerifierID,
+            shieldVerifierCommitment: shieldVerifierCommitment,
+            artifactGeneration: artifactGeneration
+        )
+    }
+
+    public func buildUnsigned() throws -> KagemushaRecursiveSpendTopUpUnsigned {
+        let archive = try KagemushaRecursiveSpendCodecs
+            .encodeTopUpShieldBuildRequest(self)
+        guard let unsignedArchive = try NoritoNativeBridge.shared
+            .kagemushaTopUpShieldBuildUnsignedV2(requestArchive: archive) else {
+            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        }
+        return try KagemushaRecursiveSpendCodecs.decodeTopUpUnsigned(unsignedArchive)
     }
 }
 

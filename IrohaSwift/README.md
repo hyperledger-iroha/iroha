@@ -852,18 +852,32 @@ builder; Pallas opening evidence is required to validate every hop.
 
 For confidential-unshield redemption, fetch the exact verifier record from
 Torii and keep it bound to the native proof through the complete
-request-to-redeem flow. The high-level helper performs the fetch, canonical
-Norito archive conversion, proof construction, and local proof verification:
+request-to-redeem flow. The first-release API keeps each trust boundary
+explicit: `ToriiClient.getVerifyingKey` rejects a response whose identifier
+does not match the requested key, the exact canonical record archive is carried
+forward unchanged, and the attachment builder verifies the native proof before
+returning an attachment:
 
 ```swift
 let unshieldVerifierKeyId = try ToriiVerifyingKeyId(
     backend: "halo2/ipa",
     name: "vk_unshield"
 )
-let redeemProof = try await sdk
-    .buildKagemushaConfidentialUnshieldRedeemProofAttachment(
-        witness: unshieldWitness,
-        verifierKeyId: unshieldVerifierKeyId,
+let verifierDetail = try await torii.getVerifyingKey(
+    backend: unshieldVerifierKeyId.backend,
+    name: unshieldVerifierKeyId.name
+)
+let verifierRecord = try verifierDetail
+    .asKagemushaRecursiveSpendVerifierRecordRef()
+let proofRequest = try PrivacyConfidentialWitnessCodecs
+    .buildConfidentialUnshieldProofRequestV2(witness: unshieldWitness)
+let proofOutput = try PrivacyNativeBridge.buildConfidentialUnshieldProofV3(
+    requestArchive: proofRequest
+)
+let redeemProof = try KagemushaRecursiveSpendRequestCodecs
+    .buildRedeemProofAttachment(
+        unshieldProofOutputArchive: proofOutput,
+        unshieldVerifierRecord: verifierRecord,
         blockHeight: currentBlockHeight
     )
 let redeemRequest = try KagemushaRecursiveSpendRedeemRequest(
@@ -881,12 +895,8 @@ let redeemRequestArchive = try KagemushaRecursiveSpendRequestCodecs
     .encodeRedeemRequest(redeemRequest)
 ```
 
-For lower-level integrations, fetch with
-`ToriiClient.getVerifyingKey(backend:name:)`, then call
-`ToriiVerifyingKeyDetail.asKagemushaRecursiveSpendVerifierRecordRef()` before
-passing the result to `buildRedeemProofAttachment`. Torii's
-`record_norito_base64` is the authoritative record archive; the SDK does not
-reconstruct it from the JSON projection.
+Torii's `record_norito_base64` is the authoritative record archive; the SDK
+does not reconstruct it from the JSON projection.
 
 The unshield witness builder rejects transfer outputs, permits zero or one
 private change output, accepts every canonical `u128` public amount, and binds

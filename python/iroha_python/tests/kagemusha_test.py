@@ -4785,6 +4785,8 @@ def test_recursive_kagemusha_redeem_request_rejects_retired_lengthless_public_ke
         kagemusha.load_crypto_extension()
     except RuntimeError as exc:
         pytest.skip(f"native extension unavailable: {exc}")
+    if not kagemusha.is_kagemusha_recursive_spend_available():
+        pytest.skip("exact native bridge ABI-18 recursive-spend surface unavailable")
 
     with pytest.raises(ValueError, match="invalid Kagemusha recursive spend redeem archive"):
         kagemusha.kagemusha_recursive_spend_redeem(malformed_archive)

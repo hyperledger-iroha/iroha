@@ -551,7 +551,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             manifest["native_bridge_abi_version"] as? Int,
             Int(KagemushaRecursiveSpendProver.requiredNativeBridgeAbiVersion)
         )
-        XCTAssertEqual(Int(KagemushaRecursiveSpendProver.topUpRequiredNativeBridgeAbiVersion), 15)
+        XCTAssertEqual(Int(KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion), 18)
 
         let circuitIds = try XCTUnwrap(manifest["proof_circuit_ids"] as? [String: Any])
         XCTAssertEqual(

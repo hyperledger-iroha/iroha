@@ -114,6 +114,9 @@ class OfflineActiveTransferVerifier(
     }
 }
 
+/** Key-material-free top-up shield verifier active at a readiness snapshot. */
+typealias OfflineActiveTopUpShieldVerifier = OfflineActiveTransferVerifier
+
 /** Readiness of the requested asset definition for Offline operations. */
 class OfflineReadiness(
     assetDefinitionId: String,
@@ -121,6 +124,7 @@ class OfflineReadiness(
     evaluatedBlockHeight: BigInteger,
     evaluatedBlockHash: String,
     @JvmField val activeTransferVerifier: OfflineActiveTransferVerifier?,
+    @JvmField val activeTopUpShieldVerifier: OfflineActiveTopUpShieldVerifier?,
     @JvmField val ready: Boolean,
     blockers: List<OfflineReadinessBlocker>,
 ) {
@@ -165,11 +169,31 @@ class OfflineReadiness(
         require(codes.contains("transfer_verifier_unavailable") == (activeTransferVerifier == null)) {
             "transfer_verifier_unavailable must be present exactly when no active verifier is reported"
         }
+        require(
+            codes.contains("topup_shield_verifier_unavailable") ==
+                (activeTopUpShieldVerifier == null),
+        ) {
+            "topup_shield_verifier_unavailable must be present exactly when no active top-up shield verifier is reported"
+        }
         require(activeTransferVerifier == null || activeTransferVerifier.isActiveAt(evaluatedBlockHeight)) {
             "activeTransferVerifier must be active at evaluatedBlockHeight"
         }
-        require(!ready || (assetScale != null && assetScale <= 28 && activeTransferVerifier != null)) {
-            "ready requires a supported asset scale and active transfer verifier"
+        require(
+            activeTopUpShieldVerifier == null ||
+                activeTopUpShieldVerifier.isActiveAt(evaluatedBlockHeight),
+        ) {
+            "activeTopUpShieldVerifier must be active at evaluatedBlockHeight"
+        }
+        require(
+            !ready ||
+                (
+                    assetScale != null &&
+                        assetScale <= 28 &&
+                        activeTransferVerifier != null &&
+                        activeTopUpShieldVerifier != null
+                    ),
+        ) {
+            "ready requires a supported asset scale, active transfer verifier, and active top-up shield verifier"
         }
     }
 
@@ -180,6 +204,7 @@ class OfflineReadiness(
             evaluatedBlockHeight == other.evaluatedBlockHeight &&
             evaluatedBlockHash == other.evaluatedBlockHash &&
             activeTransferVerifier == other.activeTransferVerifier &&
+            activeTopUpShieldVerifier == other.activeTopUpShieldVerifier &&
             ready == other.ready &&
             blockers == other.blockers
 
@@ -189,6 +214,7 @@ class OfflineReadiness(
         result = 31 * result + evaluatedBlockHeight.hashCode()
         result = 31 * result + evaluatedBlockHash.hashCode()
         result = 31 * result + (activeTransferVerifier?.hashCode() ?: 0)
+        result = 31 * result + (activeTopUpShieldVerifier?.hashCode() ?: 0)
         result = 31 * result + ready.hashCode()
         result = 31 * result + blockers.hashCode()
         return result

@@ -19,6 +19,7 @@ public final class OfflineReadiness {
   private final BigInteger evaluatedBlockHeight;
   private final String evaluatedBlockHash;
   private final OfflineActiveTransferVerifier activeTransferVerifier;
+  private final OfflineActiveTransferVerifier activeTopUpShieldVerifier;
   private final boolean ready;
   private final List<OfflineReadinessBlocker> blockers;
 
@@ -28,6 +29,7 @@ public final class OfflineReadiness {
       final BigInteger evaluatedBlockHeight,
       final String evaluatedBlockHash,
       final OfflineActiveTransferVerifier activeTransferVerifier,
+      final OfflineActiveTransferVerifier activeTopUpShieldVerifier,
       final boolean ready,
       final List<OfflineReadinessBlocker> blockers) {
     this.assetDefinitionId = OfflineReadinessText.requireExact(assetDefinitionId, "assetDefinitionId");
@@ -42,6 +44,7 @@ public final class OfflineReadiness {
     this.evaluatedBlockHeight = requireU64(evaluatedBlockHeight, "evaluatedBlockHeight");
     this.evaluatedBlockHash = requireLowercaseHash(evaluatedBlockHash, "evaluatedBlockHash");
     this.activeTransferVerifier = activeTransferVerifier;
+    this.activeTopUpShieldVerifier = activeTopUpShieldVerifier;
     this.ready = ready;
     Objects.requireNonNull(blockers, "blockers");
     final ArrayList<OfflineReadinessBlocker> blockerCopy = new ArrayList<>(blockers.size());
@@ -71,17 +74,28 @@ public final class OfflineReadiness {
       throw new IllegalArgumentException(
           "transfer_verifier_unavailable must be present exactly when no active verifier is reported");
     }
+    if (blockerCodes.contains("topup_shield_verifier_unavailable")
+        != (activeTopUpShieldVerifier == null)) {
+      throw new IllegalArgumentException(
+          "topup_shield_verifier_unavailable must be present exactly when no active top-up shield verifier is reported");
+    }
     if (activeTransferVerifier != null
         && !activeTransferVerifier.isActiveAt(this.evaluatedBlockHeight)) {
       throw new IllegalArgumentException(
           "activeTransferVerifier must be active at evaluatedBlockHeight");
     }
+    if (activeTopUpShieldVerifier != null
+        && !activeTopUpShieldVerifier.isActiveAt(this.evaluatedBlockHeight)) {
+      throw new IllegalArgumentException(
+          "activeTopUpShieldVerifier must be active at evaluatedBlockHeight");
+    }
     if (ready
         && (assetScale == null
             || assetScale.longValue() > 28
-            || activeTransferVerifier == null)) {
+            || activeTransferVerifier == null
+            || activeTopUpShieldVerifier == null)) {
       throw new IllegalArgumentException(
-          "ready requires a supported asset scale and active transfer verifier");
+          "ready requires a supported asset scale, active transfer verifier, and active top-up shield verifier");
     }
     this.blockers = Collections.unmodifiableList(blockerCopy);
   }
@@ -107,6 +121,11 @@ public final class OfflineReadiness {
     return activeTransferVerifier;
   }
 
+  /** Active public-to-confidential top-up shield verifier, without key material. */
+  public OfflineActiveTransferVerifier activeTopUpShieldVerifier() {
+    return activeTopUpShieldVerifier;
+  }
+
   public boolean ready() {
     return ready;
   }
@@ -130,6 +149,7 @@ public final class OfflineReadiness {
         && evaluatedBlockHeight.equals(that.evaluatedBlockHeight)
         && evaluatedBlockHash.equals(that.evaluatedBlockHash)
         && Objects.equals(activeTransferVerifier, that.activeTransferVerifier)
+        && Objects.equals(activeTopUpShieldVerifier, that.activeTopUpShieldVerifier)
         && blockers.equals(that.blockers);
   }
 
@@ -141,6 +161,7 @@ public final class OfflineReadiness {
         evaluatedBlockHeight,
         evaluatedBlockHash,
         activeTransferVerifier,
+        activeTopUpShieldVerifier,
         ready,
         blockers);
   }

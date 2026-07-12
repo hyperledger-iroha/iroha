@@ -43,6 +43,16 @@ public final class OfflineJsonParserTest {
             "activation_height": 1,
             "withdrawal_height": null
           },
+          "active_topup_shield_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "topup-shield-v2"},
+            "version": 3,
+            "circuit_id": "topup-shield-v2",
+            "commitment": "6666666666666666666666666666666666666666666666666666666666666666",
+            "public_inputs_schema_hash": "7777777777777777777777777777777777777777777777777777777777777777",
+            "max_proof_bytes": 8192,
+            "activation_height": 1,
+            "withdrawal_height": null
+          },
           "ready": false,
           "blockers": [
             {"code": "offline_disabled", "message": "Offline transfers are disabled"}
@@ -58,6 +68,8 @@ public final class OfflineJsonParserTest {
         .equals(readiness.evaluatedBlockHash());
     assert "halo2/ipa".equals(readiness.activeTransferVerifier().id().backend());
     assert readiness.activeTransferVerifier().maxProofBytes() == 4096L;
+    assert "topup-shield-v2".equals(readiness.activeTopUpShieldVerifier().id().name());
+    assert readiness.activeTopUpShieldVerifier().maxProofBytes() == 8192L;
     assert !readiness.ready();
     assert readiness.blockers().size() == 1;
     assert "offline_disabled".equals(readiness.blockers().get(0).code());
@@ -90,6 +102,21 @@ public final class OfflineJsonParserTest {
                 "[{\"code\":\"asset_scale_unsupported\",\"message\":\"unsupported\"}]"));
     assert Long.valueOf(29).equals(readiness.assetScale());
     assert readiness.activeTransferVerifier() != null;
+
+    final OfflineReadiness topUpUnavailable =
+        parseOfflineReadiness(
+            readinessBody(
+                "",
+                CANONICAL_ASSET_JSON,
+                "9",
+                "7",
+                activeTransferVerifier(),
+                "null",
+                "false",
+                "[{\"code\":\"topup_shield_verifier_unavailable\",\"message\":\"unavailable\"}]"));
+    assert topUpUnavailable.activeTopUpShieldVerifier() == null;
+    assert "topup_shield_verifier_unavailable"
+        .equals(topUpUnavailable.blockers().get(0).code());
   }
 
   private static void rejectsMalformedUtf8WithoutReplacement() {
@@ -245,6 +272,10 @@ public final class OfflineJsonParserTest {
           readinessBody("", CANONICAL_ASSET_JSON, "9", "7", "null", "true", "[]"),
           "transfer_verifier_unavailable must be present exactly when no active verifier is reported"),
       new MalformedReadinessCase(
+          readinessBody("", CANONICAL_ASSET_JSON, "9", "7", activeTransferVerifier(),
+              "null", "true", "[]"),
+          "topup_shield_verifier_unavailable must be present exactly when no active top-up shield verifier is reported"),
+      new MalformedReadinessCase(
           readinessBody("", CANONICAL_ASSET_JSON, "9", "7",
               activeTransferVerifier().replace("\"max_proof_bytes\": 4096", "\"max_proof_bytes\": 0"),
               "true", "[]"),
@@ -254,6 +285,28 @@ public final class OfflineJsonParserTest {
               activeTransferVerifier().replace("\"activation_height\": 1", "\"activation_height\": 8"),
               "true", "[]"),
           "active_transfer_verifier must be active at evaluated_block_height"),
+      new MalformedReadinessCase(
+          readinessBody("", CANONICAL_ASSET_JSON, "9", "7", activeTransferVerifier(),
+              activeTopUpShieldVerifier().replace(
+                  "\"max_proof_bytes\": 8192", "\"max_proof_bytes\": 0"),
+              "true", "[]"),
+          "maxProofBytes must fit in a positive unsigned 32-bit integer"),
+      new MalformedReadinessCase(
+          readinessBody("", CANONICAL_ASSET_JSON, "9", "7", activeTransferVerifier(),
+              activeTopUpShieldVerifier().replace(
+                  "\"activation_height\": 1", "\"activation_height\": 8"),
+              "true", "[]"),
+          "active_topup_shield_verifier must be active at evaluated_block_height"),
+      new MalformedReadinessCase(
+          readinessBody("", CANONICAL_ASSET_JSON, "9", "7", activeTransferVerifier(),
+              activeTopUpShieldVerifier(), "false",
+              "[{\"code\":\"topup_shield_verifier_unavailable\",\"message\":\"no\"}]"),
+          "topup_shield_verifier_unavailable must be present exactly when no active top-up shield verifier is reported"),
+      new MalformedReadinessCase(
+          readinessBody("", CANONICAL_ASSET_JSON, "7", "true", "[]")
+              .replace("\"active_topup_shield_verifier\": {",
+                  "\"future_topup_shield_verifier\": {"),
+          "root.active_topup_shield_verifier is required"),
       new MalformedReadinessCase(
           readinessBody("", CANONICAL_ASSET_JSON, "7", "1", "[]"),
           "ready must be a boolean"),
@@ -357,6 +410,26 @@ public final class OfflineJsonParserTest {
       final String activeTransferVerifier,
       final String ready,
       final String blockers) {
+    return readinessBody(
+        extra,
+        assetDefinitionId,
+        assetScale,
+        evaluatedBlockHeight,
+        activeTransferVerifier,
+        activeTopUpShieldVerifier(),
+        ready,
+        blockers);
+  }
+
+  private static String readinessBody(
+      final String extra,
+      final String assetDefinitionId,
+      final String assetScale,
+      final String evaluatedBlockHeight,
+      final String activeTransferVerifier,
+      final String activeTopUpShieldVerifier,
+      final String ready,
+      final String blockers) {
     return String.format(
         Locale.ROOT,
         """
@@ -367,6 +440,7 @@ public final class OfflineJsonParserTest {
           "evaluated_block_height": %s,
           "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
           "active_transfer_verifier": %s,
+          "active_topup_shield_verifier": %s,
           "ready": %s,
           "blockers": %s
         }
@@ -376,6 +450,7 @@ public final class OfflineJsonParserTest {
         assetScale,
         evaluatedBlockHeight,
         activeTransferVerifier,
+        activeTopUpShieldVerifier,
         ready,
         blockers);
   }
@@ -389,6 +464,21 @@ public final class OfflineJsonParserTest {
           "commitment": "4444444444444444444444444444444444444444444444444444444444444444",
           "public_inputs_schema_hash": "5555555555555555555555555555555555555555555555555555555555555555",
           "max_proof_bytes": 4096,
+          "activation_height": 1,
+          "withdrawal_height": null
+        }
+        """;
+  }
+
+  private static String activeTopUpShieldVerifier() {
+    return """
+        {
+          "id": {"backend": "halo2/ipa", "name": "topup-shield-v2"},
+          "version": 3,
+          "circuit_id": "topup-shield-v2",
+          "commitment": "6666666666666666666666666666666666666666666666666666666666666666",
+          "public_inputs_schema_hash": "7777777777777777777777777777777777777777777777777777777777777777",
+          "max_proof_bytes": 8192,
           "activation_height": 1,
           "withdrawal_height": null
         }

@@ -1485,13 +1485,20 @@ transport
     .offlineToriiClient()
     .getOfflineReadiness("xor#wonderland")
     .thenAccept(readiness -> {
-      var verifier = readiness.activeTransferVerifier();
-      var verifierLabel = verifier == null
+      var transferVerifier = readiness.activeTransferVerifier();
+      var topUpShieldVerifier = readiness.activeTopUpShieldVerifier();
+      var transferVerifierLabel = transferVerifier == null
           ? "unavailable"
-          : verifier.id().backend() + ":" + verifier.id().name() + " v" + verifier.version();
+          : transferVerifier.id().backend() + ":" + transferVerifier.id().name()
+              + " v" + transferVerifier.version();
+      var topUpShieldVerifierLabel = topUpShieldVerifier == null
+          ? "unavailable"
+          : topUpShieldVerifier.id().backend() + ":" + topUpShieldVerifier.id().name()
+              + " v" + topUpShieldVerifier.version();
       System.out.println(
           readiness.ready() + " scale=" + readiness.assetScale()
-              + " verifier=" + verifierLabel);
+              + " transferVerifier=" + transferVerifierLabel
+              + " topUpShieldVerifier=" + topUpShieldVerifierLabel);
     });
 ```
 
@@ -1500,9 +1507,14 @@ required asset definition, direct-Norito top-up and redeem submissions, and the
 operation status resource. Use `getOfflineReadiness(assetDefinitionId)` before
 showing offline receive or payment-token UI.
 Readiness preserves the authoritative nullable unsigned-32-bit asset scale and
-the key-material-free transfer verifier selected at the same evaluated block.
+the key-material-free transfer and public-to-confidential top-up shield
+verifiers selected at the same evaluated block. Both nullable verifier fields
+are required: null must correlate exactly with `transfer_verifier_unavailable`
+or `topup_shield_verifier_unavailable`, and each reported verifier must be
+active at the evaluated height.
 A scale above 28 remains decodable with `asset_scale_unsupported`; only a ready
-snapshot requires the 0-through-28 Offline amount range and an active verifier.
+snapshot requires the 0-through-28 Offline amount range and both active
+verifier roles.
 The Kotlin/JVM mirror enforces the same verifier-window, digest, proof-size,
 blocker-correlation, and duplicate-code invariants.
 `OfflineTopUpRequest` and `OfflineRedeemRequest` accept only the canonical

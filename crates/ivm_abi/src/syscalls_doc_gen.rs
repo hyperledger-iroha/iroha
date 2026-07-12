@@ -36,6 +36,8 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     crate::syscalls::SyscallDoc { number: 51, args: "r10=&AccountId, r11=&Name", ret: "u64=0", gas: "asset:gas/G_revoke_role@ivm.core/v2" },
     crate::syscalls::SyscallDoc { number: 52, args: "r10=&AccountId, r11=&Name", ret: "u64=0", gas: "asset:gas/G_grant_perm@ivm.core/v2" },
     crate::syscalls::SyscallDoc { number: 53, args: "r10=&AccountId, r11=&Name", ret: "u64=0", gas: "asset:gas/G_revoke_perm@ivm.core/v2" },
+    crate::syscalls::SyscallDoc { number: 54, args: "r10=&AccountId, r11=&Blob(entrypoint)", ret: "u64=0", gas: "asset:gas/G_grant_perm@ivm.core/v2" },
+    crate::syscalls::SyscallDoc { number: 55, args: "r10=&AccountId, r11=&Blob(entrypoint)", ret: "u64=0", gas: "asset:gas/G_revoke_perm@ivm.core/v2" },
     crate::syscalls::SyscallDoc { number: 64, args: "r10=&Json(spec)", ret: "u64=0", gas: "asset:gas/G_create_trig@ivm.core/v2" },
     crate::syscalls::SyscallDoc { number: 65, args: "r10=&Name", ret: "u64=0", gas: "asset:gas/G_remove_trig@ivm.core/v2" },
     crate::syscalls::SyscallDoc { number: 66, args: "r10=&Name, r11=enabled:u64", ret: "u64=0", gas: "asset:gas/G_set_trig@ivm.core/v2" },

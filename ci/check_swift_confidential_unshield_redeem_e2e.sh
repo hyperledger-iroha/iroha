@@ -90,7 +90,7 @@ export IROHA_SWIFT_UNSHIELD_ATTACHMENT_OUT="${TMP_DIR}/redeem-attachment.norito"
 (
   cd IrohaSwift
   swift test --scratch-path "${SWIFT_SCRATCH_PATH}" \
-    --filter ConfidentialUnshieldRedeemNativeTests
+    --filter KagemushaTopUpParityTests/testRealNativeUnshieldProofBuildsRustDecodableRedeemAttachment
 )
 
 test -s "${IROHA_SWIFT_UNSHIELD_ATTACHMENT_OUT}"

@@ -438,6 +438,7 @@ __all__ = [
     "OfflineReadinessBlocker",
     "OfflineVerifierId",
     "OfflineActiveTransferVerifier",
+    "OfflineActiveTopUpShieldVerifier",
     "OfflineReadiness",
     "OfflineAssetScale",
     "OfflineScaledAmountJson",
@@ -3177,6 +3178,11 @@ class OfflineActiveTransferVerifier:
     withdrawal_height: Optional[int]
 
 
+# The two readiness fields expose the same key-material-free registry record
+# shape while retaining distinct semantic names at the public API boundary.
+OfflineActiveTopUpShieldVerifier = OfflineActiveTransferVerifier
+
+
 def _offline_active_transfer_verifier(
     value: Any,
     evaluated_block_height: int,
@@ -3258,6 +3264,7 @@ class OfflineReadiness:
     evaluated_block_height: int
     evaluated_block_hash: str
     active_transfer_verifier: Optional[OfflineActiveTransferVerifier]
+    active_topup_shield_verifier: Optional[OfflineActiveTopUpShieldVerifier]
     ready: bool
     blockers: Tuple[OfflineReadinessBlocker, ...]
 
@@ -3311,6 +3318,18 @@ class OfflineReadiness:
                 f"{context}.active_transfer_verifier",
             )
         )
+        raw_active_topup_shield_verifier = _offline_required(
+            record, "active_topup_shield_verifier", context
+        )
+        active_topup_shield_verifier = (
+            None
+            if raw_active_topup_shield_verifier is None
+            else _offline_active_transfer_verifier(
+                raw_active_topup_shield_verifier,
+                evaluated_block_height,
+                f"{context}.active_topup_shield_verifier",
+            )
+        )
         ready = _offline_required(record, "ready", context)
         if not isinstance(ready, bool):
             raise RuntimeError(f"{context}.ready must be a boolean")
@@ -3360,13 +3379,20 @@ class OfflineReadiness:
             raise RuntimeError(
                 f"{context}.transfer_verifier_unavailable must be present exactly when no active verifier is reported"
             )
+        if ("topup_shield_verifier_unavailable" in blocker_codes) != (
+            active_topup_shield_verifier is None
+        ):
+            raise RuntimeError(
+                f"{context}.topup_shield_verifier_unavailable must be present exactly when no active top-up shield verifier is reported"
+            )
         if ready and (
             asset_scale is None
             or asset_scale > _OFFLINE_MAX_ASSET_SCALE
             or active_transfer_verifier is None
+            or active_topup_shield_verifier is None
         ):
             raise RuntimeError(
-                f"{context}.ready requires a supported scale and active transfer verifier"
+                f"{context}.ready requires a supported scale and active transfer and top-up shield verifiers"
             )
         return cls(
             asset_definition_id=asset_definition_id,
@@ -3374,6 +3400,7 @@ class OfflineReadiness:
             evaluated_block_height=evaluated_block_height,
             evaluated_block_hash=evaluated_block_hash,
             active_transfer_verifier=active_transfer_verifier,
+            active_topup_shield_verifier=active_topup_shield_verifier,
             ready=ready,
             blockers=tuple(blockers),
         )

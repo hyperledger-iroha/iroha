@@ -259,7 +259,12 @@ The first-release public HTTP lifecycle is deliberately small:
 Readiness returns `evaluated_block_height` and an exact 64-character lowercase
 `evaluated_block_hash` from the same committed state view. Wallets use that
 pair as the recent-block anchor for device-attestation registration; they must
-not combine a height and hash from independent reads.
+not combine a height and hash from independent reads. The same snapshot carries
+required nullable `active_transfer_verifier` and
+`active_topup_shield_verifier` projections. Each non-null verifier must be
+active at the evaluated height. A null value is valid exactly with its matching
+`transfer_verifier_unavailable` or `topup_shield_verifier_unavailable` blocker,
+and `ready: true` requires both verifier roles.
 
 The POST body is the typed `OfflineTopUpRequest` or `OfflineRedeemRequest`
 itself. With `Content-Type: application/json` (optionally one
@@ -462,7 +467,8 @@ asset but offline payments are not ready, it returns `200 OK` with
 the authoritative nullable `u32` asset scale. The response keeps an
 out-of-policy scale above 28 intact together with `asset_scale_unsupported` so
 clients can decode the expected unavailable state; only `ready: true` implies a
-scale in the supported 0-through-28 range. It also carries
+scale in the supported 0-through-28 range and non-null active transfer and
+top-up shield verifiers. It also carries
 representation-specific strong `ETag` computed over the exact selected JSON
 or Norito response octets, the header
 `Cache-Control: private, max-age=0, must-revalidate`, and `Vary: Accept`.

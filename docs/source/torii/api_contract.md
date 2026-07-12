@@ -162,7 +162,11 @@ framing instead of the finite HTTP envelope.
 
 Offline readiness blocker messages follow the same exact human-text grammar as
 error messages. Their blocker `code`, not their message, is the stable SDK
-identifier.
+identifier. `active_transfer_verifier` and `active_topup_shield_verifier` are
+separate required nullable fields from the same evaluated block snapshot. Each
+is null exactly when its corresponding `transfer_verifier_unavailable` or
+`topup_shield_verifier_unavailable` blocker is present; a non-null verifier must
+be active at `evaluated_block_height`, and `ready: true` requires both roles.
 
 Every HTTP response carries `X-Request-Id`. A client may supply an identifier
 containing 1–128 ASCII letters, digits, `-`, `_`, `.`, or `:`; Torii echoes it.

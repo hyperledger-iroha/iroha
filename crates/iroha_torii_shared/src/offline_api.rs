@@ -559,12 +559,13 @@ mod tests {
     }
 
     #[test]
-    fn readiness_json_requires_authoritative_scale_and_transfer_verifier_members() {
+    fn readiness_json_requires_authoritative_scale_and_both_verifier_members() {
         for json in [
             r#"{"asset_definition_id":"xor#wonderland","evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":null,"ready":false,"blockers":[]}"#,
             r#"{"asset_definition_id":"xor#wonderland","asset_scale":null,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","ready":false,"blockers":[]}"#,
             r#"{"asset_definition_id":"xor#wonderland","asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":{"id":{"backend":"halo2/ipa","name":"confidential-transfer-v2"},"version":7,"circuit_id":"halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified","commitment":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","public_inputs_schema_hash":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef","activation_height":40,"withdrawal_height":80},"ready":true,"blockers":[]}"#,
             r#"{"asset_definition_id":"xor#wonderland","asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":{"id":{"backend":"halo2/ipa","name":"confidential-transfer-v2"},"version":7,"circuit_id":"halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified","commitment":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","public_inputs_schema_hash":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef","max_proof_bytes":65536,"activation_height":40},"ready":true,"blockers":[]}"#,
+            r#"{"asset_definition_id":"xor#wonderland","asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":null,"ready":false,"blockers":[]}"#,
         ] {
             let error = norito::json::from_str::<OfflineReadiness>(json)
                 .expect_err("first-release readiness members must not be defaulted");
@@ -594,6 +595,10 @@ mod tests {
                     code: "transfer_verifier_unavailable".to_owned(),
                     message: "The transfer verifier is unavailable.".to_owned(),
                 },
+                OfflineReadinessBlocker {
+                    code: "topup_shield_verifier_unavailable".to_owned(),
+                    message: "The top-up shield verifier is unavailable.".to_owned(),
+                },
             ],
         };
 
@@ -608,6 +613,7 @@ mod tests {
         for json in [
             r#"{"asset_definition_id":"xor#wonderland","asset_scale":null,"asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":null,"ready":false,"blockers":[]}"#,
             r#"{"asset_definition_id":"xor#wonderland","asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":null,"active_transfer_verifier":null,"ready":false,"blockers":[]}"#,
+            r#"{"asset_definition_id":"xor#wonderland","asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":null,"active_topup_shield_verifier":null,"active_topup_shield_verifier":null,"ready":false,"blockers":[]}"#,
         ] {
             let error = norito::json::from_str::<OfflineReadiness>(json)
                 .expect_err("duplicate readiness authority member must fail closed");

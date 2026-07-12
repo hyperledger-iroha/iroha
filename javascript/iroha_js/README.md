@@ -3562,7 +3562,11 @@ requests whose authorization carries a different ID.
 
 ```js
 const readiness = await torii.getOfflineReadiness("xor#sora");
-console.log(readiness.asset_scale, readiness.active_transfer_verifier?.id);
+console.log(
+  readiness.asset_scale,
+  readiness.active_transfer_verifier?.id,
+  readiness.active_topup_shield_verifier?.id,
+);
 if (readiness.ready) {
   const accepted = await torii.submitOfflineTopUp({
     ...signedTopUp,
@@ -3592,13 +3596,14 @@ out-of-band while normalizing a typed DTO: every declared integer field rejects
 fraction/exponent spellings such as `1.0` and `1e3`, even when JavaScript would
 coerce them to a whole `number`, and unsigned fields reject `-0`.
 
-Readiness returns the authoritative nullable `u32` asset scale and the typed,
-key-material-free transfer verifier selected at the same evaluated block. An
-expected unavailable response can carry a scale above 28 together with
-`asset_scale_unsupported`; only `ready: true` requires the Offline amount range
-and a live verifier. Verifier activation/withdrawal bounds, hashes, proof-size
-limit, blocker correlations, and duplicate blocker codes are checked before the
-snapshot is returned.
+Readiness returns the authoritative nullable `u32` asset scale and distinct
+typed, key-material-free transfer and top-up shield verifiers selected at the
+same evaluated block. An expected unavailable response can carry a scale above
+28 together with `asset_scale_unsupported`; only `ready: true` requires the
+Offline amount range and both live verifier roles. Verifier
+activation/withdrawal bounds, hashes, proof-size limits, exact null/blocker
+correlations, and duplicate blocker codes are checked before the snapshot is
+returned.
 
 The TypeScript surface exposes closed request DTOs and a typed
 `OfflineTopUpAnchor`; proof-bearing nested objects use named Norito-JSON DTOs

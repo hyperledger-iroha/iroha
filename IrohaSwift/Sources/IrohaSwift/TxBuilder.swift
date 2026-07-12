@@ -992,6 +992,78 @@ public final class IrohaSDK: @unchecked Sendable {
                   creationTimeProvider: creationTimeProvider)
     }
 
+    /// Build an unsigned Kagemusha top-up from the current authoritative
+    /// Torii readiness snapshot and next-zero confidential Merkle path.
+    ///
+    /// The secret witness is consumed only by the local native prover. The
+    /// returned archive contains the spendable note descriptor and opaque
+    /// shield proof, never the spend key, rho, or diversifier.
+    @available(iOS 15.0, macOS 12.0, *)
+    public func buildKagemushaTopUpShieldUnsigned(
+        chainId: String,
+        assetId: String,
+        amount: KagemushaScaledAmount,
+        payer: String,
+        operationId: Data,
+        spendKey: Data,
+        rho: Data,
+        diversifier: Data,
+        artifactGeneration: String
+    ) async throws -> KagemushaRecursiveSpendTopUpUnsigned {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        let canonicalAssetId = try KagemushaRecursiveSpendCodecs.canonicalAssetID(assetId)
+        let assetParts = canonicalAssetId.split(
+            separator: "#",
+            omittingEmptySubsequences: false
+        )
+        guard assetParts.count == 2 || assetParts.count == 3 else {
+            throw KagemushaRecursiveSpendError.invalidField("assetId")
+        }
+        let assetDefinitionId = String(assetParts[0])
+        let readiness = try await toriiRestClient.getOfflineReadiness(
+            assetDefinitionId: assetDefinitionId
+        )
+        guard readiness.assetDefinitionId == assetDefinitionId,
+              readiness.assetScale == amount.scale,
+              let verifier = readiness.activeTopUpShieldVerifier,
+              verifier.id.backend == "halo2/ipa",
+              verifier.circuitId == KagemushaRecursiveSpend.topUpShieldCircuitID,
+              verifier.maxProofBytes <= 192 * 1024,
+              let verifierCommitment = Data(hexString: verifier.commitment),
+              verifierCommitment.count == 32 else {
+            throw KagemushaRecursiveSpendError.invalidField("topUp.readiness")
+        }
+        let snapshot = try await toriiRestClient.getZkAssetMerklePathSnapshot(
+            asset: assetDefinitionId,
+            commitments: []
+        )
+        guard snapshot.frontierLen
+                < ToriiZkMerklePathResponse.confidentialTreeCapacityV2 else {
+            throw KagemushaRecursiveSpendError.invalidField("topUp.zeroPath.capacity")
+        }
+        let zeroPath = try snapshot.validatedNextZeroPath()
+        guard zeroPath.rootAtHeight == snapshot.root,
+              zeroPath.leafIndex == UInt64(snapshot.frontierLen) else {
+            throw KagemushaRecursiveSpendError.invalidField("topUp.zeroPath")
+        }
+        return try KagemushaTopUpShieldBuildRequest(
+            chainID: chainId,
+            assetID: canonicalAssetId,
+            amount: amount,
+            payer: payer,
+            operationID: operationId,
+            spendKey: spendKey,
+            rho: rho,
+            diversifier: diversifier,
+            zeroPath: zeroPath,
+            shieldVerifierID: "\(verifier.id.backend):\(verifier.id.name)",
+            shieldVerifierCommitment: verifierCommitment,
+            artifactGeneration: artifactGeneration
+        ).buildUnsigned()
+    }
+
     /// Generates a new signing key using `defaultSigningAlgorithm`.
     @available(macOS 10.15, iOS 13.0, *)
     public func generateSigningKey(
@@ -1727,160 +1799,6 @@ public final class IrohaSDK: @unchecked Sendable {
             throw Self.restUnavailableError()
         }
         return try await toriiRestClient.cancelRuntimeUpgrade(idHex: idHex)
-    }
-
-    /// Builds the native confidential-unshield proof and binds it to the exact
-    /// verifier record returned by Torii for a recursive Kagemusha redemption.
-    @available(iOS 15.0, macOS 12.0, *)
-    public func buildKagemushaConfidentialUnshieldRedeemProofAttachment(
-        witness: PrivacyConfidentialWitnessV1,
-        verifierKeyId: ToriiVerifyingKeyId,
-        blockHeight: UInt64? = nil
-    ) async throws -> Data {
-        guard let toriiRestClient else {
-            throw Self.restUnavailableError()
-        }
-        return try await Self.orchestrateKagemushaConfidentialUnshieldRedeemProofAttachment(
-            witness: witness,
-            verifierKeyId: verifierKeyId,
-            blockHeight: blockHeight,
-            fetchVerifierKey: { id in
-                try await toriiRestClient.getVerifyingKey(
-                    backend: id.backend,
-                    name: id.name
-                )
-            },
-            buildProof: PrivacyNativeBridge.buildConfidentialUnshieldProofV3,
-            buildAttachment: { proofOutput, verifierRecord, height in
-                try KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(
-                    unshieldProofOutputArchive: proofOutput,
-                    unshieldVerifierRecord: verifierRecord,
-                    blockHeight: height
-                )
-            }
-        )
-    }
-
-    /// Path-based Kagemusha redemption proof builder. This is the first-release
-    /// lifecycle entrypoint: callers pass Torii-verified bounded paths rather
-    /// than an O(frontier) commitment snapshot.
-    @available(iOS 15.0, macOS 12.0, *)
-    public func buildKagemushaConfidentialUnshieldRedeemProofAttachment(
-        witness: PrivacyConfidentialWitnessV2,
-        verifierKeyId: ToriiVerifyingKeyId,
-        blockHeight: UInt64? = nil
-    ) async throws -> Data {
-        guard let toriiRestClient else {
-            throw Self.restUnavailableError()
-        }
-        return try await Self.orchestrateKagemushaConfidentialUnshieldRedeemProofAttachment(
-            witness: witness,
-            verifierKeyId: verifierKeyId,
-            blockHeight: blockHeight,
-            fetchVerifierKey: { id in
-                try await toriiRestClient.getVerifyingKey(
-                    backend: id.backend,
-                    name: id.name
-                )
-            },
-            buildProof: PrivacyNativeBridge.buildConfidentialUnshieldProofV3,
-            buildAttachment: { proofOutput, verifierRecord, height in
-                try KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(
-                    unshieldProofOutputArchive: proofOutput,
-                    unshieldVerifierRecord: verifierRecord,
-                    blockHeight: height
-                )
-            }
-        )
-    }
-
-    /// Build one confidential-transfer hop from the authoritative path witness
-    /// and bind it to the exact active verifier record returned by Torii.
-    @available(iOS 15.0, macOS 12.0, *)
-    public func buildKagemushaConfidentialTransferHopEvidence(
-        witness: PrivacyConfidentialWitnessV2,
-        verifierKeyId: ToriiVerifyingKeyId,
-        chainId: String,
-        assetDefinitionId: String,
-        rootAfter: Data
-    ) async throws -> KagemushaVerifiedFoldHopEvidence {
-        guard let toriiRestClient else {
-            throw Self.restUnavailableError()
-        }
-        let detail = try await toriiRestClient.getVerifyingKey(
-            backend: verifierKeyId.backend,
-            name: verifierKeyId.name
-        )
-        guard detail.id == verifierKeyId else {
-            throw ToriiClientError.invalidPayload(
-                "verifying-key detail identifier does not match the requested verifier key"
-            )
-        }
-        let verifierRecord = try detail.asKagemushaRecursiveSpendVerifierRecordRef()
-        let proofRequest = try PrivacyConfidentialWitnessCodecs
-            .buildConfidentialTransferProofRequestV2(witness: witness)
-        let proofOutput = try PrivacyNativeBridge.buildConfidentialTransferProofV2(
-            requestArchive: proofRequest
-        )
-        return try KagemushaVerifiedFoldHopEvidence(
-            proofOutputArchive: proofOutput,
-            verifierRecord: verifierRecord,
-            chainId: chainId,
-            assetDefinitionId: assetDefinitionId,
-            rootAfter: rootAfter
-        )
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    static func orchestrateKagemushaConfidentialUnshieldRedeemProofAttachment(
-        witness: PrivacyConfidentialWitnessV1,
-        verifierKeyId: ToriiVerifyingKeyId,
-        blockHeight: UInt64?,
-        fetchVerifierKey: (ToriiVerifyingKeyId) async throws -> ToriiVerifyingKeyDetail,
-        buildProof: (Data) throws -> Data,
-        buildAttachment: (
-            Data,
-            KagemushaRecursiveSpendVerifierRecordRef,
-            UInt64?
-        ) throws -> Data
-    ) async throws -> Data {
-        let detail = try await fetchVerifierKey(verifierKeyId)
-        guard detail.id == verifierKeyId else {
-            throw ToriiClientError.invalidPayload(
-                "verifying-key detail identifier does not match the requested verifier key"
-            )
-        }
-        let verifierRecord = try detail.asKagemushaRecursiveSpendVerifierRecordRef()
-        let proofRequest = try PrivacyConfidentialWitnessCodecs
-            .buildConfidentialUnshieldProofRequestV1(witness: witness)
-        let proofOutput = try buildProof(proofRequest)
-        return try buildAttachment(proofOutput, verifierRecord, blockHeight)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    static func orchestrateKagemushaConfidentialUnshieldRedeemProofAttachment(
-        witness: PrivacyConfidentialWitnessV2,
-        verifierKeyId: ToriiVerifyingKeyId,
-        blockHeight: UInt64?,
-        fetchVerifierKey: (ToriiVerifyingKeyId) async throws -> ToriiVerifyingKeyDetail,
-        buildProof: (Data) throws -> Data,
-        buildAttachment: (
-            Data,
-            KagemushaRecursiveSpendVerifierRecordRef,
-            UInt64?
-        ) throws -> Data
-    ) async throws -> Data {
-        let detail = try await fetchVerifierKey(verifierKeyId)
-        guard detail.id == verifierKeyId else {
-            throw ToriiClientError.invalidPayload(
-                "verifying-key detail identifier does not match the requested verifier key"
-            )
-        }
-        let verifierRecord = try detail.asKagemushaRecursiveSpendVerifierRecordRef()
-        let proofRequest = try PrivacyConfidentialWitnessCodecs
-            .buildConfidentialUnshieldProofRequestV2(witness: witness)
-        let proofOutput = try buildProof(proofRequest)
-        return try buildAttachment(proofOutput, verifierRecord, blockHeight)
     }
 
     public func deriveConfidentialKeyset(seedHex: String? = nil,

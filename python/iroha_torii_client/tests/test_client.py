@@ -4101,6 +4101,17 @@ def _offline_active_transfer_verifier(**overrides: Any) -> Dict[str, Any]:
     return verifier
 
 
+def _offline_active_topup_shield_verifier(**overrides: Any) -> Dict[str, Any]:
+    verifier = _offline_active_transfer_verifier(
+        id={"backend": "halo2-ipa-pasta", "name": "topup-shield-v2"},
+        circuit_id="kagemusha-topup-shield-v2",
+        commitment="66" * 32,
+        public_inputs_schema_hash="77" * 32,
+    )
+    verifier.update(overrides)
+    return verifier
+
+
 def _offline_readiness_payload(**overrides: Any) -> Dict[str, Any]:
     payload = {
         "asset_definition_id": CANONICAL_ASSET_DEFINITION_ID,
@@ -4108,6 +4119,7 @@ def _offline_readiness_payload(**overrides: Any) -> Dict[str, Any]:
         "evaluated_block_height": 42,
         "evaluated_block_hash": "ab" * 32,
         "active_transfer_verifier": _offline_active_transfer_verifier(),
+        "active_topup_shield_verifier": _offline_active_topup_shield_verifier(),
         "ready": True,
         "blockers": [],
     }
@@ -4310,6 +4322,8 @@ def test_get_offline_readiness_sends_exact_asset_selector_and_parses_blockers() 
     assert readiness.active_transfer_verifier is not None
     assert readiness.active_transfer_verifier.id.backend == "halo2-ipa-pasta"
     assert readiness.active_transfer_verifier.max_proof_bytes == 4096
+    assert readiness.active_topup_shield_verifier is not None
+    assert readiness.active_topup_shield_verifier.id.name == "topup-shield-v2"
     assert readiness.ready is False
     assert readiness.blockers[0].code == "proof_backend_unavailable"
     call = session.calls[0]
@@ -4352,10 +4366,13 @@ def test_get_offline_readiness_rejects_adversarial_snapshots() -> None:
     missing_scale.pop("asset_scale")
     missing_verifier = _offline_readiness_payload()
     missing_verifier.pop("active_transfer_verifier")
+    missing_topup_shield_verifier = _offline_readiness_payload()
+    missing_topup_shield_verifier.pop("active_topup_shield_verifier")
     payloads = [
         missing_hash,
         missing_scale,
         missing_verifier,
+        missing_topup_shield_verifier,
         _offline_readiness_payload(asset_definition_id="different-asset"),
         _offline_readiness_payload(
             ready=True,
@@ -4385,6 +4402,7 @@ def test_get_offline_readiness_rejects_adversarial_snapshots() -> None:
             blockers=[{"code": "not_ready", "message": "missing scale"}],
         ),
         _offline_readiness_payload(active_transfer_verifier=None),
+        _offline_readiness_payload(active_topup_shield_verifier=None),
         _offline_readiness_payload(
             active_transfer_verifier=_offline_active_transfer_verifier(
                 max_proof_bytes=0
@@ -4403,6 +4421,21 @@ def test_get_offline_readiness_rejects_adversarial_snapshots() -> None:
         _offline_readiness_payload(
             active_transfer_verifier=_offline_active_transfer_verifier(
                 commitment="AA" * 32
+            )
+        ),
+        _offline_readiness_payload(
+            active_topup_shield_verifier=_offline_active_topup_shield_verifier(
+                max_proof_bytes=0
+            )
+        ),
+        _offline_readiness_payload(
+            active_topup_shield_verifier=_offline_active_topup_shield_verifier(
+                activation_height=43
+            )
+        ),
+        _offline_readiness_payload(
+            active_topup_shield_verifier=_offline_active_topup_shield_verifier(
+                withdrawal_height=42
             )
         ),
         _offline_readiness_payload(
@@ -4479,6 +4512,26 @@ def test_offline_readiness_uses_finite_codes_and_strips_unknown_members() -> Non
         expected_unavailable.active_transfer_verifier,
         "ignored_verifier_field",
     )
+
+    topup_unavailable_session = RecordingSession()
+    topup_unavailable_session.queue(
+        StubResponse(
+            payload=_offline_readiness_payload(
+                active_topup_shield_verifier=None,
+                ready=False,
+                blockers=[
+                    {
+                        "code": "topup_shield_verifier_unavailable",
+                        "message": "top-up shield verifier unavailable",
+                    }
+                ],
+            )
+        )
+    )
+    topup_unavailable = ToriiClient(
+        "http://node.test", session=topup_unavailable_session
+    ).get_offline_readiness(CANONICAL_ASSET_DEFINITION_ID)
+    assert topup_unavailable.active_topup_shield_verifier is None
 
     for code in ("", "_leading_underscore", "a" * 65):
         invalid_session = RecordingSession()

@@ -247,6 +247,16 @@ public final class OfflineToriiClientTests {
                 "activation_height": 1,
                 "withdrawal_height": null
               },
+              "active_topup_shield_verifier": {
+                "id": {"backend": "halo2/ipa", "name": "topup-shield-v2"},
+                "version": 3,
+                "circuit_id": "topup-shield-v2",
+                "commitment": "6666666666666666666666666666666666666666666666666666666666666666",
+                "public_inputs_schema_hash": "7777777777777777777777777777777777777777777777777777777777777777",
+                "max_proof_bytes": 8192,
+                "activation_height": 1,
+                "withdrawal_height": null
+              },
               "ready": false,
               "blockers": [
                 {"code": "offline_disabled", "message": "Offline transfers are disabled"}
@@ -279,6 +289,8 @@ public final class OfflineToriiClientTests {
         .equals(readiness.evaluatedBlockHash()) : "evaluated_block_hash mismatch";
     assert "halo2/ipa".equals(readiness.activeTransferVerifier().id().backend())
         : "active transfer verifier mismatch";
+    assert "topup-shield-v2".equals(readiness.activeTopUpShieldVerifier().id().name())
+        : "active top-up shield verifier mismatch";
     assert !readiness.ready() : "ready mismatch";
     assert readiness.blockers().size() == 1 : "blockers mismatch";
     assert "offline_disabled".equals(readiness.blockers().get(0).code())
@@ -334,6 +346,7 @@ public final class OfflineToriiClientTests {
             + "\"evaluated_block_height\":7,"
             + "\"evaluated_block_hash\":\"" + repeat("ab", 32) + "\","
             + "\"active_transfer_verifier\":null,"
+            + "\"active_topup_shield_verifier\":null,"
             + "\"ready\":true,\"blockers\":[]}";
     for (final Map<String, List<String>> headers :
         List.of(
@@ -815,6 +828,16 @@ public final class OfflineToriiClientTests {
             "commitment": "4444444444444444444444444444444444444444444444444444444444444444",
             "public_inputs_schema_hash": "5555555555555555555555555555555555555555555555555555555555555555",
             "max_proof_bytes": 4096,
+            "activation_height": 1,
+            "withdrawal_height": null
+          },
+          "active_topup_shield_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "topup-shield-v2"},
+            "version": 3,
+            "circuit_id": "topup-shield-v2",
+            "commitment": "6666666666666666666666666666666666666666666666666666666666666666",
+            "public_inputs_schema_hash": "7777777777777777777777777777777777777777777777777777777777777777",
+            "max_proof_bytes": 8192,
             "activation_height": 1,
             "withdrawal_height": null
           },

@@ -3422,7 +3422,7 @@ fn main() {
     }
 
     #[test]
-    fn account_multisig_admin_builtins_emit_account_admin_syscalls() {
+    fn static_account_multisig_admin_builtins_emit_exact_account_hints() {
         let account = sample_account_literal();
         let src = format!(
             r#"
@@ -3434,13 +3434,6 @@ kotoage fn main() authorize("CompilerFixture") {{
   ledger::account::add_signatory(account, signatory);
   ledger::account::remove_signatory(account, signatory);
   ledger::account::set_quorum(account, 2);
-  ledger::account::add_signatory(account, signatory);
-  ledger::account::remove_signatory(account, signatory);
-  ledger::account::set_quorum(account, 3);
-}}
-
-kotoage fn dynamic(AccountId account, int quorum) authorize("CompilerFixture") {{
-  ledger::account::set_quorum(account, quorum);
 }}
 
 }}
@@ -3474,6 +3467,47 @@ kotoage fn dynamic(AccountId account, int quorum) authorize("CompilerFixture") {
                 "expected {label} syscall in compiled code"
             );
         }
+
+        let hints = manifest
+            .access_set_hints
+            .expect("expected static account multisig access hints");
+        assert!(hints.read_keys.contains(&format!("account:{account}")));
+        assert!(hints.write_keys.contains(&format!("account:{account}")));
+        assert!(!hints.read_keys.contains(&ACCOUNT_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&ACCOUNT_WILDCARD_KEY.to_string()));
+        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+    }
+
+    #[test]
+    fn dynamic_account_quorum_emits_checked_conversion_and_scoped_account_hints() {
+        let src = r#"
+seiyaku CompilerFixture {
+
+kotoage fn dynamic(AccountId account, int quorum) authorize("CompilerFixture") {
+  ledger::account::set_quorum(account, quorum);
+}
+
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile dynamic account quorum builtin");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        let set_quorum = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_abi::syscalls::SYSCALL_SET_ACCOUNT_QUORUM)
+                .expect("account quorum syscall id fits in u8"),
+        )
+        .to_le_bytes();
+        assert!(
+            code.windows(set_quorum.len())
+                .any(|window| window == set_quorum),
+            "expected SET_ACCOUNT_QUORUM syscall in compiled code"
+        );
         let int_to_u64 = encoding::wide::encode_syscallx(ivm_abi::syscalls::SYSCALL_INT_TRY_TO_U64)
             .to_le_bytes();
         assert!(
@@ -3484,9 +3518,9 @@ kotoage fn dynamic(AccountId account, int quorum) authorize("CompilerFixture") {
 
         let hints = manifest
             .access_set_hints
-            .expect("expected account multisig access hints");
-        assert!(hints.read_keys.contains(&format!("account:{account}")));
-        assert!(hints.write_keys.contains(&format!("account:{account}")));
+            .expect("expected dynamic account quorum access hints");
+        assert!(hints.read_keys.contains(&ACCOUNT_WILDCARD_KEY.to_string()));
+        assert!(hints.write_keys.contains(&ACCOUNT_WILDCARD_KEY.to_string()));
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
     }

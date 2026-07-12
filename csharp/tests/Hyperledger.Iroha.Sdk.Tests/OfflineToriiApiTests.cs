@@ -32,14 +32,25 @@ public sealed class OfflineToriiApiTests
         string extra = "") =>
         $$"""{"id":{"backend":"halo2-ipa-pasta","name":"transfer-v2"},"version":{{version}},"circuit_id":"confidential-transfer-v2","commitment":"{{commitment}}","public_inputs_schema_hash":"{{publicInputsSchemaHash}}","max_proof_bytes":{{maxProofBytes}},"activation_height":{{activationHeight}},"withdrawal_height":{{withdrawalHeight}}{{extra}}}""";
 
+    private static string ActiveTopUpShieldVerifierJson(
+        string version = "3",
+        string commitment = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        string publicInputsSchemaHash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        string maxProofBytes = "196608",
+        string activationHeight = "2",
+        string withdrawalHeight = "null",
+        string extra = "") =>
+        $$"""{"id":{"backend":"halo2-ipa-pasta","name":"kagemusha-topup-shield-v2"},"version":{{version}},"circuit_id":"kagemusha-topup-shield-v2","commitment":"{{commitment}}","public_inputs_schema_hash":"{{publicInputsSchemaHash}}","max_proof_bytes":{{maxProofBytes}},"activation_height":{{activationHeight}},"withdrawal_height":{{withdrawalHeight}}{{extra}}}""";
+
     private static string ReadinessJson(
         string assetScale = "28",
         string? activeTransferVerifier = null,
+        string? activeTopUpShieldVerifier = null,
         string ready = "true",
         string blockers = "[]",
         string extra = "",
         string assetDefinitionId = CanonicalAssetDefinitionId) =>
-        $$"""{"asset_definition_id":"{{assetDefinitionId}}","asset_scale":{{assetScale}},"evaluated_block_height":42,"evaluated_block_hash":"{{EvaluatedBlockHash}}","active_transfer_verifier":{{activeTransferVerifier ?? ActiveTransferVerifierJson()}},"ready":{{ready}},"blockers":{{blockers}}{{extra}}}""";
+        $$"""{"asset_definition_id":"{{assetDefinitionId}}","asset_scale":{{assetScale}},"evaluated_block_height":42,"evaluated_block_hash":"{{EvaluatedBlockHash}}","active_transfer_verifier":{{activeTransferVerifier ?? ActiveTransferVerifierJson()}},"active_topup_shield_verifier":{{activeTopUpShieldVerifier ?? ActiveTopUpShieldVerifierJson()}},"ready":{{ready}},"blockers":{{blockers}}{{extra}}}""";
 
     [Fact]
     public void RequestArchivesDeriveOperationIdAndDefensivelyCopyBytes()
@@ -312,6 +323,9 @@ public sealed class OfflineToriiApiTests
         Assert.NotNull(readiness.ActiveTransferVerifier);
         Assert.Equal("halo2-ipa-pasta", readiness.ActiveTransferVerifier.Id.Backend);
         Assert.Equal(4096U, readiness.ActiveTransferVerifier.MaxProofBytes);
+        Assert.NotNull(readiness.ActiveTopUpShieldVerifier);
+        Assert.Equal("kagemusha-topup-shield-v2", readiness.ActiveTopUpShieldVerifier.Id.Name);
+        Assert.Equal(196608U, readiness.ActiveTopUpShieldVerifier.MaxProofBytes);
         Assert.Equal("proof_backend_unavailable", Assert.Single(readiness.Blockers).Code);
         Assert.Equal(HttpMethod.Get, handler.Last!.Method);
         Assert.Equal(
@@ -376,8 +390,11 @@ public sealed class OfflineToriiApiTests
     {
         var verifier = ActiveTransferVerifierJson(
             extra: ",\"future_verifier_detail\":{\"ignored\":true}");
+        var topUpShieldVerifier = ActiveTopUpShieldVerifierJson(
+            extra: ",\"future_shield_detail\":{\"ignored\":true}");
         var json = ReadinessJson(
             activeTransferVerifier: verifier,
+            activeTopUpShieldVerifier: topUpShieldVerifier,
             ready: "false",
             blockers: "[{\"code\":\"2fa_required\",\"message\":\"blocked\",\"future_detail\":7}]",
             extra: ",\"future_top_level\":{\"ignored\":true}");
@@ -386,6 +403,9 @@ public sealed class OfflineToriiApiTests
         Assert.NotNull(readiness);
         Assert.Equal("2fa_required", Assert.Single(readiness.Blockers).Code);
         Assert.Equal("transfer-v2", readiness.ActiveTransferVerifier!.Id.Name);
+        Assert.Equal(
+            "kagemusha-topup-shield-v2",
+            readiness.ActiveTopUpShieldVerifier!.Id.Name);
     }
 
     [Fact]
@@ -430,11 +450,33 @@ public sealed class OfflineToriiApiTests
         var unavailable = JsonSerializer.Deserialize<OfflineReadiness>(ReadinessJson(
             assetScale: "null",
             activeTransferVerifier: "null",
+            activeTopUpShieldVerifier: "null",
             ready: "false",
-            blockers: "[{\"code\":\"asset_scale_unavailable\",\"message\":\"no scale\"},{\"code\":\"transfer_verifier_unavailable\",\"message\":\"no verifier\"}]"));
+            blockers: "[{\"code\":\"asset_scale_unavailable\",\"message\":\"no scale\"},{\"code\":\"transfer_verifier_unavailable\",\"message\":\"no verifier\"},{\"code\":\"topup_shield_verifier_unavailable\",\"message\":\"no shield verifier\"}]"));
         Assert.NotNull(unavailable);
         Assert.Null(unavailable.AssetScale);
         Assert.Null(unavailable.ActiveTransferVerifier);
+        Assert.Null(unavailable.ActiveTopUpShieldVerifier);
+
+        var shieldUnavailable = JsonSerializer.Deserialize<OfflineReadiness>(ReadinessJson(
+            activeTopUpShieldVerifier: "null",
+            ready: "false",
+            blockers: "[{\"code\":\"topup_shield_verifier_unavailable\",\"message\":\"no shield verifier\"}]"));
+        Assert.NotNull(shieldUnavailable);
+        Assert.NotNull(shieldUnavailable.ActiveTransferVerifier);
+        Assert.Null(shieldUnavailable.ActiveTopUpShieldVerifier);
+
+        var encoded = JsonSerializer.Serialize(shieldUnavailable);
+        using var encodedDocument = JsonDocument.Parse(encoded);
+        Assert.Equal(
+            JsonValueKind.Null,
+            encodedDocument.RootElement.GetProperty("active_topup_shield_verifier").ValueKind);
+        var roundTripped = JsonSerializer.Deserialize<OfflineReadiness>(encoded);
+        Assert.NotNull(roundTripped);
+        Assert.Null(roundTripped.ActiveTopUpShieldVerifier);
+        Assert.Equal(
+            "topup_shield_verifier_unavailable",
+            Assert.Single(roundTripped.Blockers).Code);
     }
 
     [Fact]
@@ -442,6 +484,14 @@ public sealed class OfflineToriiApiTests
     {
         var missingVerifierField = ActiveTransferVerifierJson().Replace(
             "\"max_proof_bytes\":4096,",
+            string.Empty,
+            StringComparison.Ordinal);
+        var missingTopUpShieldVerifierField = ActiveTopUpShieldVerifierJson().Replace(
+            "\"max_proof_bytes\":196608,",
+            string.Empty,
+            StringComparison.Ordinal);
+        var missingTopUpShieldSnapshotField = ReadinessJson().Replace(
+            $",\"active_topup_shield_verifier\":{ActiveTopUpShieldVerifierJson()}",
             string.Empty,
             StringComparison.Ordinal);
         string[] invalid =
@@ -452,6 +502,8 @@ public sealed class OfflineToriiApiTests
             ReadinessJson(assetScale: "29"),
             ReadinessJson(assetScale: "null", ready: "false", blockers: "[{\"code\":\"proof_backend_unavailable\",\"message\":\"blocked\"}]"),
             ReadinessJson(activeTransferVerifier: "null", ready: "false", blockers: "[{\"code\":\"proof_backend_unavailable\",\"message\":\"blocked\"}]"),
+            ReadinessJson(activeTopUpShieldVerifier: "null", ready: "false", blockers: "[{\"code\":\"proof_backend_unavailable\",\"message\":\"blocked\"}]"),
+            ReadinessJson(ready: "false", blockers: "[{\"code\":\"topup_shield_verifier_unavailable\",\"message\":\"blocked\"}]"),
             ReadinessJson(activeTransferVerifier: ActiveTransferVerifierJson(maxProofBytes: "0")),
             ReadinessJson(activeTransferVerifier: ActiveTransferVerifierJson(activationHeight: "43")),
             ReadinessJson(activeTransferVerifier: ActiveTransferVerifierJson(withdrawalHeight: "42")),
@@ -460,6 +512,16 @@ public sealed class OfflineToriiApiTests
             ReadinessJson(activeTransferVerifier: ActiveTransferVerifierJson(commitment: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")),
             ReadinessJson(activeTransferVerifier: ActiveTransferVerifierJson(extra: ",\"version\":8")),
             ReadinessJson(activeTransferVerifier: missingVerifierField),
+            ReadinessJson(activeTopUpShieldVerifier: ActiveTopUpShieldVerifierJson(maxProofBytes: "0")),
+            ReadinessJson(activeTopUpShieldVerifier: ActiveTopUpShieldVerifierJson(activationHeight: "43")),
+            ReadinessJson(activeTopUpShieldVerifier: ActiveTopUpShieldVerifierJson(withdrawalHeight: "42")),
+            ReadinessJson(activeTopUpShieldVerifier: ActiveTopUpShieldVerifierJson(version: "-1")),
+            ReadinessJson(activeTopUpShieldVerifier: ActiveTopUpShieldVerifierJson(version: "4294967296")),
+            ReadinessJson(activeTopUpShieldVerifier: ActiveTopUpShieldVerifierJson(extra: ",\"version\":4")),
+            ReadinessJson(activeTopUpShieldVerifier: "[]"),
+            ReadinessJson(activeTopUpShieldVerifier: missingTopUpShieldVerifierField),
+            ReadinessJson(extra: $",\"active_topup_shield_verifier\":{ActiveTopUpShieldVerifierJson()}"),
+            missingTopUpShieldSnapshotField,
             ReadinessJson(
                 ready: "false",
                 blockers: "[{\"code\":\"blocked\",\"message\":\"one\"},{\"code\":\"blocked\",\"message\":\"two\"}]"),
@@ -504,6 +566,7 @@ public sealed class OfflineToriiApiTests
             "evaluated_block_height",
             "evaluated_block_hash",
             "active_transfer_verifier",
+            "active_topup_shield_verifier",
             "ready",
             "blockers",
         })
@@ -513,6 +576,9 @@ public sealed class OfflineToriiApiTests
         Assert.Equal(
             "confidential-transfer-v2",
             root.GetProperty("active_transfer_verifier").GetProperty("circuit_id").GetString());
+        Assert.Equal(
+            "kagemusha-topup-shield-v2",
+            root.GetProperty("active_topup_shield_verifier").GetProperty("circuit_id").GetString());
     }
 
     [Fact]

@@ -699,6 +699,18 @@ export function normalizeOfflineReadinessResponse(payload, expectedAssetDefiniti
       evaluatedBlockHeight,
       `${context}.active_transfer_verifier`,
     );
+  const rawActiveTopUpShieldVerifier = requireOwn(
+    record,
+    "active_topup_shield_verifier",
+    context,
+  );
+  const activeTopUpShieldVerifier = rawActiveTopUpShieldVerifier === null
+    ? null
+    : normalizeActiveTransferVerifier(
+      rawActiveTopUpShieldVerifier,
+      evaluatedBlockHeight,
+      `${context}.active_topup_shield_verifier`,
+    );
   if (ready !== (blockers.length === 0)) {
     throw new TypeError(`${context}.ready must be true exactly when blockers is empty`);
   }
@@ -720,8 +732,24 @@ export function normalizeOfflineReadinessResponse(payload, expectedAssetDefiniti
       `${context}.active_transfer_verifier must be null exactly with transfer_verifier_unavailable`,
     );
   }
-  if (ready && (assetScale === null || BigInt(assetScale) > MAX_OFFLINE_ASSET_SCALE)) {
-    throw new TypeError(`${context}.ready requires an Offline-supported asset scale`);
+  const topUpShieldVerifierUnavailable = blockerCodes.has(
+    "topup_shield_verifier_unavailable",
+  );
+  if ((activeTopUpShieldVerifier === null) !== topUpShieldVerifierUnavailable) {
+    throw new TypeError(
+      `${context}.active_topup_shield_verifier must be null exactly with topup_shield_verifier_unavailable`,
+    );
+  }
+  if (
+    ready
+    && (
+      assetScale === null
+      || BigInt(assetScale) > MAX_OFFLINE_ASSET_SCALE
+      || activeTransferVerifier === null
+      || activeTopUpShieldVerifier === null
+    )
+  ) {
+    throw new TypeError(`${context}.ready requires an Offline-supported scale and active verifiers`);
   }
   return {
     asset_definition_id: assetDefinitionId,
@@ -729,6 +757,7 @@ export function normalizeOfflineReadinessResponse(payload, expectedAssetDefiniti
     evaluated_block_height: evaluatedBlockHeight,
     evaluated_block_hash: evaluatedBlockHash,
     active_transfer_verifier: activeTransferVerifier,
+    active_topup_shield_verifier: activeTopUpShieldVerifier,
     ready,
     blockers,
   };

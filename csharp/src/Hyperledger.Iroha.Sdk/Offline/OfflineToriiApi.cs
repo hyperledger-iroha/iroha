@@ -91,7 +91,7 @@ public sealed record OfflineReadinessBlocker
     public string Message { get; }
 }
 
-/// <summary>Stable registry identity of a verifier selected for Offline transfers.</summary>
+/// <summary>Stable registry identity of a verifier selected for an Offline proof role.</summary>
 [JsonConverter(typeof(OfflineVerifierIdJsonConverter))]
 public sealed record OfflineVerifierId
 {
@@ -106,7 +106,9 @@ public sealed record OfflineVerifierId
     public string Name { get; }
 }
 
-/// <summary>Key-material-free transfer verifier active at a readiness snapshot.</summary>
+/// <summary>
+/// Key-material-free verifier registry projection used by the distinct transfer and top-up shield roles.
+/// </summary>
 [JsonConverter(typeof(OfflineActiveTransferVerifierJsonConverter))]
 public sealed record OfflineActiveTransferVerifier
 {
@@ -179,6 +181,7 @@ public sealed record OfflineReadiness
         ulong evaluatedBlockHeight,
         string evaluatedBlockHash,
         OfflineActiveTransferVerifier? activeTransferVerifier,
+        OfflineActiveTransferVerifier? activeTopUpShieldVerifier,
         bool ready,
         IReadOnlyList<OfflineReadinessBlocker> blockers)
     {
@@ -190,6 +193,7 @@ public sealed record OfflineReadiness
             evaluatedBlockHash,
             nameof(evaluatedBlockHash));
         ActiveTransferVerifier = activeTransferVerifier;
+        ActiveTopUpShieldVerifier = activeTopUpShieldVerifier;
         Ready = ready;
         this.blockers = new OfflineReadinessBlocker[blockers.Count];
         var blockerCodes = new HashSet<string>(StringComparer.Ordinal);
@@ -222,10 +226,20 @@ public sealed record OfflineReadiness
                 "The transfer verifier must be active at the evaluated block height.",
                 nameof(activeTransferVerifier));
         }
+        if (activeTopUpShieldVerifier is not null
+            && (activeTopUpShieldVerifier.ActivationHeight > evaluatedBlockHeight
+                || (activeTopUpShieldVerifier.WithdrawalHeight.HasValue
+                    && activeTopUpShieldVerifier.WithdrawalHeight.Value <= evaluatedBlockHeight)))
+        {
+            throw new ArgumentException(
+                "The top-up shield verifier must be active at the evaluated block height.",
+                nameof(activeTopUpShieldVerifier));
+        }
 
         var scaleUnavailable = blockerCodes.Contains("asset_scale_unavailable");
         var scaleUnsupported = blockerCodes.Contains("asset_scale_unsupported");
         var verifierUnavailable = blockerCodes.Contains("transfer_verifier_unavailable");
+        var topUpShieldVerifierUnavailable = blockerCodes.Contains("topup_shield_verifier_unavailable");
         if (scaleUnavailable != !assetScale.HasValue)
         {
             throw new ArgumentException(
@@ -244,10 +258,19 @@ public sealed record OfflineReadiness
                 "transfer_verifier_unavailable must be present exactly when no active verifier is reported.",
                 nameof(blockers));
         }
-        if (ready && (assetScale is null or > 28 || activeTransferVerifier is null))
+        if (topUpShieldVerifierUnavailable != (activeTopUpShieldVerifier is null))
         {
             throw new ArgumentException(
-                "A ready asset requires a supported scale and active transfer verifier.",
+                "topup_shield_verifier_unavailable must be present exactly when no active top-up shield verifier is reported.",
+                nameof(blockers));
+        }
+        if (ready
+            && (assetScale is null or > 28
+                || activeTransferVerifier is null
+                || activeTopUpShieldVerifier is null))
+        {
+            throw new ArgumentException(
+                "A ready asset requires a supported scale, active transfer verifier, and active top-up shield verifier.",
                 nameof(ready));
         }
         AssetScale = assetScale;
@@ -262,6 +285,11 @@ public sealed record OfflineReadiness
     public string EvaluatedBlockHash { get; }
 
     public OfflineActiveTransferVerifier? ActiveTransferVerifier { get; }
+
+    /// <summary>
+    /// Key-material-free public-to-confidential top-up shield verifier active at the evaluated snapshot.
+    /// </summary>
+    public OfflineActiveTransferVerifier? ActiveTopUpShieldVerifier { get; }
 
     public bool Ready { get; }
 

@@ -1651,7 +1651,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
     }
 
     [Fact]
-    public void RecursiveSpendSharedAbi6FixtureMatchesSdkSurface()
+    public void RecursiveSpendSharedAbi6FixtureIsExplicitlyRejectedByFirstReleaseSurface()
     {
         using var manifest = LoadSharedRecursiveSpendManifest();
         var root = manifest.RootElement;
@@ -1659,9 +1659,9 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.Equal(
             "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
             root.GetProperty("schema").GetString());
-        Assert.Equal(
-            KagemushaRecursiveSpendNative.RequiredNativeBridgeAbiVersion,
-            (uint)root.GetProperty("native_bridge_abi_version").GetInt32());
+        var fixtureAbiVersion = (uint)root.GetProperty("native_bridge_abi_version").GetInt32();
+        Assert.Equal(6u, fixtureAbiVersion);
+        Assert.NotEqual(KagemushaRecursiveSpendNative.RequiredNativeBridgeAbiVersion, fixtureAbiVersion);
         Assert.Equal(9, root.GetProperty("operation_count").GetInt32());
 
         var circuitIds = root.GetProperty("proof_circuit_ids");

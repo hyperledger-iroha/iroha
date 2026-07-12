@@ -38,6 +38,16 @@ function browserActiveTransferVerifier() {
   };
 }
 
+function browserActiveTopUpShieldVerifier() {
+  return {
+    ...browserActiveTransferVerifier(),
+    id: { backend: "halo2-ipa-pasta", name: "topup-shield-v2" },
+    circuit_id: "kagemusha-topup-shield-v2",
+    commitment: "66".repeat(32),
+    public_inputs_schema_hash: "77".repeat(32),
+  };
+}
+
 function jsonResponse(payload, init = {}) {
   return new Response(JSON.stringify(payload), {
     status: init.status ?? 200,
@@ -71,6 +81,7 @@ test("ToriiBrowserClient implements the complete first-release Offline JSON flow
         evaluated_block_height: 7,
         evaluated_block_hash: "ab".repeat(32),
         active_transfer_verifier: browserActiveTransferVerifier(),
+        active_topup_shield_verifier: browserActiveTopUpShieldVerifier(),
         ready: true,
         blockers: [],
       });
@@ -120,7 +131,9 @@ test("ToriiBrowserClient preserves wide Offline response integers", async () => 
   const fetchImpl = async () => new Response(
     `{"asset_definition_id":"${OFFLINE_CANONICAL_ASSET_DEFINITION_ID}",`
       + `"asset_scale":4,"evaluated_block_height":18446744073709551615,"evaluated_block_hash":"${"ab".repeat(32)}",`
-      + `"active_transfer_verifier":${JSON.stringify(browserActiveTransferVerifier())},"ready":true,"blockers":[]}`,
+      + `"active_transfer_verifier":${JSON.stringify(browserActiveTransferVerifier())},`
+      + `"active_topup_shield_verifier":${JSON.stringify(browserActiveTopUpShieldVerifier())},`
+      + '"ready":true,"blockers":[]}',
     { status: 200, headers: { "content-type": "application/json" } },
   );
   const client = new ToriiBrowserClient("https://torii.example", { fetchImpl });

@@ -101,6 +101,12 @@ devices and app builds without HCE should use QR or Nearby only.
 
 The public `OfflineToriiClient` exposes only readiness for a required asset
 definition, direct-Norito top-up and redeem submissions, and operation status.
+Each readiness snapshot requires the nullable `activeTransferVerifier` and
+`activeTopUpShieldVerifier` fields. A null role must be paired exactly with its
+`transfer_verifier_unavailable` or `topup_shield_verifier_unavailable` blocker;
+every reported verifier must be active at `evaluatedBlockHeight`. A ready
+snapshot additionally requires a supported asset scale and both active
+verifier roles.
 `OfflineTopUpRequest` and `OfflineRedeemRequest` accept only the canonical
 schema-bound request archive; they derive the lowercase idempotency key from
 its nonzero 32-byte `operation_id` field, so callers cannot supply a mismatched

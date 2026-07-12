@@ -43276,13 +43276,85 @@ mod tiered_snapshot_diff_tests {
     fn decode_state_snapshot_value(
         value: norito::json::Value,
     ) -> Result<State, norito::json::Error> {
+        decode_state_snapshot_value_with_kura(value, Kura::blank_kura_for_testing())
+    }
+
+    fn decode_state_snapshot_value_with_kura(
+        value: norito::json::Value,
+        kura: Arc<Kura>,
+    ) -> Result<State, norito::json::Error> {
         deserialize::KuraSeed {
-            kura: Kura::blank_kura_for_testing(),
+            kura,
             query_handle: LiveQueryStore::start_test(),
             #[cfg(feature = "telemetry")]
             telemetry: crate::telemetry::StateTelemetry::default(),
         }
         .into_state_from_json(value)
+    }
+
+    fn exact_sccp_finality_kura() -> Arc<Kura> {
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                .expect("exact SCCP finality fixture decodes");
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&fixture.bundle.payload)
+            .expect("exact SCCP payload encodes");
+        let key_pair = checked_keypair();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let transaction = TransactionBuilder::new(
+            ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+            authority,
+        )
+        .with_executable(iroha_data_model::transaction::Executable::IvmProved(
+            iroha_data_model::transaction::IvmProved {
+                bytecode: iroha_data_model::transaction::IvmBytecode::from_compiled(vec![
+                    0x01, 0x02, 0x03,
+                ]),
+                overlay: vec![InstructionBox::from(
+                    crate::bridge::test_record_sccp_message(payload),
+                )]
+                .into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas"),
+            },
+        ))
+        .sign(key_pair.private_key());
+        let entry_hash = transaction.hash_as_entrypoint();
+        let block_signer = checked_keypair();
+        let signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::try_from_hash(
+                block_signer.private_key(),
+                finality.block_header.hash(),
+            )
+            .expect("sign exact retained SCCP header"),
+        );
+        let mut block =
+            SignedBlock::presigned(signature, finality.block_header.clone(), vec![transaction]);
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[entry_hash],
+                vec![iroha_data_model::transaction::TransactionResultInner::Ok(
+                    iroha_data_model::transaction::DataTriggerSequence::default(),
+                )],
+            )
+            .expect("exact retained SCCP block results");
+        assert_eq!(block.hash(), finality.finality_artifact.block_hash);
+
+        let kura = Kura::blank_kura_for_testing();
+        kura.persist_block_with_retained_archive_for_tests(&Arc::new(block))
+            .expect("persist exact SCCP block and archive");
+        kura.store_v2_finality_artifact(&finality.finality_artifact)
+            .expect("persist exact SCCP finality artifact");
+        kura
+    }
+
+    fn decode_terminal_sccp_world_snapshot(world: World) -> Result<State, norito::json::Error> {
+        decode_state_snapshot_value_with_kura(
+            sccp_state_snapshot_value(world, SCCP_SNAPSHOT_CHAIN_ID),
+            exact_sccp_finality_kura(),
+        )
     }
 
     fn state_snapshot_world_mut(snapshot: &mut norito::json::Value) -> &mut norito::json::Map {
@@ -43422,7 +43494,7 @@ mod tiered_snapshot_diff_tests {
                 payload_hash: exact.bundle.commitment.payload_hash,
                 payload_bytes: iroha_sccp::canonical_sccp_payload_bytes(&exact.bundle.payload)
                     .expect("exact fixture payload encodes canonically"),
-                recorded_at_height: 19,
+                recorded_at_height: 1,
                 commitment_index: 0,
             };
             (key, record)
@@ -43446,7 +43518,10 @@ mod tiered_snapshot_diff_tests {
             payload_hash: message.payload_hash,
             destination_binding_hash: message.destination_binding_hash,
             route_configuration_hash: message.route_configuration_hash,
-            finality_block_hash: [0x85; 32],
+            finality_block_hash: iroha_sccp::sccp_exact_outbound_test_fixture_v1()
+                .request
+                .public_inputs
+                .finality_block_hash,
             destination_proof_commitment: [0x86; 32],
             finality_height: message.recorded_at_height,
             commitment_index: message.commitment_index,
@@ -43981,7 +44056,7 @@ mod tiered_snapshot_diff_tests {
 
         let (outbound_world, outbound_key, _, proof_record, _, _) =
             world_with_valid_sccp_outbound_history();
-        let decoded = decode_sccp_world_snapshot(outbound_world)
+        let decoded = decode_terminal_sccp_world_snapshot(outbound_world)
             .expect("deserialize authoritative outbound state snapshot");
         assert_eq!(
             decoded
@@ -44070,7 +44145,7 @@ mod tiered_snapshot_diff_tests {
         }
 
         fn assert_outbound_proof_snapshot_rejected(world: World, label: &str) {
-            let error = match decode_sccp_world_snapshot(world) {
+            let error = match decode_terminal_sccp_world_snapshot(world) {
                 Ok(_) => panic!("{label} outbound proof replay snapshot must fail closed"),
                 Err(error) => error,
             };
@@ -44081,7 +44156,7 @@ mod tiered_snapshot_diff_tests {
             );
         }
 
-        let (missing_terminal, key, index, _) = world_with_outbound_proof();
+        let (missing_terminal, key, _, _) = world_with_outbound_proof();
         {
             let mut terminal = missing_terminal.sccp_outbound_proofs.block();
             terminal.remove(key);
@@ -44139,6 +44214,76 @@ mod tiered_snapshot_diff_tests {
             world.sccp_outbound_proofs.insert(key, proof_record);
             assert_outbound_proof_snapshot_rejected(world, label);
         }
+    }
+
+    fn world_with_valid_pending_sccp_outbound() -> (
+        World,
+        SccpOutboundMessageKeyV1,
+        SccpOutboundPendingMessageRecordV1,
+    ) {
+        let (mut world, key, message, _, _, _) = world_with_valid_sccp_outbound_history();
+        world.sccp_outbound_pending_usage = Cell::default();
+        world.sccp_outbound_pending_messages = Storage::default();
+        world.sccp_outbound_message_locator = Storage::default();
+        world.sccp_outbound_message_index = Storage::default();
+        world.sccp_outbound_proofs = Storage::default();
+        insert_complete_sccp_outbound_record(&mut world, key, message.clone());
+        (world, key, message)
+    }
+
+    #[test]
+    fn sccp_pending_usage_snapshot_is_exact_and_config_bounded() {
+        let (world, _, message) = world_with_valid_pending_sccp_outbound();
+        decode_sccp_world_snapshot(world).expect("exact pending usage hydrates");
+
+        let payload_bytes = u64::try_from(message.payload_bytes.len()).expect("small payload");
+        for hostile in [
+            SccpOutboundPendingUsageV1 {
+                message_count: 0,
+                payload_bytes,
+            },
+            SccpOutboundPendingUsageV1 {
+                message_count: 2,
+                payload_bytes,
+            },
+            SccpOutboundPendingUsageV1 {
+                message_count: 1,
+                payload_bytes: payload_bytes + 1,
+            },
+            SccpOutboundPendingUsageV1 {
+                message_count: u64::MAX,
+                payload_bytes: u64::MAX,
+            },
+        ] {
+            let (mut world, _, _) = world_with_valid_pending_sccp_outbound();
+            world.sccp_outbound_pending_usage = Cell::new(hostile);
+            let error = match decode_sccp_world_snapshot(world) {
+                Ok(_) => panic!("tampered pending usage must fail snapshot hydration"),
+                Err(error) => error,
+            };
+            assert!(
+                error.to_string().contains("sccp_outbound_pending_usage"),
+                "unexpected pending-usage error: {error}"
+            );
+        }
+
+        let (world, _, _) = world_with_valid_pending_sccp_outbound();
+        let mut state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from(SCCP_SNAPSHOT_CHAIN_ID),
+        );
+        state.zk.sccp.max_pending_outbound_messages = NonZeroU64::new(1).expect("one is nonzero");
+        state.zk.sccp.max_pending_outbound_payload_bytes =
+            NonZeroU64::new(payload_bytes).expect("fixture payload is nonzero");
+        validate_sccp_state_local_profile(&state).expect("exact configured pending cap validates");
+
+        state.zk.sccp.max_pending_outbound_payload_bytes =
+            NonZeroU64::new(payload_bytes - 1).expect("fixture payload exceeds one byte");
+        let error = validate_sccp_state_local_profile(&state)
+            .expect_err("restored usage above configured byte cap must fail");
+        assert!(error.contains("exceeds configured limits"), "{error}");
     }
 
     #[test]
@@ -44495,7 +44640,14 @@ mod tiered_snapshot_diff_tests {
         world: World,
         chain_id: &str,
     ) -> Result<State, norito::json::Error> {
-        decode_state_snapshot_value(sccp_state_snapshot_value(world, chain_id))
+        let has_terminal_outbound = world.sccp_outbound_proofs.view().iter().next().is_some();
+        let encoded = sccp_state_snapshot_value(world, chain_id);
+        let kura = if has_terminal_outbound {
+            exact_sccp_finality_kura()
+        } else {
+            Kura::blank_kura_for_testing()
+        };
+        decode_state_snapshot_value_with_kura(encoded, kura)
     }
 
     #[test]
@@ -44684,7 +44836,7 @@ mod tiered_snapshot_diff_tests {
         assert_rejected(
             world,
             "payload route drift",
-            "payload route id, asset key, or revision",
+            "differs from its immutable Kura archive entry",
         );
 
         let (mut world, key, mut message, mut proof, _, _) =
@@ -44706,7 +44858,11 @@ mod tiered_snapshot_diff_tests {
         assert!(message.is_well_formed_for_key(&wrong_sender_key));
         assert!(proof.is_well_formed_for_key(&wrong_sender_key));
         replace_complete_sccp_outbound_history(&mut world, wrong_sender_key, message, proof);
-        assert_rejected(world, "non-address sender", "exact Taira I105 account");
+        assert_rejected(
+            world,
+            "non-address sender",
+            "differs from its immutable Kura archive entry",
+        );
 
         let (mut world, key, mut message, mut proof, _, _) =
             world_with_valid_sccp_outbound_history();
@@ -57708,7 +57864,9 @@ mod tests {
         let asset_domain: DomainId = DomainId::try_new("wide", "universal").unwrap();
         let (subject, _) = gen_account_in("wide-trigger-amount");
         let asset_definition = AssetDefinitionId::new(asset_domain, "coin".parse().unwrap());
-        let wide_amount = Numeric::from(i128::from(i64::MAX) + 1);
+        let wide_amount = "9223372036854775808"
+            .parse::<Numeric>()
+            .expect("canonical integer one above i64::MAX");
         let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
             data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {
                 asset: AssetId::new(asset_definition, subject),

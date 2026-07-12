@@ -1946,6 +1946,7 @@ pub struct WsvHost {
     pub caller: AccountId,
     account_map: HashMap<u64, AccountId>,
     asset_map: HashMap<u64, AssetDefinitionId>,
+    account_aliases: BTreeMap<String, AccountId>,
     public_inputs: BTreeMap<Name, Vec<u8>>,
     // ZK verify gating and configuration
     zk_verified_transfer: bool,
@@ -1958,7 +1959,9 @@ pub struct WsvHost {
     axt_policy_overridden: bool,
     sm_enabled: bool,
     allow_contract_runtime_asset_transfer_bypass: bool,
+    contract_runtime_invoker: Option<AccountId>,
     contract_runtime_address: Option<ContractAddress>,
+    contract_runtime_entrypoint: Option<String>,
     fastpq_batch_entries: Option<Vec<(AccountId, AccountId, AssetDefinitionId, Numeric)>>,
     actual_access: crate::host::AccessLog,
     state_overlay: HashMap<String, Option<Vec<u8>>>,
@@ -1973,6 +1976,7 @@ struct WsvHostSnapshot {
     caller: AccountId,
     account_map: HashMap<u64, AccountId>,
     asset_map: HashMap<u64, AssetDefinitionId>,
+    account_aliases: BTreeMap<String, AccountId>,
     public_inputs: BTreeMap<Name, Vec<u8>>,
     zk_verified_transfer: bool,
     zk_verified_unshield: bool,
@@ -1984,7 +1988,9 @@ struct WsvHostSnapshot {
     axt_policy_overridden: bool,
     sm_enabled: bool,
     allow_contract_runtime_asset_transfer_bypass: bool,
+    contract_runtime_invoker: Option<AccountId>,
     contract_runtime_address: Option<ContractAddress>,
+    contract_runtime_entrypoint: Option<String>,
     fastpq_batch_entries: Option<Vec<(AccountId, AccountId, AssetDefinitionId, Numeric)>>,
     actual_access: crate::host::AccessLog,
     state_overlay: HashMap<String, Option<Vec<u8>>>,
@@ -2107,6 +2113,7 @@ impl WsvHost {
             caller,
             account_map,
             asset_map,
+            account_aliases: BTreeMap::new(),
             public_inputs: BTreeMap::new(),
             zk_verified_transfer: false,
             zk_verified_unshield: false,
@@ -2118,7 +2125,9 @@ impl WsvHost {
             axt_policy_overridden: false,
             sm_enabled: false,
             allow_contract_runtime_asset_transfer_bypass: false,
+            contract_runtime_invoker: None,
             contract_runtime_address: None,
+            contract_runtime_entrypoint: None,
             fastpq_batch_entries: None,
             actual_access: crate::host::AccessLog::default(),
             state_overlay: HashMap::new(),
@@ -2160,6 +2169,9 @@ impl WsvHost {
     /// Switch the caller using a canonical account identity.
     pub fn set_caller_subject(&mut self, caller: AccountId) {
         self.caller = Self::materialize_subject_account(&mut self.wsv, &caller);
+        self.contract_runtime_invoker = None;
+        self.contract_runtime_address = None;
+        self.contract_runtime_entrypoint = None;
     }
 
     /// Provide public inputs retrievable via `SYSCALL_GET_PUBLIC_INPUT`.
@@ -2203,6 +2215,7 @@ impl WsvHost {
             caller: self.caller.clone(),
             account_map: self.account_map.clone(),
             asset_map: self.asset_map.clone(),
+            account_aliases: self.account_aliases.clone(),
             public_inputs: self.public_inputs.clone(),
             zk_verified_transfer: self.zk_verified_transfer,
             zk_verified_unshield: self.zk_verified_unshield,
@@ -2215,7 +2228,9 @@ impl WsvHost {
             sm_enabled: self.sm_enabled,
             allow_contract_runtime_asset_transfer_bypass: self
                 .allow_contract_runtime_asset_transfer_bypass,
+            contract_runtime_invoker: self.contract_runtime_invoker.clone(),
             contract_runtime_address: self.contract_runtime_address.clone(),
+            contract_runtime_entrypoint: self.contract_runtime_entrypoint.clone(),
             fastpq_batch_entries: self.fastpq_batch_entries.clone(),
             actual_access: self.actual_access.clone(),
             state_overlay: self.state_overlay.clone(),
@@ -2230,6 +2245,7 @@ impl WsvHost {
         self.caller = snapshot.caller.clone();
         self.account_map = snapshot.account_map.clone();
         self.asset_map = snapshot.asset_map.clone();
+        self.account_aliases = snapshot.account_aliases.clone();
         self.public_inputs = snapshot.public_inputs.clone();
         self.zk_verified_transfer = snapshot.zk_verified_transfer;
         self.zk_verified_unshield = snapshot.zk_verified_unshield;
@@ -2242,7 +2258,9 @@ impl WsvHost {
         self.sm_enabled = snapshot.sm_enabled;
         self.allow_contract_runtime_asset_transfer_bypass =
             snapshot.allow_contract_runtime_asset_transfer_bypass;
+        self.contract_runtime_invoker = snapshot.contract_runtime_invoker.clone();
         self.contract_runtime_address = snapshot.contract_runtime_address.clone();
+        self.contract_runtime_entrypoint = snapshot.contract_runtime_entrypoint.clone();
         self.fastpq_batch_entries = snapshot.fastpq_batch_entries.clone();
         self.actual_access = snapshot.actual_access.clone();
         self.state_overlay = snapshot.state_overlay.clone();
@@ -2545,6 +2563,96 @@ impl WsvHost {
     /// Bind the immutable contract address used by contract-scoped permission builtins.
     pub fn set_contract_runtime_address(&mut self, contract: ContractAddress) {
         self.contract_runtime_address = Some(contract);
+    }
+
+    /// Bind a deployed-contract invocation while keeping the invoking authority distinct from
+    /// the immutable account which authorizes ledger effects.
+    pub fn bind_contract_runtime_context(
+        &mut self,
+        invoker: AccountId,
+        contract: ContractAddress,
+        entrypoint: String,
+    ) -> Result<(), String> {
+        if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
+            return Err("contract runtime entrypoint must be a non-empty canonical selector".into());
+        }
+        let invoker = Self::materialize_subject_account(&mut self.wsv, &invoker);
+        let contract_subject =
+            Self::materialize_subject_account(&mut self.wsv, &contract.subject_id());
+        self.caller = contract_subject;
+        self.contract_runtime_invoker = Some(invoker);
+        self.contract_runtime_address = Some(contract);
+        self.contract_runtime_entrypoint = Some(entrypoint);
+        Ok(())
+    }
+
+    /// Leave deployed-contract scope and restore the surrounding authority.
+    pub fn clear_contract_runtime_context(&mut self, authority: AccountId) {
+        self.caller = Self::materialize_subject_account(&mut self.wsv, &authority);
+        self.contract_runtime_invoker = None;
+        self.contract_runtime_address = None;
+        self.contract_runtime_entrypoint = None;
+    }
+
+    fn context_authority_subject(&self) -> AccountId {
+        self.contract_runtime_invoker
+            .clone()
+            .unwrap_or_else(|| self.caller.clone())
+    }
+
+    fn validate_account_alias_literal(alias: &str) -> Result<(), String> {
+        if alias.is_empty() || alias.trim() != alias {
+            return Err("account alias must be a non-empty canonical literal".to_owned());
+        }
+        let mut at_parts = alias.split('@');
+        let label = at_parts.next().unwrap_or_default();
+        let scope = at_parts
+            .next()
+            .ok_or_else(|| "account alias must contain exactly one `@`".to_owned())?;
+        if at_parts.next().is_some() {
+            return Err("account alias must contain exactly one `@`".to_owned());
+        }
+        let label_name = Name::from_str(label)
+            .map_err(|_| "account alias label is not a canonical Name".to_owned())?;
+        if label_name.as_ref() != label {
+            return Err("account alias label is not canonically encoded".to_owned());
+        }
+        let scope_parts = scope.split('.').collect::<Vec<_>>();
+        if !(1..=2).contains(&scope_parts.len()) {
+            return Err(
+                "account alias must be `name@dataspace` or `name@domain.dataspace`".to_owned(),
+            );
+        }
+        for part in scope_parts {
+            let name = Name::from_str(part)
+                .map_err(|_| "account alias scope contains an invalid Name".to_owned())?;
+            if name.as_ref() != part {
+                return Err("account alias scope is not canonically encoded".to_owned());
+            }
+        }
+        Ok(())
+    }
+
+    /// Seed one canonical account alias for contract-test query execution.
+    pub fn register_account_alias(
+        &mut self,
+        alias: String,
+        account: AccountId,
+    ) -> Result<(), String> {
+        Self::validate_account_alias_literal(&alias)?;
+        let account = Self::materialize_subject_account(&mut self.wsv, &account);
+        if let Some(existing) = self.account_aliases.get(&alias) {
+            let conflict = if existing == &account {
+                "duplicate"
+            } else {
+                "conflicting"
+            };
+            return Err(format!(
+                "{conflict} account alias registration for `{alias}` (existing `{existing}`, requested `{account}`)"
+            ));
+        }
+        self.account_aliases.insert(alias, account);
+        Ok(())
     }
 
     #[must_use]
@@ -4450,7 +4558,8 @@ impl IVMHost for WsvHost {
                             .ok_or(VMError::NoritoInvalid)?
                             .parse()
                             .map_err(|_| VMError::NoritoInvalid)?;
-                        if let Some(bal) = self.wsv.balance_checked(&self.caller, &acc, &asset) {
+                        let authority = self.context_authority_subject();
+                        if let Some(bal) = self.wsv.balance_checked(&authority, &acc, &asset) {
                             let mut map = njson::Map::new();
                             map.insert("balance".to_owned(), njson::Value::String(bal.to_string()));
                             let (p, response_len) = return_json(njson::Value::Object(map))?;
@@ -5679,7 +5788,7 @@ impl IVMHost for WsvHost {
             syscalls::SYSCALL_GET_AUTHORITY | syscalls::SYSCALL_SYSVAR_AUTHORITY => {
                 // Return the domainless account subject so raw equality checks inside
                 // contracts match AccountId::parse(...) literals and stored AccountId state.
-                let authority = self.caller.clone();
+                let authority = self.context_authority_subject();
                 let payload = norito::to_bytes(&authority).map_err(|_| VMError::NoritoInvalid)?;
                 let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
                 tlv.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
@@ -5700,11 +5809,63 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, 0);
                 Ok(Self::sysvar_gas(0))
             }
-            syscalls::SYSCALL_SYSVAR_CHAIN_ID
-            | syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS
-            | syscalls::SYSCALL_SYSVAR_ENTRYPOINT => {
+            syscalls::SYSCALL_SYSVAR_CHAIN_ID => {
                 vm.set_register(10, 0);
                 Ok(Self::sysvar_gas(0))
+            }
+            syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS => {
+                let Some(contract) = self.contract_runtime_address.as_ref() else {
+                    vm.set_register(10, 0);
+                    return Ok(Self::sysvar_gas(0));
+                };
+                let payload = norito::to_bytes(contract).map_err(|_| VMError::NoritoInvalid)?;
+                let pointer = Self::alloc_tlv_payload(vm, PointerType::NoritoBytes, &payload)?;
+                vm.set_register(10, pointer);
+                Ok(Self::sysvar_gas(payload.len()))
+            }
+            syscalls::SYSCALL_SYSVAR_CONTRACT_SUBJECT => {
+                let contract = self
+                    .contract_runtime_address
+                    .as_ref()
+                    .ok_or(VMError::PermissionDenied)?;
+                let payload = norito::to_bytes(&contract.subject_id())
+                    .map_err(|_| VMError::NoritoInvalid)?;
+                let pointer = Self::alloc_tlv_payload(vm, PointerType::AccountId, &payload)?;
+                vm.set_register(10, pointer);
+                Ok(Self::sysvar_gas(payload.len()))
+            }
+            syscalls::SYSCALL_SYSVAR_ENTRYPOINT => {
+                let Some(entrypoint) = self.contract_runtime_entrypoint.as_ref() else {
+                    vm.set_register(10, 0);
+                    return Ok(Self::sysvar_gas(0));
+                };
+                let payload = entrypoint.as_bytes().to_vec();
+                let pointer = Self::alloc_tlv_payload(vm, PointerType::Blob, &payload)?;
+                vm.set_register(10, pointer);
+                Ok(Self::sysvar_gas(payload.len()))
+            }
+            syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS => {
+                let alias_pointer = vm.register(10);
+                let alias_tlv = vm.validate_tlv(alias_pointer)?;
+                if !matches!(alias_tlv.type_id, PointerType::Blob | PointerType::NoritoBytes) {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let alias_input_len = alias_tlv.payload.len();
+                let alias = String::from_utf8(alias_tlv.payload.to_vec())
+                    .map_err(|_| VMError::DecodeError)?;
+                Self::validate_account_alias_literal(&alias)
+                    .map_err(|_| VMError::NoritoInvalid)?;
+                let account = self
+                    .account_aliases
+                    .get(&alias)
+                    .cloned()
+                    .ok_or(VMError::PermissionDenied)?;
+                let payload = norito::to_bytes(&account).map_err(|_| VMError::NoritoInvalid)?;
+                let pointer = Self::alloc_tlv_payload(vm, PointerType::AccountId, &payload)?;
+                vm.set_register(10, pointer);
+                Ok(Self::singular_query_gas(
+                    alias_input_len.saturating_add(payload.len()),
+                ))
             }
             syscalls::SYSCALL_GRANT_PERMISSION => {
                 if !self
@@ -5970,19 +6131,20 @@ impl IVMHost for WsvHost {
             syscalls::SYSCALL_GET_ACCOUNT_BALANCE => {
                 let account_id = self.decode_canonical_account_reg(vm, 10)?;
                 let asset_id = self.decode_asset_reg(vm, 11)?;
+                let authority = self.context_authority_subject();
                 if MockWorldStateView::account_subject(&account_id)
-                    != MockWorldStateView::account_subject(&self.caller)
+                    != MockWorldStateView::account_subject(&authority)
                 {
                     let token = PermissionToken::ReadAccountAssets(
                         MockWorldStateView::account_subject(&account_id),
                     );
-                    if !self.wsv.has_permission(&self.caller, &token) {
+                    if !self.wsv.has_permission(&authority, &token) {
                         return Err(VMError::PermissionDenied);
                     }
                 }
                 if let Some(b) = self
                     .wsv
-                    .balance_checked(&self.caller, &account_id, &asset_id)
+                    .balance_checked(&authority, &account_id, &asset_id)
                 {
                     let quantity =
                         Quantity::from_canonical_numeric(b).map_err(|_| VMError::DecodeError)?;

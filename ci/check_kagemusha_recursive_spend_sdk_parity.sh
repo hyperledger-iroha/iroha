@@ -86,6 +86,7 @@ ABI18_V2_C_SYMBOLS = (
 
 ABI18_V2_NON_RECURSIVE_C_SYMBOLS = (
     "connect_norito_kagemusha_topup_finality_verify_v2",
+    "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
     "connect_norito_kagemusha_receiver_key_reference_v2",
     "connect_norito_kagemusha_recipient_output_derive_v2",
     "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
@@ -656,8 +657,6 @@ SOURCE_PATHS = (
     "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/PrivacyConfidentialWitnessTests.swift",
-    "IrohaSwift/Tests/IrohaSwiftTests/ConfidentialUnshieldRedeemNativeTests.swift",
-    "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKConfidentialUnshieldWorkflowTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/NoritoTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
@@ -1418,8 +1417,6 @@ SDK_PRIVACY_WORKFLOW_INVENTORY_PATHS = (
     "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/PrivacyConfidentialWitnessTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
-    "IrohaSwift/Tests/IrohaSwiftTests/ConfidentialUnshieldRedeemNativeTests.swift",
-    "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKConfidentialUnshieldWorkflowTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/NoritoTests.swift",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyConfidentialWitness.java",
@@ -4010,34 +4007,34 @@ def check_workflow_runs_swift_sdk_parse(errors):
     benchmark_needs = workflow_job_needs(workflow, MAIN_JOB)
     require(
         job_block is not None,
-        "Kagemusha payload workflow must define the combined Swift SDK/native interoperability job",
+        "Kagemusha payload workflow must define the current-API Swift/native interoperability job",
         errors,
     )
     if job_block is None:
         return
     require(
         re.search(r"(?m)^\s+runs-on:\s+macos-latest\s*$", job_block) is not None,
-        "Kagemusha payload workflow must run the combined Swift SDK/native interoperability job on macOS",
+        "Kagemusha payload workflow must run the current-API Swift/native interoperability job on macOS",
         errors,
     )
     require(
         re.search(r"(?m)^\s+timeout-minutes:\s+60\s*$", job_block) is not None,
-        "Kagemusha payload workflow must retain the combined Swift SDK/native interoperability timeout",
+        "Kagemusha payload workflow must retain the current-API Swift/native interoperability timeout",
         errors,
     )
     require(
         re.search(r"(?m)^\s+- uses:\s+Swatinem/rust-cache@v2\s*$", job_block) is not None,
-        "Kagemusha payload workflow must cache Rust artifacts for the combined Swift SDK/native interoperability job",
+        "Kagemusha payload workflow must cache native artifacts for the current-API Swift/native interoperability job",
         errors,
     )
     require(
         workflow_command_match(job_block, SWIFT_UNSHIELD_E2E_COMMAND) is not None,
-        "Kagemusha payload workflow must run the Swift confidential-unshield redeem E2E check in the combined job",
+        "Kagemusha payload workflow must run the current-API Swift/native interoperability gate",
         errors,
     )
     require(
         SWIFT_SDK_JOB in benchmark_needs,
-        "Kagemusha payload benchmark job must wait for the combined Swift SDK/native interoperability job",
+        "Kagemusha payload benchmark job must wait for the current-API Swift/native interoperability job",
         errors,
     )
 
@@ -21262,6 +21259,7 @@ def check_python(texts, errors):
 
 
 def check_swift(texts, errors):
+    readme = "IrohaSwift/README.md"
     prover = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift"
     asset_definition_address = "IrohaSwift/Sources/IrohaSwift/AssetDefinitionAddress.swift"
     norito = "IrohaSwift/Sources/IrohaSwift/Norito.swift"
@@ -21274,8 +21272,6 @@ def check_swift(texts, errors):
     test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift"
     request_codecs_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift"
     top_up_parity_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift"
-    native_unshield_test = "IrohaSwift/Tests/IrohaSwiftTests/ConfidentialUnshieldRedeemNativeTests.swift"
-    unshield_workflow_test = "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKConfidentialUnshieldWorkflowTests.swift"
     compact_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift"
     recursive_aggregation_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift"
     instruction_encoder_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift"
@@ -21979,6 +21975,7 @@ def check_swift(texts, errors):
         texts,
         top_up_parity_test,
         (
+            "testRealNativeUnshieldProofBuildsRustDecodableRedeemAttachment",
             "testVerifierRecordArchiveUsesMarkedSchemaHashAndThirtyTwoBitStatus",
             "testBuildRedeemProofAttachmentEmitsCanonicalArchiveAndComposesWithRedeemRequest",
             "testBuildRedeemProofAttachmentRejectsInvalidUnshieldEvidence",
@@ -22055,6 +22052,9 @@ def check_swift(texts, errors):
             "public func asKagemushaRecursiveSpendVerifierRecordRef() throws",
             'verifierKeyId: "\\(id.backend):\\(id.name)"',
             '"verifying-key detail is missing record_norito_base64"',
+            "guard detail.id.backend == normalizedBackend,",
+            "detail.id.name == normalizedName",
+            '"verifying-key detail identifier does not match the requested verifier key"',
         ),
         "Swift Torii exact verifier-record acquisition",
         errors,
@@ -22064,6 +22064,7 @@ def check_swift(texts, errors):
         torii_client_test,
         (
             "testGetVerifyingKeyAsync",
+            "testGetVerifyingKeyRejectsCrossWiredDetail",
             "testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha",
             "testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64",
             "XCTAssertEqual(detail.record.ownerManifestId",
@@ -22073,57 +22074,38 @@ def check_swift(texts, errors):
             '" \\(canonical)"',
             "String(canonical.dropLast())",
             "XCTAssertNil(legacyDetail.recordNorito)",
+            '"verifying-key detail identifier does not match the requested verifier key"',
         ),
         "Swift Torii exact verifier-record acquisition tests",
         errors,
     )
-    require_contains(
+    require_not_regex(
         texts,
         tx_builder,
-        (
-            "public func buildKagemushaConfidentialUnshieldRedeemProofAttachment(",
-            "verifierKeyId: ToriiVerifyingKeyId",
-            "blockHeight: UInt64? = nil",
-            "orchestrateKagemushaConfidentialUnshieldRedeemProofAttachment(",
-            "toriiRestClient.getVerifyingKey(",
-            "PrivacyNativeBridge.buildConfidentialUnshieldProofV3",
-            "KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(",
-            "guard detail.id == verifierKeyId else",
-            "detail.asKagemushaRecursiveSpendVerifierRecordRef()",
-            ".buildConfidentialUnshieldProofRequestV1(witness: witness)",
-        ),
-        "Swift confidential-unshield redeem SDK workflow",
+        r"buildKagemushaConfidentialUnshieldRedeemProofAttachment|"
+        r"orchestrateKagemushaConfidentialUnshieldRedeemProofAttachment",
+        "Swift first-release API must not expose the retired detached unshield attachment workflow",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        readme,
+        r"buildKagemushaConfidentialUnshieldRedeemProofAttachment|"
+        r"orchestrateKagemushaConfidentialUnshieldRedeemProofAttachment",
+        "Swift first-release README must not document the retired detached unshield attachment workflow",
         errors,
     )
     require_contains(
         texts,
-        unshield_workflow_test,
+        readme,
         (
-            "testOrchestratorFetchesExactRecordBeforeBuildingProofAndAttachment",
-            "testOrchestratorRejectsCrossWiredToriiDetailBeforeProofConstruction",
-            "orchestrateKagemushaConfidentialUnshieldRedeemProofAttachment(",
-            'XCTAssertEqual(calls, ["fetch", "build", "attach"])',
-            'XCTAssertEqual(record.verifierKeyId, "halo2/ipa:unshield-v3")',
-            "XCTAssertEqual(record.recordBytes, recordNorito)",
-            "XCTAssertEqual(blockHeight, 42)",
-            "XCTAssertFalse(buildWasCalled)",
-        ),
-        "Swift confidential-unshield redeem SDK workflow tests",
-        errors,
-    )
-    require_contains(
-        texts,
-        native_unshield_test,
-        (
-            "testRealNativeUnshieldProofBuildsRustDecodableRedeemAttachment",
-            'environment["IROHA_SWIFT_UNSHIELD_V3_RECORD_PATH"]',
-            "PrivacyNativeBridge.isNativeAvailable",
-            ".buildConfidentialUnshieldProofRequestV1(witness: witness)",
+            "ToriiClient.getVerifyingKey",
+            ".asKagemushaRecursiveSpendVerifierRecordRef()",
+            ".buildConfidentialUnshieldProofRequestV2(witness: unshieldWitness)",
             "PrivacyNativeBridge.buildConfidentialUnshieldProofV3(",
-            "KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(",
-            'environment["IROHA_SWIFT_UNSHIELD_ATTACHMENT_OUT"]',
+            ".buildRedeemProofAttachment(",
         ),
-        "Swift confidential-unshield native interoperability test",
+        "Swift first-release explicit unshield proof workflow README",
         errors,
     )
     require_not_regex(
@@ -24213,11 +24195,11 @@ def check_swift_unshield_redeem_interoperability(texts, errors):
         WORKFLOW_PATH,
         (
             "  kagemusha_swift_sdk_parse:\n    runs-on: macos-latest\n    timeout-minutes: 60",
-            '      - uses: Swatinem/rust-cache@v2\n        with:\n          cache-on-failure: "true"\n      - name: Swift confidential-unshield redeem SDK and native interoperability',
+            '      - uses: Swatinem/rust-cache@v2\n        with:\n          cache-on-failure: "true"\n      - name: Swift confidential-unshield current SDK and native interoperability',
             "        run: ci/check_swift_confidential_unshield_redeem_e2e.sh",
             MAIN_JOB_NEEDS_LINE,
         ),
-        "Swift confidential-unshield combined CI job",
+        "Swift current-API confidential-unshield interoperability CI job",
         errors,
     )
     require_contains(
@@ -24228,7 +24210,8 @@ def check_swift_unshield_redeem_interoperability(texts, errors):
             "KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH",
             "--scratch-path",
             '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter',
-            "ToriiClientTests/testGetVerifyingKeyAsync|ToriiClientTests/testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha|ToriiClientTests/testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64",
+            '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter KagemushaRecursiveSpendRequestCodecsTests',
+            "ToriiClientTests/testGetVerifyingKeyAsync|ToriiClientTests/testGetVerifyingKeyRejectsCrossWiredDetail|ToriiClientTests/testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha|ToriiClientTests/testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64",
         ),
         "Swift confidential-unshield focused runner",
         errors,
@@ -24352,14 +24335,14 @@ def check_swift_unshield_redeem_interoperability(texts, errors):
             'export IROHA_SWIFT_UNSHIELD_V3_RECORD_PATH=',
             'export IROHA_SWIFT_UNSHIELD_ATTACHMENT_OUT=',
             'swift test --scratch-path "${SWIFT_SCRATCH_PATH}"',
-            "--filter ConfidentialUnshieldRedeemNativeTests",
+            "--filter KagemushaTopUpParityTests/testRealNativeUnshieldProofBuildsRustDecodableRedeemAttachment",
             'test -s "${IROHA_SWIFT_UNSHIELD_ATTACHMENT_OUT}"',
             "-p iroha_core --test swift_confidential_unshield_redeem",
             "swift_confidential_unshield_redeem_attachment_is_canonical_and_verifies",
             'export KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH="${SWIFT_SCRATCH_PATH}"',
             'bash "${ROOT_DIR}/ci/check_kagemusha_recursive_spend_swift_sdk.sh"',
         ),
-        "Swift confidential-unshield redeem native E2E runner",
+        "Swift current-API confidential-unshield native E2E runner",
         errors,
     )
     require_contains(
@@ -24437,13 +24420,23 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         errors,
     )
     require(
-        '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter IrohaSDKConfidentialUnshieldWorkflowTests' in script,
-        "Kagemusha Swift SDK script must run confidential-unshield SDK workflow tests",
+        '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter KagemushaRecursiveSpendTests' in script,
+        "Kagemusha Swift SDK script must run the ABI-18 recursive-spend V2 protocol tests",
         errors,
     )
     require(
-        '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter \'ToriiClientTests/testGetVerifyingKeyAsync|ToriiClientTests/testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha|ToriiClientTests/testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64\'' in script,
-        "Kagemusha Swift SDK script must run Torii verifier-record fetch, archive conversion, and noncanonical Base64 tests",
+        '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter KagemushaRecursiveSpendProverTests' in script,
+        "Kagemusha Swift SDK script must run the exact first-release selector tests",
+        errors,
+    )
+    require(
+        '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter KagemushaRecursiveSpendRequestCodecsTests' in script,
+        "Kagemusha Swift SDK script must run current recursive-spend request codec tests",
+        errors,
+    )
+    require(
+        '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter \'ToriiClientTests/testGetVerifyingKeyAsync|ToriiClientTests/testGetVerifyingKeyRejectsCrossWiredDetail|ToriiClientTests/testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha|ToriiClientTests/testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64\'' in script,
+        "Kagemusha Swift SDK script must run Torii verifier-record fetch, identity binding, archive conversion, and noncanonical Base64 tests",
         errors,
     )
     require(
@@ -24548,8 +24541,6 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/PrivacyConfidentialWitnessTests.swift",
-        "IrohaSwift/Tests/IrohaSwiftTests/ConfidentialUnshieldRedeemNativeTests.swift",
-        "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKConfidentialUnshieldWorkflowTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/NoritoTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
@@ -39438,6 +39429,12 @@ if mode == "--negative-control-mobile-confidential-witness-codecs":
             "Swift checked redeem proof attachment tests",
         ),
         (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+            "testRealNativeUnshieldProofBuildsRustDecodableRedeemAttachment",
+            "testSyntheticUnshieldProofBuildsUncheckedAttachment",
+            "Swift checked redeem proof attachment tests",
+        ),
+        (
             "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
             "public let recordNorito: Data?",
             "public let recordNorito: Data",
@@ -39456,22 +39453,28 @@ if mode == "--negative-control-mobile-confidential-witness-codecs":
             "Swift Torii exact verifier-record acquisition",
         ),
         (
+            "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
+            "guard detail.id.backend == normalizedBackend,",
+            "if detail.id.backend == normalizedBackend,",
+            "Swift Torii exact verifier-record acquisition",
+        ),
+        (
             "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
             "testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64",
             "testVerifyingKeyDetailAllowsNoncanonicalRecordNoritoBase64",
             "Swift Torii exact verifier-record acquisition tests",
         ),
         (
-            "IrohaSwift/Sources/IrohaSwift/TxBuilder.swift",
-            "public func buildKagemushaConfidentialUnshieldRedeemProofAttachment(",
-            "public func buildUncheckedKagemushaRedeemProofAttachment(",
-            "Swift confidential-unshield redeem SDK workflow",
+            "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
+            "testGetVerifyingKeyRejectsCrossWiredDetail",
+            "testGetVerifyingKeyAllowsCrossWiredDetail",
+            "Swift Torii exact verifier-record acquisition tests",
         ),
         (
-            "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKConfidentialUnshieldWorkflowTests.swift",
-            "testOrchestratorRejectsCrossWiredToriiDetailBeforeProofConstruction",
-            "testOrchestratorAllowsCrossWiredToriiDetail",
-            "Swift confidential-unshield redeem SDK workflow tests",
+            "IrohaSwift/README.md",
+            "ToriiClient.getVerifyingKey",
+            "ToriiClient.getUncheckedVerifyingKey",
+            "Swift first-release explicit unshield proof workflow README",
         ),
         (
             "crates/iroha_torii/src/routing.rs",
@@ -39508,12 +39511,6 @@ if mode == "--negative-control-mobile-confidential-witness-codecs":
             "record.is_active_at(state_transaction.block_height())",
             "record.is_active()",
             "Rust confidential-unshield redeem verifier lifecycle",
-        ),
-        (
-            "IrohaSwift/Tests/IrohaSwiftTests/ConfidentialUnshieldRedeemNativeTests.swift",
-            "testRealNativeUnshieldProofBuildsRustDecodableRedeemAttachment",
-            "testSyntheticUnshieldProofBuildsUncheckedAttachment",
-            "Swift confidential-unshield native interoperability test",
         ),
         (
             "scripts/build_norito_xcframework.sh",
@@ -39711,25 +39708,25 @@ if mode == "--negative-control-mobile-confidential-witness-codecs":
             WORKFLOW_PATH,
             "  kagemusha_swift_sdk_parse:\n    runs-on: macos-latest\n    timeout-minutes: 60",
             "  kagemusha_swift_sdk_parse:\n    runs-on: macos-latest\n    timeout-minutes: 10",
-            "Swift confidential-unshield combined CI job",
+            "Swift current-API confidential-unshield interoperability CI job",
         ),
         (
             WORKFLOW_PATH,
-            '      - uses: Swatinem/rust-cache@v2\n        with:\n          cache-on-failure: "true"\n      - name: Swift confidential-unshield redeem SDK and native interoperability',
-            "      - name: Swift confidential-unshield redeem SDK and native interoperability",
-            "Swift confidential-unshield combined CI job",
+            '      - uses: Swatinem/rust-cache@v2\n        with:\n          cache-on-failure: "true"\n      - name: Swift confidential-unshield current SDK and native interoperability',
+            "      - name: Swift confidential-unshield current SDK and native interoperability",
+            "Swift current-API confidential-unshield interoperability CI job",
         ),
         (
             WORKFLOW_PATH,
             "        run: ci/check_swift_confidential_unshield_redeem_e2e.sh",
-            "        run: ci/check_kagemusha_recursive_spend_swift_sdk.sh",
-            "Swift confidential-unshield combined CI job",
+            "        run: ci/check_swift_confidential_unshield_redeem_e2e.sh --skip",
+            "Swift current-API confidential-unshield interoperability CI job",
         ),
         (
             WORKFLOW_PATH,
             MAIN_JOB_NEEDS_LINE,
             "    needs: [kagemusha_native_bridge_tests, kagemusha_unshield_redeem_rust_tests, kagemusha_csharp_sdk_tests, kagemusha_javascript_sdk_tests, kagemusha_jvm_sdk_tests, kagemusha_python_sdk_tests]",
-            "Swift confidential-unshield combined CI job",
+            "Swift current-API confidential-unshield interoperability CI job",
         ),
         (
             SWIFT_SDK_PARSE_COMMAND,
@@ -39745,63 +39742,21 @@ if mode == "--negative-control-mobile-confidential-witness-codecs":
         ),
         (
             SWIFT_SDK_PARSE_COMMAND,
-            "ToriiClientTests/testGetVerifyingKeyAsync|ToriiClientTests/testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha|ToriiClientTests/testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64",
+            "ToriiClientTests/testGetVerifyingKeyAsync|ToriiClientTests/testGetVerifyingKeyRejectsCrossWiredDetail|ToriiClientTests/testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha|ToriiClientTests/testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64",
             "ToriiClientTests/testGetVerifyingKeyAsync",
             "Swift confidential-unshield focused runner",
         ),
         (
-            "ci/check_swift_confidential_unshield_redeem_e2e.sh",
-            'BRIDGE_TARGET_DIR="${SWIFT_CONFIDENTIAL_UNSHIELD_CARGO_TARGET_DIR:-${TMP_DIR}/cargo-target}"',
-            'BRIDGE_TARGET_DIR="${ROOT_DIR}/target"',
-            "Swift confidential-unshield redeem native E2E runner",
+            SWIFT_SDK_PARSE_COMMAND,
+            '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter KagemushaRecursiveSpendRequestCodecsTests',
+            '"${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter KagemushaRecursiveSpendRequestCodecsSmokeTests',
+            "Swift confidential-unshield focused runner",
         ),
         (
             "ci/check_swift_confidential_unshield_redeem_e2e.sh",
-            'cd "${ROOT_DIR}"',
-            'cd "${ROOT_DIR}/IrohaSwift"',
-            "Swift confidential-unshield redeem native E2E runner",
-        ),
-        (
-            "ci/check_swift_confidential_unshield_redeem_e2e.sh",
-            'SWIFT_SCRATCH_PATH="${TMP_DIR}/swift-build"',
-            'SWIFT_SCRATCH_PATH="${ROOT_DIR}/IrohaSwift/.build"',
-            "Swift confidential-unshield redeem native E2E runner",
-        ),
-        (
-            "ci/check_swift_confidential_unshield_redeem_e2e.sh",
-            'RUST_HOST_TARGET="aarch64-apple-darwin"',
-            'RUST_HOST_TARGET="aarch64-apple-ios"',
-            "Swift confidential-unshield redeem native E2E runner",
-        ),
-        (
-            "ci/check_swift_confidential_unshield_redeem_e2e.sh",
-            'RUST_HOST_TARGET="x86_64-apple-darwin"',
-            'RUST_HOST_TARGET="x86_64-apple-ios"',
-            "Swift confidential-unshield redeem native E2E runner",
-        ),
-        (
-            "ci/check_swift_confidential_unshield_redeem_e2e.sh",
-            "--features privacy-production-enabled",
-            "--features privacy-stub-only",
-            "Swift confidential-unshield redeem native E2E runner",
-        ),
-        (
-            "ci/check_swift_confidential_unshield_redeem_e2e.sh",
-            'swift test --scratch-path "${SWIFT_SCRATCH_PATH}"',
-            "swift test",
-            "Swift confidential-unshield redeem native E2E runner",
-        ),
-        (
-            "ci/check_swift_confidential_unshield_redeem_e2e.sh",
-            "--filter ConfidentialUnshieldRedeemNativeTests",
-            "--filter SyntheticUnshieldRedeemTests",
-            "Swift confidential-unshield redeem native E2E runner",
-        ),
-        (
-            "ci/check_swift_confidential_unshield_redeem_e2e.sh",
-            'export KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH="${SWIFT_SCRATCH_PATH}"',
-            "unset KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH",
-            "Swift confidential-unshield redeem native E2E runner",
+            "--filter KagemushaTopUpParityTests/testRealNativeUnshieldProofBuildsRustDecodableRedeemAttachment",
+            "--filter KagemushaTopUpParityTests/testSyntheticUnshieldProofBuildsUncheckedAttachment",
+            "Swift current-API confidential-unshield native E2E runner",
         ),
         (
             "crates/iroha_core/examples/confidential_v2_vk_json.rs",
@@ -44941,8 +44896,8 @@ if mode == "--negative-control-swift-sdk-parse-workflow":
     target = WORKFLOW_PATH
     original = read(target)
     mutated = original.replace(
-        f"        run: {SWIFT_UNSHIELD_E2E_COMMAND}",
-        "        run: ci/check_swift_confidential_unshield_redeem_e2e.sh --skip",
+        f"        run: {SWIFT_SDK_PARSE_COMMAND}",
+        f"        run: {SWIFT_SDK_PARSE_COMMAND} --skip",
         1,
     )
     if mutated == original:
@@ -44952,7 +44907,7 @@ if mode == "--negative-control-swift-sdk-parse-workflow":
         run_checks(texts)
     except ParityError as error:
         message = str(error)
-        expected = "Kagemusha payload workflow must run the Swift confidential-unshield redeem E2E check in the combined job"
+        expected = "Kagemusha payload workflow must run the maintained Swift ABI-18/V2 SDK gate"
         expected_labels = (expected,)
         if expected not in message:
             raise SystemExit(
@@ -64774,8 +64729,8 @@ if mode == "--negative-control-sdk-append-lineage-key-material-selection":
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
-            'assertEquals("lineageKeyArtifacts must be append artifacts", autoAppendWrongProfile.message)',
-            'assertTrue(autoAppendWrongProfile.message.orEmpty().contains("append artifacts"))',
+            'assertEquals("outputProofCircuitId is not valid for the previous bundle", autoAppendWrongProfile.message)',
+            'assertTrue(autoAppendWrongProfile.message.orEmpty().contains("valid for the previous bundle"))',
             "Kotlin typed recursive spend lineage-key exact diagnostics",
         ),
         (
@@ -64786,8 +64741,8 @@ if mode == "--negative-control-sdk-append-lineage-key-material-selection":
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
-            'assertEquals("lineage key artifacts are invalid for lineage append output", wrongAppendLineage.message)',
-            'assertTrue(wrongAppendLineage.message.orEmpty().contains("lineage key artifacts"))',
+            'assertEquals("outputProofCircuitId is not valid for the previous bundle", wrongAppendLineage.message)',
+            'assertTrue(wrongAppendLineage.message.orEmpty().contains("valid for the previous bundle"))',
             "Kotlin typed recursive spend lineage-key exact diagnostics",
         ),
         (
@@ -64824,20 +64779,20 @@ if mode == "--negative-control-sdk-append-lineage-key-material-selection":
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
-            '"lineageKeyArtifacts must be append artifacts"\n        .equals(autoAppendWrongProfile.getMessage())',
-            'autoAppendWrongProfile.getMessage().contains("append artifacts")',
+            '"outputProofCircuitId is not valid for the previous bundle"\n        .equals(autoLineageAppendWithInitProfile.getMessage())',
+            'autoLineageAppendWithInitProfile.getMessage().contains("valid for the previous bundle")',
             "Android Java typed recursive spend lineage-key exact diagnostics",
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
-            "autoAppendWrongProfile",
-            "generatedAppendWrongProfile",
+            "autoLineageAppendWithInitProfile",
+            "generatedLineageAppendWithInitProfile",
             "Android Java typed recursive spend append lineage-key selection tests",
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
-            '"lineage key artifacts are invalid for lineage append output"\n        .equals(wrongAppendLineage.getMessage())',
-            'messageContains(wrongAppendLineage, "lineage key artifacts")',
+            '"outputProofCircuitId is not valid for the previous bundle"\n        .equals(wrongAppendLineage.getMessage())',
+            'messageContains(wrongAppendLineage, "valid for the previous bundle")',
             "Android Java typed recursive spend lineage-key exact diagnostics",
         ),
         (
@@ -65296,8 +65251,8 @@ if mode == "--negative-control-sdk-append-previous-proof-opening-selection":
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
-            'assertEquals("previousProofOpenEnvelopes is required for lineage append output", error.message)',
-            'assertTrue(error.message.orEmpty().contains("previousProofOpenEnvelopes"))',
+            'assertEquals("outputProofCircuitId is not valid for the previous bundle", error.message)',
+            'assertTrue(error.message.orEmpty().contains("valid for the previous bundle"))',
             "Kotlin typed recursive spend lineage-key exact diagnostics",
         ),
         (
@@ -65320,8 +65275,8 @@ if mode == "--negative-control-sdk-append-previous-proof-opening-selection":
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
-            '"previousProofOpenEnvelopes is required for lineage append output"\n        .equals(error.getMessage())',
-            'messageContains(error, "previousProofOpenEnvelopes")',
+            '"outputProofCircuitId is not valid for the previous bundle"\n        .equals(error.getMessage())',
+            'messageContains(error, "valid for the previous bundle")',
             "Android Java typed recursive spend lineage-key exact diagnostics",
         ),
     )
@@ -65468,9 +65423,9 @@ if mode == "--negative-control-sdk-append-previous-proof-opening-selection":
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
             "        val malformedPreviousOpenArchives = listOf(",
             "    private data class ProofFixture(",
-            "assertEquals(expectedMessage, archiveError.message)",
-            "assertTrue(archiveError.message.orEmpty().contains(expectedMessage))",
-            "Kotlin typed recursive spend append previous-proof Pallas diagnostics missing assertEquals(expectedMessage, archiveError.message)",
+            'assertEquals(\n                "outputProofCircuitId is not valid for the previous bundle",\n                archiveError.message,\n                adversarialCase,\n            )',
+            'assertTrue(archiveError.message.orEmpty().contains("valid for the previous bundle"), adversarialCase)',
+            'Kotlin fail-closed lineage append previous-proof containment missing "outputProofCircuitId is not valid for the previous bundle",',
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
@@ -65596,9 +65551,9 @@ if mode == "--negative-control-sdk-append-previous-proof-opening-selection":
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
             "    final Object[][] malformedPreviousOpenArchives = {",
             "  private static void rejectsEmptyArchivesBeforeNativeDispatch() {",
-            "assert expectedMessage.equals(archiveError.getMessage());",
-            "assert messageContains(archiveError, expectedMessage);",
-            "Android Java typed recursive spend append previous-proof Pallas diagnostics missing assert expectedMessage.equals(archiveError.getMessage());",
+            'assert "outputProofCircuitId is not valid for the previous bundle"\n          .equals(archiveError.getMessage()) : adversarialCase;',
+            'assert messageContains(archiveError, "valid for the previous bundle") : adversarialCase;',
+            'Android Java typed recursive spend append previous-proof Pallas diagnostics missing assert "outputProofCircuitId is not valid for the previous bundle"',
         ),
     )
     for target, block_start_marker, block_end_marker, old, new, label in block_replacements:
@@ -72957,6 +72912,7 @@ if [[ -z "$MODE" && "$(uname -s)" == "Darwin" ]]; then
       "connect_norito_kagemusha_build_previous_proof_open_envelopes_archive"
       "connect_norito_kagemusha_recursive_spend_capabilities_v1"
       "connect_norito_kagemusha_topup_finality_verify_v2"
+      "connect_norito_kagemusha_topup_shield_build_unsigned_v2"
       "connect_norito_kagemusha_recursive_spend_artifact_begin_v3"
       "connect_norito_kagemusha_recursive_spend_artifact_write_v3"
       "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3"
@@ -72981,6 +72937,7 @@ if [[ -z "$MODE" && "$(uname -s)" == "Darwin" ]]; then
       "connect_norito_kagemusha_recursive_spend_bundle_summary_v2"
       "connect_norito_kagemusha_recursive_spend_capabilities_v1"
       "connect_norito_kagemusha_topup_finality_verify_v2"
+      "connect_norito_kagemusha_topup_shield_build_unsigned_v2"
       "connect_norito_kagemusha_recursive_spend_artifact_begin_v3"
       "connect_norito_kagemusha_recursive_spend_artifact_write_v3"
       "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3"

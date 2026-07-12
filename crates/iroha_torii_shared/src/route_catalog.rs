@@ -820,8 +820,15 @@ fn validate_path(route: &RouteDescriptor) -> Result<(), &'static str> {
             if !valid_kebab_segment(segment) {
                 return Err("static path segments must use lowercase kebab-case");
             }
-            if matches!(segment, "get" | "list" | "json" | "sse") {
-                return Err("static path segment uses a forbidden transport or CRUD word");
+            if matches!(segment, "json" | "sse") {
+                return Err("static path segment uses a forbidden transport word");
+            }
+            if matches!(segment, "get" | "list")
+                && !is_terminal_post_read_operation(route, segment, index, segment_count)
+            {
+                return Err(
+                    "CRUD read operation segments require a matching POST route id and must appear last",
+                );
             }
             if segment.strip_prefix('v').is_some_and(|suffix| {
                 !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
@@ -832,6 +839,23 @@ fn validate_path(route: &RouteDescriptor) -> Result<(), &'static str> {
     }
 
     validate_wildcard_shape(path, route.route_match)
+}
+
+fn is_terminal_post_read_operation(
+    route: &RouteDescriptor,
+    segment: &str,
+    index: usize,
+    segment_count: usize,
+) -> bool {
+    if route.method != HttpMethod::Post || index + 1 != segment_count {
+        return false;
+    }
+
+    match segment {
+        "get" => route.stable_route_id.ends_with("_get_post"),
+        "list" => route.stable_route_id.ends_with("_list_post"),
+        _ => false,
+    }
 }
 
 fn validate_wildcard_shape(path: &str, route_match: RouteMatch) -> Result<(), &'static str> {
@@ -5113,6 +5137,81 @@ mod tests {
             assert!(
                 validate_catalog(&[descriptor]).is_err(),
                 "path should be rejected: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_path_grammar_limits_body_bearing_read_operation_segments() {
+        for descriptor in [
+            RouteDescriptor::new(
+                "test.resources_list_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/list",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+            RouteDescriptor::new(
+                "test.resources_get_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/get",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+        ] {
+            assert_eq!(validate_path(&descriptor), Ok(()));
+        }
+
+        for descriptor in [
+            RouteDescriptor::new(
+                "test.resources_list_get",
+                HttpMethod::Get,
+                "/v1/tests/resources/list",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+            RouteDescriptor::new(
+                "test.resources_list_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/list/details",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+            RouteDescriptor::new(
+                "test.resources_query_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/list",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+        ] {
+            assert_eq!(
+                validate_path(&descriptor),
+                Err(
+                    "CRUD read operation segments require a matching POST route id and must appear last"
+                )
+            );
+        }
+
+        for descriptor in [
+            RouteDescriptor::new(
+                "test.resources_json_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/json",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+            RouteDescriptor::new(
+                "test.resources_sse_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/sse",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+        ] {
+            assert_eq!(
+                validate_path(&descriptor),
+                Err("static path segment uses a forbidden transport word")
             );
         }
     }

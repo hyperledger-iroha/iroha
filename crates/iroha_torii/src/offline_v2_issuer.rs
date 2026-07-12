@@ -323,12 +323,15 @@ fn validate_kagemusha_v2_topup_snapshot(
             "Offline top-up amount scale differs from the live asset scale.",
         ));
     }
-    let zk_state = world.zk_assets().get(request.asset.definition()).ok_or_else(|| {
-        validation(
-            "offline_confidential_state_unavailable",
-            "Offline top-up asset has no confidential tree state.",
-        )
-    })?;
+    let zk_state = world
+        .zk_assets()
+        .get(request.asset.definition())
+        .ok_or_else(|| {
+            validation(
+                "offline_confidential_state_unavailable",
+                "Offline top-up asset has no confidential tree state.",
+            )
+        })?;
     let shield_binding = zk_state.vk_shield.as_ref().ok_or_else(|| {
         validation(
             "offline_topup_shield_verifier_unavailable",
@@ -1817,9 +1820,9 @@ mod tests {
         domain::DomainId,
         offline::{
             KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
-            KagemushaSpendableNoteDescriptorV2, KagemushaVerifiedFoldBundle,
-            KagemushaVerifiedFoldRecordBundle,
+            KagemushaSpendableNoteDescriptorV2, KagemushaTopUpShieldEvidenceV2,
         },
+        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
         trigger::DataTriggerSequence,
     };
 
@@ -1873,15 +1876,21 @@ mod tests {
                 spend_nullifier: [0x62; 32],
                 amount,
             },
-            record_bundle: KagemushaVerifiedFoldRecordBundle {
-                bundle: KagemushaVerifiedFoldBundle {
-                    chain_id,
-                    asset: definition,
-                    steps: Vec::new(),
+            shield_evidence: KagemushaTopUpShieldEvidenceV2 {
+                initial_root: [0x65; 32],
+                finalized_root: [0x66; 32],
+                leaf_index: 0,
+                proof: {
+                    let backend = "halo2/ipa";
+                    let mut attachment = ProofAttachment::new_ref(
+                        backend.into(),
+                        ProofBox::new(backend.to_owned(), vec![0x67]),
+                        VerifyingKeyId::new(backend, "kagemusha-topup-shield-v2"),
+                    );
+                    attachment.vk_commitment = Some([0x68; 32]);
+                    attachment
                 },
-                verifier_records: Vec::new(),
             },
-            pallas_open_envelopes_archive: Vec::new(),
             artifact_generation: "submission-coordinator-fixture".to_owned(),
             operation_id,
             authorization: KagemushaRequestAuthorizationV2 {
@@ -2707,11 +2716,11 @@ mod tests {
         );
 
         let mut request = submission_test_request(0x44);
-        request.pallas_open_envelopes_archive = vec![0xA5; 2 * 1024 * 1024];
+        request.shield_evidence.proof.proof.bytes = vec![0xA5; 2 * 1024 * 1024];
         let original =
             OfflineOperationRequestBinding::from_request(OfflineOperationRequest::TopUp(&request))
                 .expect("canonical large request binding");
-        request.pallas_open_envelopes_archive[1_048_576] ^= 0xFF;
+        request.shield_evidence.proof.proof.bytes[1_048_576] ^= 0xFF;
         let changed =
             OfflineOperationRequestBinding::from_request(OfflineOperationRequest::TopUp(&request))
                 .expect("canonical changed request binding");

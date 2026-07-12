@@ -400,6 +400,70 @@ public enum KagemushaRecursiveSpendCodecs {
         return frame(KagemushaRecursiveSpend.topUpUnsignedWireName, payload: writer.data)
     }
 
+    public static func decodeTopUpUnsigned(
+        _ archive: Data
+    ) throws -> KagemushaRecursiveSpendTopUpUnsigned {
+        var reader = KagemushaV2Reader(try payload(
+            archive,
+            schema: KagemushaRecursiveSpend.topUpUnsignedWireName,
+            field: "topUpUnsigned"
+        ))
+        let assetID = try decodeAssetID(reader.field())
+        let amount = try decodeScaledAmount(reader.field())
+        let currentNote = try decodeNote(reader.field())
+        let shieldEvidence = try decodeTopUpShieldEvidence(reader.field())
+        let artifactGeneration = try decodeString(
+            reader.field(),
+            field: "artifactGeneration"
+        )
+        let operationID = try packedFixed(
+            reader.field(),
+            count: 32,
+            field: "operationID"
+        )
+        try reader.finish("topUpUnsigned")
+        let value = try KagemushaRecursiveSpendTopUpUnsigned(
+            assetID: assetID,
+            amount: amount,
+            currentNote: currentNote,
+            shieldEvidence: shieldEvidence,
+            artifactGeneration: artifactGeneration,
+            operationID: operationID
+        )
+        guard try encodeTopUpUnsigned(value) == archive else {
+            throw KagemushaRecursiveSpendError.invalidArchive("topUpUnsigned.canonical")
+        }
+        return value
+    }
+
+    public static func encodeTopUpShieldBuildRequest(
+        _ request: KagemushaTopUpShieldBuildRequest
+    ) throws -> Data {
+        var zeroPath = OfflineCompactNoritoWriter()
+        zeroPath.writeField(try sequence(request.zeroPath.siblings))
+        zeroPath.writeField(bytes(request.zeroPath.directions))
+        zeroPath.writeField(request.zeroPath.root)
+
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(chainID(request.chainID))
+        writer.writeField(try assetID(request.assetID))
+        writer.writeField(try scaledAmount(request.amount))
+        writer.writeField(try accountID(request.payer))
+        writer.writeField(request.operationID)
+        writer.writeField(request.spendKey)
+        writer.writeField(request.rho)
+        writer.writeField(request.diversifier)
+        writer.writeField(uint32(request.leafIndex))
+        writer.writeField(zeroPath.data)
+        writer.writeField(try verifierKeyID(request.shieldVerifierID))
+        writer.writeField(request.shieldVerifierCommitment)
+        writer.writeField(string(request.artifactGeneration))
+        return frame(
+            KagemushaRecursiveSpend.topUpShieldBuildRequestWireName,
+            payload: writer.data
+        )
+    }
+
     public static func encodeTopUpRequest(
         _ request: KagemushaRecursiveSpendTopUpRequest
     ) throws -> Data {

@@ -49,6 +49,24 @@ private func nativeAmxTestHash(_ seed: UInt8) -> String {
     return "hash:\(body)#\(String(format: "%04X", checksum))"
 }
 
+private func canonicalKagemushaVerifierRecordArchive(
+    seed: UInt8,
+    verifierKeyLength: Int = 96
+) throws -> Data {
+    guard verifierKeyLength > 0 else {
+        throw NSError(
+            domain: "ToriiClientTests",
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: "verifierKeyLength must be positive"]
+        )
+    }
+    return noritoEncode(
+        typeName: KagemushaRecursiveSpend.verifyingKeyRecordWireName,
+        payload: Data(repeating: seed, count: verifierKeyLength),
+        flags: NoritoHeader.compactLen
+    )
+}
+
 private func nativeAmxStatusPayload(
     preparePhase: String = "prepare",
     signature: String = String(repeating: "9a", count: 96),
@@ -9432,6 +9450,16 @@ final class ToriiClientTests: XCTestCase {
             "activation_height": 0,
             "withdrawal_height": null
           },
+          "active_topup_shield_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "kagemusha-topup-shield-v2"},
+            "version": 3,
+            "circuit_id": "kagemusha-topup-shield-v2",
+            "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
+            "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
+            "max_proof_bytes": 196608,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
           "ready": false,
           "blockers": [
             {"code": "offline_disabled", "message": "Offline transfers are disabled"}
@@ -9463,6 +9491,11 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(readiness.activeTransferVerifier?.version, 7)
         XCTAssertEqual(readiness.activeTransferVerifier?.maxProofBytes, 4096)
         XCTAssertNil(readiness.activeTransferVerifier?.withdrawalHeight)
+        XCTAssertEqual(
+            readiness.activeTopUpShieldVerifier?.id.name,
+            "kagemusha-topup-shield-v2"
+        )
+        XCTAssertEqual(readiness.activeTopUpShieldVerifier?.maxProofBytes, 196608)
         XCTAssertFalse(readiness.ready)
         XCTAssertEqual(readiness.blockers.count, 1)
         XCTAssertEqual(readiness.blockers[0].code, "offline_disabled")
@@ -9486,6 +9519,16 @@ final class ToriiClientTests: XCTestCase {
             "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
             "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
             "max_proof_bytes": 4096,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
+          "active_topup_shield_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "kagemusha-topup-shield-v2"},
+            "version": 3,
+            "circuit_id": "kagemusha-topup-shield-v2",
+            "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
+            "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
+            "max_proof_bytes": 196608,
             "activation_height": 0,
             "withdrawal_height": null
           },
@@ -9562,6 +9605,7 @@ final class ToriiClientTests: XCTestCase {
                      assetScale: String = "9",
                      blockHash: String = "\"abababababababababababababababababababababababababababababababab\"",
                      activeTransferVerifier: String? = nil,
+                     activeTopUpShieldVerifier: String? = nil,
                      ready: String = "true",
                      blockers: String = "[]") -> Data {
             let verifier = activeTransferVerifier ?? """
@@ -9576,7 +9620,19 @@ final class ToriiClientTests: XCTestCase {
               "withdrawal_height": null
             }
             """
+            let topUpShieldVerifier = activeTopUpShieldVerifier ?? """
+            {
+              "id": {"backend": "halo2/ipa", "name": "kagemusha-topup-shield-v2"},
+              "version": 3,
+              "circuit_id": "kagemusha-topup-shield-v2",
+              "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
+              "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
+              "max_proof_bytes": 196608,
+              "activation_height": 0,
+              "withdrawal_height": null
+            }
             """
+            return """
             {
               \(extra)
               "asset_definition_id": \(assetDefinitionId),
@@ -9584,6 +9640,7 @@ final class ToriiClientTests: XCTestCase {
               "evaluated_block_height": 7,
               "evaluated_block_hash": \(blockHash),
               "active_transfer_verifier": \(verifier),
+              "active_topup_shield_verifier": \(topUpShieldVerifier),
               "ready": \(ready),
               "blockers": \(blockers)
             }
@@ -9626,6 +9683,25 @@ final class ToriiClientTests: XCTestCase {
             (
                 payload(activeTransferVerifier: "null"),
                 "active_transfer_verifier must be null exactly when transfer_verifier_unavailable is blocked"
+            ),
+            (
+                payload(activeTopUpShieldVerifier: "null"),
+                "active_topup_shield_verifier must be null exactly when topup_shield_verifier_unavailable is blocked"
+            ),
+            (
+                payload(activeTopUpShieldVerifier: """
+                {
+                  "id": {"backend": "halo2/ipa", "name": "kagemusha-topup-shield-v2"},
+                  "version": 3,
+                  "circuit_id": "kagemusha-topup-shield-v2",
+                  "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
+                  "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
+                  "max_proof_bytes": 196608,
+                  "activation_height": 8,
+                  "withdrawal_height": null
+                }
+                """),
+                "active_topup_shield_verifier must be active at evaluated_block_height"
             ),
             (
                 payload(activeTransferVerifier: """
@@ -9764,6 +9840,13 @@ final class ToriiClientTests: XCTestCase {
             (
                 payload(
                     ready: "false",
+                    blockers: "[{\"code\":\"topup_shield_verifier_unavailable\",\"message\":\"no\"}]"
+                ),
+                "active_topup_shield_verifier must be null exactly when topup_shield_verifier_unavailable is blocked"
+            ),
+            (
+                payload(
+                    ready: "false",
                     blockers: "[{\"code\":\"blocked\",\"message\":\"no\\u0001control\"}]"
                 ),
                 "message must be exact non-empty text of at most 1024 Unicode characters"
@@ -9873,6 +9956,16 @@ final class ToriiClientTests: XCTestCase {
             "activation_height": 0,
             "withdrawal_height": null
           },
+          "active_topup_shield_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "kagemusha-topup-shield-v2"},
+            "version": 3,
+            "circuit_id": "kagemusha-topup-shield-v2",
+            "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
+            "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
+            "max_proof_bytes": 196608,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
           "ready": true,
           "blockers": []
         }
@@ -9888,6 +9981,13 @@ final class ToriiClientTests: XCTestCase {
                     with: #"  "omitted_transfer_verifier": {"#
                 ),
                 "active_transfer_verifier is required"
+            ),
+            (
+                valid.replacingOccurrences(
+                    of: #"  "active_topup_shield_verifier": {"#,
+                    with: #"  "omitted_topup_shield_verifier": {"#
+                ),
+                "active_topup_shield_verifier is required"
             ),
             (
                 valid.replacingOccurrences(
@@ -9931,10 +10031,12 @@ final class ToriiClientTests: XCTestCase {
           "evaluated_block_height": 7,
           "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
           "active_transfer_verifier": null,
+          "active_topup_shield_verifier": null,
           "ready": false,
           "blockers": [
             {"code": "asset_scale_unsupported", "message": "The asset scale is unsupported"},
-            {"code": "transfer_verifier_unavailable", "message": "The verifier is unavailable"}
+            {"code": "transfer_verifier_unavailable", "message": "The verifier is unavailable"},
+            {"code": "topup_shield_verifier_unavailable", "message": "The top-up shield verifier is unavailable"}
           ]
         }
         """.data(using: .utf8)!
@@ -9954,6 +10056,7 @@ final class ToriiClientTests: XCTestCase {
         )
         XCTAssertEqual(readiness.assetScale, 29)
         XCTAssertNil(readiness.activeTransferVerifier)
+        XCTAssertNil(readiness.activeTopUpShieldVerifier)
         XCTAssertFalse(readiness.ready)
     }
 
@@ -9972,6 +10075,17 @@ final class ToriiClientTests: XCTestCase {
             "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
             "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
             "max_proof_bytes": 4096,
+            "activation_height": 0,
+            "withdrawal_height": null,
+            "future_verifier_metadata": true
+          },
+          "active_topup_shield_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "kagemusha-topup-shield-v2"},
+            "version": 3,
+            "circuit_id": "kagemusha-topup-shield-v2",
+            "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
+            "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
+            "max_proof_bytes": 196608,
             "activation_height": 0,
             "withdrawal_height": null,
             "future_verifier_metadata": true
@@ -10024,6 +10138,16 @@ final class ToriiClientTests: XCTestCase {
             "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
             "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
             "max_proof_bytes": 4096,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
+          "active_topup_shield_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "kagemusha-topup-shield-v2"},
+            "version": 3,
+            "circuit_id": "kagemusha-topup-shield-v2",
+            "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
+            "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
+            "max_proof_bytes": 196608,
             "activation_height": 0,
             "withdrawal_height": null
           },
@@ -10948,6 +11072,57 @@ final class ToriiClientHeaderTests: XCTestCase {
         XCTAssertEqual(detail.recordNorito, recordNorito)
     }
 
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetVerifyingKeyRejectsCrossWiredDetail() async throws {
+        let recordNorito = try canonicalKagemushaVerifierRecordArchive(seed: 0x64)
+        let payload = """
+        {
+          "id": { "backend": "halo2/ipa", "name": "different-vk" },
+          "record_norito_base64": "\(recordNorito.base64EncodedString())",
+          "record": {
+            "version": 3,
+            "circuit_id": "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+            "owner_manifest_id": "confidential-v3",
+            "namespace": "offline_kagemusha",
+            "backend": "halo2/ipa",
+            "curve": "pallas",
+            "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "vk_len": 96,
+            "max_proof_bytes": 196608,
+            "status": "Active"
+          }
+        }
+        """.data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertTrue(request.url!.absoluteString.contains("/v1/zk/vk/halo2%2Fipa/unshield-v3"))
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, payload)
+        }
+
+        do {
+            _ = try await makeClient().getVerifyingKey(
+                backend: "halo2/ipa",
+                name: "unshield-v3"
+            )
+            XCTFail("cross-wired verifier detail must be rejected")
+        } catch let error as ToriiClientError {
+            guard case let .invalidPayload(reason) = error else {
+                return XCTFail("unexpected Torii error: \(error)")
+            }
+            XCTAssertEqual(
+                reason,
+                "verifying-key detail identifier does not match the requested verifier key"
+            )
+        }
+    }
+
     func testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha() throws {
         let recordNorito = try canonicalKagemushaVerifierRecordArchive(seed: 0x71)
         let payload = """
@@ -10980,7 +11155,7 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64() throws {
         let recordNorito = try canonicalKagemushaVerifierRecordArchive(
             seed: 0x79,
-            verifierKeyLength: 95
+            verifierKeyLength: 96
         )
         let canonical = recordNorito.base64EncodedString()
         XCTAssertTrue(canonical.hasSuffix("="))

@@ -170,7 +170,12 @@ Defaults first: configuration values are curated for typical Iroha blockchain de
     SCCP proof bytes, proof count, native headers, Ethereum light-client updates, native header
     bytes, secp256k1 recoveries, BLS aggregate checks/key contributions, and BN254 pairing-product
     checks. Transaction limits may not exceed block limits, and the per-proof byte limit may not
-    exceed the transaction byte limit. These fields deliberately have no environment aliases.
+    exceed the transaction byte limit. `max_pending_outbound_messages` (default: `65536`) and
+    `max_pending_outbound_payload_bytes` (default: `268435456`) jointly hard-bound canonical
+    payloads waiting for destination-proof acceptance; accepting a proof removes that payload from
+    the pending map and leaves a fixed terminal replay descriptor. These fields deliberately have
+    no environment aliases. The fixed V1 limits of 512 successful outbound messages per block and
+    4,096 canonical payload bytes per message are protocol constants, not configuration fields.
   - `halo2.verifier_worker_threads` / `halo2.verifier_queue_cap` (defaults: `0` / `0`): size the ZK lane verifier worker pool and ingress queue. Zero keeps auto-derivation (`available_parallelism`, queue headroom scaled by workers).
   - `halo2.verifier_enqueue_wait_ms` (default: `25`): bounded enqueue wait used before classifying a saturated admission as timeout.
   - `halo2.verifier_retry_ring_cap` / `halo2.verifier_retry_max_attempts` / `halo2.verifier_retry_tick_ms` (defaults: `2048` / `3` / `5`): in-memory replay policy for important ZK lane tasks (`tx_hash` present). Saturated important tasks enter the retry ring and are replayed opportunistically; exhausted entries increment `iroha_zk_lane_retry_exhausted_total`.

@@ -22,6 +22,8 @@ object OfflineJsonParser {
         }
         val assetScaleValue = required(obj, "asset_scale", "root")
         val activeVerifierValue = required(obj, "active_transfer_verifier", "root")
+        val activeTopUpShieldVerifierValue =
+            required(obj, "active_topup_shield_verifier", "root")
         val evaluatedBlockHeight = asReadinessU64(
             required(obj, "evaluated_block_height", "root"),
             "evaluated_block_height",
@@ -40,6 +42,13 @@ object OfflineJsonParser {
             ),
             activeVerifierValue?.let {
                 parseActiveTransferVerifier(it, evaluatedBlockHeight, "active_transfer_verifier")
+            },
+            activeTopUpShieldVerifierValue?.let {
+                parseActiveTransferVerifier(
+                    it,
+                    evaluatedBlockHeight,
+                    "active_topup_shield_verifier",
+                )
             },
             asBoolean(required(obj, "ready", "root"), "ready"),
             blockers,

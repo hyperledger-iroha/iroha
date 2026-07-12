@@ -9611,6 +9611,11 @@ public struct ToriiOfflineActiveTransferVerifier: Decodable, Sendable, Equatable
     }
 }
 
+/// The active public-to-confidential top-up shield verifier selected for the
+/// same readiness snapshot. Its wire shape and registry invariants are exact
+/// aliases of the transfer verifier record, but the roles are not interchangeable.
+public typealias ToriiOfflineActiveTopUpShieldVerifier = ToriiOfflineActiveTransferVerifier
+
 public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
     public let assetDefinitionId: String
     /// Authoritative live asset scale. Values above 28 are retained so callers
@@ -9620,6 +9625,7 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
     public let evaluatedBlockHash: String
     public let evaluatedBlockHashBytes: Data
     public let activeTransferVerifier: ToriiOfflineActiveTransferVerifier?
+    public let activeTopUpShieldVerifier: ToriiOfflineActiveTopUpShieldVerifier?
     public let ready: Bool
     public let blockers: [ToriiOfflineReadinessBlocker]
 
@@ -9629,6 +9635,7 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
         case evaluatedBlockHeight = "evaluated_block_height"
         case evaluatedBlockHash = "evaluated_block_hash"
         case activeTransferVerifier = "active_transfer_verifier"
+        case activeTopUpShieldVerifier = "active_topup_shield_verifier"
         case ready
         case blockers
     }
@@ -9677,6 +9684,19 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
         let decodedActiveTransferVerifier = try container.decodeIfPresent(
             ToriiOfflineActiveTransferVerifier.self,
             forKey: .activeTransferVerifier
+        )
+        guard container.contains(.activeTopUpShieldVerifier) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.activeTopUpShieldVerifier,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "active_topup_shield_verifier is required"
+                )
+            )
+        }
+        let decodedActiveTopUpShieldVerifier = try container.decodeIfPresent(
+            ToriiOfflineActiveTopUpShieldVerifier.self,
+            forKey: .activeTopUpShieldVerifier
         )
         let decodedReady = try container.decode(Bool.self, forKey: .ready)
         let decodedBlockers = try container.decode(
@@ -9742,8 +9762,27 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
                 debugDescription: "active_transfer_verifier must be active at evaluated_block_height"
             )
         }
+        let topUpShieldUnavailable = blockerCodes.contains(
+            "topup_shield_verifier_unavailable"
+        )
+        guard (decodedActiveTopUpShieldVerifier == nil) == topUpShieldUnavailable else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .activeTopUpShieldVerifier,
+                in: container,
+                debugDescription: "active_topup_shield_verifier must be null exactly when topup_shield_verifier_unavailable is blocked"
+            )
+        }
+        if let decodedActiveTopUpShieldVerifier,
+           !decodedActiveTopUpShieldVerifier.isActive(at: evaluatedBlockHeight) {
+            throw DecodingError.dataCorruptedError(
+                forKey: .activeTopUpShieldVerifier,
+                in: container,
+                debugDescription: "active_topup_shield_verifier must be active at evaluated_block_height"
+            )
+        }
         assetScale = decodedAssetScale
         activeTransferVerifier = decodedActiveTransferVerifier
+        activeTopUpShieldVerifier = decodedActiveTopUpShieldVerifier
         ready = decodedReady
         blockers = decodedBlockers
     }
@@ -20875,7 +20914,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let pathName = encodePathComponent(normalizedName)
         let request = try makeRequest(path: "/v1/zk/vk/\(pathBackend)/\(pathName)")
         let data = try await data(for: request)
-        return try decodeJSON(ToriiVerifyingKeyDetail.self, from: data)
+        let detail = try decodeJSON(ToriiVerifyingKeyDetail.self, from: data)
+        guard detail.id.backend == normalizedBackend,
+              detail.id.name == normalizedName
+        else {
+            throw ToriiClientError.invalidPayload(
+                "verifying-key detail identifier does not match the requested verifier key"
+            )
+        }
+        return detail
     }
 
     public func listVerifyingKeys(query: ToriiVerifyingKeyListQuery? = nil) async throws -> [ToriiVerifyingKeyListItem] {

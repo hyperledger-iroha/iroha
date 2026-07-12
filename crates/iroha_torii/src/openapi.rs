@@ -14155,6 +14155,15 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "OfflineActiveTopUpShieldVerifier".to_owned(),
+        norito::json!({
+            "allOf": [
+                { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" }
+            ],
+            "description": "Role-specific active verifier record for the zero-input Kagemusha top-up shield circuit; it must not be substituted with the peer-transfer verifier."
+        }),
+    );
+    schemas.insert(
         "OfflineReadiness".to_owned(),
         norito::json!({
             "type": "object",
@@ -14200,7 +14209,7 @@ fn openapi_schemas() -> Map {
                 },
                 "active_topup_shield_verifier": {
                     "anyOf": [
-                        { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" },
+                        { "$ref": "#/components/schemas/OfflineActiveTopUpShieldVerifier" },
                         { "type": "null" }
                     ],
                     "description": "Authoritative active public-to-confidential top-up shield verifier at the evaluated height, or null with a topup_shield_verifier_unavailable blocker."
@@ -17848,13 +17857,18 @@ fn openapi_schemas() -> Map {
                 "proposal_id": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
                 "instructions_hash": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
                 "operation_type": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Z][A-Z0-9_]*$" },
-                "intent": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
+                "intent": { "$ref": "#/components/schemas/JsonValue" },
                 "proposal": { "$ref": "#/components/schemas/MultisigProposalPayload" },
                 "status": {
                     "type": "string",
                     "enum": ["COLLECTING_SIGNATURES", "FINALIZED", "CANCELED", "EXPIRED"]
                 },
-                "terminal_at_ms": { "type": "integer", "format": "uint64", "nullable": true }
+                "terminal_at_ms": {
+                    "oneOf": [
+                        { "type": "integer", "format": "uint64" },
+                        { "type": "null" }
+                    ]
+                }
             }
         }),
     );
@@ -17939,13 +17953,18 @@ fn openapi_schemas() -> Map {
                 "proposal_id": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
                 "instructions_hash": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
                 "operation_type": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Z][A-Z0-9_]*$" },
-                "intent": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
+                "intent": { "$ref": "#/components/schemas/JsonValue" },
                 "proposal": { "$ref": "#/components/schemas/MultisigProposalPayload" },
                 "status": {
                     "type": "string",
                     "enum": ["COLLECTING_SIGNATURES", "FINALIZED", "CANCELED", "EXPIRED"]
                 },
-                "terminal_at_ms": { "type": "integer", "format": "uint64", "nullable": true }
+                "terminal_at_ms": {
+                    "oneOf": [
+                        { "type": "integer", "format": "uint64" },
+                        { "type": "null" }
+                    ]
+                }
             }
         }),
     );
@@ -20457,7 +20476,11 @@ mod tests {
                 .get(schema_name)
                 .and_then(Value::as_object)
                 .expect("direct offline request schema");
-            assert!(!schema.contains_key("additionalProperties"));
+            assert_eq!(
+                schema.get("additionalProperties").and_then(Value::as_bool),
+                Some(false),
+                "direct request JSON must reject retired and unknown fields"
+            );
             assert!(!schema.contains_key("x-iroha-norito-type"));
             assert_eq!(
                 schema.get("x-iroha-norito-schema").and_then(Value::as_str),
@@ -20486,6 +20509,7 @@ mod tests {
                 "evaluated_block_height",
                 "evaluated_block_hash",
                 "active_transfer_verifier",
+                "active_topup_shield_verifier",
                 "ready",
                 "blockers",
             ]
@@ -20493,6 +20517,14 @@ mod tests {
         assert_eq!(
             nullable_property_ref(schemas, "OfflineReadiness", "active_transfer_verifier"),
             "#/components/schemas/OfflineActiveTransferVerifier"
+        );
+        assert_eq!(
+            nullable_property_ref(
+                schemas,
+                "OfflineReadiness",
+                "active_topup_shield_verifier"
+            ),
+            "#/components/schemas/OfflineActiveTopUpShieldVerifier"
         );
         let readiness_scale = readiness
             .get("properties")
@@ -22122,6 +22154,7 @@ mod tests {
     #[test]
     fn multisig_proposal_schemas_document_status_filters_and_lifecycle_fields() {
         let doc = generate_spec();
+        assert_eq!(doc.get("openapi").and_then(Value::as_str), Some("3.1.0"));
         let schemas = doc
             .get("components")
             .and_then(Value::as_object)
@@ -22236,6 +22269,14 @@ mod tests {
         );
         assert!(list_response.contains_key("next_cursor"));
 
+        let nullable_intent_schema =
+            norito::json!({ "$ref": "#/components/schemas/JsonValue" });
+        let nullable_terminal_timestamp_schema = norito::json!({
+            "oneOf": [
+                { "type": "integer", "format": "uint64" },
+                { "type": "null" }
+            ]
+        });
         for schema_name in ["MultisigProposalEntry", "MultisigProposalGetResponse"] {
             let schema = schemas
                 .get(schema_name)
@@ -22255,8 +22296,16 @@ mod tests {
                 .get("properties")
                 .and_then(Value::as_object)
                 .expect("proposal properties");
-            assert!(properties.contains_key("intent"));
-            assert!(properties.contains_key("terminal_at_ms"));
+            assert_eq!(
+                properties.get("intent"),
+                Some(&nullable_intent_schema),
+                "{schema_name}.intent must use the null-capable JsonValue schema without the retired OpenAPI 3.0 nullable keyword"
+            );
+            assert_eq!(
+                properties.get("terminal_at_ms"),
+                Some(&nullable_terminal_timestamp_schema),
+                "{schema_name}.terminal_at_ms must explicitly model integer-or-null under OpenAPI 3.1"
+            );
             let status_values = properties
                 .get("status")
                 .and_then(Value::as_object)

@@ -7902,6 +7902,7 @@ TEXT_REQUIREMENTS = {
         "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 18;",
         "connect_norito_kagemusha_recursive_spend_capabilities_v1",
         "connect_norito_kagemusha_topup_finality_verify_v2",
+        "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
         "kagemusha_recursive_spend_native_capabilities_v1();",
         "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
         "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
@@ -7951,6 +7952,7 @@ TEXT_REQUIREMENTS = {
         "cachedNativeCapabilities?.proofBackendAvailable == true",
         "connect_norito_kagemusha_recursive_spend_capabilities_v1",
         "connect_norito_kagemusha_topup_finality_verify_v2",
+        "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
         "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
         "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
         "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
@@ -7967,6 +7969,7 @@ TEXT_REQUIREMENTS = {
         "The ABI-18 Kagemusha recursive spend V2 bridge is unavailable.",
         "connect_norito_kagemusha_recursive_spend_capabilities_v1",
         "connect_norito_kagemusha_topup_finality_verify_v2",
+        "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
         "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
     ),
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt": (
@@ -7998,6 +8001,7 @@ TEXT_REQUIREMENTS = {
     "scripts/build_norito_xcframework.sh": (
         "connect_norito_kagemusha_recursive_spend_capabilities_v1",
         "connect_norito_kagemusha_topup_finality_verify_v2",
+        "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
         "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
         "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
         "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",

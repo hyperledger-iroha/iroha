@@ -2378,6 +2378,23 @@ mod tests {
     }
 
     #[test]
+    fn finality_builder_never_substitutes_an_adjacent_retained_height() {
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                .expect("exact fixture finality proof");
+        let state = persisted_state_for_exact_sccp_fixture(&fixture, &finality);
+
+        assert_eq!(
+            build_finality_proof(&state, 2),
+            Err(BridgeFinalityError::FinalityArtifactNotFound(2))
+        );
+        let error = validated_sccp_finalized_messages_at_height(&state, 2)
+            .expect_err("an adjacent request must not reuse height-one finality/archive data");
+        assert!(error.contains("artifact for height 2 not found"), "{error}");
+    }
+
+    #[test]
     fn sccp_local_anchor_rejects_artifact_chain_and_record_substitution() {
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
         let finality =
@@ -2575,6 +2592,50 @@ mod tests {
             iroha_sccp::merkle_root_from_commitment(&messages[1].commitment, &proof),
             root
         );
+    }
+
+    #[test]
+    fn commitment_paths_bind_first_middle_last_execution_indices_not_key_order() {
+        let candidates = (1..=5)
+            .map(|nonce| {
+                canonical_test_sccp_payload_bytes(&sample_transfer_payload(nonce, [0x22; 20]))
+            })
+            .collect::<Vec<_>>();
+        let (candidate_block, _) = signed_block_with_sccp_payloads(&candidates, 1);
+        let candidate_messages = collect_sccp_messages_from_signed_block(&candidate_block);
+        let mut ordered = candidates
+            .into_iter()
+            .zip(candidate_messages)
+            .collect::<Vec<_>>();
+        ordered.sort_by(|(_, left), (_, right)| {
+            right.commitment.message_id.cmp(&left.commitment.message_id)
+        });
+        let payloads = ordered
+            .into_iter()
+            .map(|(payload, _)| payload)
+            .collect::<Vec<_>>();
+        let (block, _) = signed_block_with_sccp_payloads(&payloads, 1);
+        let messages = collect_sccp_messages_from_signed_block(&block);
+        assert!(
+            messages
+                .windows(2)
+                .all(|pair| pair[0].commitment.message_id > pair[1].commitment.message_id),
+            "fixture execution order must deliberately oppose ascending replay-key order"
+        );
+        let commitments = messages
+            .iter()
+            .map(|message| message.commitment.clone())
+            .collect::<Vec<_>>();
+        let root = iroha_sccp::commitment_merkle_root(&commitments).expect("five-message root");
+        for index in [0, 2, 4] {
+            let proof = iroha_sccp::commitment_merkle_proof(&commitments, index)
+                .expect("first/middle/last path exists");
+            assert_eq!(
+                iroha_sccp::merkle_root_from_commitment(&messages[index].commitment, &proof),
+                root,
+                "execution-index path {index} must reconstruct the finalized root"
+            );
+        }
     }
 
     #[test]

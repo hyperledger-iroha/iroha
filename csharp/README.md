@@ -447,6 +447,10 @@ if (readiness.ActiveTransferVerifier is { } verifier)
 {
     Console.WriteLine($"transfer verifier: {verifier.Id.Backend}:{verifier.Id.Name} v{verifier.Version}");
 }
+if (readiness.ActiveTopUpShieldVerifier is { } shieldVerifier)
+{
+    Console.WriteLine($"top-up shield verifier: {shieldVerifier.Id.Backend}:{shieldVerifier.Id.Name} v{shieldVerifier.Version}");
+}
 if (!readiness.Ready)
 {
     foreach (var blocker in readiness.Blockers)
@@ -479,8 +483,12 @@ switch (status)
 Readiness preserves the chain's full nullable `uint` asset scale. A scale above
 28 is therefore decoded together with `asset_scale_unsupported`; only a ready
 response requires the 0-through-28 Offline amount range. The typed active
-transfer verifier is bound to the same evaluated block and contains no key
-material.
+transfer and top-up shield verifiers are separate authoritative fields bound
+to the same evaluated block and contain no key material. Each non-null verifier
+must be active at that height. A null transfer verifier requires exactly the
+`transfer_verifier_unavailable` blocker; a null top-up shield verifier requires
+exactly `topup_shield_verifier_unavailable`. `Ready` can be true only when the
+scale is supported, both verifier roles are present, and `Blockers` is empty.
 
 Operation references and statuses are negotiated as
 `application/x-norito`. The decoder returns closed pending/applied/rejected

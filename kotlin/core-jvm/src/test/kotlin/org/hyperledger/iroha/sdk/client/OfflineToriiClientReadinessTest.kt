@@ -44,6 +44,8 @@ class OfflineToriiClientReadinessTest {
         assertEquals("ab".repeat(32), readiness.evaluatedBlockHash)
         assertEquals("halo2/ipa", readiness.activeTransferVerifier?.id?.backend)
         assertEquals(4096L, readiness.activeTransferVerifier?.maxProofBytes)
+        assertEquals("topup-shield-v2", readiness.activeTopUpShieldVerifier?.id?.name)
+        assertEquals(8192L, readiness.activeTopUpShieldVerifier?.maxProofBytes)
         assertEquals(false, readiness.ready)
         assertEquals(1, readiness.blockers.size)
         assertEquals("offline_disabled", readiness.blockers.single().code)
@@ -92,6 +94,8 @@ class OfflineToriiClientReadinessTest {
             ) to "asset_scale_unavailable must be present exactly when assetScale is null",
             canonicalReadinessBody(activeVerifier = "null") to
                 "transfer_verifier_unavailable must be present exactly when no active verifier is reported",
+            canonicalReadinessBody(activeTopUpShieldVerifier = "null") to
+                "topup_shield_verifier_unavailable must be present exactly when no active top-up shield verifier is reported",
             canonicalReadinessBody(
                 activeVerifier = activeTransferVerifier(maxProofBytes = "0"),
             ) to "maxProofBytes must fit in a positive unsigned 32-bit integer",
@@ -101,6 +105,15 @@ class OfflineToriiClientReadinessTest {
             canonicalReadinessBody(
                 activeVerifier = activeTransferVerifier(withdrawalHeight = "7"),
             ) to "active_transfer_verifier must be active at evaluated_block_height",
+            canonicalReadinessBody(
+                activeTopUpShieldVerifier = activeTopUpShieldVerifier(maxProofBytes = "0"),
+            ) to "maxProofBytes must fit in a positive unsigned 32-bit integer",
+            canonicalReadinessBody(
+                activeTopUpShieldVerifier = activeTopUpShieldVerifier(activationHeight = "8"),
+            ) to "active_topup_shield_verifier must be active at evaluated_block_height",
+            canonicalReadinessBody(
+                activeTopUpShieldVerifier = activeTopUpShieldVerifier(withdrawalHeight = "7"),
+            ) to "active_topup_shield_verifier must be active at evaluated_block_height",
             canonicalReadinessBody(blockHash = "\"AB${"ab".repeat(31)}\"") to
                 "evaluated_block_hash must be exact lowercase 32-byte hexadecimal",
             canonicalReadinessBody(ready = "1") to "ready must be a boolean",
@@ -142,6 +155,10 @@ class OfflineToriiClientReadinessTest {
                     extra = "\"future_verifier_field\": [1, 2, 3],",
                     idExtra = "\"future_id_field\": true,",
                 ),
+                activeTopUpShieldVerifier = activeTopUpShieldVerifier(
+                    extra = "\"future_topup_field\": [4, 5, 6],",
+                    idExtra = "\"future_topup_id_field\": true,",
+                ),
                 ready = "false",
                 blockers =
                     "[{\"code\":\"2fa_required\",\"message\":\"no\",\"future_detail\":7}]",
@@ -159,6 +176,21 @@ class OfflineToriiClientReadinessTest {
             ),
         )
         assertEquals(29L, unsupported.assetScale)
+    }
+
+    @Test
+    fun readinessAcceptsUnavailableTopUpShieldVerifierWithMatchingBlocker() {
+        val readiness = readinessFromBody(
+            canonicalReadinessBody(
+                activeTopUpShieldVerifier = "null",
+                ready = "false",
+                blockers =
+                    "[{\"code\":\"topup_shield_verifier_unavailable\",\"message\":\"unavailable\"}]",
+            ),
+        )
+
+        assertEquals(null, readiness.activeTopUpShieldVerifier)
+        assertEquals("topup_shield_verifier_unavailable", readiness.blockers.single().code)
     }
 
     @Test
@@ -187,6 +219,10 @@ class OfflineToriiClientReadinessTest {
                 "\"future_transfer_verifier\": {",
             ) to "root.active_transfer_verifier is required",
             canonical.replace(
+                "\"active_topup_shield_verifier\": {",
+                "\"future_topup_shield_verifier\": {",
+            ) to "root.active_topup_shield_verifier is required",
+            canonical.replace(
                 "  \"asset_scale\": 9,",
                 "  \"asset_scale\": 9,\n  \"asset_scale\": 9,",
             ) to "Duplicate JSON object key: asset_scale",
@@ -214,6 +250,18 @@ class OfflineToriiClientReadinessTest {
             canonicalReadinessBody(
                 activeVerifier = activeTransferVerifier(circuitId = "\"confidential\\ntransfer\""),
             ) to "circuitId must be exact non-empty text",
+            canonicalReadinessBody(
+                activeTopUpShieldVerifier = activeTopUpShieldVerifier(version = "4294967296"),
+            ) to "active_topup_shield_verifier.version must fit in an unsigned 32-bit integer",
+            canonicalReadinessBody(
+                activeTopUpShieldVerifier = activeTopUpShieldVerifier(commitment = "\"${"AA".repeat(32)}\""),
+            ) to "active_topup_shield_verifier.commitment must be exact lowercase 32-byte hexadecimal",
+            canonicalReadinessBody(
+                ready = "false",
+                blockers =
+                    "[{\"code\":\"topup_shield_verifier_unavailable\",\"message\":\"no\"}]",
+            ) to
+                "topup_shield_verifier_unavailable must be present exactly when no active top-up shield verifier is reported",
             canonicalReadinessBody(
                 ready = "false",
                 blockers = "[{\"code\":\"blocked\",\"message\":\"no\\ncontrol\"}]",
@@ -314,6 +362,7 @@ class OfflineToriiClientReadinessTest {
         height: String = "7",
         blockHash: String = "\"${"ab".repeat(32)}\"",
         activeVerifier: String = activeTransferVerifier(),
+        activeTopUpShieldVerifier: String = activeTopUpShieldVerifier(),
         ready: String = "true",
         blockers: String = "[]",
     ): String = """
@@ -324,6 +373,7 @@ class OfflineToriiClientReadinessTest {
           "evaluated_block_height": $height,
           "evaluated_block_hash": $blockHash,
           "active_transfer_verifier": $activeVerifier,
+          "active_topup_shield_verifier": $activeTopUpShieldVerifier,
           "ready": $ready,
           "blockers": $blockers
         }
@@ -354,6 +404,28 @@ class OfflineToriiClientReadinessTest {
           "withdrawal_height": $withdrawalHeight
         }
     """.trimIndent()
+
+    private fun activeTopUpShieldVerifier(
+        extra: String = "",
+        idExtra: String = "",
+        version: String = "3",
+        commitment: String = "\"${"66".repeat(32)}\"",
+        schemaHash: String = "\"${"77".repeat(32)}\"",
+        maxProofBytes: String = "8192",
+        activationHeight: String = "1",
+        withdrawalHeight: String = "null",
+    ): String = activeTransferVerifier(
+        extra = extra,
+        idExtra = idExtra,
+        name = "\"topup-shield-v2\"",
+        version = version,
+        circuitId = "\"topup-shield-v2\"",
+        commitment = commitment,
+        schemaHash = schemaHash,
+        maxProofBytes = maxProofBytes,
+        activationHeight = activationHeight,
+        withdrawalHeight = withdrawalHeight,
+    )
 
     private class CapturingExecutor(
         private val responseBody: String,
