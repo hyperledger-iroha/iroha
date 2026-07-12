@@ -56,6 +56,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     hint::black_box,
     str::FromStr,
+    sync::atomic::{AtomicUsize, Ordering as AtomicOrdering},
     time::Duration,
 };
 
@@ -162,7 +163,9 @@ struct LegacyExecutionContextLaneBlockDescriptorPreimage {
     qc_mode_tag: String,
 }
 
-const PUBLIC_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+const PUBLIC_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
+// Retained only so historical Taira genesis blocks can replay their legacy digest.
+const ARCHIVED_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
 const PK2_STAGING_CHAIN_ID: &str = "cbdc16";
 
 const LEGACY_TAIRA_ZK_POLICY_HASHES: [[u8; 32]; 4] = [
@@ -194,6 +197,10 @@ fn is_public_taira_chain_id(chain_id: &ChainId) -> bool {
         chain_id.as_str(),
         PUBLIC_TAIRA_CHAIN_ID | "iroha3-taira" | "taira"
     )
+}
+
+fn is_archived_taira_chain_id(chain_id: &ChainId) -> bool {
+    chain_id.as_str() == ARCHIVED_TAIRA_CHAIN_ID
 }
 
 fn is_pk2_staging_chain_id(chain_id: &ChainId) -> bool {
@@ -635,10 +642,17 @@ struct LaneSettlementBuilder {
     total_xor_variance_micro: u128,
     swap_evidence: Option<SwapEvidence>,
     receipts: Vec<LaneSettlementReceipt>,
-    nexus_fee_receipts: Vec<iroha_data_model::block::consensus::NexusFeeReceipt>,
+    nexus_fee_receipts: Vec<crate::settlement::PendingNexusFeeReceipt>,
     native_amx_receipts: Vec<NativeAmxReceipt>,
     buffer_snapshot: Option<SettlementBufferSnapshot>,
     source_counts: BTreeMap<AssetDefinitionId, u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LanePayloadCoordinate {
+    lane_incarnation: Hash,
+    lane_block_height: u64,
+    lane_block_descriptor_hash: Hash,
 }
 
 /// Consensus-critical authority surface used by native AMX validation.
@@ -1234,7 +1248,8 @@ fn lane_relay_envelopes_for_block(
     da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
     lane_settlement_commitments: &[LaneBlockCommitment],
     lane_summaries: &BTreeMap<LaneId, LaneSummary>,
-) -> Vec<LaneRelayEnvelope> {
+    lane_payload_coordinates: &BTreeMap<(LaneId, DataSpaceId), LanePayloadCoordinate>,
+) -> Result<Vec<LaneRelayEnvelope>, BlockValidationError> {
     lane_settlement_commitments
         .iter()
         .map(|commitment| {
@@ -1242,6 +1257,15 @@ fn lane_relay_envelopes_for_block(
                 .get(&commitment.lane_id)
                 .map_or(0, |summary| summary.rbc_bytes_total);
 
+            let coordinate = lane_payload_coordinates
+                .get(&(commitment.lane_id, commitment.dataspace_id))
+                .ok_or_else(|| {
+                    BlockValidationError::ExecutionContextInvalid(format!(
+                        "settled lane {} dataspace {} has no exact lane payload ownership",
+                        commitment.lane_id.as_u32(),
+                        commitment.dataspace_id.as_u64()
+                    ))
+                })?;
             LaneRelayEnvelope::new(
                 *block_header,
                 None,
@@ -1249,7 +1273,15 @@ fn lane_relay_envelopes_for_block(
                 commitment.clone(),
                 rbc_bytes_total,
             )
-            .expect("construct lane relay envelope from settlement commitment")
+            .map_err(|err| {
+                BlockValidationError::ExecutionContextInvalid(format!(
+                    "settled lane relay envelope is invalid: {err}"
+                ))
+            })
+            .map(|envelope| {
+                envelope
+                    .with_lane_block_descriptor_hash(Some(coordinate.lane_block_descriptor_hash))
+            })
         })
         .collect()
 }
@@ -2836,13 +2868,13 @@ pub enum BlockValidationError {
         /// Human-readable validation reason.
         reason: &'static str,
     },
-    /// SCCP committed block contains duplicate successful outbound message. Source domain: {source_domain}, target domain: {target_domain}, message id: {message_id:?}
+    /// SCCP committed block contains duplicate successful outbound message. Source profile: {source_profile:?}, target profile: {target_profile:?}, message id: {message_id:?}
     SccpDuplicateOutboundMessage {
-        /// SCCP source domain encoded in the duplicate payload.
-        source_domain: u32,
-        /// SCCP target domain encoded in the duplicate payload.
-        target_domain: u32,
-        /// SCCP message identifier derived from the canonical payload.
+        /// Exact SCCP source profile committed by the duplicate record.
+        source_profile: iroha_data_model::bridge::SccpNetworkV1,
+        /// Exact SCCP target profile committed by the duplicate record.
+        target_profile: iroha_data_model::bridge::SccpNetworkV1,
+        /// SCCP message identifier derived from the exact lane and canonical payload.
         message_id: [u8; 32],
     },
     /// Mismatch between the actual and expected hashes of the previous block. Expected: {expected:?}, actual: {actual:?}
@@ -6110,8 +6142,8 @@ pub(crate) mod valid {
                     crate::bridge::SccpCommittedBlockValidationError::DuplicateOutboundMessage(
                         key,
                     ) => BlockValidationError::SccpDuplicateOutboundMessage {
-                        source_domain: key.source_domain,
-                        target_domain: key.target_domain,
+                        source_profile: key.lane.source,
+                        target_profile: key.lane.target,
                         message_id: key.message_id,
                     },
                     crate::bridge::SccpCommittedBlockValidationError::CommitmentRootMismatch {
@@ -6716,8 +6748,12 @@ pub(crate) mod valid {
                 });
             }
 
-            let computed_digest =
-                compute_confidential_feature_digest(state.world(), state.zk(), block_height);
+            let computed_digest = compute_confidential_feature_digest(
+                state.world(),
+                state.zk(),
+                state.sccp_registry(),
+                block_height,
+            );
             let expected_digest = if computed_digest.is_empty() {
                 None
             } else {
@@ -6729,8 +6765,8 @@ pub(crate) mod valid {
                     taira_legacy_replay_confidential_digest(expected_digest, actual_digest);
                 let is_legacy_pk2_staging_digest =
                     pk2_staging_legacy_replay_confidential_digest(expected_digest, actual_digest);
-                let is_public_taira_genesis =
-                    block.header().is_genesis() && is_public_taira_chain_id(chain_id);
+                let is_public_taira_genesis = block.header().is_genesis()
+                    && (is_public_taira_chain_id(chain_id) || is_archived_taira_chain_id(chain_id));
                 let is_pk2_staging_genesis =
                     block.header().is_genesis() && is_pk2_staging_chain_id(chain_id);
                 if (is_legacy_taira_digest
@@ -7640,13 +7676,10 @@ pub(crate) mod valid {
             state: &impl StateReadOnly,
             bundle: &BlockExecutionContextBundle,
         ) -> Result<(), BlockValidationError> {
-            if bundle.lane_payload_ownerships.is_empty() {
-                return Ok(());
-            }
-
             let proposal_height = block.header().height().get();
             let proposal_view = block.header().view_change_index();
             let mut covered_indices = BTreeSet::new();
+            let mut seen_lane_payloads = BTreeSet::new();
             let mut seen_slots = BTreeSet::new();
             let mut seen_descriptor_hashes = BTreeSet::new();
             let mut seen_payload_ownership_hashes = BTreeSet::new();
@@ -7665,6 +7698,31 @@ pub(crate) mod valid {
                         ownership.proposal_view
                     )));
                 }
+                if ownership.lane_block_height == 0 {
+                    return Err(Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} has zero lane-local height",
+                    )));
+                }
+                let expected_dataspace = crate::state::nexus_active_lane_dataspace_at_height(
+                    ownership.lane_id,
+                    state.nexus(),
+                    proposal_height,
+                );
+                if expected_dataspace != Some(ownership.dataspace_id) {
+                    return Err(Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} does not target the active proposal-height lane route"
+                    )));
+                }
+                let expected_incarnation = StateReadOnly::lane_incarnation_at_height(
+                    state,
+                    ownership.lane_id,
+                    proposal_height,
+                );
+                if expected_incarnation != Some(ownership.lane_incarnation) {
+                    return Err(Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} does not bind the active proposal-height lane incarnation"
+                    )));
+                }
                 if ownership.accepted_candidate_indices.is_empty() {
                     return Err(Self::execution_context_error(format!(
                         "lane payload ownership {ownership_idx} has no accepted entrypoint indices"
@@ -7680,6 +7738,13 @@ pub(crate) mod valid {
                         "lane payload ownership {ownership_idx} has no lane block descriptor hash"
                     )));
                 };
+                if !seen_lane_payloads.insert((ownership.lane_id, ownership.dataspace_id)) {
+                    return Err(Self::execution_context_error(format!(
+                        "duplicate lane payload ownership for lane {} dataspace {}",
+                        ownership.lane_id.as_u32(),
+                        ownership.dataspace_id.as_u64()
+                    )));
+                }
 
                 let slot = (
                     ownership.lane_id,
@@ -7807,6 +7872,17 @@ pub(crate) mod valid {
                         "lane payload ownership {ownership_idx} previous lane block height mismatch"
                     )));
                 }
+                if previous_lane_block_height == 0 {
+                    if ownership.previous_lane_block_descriptor_hash.is_some() {
+                        return Err(Self::execution_context_error(format!(
+                            "lane payload ownership {ownership_idx} height-one predecessor descriptor must be absent"
+                        )));
+                    }
+                } else if ownership.previous_lane_block_descriptor_hash.is_none() {
+                    return Err(Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} is missing its non-genesis predecessor descriptor hash"
+                    )));
+                }
                 if ownership.lane_block_descriptor_validator_set != validator_set {
                     return Err(Self::execution_context_error(format!(
                         "lane payload ownership {ownership_idx} lane block descriptor validator set mismatch"
@@ -7886,34 +7962,80 @@ pub(crate) mod valid {
                         "lane payload ownership {ownership_idx} lane block height must be non-zero"
                     )));
                 }
-                let Some(existing) = state
+                if let Some(existing) = state
                     .kura()
                     .read_lane_block_artifact(ownership.lane_id, ownership.lane_block_height)
-                else {
-                    continue;
-                };
-                if existing.ownership.dataspace_id != ownership.dataspace_id {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} conflicts with stored lane artifact dataspace: expected {}, got {}",
-                        existing.ownership.dataspace_id.as_u64(),
-                        ownership.dataspace_id.as_u64()
-                    )));
+                {
+                    if existing.ownership.dataspace_id != ownership.dataspace_id {
+                        return Err(Self::execution_context_error(format!(
+                            "lane payload ownership {ownership_idx} conflicts with stored lane artifact dataspace: expected {}, got {}",
+                            existing.ownership.dataspace_id.as_u64(),
+                            ownership.dataspace_id.as_u64()
+                        )));
+                    }
+                    if existing.ownership.proposal_height < proposal_height
+                        && existing.proposal_block_hash != proposal_hash
+                    {
+                        return Err(Self::execution_context_error(format!(
+                            "lane payload ownership {ownership_idx} reuses committed lane artifact for lane {} dataspace {} lane-height {} from proposal height {}",
+                            ownership.lane_id.as_u32(),
+                            ownership.dataspace_id.as_u64(),
+                            ownership.lane_block_height,
+                            existing.ownership.proposal_height,
+                        )));
+                    }
+                    if existing.proposal_block_hash == proposal_hash
+                        && existing.ownership != *ownership
+                    {
+                        return Err(Self::execution_context_error(format!(
+                            "lane payload ownership {ownership_idx} does not match stored lane artifact for this proposal"
+                        )));
+                    }
                 }
-                if existing.ownership.proposal_height < proposal_height
-                    && existing.proposal_block_hash != proposal_hash
+
+                if ownership.lane_block_height == 1 {
+                    if ownership.previous_lane_block_height != 0
+                        || ownership.previous_lane_block_descriptor_hash.is_some()
+                    {
+                        return Err(Self::execution_context_error(format!(
+                            "lane payload ownership {ownership_idx} has a non-canonical height-one predecessor"
+                        )));
+                    }
+                    continue;
+                }
+
+                let previous_height = ownership.lane_block_height - 1;
+                let Some(declared_predecessor_hash) = ownership.previous_lane_block_descriptor_hash
+                else {
+                    return Err(Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} is missing its non-genesis predecessor descriptor hash"
+                    )));
+                };
+                let Some(predecessor_receipt) = state
+                    .kura()
+                    .read_lane_block_application_receipt(ownership.lane_id, previous_height)
+                else {
+                    return Err(Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} has no canonical predecessor application receipt for lane {} lane-height {previous_height}",
+                        ownership.lane_id.as_u32()
+                    )));
+                };
+                let predecessor = &predecessor_receipt.proposal.descriptor;
+                if predecessor.lane_id != ownership.lane_id
+                    || predecessor.dataspace_id != ownership.dataspace_id
+                    || predecessor.lane_incarnation != ownership.lane_incarnation
+                    || predecessor.lane_block_height != previous_height
+                    || predecessor.proposal_height >= proposal_height
+                    || predecessor.descriptor_hash != declared_predecessor_hash
+                    || !state
+                        .kura()
+                        .lane_block_application_receipt_available(&predecessor_receipt.proposal)
                 {
                     return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} reuses committed lane artifact for lane {} dataspace {} lane-height {} from proposal height {}",
+                        "lane payload ownership {ownership_idx} does not extend the exact applied canonical predecessor for lane {} dataspace {} incarnation {} lane-height {previous_height}",
                         ownership.lane_id.as_u32(),
                         ownership.dataspace_id.as_u64(),
-                        ownership.lane_block_height,
-                        existing.ownership.proposal_height,
-                    )));
-                }
-                if existing.proposal_block_hash == proposal_hash && existing.ownership != *ownership
-                {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} does not match stored lane artifact for this proposal"
+                        ownership.lane_incarnation,
                     )));
                 }
             }
@@ -8213,43 +8335,17 @@ pub(crate) mod valid {
             }
         }
 
-        fn signed_transaction_requires_live_sequential_execution(tx: &SignedTransaction) -> bool {
-            matches!(
-                tx.instructions(),
-                Executable::ContractCall(_) | Executable::Ivm(_)
-            )
-        }
-
-        fn entrypoint_requires_live_sequential_execution(
-            entrypoint: &TransactionEntrypoint,
-        ) -> bool {
-            Self::signed_transaction_from_entrypoint(entrypoint)
-                .is_some_and(Self::signed_transaction_requires_live_sequential_execution)
-        }
-
         pub(crate) fn sequential_entrypoints_for_live_execution(
             block: &SignedBlock,
         ) -> Option<Vec<TransactionEntrypoint>> {
             if let Some(entrypoints) = block.external_entrypoints_slice() {
-                let needs_sequential = entrypoints.iter().any(|entrypoint| {
-                    !matches!(entrypoint, TransactionEntrypoint::External(_))
-                        || Self::entrypoint_requires_live_sequential_execution(entrypoint)
-                });
+                let needs_sequential = entrypoints
+                    .iter()
+                    .any(|entrypoint| !matches!(entrypoint, TransactionEntrypoint::External(_)));
                 return needs_sequential.then(|| entrypoints.to_vec());
             }
 
-            block
-                .transactions_vec()
-                .iter()
-                .any(|tx| Self::signed_transaction_requires_live_sequential_execution(tx))
-                .then(|| {
-                    block
-                        .transactions_vec()
-                        .iter()
-                        .cloned()
-                        .map(TransactionEntrypoint::External)
-                        .collect()
-                })
+            None
         }
 
         fn prepare_external_transactions(block: &SignedBlock) -> Vec<PreparedBlockTransaction> {
@@ -9010,6 +9106,332 @@ pub(crate) mod valid {
             Ok(())
         }
 
+        /// Drain transaction-scoped settlement evidence, bind every record to the
+        /// transaction's exact route and lane-payload coordinate, and publish the
+        /// resulting commitments. Both the DAG and live-sequential execution paths
+        /// must pass through this function so neither path can silently strand
+        /// consensus evidence in `StateBlock`.
+        #[allow(clippy::too_many_lines)]
+        fn finalize_lane_settlement_evidence(
+            block: &SignedBlock,
+            state_block: &mut StateBlock<'_>,
+            routed_transactions: &[(HashOf<SignedTransaction>, crate::queue::RoutingDecision)],
+            lane_summaries: &BTreeMap<LaneId, LaneSummary>,
+        ) -> Result<Vec<LaneBlockCommitment>, BlockValidationError> {
+            let mut native_amx_receipts_by_hash = BTreeMap::new();
+            if let Some(bundle) = block.execution_context() {
+                for (entrypoint, context) in block
+                    .external_entrypoints_cloned()
+                    .zip(bundle.external.iter())
+                {
+                    let Some(receipt) = context.native_amx_receipt.clone() else {
+                        continue;
+                    };
+                    let Some(signed) = Self::signed_transaction_from_entrypoint(&entrypoint) else {
+                        return Err(Self::execution_context_error(
+                            "native AMX receipt is attached to an entrypoint without a signed transaction",
+                        ));
+                    };
+                    let tx_hash = signed.hash();
+                    if native_amx_receipts_by_hash
+                        .insert(tx_hash, receipt)
+                        .is_some()
+                    {
+                        return Err(Self::execution_context_error(format!(
+                            "duplicate native AMX receipt for routed transaction {tx_hash}"
+                        )));
+                    }
+                }
+            }
+
+            let mut lane_payload_coordinates = BTreeMap::new();
+            if let Some(bundle) = block.execution_context() {
+                for (ownership_idx, ownership) in bundle.lane_payload_ownerships.iter().enumerate()
+                {
+                    let lane_block_descriptor_hash = ownership
+                        .lane_block_descriptor_hash
+                        .ok_or_else(|| {
+                            Self::execution_context_error(format!(
+                                "lane payload ownership {ownership_idx} has no descriptor hash during settlement finalization"
+                            ))
+                        })?;
+                    let previous = lane_payload_coordinates.insert(
+                        (ownership.lane_id, ownership.dataspace_id),
+                        LanePayloadCoordinate {
+                            lane_incarnation: ownership.lane_incarnation,
+                            lane_block_height: ownership.lane_block_height,
+                            lane_block_descriptor_hash,
+                        },
+                    );
+                    if previous.is_some() {
+                        return Err(Self::execution_context_error(format!(
+                            "duplicate exact lane payload ownership for lane {} dataspace {} during settlement finalization",
+                            ownership.lane_id.as_u32(),
+                            ownership.dataspace_id.as_u64()
+                        )));
+                    }
+                }
+            }
+
+            let mut seen_transactions = BTreeSet::new();
+            for (tx_hash, _) in routed_transactions {
+                if !seen_transactions.insert(*tx_hash) {
+                    return Err(Self::execution_context_error(format!(
+                        "duplicate transaction {tx_hash} during settlement evidence routing"
+                    )));
+                }
+            }
+
+            let mut pending_settlements = state_block.drain_settlement_records();
+            let mut pending_nexus_fee_receipts = state_block.drain_nexus_fee_records();
+            let nexus_fee_receipts_active = state_block
+                .nexus
+                .fees
+                .lane_relay_burn_receipts_active_at(block.header().height().get());
+            let mut lane_settlement_builders: BTreeMap<
+                (LaneId, DataSpaceId),
+                LaneSettlementBuilder,
+            > = BTreeMap::new();
+            for (tx_hash, decision) in routed_transactions {
+                let mut counted_settlement_tx = false;
+                if let Some(record) = pending_settlements.remove(tx_hash) {
+                    lane_payload_coordinates
+                        .get(&(decision.lane_id, decision.dataspace_id))
+                        .ok_or_else(|| {
+                            Self::execution_context_error(format!(
+                                "settled lane {} dataspace {} has no exact lane payload ownership",
+                                decision.lane_id.as_u32(),
+                                decision.dataspace_id.as_u64()
+                            ))
+                        })?;
+                    let builder = lane_settlement_builders
+                        .entry((decision.lane_id, decision.dataspace_id))
+                        .or_default();
+                    builder.tx_count = builder.tx_count.saturating_add(1);
+                    counted_settlement_tx = true;
+                    builder.total_local_micro = builder
+                        .total_local_micro
+                        .saturating_add(record.local_amount_micro);
+                    builder.total_xor_due_micro = builder
+                        .total_xor_due_micro
+                        .saturating_add(record.xor_due_micro);
+                    builder.total_xor_after_haircut_micro = builder
+                        .total_xor_after_haircut_micro
+                        .saturating_add(record.xor_after_haircut_micro);
+                    builder.total_xor_variance_micro = builder
+                        .total_xor_variance_micro
+                        .saturating_add(record.xor_variance_micro);
+                    builder
+                        .source_counts
+                        .entry(record.asset_definition_id.clone())
+                        .and_modify(|count| *count = count.saturating_add(1))
+                        .or_insert(1);
+                    let evidence = SwapEvidence {
+                        epsilon_bps: record.epsilon_bps,
+                        twap_window_seconds: record.twap_window_seconds,
+                        liquidity_profile: record.liquidity_profile,
+                        twap_local_per_xor: record.twap_local_per_xor,
+                        volatility_bucket: record.volatility_bucket,
+                    };
+                    if builder
+                        .swap_evidence
+                        .as_ref()
+                        .is_some_and(|existing| existing != &evidence)
+                    {
+                        return Err(Self::execution_context_error(format!(
+                            "lane {} dataspace {} produced inconsistent settlement swap metadata",
+                            decision.lane_id.as_u32(),
+                            decision.dataspace_id.as_u64()
+                        )));
+                    }
+                    builder.swap_evidence.get_or_insert(evidence);
+                    builder.receipts.push(record.into_lane_receipt());
+                }
+
+                if let Some(record) = pending_nexus_fee_receipts.remove(tx_hash) {
+                    if !nexus_fee_receipts_active {
+                        iroha_logger::warn!(
+                            height = block.header().height().get(),
+                            tx = %tx_hash,
+                            "dropping staged Nexus fee receipt before fee receipt activation height"
+                        );
+                    } else {
+                        lane_payload_coordinates
+                            .get(&(decision.lane_id, decision.dataspace_id))
+                            .ok_or_else(|| {
+                                Self::execution_context_error(format!(
+                                    "fee-settled lane {} dataspace {} has no exact lane payload ownership",
+                                    decision.lane_id.as_u32(),
+                                    decision.dataspace_id.as_u64()
+                                ))
+                            })?;
+                        let builder = lane_settlement_builders
+                            .entry((decision.lane_id, decision.dataspace_id))
+                            .or_default();
+                        if !counted_settlement_tx {
+                            builder.tx_count = builder.tx_count.saturating_add(1);
+                            counted_settlement_tx = true;
+                        }
+                        builder.nexus_fee_receipts.push(record);
+                    }
+                }
+
+                if let Some(receipt) = native_amx_receipts_by_hash.remove(tx_hash) {
+                    let coordinate = lane_payload_coordinates
+                        .get(&(decision.lane_id, decision.dataspace_id))
+                        .ok_or_else(|| {
+                            Self::execution_context_error(format!(
+                                "native AMX lane {} dataspace {} has no exact lane payload ownership",
+                                decision.lane_id.as_u32(),
+                                decision.dataspace_id.as_u64()
+                            ))
+                        })?;
+                    if receipt.lane_incarnation != coordinate.lane_incarnation
+                        || receipt.lane_block_height != coordinate.lane_block_height
+                    {
+                        return Err(Self::execution_context_error(format!(
+                            "native AMX receipt coordinates do not match exact lane payload ownership for lane {} dataspace {}",
+                            decision.lane_id.as_u32(),
+                            decision.dataspace_id.as_u64()
+                        )));
+                    }
+                    let builder = lane_settlement_builders
+                        .entry((decision.lane_id, decision.dataspace_id))
+                        .or_default();
+                    if !counted_settlement_tx {
+                        builder.tx_count = builder.tx_count.saturating_add(1);
+                    }
+                    builder.native_amx_receipts.push(receipt);
+                }
+            }
+
+            if !pending_settlements.is_empty()
+                || !pending_nexus_fee_receipts.is_empty()
+                || !native_amx_receipts_by_hash.is_empty()
+            {
+                return Err(Self::execution_context_error(format!(
+                    "unbound settlement evidence remains after lane routing (settlement={}, nexus_fee={}, native_amx={})",
+                    pending_settlements.len(),
+                    pending_nexus_fee_receipts.len(),
+                    native_amx_receipts_by_hash.len()
+                )));
+            }
+
+            for ((lane_id, _), builder) in &mut lane_settlement_builders {
+                if builder.buffer_snapshot.is_none() {
+                    builder.buffer_snapshot =
+                        compute_settlement_buffer_snapshot(state_block, *lane_id);
+                }
+                if let Some(snapshot) = &builder.buffer_snapshot
+                    && let Some(metadata) = lane_metadata_by_id(state_block, *lane_id)
+                {
+                    match snapshot.status {
+                        BufferStatus::Normal => {}
+                        BufferStatus::Alert => iroha_logger::warn!(
+                            lane = %metadata.alias,
+                            "settlement buffer for lane {} dipped below the alert threshold (<{}%)",
+                            metadata.alias,
+                            state_block.settlement_engine().buffer_policy().alert
+                        ),
+                        BufferStatus::Throttle => iroha_logger::warn!(
+                            lane = %metadata.alias,
+                            "settlement buffer for lane {} entered throttle state (<{}%); reduce subsidised inclusion",
+                            metadata.alias,
+                            state_block.settlement_engine().buffer_policy().throttle
+                        ),
+                        BufferStatus::XorOnly => iroha_logger::warn!(
+                            lane = %metadata.alias,
+                            "settlement buffer for lane {} entered XOR-only state (<{}%); force XOR-denominated inclusion",
+                            metadata.alias,
+                            state_block.settlement_engine().buffer_policy().xor_only
+                        ),
+                        BufferStatus::Halt => iroha_logger::error!(
+                            lane = %metadata.alias,
+                            "settlement buffer for lane {} hit the halt threshold (<{}%); pause settlement until refilled",
+                            metadata.alias,
+                            state_block.settlement_engine().buffer_policy().halt
+                        ),
+                    }
+                }
+            }
+
+            let lane_settlement_commitments = lane_settlement_builders
+                .into_iter()
+                .map(|((lane_id, dataspace_id), builder)| {
+                    #[cfg(feature = "telemetry")]
+                    record_lane_settlement_metrics(
+                        state_block.metrics(),
+                        lane_id,
+                        dataspace_id,
+                        &builder,
+                    );
+                    let coordinate = lane_payload_coordinates
+                        .get(&(lane_id, dataspace_id))
+                        .ok_or_else(|| {
+                            Self::execution_context_error(format!(
+                                "settled lane {} dataspace {} has no exact lane payload ownership during commitment finalization",
+                                lane_id.as_u32(),
+                                dataspace_id.as_u64()
+                            ))
+                        })?;
+                    Ok(LaneBlockCommitment {
+                        block_height: coordinate.lane_block_height,
+                        lane_id,
+                        lane_incarnation: coordinate.lane_incarnation,
+                        dataspace_id,
+                        tx_count: builder.tx_count,
+                        total_local_micro: builder.total_local_micro,
+                        total_xor_due_micro: builder.total_xor_due_micro,
+                        total_xor_after_haircut_micro: builder.total_xor_after_haircut_micro,
+                        total_xor_variance_micro: builder.total_xor_variance_micro,
+                        swap_metadata: builder
+                            .swap_evidence
+                            .map(SwapEvidence::into_lane_metadata),
+                        receipts: builder.receipts,
+                        nexus_fee_receipts: builder
+                            .nexus_fee_receipts
+                            .into_iter()
+                            .map(|receipt| {
+                                receipt.into_lane_receipt(
+                                    coordinate.lane_block_height,
+                                    lane_id,
+                                    dataspace_id,
+                                )
+                            })
+                            .collect(),
+                        native_amx_receipts: builder.native_amx_receipts,
+                    })
+                })
+                .collect::<Result<Vec<_>, BlockValidationError>>()?;
+
+            if !lane_settlement_commitments.is_empty() {
+                crate::sumeragi::status::set_lane_settlement_commitments(
+                    lane_settlement_commitments.clone(),
+                );
+                let block_header = block.header();
+                let manifest_roots = state_block
+                    .axt_policy_snapshot()
+                    .entries
+                    .iter()
+                    .filter_map(|entry| {
+                        (!entry.policy.manifest_root.iter().all(|byte| *byte == 0))
+                            .then_some((entry.dsid, entry.policy.manifest_root))
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                let mut lane_relay_envelopes = lane_relay_envelopes_for_block(
+                    &block_header,
+                    block_header.da_commitments_hash(),
+                    &lane_settlement_commitments,
+                    lane_summaries,
+                    &lane_payload_coordinates,
+                )?;
+                attach_manifest_roots_to_relays(&mut lane_relay_envelopes, &manifest_roots);
+                crate::sumeragi::status::set_lane_relay_envelopes(lane_relay_envelopes);
+            }
+
+            Ok(lane_settlement_commitments)
+        }
+
         fn validate_and_record_entrypoints_sequential(
             block: &mut SignedBlock,
             state_block: &mut StateBlock<'_>,
@@ -9095,7 +9517,10 @@ pub(crate) mod valid {
                 }
             }
 
-            let mut ivm_cache = IvmCache::new();
+            let mut ivm_cache = IvmCache::with_prepared_contract_cache(
+                state_block.pipeline.cache_size,
+                state_block.pipeline_ivm_prepared_cache.clone(),
+            );
             let mut hashes: Vec<Option<HashOf<TransactionEntrypoint>>> = vec![None; n];
             let mut results: Vec<Option<TransactionResultInner>> = vec![None; n];
             for idx in execution_order {
@@ -9137,6 +9562,35 @@ pub(crate) mod valid {
                     ))
                 }));
             }
+
+            let mut lane_summaries: BTreeMap<LaneId, LaneSummary> = BTreeMap::new();
+            let mut routed_transactions = Vec::new();
+            for (entrypoint, decision) in entrypoints.iter().zip(&routing_decisions) {
+                let summary = lane_summaries.entry(decision.lane_id).or_default();
+                summary.tx_vertices = summary.tx_vertices.saturating_add(1);
+                if let Some(tx) = Self::signed_transaction_from_entrypoint(entrypoint) {
+                    let metadata = crate::tx::AcceptedTransaction::prepare_signed_metadata(tx);
+                    summary.rbc_bytes_total = summary
+                        .rbc_bytes_total
+                        .saturating_add(metadata.encoded_len as u64);
+                    routed_transactions.push((tx.hash(), *decision));
+                }
+            }
+            let chunk_size =
+                (iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_MAX_BYTES.max(1)) as u64;
+            for summary in lane_summaries.values_mut() {
+                summary.rbc_chunks = if summary.rbc_bytes_total == 0 {
+                    0
+                } else {
+                    summary.rbc_bytes_total.div_ceil(chunk_size)
+                };
+            }
+            Self::finalize_lane_settlement_evidence(
+                block,
+                state_block,
+                &routed_transactions,
+                &lane_summaries,
+            )?;
 
             Self::execute_deterministic_pipeline_triggers(
                 block,
@@ -9336,7 +9790,10 @@ pub(crate) mod valid {
                     AccessSetSource, derive_for_prepared_overlay_with_source,
                     derive_for_transaction_with_source,
                 },
-                overlay::{TxOverlay, build_prepared_overlay_for_transaction_with_accounts_zk},
+                overlay::{
+                    DurableStateReadSnapshot, TxOverlay, VmAccessFence,
+                    build_prepared_overlay_for_transaction_with_accounts_zk,
+                },
             };
 
             let to_ms = |duration: Duration| -> u64 {
@@ -10233,11 +10690,18 @@ pub(crate) mod valid {
             let overlay_cache_count = workers.max(1);
             let overlay_caches: Vec<_> = (0..overlay_cache_count)
                 .map(|_| {
-                    parking_lot::Mutex::new(IvmCache::with_capacity(
+                    parking_lot::Mutex::new(IvmCache::with_prepared_contract_cache(
                         state_block.pipeline.cache_size,
+                        state_block.pipeline_ivm_prepared_cache.clone(),
                     ))
                 })
                 .collect();
+            // Preserve the worker-local cache affinity even when preparation
+            // fails. A state-dependent failure may be retried later against
+            // live state and should reuse any artifact/template work completed
+            // before that failure.
+            let overlay_cache_indices: Vec<_> =
+                (0..txs.len()).map(|_| AtomicUsize::new(0)).collect();
             #[cfg(feature = "telemetry")]
             let overlay_aggregate_lane = state_block.nexus.routing_policy.default_lane;
 
@@ -10252,7 +10716,20 @@ pub(crate) mod valid {
             struct PreparedBlockOverlay {
                 overlay: Arc<TxOverlay>,
                 access_log: Option<ivm::host::AccessLog>,
+                durable_state_reads: Option<DurableStateReadSnapshot>,
+                access_fence: VmAccessFence,
+                force_live_rebuild: bool,
+                prepared_argument_record: Option<ivm::PreparedArgumentRecord>,
+                cache_idx: usize,
             }
+
+            let capture_vm_access_log = |tx: &SignedTransaction| {
+                dynamic_prepass
+                    || matches!(
+                        tx.instructions(),
+                        Executable::ContractCall(_) | Executable::Ivm(_)
+                    )
+            };
 
             let mut prepared_overlays: Vec<
                 Result<PreparedBlockOverlay, crate::pipeline::overlay::OverlayBuildError>,
@@ -10274,6 +10751,8 @@ pub(crate) mod valid {
                                         );
                                     let cache_idx = rayon::current_thread_index().unwrap_or(i)
                                         % overlay_caches.len();
+                                    overlay_cache_indices[i]
+                                        .store(cache_idx, AtomicOrdering::Relaxed);
                                     #[cfg(feature = "telemetry")]
                                     let cache_wait_start = Instant::now();
                                     let mut ivm_cache = overlay_caches[cache_idx].lock();
@@ -10293,12 +10772,25 @@ pub(crate) mod valid {
                                             &block.header(),
                                             metadata,
                                             &mut ivm_cache,
-                                            dynamic_prepass,
+                                            capture_vm_access_log(tx),
+                                            None,
                                         )
                                         .map(|prepared| {
+                                            let durable_state_reads =
+                                                DurableStateReadSnapshot::capture(
+                                                    tx,
+                                                    prepared.access_log.as_ref(),
+                                                    state_block,
+                                                );
                                             PreparedBlockOverlay {
                                                 overlay: Arc::new(prepared.overlay),
                                                 access_log: prepared.access_log,
+                                                durable_state_reads,
+                                                access_fence: prepared.access_fence,
+                                                force_live_rebuild: prepared.force_live_rebuild,
+                                                prepared_argument_record: prepared
+                                                    .prepared_argument_record,
+                                                cache_idx,
                                             }
                                         });
                                 }
@@ -10317,6 +10809,7 @@ pub(crate) mod valid {
                                 );
                                 let cache_idx = rayon::current_thread_index().unwrap_or(i)
                                     % overlay_caches.len();
+                                overlay_cache_indices[i].store(cache_idx, AtomicOrdering::Relaxed);
                                 #[cfg(feature = "telemetry")]
                                 let cache_wait_start = Instant::now();
                                 let mut ivm_cache = overlay_caches[cache_idx].lock();
@@ -10335,12 +10828,23 @@ pub(crate) mod valid {
                                     &block.header(),
                                     metadata,
                                     &mut ivm_cache,
-                                    dynamic_prepass,
+                                    capture_vm_access_log(tx),
+                                    None,
                                 )
                                 .map(|prepared| {
+                                    let durable_state_reads = DurableStateReadSnapshot::capture(
+                                        tx,
+                                        prepared.access_log.as_ref(),
+                                        state_block,
+                                    );
                                     PreparedBlockOverlay {
                                         overlay: Arc::new(prepared.overlay),
                                         access_log: prepared.access_log,
+                                        durable_state_reads,
+                                        access_fence: prepared.access_fence,
+                                        force_live_rebuild: prepared.force_live_rebuild,
+                                        prepared_argument_record: prepared.prepared_argument_record,
+                                        cache_idx,
                                     }
                                 });
                             }
@@ -10371,11 +10875,24 @@ pub(crate) mod valid {
                                 &block.header(),
                                 metadata,
                                 &mut ivm_cache,
-                                dynamic_prepass,
+                                capture_vm_access_log(tx),
+                                None,
                             )
-                            .map(|prepared| PreparedBlockOverlay {
-                                overlay: Arc::new(prepared.overlay),
-                                access_log: prepared.access_log,
+                            .map(|prepared| {
+                                let durable_state_reads = DurableStateReadSnapshot::capture(
+                                    tx,
+                                    prepared.access_log.as_ref(),
+                                    state_block,
+                                );
+                                PreparedBlockOverlay {
+                                    overlay: Arc::new(prepared.overlay),
+                                    access_log: prepared.access_log,
+                                    durable_state_reads,
+                                    access_fence: prepared.access_fence,
+                                    force_live_rebuild: prepared.force_live_rebuild,
+                                    prepared_argument_record: prepared.prepared_argument_record,
+                                    cache_idx: 0,
+                                }
                             });
                     }
                 }
@@ -10414,6 +10931,11 @@ pub(crate) mod valid {
                             .map(|overlay| PreparedBlockOverlay {
                                 overlay: Arc::new(overlay),
                                 access_log: None,
+                                durable_state_reads: None,
+                                access_fence: VmAccessFence::Global,
+                                force_live_rebuild: true,
+                                prepared_argument_record: None,
+                                cache_idx: 0,
                             });
                     }
                 }
@@ -10461,7 +10983,7 @@ pub(crate) mod valid {
                 if stateless_rejections[idx].is_some() {
                     return (crate::pipeline::access::AccessSet::new(), None);
                 }
-                match &prepared_overlays[idx] {
+                let (mut set, mut source) = match &prepared_overlays[idx] {
                     Ok(prepared) => derive_for_prepared_overlay_with_source(
                         tx,
                         &*state_block,
@@ -10474,7 +10996,18 @@ pub(crate) mod valid {
                         Some(&*state_block),
                         crate::pipeline::access::IvmStrategy::Conservative,
                     ),
+                };
+                if let Ok(prepared) = &prepared_overlays[idx]
+                    && !matches!(
+                        source,
+                        Some(AccessSetSource::ManifestHints | AccessSetSource::EntrypointHints)
+                    )
+                    && let Some(fence_key) = prepared.access_fence.scheduler_write_key()
+                {
+                    set.add_write(fence_key.to_owned());
+                    source = Some(AccessSetSource::ConservativeFallback);
                 }
+                (set, source)
             };
             let derived: Vec<_> = if workers > 1 {
                 if let Some(pool) = pool.as_ref() {
@@ -10563,6 +11096,90 @@ pub(crate) mod valid {
                             .map_err(Clone::clone)
                     })
                     .collect();
+
+            // VM overlays are prepared from a block-start snapshot. Before a
+            // sequential merge, retain the cached overlay only while every
+            // durable-state prefix read by that VM still has the same value.
+            // This is deliberately narrower than re-executing arbitrary ISIs:
+            // ContractCall/IVM overlays with an observed stale durable read are
+            // rebuilt selectively. Bytecode with ledger access, nested calls,
+            // or other opaque dynamic access is also rebuilt because those
+            // observations are not yet represented by a narrow fingerprint.
+            // Quarantined VMs use the same live-state rule because their capped
+            // builder does not return an access log.
+            let overlay_rebuild_header = block.header();
+            let overlay_for_live_state = |state_ro: &StateBlock<'_>,
+                                          idx: usize|
+             -> Result<
+                Arc<TxOverlay>,
+                crate::pipeline::overlay::OverlayBuildError,
+            > {
+                let tx = txs[idx];
+                let is_vm = matches!(
+                    tx.instructions(),
+                    Executable::ContractCall(_) | Executable::Ivm(_)
+                );
+                let (stale_durable_read, force_live_rebuild, cache_idx, prepared_argument_record) =
+                    match prepared_overlays[idx].as_ref() {
+                        Ok(prepared) => (
+                            prepared
+                                .durable_state_reads
+                                .as_ref()
+                                .is_some_and(|snapshot| !snapshot.is_current(state_ro)),
+                            prepared.force_live_rebuild,
+                            prepared.cache_idx,
+                            prepared.prepared_argument_record.clone(),
+                        ),
+                        Err(err) if is_vm && err.may_change_with_live_state() => (
+                            false,
+                            true,
+                            overlay_cache_indices[idx].load(AtomicOrdering::Relaxed),
+                            None,
+                        ),
+                        Err(err) => return Err(err.clone()),
+                    };
+                let rebuild_quarantined_vm = is_quarantine[idx] && is_vm;
+                if !stale_durable_read && !force_live_rebuild && !rebuild_quarantined_vm {
+                    return prepared_overlays[idx]
+                        .as_ref()
+                        .map(|prepared| Arc::clone(&prepared.overlay))
+                        .map_err(Clone::clone);
+                }
+
+                let accounts = state_ro.accounts_snapshot();
+                let metadata =
+                    crate::pipeline::overlay::resolve_streaming_metadata(state_ro, tx.authority());
+                // Reuse the same worker-local runtime and prepared-artifact
+                // pool that produced the original overlay. A selective retry
+                // must not turn a warm nested call into another parse/predecode.
+                let mut ivm_cache = overlay_caches[cache_idx].lock();
+                let rebuilt = if rebuild_quarantined_vm {
+                    crate::pipeline::overlay::build_overlay_for_transaction_quarantine(
+                        tx,
+                        accounts,
+                        state_ro,
+                        q_cycle_cap,
+                        q_time_cap,
+                        upper_cycle_cap,
+                        metadata,
+                        &mut ivm_cache,
+                    )
+                } else {
+                    build_prepared_overlay_for_transaction_with_accounts_zk(
+                        tx,
+                        accounts,
+                        state_ro,
+                        state_ro.zk().halo2.enabled || state_ro.zk().stark.enabled,
+                        &overlay_rebuild_header,
+                        metadata,
+                        &mut ivm_cache,
+                        false,
+                        prepared_argument_record,
+                    )
+                    .map(|prepared| prepared.overlay)
+                }?;
+                Ok(Arc::new(rebuilt))
+            };
 
             // Build conflict graph using key interning (strings -> compact IDs),
             // and partition transactions into independent components via DSF.
@@ -10841,34 +11458,6 @@ pub(crate) mod valid {
             let mut apply_results_ms = 0u64;
             let mut lane_summaries: BTreeMap<LaneId, LaneSummary> = BTreeMap::new();
             let mut dataspace_summaries: BTreeMap<(LaneId, DataSpaceId), u64> = BTreeMap::new();
-            let mut pending_settlements = state_block.drain_settlement_records();
-            let mut pending_nexus_fee_receipts = state_block.drain_nexus_fee_records();
-            let nexus_fee_receipts_active = state_block
-                .nexus
-                .fees
-                .lane_relay_burn_receipts_active_at(block.header().height().get());
-            let mut native_amx_receipts_by_hash: BTreeMap<
-                HashOf<SignedTransaction>,
-                NativeAmxReceipt,
-            > = block
-                .execution_context()
-                .map(|bundle| {
-                    block
-                        .external_entrypoints_cloned()
-                        .zip(bundle.external.iter())
-                        .filter_map(|(entrypoint, context)| {
-                            let receipt = context.native_amx_receipt.clone()?;
-                            let signed = Self::signed_transaction_from_entrypoint(&entrypoint)?;
-                            Some((signed.hash(), receipt))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let mut lane_settlement_builders: BTreeMap<
-                (LaneId, DataSpaceId),
-                LaneSettlementBuilder,
-            > = BTreeMap::new();
 
             #[cfg(feature = "telemetry")]
             let record_amx_abort =
@@ -10897,87 +11486,6 @@ pub(crate) mod valid {
                     summary.rbc_bytes_total = summary
                         .rbc_bytes_total
                         .saturating_add(prepared_txs[idx].metadata.encoded_len as u64);
-
-                    let mut counted_settlement_tx = false;
-                    if let Some(record) =
-                        pending_settlements.remove(&prepared_txs[idx].metadata.signed_hash)
-                    {
-                        let builder = lane_settlement_builders
-                            .entry((decision.lane_id, decision.dataspace_id))
-                            .or_default();
-                        builder.tx_count = builder.tx_count.saturating_add(1);
-                        counted_settlement_tx = true;
-                        builder.total_local_micro = builder
-                            .total_local_micro
-                            .saturating_add(record.local_amount_micro);
-                        builder.total_xor_due_micro = builder
-                            .total_xor_due_micro
-                            .saturating_add(record.xor_due_micro);
-                        builder.total_xor_after_haircut_micro = builder
-                            .total_xor_after_haircut_micro
-                            .saturating_add(record.xor_after_haircut_micro);
-                        builder.total_xor_variance_micro = builder
-                            .total_xor_variance_micro
-                            .saturating_add(record.xor_variance_micro);
-                        builder
-                            .source_counts
-                            .entry(record.asset_definition_id.clone())
-                            .and_modify(|count| *count = count.saturating_add(1))
-                            .or_insert(1);
-                        let evidence = SwapEvidence {
-                            epsilon_bps: record.epsilon_bps,
-                            twap_window_seconds: record.twap_window_seconds,
-                            liquidity_profile: record.liquidity_profile,
-                            twap_local_per_xor: record.twap_local_per_xor,
-                            volatility_bucket: record.volatility_bucket,
-                        };
-                        match &mut builder.swap_evidence {
-                            Some(existing) => {
-                                debug_assert_eq!(
-                                    existing, &evidence,
-                                    "lane/dataspace conversions must share swap metadata"
-                                );
-                            }
-                            None => {
-                                builder.swap_evidence = Some(evidence);
-                            }
-                        }
-                        builder.receipts.push(record.into_lane_receipt());
-                    }
-                    if let Some(record) =
-                        pending_nexus_fee_receipts.remove(&prepared_txs[idx].metadata.signed_hash)
-                    {
-                        if !nexus_fee_receipts_active {
-                            iroha_logger::warn!(
-                                height = block.header().height().get(),
-                                tx = %prepared_txs[idx].metadata.signed_hash,
-                                "dropping staged Nexus fee receipt before fee receipt activation height"
-                            );
-                            continue;
-                        }
-                        let builder = lane_settlement_builders
-                            .entry((decision.lane_id, decision.dataspace_id))
-                            .or_default();
-                        if !counted_settlement_tx {
-                            builder.tx_count = builder.tx_count.saturating_add(1);
-                        }
-                        builder.nexus_fee_receipts.push(record.into_lane_receipt(
-                            block.header().height().get(),
-                            decision.lane_id,
-                            decision.dataspace_id,
-                        ));
-                    }
-                    if let Some(receipt) =
-                        native_amx_receipts_by_hash.remove(&prepared_txs[idx].metadata.signed_hash)
-                    {
-                        let builder = lane_settlement_builders
-                            .entry((decision.lane_id, decision.dataspace_id))
-                            .or_default();
-                        if !counted_settlement_tx {
-                            builder.tx_count = builder.tx_count.saturating_add(1);
-                        }
-                        builder.native_amx_receipts.push(receipt);
-                    }
                 }
 
                 for (src, decision) in routing_decisions.iter().enumerate() {
@@ -11154,131 +11662,17 @@ pub(crate) mod valid {
                 status::set_dataspace_activity_snapshot(dataspace_activity_snapshot);
             }
 
-            for ((lane_id, _), builder) in lane_settlement_builders.iter_mut() {
-                if builder.buffer_snapshot.is_none() {
-                    builder.buffer_snapshot =
-                        compute_settlement_buffer_snapshot(state_block, *lane_id);
-                }
-                if let Some(snapshot) = &builder.buffer_snapshot {
-                    if let Some(metadata) = lane_metadata_by_id(state_block, *lane_id) {
-                        match snapshot.status {
-                            BufferStatus::Normal => {}
-                            BufferStatus::Alert => {
-                                iroha_logger::warn!(
-                                    lane = %metadata.alias,
-                                    "settlement buffer for lane {} dipped below the alert threshold (<{}%)",
-                                    metadata.alias,
-                                    state_block
-                                        .settlement_engine()
-                                        .buffer_policy()
-                                        .alert
-                                );
-                            }
-                            BufferStatus::Throttle => {
-                                iroha_logger::warn!(
-                                    lane = %metadata.alias,
-                                    "settlement buffer for lane {} entered throttle state (<{}%); reduce subsidised inclusion",
-                                    metadata.alias,
-                                    state_block
-                                        .settlement_engine()
-                                        .buffer_policy()
-                                        .throttle
-                                );
-                            }
-                            BufferStatus::XorOnly => {
-                                iroha_logger::warn!(
-                                    lane = %metadata.alias,
-                                    "settlement buffer for lane {} entered XOR-only state (<{}%); force XOR-denominated inclusion",
-                                    metadata.alias,
-                                    state_block
-                                        .settlement_engine()
-                                        .buffer_policy()
-                                        .xor_only
-                                );
-                            }
-                            BufferStatus::Halt => {
-                                iroha_logger::error!(
-                                    lane = %metadata.alias,
-                                    "settlement buffer for lane {} hit the halt threshold (<{}%); pause settlement until refilled",
-                                    metadata.alias,
-                                    state_block
-                                        .settlement_engine()
-                                        .buffer_policy()
-                                        .halt
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            let lane_settlement_commitments: Vec<LaneBlockCommitment> = {
-                let block_height = block.header().height().get();
-                lane_settlement_builders
-                    .into_iter()
-                    .map(|((lane_id, dataspace_id), builder)| {
-                        #[cfg(feature = "telemetry")]
-                        {
-                            record_lane_settlement_metrics(
-                                state_block.metrics(),
-                                lane_id,
-                                dataspace_id,
-                                &builder,
-                            );
-                        }
-                        LaneBlockCommitment {
-                            block_height,
-                            lane_id,
-                            lane_incarnation: StateReadOnly::lane_incarnation_at_height(
-                                state_block,
-                                lane_id,
-                                block_height,
-                            )
-                            .expect("settlement lane must have an active incarnation"),
-                            dataspace_id,
-                            tx_count: builder.tx_count,
-                            total_local_micro: builder.total_local_micro,
-                            total_xor_due_micro: builder.total_xor_due_micro,
-                            total_xor_after_haircut_micro: builder.total_xor_after_haircut_micro,
-                            total_xor_variance_micro: builder.total_xor_variance_micro,
-                            swap_metadata: builder
-                                .swap_evidence
-                                .map(SwapEvidence::into_lane_metadata),
-                            receipts: builder.receipts,
-                            nexus_fee_receipts: builder.nexus_fee_receipts,
-                            native_amx_receipts: builder.native_amx_receipts,
-                        }
-                    })
-                    .collect()
-            };
-
-            if !lane_settlement_commitments.is_empty() {
-                crate::sumeragi::status::set_lane_settlement_commitments(
-                    lane_settlement_commitments.clone(),
-                );
-                let block_header = block.header();
-                let da_commitment_hash = block_header.da_commitments_hash();
-                let manifest_roots: BTreeMap<DataSpaceId, [u8; 32]> = state_block
-                    .axt_policy_snapshot()
-                    .entries
-                    .iter()
-                    .filter_map(|entry| {
-                        if entry.policy.manifest_root.iter().all(|byte| *byte == 0) {
-                            None
-                        } else {
-                            Some((entry.dsid, entry.policy.manifest_root))
-                        }
-                    })
-                    .collect();
-                let mut lane_relay_envelopes = lane_relay_envelopes_for_block(
-                    &block_header,
-                    da_commitment_hash,
-                    &lane_settlement_commitments,
-                    &lane_summaries,
-                );
-                attach_manifest_roots_to_relays(&mut lane_relay_envelopes, &manifest_roots);
-                crate::sumeragi::status::set_lane_relay_envelopes(lane_relay_envelopes);
-            }
+            let routed_transactions = prepared_txs
+                .iter()
+                .zip(&routing_decisions)
+                .map(|(prepared, decision)| (prepared.metadata.signed_hash, *decision))
+                .collect::<Vec<_>>();
+            Self::finalize_lane_settlement_evidence(
+                block,
+                state_block,
+                &routed_transactions,
+                &lane_summaries,
+            )?;
 
             let mut tx_results: Vec<Option<TransactionResultInner>> = vec![None; n];
             let mut record_result = |idx: usize, result: TransactionResultInner| {
@@ -11368,6 +11762,57 @@ pub(crate) mod valid {
                     let layer_prep_start = timings.as_ref().map(|_| Instant::now());
                     #[cfg(feature = "telemetry")]
                     let t_layer_prep = Instant::now();
+                    let prepare_entry = |idx: usize| {
+                        let tx = txs[idx];
+                        let overlay = match overlays[idx].as_ref() {
+                            Ok(overlay) => Some(overlay.as_ref()),
+                            Err(err)
+                                if matches!(
+                                    tx.instructions(),
+                                    Executable::ContractCall(_) | Executable::Ivm(_)
+                                ) && err.may_change_with_live_state() =>
+                            {
+                                // A VM can fail against the block-start snapshot
+                                // and become valid after an earlier globally
+                                // serialized transaction. Defer its definitive
+                                // build to `overlay_for_live_state`.
+                                None
+                            }
+                            Err(err) => return Err((idx, map_overlay_error(err))),
+                        };
+                        if let Some(overlay) = overlay {
+                            let max_instrs = state_block.pipeline.overlay_max_instructions;
+                            if max_instrs > 0 && overlay.instruction_count() > max_instrs {
+                                return Err((
+                                    idx,
+                                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                                        iroha_data_model::ValidationFail::NotPermitted(format!(
+                                            "overlay exceeds max instructions: {} > {max_instrs}",
+                                            overlay.instruction_count()
+                                        )),
+                                    ),
+                                ));
+                            }
+                            let max_bytes = state_block.pipeline.overlay_max_bytes;
+                            let byte_size = overlay.byte_size() as u64;
+                            if max_bytes > 0 && byte_size > max_bytes {
+                                return Err((
+                                    idx,
+                                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                                        iroha_data_model::ValidationFail::NotPermitted(format!(
+                                            "overlay exceeds max bytes: {byte_size} > {max_bytes}"
+                                        )),
+                                    ),
+                                ));
+                            }
+                        }
+                        Ok(PreparedEntry {
+                            idx,
+                            authority: tx.authority().clone(),
+                            chunk_size: state_block.pipeline.overlay_chunk_instructions.max(1),
+                            _log_only: false,
+                        })
+                    };
                     let prepared_or_err: Vec<
                         Result<
                             PreparedEntry,
@@ -11381,132 +11826,17 @@ pub(crate) mod valid {
                             pool.install(|| {
                                 layer_norm
                                     .par_iter()
-                                    .map(|&idx| {
-                                        let tx = txs[idx];
-                                        let overlay = match overlays[idx].as_ref() {
-                                            Ok(o) => Arc::clone(o),
-                                            Err(err) => {
-                                                let rej = map_overlay_error(err);
-                                                return Err((idx, rej));
-                                            }
-                                        };
-                                        let max_instrs =
-                                            state_block.pipeline.overlay_max_instructions;
-                                        if max_instrs > 0
-                                            && overlay.instruction_count() > max_instrs
-                                        {
-                                            return Err((
-                                                idx,
-                                                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                                    iroha_data_model::ValidationFail::NotPermitted(format!(
-                                                        "overlay exceeds max instructions: {} > {max_instrs}",
-                                                        overlay.instruction_count()
-                                                    )),
-                                                ),
-                                            ));
-                                        }
-                                        let max_bytes = state_block.pipeline.overlay_max_bytes;
-                                        let byte_size = overlay.byte_size() as u64;
-                                        if max_bytes > 0 && byte_size > max_bytes {
-                                            return Err((
-                                                idx,
-                                                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                                    iroha_data_model::ValidationFail::NotPermitted(format!(
-                                                        "overlay exceeds max bytes: {byte_size} > {max_bytes}"
-                                                    )),
-                                                ),
-                                            ));
-                                        }
-                                        Ok(PreparedEntry {
-                                            idx,
-                                            authority: tx.authority().clone(),
-                                            chunk_size: state_block
-                                                .pipeline
-                                                .overlay_chunk_instructions
-                                                .max(1),
-                                            _log_only: false,
-                                        })
-                                    })
+                                    .map(|&idx| prepare_entry(idx))
                                     .collect()
                             })
                         } else {
                             layer_norm
                                 .par_iter()
-                                .map(|&idx| {
-                                    let tx = txs[idx];
-                                    let overlay = match overlays[idx].as_ref() {
-                                        Ok(o) => Arc::clone(o),
-                                        Err(err) => {
-                                            let rej = map_overlay_error(err);
-                                            return Err((idx, rej));
-                                        }
-                                    };
-                                    let max_instrs = state_block.pipeline.overlay_max_instructions;
-                                    if max_instrs > 0 && overlay.instruction_count() > max_instrs {
-                                        return Err((
-                                            idx,
-                                            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                                iroha_data_model::ValidationFail::NotPermitted(format!(
-                                                    "overlay exceeds max instructions: {} > {max_instrs}",
-                                                    overlay.instruction_count()
-                                                )),
-                                            ),
-                                        ));
-                                    }
-                                    let max_bytes = state_block.pipeline.overlay_max_bytes;
-                                    let byte_size = overlay.byte_size() as u64;
-                                    if max_bytes > 0 && byte_size > max_bytes {
-                                        return Err((
-                                            idx,
-                                            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                                iroha_data_model::ValidationFail::NotPermitted(format!(
-                                                    "overlay exceeds max bytes: {byte_size} > {max_bytes}"
-                                                )),
-                                            ),
-                                        ));
-                                    }
-                                    Ok(PreparedEntry {
-                                        idx,
-                                        authority: tx.authority().clone(),
-                                        chunk_size: state_block
-                                            .pipeline
-                                            .overlay_chunk_instructions
-                                            .max(1),
-                                        _log_only: false,
-                                    })
-                                })
+                                .map(|&idx| prepare_entry(idx))
                                 .collect()
                         }
                     } else {
-                        layer_norm.iter().map(|&idx| {
-                            let tx = txs[idx];
-                            let overlay = match overlays[idx].as_ref() {
-                                Ok(o) => Arc::clone(o),
-                                Err(err) => {
-                                    let rej = map_overlay_error(err);
-                                    return Err((idx, rej));
-                                }
-                            };
-                            let max_instrs = state_block.pipeline.overlay_max_instructions;
-                            if max_instrs > 0 && overlay.instruction_count() > max_instrs {
-                                return Err((idx, iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                    iroha_data_model::ValidationFail::NotPermitted(format!("overlay exceeds max instructions: {} > {max_instrs}", overlay.instruction_count())),
-                                )));
-                            }
-                            let max_bytes = state_block.pipeline.overlay_max_bytes;
-                            let byte_size = overlay.byte_size() as u64;
-                            if max_bytes > 0 && byte_size > max_bytes {
-                                return Err((idx, iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                    iroha_data_model::ValidationFail::NotPermitted(format!("overlay exceeds max bytes: {byte_size} > {max_bytes}")),
-                                )));
-                            }
-                            Ok(PreparedEntry {
-                                idx,
-                                authority: tx.authority().clone(),
-                                chunk_size: state_block.pipeline.overlay_chunk_instructions.max(1),
-                                _log_only: false,
-                            })
-                        }).collect()
+                        layer_norm.iter().map(|&idx| prepare_entry(idx)).collect()
                     };
                     #[cfg(feature = "telemetry")]
                     {
@@ -11732,7 +12062,15 @@ pub(crate) mod valid {
                             ) {
                                 return (p.idx, None, Some(DetachedFallbackReason::UserExecutor));
                             }
-                            if ovl.has_durable_state_changes() {
+                            if ovl.has_durable_state_changes()
+                                || prepared_overlays[p.idx]
+                                    .as_ref()
+                                    .ok()
+                                    .is_some_and(|prepared| {
+                                        prepared.durable_state_reads.is_some()
+                                            || prepared.force_live_rebuild
+                                    })
+                            {
                                 return (p.idx, None, Some(DetachedFallbackReason::DurableState));
                             }
                             let mut delta = DetachedStateTransactionDelta::default();
@@ -11995,11 +12333,11 @@ pub(crate) mod valid {
                             }
                             let tx = txs[idx];
                             let hash = prepared_txs[idx].metadata.entrypoint_hash;
-                            let overlay = match overlays[idx].as_ref() {
-                                Ok(ovl) => Arc::clone(ovl),
+                            let overlay = match overlay_for_live_state(state_block_mut, idx) {
+                                Ok(overlay) => overlay,
                                 Err(err) => {
                                     record_amx_abort(state_block_mut, idx, "prepare");
-                                    let rej = map_overlay_error(err);
+                                    let rej = map_overlay_error(&err);
                                     return Err(rej);
                                 }
                             };
@@ -12643,10 +12981,10 @@ pub(crate) mod valid {
                             record_result(idx, Err(reason));
                             continue;
                         }
-                        let overlay = match overlays[idx].as_ref() {
-                            Ok(o) => Arc::clone(o),
+                        let overlay = match overlay_for_live_state(state_block, idx) {
+                            Ok(overlay) => overlay,
                             Err(err) => {
-                                let rej = map_overlay_error(err);
+                                let rej = map_overlay_error(&err);
                                 record_result(idx, Err(rej));
                                 continue;
                             }
@@ -12855,11 +13193,11 @@ pub(crate) mod valid {
                         record_result(idx, Err(reason));
                         continue;
                     }
-                    let overlay = match overlays[idx].as_ref() {
-                        Ok(ovl) => Arc::clone(ovl),
+                    let overlay = match overlay_for_live_state(state_block, idx) {
+                        Ok(overlay) => overlay,
                         Err(err) => {
                             record_amx_abort(state_block, idx, "prepare");
-                            let rej = map_overlay_error(err);
+                            let rej = map_overlay_error(&err);
                             record_result(idx, Err(rej));
                             continue;
                         }
@@ -13795,7 +14133,7 @@ pub(crate) mod valid {
     mod tests {
         use std::{
             borrow::Cow,
-            collections::BTreeSet,
+            collections::{BTreeMap, BTreeSet},
             num::{NonZeroU16, NonZeroU32, NonZeroU64},
             path::PathBuf,
             str::FromStr,
@@ -13845,6 +14183,7 @@ pub(crate) mod valid {
                 Executable, IvmBytecode, IvmProved, SignedTransaction, TransactionBuilder,
                 error::TransactionLimitError,
             },
+            trigger::DataTriggerSequence,
         };
         use iroha_logger::Level;
         use iroha_primitives::time::TimeSource;
@@ -13893,7 +14232,12 @@ pub(crate) mod valid {
             height: u64,
         ) -> Option<ConfidentialFeatureDigest> {
             let view = state.query_view();
-            let digest = compute_confidential_feature_digest(view.world(), view.zk(), height);
+            let digest = compute_confidential_feature_digest(
+                view.world(),
+                view.zk(),
+                view.sccp_registry(),
+                height,
+            );
             (!digest.is_empty()).then_some(digest)
         }
 
@@ -14269,15 +14613,16 @@ pub(crate) mod valid {
                 source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
                 dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
                 nonce: 1,
+                route_revision: 1,
                 asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-                asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                asset_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
                 asset_id: b"xor".to_vec(),
                 amount: 10,
-                sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                sender_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
                 sender: b"bridge@sora".to_vec(),
-                recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-                recipient: b"0x3333333333333333333333333333333333333333".to_vec(),
-                route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                recipient_codec: iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
+                recipient: vec![0x22; 20],
+                route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
                 route_id: b"nexus:eth:xor".to_vec(),
             })
         }
@@ -14303,9 +14648,10 @@ pub(crate) mod valid {
             keypair: &KeyPair,
             record_count: usize,
         ) -> AcceptedTransaction<'static> {
-            let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&sccp_transfer_payload());
+            let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&sccp_transfer_payload())
+                .expect("valid SCCP block fixture payload encodes");
             let overlay = core::iter::repeat_with(|| {
-                InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                InstructionBox::from(crate::bridge::test_record_sccp_message(
                     payload_bytes.clone(),
                 ))
             })
@@ -14471,7 +14817,7 @@ pub(crate) mod valid {
                 account_id,
                 &keypair,
                 vec![InstructionBox::from(
-                    iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                    crate::bridge::test_record_sccp_message(
                         b"not a canonical SCCP payload".to_vec(),
                     ),
                 )],
@@ -14656,7 +15002,7 @@ pub(crate) mod valid {
             let accepted = sccp_accepted_transaction_with_record_count(account_id, &keypair, 2);
             let leader = crate::block::checked_keypair();
             let duplicate_commitment =
-                iroha_sccp::hub_commitment_from_sccp_payload(&sccp_transfer_payload());
+                crate::bridge::test_sccp_hub_commitment(&sccp_transfer_payload());
             let duplicate_inclusive_root = iroha_sccp::commitment_merkle_root(&[
                 duplicate_commitment.clone(),
                 duplicate_commitment,
@@ -14694,7 +15040,7 @@ pub(crate) mod valid {
             let candidate_root =
                 crate::bridge::sccp_commitment_root_from_messages(&candidate_messages)
                     .expect("candidate SCCP root");
-            let key = crate::bridge::sccp_outbound_message_key(&sccp_transfer_payload());
+            let key = crate::bridge::test_sccp_outbound_message_key(&sccp_transfer_payload());
             let leader = crate::block::checked_keypair();
             let new_block = BlockBuilder::new(vec![accepted])
                 .chain(0, None)
@@ -14747,7 +15093,7 @@ pub(crate) mod valid {
                 crate::bridge::sccp_commitment_root_from_messages(&candidate_messages).is_some(),
                 "the pre-execution candidate includes the SCCP record"
             );
-            let key = crate::bridge::sccp_outbound_message_key(&sccp_transfer_payload());
+            let key = crate::bridge::test_sccp_outbound_message_key(&sccp_transfer_payload());
             let leader = crate::block::checked_keypair();
             let new_block = BlockBuilder::new(vec![accepted])
                 .chain(0, None)
@@ -14787,7 +15133,7 @@ pub(crate) mod valid {
             let candidate_root =
                 crate::bridge::sccp_commitment_root_from_messages(&candidate_messages)
                     .expect("candidate SCCP root");
-            let key = crate::bridge::sccp_outbound_message_key(&sccp_transfer_payload());
+            let key = crate::bridge::test_sccp_outbound_message_key(&sccp_transfer_payload());
             let leader = crate::block::checked_keypair();
             let new_block = BlockBuilder::new(vec![accepted])
                 .chain(0, None)
@@ -15010,6 +15356,7 @@ pub(crate) mod valid {
             proposal_view: u64,
             lane_id: LaneId,
             dataspace_id: DataSpaceId,
+            lane_incarnation: Hash,
             accepted_candidate_indices: Vec<u64>,
             candidate_hashes: Vec<Hash>,
             validator_set: &[PeerId],
@@ -15019,6 +15366,7 @@ pub(crate) mod valid {
                 proposal_view,
                 lane_id,
                 dataspace_id,
+                lane_incarnation,
                 proposal_height,
                 proposal_view,
                 accepted_candidate_indices,
@@ -15032,6 +15380,7 @@ pub(crate) mod valid {
             proposal_view: u64,
             lane_id: LaneId,
             dataspace_id: DataSpaceId,
+            lane_incarnation: Hash,
             lane_block_height: u64,
             lane_block_view: u64,
             accepted_candidate_indices: Vec<u64>,
@@ -15058,14 +15407,7 @@ pub(crate) mod valid {
                 proposal_view,
                 lane_id,
                 dataspace_id,
-                lane_incarnation: Hash::new(
-                    format!(
-                        "block-test-lane-incarnation:{}:{}",
-                        lane_id.as_u32(),
-                        dataspace_id.as_u64()
-                    )
-                    .as_bytes(),
-                ),
+                lane_incarnation,
                 lane_block_height,
                 lane_block_view,
                 subject_hash: Hash::new(b"block-test lane subject placeholder"),
@@ -15097,6 +15439,61 @@ pub(crate) mod valid {
             ownership
         }
 
+        #[test]
+        fn settlement_finalization_rejects_unbound_evidence() {
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = ValidBlock::new_dummy(leader.private_key());
+            let mut state_block = state.block(block.as_ref().header());
+            let tx_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::new(
+                b"unbound sequential settlement transaction",
+            ));
+            let mut source_id = [0; Hash::LENGTH];
+            source_id.copy_from_slice(tx_hash.as_ref());
+            state_block.record_settlement_receipt(
+                tx_hash,
+                crate::settlement::PendingSettlement {
+                    source_id,
+                    asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
+                        DomainId::try_new("wonderland", "universal").expect("domain id"),
+                        "settlement".parse().expect("asset name"),
+                    ),
+                    local_amount_micro: 11,
+                    xor_due_micro: 7,
+                    xor_after_haircut_micro: 6,
+                    xor_variance_micro: 1,
+                    timestamp_ms: 1,
+                    liquidity_profile: settlement_router::LiquidityProfile::Tier1,
+                    volatility_bucket: crate::settlement::VolatilityBucket::Stable,
+                    twap_local_per_xor: rust_decimal::Decimal::ONE,
+                    epsilon_bps: 25,
+                    twap_window_seconds: 60,
+                    oracle_timestamp_ms: 1,
+                },
+            );
+
+            let error = ValidBlock::finalize_lane_settlement_evidence(
+                block.as_ref(),
+                &mut state_block,
+                &[],
+                &BTreeMap::new(),
+            )
+            .expect_err("settlement evidence without a routed transaction must fail closed");
+            assert!(
+                matches!(
+                    error,
+                    BlockValidationError::ExecutionContextInvalid(ref message)
+                        if message.contains("unbound settlement evidence")
+                            && message.contains("settlement=1")
+                ),
+                "unexpected unbound settlement rejection: {error}"
+            );
+        }
+
         fn lane_payload_context_fixture() -> (State, Arc<Kura>, Topology, TimeSource, KeyPair) {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -15126,6 +15523,7 @@ pub(crate) mod valid {
             time_source: &TimeSource,
             label: &str,
             lane_block_height: u64,
+            predecessor_descriptor_hash: Option<Hash>,
         ) -> SignedBlock {
             let (authority, signer) = gen_account_in(label);
             let tx = TransactionBuilder::new_with_time_source(
@@ -15138,25 +15536,38 @@ pub(crate) mod valid {
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
             let proposal_height = u64::try_from(state.block_hashes.view().len().saturating_add(1))
                 .expect("test block height fits u64");
+            let mut ownership = sample_lane_payload_ownership_for_context_at_slot(
+                proposal_height,
+                0,
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                state
+                    .lane_incarnation(LaneId::SINGLE)
+                    .expect("default lane incarnation"),
+                lane_block_height,
+                0,
+                vec![0],
+                vec![Hash::from(tx.hash_as_entrypoint())],
+                topology.as_ref(),
+            );
+            if let Some(predecessor_descriptor_hash) = predecessor_descriptor_hash {
+                ownership.previous_lane_block_descriptor_hash = Some(predecessor_descriptor_hash);
+                let replay_hashes = ownership
+                    .compute_replay_hashes()
+                    .expect("exact predecessor fixture replay hashes compute");
+                ownership.subject_hash = replay_hashes.subject_hash;
+                ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+                ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+                ownership.lane_block_descriptor_hash =
+                    Some(replay_hashes.lane_block_descriptor_hash);
+            }
             let execution_context =
                 BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
                     tx.hash_as_entrypoint(),
                     LaneId::SINGLE,
                     DataSpaceId::UNIVERSAL,
                 )])
-                .with_lane_payload_ownerships(vec![
-                    sample_lane_payload_ownership_for_context_at_slot(
-                        proposal_height,
-                        0,
-                        LaneId::SINGLE,
-                        DataSpaceId::UNIVERSAL,
-                        lane_block_height,
-                        0,
-                        vec![0],
-                        vec![Hash::from(tx.hash_as_entrypoint())],
-                        topology.as_ref(),
-                    ),
-                ]);
+                .with_lane_payload_ownerships(vec![ownership]);
             let mut builder =
                 BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
                     .chain(0, state.view().latest_block().as_deref())
@@ -15196,7 +15607,11 @@ pub(crate) mod valid {
         fn signed_default_lane_block_with_execution_context(
             label: &str,
             transaction_count: usize,
-            context_for: impl FnOnce(&[SignedTransaction], &[PeerId]) -> BlockExecutionContextBundle,
+            context_for: impl FnOnce(
+                &[SignedTransaction],
+                &[PeerId],
+                Hash,
+            ) -> BlockExecutionContextBundle,
         ) -> (State, Topology, TimeSource, SignedBlock) {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
@@ -15251,7 +15666,11 @@ pub(crate) mod valid {
                 .into_iter()
                 .map(|(_, _, tx)| tx)
                 .collect::<Vec<_>>();
-            let execution_context = context_for(&canonical_transactions, topology.as_ref());
+            let lane_incarnation = state
+                .lane_incarnation(LaneId::SINGLE)
+                .expect("default lane incarnation");
+            let execution_context =
+                context_for(&canonical_transactions, topology.as_ref(), lane_incarnation);
             let builder = BlockBuilder::new_with_time_source(accepted, time_source.clone())
                 .chain(0, state.view().latest_block().as_deref())
                 .with_execution_context(Some(execution_context));
@@ -16708,18 +17127,21 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     "lane-payload-context-valid",
                     1,
-                    |transactions, validators| {
+                    |transactions, validators, lane_incarnation| {
                         BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
                             transactions[0].hash_as_entrypoint(),
                             LaneId::SINGLE,
                             DataSpaceId::UNIVERSAL,
                         )])
                         .with_lane_payload_ownerships(vec![
-                            sample_lane_payload_ownership_for_context(
+                            sample_lane_payload_ownership_for_context_at_slot(
                                 2,
                                 0,
                                 LaneId::SINGLE,
                                 DataSpaceId::UNIVERSAL,
+                                lane_incarnation,
+                                1,
+                                0,
                                 vec![0],
                                 vec![Hash::from(transactions[0].hash_as_entrypoint())],
                                 validators,
@@ -16753,6 +17175,7 @@ pub(crate) mod valid {
                 &time_source,
                 "lane-payload-artifact-first",
                 2,
+                None,
             );
             let committed_first = ValidBlock::new_unverified_for_tests(first.clone())
                 .commit_unchecked()
@@ -16779,6 +17202,7 @@ pub(crate) mod valid {
                 &time_source,
                 "lane-payload-artifact-reuse",
                 2,
+                None,
             );
             let view = state.query_view();
             let err = ValidBlock::validate_static_state_dependent(
@@ -16803,6 +17227,159 @@ pub(crate) mod valid {
             );
         }
 
+        #[test]
+        fn validate_execution_context_requires_exact_canonical_lane_predecessor() {
+            let (state, kura, topology, time_source, leader) = lane_payload_context_fixture();
+            let mut first = signed_lane_payload_context_block(
+                &state,
+                &topology,
+                &leader,
+                &time_source,
+                "lane-payload-predecessor-first",
+                1,
+                None,
+            );
+            let predecessor_descriptor_hash = first
+                .execution_context()
+                .expect("first execution context")
+                .lane_payload_ownerships
+                .first()
+                .and_then(|ownership| ownership.lane_block_descriptor_hash)
+                .expect("first lane descriptor hash");
+            let predecessor_ownership = first
+                .execution_context()
+                .expect("first execution context")
+                .lane_payload_ownerships[0]
+                .clone();
+            let predecessor_proposal =
+                native_amx_coordinator_proposal_from_ownership(&predecessor_ownership)
+                    .expect("first lane proposal reconstructs");
+            let entrypoint_hashes = first
+                .external_entrypoints_cloned()
+                .map(|entrypoint| entrypoint.hash())
+                .collect::<Vec<_>>();
+            first
+                .set_transaction_results(
+                    Vec::new(),
+                    &entrypoint_hashes,
+                    vec![Ok(DataTriggerSequence::default())],
+                )
+                .expect("attach canonical predecessor results");
+            let committed_first = ValidBlock::new_unverified_for_tests(first.clone())
+                .commit_unchecked()
+                .unpack(|_| {});
+            {
+                let mut state_block = state.block(committed_first.as_ref().header());
+                let _ = state_block
+                    .apply_without_execution(&committed_first, topology.as_ref().to_owned());
+                state_block
+                    .commit()
+                    .expect("commit first lane predecessor block");
+            }
+            kura.store_block(Arc::new(first))
+                .expect("store first lane predecessor artifact");
+
+            let exact_predecessor = signed_lane_payload_context_block(
+                &state,
+                &topology,
+                &leader,
+                &time_source,
+                "lane-payload-predecessor-exact",
+                2,
+                Some(predecessor_descriptor_hash),
+            );
+            let view = state.query_view();
+            let err = ValidBlock::validate_execution_context_with_state(
+                &exact_predecessor,
+                &topology,
+                &state.chain_id,
+                &view,
+                ConsensusValidationProfile::LegacyLive,
+            )
+            .expect_err("a predecessor ownership artifact without application must be rejected");
+            assert!(
+                matches!(
+                    err,
+                    BlockValidationError::ExecutionContextInvalid(ref message)
+                        if message.contains("has no canonical predecessor application receipt")
+                ),
+                "unexpected unapplied-predecessor validation error: {err:?}"
+            );
+
+            kura.persist_lane_block_application_receipt(&predecessor_proposal)
+                .expect("persist first lane predecessor application receipt");
+            assert!(
+                kura.lane_block_application_receipt_available(&predecessor_proposal),
+                "test setup must expose an applied canonical predecessor"
+            );
+
+            let wrong_predecessor = signed_lane_payload_context_block(
+                &state,
+                &topology,
+                &leader,
+                &time_source,
+                "lane-payload-predecessor-wrong",
+                2,
+                None,
+            );
+            let err = ValidBlock::validate_execution_context_with_state(
+                &wrong_predecessor,
+                &topology,
+                &state.chain_id,
+                &view,
+                ConsensusValidationProfile::LegacyLive,
+            )
+            .expect_err("a self-consistent but wrong predecessor hash must be rejected");
+            assert!(
+                matches!(
+                    err,
+                    BlockValidationError::ExecutionContextInvalid(ref message)
+                        if message.contains("does not extend the exact applied canonical predecessor")
+                ),
+                "unexpected wrong-predecessor validation error: {err:?}"
+            );
+
+            ValidBlock::validate_execution_context_with_state(
+                &exact_predecessor,
+                &topology,
+                &state.chain_id,
+                &view,
+                ConsensusValidationProfile::LegacyLive,
+            )
+            .expect("the exact same-incarnation canonical predecessor must validate");
+        }
+
+        #[test]
+        fn validate_execution_context_rejects_missing_canonical_lane_predecessor() {
+            let (state, _kura, topology, time_source, leader) = lane_payload_context_fixture();
+            let signed = signed_lane_payload_context_block(
+                &state,
+                &topology,
+                &leader,
+                &time_source,
+                "lane-payload-predecessor-missing",
+                2,
+                None,
+            );
+            let view = state.query_view();
+            let err = ValidBlock::validate_execution_context_with_state(
+                &signed,
+                &topology,
+                &state.chain_id,
+                &view,
+                ConsensusValidationProfile::LegacyLive,
+            )
+            .expect_err("lane-local height two without height one must be rejected");
+            assert!(
+                matches!(
+                    err,
+                    BlockValidationError::ExecutionContextInvalid(ref message)
+                        if message.contains("has no canonical predecessor application receipt")
+                ),
+                "unexpected missing-predecessor validation error: {err:?}"
+            );
+        }
+
         fn assert_lane_payload_ownership_context_rejected(
             label: &str,
             mutate: impl FnOnce(&mut SumeragiLanePayloadOwnership),
@@ -16812,12 +17389,13 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     label,
                     1,
-                    |transactions, validators| {
+                    |transactions, validators, lane_incarnation| {
                         let mut ownership = sample_lane_payload_ownership_for_context(
                             2,
                             0,
                             LaneId::SINGLE,
                             DataSpaceId::UNIVERSAL,
+                            lane_incarnation,
                             vec![0],
                             vec![Hash::from(transactions[0].hash_as_entrypoint())],
                             validators,
@@ -16874,6 +17452,15 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn validate_static_state_dependent_rejects_missing_lane_predecessor_descriptor_hash() {
+            assert_lane_payload_ownership_context_rejected(
+                "lane-payload-context-missing-predecessor-descriptor",
+                |ownership| ownership.previous_lane_block_descriptor_hash = None,
+                "missing its non-genesis predecessor descriptor hash",
+            );
+        }
+
+        #[test]
         fn validate_static_state_dependent_rejects_reused_lane_block_descriptor_hash() {
             assert_lane_payload_ownership_context_rejected(
                 "lane-payload-context-reused-descriptor",
@@ -16900,7 +17487,7 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     "lane-payload-context-descriptor-validator-drift",
                     1,
-                    |transactions, _validators| {
+                    |transactions, _validators, lane_incarnation| {
                         let wrong_validator =
                             crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
                         let wrong_validators =
@@ -16916,6 +17503,7 @@ pub(crate) mod valid {
                                 0,
                                 LaneId::SINGLE,
                                 DataSpaceId::UNIVERSAL,
+                                lane_incarnation,
                                 vec![0],
                                 vec![Hash::from(transactions[0].hash_as_entrypoint())],
                                 &wrong_validators,
@@ -17020,12 +17608,15 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     "lane-payload-context-pk2-subject-compat",
                     1,
-                    |transactions, validators| {
-                        let mut ownership = sample_lane_payload_ownership_for_context(
+                    |transactions, validators, lane_incarnation| {
+                        let mut ownership = sample_lane_payload_ownership_for_context_at_slot(
                             2,
                             0,
                             LaneId::SINGLE,
                             DataSpaceId::UNIVERSAL,
+                            lane_incarnation,
+                            1,
+                            0,
                             vec![0],
                             vec![Hash::from(transactions[0].hash_as_entrypoint())],
                             validators,
@@ -17076,7 +17667,7 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     "lane-payload-context-candidate-hash-drift",
                     1,
-                    |transactions, validators| {
+                    |transactions, validators, lane_incarnation| {
                         BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
                             transactions[0].hash_as_entrypoint(),
                             LaneId::SINGLE,
@@ -17088,6 +17679,7 @@ pub(crate) mod valid {
                                 0,
                                 LaneId::SINGLE,
                                 DataSpaceId::UNIVERSAL,
+                                lane_incarnation,
                                 vec![0],
                                 vec![Hash::new(b"wrong lane candidate hash")],
                                 validators,
@@ -17143,7 +17735,7 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     "lane-payload-context-route-mismatch",
                     1,
-                    |transactions, validators| {
+                    |transactions, validators, lane_incarnation| {
                         BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
                             transactions[0].hash_as_entrypoint(),
                             LaneId::SINGLE,
@@ -17155,6 +17747,7 @@ pub(crate) mod valid {
                                 0,
                                 LaneId::new(3),
                                 DataSpaceId::UNIVERSAL,
+                                lane_incarnation,
                                 vec![0],
                                 vec![Hash::from(transactions[0].hash_as_entrypoint())],
                                 validators,
@@ -17190,7 +17783,7 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     "lane-payload-context-partial",
                     2,
-                    |transactions, validators| {
+                    |transactions, validators, lane_incarnation| {
                         BlockExecutionContextBundle::new(vec![
                             ExternalExecutionContext::new(
                                 transactions[0].hash_as_entrypoint(),
@@ -17209,6 +17802,7 @@ pub(crate) mod valid {
                                 0,
                                 LaneId::SINGLE,
                                 DataSpaceId::UNIVERSAL,
+                                lane_incarnation,
                                 vec![0],
                                 vec![Hash::from(transactions[0].hash_as_entrypoint())],
                                 validators,
@@ -17246,7 +17840,7 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     "lane-payload-context-out-of-range",
                     1,
-                    |transactions, validators| {
+                    |transactions, validators, lane_incarnation| {
                         BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
                             transactions[0].hash_as_entrypoint(),
                             LaneId::SINGLE,
@@ -17258,6 +17852,7 @@ pub(crate) mod valid {
                                 0,
                                 LaneId::SINGLE,
                                 DataSpaceId::UNIVERSAL,
+                                lane_incarnation,
                                 vec![1],
                                 vec![Hash::from(transactions[0].hash_as_entrypoint())],
                                 validators,
@@ -24274,13 +24869,27 @@ mod tests {
     #[test]
     fn public_taira_chain_id_guard_accepts_only_taira_ids() {
         assert!(is_public_taira_chain_id(&ChainId::from(
-            "809574f5-fee7-5e69-bfcf-52451e42d50f"
+            "fc56984b-2be7-431d-840e-21514d1883f0"
         )));
         assert!(is_public_taira_chain_id(&ChainId::from("iroha3-taira")));
         assert!(is_public_taira_chain_id(&ChainId::from("taira")));
         assert!(!is_public_taira_chain_id(&ChainId::from(
+            ARCHIVED_TAIRA_CHAIN_ID
+        )));
+        assert!(!is_public_taira_chain_id(&ChainId::from(
             "00000000-0000-0000-0000-000000000000"
         )));
+    }
+
+    #[test]
+    fn archived_taira_chain_id_guard_accepts_only_archived_uuid() {
+        assert!(is_archived_taira_chain_id(&ChainId::from(
+            ARCHIVED_TAIRA_CHAIN_ID
+        )));
+        assert!(!is_archived_taira_chain_id(&ChainId::from(
+            PUBLIC_TAIRA_CHAIN_ID
+        )));
+        assert!(!is_archived_taira_chain_id(&ChainId::from("taira")));
     }
 
     #[test]
@@ -25561,7 +26170,7 @@ mod tests {
             timestamp_ms: 1_700_000_100,
         };
         let settlement = LaneBlockCommitment {
-            block_height: block_header.height().get(),
+            block_height: 3,
             lane_id,
             lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id,
@@ -25585,12 +26194,37 @@ mod tests {
             },
         );
 
+        let descriptor_hash = Hash::new(b"lane-relay-helper-descriptor");
+        let lane_payload_coordinates = BTreeMap::from([(
+            (lane_id, dataspace_id),
+            LanePayloadCoordinate {
+                lane_incarnation: settlement.lane_incarnation,
+                lane_block_height: settlement.block_height,
+                lane_block_descriptor_hash: descriptor_hash,
+            },
+        )]);
+
+        let missing_coordinate = lane_relay_envelopes_for_block(
+            &block_header,
+            da_hash,
+            std::slice::from_ref(&settlement),
+            &lane_summaries,
+            &BTreeMap::new(),
+        )
+        .expect_err("settled lanes must have exact payload ownership coordinates");
+        assert!(matches!(
+            missing_coordinate,
+            BlockValidationError::ExecutionContextInvalid(_)
+        ));
+
         let relays = lane_relay_envelopes_for_block(
             &block_header,
             da_hash,
             std::slice::from_ref(&settlement),
             &lane_summaries,
-        );
+            &lane_payload_coordinates,
+        )
+        .expect("exact lane payload coordinates build a relay");
         assert_eq!(relays.len(), 1);
         let envelope = &relays[0];
         assert!(
@@ -25598,6 +26232,9 @@ mod tests {
             "block-level commit QC must not be copied into lane relay QC"
         );
         assert_eq!(envelope.rbc_bytes_total, 2048);
+        assert_eq!(envelope.block_height, 3);
+        assert_eq!(envelope.block_header.height().get(), 5);
+        assert_eq!(envelope.lane_block_descriptor_hash, Some(descriptor_hash));
         envelope.verify().expect("envelope should validate");
     }
 
@@ -25634,7 +26271,7 @@ mod tests {
             timestamp_ms: 1_700_000_100,
         };
         let settlement = LaneBlockCommitment {
-            block_height: block_header.height().get(),
+            block_height: 3,
             lane_id,
             lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id,
@@ -25658,12 +26295,23 @@ mod tests {
             },
         );
 
+        let lane_payload_coordinates = BTreeMap::from([(
+            (lane_id, dataspace_id),
+            LanePayloadCoordinate {
+                lane_incarnation: settlement.lane_incarnation,
+                lane_block_height: settlement.block_height,
+                lane_block_descriptor_hash: Hash::new(b"manifest-relay-descriptor"),
+            },
+        )]);
+
         let mut envelopes = lane_relay_envelopes_for_block(
             &block_header,
             da_hash,
             std::slice::from_ref(&settlement),
             &lane_summaries,
-        );
+            &lane_payload_coordinates,
+        )
+        .expect("exact lane payload coordinates build a relay");
         let manifest_root = [0x44; 32];
         let manifest_roots: BTreeMap<DataSpaceId, [u8; 32]> =
             core::iter::once((dataspace_id, manifest_root)).collect();
@@ -25672,7 +26320,7 @@ mod tests {
         assert_eq!(envelopes.len(), 1);
         envelopes[0].fastpq_proof = Some(iroha_data_model::nexus::LaneFastpqProofMaterial {
             proof_digest: Hash::new(b"test-fastpq-proof"),
-            verified_at_height: envelopes[0].block_height,
+            verified_at_height: envelopes[0].block_header.height().get(),
         });
         assert_eq!(envelopes[0].manifest_root, Some(manifest_root));
         assert!(envelopes[0].fastpq_proof.is_some());
@@ -25885,8 +26533,8 @@ mod tests {
     }
 
     #[test]
-    fn block_validation_external_vm_entrypoints_require_sequential_execution() {
-        let chain_id = ChainId::from("external-vm-sequential-routing");
+    fn block_validation_external_vm_entrypoints_use_overlay_scheduler() {
+        let chain_id = ChainId::from("external-vm-overlay-routing");
         let (authority, keypair) = gen_account_in("wonderland");
         let make_block = |tx: SignedTransaction| {
             BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(tx))])
@@ -25917,14 +26565,14 @@ mod tests {
                 iroha_data_model::transaction::executable::ContractInvocation {
                     contract_address,
                     entrypoint: "increment".to_owned(),
-                    payload: None,
+                    arguments: None,
                 },
             ))
             .sign(keypair.private_key());
         let contract_block: SignedBlock = make_block(contract_tx);
         assert!(
-            ValidBlock::sequential_entrypoints_for_live_execution(&contract_block).is_some(),
-            "contract calls must execute against live state instead of stale prebuilt overlays"
+            ValidBlock::sequential_entrypoints_for_live_execution(&contract_block).is_none(),
+            "contract calls use the overlay scheduler; durable reads are validated before merge"
         );
 
         let ivm_tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
@@ -25932,8 +26580,8 @@ mod tests {
             .sign(keypair.private_key());
         let ivm_block: SignedBlock = make_block(ivm_tx);
         assert!(
-            ValidBlock::sequential_entrypoints_for_live_execution(&ivm_block).is_some(),
-            "raw IVM bytecode can produce durable-state overlays and must execute live"
+            ValidBlock::sequential_entrypoints_for_live_execution(&ivm_block).is_none(),
+            "raw IVM calls use the same durable-read validation as deployed contracts"
         );
 
         let proved_tx = TransactionBuilder::new(chain_id, authority)
@@ -25949,6 +26597,485 @@ mod tests {
             ValidBlock::sequential_entrypoints_for_live_execution(&proved_block).is_none(),
             "proved overlays are transaction-supplied and should keep their existing path"
         );
+    }
+
+    #[test]
+    fn block_overlay_rejects_protected_contract_call_without_persisting_state() {
+        let chain_id = ChainId::from("protected-contract-overlay");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").expect("valid domain"))
+                .build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let mut world = World::with([domain], [account], []);
+
+        let source = r#"
+seiyaku GuardedOverlay {
+  state StateMap<int, int> Values;
+
+  kotoage fn write(int value) authorize("CanWriteGuardedOverlay") {
+    Values[0] = value;
+  }
+}
+"#;
+        let (program, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile protected overlay contract");
+        let interface = ivm::ProgramMetadata::parse(&program)
+            .expect("parse protected contract")
+            .contract_interface
+            .expect("compiled contract interface");
+        let code_hash = ivm::contract_code_hash(&program);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        world.contract_code.insert(code_hash, program);
+        world
+            .contract_manifests
+            .insert(code_hash, manifest.signed(&keypair));
+        world
+            .contract_instances
+            .insert(contract_address.clone(), code_hash);
+
+        let state = State::new_with_chain_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        let payload = Json::new(norito::json!({ "value": "9" }));
+        let schema = interface
+            .entrypoints
+            .iter()
+            .find(|descriptor| descriptor.name == "write")
+            .and_then(|descriptor| descriptor.argument_schema.as_ref());
+        let arguments = crate::executor::encode_contract_argument_record(schema, Some(&payload))
+            .expect("encode guarded arguments")
+            .map(iroha_data_model::transaction::executable::ContractArgumentRecord::try_new)
+            .transpose()
+            .expect("bounded guarded arguments");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "gas_limit".parse().expect("gas_limit name"),
+            Json::new(100_000_u64),
+        );
+        let transaction = TransactionBuilder::new(chain_id, authority.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::ContractCall(
+                iroha_data_model::transaction::executable::ContractInvocation {
+                    contract_address,
+                    entrypoint: "write".to_owned(),
+                    arguments,
+                },
+            ))
+            .sign(keypair.private_key());
+        let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
+            transaction,
+        ))])
+        .chain(0, state.view().latest_block().as_deref())
+        .sign(keypair.private_key())
+        .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let results = valid
+            .as_ref()
+            .entrypoint_results()
+            .map(|(_, _, result)| result.0.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0]
+                .as_ref()
+                .is_err_and(|error| error.to_string().contains("CanWriteGuardedOverlay")),
+            "protected overlay call must be rejected with its stable permission name: {results:?}"
+        );
+        assert!(
+            state_block.world.smart_contract_state.is_empty(),
+            "a denied overlay must not persist any contract state"
+        );
+    }
+
+    #[test]
+    fn block_validation_reprepares_stale_contract_state_read_modify_write() {
+        let chain_id = ChainId::from("durable-state-read-validation");
+        let (alice, alice_keypair) = gen_account_in("wonderland");
+        let (bob, bob_keypair) = gen_account_in("wonderland");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("valid domain");
+        let domain = Domain::new(domain_id).build(&alice);
+        let alice_account = Account::new(alice.clone()).build(&alice);
+        let bob_account = Account::new(bob.clone()).build(&alice);
+        let mut world = World::with([domain], [alice_account, bob_account], []);
+
+        for authority in [&alice, &bob] {
+            let mut permissions = iroha_data_model::permission::Permissions::new();
+            assert!(
+                permissions.insert(iroha_data_model::permission::Permission::new(
+                    "CanEnactGovernance".to_owned(),
+                    Json::new(()),
+                ))
+            );
+            world
+                .account_permissions_mut_for_testing()
+                .insert(authority.clone(), permissions);
+        }
+
+        let source = r#"
+seiyaku DynamicAccessCounter {
+  state StateMap<int, int> Counters;
+
+  fn bump_hidden(int key, int delta) {
+    let current = Counters.get(key).unwrap_or(0);
+    Counters[key] = current + delta;
+  }
+
+  kotoage fn bump_direct(int key, int delta) authorize("CanEnactGovernance") {
+    let current = Counters.get(key).unwrap_or(0);
+    Counters[key] = current + delta;
+  }
+
+  kotoage fn bump_via_helper(int key, int delta) authorize("CanEnactGovernance") {
+    bump_hidden(key, delta);
+  }
+}
+"#;
+        let (program, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile dynamic StateMap counter");
+        let contract_interface = ivm::ProgramMetadata::parse(&program)
+            .expect("parse compiled contract")
+            .contract_interface
+            .expect("compiled contract interface");
+        let code_hash = ivm::contract_code_hash(&program);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &alice,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        world.contract_code.insert(code_hash, program);
+        world
+            .contract_manifests
+            .insert(code_hash, manifest.signed(&alice_keypair));
+        world
+            .contract_instances
+            .insert(contract_address.clone(), code_hash);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+        let mut pipeline = state.pipeline.clone();
+        pipeline.dynamic_prepass = true;
+        pipeline.parallel_overlay = true;
+        pipeline.parallel_apply = true;
+        pipeline.workers = 2;
+        state.set_pipeline(pipeline);
+
+        let make_call = |authority: AccountId, keypair: &KeyPair, entrypoint: &str, delta: i64| {
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                "gas_limit".parse().expect("gas_limit name"),
+                Json::new(100_000_u64),
+            );
+            let payload = Json::new(norito::json!({
+                "key": "7",
+                "delta": (delta.to_string()),
+            }));
+            let schema = contract_interface
+                .entrypoints
+                .iter()
+                .find(|descriptor| descriptor.name == entrypoint)
+                .and_then(|descriptor| descriptor.argument_schema.as_ref());
+            let arguments =
+                crate::executor::encode_contract_argument_record(schema, Some(&payload))
+                    .expect("encode contract arguments")
+                    .map(iroha_data_model::transaction::executable::ContractArgumentRecord::try_new)
+                    .transpose()
+                    .expect("bounded contract arguments");
+            TransactionBuilder::new(chain_id.clone(), authority)
+                .with_metadata(metadata)
+                .with_executable(Executable::ContractCall(
+                    iroha_data_model::transaction::executable::ContractInvocation {
+                        contract_address: contract_address.clone(),
+                        entrypoint: entrypoint.to_owned(),
+                        arguments,
+                    },
+                ))
+                .sign(keypair.private_key())
+        };
+        let direct = make_call(alice.clone(), &alice_keypair, "bump_direct", 3);
+        let helper = make_call(bob, &bob_keypair, "bump_via_helper", 5);
+        let accepted = [direct, helper]
+            .into_iter()
+            .map(|tx| AcceptedTransaction::new_unchecked(Cow::Owned(tx)))
+            .collect();
+        let block = BlockBuilder::new(accepted)
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(alice_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let results = valid
+            .as_ref()
+            .entrypoint_results()
+            .map(|(_, _, result)| result.0.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            results.iter().all(Result::is_ok),
+            "both co-batched contract calls must succeed: {results:?}"
+        );
+
+        let encoded_key =
+            ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(7))
+                .expect("encode canonical StateMap int key");
+        let logical_path = format!("Counters/{}", hex::encode(encoded_key));
+        let scope_id = contract_address.to_string();
+        let scope_digest = hex::encode(Hash::new(scope_id.as_bytes()).as_ref());
+        let scoped_path: Name = format!("sc/{scope_digest}/{logical_path}")
+            .parse()
+            .expect("valid scoped StateMap path");
+        let stored = state_block
+            .world
+            .smart_contract_state
+            .get(&scoped_path)
+            .expect("counter state must be persisted");
+        let tlv = ivm::pointer_abi::validate_tlv_bytes(stored)
+            .expect("counter state uses a canonical pointer-ABI envelope");
+        assert_eq!(tlv.type_id, ivm::PointerType::Int);
+        let counter = iroha_primitives::numeric_abi::IntValueV1::decode_frame(tlv.payload)
+            .expect("decode persisted counter")
+            .into_int()
+            .try_to_i64()
+            .expect("counter fits i64");
+        assert_eq!(
+            counter, 8,
+            "the second overlay must be recomputed from the first call's committed value"
+        );
+    }
+
+    #[test]
+    fn block_validation_serializes_a_dynamic_target_that_changes_during_reprepare() {
+        let chain_id = ChainId::from("dynamic-target-live-reprepare");
+        let (alice, alice_keypair) = gen_account_in("wonderland");
+        let (bob, bob_keypair) = gen_account_in("wonderland");
+        let (charlie, charlie_keypair) = gen_account_in("wonderland");
+        let (dave, dave_keypair) = gen_account_in("wonderland");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("valid domain");
+        let domain = Domain::new(domain_id).build(&alice);
+        let accounts = [
+            Account::new(alice.clone()).build(&alice),
+            Account::new(bob.clone()).build(&alice),
+            Account::new(charlie.clone()).build(&alice),
+            Account::new(dave.clone()).build(&alice),
+        ];
+        let mut world = World::with([domain], accounts, []);
+        for authority in [&alice, &bob, &charlie, &dave] {
+            let mut permissions = iroha_data_model::permission::Permissions::new();
+            assert!(
+                permissions.insert(iroha_data_model::permission::Permission::new(
+                    "CanEnactGovernance".to_owned(),
+                    Json::new(()),
+                ))
+            );
+            world
+                .account_permissions_mut_for_testing()
+                .insert(authority.clone(), permissions);
+        }
+
+        let source = r#"
+seiyaku DynamicTarget {
+  error enum DynamicTargetError {
+    SelectorClosed = 1,
+  }
+
+  state StateMap<int, int> Selector;
+  state StateMap<int, int> Counters;
+
+  kotoage fn choose(int key) authorize("CanEnactGovernance") {
+    Selector[0] = key;
+  }
+
+  kotoage fn set_selected(int value) authorize("CanEnactGovernance") {
+    let key = Selector.get(0).unwrap_or(1);
+    Counters[key] = value;
+  }
+
+  kotoage fn set_direct(int key, int value) authorize("CanEnactGovernance") {
+    Counters[key] = value;
+  }
+
+  kotoage fn guarded_set(int value) authorize("CanEnactGovernance") {
+    require(Selector.get(0).unwrap_or(0) == 2, DynamicTargetError::SelectorClosed);
+    Counters[3] = value;
+  }
+}
+"#;
+        let (program, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile dynamic-target contract");
+        let contract_interface = ivm::ProgramMetadata::parse(&program)
+            .expect("parse compiled contract")
+            .contract_interface
+            .expect("compiled contract interface");
+        let code_hash = ivm::contract_code_hash(&program);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &alice,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        world.contract_code.insert(code_hash, program);
+        world
+            .contract_manifests
+            .insert(code_hash, manifest.signed(&alice_keypair));
+        world
+            .contract_instances
+            .insert(contract_address.clone(), code_hash);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+        let mut pipeline = state.pipeline.clone();
+        pipeline.dynamic_prepass = true;
+        pipeline.parallel_overlay = true;
+        pipeline.parallel_apply = true;
+        pipeline.workers = 4;
+        state.set_pipeline(pipeline);
+
+        let make_call = |authority: AccountId,
+                         keypair: &KeyPair,
+                         entrypoint: &str,
+                         payload: Json| {
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                "gas_limit".parse().expect("gas_limit name"),
+                Json::new(100_000_u64),
+            );
+            let schema = contract_interface
+                .entrypoints
+                .iter()
+                .find(|descriptor| descriptor.name == entrypoint)
+                .and_then(|descriptor| descriptor.argument_schema.as_ref());
+            let arguments =
+                crate::executor::encode_contract_argument_record(schema, Some(&payload))
+                    .expect("encode contract arguments")
+                    .map(iroha_data_model::transaction::executable::ContractArgumentRecord::try_new)
+                    .transpose()
+                    .expect("bounded contract arguments");
+            TransactionBuilder::new(chain_id.clone(), authority)
+                .with_metadata(metadata)
+                .with_executable(Executable::ContractCall(
+                    iroha_data_model::transaction::executable::ContractInvocation {
+                        contract_address: contract_address.clone(),
+                        entrypoint: entrypoint.to_owned(),
+                        arguments,
+                    },
+                ))
+                .sign(keypair.private_key())
+        };
+        let choose = make_call(
+            alice.clone(),
+            &alice_keypair,
+            "choose",
+            Json::new(norito::json!({ "key": "2" })),
+        );
+        let selected = make_call(
+            bob,
+            &bob_keypair,
+            "set_selected",
+            Json::new(norito::json!({ "value": "5" })),
+        );
+        let direct = make_call(
+            charlie,
+            &charlie_keypair,
+            "set_direct",
+            Json::new(norito::json!({ "key": "2", "value": "7" })),
+        );
+        let guarded = make_call(
+            dave,
+            &dave_keypair,
+            "guarded_set",
+            Json::new(norito::json!({ "value": "11" })),
+        );
+        let accepted = [choose, selected, direct, guarded]
+            .into_iter()
+            .map(|tx| AcceptedTransaction::new_unchecked(Cow::Owned(tx)))
+            .collect();
+        let block = BlockBuilder::new(accepted)
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(alice_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let results = valid
+            .as_ref()
+            .entrypoint_results()
+            .map(|(_, _, result)| result.0.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            results.iter().all(Result::is_ok),
+            "all dynamic-target calls must succeed: {results:?}"
+        );
+
+        let encoded_key =
+            ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(2))
+                .expect("encode canonical StateMap int key");
+        let logical_path = format!("Counters/{}", hex::encode(encoded_key));
+        let scope_digest = hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
+        let scoped_path: Name = format!("sc/{scope_digest}/{logical_path}")
+            .parse()
+            .expect("valid scoped StateMap path");
+        let stored = state_block
+            .world
+            .smart_contract_state
+            .get(&scoped_path)
+            .expect("selected counter must be persisted");
+        let tlv = ivm::pointer_abi::validate_tlv_bytes(stored)
+            .expect("counter state uses a canonical pointer-ABI envelope");
+        assert_eq!(tlv.type_id, ivm::PointerType::Int);
+        let counter = iroha_primitives::numeric_abi::IntValueV1::decode_frame(tlv.payload)
+            .expect("decode persisted counter")
+            .into_int()
+            .try_to_i64()
+            .expect("counter fits i64");
+        assert_eq!(
+            counter, 7,
+            "a key selected during live re-execution must retain source-order conflict semantics"
+        );
+
+        let guarded_key =
+            ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(3))
+                .expect("encode canonical guarded StateMap int key");
+        let guarded_path: Name = format!("sc/{scope_digest}/Counters/{}", hex::encode(guarded_key))
+            .parse()
+            .expect("valid guarded StateMap path");
+        let guarded_stored = state_block
+            .world
+            .smart_contract_state
+            .get(&guarded_path)
+            .expect("an initially failing VM overlay must be retried against live state");
+        let guarded_tlv = ivm::pointer_abi::validate_tlv_bytes(guarded_stored)
+            .expect("guarded state uses a canonical pointer-ABI envelope");
+        assert_eq!(guarded_tlv.type_id, ivm::PointerType::Int);
+        let guarded_value =
+            iroha_primitives::numeric_abi::IntValueV1::decode_frame(guarded_tlv.payload)
+                .expect("decode guarded persisted value")
+                .into_int()
+                .try_to_i64()
+                .expect("guarded value fits i64");
+        assert_eq!(guarded_value, 11);
     }
 
     #[test]
@@ -25984,10 +27111,16 @@ mod tests {
 
     #[test]
     fn block_validation_sequential_entrypoints_execute_pipeline_triggers() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus status test lock");
+        crate::sumeragi::status::set_lane_settlement_commitments(Vec::new());
+        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+
         let chain_id = ChainId::from("sequential-pipeline-triggers");
         let (authority, keypair) = gen_account_in("wonderland");
         let domain_id = DomainId::try_new("wonderland", "universal").expect("valid domain");
-        let domain = Domain::new(domain_id).build(&authority);
+        let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
         let mut world = World::with([domain], [account], []);
         let block_key = Name::from_str("sequential_block_pipeline_trigger").expect("metadata key");
@@ -26020,15 +27153,92 @@ mod tests {
         let metadata_key = Name::from_str("sequential_commitment_marker").expect("metadata key");
         let (commitment_entrypoint, _reveal_entrypoint) =
             sealed_set_key_entrypoints(&chain_id, &authority, &keypair, 2, 4, metadata_key);
+        let commitment_entrypoint_hash = commitment_entrypoint.hash();
+        let external_entrypoint_hash = external_signed.hash_as_entrypoint();
+
+        let lane_incarnation = Hash::new(b"sequential-settlement-lane-incarnation");
+        let validator_set = vec![PeerId::new(keypair.public_key().clone())];
+        let mut ownership = iroha_data_model::block::consensus::SumeragiLanePayloadOwnership {
+            proposal_height: 1,
+            proposal_view: 0,
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_incarnation,
+            lane_block_height: 1,
+            lane_block_view: 0,
+            subject_hash: Hash::new(b"sequential settlement subject placeholder"),
+            qc_mode_tag: LaneRelayEnvelope::lane_qc_mode_tag_for(
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                chain_id.as_str(),
+            ),
+            accepted_candidate_indices: vec![0, 1],
+            accepted_transaction_hashes: vec![
+                Hash::from(external_entrypoint_hash),
+                Hash::from(commitment_entrypoint_hash),
+            ],
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_descriptor_hash: None,
+            lane_block_descriptor_validator_set: validator_set,
+            lane_block_descriptor_validator_count: 1,
+            lane_block_descriptor_min_quorum: 1,
+            payload_ownership_hash: Hash::new(b"sequential settlement ownership placeholder"),
+            rbc_instance_hash: Hash::new(b"sequential settlement rbc placeholder"),
+        };
+        let replay_hashes = ownership
+            .compute_replay_hashes()
+            .expect("sequential settlement ownership replay hashes");
+        ownership.subject_hash = replay_hashes.subject_hash;
+        ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+        ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+        ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+        let execution_context = BlockExecutionContextBundle::new(vec![
+            ExternalExecutionContext::new(
+                external_entrypoint_hash,
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+            ),
+            ExternalExecutionContext::new(
+                commitment_entrypoint_hash,
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+            ),
+        ])
+        .with_lane_payload_ownerships(vec![ownership]);
 
         let accepted_external = AcceptedTransaction::new_unchecked(Cow::Owned(external_signed));
         let accepted_commitment =
             AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));
         let block = BlockBuilder::new(vec![accepted_external, accepted_commitment])
             .chain(0, state.view().latest_block().as_deref())
+            .with_execution_context(Some(execution_context))
             .sign(keypair.private_key())
             .unpack(|_| {});
         let mut state_block = state.block(block.header());
+        let mut source_id = [0; Hash::LENGTH];
+        source_id.copy_from_slice(external_hash.as_ref());
+        state_block.record_settlement_receipt(
+            external_hash,
+            crate::settlement::PendingSettlement {
+                source_id,
+                asset_definition_id: AssetDefinitionId::new(
+                    domain_id,
+                    "settlement".parse().expect("asset name"),
+                ),
+                local_amount_micro: 11,
+                xor_due_micro: 7,
+                xor_after_haircut_micro: 6,
+                xor_variance_micro: 1,
+                timestamp_ms: 1,
+                liquidity_profile: settlement_router::LiquidityProfile::Tier1,
+                volatility_bucket: crate::settlement::VolatilityBucket::Stable,
+                twap_local_per_xor: Decimal::ONE,
+                epsilon_bps: 25,
+                twap_window_seconds: 60,
+                oracle_timestamp_ms: 1,
+            },
+        );
 
         let valid_block = block
             .validate_and_record_transactions(&mut state_block)
@@ -26051,6 +27261,20 @@ mod tests {
             .expect("authority account exists");
         assert_eq!(block_value, Some(Json::new("ok")));
         assert_eq!(tx_value, Some(Json::new("ok")));
+
+        let snapshot = crate::sumeragi::status::snapshot();
+        assert_eq!(snapshot.lane_settlement_commitments.len(), 1);
+        let settlement = &snapshot.lane_settlement_commitments[0];
+        assert_eq!(settlement.lane_id, LaneId::SINGLE);
+        assert_eq!(settlement.dataspace_id, DataSpaceId::UNIVERSAL);
+        assert_eq!(settlement.lane_incarnation, lane_incarnation);
+        assert_eq!(settlement.block_height, 1);
+        assert_eq!(settlement.tx_count, 1);
+        assert_eq!(settlement.receipts.len(), 1);
+        assert_eq!(settlement.receipts[0].source_id, source_id);
+
+        crate::sumeragi::status::set_lane_settlement_commitments(Vec::new());
+        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
     }
 
     #[test]

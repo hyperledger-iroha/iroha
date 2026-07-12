@@ -3,25 +3,75 @@
 //! This module is internal and side-effect free; consumed by the Sumeragi execution pipeline.
 
 use iroha_crypto::Hash;
+use iroha_data_model::block::consensus_v2 as wire;
 
 use super::{
     consensus::ExecWitness,
-    smt::{KvPair, compute_post_state_root},
+    smt::{
+        KvPair, build_kagemusha_topup_block_commitment, compute_consensus_post_state_root,
+        compute_post_state_root,
+    },
 };
 
-/// Convert an `ExecWitness` into SMT `KvPair` slices and compute the `post_state_root`.
-pub fn post_state_from_witness(w: &ExecWitness) -> Hash {
-    let reads: Vec<KvPair> = w
+fn witness_pairs(witness: &ExecWitness) -> (Vec<KvPair>, Vec<KvPair>) {
+    let reads = witness
         .reads
         .iter()
         .map(|kv| KvPair::new(kv.key.clone(), kv.value.clone()))
         .collect();
-    let writes: Vec<KvPair> = w
+    let writes = witness
         .writes
         .iter()
         .map(|kv| KvPair::new(kv.key.clone(), kv.value.clone()))
         .collect();
-    compute_post_state_root(&reads, &writes)
+    (reads, writes)
+}
+
+/// Convert an `ExecWitness` into SMT `KvPair` slices and compute the `post_state_root`.
+pub fn post_state_from_witness(w: &ExecWitness) -> Hash {
+    try_post_state_from_witness(w).unwrap_or_else(|error| {
+        let mut preimage = b"iroha:sumeragi:invalid-exec-witness".to_vec();
+        preimage.push(0);
+        preimage.extend_from_slice(error.as_bytes());
+        Hash::new(preimage)
+    })
+}
+
+/// Checked variant used before a validator signs execution roots.
+pub fn try_post_state_from_witness(w: &ExecWitness) -> Result<Hash, &'static str> {
+    let (reads, writes) = witness_pairs(w);
+    compute_consensus_post_state_root(&reads, &writes)
+}
+
+/// Derive the exact execution commitment authenticated by Sumeragi-v2 votes.
+///
+/// This is intentionally the only projection used by candidate validation and
+/// decided application. It consumes the actual `StateBlock` witness and uses
+/// the same bounded Kagemusha subtree builder as finality-proof generation.
+pub(crate) fn execution_commitment_from_witness(
+    witness: &ExecWitness,
+) -> Result<wire::ExecutionCommitment, &'static str> {
+    let (reads, writes) = witness_pairs(witness);
+    let parent_state_root = parent_state_from_witness(witness);
+    match build_kagemusha_topup_block_commitment(&writes)? {
+        Some(kagemusha) => wire::ExecutionCommitment::new(
+            parent_state_root,
+            kagemusha.post_state_root,
+            kagemusha.ordinary_writes_root,
+            Some(kagemusha.topup_anchor_root),
+            u32::try_from(kagemusha.leaves.len())
+                .map_err(|_| "Kagemusha V2 top-up anchor count does not fit u32")?,
+        )
+        .map_err(|_| "Kagemusha V2 execution commitment is not canonical"),
+        None => wire::ExecutionCommitment::new(
+            parent_state_root,
+            compute_consensus_post_state_root(&reads, &writes)?,
+            compute_post_state_root(&[], &writes),
+            None,
+            0,
+        )
+        .map_err(|_| "Sumeragi V2 execution commitment is not canonical"),
+    }
 }
 
 /// Compute the `parent_state_root` using only the witnessed reads (pre-values).
@@ -166,6 +216,40 @@ mod tests {
         assert_eq!(
             post_state_from_witness(&duplicated_writes),
             post_state_from_witness(&single_write)
+        );
+    }
+
+    #[test]
+    fn v2_execution_commitment_exposes_exact_bounded_topup_projection() {
+        let mut operation_key = vec![super::super::smt::KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_TAG];
+        operation_key.extend_from_slice(&[0xA1; 32]);
+        let witness = ExecWitness {
+            reads: vec![ExecKv {
+                key: operation_key.clone(),
+                value: Vec::new(),
+            }],
+            writes: vec![
+                ExecKv {
+                    key: b"ordinary".to_vec(),
+                    value: b"write".to_vec(),
+                },
+                ExecKv {
+                    key: operation_key,
+                    value: vec![0xB2; 32],
+                },
+            ],
+            fastpq_transcripts: Vec::new(),
+            fastpq_batches: Vec::new(),
+        };
+
+        let commitment =
+            execution_commitment_from_witness(&witness).expect("valid top-up commitment");
+        assert_eq!(commitment.topup_anchor_count, 1);
+        assert!(commitment.topup_anchor_root.is_some());
+        assert_eq!(commitment.validate(), Ok(()));
+        assert_eq!(
+            commitment.post_state_root,
+            try_post_state_from_witness(&witness).expect("same consensus post root")
         );
     }
 

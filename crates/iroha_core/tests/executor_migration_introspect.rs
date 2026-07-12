@@ -10,6 +10,10 @@ use ivm::{IVM, Memory, VMError, host::IVMHost};
 struct LoggingHost;
 
 impl IVMHost for LoggingHost {
+    fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        Ok(0)
+    }
+
     fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
         println!("syscall {number:#x}");
         Err(VMError::UnknownSyscall(number))

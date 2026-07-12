@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Verify that when `connect.enabled=false`, Torii hides WS/relay endpoints.
+//! Verify that Connect routes are stable while runtime configuration controls availability.
 
 use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
 
@@ -258,10 +258,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
         },
         torii: A::Torii {
             address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
-            api_versions: iroha_config::parameters::defaults::torii::api_supported_versions(),
-            api_version_default: iroha_config::parameters::defaults::torii::api_default_version(),
-            api_min_proof_version: iroha_config::parameters::defaults::torii::api_min_proof_version(),
-            api_version_sunset_unix: iroha_config::parameters::defaults::torii::API_SUNSET_UNIX,
             max_content_len: (1_048_576u64).into(),
             data_dir: iroha_config::parameters::defaults::torii::data_dir(),
             receipt_signer: None,
@@ -308,6 +304,9 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 max_body_bytes: iroha_config::parameters::defaults::torii::PROOF_MAX_BODY_BYTES,
                 body_max_inflight:
                     iroha_config::parameters::defaults::torii::PROOF_BODY_MAX_INFLIGHT,
+                body_read_timeout: std::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::torii::PROOF_BODY_READ_TIMEOUT_MS,
+                ),
                 egress_bytes_per_sec: iroha_config::parameters::defaults::torii::PROOF_EGRESS_BYTES_PER_SEC
                     .and_then(std::num::NonZeroU64::new),
                 egress_burst_bytes: iroha_config::parameters::defaults::torii::PROOF_EGRESS_BURST_BYTES
@@ -617,6 +616,9 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                     iroha_config::parameters::defaults::sumeragi::KURA_STORE_RETRY_MAX_ATTEMPTS,
                 commit_inflight_timeout: std::time::Duration::from_millis(
                     iroha_config::parameters::defaults::sumeragi::COMMIT_INFLIGHT_TIMEOUT_MS,
+                ),
+                post_finality_cleanup_timeout: std::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::POST_FINALITY_CLEANUP_TIMEOUT_MS,
                 ),
                 commit_work_queue_cap:
                     iroha_config::parameters::defaults::sumeragi::COMMIT_WORK_QUEUE_CAP,
@@ -1111,6 +1113,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 metal_debug_fused: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
             },
             stark: iroha_config::parameters::actual::Stark::default(),
+            sccp: iroha_config::parameters::actual::Sccp::default(),
             root_history_cap: iroha_config::parameters::defaults::zk::ledger::ROOT_HISTORY_CAP,
             ballot_history_cap: iroha_config::parameters::defaults::zk::vote::BALLOT_HISTORY_CAP,
             empty_root_on_empty:
@@ -1128,13 +1131,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
             bridge_proof_max_future_drift_blocks:
                 iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
-            sccp_launch_mode:
-                iroha_config::parameters::actual::SccpLaunchMode::EthereumMainnetLane,
-            sccp_source_verifier_materials: Vec::new(),
-            sccp_source_adapter_engine_deployments: Vec::new(),
-            sccp_destination_rollouts: Vec::new(),
-            sccp_route_allowlists: Vec::new(),
-            sccp_route_manifests: Vec::new(),
             poseidon_params_id:
                 iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
             pedersen_params_id:
@@ -1470,12 +1466,12 @@ fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Tor
 }
 
 #[tokio::test]
-async fn connect_endpoints_hidden_when_disabled() {
+async fn connect_endpoints_report_typed_unavailability_when_disabled() {
     let cfg = minimal_actual_config(false);
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
 
-    // /v1/connect/ws should be 404 when disabled
+    // The WebSocket route remains mounted but rejects the upgrade while disabled.
     let resp = app
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -1486,19 +1482,30 @@ async fn connect_endpoints_hidden_when_disabled() {
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
 
-    // /v1/connect/status should be 404 when disabled
+    // Ordinary REST routes return the shared typed error envelope.
     let resp = app
         .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .uri(Uri::from_static("/v1/connect/status"))
+                .header(axum::http::header::ACCEPT, "application/json")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = http_body_util::BodyExt::collect(resp.into_body())
+        .await
+        .expect("connect disabled response body")
+        .to_bytes();
+    let error: norito::json::Value =
+        norito::json::from_slice(&body).expect("typed Connect disabled error envelope");
+    assert_eq!(
+        error.get("code").and_then(norito::json::Value::as_str),
+        Some("connect_disabled")
+    );
 }
 
 #[tokio::test]
@@ -3391,9 +3398,12 @@ async fn connect_ws_handshake_fails_when_disabled() {
         "ws://{}/v1/connect/ws?sid={}&role=app",
         addr, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     );
-    let res = tokio_tungstenite::connect_async(&url).await;
-    assert!(
-        res.is_err(),
-        "ws handshake should fail when connect disabled"
-    );
+    let err = tokio_tungstenite::connect_async(&url)
+        .await
+        .expect_err("ws handshake should fail when connect disabled");
+    let status = match err {
+        tokio_tungstenite::tungstenite::Error::Http(response) => response.status(),
+        other => panic!("unexpected WebSocket error: {other:?}"),
+    };
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 }

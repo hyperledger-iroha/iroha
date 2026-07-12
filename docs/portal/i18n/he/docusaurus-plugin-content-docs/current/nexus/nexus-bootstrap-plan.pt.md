@@ -33,7 +33,7 @@ Esta pagina reflete `docs/source/soranexus_bootstrap_plan.md`. Mantenha as duas 
 ## אמביינטס דה רד
 - Operar dois ambientes Nexus com prefixes de red distintos:
 - **Sora Nexus (mainnet)** - prefixo de rede de producao `nexus`, hospedando governanca canonica e servicos piggyback SoraFS/SoraNet (מזהה שרשרת Prometheus /U00NI000 `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - קידומת דה רד דה סטaging `testus`, espelhando a configuracao da mainnet para testes de integracao e validacao טרום-release (שרשרת UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - קידומת דה רד דה סטaging `testus`, espelhando a configuracao da mainnet para testes de integracao e validacao טרום-release (שרשרת UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Manter arquivos genesis separados, chaves de governanca e footprints de infraestrutura para cada ambiente. Testus atua como campo de provas para rollouts SoraFS/SoraNet antes de promotor para Nexus.
 - Pipelines de CI/CD devem fazer לפרוס את פרימיירו ב-Testus, ביצוע בדיקות עשן אוטומטיות e exigir promocao manual para Nexus quando os checks passerem.
 - Bundles de configuracao de referencia vivem em `configs/soranexus/nexus/` (mainnet) e `configs/soranexus/testus/` (testnet), cada um contendo `config.toml`, `genesis.json` e diretorios de admiss I10100X explosion.

@@ -77,7 +77,7 @@ translator: machine-google-reviewed
 | Pointer-ABI တင်းကျပ်သော တရားဝင်အတည်ပြုချက်နှင့် doc ထပ်တူပြုခြင်း | ◉ | TLV မူဝါဒကို ရွှေရောင်စမ်းသပ်မှုများနှင့် ထုတ်လုပ်ထားသော စာရွက်စာတမ်းများဖြင့် လက်ခံသူ/IVM တွင် ပြဋ္ဌာန်းထားသည်။ | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
 | CoreHost | မှတဆင့် ZK syscall ဂိတ်ပေါက်ခြင်း။ ◉ | Per-op သည် ဂိတ်စစ်ဆေးထားသော စာအိတ်များကို စီတန်းပြီး ISI မလုပ်ဆောင်မီ hash ကိုက်ညီမှုကို တွန်းအားပေးသည်။ | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
 | Kotodama ညွှန်ပြချက်-ABI docs & သဒ္ဒါ | ◉ | တိုက်ရိုက်တည်ဆောက်သူများနှင့် SCALL မြေပုံဆွဲခြင်းများဖြင့် သဒ္ဒါ/စာရွက်စာတမ်းများကို ထပ်တူပြုထားသည်။ | status.md:299-301 |
-| ISO 20022 schema-driven engine & Torii တံတား | ◉ | ထည့်သွင်းထားသော Canonical ISO 20022 အစီအစဉ်များ၊ အဆုံးအဖြတ်ရှိသော XML ပိုင်းခြားစိတ်ဖြာခြင်းနှင့် `/v1/iso20022/status/{MsgId}` API တို့ကို ဖော်ထုတ်ထားသည်။ | status.md:65-70 |
+| ISO 20022 schema-driven engine & Torii တံတား | ◉ | ထည့်သွင်းထားသော Canonical ISO 20022 အစီအစဉ်များ၊ အဆုံးအဖြတ်ရှိသော XML ပိုင်းခြားစိတ်ဖြာခြင်းနှင့် `/v1/iso20022/messages/{MsgId}` API တို့ကို ဖော်ထုတ်ထားသည်။ | status.md:65-70 |
 
 ## Hardware Acceleration
 

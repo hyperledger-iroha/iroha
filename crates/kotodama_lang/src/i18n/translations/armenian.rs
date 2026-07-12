@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "`{func}` ֆունկցիայում `{name}` պարամետրը երբեք չի օգտագործվում",
     lint_unreachable_after_return: "{context}`-ում հայտնաբերվեց անմատչելի արտահայտություն. return-ից հետո կոդը երբեք չի կատարվում",
     lint_ok: "լավ",
-    lint_usage: "Օգտագործում՝ koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Օգտագործում՝ koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Գործարկում է Kotodama-ի lint ստուգումները տրամադրված աղբյուրների վրա։",
     ..english::MESSAGES
 };

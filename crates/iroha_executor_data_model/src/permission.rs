@@ -325,6 +325,26 @@ pub mod asset {
             pub asset: AssetId,
         }
     }
+
+    permission! {
+        /// Permission to set or clear transfer-freeze state for one asset definition.
+        pub struct CanSetAssetTransferFreeze {
+            /// Asset definition whose account freeze state may be managed.
+            pub asset_definition: AssetDefinitionId,
+            /// Canonical on-chain alias domain of accounts whose freeze state may be managed.
+            pub account_domain: iroha_data_model::account::rekey::AccountAliasDomain,
+        }
+    }
+
+    permission! {
+        /// Permission to set the daily transfer limit for one asset definition.
+        pub struct CanSetAssetTransferDailyLimit {
+            /// Asset definition whose daily account limits may be managed.
+            pub asset_definition: AssetDefinitionId,
+            /// Canonical on-chain alias domain of accounts whose daily limit may be managed.
+            pub account_domain: iroha_data_model::account::rekey::AccountAliasDomain,
+        }
+    }
 }
 
 /// Permission tokens covering ZK-ACE identity management.
@@ -446,6 +466,23 @@ pub mod parameter {
     }
 }
 
+/// Permission tokens for governed SCCP consensus state.
+pub mod sccp {
+    use super::*;
+
+    permission! {
+        /// Permission to enact governed SCCP registry actions.
+        #[derive(Copy)]
+        pub struct CanManageSccpGovernance;
+    }
+
+    permission! {
+        /// Permission to submit typed SCCP route-governance proposals.
+        #[derive(Copy)]
+        pub struct CanProposeSccpRouteGovernance;
+    }
+}
+
 /// Permission tokens affecting role lifecycle.
 pub mod role {
     use super::*;
@@ -476,6 +513,43 @@ pub mod smart_contract {
         /// Permission to register smart contract code artifacts.
         #[derive(Copy)]
         pub struct CanRegisterSmartContractCode;
+    }
+
+    permission! {
+        /// Permission to invoke one exact entrypoint of one deployed contract instance.
+        pub struct CanInvokeContractEntrypoint {
+            /// Immutable deployed contract address.
+            pub contract: ContractAddress,
+            /// Exact case-sensitive public entrypoint selector.
+            pub entrypoint: String,
+        }
+    }
+}
+
+/// Permission tokens governing native FX corridors.
+pub mod settlement {
+    use super::*;
+
+    permission! {
+        /// Root permission for delegating native FX corridor governance.
+        #[derive(Copy)]
+        pub struct CanManageFxCorridors;
+    }
+
+    permission! {
+        /// Permission to publish the next revision of one FX corridor policy.
+        pub struct CanSetFxCorridorPolicy {
+            /// Stable corridor policy identifier.
+            pub policy_id: Name,
+        }
+    }
+
+    permission! {
+        /// Permission to execute settlements under one FX corridor policy.
+        pub struct CanSettleFxCorridor {
+            /// Stable corridor policy identifier.
+            pub policy_id: Name,
+        }
     }
 }
 

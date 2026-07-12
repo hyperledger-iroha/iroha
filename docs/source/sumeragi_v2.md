@@ -241,6 +241,31 @@ application receipt bound to the canonical global block and its transaction resu
 results are retained, or the exact hash-only snapshot anchor after compaction. Restart repairs the
 narrow full-body certificate-before-receipt crash boundary from those canonical artifacts.
 
+A fresh lane height always starts at lane view zero, independently of the winning global proposal
+view. The global proposer signs an executable-payload handoff naming the exact locked block and
+fans it to the whole frozen lane committee. Any exact committee member may authenticate those same
+bytes under its own BLS key, so an offline deterministic lane author does not stall the lane. The
+payload digest excludes the producer but includes the global anchor and executable body; Kura
+accepts producer-signature variants only when the origin proposal and body are identical. V2 does
+not admit unanchored, hintless payloads: without the globally locked ownership there is no
+deterministic promotion rule capable of preventing a Byzantine producer from permanently splitting
+first-write lane slots.
+
+An autonomous Prepare vote carries a second domain-separated READY signature over the exact
+producer-authenticated payload. The resulting PrepareQC embeds the READY aggregate, historical
+committee and PoPs. Kura must fsync this origin-Prepare availability certificate before the adapter
+may consume a Commit request or release a Commit signature. A transient write failure leaves the
+request and QC retryable; it cannot produce an undurable Commit lock.
+
+Lane `NewView` certificates rotate only a synthetic, durable retransmission cursor. They never
+retarget the proposal certified by Prepare, Commit, READY, the certified sidecar, or merge
+execution. Every Commit signature before and after a cursor change is therefore byte-identical and
+remains compatible with the crash-safe per-incarnation signing guard. The cursor chain is checked
+for contiguous quorum-authorized transitions and may be compacted into a restart checkpoint, but a
+later-view READY certificate is invalid. Failed cursor persistence is retried by re-aggregating the
+retained quorum votes; installing a cursor simply re-fans the immutable origin payload, proposal,
+votes, and QCs.
+
 Fast global finality does not reset unfinished canonical lane consensus. At each global-height
 boundary the runner carries only the bounded lane-session cache whose proposal identity matches the
 exact Kura ownership artifact, whose incarnation remains active in the successor context, and whose
@@ -250,6 +275,16 @@ the advisory global-block hint is normalized to Kura's exact anchor. Unanchored 
 orphan evidence, applied slots, and inactive incarnations are pruned, while a quorum-certified
 identity that conflicts with the canonical recovered proposal stops rollover before mutation. The
 successor reapplies its configured ordinary-session bound without evicting protected commit evidence.
+Ephemeral NewView votes and timeout markers do not cross that boundary; the successor fully
+revalidates the durable cursor chain and latest certificate from Kura. Historical shared-lane
+evidence is authenticated with the immutable V2 height-context roster and PoPs stored for its
+original proposal height, never the successor's mutable roster.
+
+Startup enumerates validated autonomous artifacts before reconstructing missing payloads from
+committed global anchors. It filters finalized and inactive work before applying the global session
+cap, restores the immutable origin proposal and READY/Prepare evidence, hydrates an exact certified
+sidecar when present, and recreates the local Prepare vote from durable bytes. A quorum restart
+therefore does not depend on an external proposal replay to resume an unfinished lane height.
 
 A complete lane session whose exact carrier is durable in Kura but not yet committed in WSV is a
 deferred apply boundary, not a fatal certificate error. It remains in the bounded retry queue. The
@@ -274,6 +309,14 @@ sidecar, and Kura commits the carrier block and merge-log record in the same glo
 rollback and restart reconciliation coupled to block persistence. Old-view sidecars and signatures
 cannot be rebound to a later-view proposal; an earlier-view global block that already reaches a
 CommitQC remains decisive only with its exact earlier-view carrier.
+
+Only the exact global merge leader constructs the execution candidate. It advertises and serves
+bounded chunks of that complete candidate; followers validate and deterministically reexecute the
+embedded autonomous source bundles using committed State rather than selecting a local Kura subset.
+Consequently harmless local producer-signature or synthetic-cursor variants cannot create follower
+digest choices: the round has one leader-carried byte sequence, one durable merge signing decision,
+and one quorum digest. A completed round rejects a second advert or transfer identity even from the
+authenticated leader, and view/lock retirement immediately purges queued candidate traffic.
 
 If that exact sidecar is absent during deterministic body validation or later decided application,
 the exact work identifier is retained rather than converted into a permanent rejection. The node
@@ -369,11 +412,22 @@ discarded. A checksum failure, broken hash chain, non-monotonic sequence, or ide
 before that tail fails closed. Records are pruned only after the decided block and its certificate
 are durable in Kura.
 
-Height-local I/O retirement and shutdown use one absolute five-second control deadline covering
-queue drain, terminal acknowledgement, cancellation attempt, and join. Cooperative workers are
-joined. A worker wedged in an OS/HSM/fsync call is detached after the deadline with its receivers
-dropped; finalized height-local files are retained for restart reconciliation instead of blocking
-successor construction or racing cleanup.
+Height-local I/O retirement uses one bounded control deadline covering queue drain and terminal
+acknowledgement. Cooperative workers are joined immediately; a worker still blocked in an
+OS/HSM/fsync call after the deadline remains owned by the runner's cleanup supervisor and is reaped
+after it finishes. If the worker is still wedged when the runner itself shuts down, its join handle
+is detached instead of blocking shutdown. Finalized height-local files are retained for restart
+reconciliation instead of blocking successor construction or racing cleanup.
+
+The production `SumeragiWorker` dispatches protocol 2 directly to the
+serialized height runner; it never executes the legacy actor under a v2
+handshake. For every height the runner replays context and WAL state before
+opening ingress, drains all tagged effects, validates the typed Kura receipt
+against the exact finality artifact, and only then builds the successor
+context. WAL, body, chunk, or cleanup-worker retirement after that durability
+boundary returns an ordered typed warning report. Those local cleanup warnings
+remain operator-visible but cannot turn a committed block back into an error or
+prevent successor-height progress.
 
 ## Correctness claim and trusted boundary
 

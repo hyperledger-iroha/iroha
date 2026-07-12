@@ -9240,302 +9240,328 @@ public struct ToriiVerifyingKeyDetail: Decodable, Sendable {
     }
 }
 
-public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
-    public let offlineKagemushaRecursiveCompactAvailable: Bool
-    public let offlineKagemushaRecursiveCompactMode: String
-    public let offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion: UInt32
-    public let offlineKagemushaRecursiveCompactCircuitId: String
-    public let offlineKagemushaRecursiveCompactArtifactsAvailable: Bool
-    public let offlineTelemetry: Bool
-    public let offlineNote: Bool
-    public let offlineOneUseKeys: Bool
-    public let offlineRecursiveNoteProof: Bool
-    public let offlineRecursiveNoteProofBackend: String?
-    public let offlineRecursiveNoteProofCircuitId: String?
-    public let offlineRecursiveNoteProofPublicInputsSchemaHash: String?
-    public let offlineRecursiveNoteProofPublicInstanceColumns: UInt64?
-    public let offlineRecursiveNoteProofVerifierKeyId: ToriiVerifyingKeyId?
-    public let offlineFountainQr: Bool
-    public let offlineSyncOptional: Bool
+public struct ToriiOfflineReadinessBlocker: Decodable, Sendable, Equatable {
+    public let code: String
+    public let message: String
 
-    public var hasKagemushaRecursiveCompactMetadata: Bool {
-        offlineKagemushaRecursiveCompactAvailable
-            && offlineKagemushaRecursiveCompactMode == "recursive_compact_v1"
-            && offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion == 7
-            && offlineKagemushaRecursiveCompactCircuitId == "kagemusha-recursive-compact-v1"
-    }
-
-    public var hasCanonicalRecursiveVerifierMetadata: Bool {
-        guard let schemaHash = offlineRecursiveNoteProofPublicInputsSchemaHash,
-              schemaHash.count == 64,
-              schemaHash.allSatisfy(\.isHexDigit)
-        else {
-            return false
-        }
-        return offlineRecursiveNoteProof
-            && offlineRecursiveNoteProofBackend == OfflineNoteConstants.recursiveBackend
-            && offlineRecursiveNoteProofCircuitId == OfflineNoteConstants.recursiveVerifierName
-            && offlineRecursiveNoteProofPublicInstanceColumns == 16
-            && offlineRecursiveNoteProofVerifierKeyId?.backend == OfflineNoteConstants.recursiveBackend
-            && offlineRecursiveNoteProofVerifierKeyId?.name == OfflineNoteConstants.recursiveVerifierName
-    }
-
-    private enum CodingKeys: String, CodingKey, CaseIterable {
-        case offlineKagemushaRecursiveCompactAvailable = "offline_kagemusha_recursive_compact_available"
-        case offlineKagemushaRecursiveCompactMode = "offline_kagemusha_recursive_compact_mode"
-        case offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion = "offline_kagemusha_recursive_compact_required_native_bridge_abi_version"
-        case offlineKagemushaRecursiveCompactCircuitId = "offline_kagemusha_recursive_compact_circuit_id"
-        case offlineKagemushaRecursiveCompactArtifactsAvailable = "offline_kagemusha_recursive_compact_artifacts_available"
-        case removedOfflineKagemushaAbi7 = "offline_kagemusha_abi7"
-        case removedOfflineKagemushaAbi7BridgeAbiVersion = "offline_kagemusha_abi7_bridge_abi_version"
-        case offlineTelemetry = "offline_telemetry"
-        case offlineNote = "offline_note"
-        case offlineOneUseKeys = "offline_one_use_keys"
-        case offlineRecursiveNoteProof = "offline_recursive_note_proof"
-        case offlineRecursiveNoteProofBackend = "offline_recursive_note_proof_backend"
-        case offlineRecursiveNoteProofCircuitId = "offline_recursive_note_proof_circuit_id"
-        case offlineRecursiveNoteProofPublicInputsSchemaHash = "offline_recursive_note_proof_public_inputs_schema_hash"
-        case offlineRecursiveNoteProofPublicInstanceColumns = "offline_recursive_note_proof_public_instance_columns"
-        case offlineRecursiveNoteProofVerifierKeyId = "offline_recursive_note_proof_verifier_key_id"
-        case offlineFountainQr = "offline_fountain_qr"
-        case offlineSyncOptional = "offline_sync_optional"
-    }
-
-    private struct ReadinessField: CodingKey {
-        let stringValue: String
-        let intValue: Int? = nil
-
-        init?(stringValue: String) {
-            self.stringValue = stringValue
-        }
-
-        init?(intValue: Int) {
-            nil
-        }
-    }
-
-    private struct KagemushaReadinessFamily {
-        let available: Bool
-        let mode: String
-        let bridgeAbiVersion: UInt32
-        let circuitId: String
-        let artifacts: Bool
+    private enum CodingKeys: String, CodingKey {
+        case code
+        case message
     }
 
     public init(from decoder: Decoder) throws {
-        let readinessContainer = try decoder.container(keyedBy: ReadinessField.self)
-        try Self.rejectRemovedAbi7Fields(in: readinessContainer)
-        try Self.rejectUnknownFields(in: readinessContainer)
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let hasRecursiveCompactFamily = Self.containsAny(
-            container,
-            keys: [
-                .offlineKagemushaRecursiveCompactAvailable,
-                .offlineKagemushaRecursiveCompactMode,
-                .offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion,
-                .offlineKagemushaRecursiveCompactCircuitId,
-                .offlineKagemushaRecursiveCompactArtifactsAvailable
-            ]
-        )
-        guard hasRecursiveCompactFamily else {
-            throw Self.missingKey(.offlineKagemushaRecursiveCompactAvailable, in: container)
-        }
-        let recursiveCompact = try Self.decodeRecursiveCompactFamily(from: container)
-        offlineKagemushaRecursiveCompactAvailable = recursiveCompact.available
-        offlineKagemushaRecursiveCompactMode = recursiveCompact.mode
-        offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion = recursiveCompact.bridgeAbiVersion
-        offlineKagemushaRecursiveCompactCircuitId = recursiveCompact.circuitId
-        offlineKagemushaRecursiveCompactArtifactsAvailable = recursiveCompact.artifacts
-        offlineTelemetry = try container.decode(Bool.self, forKey: .offlineTelemetry)
-        offlineNote = try container.decodeIfPresent(Bool.self, forKey: .offlineNote) ?? false
-        offlineOneUseKeys = try container.decodeIfPresent(Bool.self, forKey: .offlineOneUseKeys) ?? false
-        offlineRecursiveNoteProof = try container.decodeIfPresent(Bool.self, forKey: .offlineRecursiveNoteProof) ?? false
-        offlineRecursiveNoteProofBackend = try container.decodeIfPresent(
-            String.self,
-            forKey: .offlineRecursiveNoteProofBackend
-        )
-        offlineRecursiveNoteProofCircuitId = try container.decodeIfPresent(
-            String.self,
-            forKey: .offlineRecursiveNoteProofCircuitId
-        )
-        offlineRecursiveNoteProofPublicInputsSchemaHash = try container.decodeIfPresent(
-            String.self,
-            forKey: .offlineRecursiveNoteProofPublicInputsSchemaHash
-        )
-        offlineRecursiveNoteProofPublicInstanceColumns = try container.decodeIfPresent(
-            UInt64.self,
-            forKey: .offlineRecursiveNoteProofPublicInstanceColumns
-        )
-        offlineRecursiveNoteProofVerifierKeyId = try container.decodeIfPresent(
-            ToriiVerifyingKeyId.self,
-            forKey: .offlineRecursiveNoteProofVerifierKeyId
-        )
-        offlineFountainQr = try container.decodeIfPresent(Bool.self, forKey: .offlineFountainQr) ?? false
-        offlineSyncOptional = try container.decodeIfPresent(Bool.self, forKey: .offlineSyncOptional) ?? false
-    }
-
-    private static func containsAny(
-        _ container: KeyedDecodingContainer<CodingKeys>,
-        keys: [CodingKeys]
-    ) -> Bool {
-        keys.contains { container.contains($0) }
-    }
-
-    private static func rejectUnknownFields(
-        in container: KeyedDecodingContainer<ReadinessField>
-    ) throws {
-        let allowedFields = Set(CodingKeys.allCases.map(\.stringValue))
-        for key in container.allKeys where !allowedFields.contains(key.stringValue) {
+        let decodedCode = try container.decode(String.self, forKey: .code)
+        guard ToriiOfflineReadinessValidation.isStableCode(decodedCode) else {
             throw DecodingError.dataCorruptedError(
-                forKey: key,
+                forKey: .code,
                 in: container,
-                debugDescription: "\(key.stringValue) is not a supported offline readiness field"
+                debugDescription: "code must be a 1-64 character lowercase stable identifier"
             )
         }
+        code = decodedCode
+        message = try Self.decodeExactText(from: container, forKey: .message)
     }
 
-    private static func rejectRemovedAbi7Fields(
-        in container: KeyedDecodingContainer<ReadinessField>
-    ) throws {
-        for key in container.allKeys where removedAbi7Fields.contains(key.stringValue) {
-            throw DecodingError.dataCorruptedError(
-                forKey: key,
-                in: container,
-                debugDescription: "\(key.stringValue) is not supported; use offline_kagemusha_recursive_compact_*"
-            )
-        }
-    }
-
-    private static let removedAbi7Fields: Set<String> = [
-        "offline_kagemusha_abi7",
-        "offline_kagemusha_abi7_mode",
-        "offline_kagemusha_abi7_bridge_abi_version",
-        "offline_kagemusha_abi7_circuit_id",
-        "offline_kagemusha_abi7_artifacts",
-    ]
-
-    private static func decodeRecursiveCompactFamily(
-        from container: KeyedDecodingContainer<CodingKeys>
-    ) throws -> KagemushaReadinessFamily {
-        KagemushaReadinessFamily(
-            available: try decodeRequiredBool(from: container, forKey: .offlineKagemushaRecursiveCompactAvailable),
-            mode: try decodeRequiredExactString(from: container, forKey: .offlineKagemushaRecursiveCompactMode),
-            bridgeAbiVersion: try decodeExactPositiveAbiVersion(
-                from: container,
-                forKey: .offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion
-            ),
-            circuitId: try decodeRequiredExactString(
-                from: container,
-                forKey: .offlineKagemushaRecursiveCompactCircuitId
-            ),
-            artifacts: try decodeRequiredBool(
-                from: container,
-                forKey: .offlineKagemushaRecursiveCompactArtifactsAvailable
-            )
-        )
-    }
-
-    private static func decodeRequiredBool(
-        from container: KeyedDecodingContainer<CodingKeys>,
-        forKey key: CodingKeys
-    ) throws -> Bool {
-        guard container.contains(key) else {
-            throw missingKey(key, in: container)
-        }
-        return try container.decode(Bool.self, forKey: key)
-    }
-
-    private static func decodeRequiredExactString(
+    private static func decodeExactText(
         from container: KeyedDecodingContainer<CodingKeys>,
         forKey key: CodingKeys
     ) throws -> String {
-        guard container.contains(key) else {
-            throw missingKey(key, in: container)
-        }
         let value = try container.decode(String.self, forKey: key)
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+        guard ToriiOfflineReadinessValidation.isExactText(value)
+        else {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
                 in: container,
-                debugDescription: "\(key.stringValue) must be a non-empty string"
+                debugDescription: "\(key.stringValue) must be exact non-empty text"
             )
         }
-        guard trimmed == value else {
+        return value
+    }
+}
+
+/// The active confidential-transfer verifier selected for an Offline readiness snapshot.
+public struct ToriiOfflineActiveTransferVerifier: Decodable, Sendable, Equatable {
+    public let id: ToriiVerifyingKeyId
+    public let version: UInt32
+    public let circuitId: String
+    public let commitment: String
+    public let publicInputsSchemaHash: String
+    public let maxProofBytes: UInt32
+    public let activationHeight: UInt64
+    public let withdrawalHeight: UInt64?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case version
+        case circuitId = "circuit_id"
+        case commitment
+        case publicInputsSchemaHash = "public_inputs_schema_hash"
+        case maxProofBytes = "max_proof_bytes"
+        case activationHeight = "activation_height"
+        case withdrawalHeight = "withdrawal_height"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(ToriiVerifyingKeyId.self, forKey: .id)
+        version = try container.decode(UInt32.self, forKey: .version)
+        circuitId = try Self.decodeExactText(from: container, forKey: .circuitId)
+        commitment = try Self.decodeCanonicalHash(from: container, forKey: .commitment)
+        publicInputsSchemaHash = try Self.decodeCanonicalHash(
+            from: container,
+            forKey: .publicInputsSchemaHash
+        )
+        let decodedMaxProofBytes = try container.decode(UInt32.self, forKey: .maxProofBytes)
+        guard decodedMaxProofBytes > 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .maxProofBytes,
+                in: container,
+                debugDescription: "max_proof_bytes must be greater than zero"
+            )
+        }
+        maxProofBytes = decodedMaxProofBytes
+        activationHeight = try container.decode(UInt64.self, forKey: .activationHeight)
+        guard container.contains(.withdrawalHeight) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.withdrawalHeight,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "withdrawal_height is required"
+                )
+            )
+        }
+        withdrawalHeight = try container.decodeIfPresent(
+            UInt64.self,
+            forKey: .withdrawalHeight
+        )
+        if let withdrawalHeight, withdrawalHeight <= activationHeight {
+            throw DecodingError.dataCorruptedError(
+                forKey: .withdrawalHeight,
+                in: container,
+                debugDescription: "withdrawal_height must be greater than activation_height"
+            )
+        }
+    }
+
+    fileprivate func isActive(at blockHeight: UInt64) -> Bool {
+        activationHeight <= blockHeight
+            && withdrawalHeight.map { blockHeight < $0 } != false
+    }
+
+    private static func decodeExactText(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> String {
+        let value = try container.decode(String.self, forKey: key)
+        guard ToriiOfflineReadinessValidation.isExactText(value) else {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
                 in: container,
-                debugDescription: "\(key.stringValue) must not contain surrounding whitespace"
+                debugDescription: "\(key.stringValue) must be exact non-empty text"
             )
         }
         return value
     }
 
-    private static func decodeExactPositiveAbiVersion(
+    private static func decodeCanonicalHash(
         from container: KeyedDecodingContainer<CodingKeys>,
         forKey key: CodingKeys
-    ) throws -> UInt32 {
-        guard container.contains(key) else {
-            throw missingKey(key, in: container)
+    ) throws -> String {
+        let value = try container.decode(String.self, forKey: key)
+        guard ToriiOfflineReadinessValidation.isCanonicalHash(value) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must be exact lowercase 32-byte hexadecimal"
+            )
         }
-        let maximum = UInt64(Int32.max)
-        if let numeric = try? container.decode(UInt64.self, forKey: key) {
-            guard numeric > 0 else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: key,
-                    in: container,
-                    debugDescription: "\(key.stringValue) must be a positive integer"
-                )
-            }
-            guard numeric <= maximum else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: key,
-                    in: container,
-                    debugDescription: "\(key.stringValue) must fit in signed 32-bit range"
-                )
-            }
-            return UInt32(numeric)
-        }
-        if let string = try? container.decode(String.self, forKey: key) {
-            let bytes = Array(string.utf8)
-            guard let first = bytes.first,
-                  first >= UInt8(ascii: "1"),
-                  first <= UInt8(ascii: "9"),
-                  bytes.allSatisfy({ $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9") })
-            else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: key,
-                    in: container,
-                    debugDescription: "\(key.stringValue) must be an exact positive integer string"
-                )
-            }
-            guard let numeric = UInt64(string), numeric <= maximum else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: key,
-                    in: container,
-                    debugDescription: "\(key.stringValue) must fit in signed 32-bit range"
-                )
-            }
-            return UInt32(numeric)
-        }
-        throw DecodingError.dataCorruptedError(
-            forKey: key,
-            in: container,
-            debugDescription: "\(key.stringValue) must be a positive integer"
-        )
+        return value
+    }
+}
+
+public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
+    public let assetDefinitionId: String
+    /// Authoritative live asset scale. Values above 28 are retained so callers
+    /// can explain an `asset_scale_unsupported` readiness blocker.
+    public let assetScale: UInt32?
+    public let evaluatedBlockHeight: UInt64
+    public let evaluatedBlockHash: String
+    public let evaluatedBlockHashBytes: Data
+    public let activeTransferVerifier: ToriiOfflineActiveTransferVerifier?
+    public let ready: Bool
+    public let blockers: [ToriiOfflineReadinessBlocker]
+
+    private enum CodingKeys: String, CodingKey {
+        case assetDefinitionId = "asset_definition_id"
+        case assetScale = "asset_scale"
+        case evaluatedBlockHeight = "evaluated_block_height"
+        case evaluatedBlockHash = "evaluated_block_hash"
+        case activeTransferVerifier = "active_transfer_verifier"
+        case ready
+        case blockers
     }
 
-    private static func missingKey(
-        _ key: CodingKeys,
-        in container: KeyedDecodingContainer<CodingKeys>
-    ) -> DecodingError {
-        DecodingError.keyNotFound(
-            key,
-            DecodingError.Context(
-                codingPath: container.codingPath,
-                debugDescription: "\(key.stringValue) is required"
-            )
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        assetDefinitionId = try Self.decodeExactToken(
+            from: container,
+            forKey: .assetDefinitionId
         )
+        guard container.contains(.assetScale) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.assetScale,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "asset_scale is required"
+                )
+            )
+        }
+        let decodedAssetScale = try container.decodeIfPresent(UInt32.self, forKey: .assetScale)
+        evaluatedBlockHeight = try container.decode(
+            UInt64.self,
+            forKey: .evaluatedBlockHeight
+        )
+        let blockHash = try container.decode(String.self, forKey: .evaluatedBlockHash)
+        guard ToriiOfflineReadinessValidation.isCanonicalHash(blockHash),
+              let blockHashBytes = Data(hexString: blockHash),
+              blockHashBytes.count == 32 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .evaluatedBlockHash,
+                in: container,
+                debugDescription: "evaluated_block_hash must be exact lowercase 32-byte hexadecimal"
+            )
+        }
+        evaluatedBlockHash = blockHash
+        evaluatedBlockHashBytes = blockHashBytes
+        guard container.contains(.activeTransferVerifier) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.activeTransferVerifier,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "active_transfer_verifier is required"
+                )
+            )
+        }
+        let decodedActiveTransferVerifier = try container.decodeIfPresent(
+            ToriiOfflineActiveTransferVerifier.self,
+            forKey: .activeTransferVerifier
+        )
+        let decodedReady = try container.decode(Bool.self, forKey: .ready)
+        let decodedBlockers = try container.decode(
+            [ToriiOfflineReadinessBlocker].self,
+            forKey: .blockers
+        )
+        guard decodedReady == decodedBlockers.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .ready,
+                in: container,
+                debugDescription: "ready must be true exactly when blockers is empty"
+            )
+        }
+        let blockerCodes = Set(decodedBlockers.map(\.code))
+        let scaleUnavailable = blockerCodes.contains("asset_scale_unavailable")
+        let scaleUnsupported = blockerCodes.contains("asset_scale_unsupported")
+        switch decodedAssetScale {
+        case nil where !scaleUnavailable || scaleUnsupported:
+            throw DecodingError.dataCorruptedError(
+                forKey: .assetScale,
+                in: container,
+                debugDescription: "null asset_scale requires only the asset_scale_unavailable blocker"
+            )
+        case let scale? where scale <= 28 && (scaleUnavailable || scaleUnsupported):
+            throw DecodingError.dataCorruptedError(
+                forKey: .assetScale,
+                in: container,
+                debugDescription: "supported asset_scale must not have an asset scale blocker"
+            )
+        case let scale? where scale > 28 && (!scaleUnsupported || scaleUnavailable):
+            throw DecodingError.dataCorruptedError(
+                forKey: .assetScale,
+                in: container,
+                debugDescription: "asset_scale above 28 requires only the asset_scale_unsupported blocker"
+            )
+        default:
+            break
+        }
+        let transferUnavailable = blockerCodes.contains("transfer_verifier_unavailable")
+        guard (decodedActiveTransferVerifier == nil) == transferUnavailable else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .activeTransferVerifier,
+                in: container,
+                debugDescription: "active_transfer_verifier must be null exactly when transfer_verifier_unavailable is blocked"
+            )
+        }
+        if let decodedActiveTransferVerifier,
+           !decodedActiveTransferVerifier.isActive(at: evaluatedBlockHeight) {
+            throw DecodingError.dataCorruptedError(
+                forKey: .activeTransferVerifier,
+                in: container,
+                debugDescription: "active_transfer_verifier must be active at evaluated_block_height"
+            )
+        }
+        assetScale = decodedAssetScale
+        activeTransferVerifier = decodedActiveTransferVerifier
+        ready = decodedReady
+        blockers = decodedBlockers
+    }
+
+    private static func decodeExactToken(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> String {
+        let value = try container.decode(String.self, forKey: key)
+        guard ToriiOfflineReadinessValidation.isExactToken(value)
+        else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must be exact non-empty text without whitespace"
+            )
+        }
+        return value
+    }
+}
+
+private enum ToriiOfflineReadinessValidation {
+    static func isCanonicalHash(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        return bytes.count == 64 && bytes.allSatisfy {
+            ($0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9"))
+                || ($0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "f"))
+        }
+    }
+
+    static func isStableCode(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        guard (1...64).contains(bytes.count), let first = bytes.first else {
+            return false
+        }
+        let isDigit: (UInt8) -> Bool = {
+            $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9")
+        }
+        let isLowercase: (UInt8) -> Bool = {
+            $0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "z")
+        }
+        return (isDigit(first) || isLowercase(first))
+            && bytes.allSatisfy {
+                isDigit($0) || isLowercase($0) || $0 == UInt8(ascii: "_")
+            }
+    }
+
+    static func isExactText(_ value: String) -> Bool {
+        !value.isEmpty
+            && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+            && !value.unicodeScalars.contains {
+                CharacterSet.controlCharacters.contains($0)
+            }
+    }
+
+    static func isExactToken(_ value: String) -> Bool {
+        isExactText(value)
+            && !value.unicodeScalars.contains {
+                CharacterSet.whitespacesAndNewlines.contains($0)
+            }
     }
 }
 
@@ -10622,65 +10648,1780 @@ public struct ToriiTriggerEventFilter: Sendable {
     }
 }
 
+fileprivate enum ToriiCanonicalHashLiteral {
+    private static let tag = "hash"
+    private static let prefix = "hash:"
+    private static let bodyLength = 64
+    private static let checksumLength = 4
+    private static let crcPolynomial: UInt16 = 0x1021
+
+    static func normalizedHex(from literal: String) -> String? {
+        let bytes = Array(literal.utf8)
+        let prefixBytes = Array(prefix.utf8)
+        let expectedLength = prefixBytes.count + bodyLength + 1 + checksumLength
+        guard bytes.count == expectedLength,
+              Array(bytes.prefix(prefixBytes.count)) == prefixBytes else {
+            return nil
+        }
+        let bodyStart = prefixBytes.count
+        let bodyEnd = bodyStart + bodyLength
+        guard bytes[bodyEnd] == 0x23 else {
+            return nil
+        }
+        let bodyBytes = Array(bytes[bodyStart..<bodyEnd])
+        let checksumBytes = Array(bytes[(bodyEnd + 1)...])
+        guard bodyBytes.allSatisfy(isUppercaseHex),
+              checksumBytes.allSatisfy(isUppercaseHex),
+              let body = String(bytes: bodyBytes, encoding: .utf8),
+              let checksum = String(bytes: checksumBytes, encoding: .utf8),
+              let parsedChecksum = UInt16(checksum, radix: 16),
+              parsedChecksum == crc16(body: body),
+              let hashBytes = Data(hexString: body),
+              hashBytes.count == 32,
+              hashBytes.last.map({ $0 & 1 == 1 }) == true else {
+            return nil
+        }
+        return body.lowercased()
+    }
+
+    static func literal(fromNormalizedHex value: String) -> String? {
+        guard normalizedConvenienceHex(value) != nil else {
+            return nil
+        }
+        let body = value.uppercased()
+        return "\(prefix)\(body)#\(String(format: "%04X", crc16(body: body)))"
+    }
+
+    static func normalizedConvenienceHex(_ value: String) -> String? {
+        let bodyBytes = Array(value.utf8)
+        guard bodyBytes.count == bodyLength,
+              bodyBytes.allSatisfy(isLowercaseHex),
+              let hashBytes = Data(hexString: value),
+              hashBytes.count == 32,
+              hashBytes.last.map({ $0 & 1 == 1 }) == true else {
+            return nil
+        }
+        return value
+    }
+
+    private static func isUppercaseHex(_ byte: UInt8) -> Bool {
+        (48...57).contains(byte) || (65...70).contains(byte)
+    }
+
+    private static func isLowercaseHex(_ byte: UInt8) -> Bool {
+        (48...57).contains(byte) || (97...102).contains(byte)
+    }
+
+    private static func crc16(body: String) -> UInt16 {
+        var crc: UInt16 = 0xFFFF
+        for byte in "\(tag):\(body)".utf8 {
+            crc ^= UInt16(byte) << 8
+            for _ in 0..<8 {
+                crc = (crc & 0x8000) != 0
+                    ? (crc &<< 1) ^ crcPolynomial
+                    : crc &<< 1
+            }
+        }
+        return crc
+    }
+}
+
+fileprivate func rejectUnknownContractManifestFields(
+    from decoder: Decoder,
+    allowed: Set<String>,
+    context: String
+) throws {
+    let container = try decoder.container(keyedBy: ToriiAnyCodingKey.self)
+    if let unknown = container.allKeys.first(where: { !allowed.contains($0.stringValue) }) {
+        throw DecodingError.dataCorruptedError(
+            forKey: unknown,
+            in: container,
+            debugDescription: "\(context) contains unknown field `\(unknown.stringValue)`"
+        )
+    }
+}
+
+fileprivate func isExactContractManifestString(_ value: String, allowEmpty: Bool = false) -> Bool {
+    guard (allowEmpty || !value.isEmpty),
+          value == value.trimmingCharacters(in: .whitespacesAndNewlines) else {
+        return false
+    }
+    return !value.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
+}
+
+fileprivate func isCanonicalContractManifestBase64(_ value: String) -> Bool {
+    guard isExactContractManifestString(value),
+          let bytes = Data(base64Encoded: value),
+          !bytes.isEmpty else {
+        return false
+    }
+    return bytes.base64EncodedString() == value
+}
+
+public struct ToriiContractDynamicAccessHint: Codable, Sendable, Equatable {
+    public var baseKey: String
+    public var keyType: String
+    public var boundKind: String
+    public var maxKeys: UInt32
+
+    public init(baseKey: String, keyType: String, boundKind: String, maxKeys: UInt32) {
+        self.baseKey = baseKey
+        self.keyType = keyType
+        self.boundKind = boundKind
+        self.maxKeys = maxKeys
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case baseKey = "base_key"
+        case keyType = "key_type"
+        case boundKind = "bound_kind"
+        case maxKeys = "max_keys"
+    }
+
+    private var isCanonical: Bool {
+        baseKey.hasPrefix("state:")
+            && baseKey != "state:*"
+            && isExactContractManifestString(baseKey)
+            && isExactContractManifestString(keyType)
+            && isExactContractManifestString(boundKind)
+            && maxKeys != 0
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: ["base_key", "key_type", "bound_kind", "max_keys"],
+            context: "dynamic access hint"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        baseKey = try container.decode(String.self, forKey: .baseKey)
+        keyType = try container.decode(String.self, forKey: .keyType)
+        boundKind = try container.decode(String.self, forKey: .boundKind)
+        maxKeys = try container.decode(UInt32.self, forKey: .maxKeys)
+        guard isCanonical else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .baseKey,
+                in: container,
+                debugDescription: "dynamic access hints require a positive bounded concrete state key"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        guard isCanonical else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "dynamic access hints require a positive bounded concrete state key")
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(baseKey, forKey: .baseKey)
+        try container.encode(keyType, forKey: .keyType)
+        try container.encode(boundKind, forKey: .boundKind)
+        try container.encode(maxKeys, forKey: .maxKeys)
+    }
+}
+
 public struct ToriiContractAccessSetHints: Codable, Sendable, Equatable {
     public var readKeys: [String]
     public var writeKeys: [String]
+    public var dynamicReads: [ToriiContractDynamicAccessHint]
+    public var dynamicWrites: [ToriiContractDynamicAccessHint]
 
-    public init(readKeys: [String] = [], writeKeys: [String] = []) {
+    public init(readKeys: [String] = [],
+                writeKeys: [String] = [],
+                dynamicReads: [ToriiContractDynamicAccessHint] = [],
+                dynamicWrites: [ToriiContractDynamicAccessHint] = []) {
         self.readKeys = readKeys
         self.writeKeys = writeKeys
+        self.dynamicReads = dynamicReads
+        self.dynamicWrites = dynamicWrites
     }
 
     private enum CodingKeys: String, CodingKey {
         case readKeys = "read_keys"
         case writeKeys = "write_keys"
+        case dynamicReads = "dynamic_reads"
+        case dynamicWrites = "dynamic_writes"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: ["read_keys", "write_keys", "dynamic_reads", "dynamic_writes"],
+            context: "contract access-set hints"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        readKeys = try container.decode([String].self, forKey: .readKeys)
+        writeKeys = try container.decode([String].self, forKey: .writeKeys)
+        dynamicReads = try container.decodeIfPresent(
+            [ToriiContractDynamicAccessHint].self,
+            forKey: .dynamicReads
+        ) ?? []
+        dynamicWrites = try container.decodeIfPresent(
+            [ToriiContractDynamicAccessHint].self,
+            forKey: .dynamicWrites
+        ) ?? []
+        guard readKeys.allSatisfy({ isExactContractManifestString($0) }),
+              writeKeys.allSatisfy({ isExactContractManifestString($0) }) else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: container.codingPath,
+                      debugDescription: "contract access-set keys must be exact non-empty strings")
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        guard readKeys.allSatisfy({ isExactContractManifestString($0) }),
+              writeKeys.allSatisfy({ isExactContractManifestString($0) }) else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "contract access-set keys must be exact non-empty strings")
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(readKeys, forKey: .readKeys)
+        try container.encode(writeKeys, forKey: .writeKeys)
+        try container.encode(dynamicReads, forKey: .dynamicReads)
+        try container.encode(dynamicWrites, forKey: .dynamicWrites)
+    }
+}
+
+public enum ToriiContractEntrypointKind: String, Sendable, Equatable {
+    case kotoage = "Kotoage"
+    case view = "View"
+    case hajimari = "Hajimari"
+    case kaizen = "Kaizen"
+}
+
+extension ToriiContractEntrypointKind: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case value
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: ["kind", "value"],
+            context: "Kotodama entrypoint kind"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let label = try container.decode(String.self, forKey: .kind)
+        guard let kind = Self(rawValue: label) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "Unsupported Kotodama entrypoint kind \(label)"
+            )
+        }
+        guard container.contains(.value), try container.decodeNil(forKey: .value) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .value,
+                in: container,
+                debugDescription: "Kotodama entrypoint kind payload must be null"
+            )
+        }
+        self = kind
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(rawValue, forKey: .kind)
+        try container.encodeNil(forKey: .value)
+    }
+}
+
+public enum ToriiEntrypointValueKindV1: String, Sendable, Equatable {
+    case int = "Int"
+    case decimal = "Decimal"
+    case quantity = "Quantity"
+    case bool = "Bool"
+    case string = "String"
+    case json = "Json"
+    case name = "Name"
+    case accountId = "AccountId"
+    case assetDefinitionId = "AssetDefinitionId"
+    case assetId = "AssetId"
+    case domainId = "DomainId"
+    case nftId = "NftId"
+    case dataSpaceId = "DataSpaceId"
+    case blob = "Blob"
+}
+
+extension ToriiEntrypointValueKindV1: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case value
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: ["kind", "value"],
+            context: "Kotodama boundary value kind"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let label = try container.decode(String.self, forKey: .kind)
+        guard let kind = Self(rawValue: label) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "Unsupported Kotodama boundary value kind \(label)"
+            )
+        }
+        guard container.contains(.value), try container.decodeNil(forKey: .value) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .value,
+                in: container,
+                debugDescription: "Kotodama boundary value-kind payload must be null"
+            )
+        }
+        self = kind
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(rawValue, forKey: .kind)
+        try container.encodeNil(forKey: .value)
+    }
+}
+
+public struct ToriiEntrypointStructTypeNodeV1: Codable, Sendable, Equatable {
+    public var name: String
+    public var fields: [String]
+
+    public init(name: String, fields: [String]) {
+        self.name = name
+        self.fields = fields
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case fields
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: ["name", "fields"],
+            context: "Kotodama struct boundary node"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        fields = try container.decode([String].self, forKey: .fields)
+    }
+}
+
+public struct ToriiEntrypointListTypeNodeV1: Codable, Sendable, Equatable {
+    public var capacity: UInt8
+
+    public init(capacity: UInt8) {
+        self.capacity = capacity
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case capacity
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: ["capacity"],
+            context: "Kotodama list boundary node"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        capacity = try container.decode(UInt8.self, forKey: .capacity)
+    }
+}
+
+public enum ToriiEntrypointValueTypeNodeV1: Codable, Sendable, Equatable {
+    case structType(ToriiEntrypointStructTypeNodeV1)
+    case tuple(UInt16)
+    case option
+    case result
+    case list(ToriiEntrypointListTypeNodeV1)
+    case leaf(ToriiEntrypointValueKindV1)
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case value
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: ["kind", "value"],
+            context: "Kotodama boundary type node"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decode(String.self, forKey: .kind)
+        switch kind {
+        case "Struct":
+            self = .structType(
+                try container.decode(ToriiEntrypointStructTypeNodeV1.self, forKey: .value)
+            )
+        case "Tuple":
+            self = .tuple(try container.decode(UInt16.self, forKey: .value))
+        case "Option":
+            guard container.contains(.value), try container.decodeNil(forKey: .value) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .value,
+                    in: container,
+                    debugDescription: "Kotodama Option schema payload must be null"
+                )
+            }
+            self = .option
+        case "Result":
+            guard container.contains(.value), try container.decodeNil(forKey: .value) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .value,
+                    in: container,
+                    debugDescription: "Kotodama Result schema payload must be null"
+                )
+            }
+            self = .result
+        case "List":
+            self = .list(
+                try container.decode(ToriiEntrypointListTypeNodeV1.self, forKey: .value)
+            )
+        case "Leaf":
+            self = .leaf(try container.decode(ToriiEntrypointValueKindV1.self, forKey: .value))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "Unsupported Kotodama boundary type node \(kind)"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .structType(let value):
+            try container.encode("Struct", forKey: .kind)
+            try container.encode(value, forKey: .value)
+        case .tuple(let value):
+            try container.encode("Tuple", forKey: .kind)
+            try container.encode(value, forKey: .value)
+        case .option:
+            try container.encode("Option", forKey: .kind)
+            try container.encodeNil(forKey: .value)
+        case .result:
+            try container.encode("Result", forKey: .kind)
+            try container.encodeNil(forKey: .value)
+        case .list(let value):
+            try container.encode("List", forKey: .kind)
+            try container.encode(value, forKey: .value)
+        case .leaf(let value):
+            try container.encode("Leaf", forKey: .kind)
+            try container.encode(value, forKey: .value)
+        }
+    }
+}
+
+public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
+    public var nodes: [ToriiEntrypointValueTypeNodeV1]
+
+    public init(nodes: [ToriiEntrypointValueTypeNodeV1]) {
+        self.nodes = nodes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case nodes
+    }
+
+    private struct Analysis {
+        var nodeCount: Int
+        var wordCount: Int
+        var maxDepth: Int
+        var canonicalTypeName: String
+        var coreQueryViewName: String?
+        var listElementCoreQueryViewName: String?
+    }
+
+    private static let maximumNodes = 256
+    private static let maximumDepth = 256
+    private static let coreQueryViewNames: Set<String> = [
+        "AccountView", "AssetView", "AssetDefinitionView", "DomainView", "NftView",
+    ]
+    private static let reservedIdentifiers: Set<String> = [
+        "authorize", "break", "const", "continue", "else", "enum", "error", "false",
+        "fn", "for", "hajimari", "if", "in", "int", "decimal", "quantity", "kaizen", "kotoage", "let", "match", "module",
+        "return", "seiyaku", "state", "struct", "trigger", "true", "var", "view",
+    ]
+    private static let reservedDeclarationIdentifiers: Set<String> = [
+        "int", "decimal", "quantity", "bool", "string", "bytes", "Json", "AccountId",
+        "AssetDefinitionId", "AssetId", "DomainId", "Name", "NftId", "DataSpaceId",
+        "Option", "Result", "List", "StateMap", "Secret", "AccountView", "AssetView",
+        "AssetDefinitionView", "DomainView", "NftView", "QueryPage", "AxtDescriptor",
+        "AssetHandle", "ProofBlob", "SoracloudRequest", "SoracloudResponse",
+        "state_map_get", "__kotodama_list_len", "__kotodama_list_get",
+        "__kotodama_list_try_set", "__kotodama_list_try_push", "__kotodama_list_pop",
+        "__kotodama_list_contains", "__kotodama_list_take", "__kotodama_list_enumerate",
+        "__kotodama_decimal_div_round", "__kotodama_quantity_div_round",
+    ]
+
+    fileprivate static func isCanonicalIdentifier(_ value: String) -> Bool {
+        guard !value.isEmpty, !reservedIdentifiers.contains(value) else {
+            return false
+        }
+        let scalars = Array(value.unicodeScalars)
+        guard let first = scalars.first else {
+            return false
+        }
+        func isASCIILetter(_ scalar: Unicode.Scalar) -> Bool {
+            (65...90).contains(scalar.value) || (97...122).contains(scalar.value)
+        }
+        func isASCIIDigit(_ scalar: Unicode.Scalar) -> Bool {
+            (48...57).contains(scalar.value)
+        }
+        guard isASCIILetter(first) || first.value == 95 else {
+            return false
+        }
+        return scalars.dropFirst().allSatisfy {
+            isASCIILetter($0) || isASCIIDigit($0) || $0.value == 95
+        }
+    }
+
+    fileprivate static func isCanonicalDeclarationIdentifier(_ value: String) -> Bool {
+        isCanonicalIdentifier(value)
+            && !reservedDeclarationIdentifiers.contains(value)
+            && !value.hasPrefix("__kotodama_link_")
+    }
+
+    fileprivate static func isCanonicalEntrypointName(_ value: String) -> Bool {
+        value == "hajimari" || value == "始まり" || value == "kaizen" || value == "改善"
+            || isCanonicalIdentifier(value)
+    }
+
+    private static func canonicalLeafName(_ kind: ToriiEntrypointValueKindV1) -> String {
+        switch kind {
+        case .int: return "int"
+        case .decimal: return "decimal"
+        case .quantity: return "quantity"
+        case .bool: return "bool"
+        case .string: return "string"
+        case .json: return "Json"
+        case .name: return "Name"
+        case .accountId: return "AccountId"
+        case .assetDefinitionId: return "AssetDefinitionId"
+        case .assetId: return "AssetId"
+        case .domainId: return "DomainId"
+        case .nftId: return "NftId"
+        case .dataSpaceId: return "DataSpaceId"
+        case .blob: return "bytes"
+        }
+    }
+
+    private static func isExactCoreQueryView(
+        _ descriptor: ToriiEntrypointStructTypeNodeV1,
+        childTypeNames: [String]
+    ) -> Bool {
+        let expected: ([String], [String])?
+        switch descriptor.name {
+        case "AccountView":
+            expected = (["id", "metadata"], ["AccountId", "Json"])
+        case "AssetView":
+            expected = (["id", "amount"], ["AssetId", "quantity"])
+        case "AssetDefinitionView":
+            expected = (
+                ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
+                ["AssetDefinitionId", "string", "Option<string>", "AccountId", "quantity", "Json"]
+            )
+        case "DomainView":
+            expected = (
+                ["id", "owned_by", "metadata"],
+                ["DomainId", "AccountId", "Json"]
+            )
+        case "NftView":
+            expected = (
+                ["id", "owned_by", "content"],
+                ["NftId", "AccountId", "Json"]
+            )
+        default:
+            expected = nil
+        }
+        guard let expected else {
+            return false
+        }
+        return descriptor.fields == expected.0 && childTypeNames == expected.1
+    }
+
+    private struct AnalysisFrame {
+        var remainingChildren: Int
+        var suppressWords: Bool
+    }
+
+    private struct RenderedType {
+        var canonicalTypeName: String
+        var coreQueryViewName: String?
+        var listCapacity: UInt8?
+        var listElementCoreQueryViewName: String?
+    }
+
+    private static func childCount(of node: ToriiEntrypointValueTypeNodeV1) -> Int {
+        switch node {
+        case .structType(let descriptor):
+            return descriptor.fields.count
+        case .tuple(let arity):
+            return Int(arity)
+        case .option, .list:
+            return 1
+        case .result:
+            return 2
+        case .leaf:
+            return 0
+        }
+    }
+
+    private static func takeRenderedChildren(
+        _ rendered: inout [RenderedType],
+        count: Int
+    ) -> [RenderedType]? {
+        guard rendered.count >= count else {
+            return nil
+        }
+        if count == 0 {
+            return []
+        }
+        let start = rendered.count - count
+        let children = Array(rendered[start...].reversed())
+        rendered.removeSubrange(start...)
+        return children
+    }
+
+    private func analysis() -> Analysis? {
+        guard !nodes.isEmpty, nodes.count <= Self.maximumNodes else {
+            return nil
+        }
+
+        var frames: [AnalysisFrame] = []
+        var wordCount = 0
+        var maxDepth = 0
+        for (index, node) in nodes.enumerated() {
+            while frames.last?.remainingChildren == 0 {
+                frames.removeLast()
+            }
+
+            let suppressWords: Bool
+            if index == 0 {
+                suppressWords = false
+            } else {
+                guard !frames.isEmpty, frames[frames.count - 1].remainingChildren > 0 else {
+                    return nil
+                }
+                suppressWords = frames[frames.count - 1].suppressWords
+                frames[frames.count - 1].remainingChildren -= 1
+            }
+
+            let depth = frames.count + 1
+            guard depth <= Self.maximumDepth else {
+                return nil
+            }
+            maxDepth = max(maxDepth, depth)
+
+            switch node {
+            case .structType(let descriptor):
+                guard !descriptor.fields.isEmpty,
+                      Self.isCanonicalIdentifier(descriptor.name),
+                      descriptor.fields.allSatisfy(Self.isCanonicalIdentifier),
+                      Set(descriptor.fields).count == descriptor.fields.count else {
+                    return nil
+                }
+            case .tuple(let arity):
+                guard arity >= 2 else {
+                    return nil
+                }
+            case .list(let descriptor):
+                guard (1...64).contains(descriptor.capacity) else {
+                    return nil
+                }
+            case .option, .result, .leaf:
+                break
+            }
+
+            let isHandle: Bool
+            switch node {
+            case .option, .result, .list:
+                isHandle = true
+            case .structType, .tuple, .leaf:
+                isHandle = false
+            }
+            if !suppressWords && (isHandle || Self.childCount(of: node) == 0) {
+                wordCount += 1
+            }
+            let children = Self.childCount(of: node)
+            if children != 0 {
+                frames.append(
+                    AnalysisFrame(
+                        remainingChildren: children,
+                        suppressWords: suppressWords || isHandle
+                    )
+                )
+            }
+        }
+        while frames.last?.remainingChildren == 0 {
+            frames.removeLast()
+        }
+        guard frames.isEmpty else {
+            return nil
+        }
+
+        var rendered: [RenderedType] = []
+        for node in nodes.reversed() {
+            guard let children = Self.takeRenderedChildren(
+                &rendered,
+                count: Self.childCount(of: node)
+            ) else {
+                return nil
+            }
+            let result: RenderedType
+            switch node {
+            case .structType(let descriptor):
+                let childTypeNames = children.map(\.canonicalTypeName)
+                if descriptor.name == "QueryPage" {
+                    guard descriptor.fields == ["items", "next_offset"],
+                          children.count == 2,
+                          children[0].listCapacity == 64,
+                          let viewName = children[0].listElementCoreQueryViewName,
+                          children[1].canonicalTypeName == "Option<int>" else {
+                        return nil
+                    }
+                    result = RenderedType(
+                        canonicalTypeName: "QueryPage<\(viewName)>",
+                        coreQueryViewName: nil,
+                        listCapacity: nil,
+                        listElementCoreQueryViewName: nil
+                    )
+                } else if Self.coreQueryViewNames.contains(descriptor.name) {
+                    guard Self.isExactCoreQueryView(
+                        descriptor,
+                        childTypeNames: childTypeNames
+                    ) else {
+                        return nil
+                    }
+                    result = RenderedType(
+                        canonicalTypeName: descriptor.name,
+                        coreQueryViewName: descriptor.name,
+                        listCapacity: nil,
+                        listElementCoreQueryViewName: nil
+                    )
+                } else {
+                    result = RenderedType(
+                        canonicalTypeName: "struct \(descriptor.name)",
+                        coreQueryViewName: nil,
+                        listCapacity: nil,
+                        listElementCoreQueryViewName: nil
+                    )
+                }
+            case .tuple:
+                result = RenderedType(
+                    canonicalTypeName: "(\(children.map(\.canonicalTypeName).joined(separator: ", ")))",
+                    coreQueryViewName: nil,
+                    listCapacity: nil,
+                    listElementCoreQueryViewName: nil
+                )
+            case .option:
+                guard let child = children.first else {
+                    return nil
+                }
+                result = RenderedType(
+                    canonicalTypeName: "Option<\(child.canonicalTypeName)>",
+                    coreQueryViewName: nil,
+                    listCapacity: nil,
+                    listElementCoreQueryViewName: nil
+                )
+            case .result:
+                guard children.count == 2 else {
+                    return nil
+                }
+                result = RenderedType(
+                    canonicalTypeName:
+                        "Result<\(children[0].canonicalTypeName), \(children[1].canonicalTypeName)>",
+                    coreQueryViewName: nil,
+                    listCapacity: nil,
+                    listElementCoreQueryViewName: nil
+                )
+            case .list(let descriptor):
+                guard let child = children.first else {
+                    return nil
+                }
+                result = RenderedType(
+                    canonicalTypeName: "List<\(child.canonicalTypeName), \(descriptor.capacity)>",
+                    coreQueryViewName: nil,
+                    listCapacity: descriptor.capacity,
+                    listElementCoreQueryViewName: child.coreQueryViewName
+                )
+            case .leaf(let kind):
+                result = RenderedType(
+                    canonicalTypeName: Self.canonicalLeafName(kind),
+                    coreQueryViewName: nil,
+                    listCapacity: nil,
+                    listElementCoreQueryViewName: nil
+                )
+            }
+            rendered.append(result)
+        }
+        guard rendered.count == 1, let root = rendered.first else {
+            return nil
+        }
+        return Analysis(
+            nodeCount: nodes.count,
+            wordCount: wordCount,
+            maxDepth: maxDepth,
+            canonicalTypeName: root.canonicalTypeName,
+            coreQueryViewName: root.coreQueryViewName,
+            listElementCoreQueryViewName: root.listElementCoreQueryViewName
+        )
+    }
+
+    public var wordCount: Int? {
+        analysis()?.wordCount
+    }
+
+    public var canonicalTypeName: String? {
+        analysis()?.canonicalTypeName
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: ["nodes"],
+            context: "Kotodama boundary type"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        nodes = try container.decode([ToriiEntrypointValueTypeNodeV1].self, forKey: .nodes)
+        guard analysis() != nil else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .nodes,
+                in: container,
+                debugDescription: "Kotodama boundary type is not a canonical V1 schema"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        guard analysis() != nil else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "Kotodama boundary type is not a canonical V1 schema")
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(nodes, forKey: .nodes)
+    }
+}
+
+public struct ToriiEntrypointArgumentFieldV1: Codable, Sendable, Equatable {
+    public var name: String
+    public var type: ToriiEntrypointValueTypeV1
+
+    public init(name: String, type: ToriiEntrypointValueTypeV1) {
+        self.name = name
+        self.type = type
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case type = "ty"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: ["name", "ty"],
+            context: "Kotodama argument field"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        type = try container.decode(ToriiEntrypointValueTypeV1.self, forKey: .type)
+    }
+}
+
+public struct ToriiEntrypointArgumentSchemaV1: Codable, Sendable, Equatable {
+    public var fields: [ToriiEntrypointArgumentFieldV1]
+
+    public init(fields: [ToriiEntrypointArgumentFieldV1]) {
+        self.fields = fields
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case fields
+    }
+
+    private var isCanonical: Bool {
+        let names = fields.map(\.name)
+        return (1...13).contains(fields.count)
+            && names.allSatisfy(ToriiEntrypointValueTypeV1.isCanonicalIdentifier)
+            && Set(names).count == names.count
+            && fields.allSatisfy { $0.type.wordCount != nil }
+            && fields.reduce(0) { $0 + ($1.type.wordCount ?? Int.max) } <= 13
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: ["fields"],
+            context: "Kotodama argument schema"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fields = try container.decode([ToriiEntrypointArgumentFieldV1].self, forKey: .fields)
+        guard isCanonical else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .fields,
+                in: container,
+                debugDescription: "Kotodama argument schema violates canonical V1 bounds"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        guard isCanonical else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "Kotodama argument schema violates canonical V1 bounds")
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(fields, forKey: .fields)
+    }
+}
+
+public struct ToriiContractEntrypointParameter: Codable, Sendable, Equatable {
+    public var name: String
+    public var typeName: String
+
+    public init(name: String, typeName: String) {
+        self.name = name
+        self.typeName = typeName
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case typeName = "type_name"
+    }
+
+    private var isCanonical: Bool {
+        ToriiEntrypointValueTypeV1.isCanonicalIdentifier(name)
+            && isExactContractManifestString(typeName)
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: ["name", "type_name"],
+            context: "Kotodama entrypoint parameter"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        typeName = try container.decode(String.self, forKey: .typeName)
+        guard isCanonical else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .name,
+                in: container,
+                debugDescription: "Kotodama entrypoint parameter is not canonical"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        guard isCanonical else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "Kotodama entrypoint parameter is not canonical")
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        try container.encode(typeName, forKey: .typeName)
+    }
+}
+
+public enum ToriiContractTriggerRepeats: Codable, Sendable, Equatable {
+    case indefinitely
+    case exactly(UInt32)
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: ToriiAnyCodingKey.self)
+        guard container.allKeys.count == 1, let key = container.allKeys.first else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: container.codingPath,
+                      debugDescription: "trigger repeats must contain exactly one enum variant")
+            )
+        }
+        switch key.stringValue {
+        case "Indefinitely":
+            guard try container.decodeNil(forKey: key) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: key,
+                    in: container,
+                    debugDescription: "Repeats.Indefinitely payload must be null"
+                )
+            }
+            self = .indefinitely
+        case "Exactly":
+            self = .exactly(try container.decode(UInt32.self, forKey: key))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "unsupported trigger repetition policy"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: ToriiAnyCodingKey.self)
+        switch self {
+        case .indefinitely:
+            try container.encodeNil(forKey: ToriiAnyCodingKey("Indefinitely"))
+        case .exactly(let count):
+            try container.encode(count, forKey: ToriiAnyCodingKey("Exactly"))
+        }
+    }
+}
+
+public struct ToriiContractTriggerCallback: Codable, Sendable, Equatable {
+    public var namespace: String?
+    public var entrypoint: String
+
+    public init(namespace: String? = nil, entrypoint: String) {
+        self.namespace = namespace
+        self.entrypoint = entrypoint
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case namespace
+        case entrypoint
+    }
+
+    fileprivate var isCanonical: Bool {
+        (namespace.map { isExactContractManifestString($0) } ?? true)
+            && ToriiEntrypointValueTypeV1.isCanonicalEntrypointName(entrypoint)
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: ["namespace", "entrypoint"],
+            context: "contract trigger callback"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        namespace = try container.decodeIfPresent(String.self, forKey: .namespace)
+        entrypoint = try container.decode(String.self, forKey: .entrypoint)
+        guard isCanonical else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .entrypoint,
+                in: container,
+                debugDescription: "trigger callback must use an exact namespace and canonical Kotodama selector"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        guard isCanonical else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "trigger callback must use an exact namespace and canonical Kotodama selector")
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(namespace, forKey: .namespace)
+        try container.encode(entrypoint, forKey: .entrypoint)
+    }
+}
+
+public struct ToriiContractTriggerDescriptor: Codable, Sendable, Equatable {
+    public var id: String
+    public var repeats: ToriiContractTriggerRepeats
+    public var filterBase64: String
+    public var authority: String?
+    public var metadata: [String: ToriiJSONValue]
+    public var callback: ToriiContractTriggerCallback
+
+    public init(id: String,
+                repeats: ToriiContractTriggerRepeats,
+                filterBase64: String,
+                authority: String? = nil,
+                metadata: [String: ToriiJSONValue] = [:],
+                callback: ToriiContractTriggerCallback) {
+        self.id = id
+        self.repeats = repeats
+        self.filterBase64 = filterBase64
+        self.authority = authority
+        self.metadata = metadata
+        self.callback = callback
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case repeats
+        case filterBase64 = "filter"
+        case authority
+        case metadata
+        case callback
+    }
+
+    private static func isCanonicalAuthority(_ value: String) -> Bool {
+        guard isExactContractManifestString(value),
+              let address = try? AccountAddress.parseEncoded(value, expectedPrefix: 0x02F1),
+              let rendered = try? address.toI105(networkPrefix: 0x02F1) else {
+            return false
+        }
+        return rendered == value
+    }
+
+    private var isCanonical: Bool {
+        isExactContractManifestString(id)
+            && isCanonicalContractManifestBase64(filterBase64)
+            && (authority.map(Self.isCanonicalAuthority) ?? true)
+            && callback.isCanonical
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: ["id", "repeats", "filter", "authority", "metadata", "callback"],
+            context: "contract trigger descriptor"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        repeats = try container.decode(ToriiContractTriggerRepeats.self, forKey: .repeats)
+        filterBase64 = try container.decode(String.self, forKey: .filterBase64)
+        authority = try container.decodeIfPresent(String.self, forKey: .authority)
+        metadata = try container.decode([String: ToriiJSONValue].self, forKey: .metadata)
+        callback = try container.decode(ToriiContractTriggerCallback.self, forKey: .callback)
+        guard isCanonical else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .id,
+                in: container,
+                debugDescription: "contract trigger descriptor is not canonical"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        guard isCanonical else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "contract trigger descriptor is not canonical")
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(repeats, forKey: .repeats)
+        try container.encode(filterBase64, forKey: .filterBase64)
+        try container.encode(authority, forKey: .authority)
+        try container.encode(metadata, forKey: .metadata)
+        try container.encode(callback, forKey: .callback)
+    }
+}
+
+public struct ToriiContractEntrypointDescriptor: Codable, Sendable, Equatable {
+    public var name: String
+    public var kind: ToriiContractEntrypointKind
+    public var params: [ToriiContractEntrypointParameter]
+    public var argumentSchema: ToriiEntrypointArgumentSchemaV1?
+    public var returnType: String?
+    public var returnSchema: ToriiEntrypointValueTypeV1?
+    public var permission: String?
+    public var readKeys: [String]
+    public var writeKeys: [String]
+    public var accessHintsComplete: Bool?
+    public var accessHintsSkipped: [String]
+    public var triggers: [ToriiContractTriggerDescriptor]
+
+    public init(name: String,
+                kind: ToriiContractEntrypointKind,
+                params: [ToriiContractEntrypointParameter] = [],
+                argumentSchema: ToriiEntrypointArgumentSchemaV1? = nil,
+                returnType: String? = nil,
+                returnSchema: ToriiEntrypointValueTypeV1? = nil,
+                permission: String? = nil,
+                readKeys: [String] = [],
+                writeKeys: [String] = [],
+                accessHintsComplete: Bool? = nil,
+                accessHintsSkipped: [String] = [],
+                triggers: [ToriiContractTriggerDescriptor] = []) {
+        self.name = name
+        self.kind = kind
+        self.params = params
+        self.argumentSchema = argumentSchema
+        self.returnType = returnType
+        self.returnSchema = returnSchema
+        self.permission = permission
+        self.readKeys = readKeys
+        self.writeKeys = writeKeys
+        self.accessHintsComplete = accessHintsComplete
+        self.accessHintsSkipped = accessHintsSkipped
+        self.triggers = triggers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case kind
+        case params
+        case argumentSchema = "argument_schema"
+        case returnType = "return_type"
+        case returnSchema = "return_schema"
+        case permission
+        case readKeys = "read_keys"
+        case writeKeys = "write_keys"
+        case accessHintsComplete = "access_hints_complete"
+        case accessHintsSkipped = "access_hints_skipped"
+        case triggers
+    }
+
+    private var isCanonicalV1: Bool {
+        let parameterNames = params.map(\.name)
+        let hasExactArguments: Bool
+        if params.isEmpty {
+            hasExactArguments = argumentSchema == nil
+        } else if let fields = argumentSchema?.fields, fields.count == params.count {
+            hasExactArguments = zip(params, fields).allSatisfy { pair in
+                let (parameter, field) = pair
+                return parameter.name == field.name
+                    && parameter.typeName == field.type.canonicalTypeName
+            }
+        } else {
+            hasExactArguments = false
+        }
+        let hasExactReturn: Bool
+        if returnType == nil, returnSchema == nil {
+            hasExactReturn = true
+        } else if let returnType, let returnSchema {
+            hasExactReturn = returnSchema.wordCount.map { $0 <= 13 } == true
+                && returnSchema.canonicalTypeName == returnType
+                && isExactContractManifestString(returnType)
+        } else {
+            hasExactReturn = false
+        }
+        let lifecycleMatches: Bool
+        switch kind {
+        case .hajimari:
+            lifecycleMatches = name == "hajimari" || name == "始まり"
+        case .kaizen:
+            lifecycleMatches = name == "kaizen" || name == "改善"
+        case .kotoage, .view:
+            lifecycleMatches = name != "hajimari" && name != "始まり"
+                && name != "kaizen" && name != "改善"
+        }
+        let authorizationMatches: Bool
+        switch kind {
+        case .kotoage:
+            authorizationMatches = permission.map { isExactContractManifestString($0) } == true
+        case .hajimari, .kaizen:
+            authorizationMatches = permission == nil
+        case .view:
+            authorizationMatches = permission.map { isExactContractManifestString($0) } ?? true
+        }
+        let completenessMatches = (accessHintsComplete != true || accessHintsSkipped.isEmpty)
+            && (accessHintsComplete != false || !accessHintsSkipped.isEmpty)
+        return ToriiEntrypointValueTypeV1.isCanonicalEntrypointName(name)
+            && lifecycleMatches
+            && params.count <= 13
+            && Set(parameterNames).count == parameterNames.count
+            && params.allSatisfy {
+                ToriiEntrypointValueTypeV1.isCanonicalIdentifier($0.name)
+                    && isExactContractManifestString($0.typeName)
+            }
+            && hasExactArguments
+            && hasExactReturn
+            && authorizationMatches
+            && readKeys.allSatisfy { isExactContractManifestString($0) }
+            && writeKeys.allSatisfy { isExactContractManifestString($0) }
+            && accessHintsSkipped.allSatisfy { isExactContractManifestString($0) }
+            && completenessMatches
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: [
+                "name", "kind", "params", "argument_schema", "return_type", "return_schema",
+                "permission", "read_keys", "write_keys", "access_hints_complete",
+                "access_hints_skipped", "triggers",
+            ],
+            context: "contract entrypoint descriptor"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        kind = try container.decode(ToriiContractEntrypointKind.self, forKey: .kind)
+        params = try container.decodeIfPresent(
+            [ToriiContractEntrypointParameter].self,
+            forKey: .params
+        ) ?? []
+        argumentSchema = try container.decodeIfPresent(
+            ToriiEntrypointArgumentSchemaV1.self,
+            forKey: .argumentSchema
+        )
+        returnType = try container.decodeIfPresent(String.self, forKey: .returnType)
+        returnSchema = try container.decodeIfPresent(
+            ToriiEntrypointValueTypeV1.self,
+            forKey: .returnSchema
+        )
+        permission = try container.decodeIfPresent(String.self, forKey: .permission)
+        readKeys = try container.decodeIfPresent([String].self, forKey: .readKeys) ?? []
+        writeKeys = try container.decodeIfPresent([String].self, forKey: .writeKeys) ?? []
+        accessHintsComplete = try container.decodeIfPresent(Bool.self, forKey: .accessHintsComplete)
+        accessHintsSkipped = try container.decodeIfPresent(
+            [String].self,
+            forKey: .accessHintsSkipped
+        ) ?? []
+        triggers = try container.decodeIfPresent(
+            [ToriiContractTriggerDescriptor].self,
+            forKey: .triggers
+        ) ?? []
+        guard isCanonicalV1 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .name,
+                in: container,
+                debugDescription: "Entrypoint descriptor is not a canonical exact V1 interface"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        guard isCanonicalV1 else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "Entrypoint descriptor is not a canonical exact V1 interface")
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(params, forKey: .params)
+        try container.encode(argumentSchema, forKey: .argumentSchema)
+        try container.encode(returnType, forKey: .returnType)
+        try container.encode(returnSchema, forKey: .returnSchema)
+        try container.encode(permission, forKey: .permission)
+        try container.encode(readKeys, forKey: .readKeys)
+        try container.encode(writeKeys, forKey: .writeKeys)
+        try container.encode(accessHintsComplete, forKey: .accessHintsComplete)
+        try container.encode(accessHintsSkipped, forKey: .accessHintsSkipped)
+        try container.encode(triggers, forKey: .triggers)
+    }
+}
+
+public struct ToriiContractStateDescriptor: Codable, Sendable, Equatable {
+    public var name: String
+    public var typeName: String
+
+    public init(name: String, typeName: String) {
+        self.name = name
+        self.typeName = typeName
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case typeName = "type_name"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: ["name", "type_name"],
+            context: "contract state descriptor"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        typeName = try container.decode(String.self, forKey: .typeName)
+        guard ToriiEntrypointValueTypeV1.isCanonicalDeclarationIdentifier(name),
+              isExactContractManifestString(typeName) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .name,
+                in: container,
+                debugDescription: "Kotodama state descriptor requires a canonical name and type"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        guard ToriiEntrypointValueTypeV1.isCanonicalDeclarationIdentifier(name),
+              isExactContractManifestString(typeName) else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "Kotodama state descriptor requires a canonical name and type")
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        try container.encode(typeName, forKey: .typeName)
+    }
+}
+
+public struct ToriiContractErrorCodeDescriptor: Codable, Sendable, Equatable {
+    public var namespace: String
+    public var name: String
+    public var code: UInt32
+
+    public init(namespace: String, name: String, code: UInt32) {
+        self.namespace = namespace
+        self.name = name
+        self.code = code
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case namespace
+        case name
+        case code
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: ["namespace", "name", "code"],
+            context: "contract error descriptor"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        namespace = try container.decode(String.self, forKey: .namespace)
+        name = try container.decode(String.self, forKey: .name)
+        code = try container.decode(UInt32.self, forKey: .code)
+        guard ToriiEntrypointValueTypeV1.isCanonicalDeclarationIdentifier(namespace),
+              ToriiEntrypointValueTypeV1.isCanonicalIdentifier(name),
+              code != 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .code,
+                in: container,
+                debugDescription: "Kotodama error descriptors require names and a non-zero u32 code"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        guard ToriiEntrypointValueTypeV1.isCanonicalDeclarationIdentifier(namespace),
+              ToriiEntrypointValueTypeV1.isCanonicalIdentifier(name),
+              code != 0 else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "Kotodama error descriptors require names and a non-zero u32 code")
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(namespace, forKey: .namespace)
+        try container.encode(name, forKey: .name)
+        try container.encode(code, forKey: .code)
+    }
+}
+
+public struct ToriiContractKotobaTranslation: Codable, Sendable, Equatable {
+    public var language: String
+    public var text: String
+
+    public init(language: String, text: String) {
+        self.language = language
+        self.text = text
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case language = "lang"
+        case text
+    }
+
+    private var isCanonical: Bool {
+        isExactContractManifestString(language)
+            && isExactContractManifestString(text, allowEmpty: true)
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: ["lang", "text"],
+            context: "kotoba translation"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        language = try container.decode(String.self, forKey: .language)
+        text = try container.decode(String.self, forKey: .text)
+        guard isCanonical else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .language,
+                in: container,
+                debugDescription: "kotoba translation language and text must be exact strings"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        guard isCanonical else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "kotoba translation language and text must be exact strings")
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(language, forKey: .language)
+        try container.encode(text, forKey: .text)
+    }
+}
+
+public struct ToriiContractKotobaTranslationEntry: Codable, Sendable, Equatable {
+    public var messageId: String
+    public var translations: [ToriiContractKotobaTranslation]
+
+    public init(messageId: String, translations: [ToriiContractKotobaTranslation]) {
+        self.messageId = messageId
+        self.translations = translations
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case messageId = "msg_id"
+        case translations
+    }
+
+    private var isCanonical: Bool {
+        isExactContractManifestString(messageId)
+            && Set(translations.map(\.language)).count == translations.count
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: ["msg_id", "translations"],
+            context: "kotoba translation entry"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        messageId = try container.decode(String.self, forKey: .messageId)
+        translations = try container.decode(
+            [ToriiContractKotobaTranslation].self,
+            forKey: .translations
+        )
+        guard isCanonical else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .messageId,
+                in: container,
+                debugDescription: "kotoba entry must use an exact message id and unique languages"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        guard isCanonical else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "kotoba entry must use an exact message id and unique languages")
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(messageId, forKey: .messageId)
+        try container.encode(translations, forKey: .translations)
+    }
+}
+
+public struct ToriiContractManifestProvenance: Codable, Sendable, Equatable {
+    public var signer: String
+    public var signature: String
+
+    public init(signer: String, signature: String) {
+        self.signer = signer
+        self.signature = signature
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case signer
+        case signature
+    }
+
+    private var isCanonical: Bool {
+        isExactContractManifestString(signer) && isExactContractManifestString(signature)
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: ["signer", "signature"],
+            context: "contract manifest provenance"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        signer = try container.decode(String.self, forKey: .signer)
+        signature = try container.decode(String.self, forKey: .signature)
+        guard isCanonical else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: container.codingPath,
+                      debugDescription: "contract manifest provenance fields must be exact non-empty strings")
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        guard isCanonical else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "contract manifest provenance fields must be exact non-empty strings")
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(signer, forKey: .signer)
+        try container.encode(signature, forKey: .signature)
     }
 }
 
 public struct ToriiContractManifest: Codable, Sendable, Equatable {
+    public var seiyakuName: String?
     public var codeHash: String?
     public var abiHash: String?
     public var compilerFingerprint: String?
     public var featuresBitmap: UInt64?
     public var accessSetHints: ToriiContractAccessSetHints?
+    public var entrypoints: [ToriiContractEntrypointDescriptor]?
+    public var states: [ToriiContractStateDescriptor]?
+    public var errorCodes: [ToriiContractErrorCodeDescriptor]?
+    public var kotoba: [ToriiContractKotobaTranslationEntry]?
+    public var provenance: ToriiContractManifestProvenance?
 
-    public init(codeHash: String? = nil,
+    public init(seiyakuName: String? = nil,
+                codeHash: String? = nil,
                 abiHash: String? = nil,
                 compilerFingerprint: String? = nil,
                 featuresBitmap: UInt64? = nil,
-                accessSetHints: ToriiContractAccessSetHints? = nil) {
+                accessSetHints: ToriiContractAccessSetHints? = nil,
+                entrypoints: [ToriiContractEntrypointDescriptor]? = nil,
+                states: [ToriiContractStateDescriptor]? = nil,
+                errorCodes: [ToriiContractErrorCodeDescriptor]? = nil,
+                kotoba: [ToriiContractKotobaTranslationEntry]? = nil,
+                provenance: ToriiContractManifestProvenance? = nil) {
+        self.seiyakuName = seiyakuName
         self.codeHash = codeHash
         self.abiHash = abiHash
         self.compilerFingerprint = compilerFingerprint
         self.featuresBitmap = featuresBitmap
         self.accessSetHints = accessSetHints
+        self.entrypoints = entrypoints
+        self.states = states
+        self.errorCodes = errorCodes
+        self.kotoba = kotoba
+        self.provenance = provenance
     }
 
     private enum CodingKeys: String, CodingKey {
+        case seiyakuName = "seiyaku_name"
         case codeHash = "code_hash"
         case abiHash = "abi_hash"
         case compilerFingerprint = "compiler_fingerprint"
         case featuresBitmap = "features_bitmap"
         case accessSetHints = "access_set_hints"
+        case entrypoints
+        case states
+        case errorCodes = "error_codes"
+        case kotoba
+        case provenance
+    }
+
+    private var canonicalFailure: String? {
+        if let seiyakuName,
+           !ToriiEntrypointValueTypeV1.isCanonicalDeclarationIdentifier(seiyakuName) {
+            return "seiyaku_name must be a canonical non-reserved Kotodama declaration"
+        }
+        if let compilerFingerprint,
+           !isExactContractManifestString(compilerFingerprint) {
+            return "compiler_fingerprint must be an exact non-empty string"
+        }
+        if let featuresBitmap, (featuresBitmap & ~UInt64(3)) != 0 {
+            return "features_bitmap contains unsupported Kotodama V1 bits"
+        }
+        if let entrypoints {
+            let names = entrypoints.map(\.name)
+            if Set(names).count != names.count {
+                return "entrypoint names must be unique"
+            }
+            if entrypoints.filter({ $0.kind == .hajimari }).count > 1
+                || entrypoints.filter({ $0.kind == .kaizen }).count > 1 {
+                return "lifecycle entrypoints must be unique"
+            }
+            let kinds = Dictionary(uniqueKeysWithValues: entrypoints.map { ($0.name, $0.kind) })
+            var triggerIds = Set<String>()
+            for descriptor in entrypoints {
+                for trigger in descriptor.triggers {
+                    if !triggerIds.insert(trigger.id).inserted {
+                        return "trigger ids must be globally unique"
+                    }
+                    if trigger.callback.namespace == nil,
+                       kinds[trigger.callback.entrypoint] != .kotoage {
+                        return "local trigger callbacks must target a declared kotoage entrypoint"
+                    }
+                }
+            }
+        }
+        if let states, Set(states.map(\.name)).count != states.count {
+            return "state names must be unique"
+        }
+        if let errorCodes {
+            let paths = errorCodes.map { "\($0.namespace)::\($0.name)" }
+            if Set(paths).count != paths.count || Set(errorCodes.map(\.code)).count != errorCodes.count {
+                return "error paths and numeric codes must be unique"
+            }
+        }
+        if let kotoba, Set(kotoba.map(\.messageId)).count != kotoba.count {
+            return "kotoba message ids must be unique"
+        }
+        return nil
     }
 
     public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: [
+                "seiyaku_name", "code_hash", "abi_hash", "compiler_fingerprint",
+                "features_bitmap", "access_set_hints", "entrypoints", "states",
+                "error_codes", "kotoba", "provenance",
+            ],
+            context: "contract manifest"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        if let codeHash = try container.decodeIfPresent(String.self, forKey: .codeHash) {
-            self.codeHash = try ToriiValidation.normalized32ByteHex(
-                codeHash,
-                field: "code_hash",
-                codingPath: container.codingPath + [CodingKeys.codeHash]
+        if let seiyakuName = try container.decodeIfPresent(String.self, forKey: .seiyakuName) {
+            let normalized = try ToriiValidation.normalizedNonEmpty(
+                seiyakuName,
+                field: "seiyaku_name",
+                codingPath: container.codingPath + [CodingKeys.seiyakuName]
             )
+            guard normalized == seiyakuName,
+                  ToriiEntrypointValueTypeV1.isCanonicalDeclarationIdentifier(normalized) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .seiyakuName,
+                    in: container,
+                    debugDescription: "seiyaku_name must be a canonical Kotodama identifier"
+                )
+            }
+            self.seiyakuName = normalized
+        } else {
+            self.seiyakuName = nil
+        }
+        if let codeHash = try container.decodeIfPresent(String.self, forKey: .codeHash) {
+            guard let normalized = ToriiCanonicalHashLiteral.normalizedHex(from: codeHash) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .codeHash,
+                    in: container,
+                    debugDescription: "code_hash must be one canonical checksummed Norito Hash literal"
+                )
+            }
+            self.codeHash = normalized
         } else {
             self.codeHash = nil
         }
         if let abiHash = try container.decodeIfPresent(String.self, forKey: .abiHash) {
-            self.abiHash = try ToriiValidation.normalized32ByteHex(
-                abiHash,
-                field: "abi_hash",
-                codingPath: container.codingPath + [CodingKeys.abiHash]
-            )
+            guard let normalized = ToriiCanonicalHashLiteral.normalizedHex(from: abiHash) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .abiHash,
+                    in: container,
+                    debugDescription: "abi_hash must be one canonical checksummed Norito Hash literal"
+                )
+            }
+            self.abiHash = normalized
         } else {
             self.abiHash = nil
         }
@@ -10688,25 +12429,86 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
         featuresBitmap = try container.decodeIfPresent(UInt64.self, forKey: .featuresBitmap)
         accessSetHints = try container.decodeIfPresent(ToriiContractAccessSetHints.self,
                                                        forKey: .accessSetHints)
+        entrypoints = try container.decodeIfPresent(
+            [ToriiContractEntrypointDescriptor].self,
+            forKey: .entrypoints
+        )
+        states = try container.decodeIfPresent([ToriiContractStateDescriptor].self, forKey: .states)
+        errorCodes = try container.decodeIfPresent(
+            [ToriiContractErrorCodeDescriptor].self,
+            forKey: .errorCodes
+        )
+        kotoba = try container.decodeIfPresent(
+            [ToriiContractKotobaTranslationEntry].self,
+            forKey: .kotoba
+        )
+        provenance = try container.decodeIfPresent(
+            ToriiContractManifestProvenance.self,
+            forKey: .provenance
+        )
+        if let canonicalFailure {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: container.codingPath,
+                      debugDescription: "contract manifest is not canonical: \(canonicalFailure)")
+            )
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        if let codeHash {
-            try container.encode(
-                try ToriiRequestValidation.normalized32ByteHex(codeHash, field: "code_hash"),
-                forKey: .codeHash
+        if let canonicalFailure {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "contract manifest is not canonical: \(canonicalFailure)")
             )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let seiyakuName {
+            guard ToriiEntrypointValueTypeV1.isCanonicalDeclarationIdentifier(seiyakuName) else {
+                throw EncodingError.invalidValue(
+                    seiyakuName,
+                    .init(codingPath: encoder.codingPath,
+                          debugDescription: "seiyaku_name must be a canonical Kotodama identifier")
+                )
+            }
+            try container.encode(
+                try ToriiRequestValidation.normalizedNonEmpty(
+                    seiyakuName,
+                    field: "seiyaku_name"
+                ),
+                forKey: .seiyakuName
+            )
+        } else {
+            try container.encodeNil(forKey: .seiyakuName)
+        }
+        if let codeHash {
+            guard let literal = ToriiCanonicalHashLiteral.literal(fromNormalizedHex: codeHash) else {
+                throw ToriiClientError.invalidPayload(
+                    "code_hash must be canonical lowercase 64-hex with the Iroha hash marker bit set"
+                )
+            }
+            try container.encode(literal, forKey: .codeHash)
+        } else {
+            try container.encodeNil(forKey: .codeHash)
         }
         if let abiHash {
-            try container.encode(
-                try ToriiRequestValidation.normalized32ByteHex(abiHash, field: "abi_hash"),
-                forKey: .abiHash
-            )
+            guard let literal = ToriiCanonicalHashLiteral.literal(fromNormalizedHex: abiHash) else {
+                throw ToriiClientError.invalidPayload(
+                    "abi_hash must be canonical lowercase 64-hex with the Iroha hash marker bit set"
+                )
+            }
+            try container.encode(literal, forKey: .abiHash)
+        } else {
+            try container.encodeNil(forKey: .abiHash)
         }
-        try container.encodeIfPresent(compilerFingerprint, forKey: .compilerFingerprint)
-        try container.encodeIfPresent(featuresBitmap, forKey: .featuresBitmap)
-        try container.encodeIfPresent(accessSetHints, forKey: .accessSetHints)
+        try container.encode(compilerFingerprint, forKey: .compilerFingerprint)
+        try container.encode(featuresBitmap, forKey: .featuresBitmap)
+        try container.encode(accessSetHints, forKey: .accessSetHints)
+        try container.encode(entrypoints, forKey: .entrypoints)
+        try container.encode(states, forKey: .states)
+        try container.encode(errorCodes, forKey: .errorCodes)
+        try container.encode(kotoba, forKey: .kotoba)
+        try container.encode(provenance, forKey: .provenance)
     }
 }
 
@@ -10751,25 +12553,62 @@ public struct ToriiRegisterContractCodeRequest: Encodable, Sendable {
 
 public struct ToriiContractManifestRecord: Decodable, Sendable {
     public let manifest: ToriiContractManifest
-    public let codeBytes: String?
+    public let codeHash: String?
+    public let abiHash: String?
 
     private enum CodingKeys: String, CodingKey {
         case manifest
+        case codeHash = "code_hash"
+        case abiHash = "abi_hash"
         case codeBytes = "code_bytes"
     }
 
     public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(
+            from: decoder,
+            allowed: ["manifest", "code_hash", "abi_hash", "code_bytes"],
+            context: "contract manifest response"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        manifest = try container.decode(ToriiContractManifest.self, forKey: .manifest)
-        if let codeBytes = try container.decodeIfPresent(String.self, forKey: .codeBytes) {
-            self.codeBytes = try ToriiValidation.normalizedBase64(
-                codeBytes,
-                field: "code_bytes",
-                codingPath: container.codingPath + [CodingKeys.codeBytes]
+        guard !container.contains(.codeBytes) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .codeBytes,
+                in: container,
+                debugDescription: "contract manifest responses must not inline code_bytes"
             )
-        } else {
-            self.codeBytes = nil
         }
+        manifest = try container.decode(ToriiContractManifest.self, forKey: .manifest)
+        let rawCodeHash = try container.decodeIfPresent(String.self, forKey: .codeHash)
+        let rawAbiHash = try container.decodeIfPresent(String.self, forKey: .abiHash)
+        let normalizedCodeHash = try rawCodeHash.map { value in
+            guard let normalized = ToriiCanonicalHashLiteral.normalizedConvenienceHex(value) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .codeHash,
+                    in: container,
+                    debugDescription: "code_hash must be canonical lowercase 64-hex"
+                )
+            }
+            return normalized
+        }
+        let normalizedAbiHash = try rawAbiHash.map { value in
+            guard let normalized = ToriiCanonicalHashLiteral.normalizedConvenienceHex(value) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .abiHash,
+                    in: container,
+                    debugDescription: "abi_hash must be canonical lowercase 64-hex"
+                )
+            }
+            return normalized
+        }
+        guard normalizedCodeHash == manifest.codeHash,
+              normalizedAbiHash == manifest.abiHash else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: container.codingPath,
+                      debugDescription: "top-level contract hash conveniences must exactly match the canonical manifest hashes")
+            )
+        }
+        codeHash = manifest.codeHash
+        abiHash = manifest.abiHash
     }
 }
 
@@ -10814,7 +12653,7 @@ public struct ToriiDeployContractResponse: Decodable, Sendable {
     public let contractAlias: String
     public let contractAddress: String
     public let previousContractAddress: String?
-    public let upgraded: Bool
+    public let kaizen: Bool
     public let dataspace: String
     public let deployNonce: UInt64
     public let txHashHex: String
@@ -10827,7 +12666,7 @@ public struct ToriiDeployContractResponse: Decodable, Sendable {
         case contractAlias = "contract_alias"
         case contractAddress = "contract_address"
         case previousContractAddress = "previous_contract_address"
-        case upgraded
+        case kaizen
         case dataspace
         case deployNonce = "deploy_nonce"
         case txHashHex = "tx_hash_hex"
@@ -10857,7 +12696,7 @@ public struct ToriiDeployContractResponse: Decodable, Sendable {
         } else {
             self.previousContractAddress = nil
         }
-        upgraded = try container.decode(Bool.self, forKey: .upgraded)
+        kaizen = try container.decode(Bool.self, forKey: .kaizen)
         dataspace = try ToriiValidation.normalizedNonEmpty(
             try container.decode(String.self, forKey: .dataspace),
             field: "dataspace",
@@ -10908,7 +12747,7 @@ public struct ToriiContractCallRequest: Encodable, Sendable {
     public var signatureB64: String?
     public var contractAddress: String?
     public var contractAlias: String?
-    public var entrypoint: String?
+    public var entrypoint: String
     public var payload: ToriiJSONValue?
     public var creationTimeMs: UInt64?
     public var gasAssetId: String?
@@ -10920,7 +12759,7 @@ public struct ToriiContractCallRequest: Encodable, Sendable {
                 signatureB64: String? = nil,
                 contractAddress: String? = nil,
                 contractAlias: String? = nil,
-                entrypoint: String? = nil,
+                entrypoint: String,
                 payload: ToriiJSONValue? = nil,
                 creationTimeMs: UInt64? = nil,
                 gasAssetId: String? = nil,
@@ -10967,9 +12806,10 @@ public struct ToriiContractCallRequest: Encodable, Sendable {
             contractAlias: contractAlias,
             field: "contract call"
         )
-        let normalizedEntrypoint = try entrypoint.map {
-            try ToriiRequestValidation.normalizedNonEmpty($0, field: "entrypoint")
-        }
+        let normalizedEntrypoint = try ToriiRequestValidation.normalizedNonEmpty(
+            entrypoint,
+            field: "entrypoint"
+        )
         let normalizedGasAssetId = try gasAssetId.map {
             try normalizeToriiAssetIdQueryValue($0, field: "gas_asset_id")
         }
@@ -10986,12 +12826,112 @@ public struct ToriiContractCallRequest: Encodable, Sendable {
         try container.encodeIfPresent(normalizedSignatureB64, forKey: .signatureB64)
         try container.encodeIfPresent(normalizedTarget.contractAddress, forKey: .contractAddress)
         try container.encodeIfPresent(normalizedTarget.contractAlias, forKey: .contractAlias)
-        try container.encodeIfPresent(normalizedEntrypoint, forKey: .entrypoint)
+        try container.encode(normalizedEntrypoint, forKey: .entrypoint)
         try container.encodeIfPresent(payload, forKey: .payload)
         try container.encodeIfPresent(creationTimeMs, forKey: .creationTimeMs)
         try container.encodeIfPresent(normalizedGasAssetId, forKey: .gasAssetId)
         try container.encodeIfPresent(normalizedFeeSponsor, forKey: .feeSponsor)
         try container.encode(gasLimit, forKey: .gasLimit)
+    }
+}
+
+public struct ToriiContractOperationReceipt: Decodable, Sendable {
+    public let operationKind: String
+    public let status: String
+    public let transport: String
+    public let dataspace: String
+    public let contractAlias: String?
+    public let contractAddress: String?
+    public let codeHashHex: String?
+    public let abiHashHex: String?
+    public let txHashHex: String?
+    public let entrypoint: String?
+    public let entrypointHashHex: String?
+    public let gasLimit: UInt64?
+    public let gasUsed: UInt64?
+    public let gasAssetId: String?
+    public let feeSponsor: String?
+    public let payloadDigestHex: String
+
+    private enum CodingKeys: String, CodingKey {
+        case operationKind = "operation_kind"
+        case status
+        case transport
+        case dataspace
+        case contractAlias = "contract_alias"
+        case contractAddress = "contract_address"
+        case codeHashHex = "code_hash_hex"
+        case abiHashHex = "abi_hash_hex"
+        case txHashHex = "tx_hash_hex"
+        case entrypoint
+        case entrypointHashHex = "entrypoint_hash_hex"
+        case gasLimit = "gas_limit"
+        case gasUsed = "gas_used"
+        case gasAssetId = "gas_asset_id"
+        case feeSponsor = "fee_sponsor"
+        case payloadDigestHex = "payload_digest_hex"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        func requiredString(_ key: CodingKeys, field: String) throws -> String {
+            try ToriiValidation.normalizedNonEmpty(
+                container.decode(String.self, forKey: key),
+                field: field,
+                codingPath: container.codingPath + [key]
+            )
+        }
+
+        func optionalString(_ key: CodingKeys, field: String) throws -> String? {
+            guard let value = try container.decodeIfPresent(String.self, forKey: key) else {
+                return nil
+            }
+            return try ToriiValidation.normalizedNonEmpty(
+                value,
+                field: field,
+                codingPath: container.codingPath + [key]
+            )
+        }
+
+        func optionalHash(_ key: CodingKeys, field: String) throws -> String? {
+            guard let value = try container.decodeIfPresent(String.self, forKey: key) else {
+                return nil
+            }
+            return try ToriiValidation.normalized32ByteHex(
+                value,
+                field: field,
+                codingPath: container.codingPath + [key]
+            )
+        }
+
+        operationKind = try requiredString(.operationKind, field: "operation_kind")
+        status = try requiredString(.status, field: "status")
+        transport = try requiredString(.transport, field: "transport")
+        dataspace = try requiredString(.dataspace, field: "dataspace")
+        contractAlias = try optionalString(.contractAlias, field: "contract_alias")
+        contractAddress = try optionalString(.contractAddress, field: "contract_address")
+        codeHashHex = try optionalHash(.codeHashHex, field: "code_hash_hex")
+        abiHashHex = try optionalHash(.abiHashHex, field: "abi_hash_hex")
+        txHashHex = try optionalHash(.txHashHex, field: "tx_hash_hex")
+        entrypoint = try optionalString(.entrypoint, field: "entrypoint")
+        entrypointHashHex = try optionalHash(.entrypointHashHex, field: "entrypoint_hash_hex")
+        gasLimit = try container.decodeIfPresent(UInt64.self, forKey: .gasLimit)
+        if gasLimit == 0 {
+            throw DecodingError.dataCorruptedError(
+                forKey: .gasLimit,
+                in: container,
+                debugDescription: "gas_limit must be greater than zero"
+            )
+        }
+        gasUsed = try container.decodeIfPresent(UInt64.self, forKey: .gasUsed)
+        gasAssetId = try optionalString(.gasAssetId, field: "gas_asset_id")
+        feeSponsor = try optionalString(.feeSponsor, field: "fee_sponsor")
+        payloadDigestHex = try ToriiValidation.normalized32ByteHex(
+            container.decode(String.self, forKey: .payloadDigestHex),
+            field: "payload_digest_hex",
+            codingPath: container.codingPath + [CodingKeys.payloadDigestHex]
+        )
     }
 }
 
@@ -11005,10 +12945,13 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
     public let creationTimeMs: UInt64
     public let txHashHex: String?
     public let pipelineStatus: ToriiPipelineTransactionStatus?
+    public let transactionTtlMs: UInt64?
+    public let entrypointHashHex: String?
     public let transactionScaffoldB64: String?
     public let signedTransactionB64: String?
     public let signingMessageB64: String?
     public let entrypoint: String?
+    public let operationReceipt: ToriiContractOperationReceipt
 
     private enum CodingKeys: String, CodingKey {
         case ok
@@ -11020,10 +12963,13 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
         case creationTimeMs = "creation_time_ms"
         case txHashHex = "tx_hash_hex"
         case pipelineStatus = "pipeline_status"
+        case transactionTtlMs = "transaction_ttl_ms"
+        case entrypointHashHex = "entrypoint_hash_hex"
         case transactionScaffoldB64 = "transaction_scaffold_b64"
         case signedTransactionB64 = "signed_transaction_b64"
         case signingMessageB64 = "signing_message_b64"
         case entrypoint
+        case operationReceipt = "operation_receipt"
     }
 
     public init(from decoder: Decoder) throws {
@@ -11066,6 +13012,16 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
             self.txHashHex = nil
         }
         self.pipelineStatus = try container.decodeIfPresent(ToriiPipelineTransactionStatus.self, forKey: .pipelineStatus)
+        transactionTtlMs = try container.decodeIfPresent(UInt64.self, forKey: .transactionTtlMs)
+        if let entrypointHashHex = try container.decodeIfPresent(String.self, forKey: .entrypointHashHex) {
+            self.entrypointHashHex = try ToriiValidation.normalized32ByteHex(
+                entrypointHashHex,
+                field: "entrypoint_hash_hex",
+                codingPath: container.codingPath + [CodingKeys.entrypointHashHex]
+            )
+        } else {
+            self.entrypointHashHex = nil
+        }
         if let transactionScaffoldB64 = try container.decodeIfPresent(String.self, forKey: .transactionScaffoldB64) {
             self.transactionScaffoldB64 = try ToriiValidation.normalizedBase64(
                 transactionScaffoldB64,
@@ -11093,7 +13049,16 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
         } else {
             self.signingMessageB64 = nil
         }
-        entrypoint = try container.decodeIfPresent(String.self, forKey: .entrypoint)
+        if let entrypoint = try container.decodeIfPresent(String.self, forKey: .entrypoint) {
+            self.entrypoint = try ToriiValidation.normalizedNonEmpty(
+                entrypoint,
+                field: "entrypoint",
+                codingPath: container.codingPath + [CodingKeys.entrypoint]
+            )
+        } else {
+            self.entrypoint = nil
+        }
+        operationReceipt = try container.decode(ToriiContractOperationReceipt.self, forKey: .operationReceipt)
     }
 }
 
@@ -14266,7 +16231,9 @@ public struct ToriiNativeAmxReceipt: Decodable, Sendable, Equatable {
             "\($0.laneId):\($0.dataspaceId):\($0.prepareQc.body.participantLaneIncarnation)"
         })
         let entrypointHashes = Set(legs.map { $0.prepareQc.body.transactionEntrypointHash })
-        guard legs.count <= 256,
+        // The protocol's 256-leg plan budget includes the coordinator;
+        // receipts therefore carry at most 255 participant legs.
+        guard legs.count <= 255,
               routeKeys.count == legs.count,
               entrypointHashes.count == 1,
               legs.allSatisfy({ leg in
@@ -15603,7 +17570,7 @@ private struct ToriiSumeragiV2DynamicCodingKey: CodingKey {
         self.intValue = intValue
     }
 }
-/// Commit QC record returned by `/v1/sumeragi/commit_qc/{hash}`.
+/// Commit QC record returned by `/v1/sumeragi/commit-qcs/{block_hash}`.
 public struct ToriiSumeragiCommitQcRecord: Decodable, Sendable, Equatable {
     public let subjectBlockHash: String
     public let commitQc: ToriiSumeragiCommitQc?
@@ -15614,7 +17581,7 @@ public struct ToriiSumeragiCommitQcRecord: Decodable, Sendable, Equatable {
     }
 }
 
-/// Full commit QC details returned by `/v1/sumeragi/commit_qc/{hash}`.
+/// Full commit QC details returned by `/v1/sumeragi/commit-qcs/{block_hash}`.
 public struct ToriiSumeragiCommitQc: Decodable, Sendable, Equatable {
     public let phase: String
     public let parentStateRoot: String
@@ -15725,6 +17692,22 @@ public struct ToriiProverReportsFilter: Sendable {
     }
 }
 
+/// A terminal error emitted after a Torii server-sent event stream has started.
+public struct ToriiStreamError: Error, Sendable, Equatable {
+    /// Stable machine-readable stream error code.
+    public let code: String
+    /// Human-readable terminal error message.
+    public let message: String
+    /// Number of broadcast messages skipped before termination, when reported.
+    public let droppedMessages: UInt64?
+    /// Whether the server can replay the missing portion of this stream.
+    public let replayAvailable: Bool
+}
+
+extension ToriiStreamError: LocalizedError {
+    public var errorDescription: String? { message }
+}
+
 public enum ToriiClientError: Error, Sendable {
     case invalidURL(String)
     case transport(Swift.Error)
@@ -15733,6 +17716,7 @@ public enum ToriiClientError: Error, Sendable {
     case httpStatus(code: Int, message: String?, rejectCode: String?)
     case decoding(Swift.Error)
     case invalidPayload(String)
+    case stream(ToriiStreamError)
     case dataModelMismatch(expected: Int, actual: Int?)
     case transactionSchemaMismatch(expected: String, actual: String?)
 }
@@ -15758,6 +17742,8 @@ extension ToriiClientError: LocalizedError {
             return "Failed to decode Torii response: \(Self.describeDecodingError(error))"
         case .invalidPayload(let reason):
             return "Torii response payload was invalid: \(reason)"
+        case .stream(let error):
+            return "Torii event stream terminated with \(error.code): \(error.message)"
         case let .dataModelMismatch(expected, actual):
             if let actual {
                 return "Torii data model version mismatch (expected \(expected), got \(actual))."
@@ -15881,281 +17867,6 @@ public extension ToriiTransactionEntrypointSubmitting where Self: Sendable {
     }
 }
 
-/// Request payload for `POST /v1/bridge/proofs/submit`.
-public struct ToriiBridgeProofSubmitRequest: Encodable, Sendable, Equatable {
-    public let authority: String
-    public let privateKey: ToriiJSONValue?
-    public let publicKeyHex: String?
-    public let signatureB64: String?
-    public let burnBundle: ToriiJSONValue?
-    public let messageBundle: ToriiJSONValue?
-    public let networkIdHex: String?
-    public let verifierAddressHex: String?
-    public let bridgeAddressHex: String?
-    public let verifierCodeHashHex: String?
-    public let verifierKeyHashHex: String?
-    public let expectedDestinationBindingHashHex: String?
-    public let tronVerifierAddress: String?
-    public let proofBytesHex: String?
-    public let creationTimeMs: ToriiJSONValue?
-
-    public init(authority: String,
-                privateKey: ToriiJSONValue? = nil,
-                publicKeyHex: String? = nil,
-                signatureB64: String? = nil,
-                burnBundle: ToriiJSONValue? = nil,
-                messageBundle: ToriiJSONValue? = nil,
-                networkIdHex: String? = nil,
-                verifierAddressHex: String? = nil,
-                bridgeAddressHex: String? = nil,
-                verifierCodeHashHex: String? = nil,
-                verifierKeyHashHex: String? = nil,
-                expectedDestinationBindingHashHex: String? = nil,
-                tronVerifierAddress: String? = nil,
-                proofBytesHex: String? = nil,
-                creationTimeMs: ToriiJSONValue? = nil) {
-        self.authority = authority
-        self.privateKey = privateKey
-        self.publicKeyHex = publicKeyHex
-        self.signatureB64 = signatureB64
-        self.burnBundle = burnBundle
-        self.messageBundle = messageBundle
-        self.networkIdHex = networkIdHex
-        self.verifierAddressHex = verifierAddressHex
-        self.bridgeAddressHex = bridgeAddressHex
-        self.verifierCodeHashHex = verifierCodeHashHex
-        self.verifierKeyHashHex = verifierKeyHashHex
-        self.expectedDestinationBindingHashHex = expectedDestinationBindingHashHex
-        self.tronVerifierAddress = tronVerifierAddress
-        self.proofBytesHex = proofBytesHex
-        self.creationTimeMs = creationTimeMs
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case authority
-        case privateKey = "private_key"
-        case publicKeyHex = "public_key_hex"
-        case signatureB64 = "signature_b64"
-        case burnBundle = "burn_bundle"
-        case messageBundle = "message_bundle"
-        case networkIdHex = "network_id_hex"
-        case verifierAddressHex = "verifier_address_hex"
-        case bridgeAddressHex = "bridge_address_hex"
-        case verifierCodeHashHex = "verifier_code_hash_hex"
-        case verifierKeyHashHex = "verifier_key_hash_hex"
-        case expectedDestinationBindingHashHex = "expected_destination_binding_hash_hex"
-        case tronVerifierAddress = "tron_verifier_address"
-        case proofBytesHex = "proof_bytes_hex"
-        case creationTimeMs = "creation_time_ms"
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        let normalizedSignatureB64 = try signatureB64.map {
-            try ToriiRequestValidation.normalizedExactBase64($0, field: "signature_b64")
-        }
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(authority, forKey: .authority)
-        try container.encodeIfPresent(privateKey, forKey: .privateKey)
-        try container.encodeIfPresent(publicKeyHex, forKey: .publicKeyHex)
-        try container.encodeIfPresent(normalizedSignatureB64, forKey: .signatureB64)
-        try container.encodeIfPresent(burnBundle, forKey: .burnBundle)
-        try container.encodeIfPresent(messageBundle, forKey: .messageBundle)
-        try container.encodeIfPresent(networkIdHex, forKey: .networkIdHex)
-        try container.encodeIfPresent(verifierAddressHex, forKey: .verifierAddressHex)
-        try container.encodeIfPresent(bridgeAddressHex, forKey: .bridgeAddressHex)
-        try container.encodeIfPresent(verifierCodeHashHex, forKey: .verifierCodeHashHex)
-        try container.encodeIfPresent(verifierKeyHashHex, forKey: .verifierKeyHashHex)
-        try container.encodeIfPresent(expectedDestinationBindingHashHex, forKey: .expectedDestinationBindingHashHex)
-        try container.encodeIfPresent(tronVerifierAddress, forKey: .tronVerifierAddress)
-        try container.encodeIfPresent(proofBytesHex, forKey: .proofBytesHex)
-        try container.encodeIfPresent(creationTimeMs, forKey: .creationTimeMs)
-    }
-}
-
-public extension ToriiBridgeProofSubmitRequest {
-    /// Build an on-chain bridge-proof submit request from an EVM-family SCCP proof submission.
-    init(authority: String,
-         messageBundle: ToriiJSONValue,
-         evmSccpSubmission submission: EvmSccpSubmission,
-         destinationBinding: EvmSccpDestinationBinding,
-         privateKey: ToriiJSONValue? = nil,
-         publicKeyHex: String? = nil,
-         signatureB64: String? = nil,
-         creationTimeMs: ToriiJSONValue? = nil) throws {
-        try Self.requireEvmSubmission(submission, matches: destinationBinding)
-        try Self.requireSccpGroth16Proof(submission.proofBytes, matches: messageBundle)
-        self.init(
-            authority: authority,
-            privateKey: privateKey,
-            publicKeyHex: publicKeyHex,
-            signatureB64: signatureB64,
-            messageBundle: messageBundle,
-            networkIdHex: destinationBinding.networkId,
-            verifierAddressHex: destinationBinding.verifierAddress,
-            bridgeAddressHex: destinationBinding.bridgeAddress,
-            verifierCodeHashHex: destinationBinding.verifierCodeHash,
-            verifierKeyHashHex: destinationBinding.verifierKeyHash,
-            expectedDestinationBindingHashHex: destinationBinding.hash,
-            proofBytesHex: "0x" + submission.proofBytes.hexEncodedString(),
-            creationTimeMs: creationTimeMs
-        )
-    }
-
-    /// Build an on-chain bridge-proof submit request from a TRON SCCP proof submission.
-    init(authority: String,
-         messageBundle: ToriiJSONValue,
-         tronSccpSubmission submission: TronSccpSubmission,
-         destinationBinding: TronSccpDestinationBinding,
-         privateKey: ToriiJSONValue? = nil,
-         publicKeyHex: String? = nil,
-         signatureB64: String? = nil,
-         creationTimeMs: ToriiJSONValue? = nil) throws {
-        try Self.requireTronSubmission(submission, matches: destinationBinding)
-        try Self.requireSccpGroth16Proof(submission.proofBytes, matches: messageBundle)
-        self.init(
-            authority: authority,
-            privateKey: privateKey,
-            publicKeyHex: publicKeyHex,
-            signatureB64: signatureB64,
-            messageBundle: messageBundle,
-            networkIdHex: destinationBinding.networkId,
-            verifierCodeHashHex: destinationBinding.verifierCodeHash,
-            verifierKeyHashHex: destinationBinding.verifierKeyHash,
-            expectedDestinationBindingHashHex: destinationBinding.hash,
-            tronVerifierAddress: destinationBinding.verifierAddress,
-            proofBytesHex: "0x" + submission.proofBytes.hexEncodedString(),
-            creationTimeMs: creationTimeMs
-        )
-    }
-
-    private static func requireEvmSubmission(_ submission: EvmSccpSubmission,
-                                             matches destinationBinding: EvmSccpDestinationBinding) throws {
-        guard submission.version == 1 else {
-            throw ToriiClientError.invalidPayload("EVM SCCP submission version must be 1.")
-        }
-        guard submission.submissionKind == "contract_call" else {
-            throw ToriiClientError.invalidPayload("EVM SCCP submission must be a contract_call.")
-        }
-        guard submission.sourceDomain == destinationBinding.sourceDomain else {
-            throw ToriiClientError.invalidPayload("EVM SCCP submission sourceDomain must match destination binding.")
-        }
-        guard submission.targetDomain == destinationBinding.targetDomain else {
-            throw ToriiClientError.invalidPayload("EVM SCCP submission targetDomain must match destination binding.")
-        }
-        guard submission.verifierBackend == destinationBinding.verifierBackend else {
-            throw ToriiClientError.invalidPayload("EVM SCCP submission verifierBackend must match destination binding.")
-        }
-        guard submission.proofFamily == destinationBinding.proofFamily else {
-            throw ToriiClientError.invalidPayload("EVM SCCP submission proofFamily must match destination binding.")
-        }
-        guard submission.destinationBindingHash == destinationBinding.hash else {
-            throw ToriiClientError.invalidPayload("EVM SCCP submission destinationBindingHash must match destination binding.")
-        }
-    }
-
-    private static func requireTronSubmission(_ submission: TronSccpSubmission,
-                                              matches destinationBinding: TronSccpDestinationBinding) throws {
-        guard submission.version == 1 else {
-            throw ToriiClientError.invalidPayload("TRON SCCP submission version must be 1.")
-        }
-        guard submission.submissionKind == "contract_call" else {
-            throw ToriiClientError.invalidPayload("TRON SCCP submission must be a contract_call.")
-        }
-        guard submission.sourceDomain == destinationBinding.sourceDomain else {
-            throw ToriiClientError.invalidPayload("TRON SCCP submission sourceDomain must match destination binding.")
-        }
-        guard submission.targetDomain == destinationBinding.targetDomain else {
-            throw ToriiClientError.invalidPayload("TRON SCCP submission targetDomain must match destination binding.")
-        }
-        guard submission.verifierBackend == destinationBinding.verifierBackend else {
-            throw ToriiClientError.invalidPayload("TRON SCCP submission verifierBackend must match destination binding.")
-        }
-        guard submission.proofFamily == destinationBinding.proofFamily else {
-            throw ToriiClientError.invalidPayload("TRON SCCP submission proofFamily must match destination binding.")
-        }
-        guard submission.destinationBindingHash == destinationBinding.hash else {
-            throw ToriiClientError.invalidPayload("TRON SCCP submission destinationBindingHash must match destination binding.")
-        }
-    }
-
-    private static func requireSccpGroth16Proof(_ proofBytes: Data,
-                                                matches messageBundle: ToriiJSONValue) throws {
-        guard proofBytes.count == sccpGroth16Bn254ProofAbiByteLengthV1,
-              proofBytes.contains(where: { $0 != 0 })
-        else {
-            throw ToriiClientError.invalidPayload("SCCP proof bytes must be a non-zero 384-byte Groth16 ABI tuple.")
-        }
-        if let field = sccpGroth16Bn254ProofTupleInvalidField(proofBytes) {
-            throw ToriiClientError.invalidPayload("\(field) is invalid.")
-        }
-        let context = try sccpMessageProofContext(from: messageBundle)
-        guard proofWord(proofBytes, index: 0) == abiWordU32(1) else {
-            throw ToriiClientError.invalidPayload("proof_bytes_hex.version must be 1.")
-        }
-        guard proofWord(proofBytes, index: 1) == context.messageId else {
-            throw ToriiClientError.invalidPayload(
-                "proof_bytes_hex.message_id must match message_bundle.commitment.message_id."
-            )
-        }
-        guard proofWord(proofBytes, index: 2) == abiWordU32(0) else {
-            throw ToriiClientError.invalidPayload("proof_bytes_hex.source_domain must be SORA.")
-        }
-        guard proofWord(proofBytes, index: 3) == context.commitmentRoot else {
-            throw ToriiClientError.invalidPayload(
-                "proof_bytes_hex.commitment_root must match message_bundle.commitment_root."
-            )
-        }
-    }
-
-    private static func sccpMessageProofContext(from messageBundle: ToriiJSONValue) throws -> (messageId: Data, commitmentRoot: Data) {
-        guard case let .object(bundle) = messageBundle else {
-            throw ToriiClientError.invalidPayload("message_bundle must contain commitment metadata.")
-        }
-        guard case let .object(commitment)? = bundle["commitment"] else {
-            throw ToriiClientError.invalidPayload("message_bundle.commitment.message_id is required.")
-        }
-        let messageIdValue = commitment["message_id"] ?? commitment["messageId"]
-        let commitmentRootValue = bundle["commitment_root"] ?? bundle["commitmentRoot"]
-        guard let messageIdValue, let commitmentRootValue else {
-            throw ToriiClientError.invalidPayload(
-                "message_bundle.commitment.message_id and message_bundle.commitment_root are required."
-            )
-        }
-        return (
-            try hex32Data(messageIdValue, label: "message_bundle.commitment.message_id"),
-            try hex32Data(commitmentRootValue, label: "message_bundle.commitment_root")
-        )
-    }
-
-    private static func hex32Data(_ value: ToriiJSONValue, label: String) throws -> Data {
-        guard case let .string(string) = value else {
-            throw ToriiClientError.invalidPayload("\(label) must contain valid hexadecimal bytes.")
-        }
-        var normalized = string
-        if normalized.hasPrefix("0x") || normalized.hasPrefix("0X") {
-            normalized = String(normalized.dropFirst(2))
-        }
-        guard let data = Data(hexString: normalized), data.count == 32 else {
-            throw ToriiClientError.invalidPayload("\(label) must contain valid hexadecimal bytes.")
-        }
-        return data
-    }
-
-    private static func proofWord(_ proofBytes: Data, index: Int) -> Data {
-        let start = index * 32
-        return Data(proofBytes[start..<(start + 32)])
-    }
-
-    private static func abiWordU32(_ value: UInt32) -> Data {
-        var out = Data(repeating: 0, count: 32)
-        out[28] = UInt8((value >> 24) & 0xff)
-        out[29] = UInt8((value >> 16) & 0xff)
-        out[30] = UInt8((value >> 8) & 0xff)
-        out[31] = UInt8(value & 0xff)
-        return out
-    }
-}
-
 public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked Sendable {
     private struct ObservedServerClock: Sendable {
         let serverEpochMs: UInt64
@@ -16180,6 +17891,9 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     private let serverClockQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.server-clock")
     private var observedServerClock: ObservedServerClock?
     private static let defaultListPageSize = 100
+    private static let sccpCapabilitiesResponseMaximumBytes = 64 * 1024
+    private static let sccpRecentMessagesResponseMaximumBytes = 8 * 1024 * 1024
+    private static let sccpDiscoveryResponseMaximumBytes = 64 * 1024 * 1024
 
     public init(baseURL: URL,
                 session: URLSession = .shared,
@@ -16931,8 +18645,39 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func getOfflineReadiness(completion: @escaping (Result<ToriiOfflineReadiness, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getOfflineReadiness() }
+    public func getOfflineReadiness(
+        assetDefinitionId: String,
+        completion: @escaping (Result<ToriiOfflineReadiness, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.getOfflineReadiness(assetDefinitionId: assetDefinitionId)
+        }
+    }
+
+    @discardableResult
+    public func submitOfflineTopUp(
+        _ request: OfflineTopUpRequest,
+        completion: @escaping (Result<OfflineOperationReference, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) { try await self.submitOfflineTopUp(request) }
+    }
+
+    @discardableResult
+    public func submitOfflineRedeem(
+        _ request: OfflineRedeemRequest,
+        completion: @escaping (Result<OfflineOperationReference, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) { try await self.submitOfflineRedeem(request) }
+    }
+
+    @discardableResult
+    public func getOfflineOperationStatus(
+        operationId: String,
+        completion: @escaping (Result<OfflineOperationStatus, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.getOfflineOperationStatus(operationId: operationId)
+        }
     }
 
     @discardableResult
@@ -17146,21 +18891,25 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func postBridgeProofSubmitJson(_ jsonData: Data,
-                                          completion: @escaping (Result<Data, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.postBridgeProofSubmitJson(jsonData) }
+    public func submitBridgeProof(
+        _ requestBody: ToriiBridgeProofSubmitRequest,
+        expectation: SccpBridgeResponseExpectation? = nil,
+        completion: @escaping (Result<SccpBridgeSubmitResponse, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.submitBridgeProof(requestBody, expectation: expectation)
+        }
     }
 
     @discardableResult
-    public func submitBridgeProof(_ requestBody: ToriiBridgeProofSubmitRequest,
-                                  completion: @escaping (Result<Data, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.submitBridgeProof(requestBody) }
-    }
-
-    @discardableResult
-    public func postBridgeMessageSubmitJson(_ jsonData: Data,
-                                            completion: @escaping (Result<Data, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.postBridgeMessageSubmitJson(jsonData) }
+    public func submitBridgeMessage(
+        _ requestBody: ToriiBridgeMessageSubmitRequest,
+        expectation: SccpBridgeResponseExpectation? = nil,
+        completion: @escaping (Result<SccpBridgeSubmitResponse, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.submitBridgeMessage(requestBody, expectation: expectation)
+        }
     }
 
     @discardableResult
@@ -18421,14 +20170,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getDaProofPolicies() async throws -> ToriiJSONValue {
-        let request = try makeRequest(path: "/v1/da/proof_policies",
+        let request = try makeRequest(path: "/v1/da/proof-policies",
                                       headers: ["Accept": "application/json"])
         let data = try await data(for: request)
         return try decodeJSON(ToriiJSONValue.self, from: data)
     }
 
     public func getDaProofPolicySnapshot() async throws -> ToriiJSONValue {
-        let request = try makeRequest(path: "/v1/da/proof_policy_snapshot",
+        let request = try makeRequest(path: "/v1/da/proof-policies/snapshot",
                                       headers: ["Accept": "application/json"])
         let data = try await data(for: request)
         return try decodeJSON(ToriiJSONValue.self, from: data)
@@ -18480,7 +20229,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let normalized = try normalizeDaPinIntentQueryRequest(requestBody)
         let encoder = JSONEncoder()
         let body = try encoder.encode(normalized)
-        let request = try makeRequest(path: "/v1/da/pin_intents",
+        let request = try makeRequest(path: "/v1/da/pin-intents",
                                       method: .post,
                                       body: body,
                                       headers: [
@@ -18495,7 +20244,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let normalized = try normalizeDaPinIntentQueryRequest(requestBody)
         let encoder = JSONEncoder()
         let body = try encoder.encode(normalized)
-        let request = try makeRequest(path: "/v1/da/pin_intents/prove",
+        let request = try makeRequest(path: "/v1/da/pin-intents/prove",
                                       method: .post,
                                       body: body,
                                       headers: [
@@ -18507,7 +20256,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func verifyDaPinIntent(proof: ToriiJSONValue) async throws -> ToriiDaPinIntentVerifyResponse {
-        let request = try makeRequest(path: "/v1/da/pin_intents/verify",
+        let request = try makeRequest(path: "/v1/da/pin-intents/verify",
                                       method: .post,
                                       body: try proof.encodedData(),
                                       headers: [
@@ -18870,6 +20619,41 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         if requestBody.commitments.isEmpty {
             return []
         }
+        let response = try await fetchZkAssetMerklePathResponse(
+            asset: asset,
+            commitments: commitments
+        )
+        return try response.validatedPaths(expectedCommitments: commitments)
+    }
+
+    /// Fetch the complete authoritative path snapshot, including Torii's
+    /// padded next-zero path. Kagemusha uses this form so a one-input proof can
+    /// be built from two bounded paths without downloading the whole tree.
+    public func getZkAssetMerklePathSnapshot(
+        asset: String,
+        commitments: [Data]
+    ) async throws -> ToriiZkMerklePathResponse {
+        let response = try await fetchZkAssetMerklePathResponse(
+            asset: asset,
+            commitments: commitments
+        )
+        _ = try response.validatedPaths(expectedCommitments: commitments)
+        guard response.treeDepth == ToriiZkMerklePathResponse.confidentialTreeDepthV2 else {
+            throw ToriiClientError.invalidPayload(
+                "Torii returned a non-confidential-v2 Merkle tree depth."
+            )
+        }
+        if response.frontierLen < ToriiZkMerklePathResponse.confidentialTreeCapacityV2 {
+            _ = try response.validatedNextZeroPath()
+        }
+        return response
+    }
+
+    private func fetchZkAssetMerklePathResponse(
+        asset: String,
+        commitments: [Data]
+    ) async throws -> ToriiZkMerklePathResponse {
+        let requestBody = try ToriiZkMerklePathRequest(assetId: asset, commitments: commitments)
         let request = try makeRequest(path: "/v1/zk/merkle-path",
                                       method: .post,
                                       queryItems: nil,
@@ -18882,7 +20666,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         } catch {
             throw ToriiClientError.decoding(error)
         }
-        return try response.validatedPaths(expectedCommitments: requestBody.commitments)
+        return response
     }
 
     @discardableResult
@@ -19006,7 +20790,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func listMultisigProposals(_ requestBody: ToriiMultisigProposalsListRequest) async throws -> ToriiMultisigProposalsListResponse {
-        let request = try makeRequest(path: "/v1/multisig/proposals/list",
+        let request = try makeRequest(path: "/v1/multisig/proposals/query",
                                       method: .post,
                                       queryItems: nil,
                                       body: try JSONEncoder().encode(requestBody),
@@ -19016,7 +20800,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getMultisigProposal(_ requestBody: ToriiMultisigProposalGetRequest) async throws -> ToriiMultisigProposalGetResponse {
-        let request = try makeRequest(path: "/v1/multisig/proposals/get",
+        let request = try makeRequest(path: "/v1/multisig/proposals/lookup",
                                       method: .post,
                                       queryItems: nil,
                                       body: try JSONEncoder().encode(requestBody),
@@ -19041,11 +20825,118 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeUTF8String(from: data, context: "health")
     }
 
-    public func getOfflineReadiness() async throws -> ToriiOfflineReadiness {
+    public func getOfflineReadiness(assetDefinitionId: String) async throws -> ToriiOfflineReadiness {
+        let exactAssetDefinitionId = try requireToriiExactNonEmptyQueryValue(
+            assetDefinitionId,
+            field: "assetDefinitionId"
+        )
         let request = try makeRequest(path: "/v1/offline/readiness",
+                                      queryItems: [
+                                        URLQueryItem(
+                                            name: "asset_definition_id",
+                                            value: exactAssetDefinitionId
+                                        )
+                                      ],
                                       headers: ["Accept": "application/json"])
-        let data = try await data(for: request)
+        let (data, response) = try await send(request)
+        try ensureStatus(response, equals: 200, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/json")
+        guard !data.isEmpty else {
+            throw ToriiClientError.emptyBody
+        }
+        do {
+            try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(in: data)
+        } catch {
+            throw ToriiClientError.invalidPayload(
+                "offline readiness response must be valid UTF-8 JSON without duplicate object keys"
+            )
+        }
         return try decodeJSON(ToriiOfflineReadiness.self, from: data)
+    }
+
+    public func submitOfflineTopUp(
+        _ requestBody: OfflineTopUpRequest
+    ) async throws -> OfflineOperationReference {
+        try await submitOfflineOperation(
+            path: OfflineAPI.Endpoint.topUp.path,
+            operationId: requestBody.operationId,
+            expectedKind: .topUp,
+            archive: requestBody.noritoArchive()
+        )
+    }
+
+    public func submitOfflineRedeem(
+        _ requestBody: OfflineRedeemRequest
+    ) async throws -> OfflineOperationReference {
+        try await submitOfflineOperation(
+            path: OfflineAPI.Endpoint.redeem.path,
+            operationId: requestBody.operationId,
+            expectedKind: .redeem,
+            archive: requestBody.noritoArchive()
+        )
+    }
+
+    public func getOfflineOperationStatus(
+        operationId: String
+    ) async throws -> OfflineOperationStatus {
+        let path = try OfflineAPI.operationPath(operationId)
+        let request = try makeRequest(
+            path: path,
+            headers: ["Accept": "application/x-norito"]
+        )
+        let (responseData, response) = try await send(request)
+        try ensureStatus(response, equals: 200, responseBody: responseData)
+        try ensureResponseMediaType(response, equals: "application/x-norito")
+        guard !responseData.isEmpty else {
+            throw ToriiClientError.emptyBody
+        }
+        let status = try OfflineOperationCodec.decodeStatus(responseData)
+        guard status.operationId == operationId else {
+            throw ToriiClientError.invalidPayload(
+                "offline operation status operation_id does not match the requested resource"
+            )
+        }
+        return status
+    }
+
+    private func submitOfflineOperation(
+        path: String,
+        operationId: String,
+        expectedKind: OfflineOperationKind,
+        archive: Data
+    ) async throws -> OfflineOperationReference {
+        let request = try makeRequest(
+            path: path,
+            method: .post,
+            body: archive,
+            headers: [
+                "Content-Type": "application/x-norito",
+                "Accept": "application/x-norito",
+                "Idempotency-Key": operationId,
+            ]
+        )
+        let (data, response) = try await send(request)
+        try ensureStatus(response, equals: 202, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/x-norito")
+        guard !data.isEmpty else {
+            throw ToriiClientError.emptyBody
+        }
+        let reference = try OfflineOperationCodec.decodeReference(data)
+        let expectedStatusUri = try OfflineAPI.operationPath(operationId)
+        guard reference.operationId == operationId,
+              reference.kind == expectedKind,
+              reference.state == .pending,
+              reference.statusUri == expectedStatusUri else {
+            throw ToriiClientError.invalidPayload(
+                "offline operation reference does not match the submitted command"
+            )
+        }
+        guard response.value(forHTTPHeaderField: "Location") == expectedStatusUri else {
+            throw ToriiClientError.invalidPayload(
+                "offline operation Location must match the canonical status resource"
+            )
+        }
+        return reference
     }
 
     public func getMetrics(asText: Bool = false) async throws -> ToriiMetricsResponse {
@@ -19220,19 +21111,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func streamVerifyingKeyEvents(filter: ToriiVerifyingKeyEventFilter = ToriiVerifyingKeyEventFilter(),
-                                         lastEventId: String? = nil) -> AsyncThrowingStream<ToriiVerifyingKeyEventMessage, Error> {
+    public func streamVerifyingKeyEvents(filter: ToriiVerifyingKeyEventFilter = ToriiVerifyingKeyEventFilter()) -> AsyncThrowingStream<ToriiVerifyingKeyEventMessage, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     let queryItems = try filter.queryItems()
-                    var headers = ["Accept": "text/event-stream"]
-                    if let lastEventId {
-                        headers["Last-Event-ID"] = lastEventId
-                    }
                     let request = try makeRequest(path: "/v1/events/sse",
                                                   queryItems: queryItems,
-                                                  headers: headers)
+                                                  headers: ["Accept": "text/event-stream"])
                     let (bytes, response) = try await session.bytes(for: request)
                     guard let httpResponse = response as? HTTPURLResponse else {
                         throw ToriiClientError.invalidResponse
@@ -19289,19 +21175,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func streamTriggerEvents(filter: ToriiTriggerEventFilter = ToriiTriggerEventFilter(),
-                                    lastEventId: String? = nil) -> AsyncThrowingStream<ToriiTriggerEventMessage, Error> {
+    public func streamTriggerEvents(filter: ToriiTriggerEventFilter = ToriiTriggerEventFilter()) -> AsyncThrowingStream<ToriiTriggerEventMessage, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     let queryItems = try filter.queryItems()
-                    var headers = ["Accept": "text/event-stream"]
-                    if let lastEventId {
-                        headers["Last-Event-ID"] = lastEventId
-                    }
                     let request = try makeRequest(path: "/v1/events/sse",
                                                   queryItems: queryItems,
-                                                  headers: headers)
+                                                  headers: ["Accept": "text/event-stream"])
                     let (bytes, response) = try await session.bytes(for: request)
                     guard let httpResponse = response as? HTTPURLResponse else {
                         throw ToriiClientError.invalidResponse
@@ -19358,19 +21239,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func streamProofEvents(filter: ToriiProofEventFilter = ToriiProofEventFilter(),
-                                  lastEventId: String? = nil) -> AsyncThrowingStream<ToriiProofEventMessage, Error> {
+    public func streamProofEvents(filter: ToriiProofEventFilter = ToriiProofEventFilter()) -> AsyncThrowingStream<ToriiProofEventMessage, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     let queryItems = try filter.queryItems()
-                    var headers = ["Accept": "text/event-stream"]
-                    if let lastEventId {
-                        headers["Last-Event-ID"] = lastEventId
-                    }
                     let request = try makeRequest(path: "/v1/events/sse",
                                                   queryItems: queryItems,
-                                                  headers: headers)
+                                                  headers: ["Accept": "text/event-stream"])
                     let (bytes, response) = try await session.bytes(for: request)
                     guard let httpResponse = response as? HTTPURLResponse else {
                         throw ToriiClientError.invalidResponse
@@ -19822,447 +21698,357 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                            idempotencyKey: idempotencyKey)
     }
 
-    public func postBridgeProofSubmitJson(_ jsonData: Data) async throws -> Data {
-        try await postBridgeSubmitJson(path: "/v1/bridge/proofs/submit",
-                                       data: jsonData,
-                                       context: "bridge proof submit")
-    }
-
-    public func submitBridgeProof(_ requestBody: ToriiBridgeProofSubmitRequest) async throws -> Data {
-        try await postBridgeProofSubmitJson(JSONEncoder().encode(requestBody))
-    }
-
-    public func postBridgeMessageSubmitJson(_ jsonData: Data) async throws -> Data {
-        try await postBridgeSubmitJson(path: "/v1/bridge/messages",
-                                       data: jsonData,
-                                       context: "bridge message submit")
-    }
-
-    private func postBridgeSubmitJson(path: String,
-                                      data: Data,
-                                      context: String) async throws -> Data {
-        guard !data.isEmpty else {
-            throw ToriiClientError.invalidPayload("\(context) body must not be empty.")
-        }
-        try preflightBridgeSubmitJson(data, context: context)
-        let request = try makeRequest(path: path,
-                                      method: .post,
-                                      body: data,
-                                      headers: [
-                                          "Content-Type": "application/json",
-                                          "Accept": "application/json"
-                                      ])
-        let (responseData, response) = try await send(request)
-        try ensureStatus(response, equals: 200, responseBody: responseData)
-        return responseData
-    }
-
-    private func preflightBridgeSubmitJson(_ data: Data, context: String) throws {
-        guard let root = try? JSONSerialization.jsonObject(with: data),
-              let fields = root as? [String: Any]
-        else {
-            return
-        }
-        if let proofBytesHex = fields["proof_bytes_hex"], !(proofBytesHex is NSNull) {
-            guard let proofBytesHex = proofBytesHex as? String else {
-                throw ToriiClientError.invalidPayload(
-                    "proof_bytes_hex must contain valid hexadecimal bytes."
-                )
-            }
-            guard proofBytesHex.trimmingCharacters(in: .whitespacesAndNewlines) == proofBytesHex else {
-                throw ToriiClientError.invalidPayload(
-                    "proof_bytes_hex must contain canonical hexadecimal bytes."
-                )
-            }
-            var normalized = proofBytesHex
-            if normalized.hasPrefix("0x") || normalized.hasPrefix("0X") {
-                normalized = String(normalized.dropFirst(2))
-            }
-            guard !normalized.isEmpty, let bytes = Data(hexString: normalized) else {
-                throw ToriiClientError.invalidPayload(
-                    "proof_bytes_hex must contain valid hexadecimal bytes."
-                )
-            }
-            guard bytes.contains(where: { $0 != 0 }) else {
-                throw ToriiClientError.invalidPayload("proof_bytes_hex must not be all zero.")
-            }
-            guard bytes.count == sccpGroth16Bn254ProofAbiByteLengthV1 else {
-                throw ToriiClientError.invalidPayload(
-                    "proof_bytes_hex must be a \(sccpGroth16Bn254ProofAbiByteLengthV1)-byte hex string."
-                )
-            }
-            try preflightSccpGroth16ProofBytes(bytes, fields: fields)
-        }
-        try preflightSccpDestinationProofMaterialRelationship(fields)
-        try preflightSccpBridgeSubmitBundleSelection(fields, context: context)
-    }
-
-    private static let sccpDestinationProofMaterialHexFields: [(String, Int)] = [
-        ("network_id_hex", 32),
-        ("verifier_address_hex", 20),
-        ("bridge_address_hex", 20),
-        ("verifier_code_hash_hex", 32),
-        ("verifier_key_hash_hex", 32),
-        ("expected_destination_binding_hash_hex", 32)
-    ]
-    private static let tronBase58Alphabet = Array("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
-    private static let tronBase58Index = Dictionary(
-        uniqueKeysWithValues: tronBase58Alphabet.enumerated().map { ($0.element, $0.offset) }
-    )
-
-    private func preflightSccpDestinationProofMaterialRelationship(_ fields: [String: Any]) throws {
-        let hasDestinationMaterial = try preflightSccpDestinationProofMaterial(fields)
-        let hasProofBytes = fields["proof_bytes_hex"] != nil && !(fields["proof_bytes_hex"] is NSNull)
-        if hasDestinationMaterial && !hasProofBytes {
-            throw ToriiClientError.invalidPayload(
-                "proof_bytes_hex is required when SCCP destination proof parameters are supplied."
-            )
-        }
-        if hasProofBytes && !hasDestinationMaterial {
-            throw ToriiClientError.invalidPayload(
-                "deployment destination fields are required when proof_bytes_hex is supplied."
-            )
-        }
-        if hasDestinationMaterial && hasProofBytes {
-            try preflightSccpDestinationProofMaterialTuple(fields)
-        }
-    }
-
-    private func preflightSccpDestinationProofMaterial(_ fields: [String: Any]) throws -> Bool {
-        var hasDestinationMaterial = false
-        for (field, expectedByteCount) in Self.sccpDestinationProofMaterialHexFields {
-            guard let value = fields[field], !(value is NSNull) else {
-                continue
-            }
-            _ = try nonZeroHexData(value, label: field, expectedByteCount: expectedByteCount)
-            hasDestinationMaterial = true
-        }
-        if let value = fields["tron_verifier_address"], !(value is NSNull) {
-            _ = try Self.normalizeTronBase58CheckAddress(value, label: "tron_verifier_address")
-            hasDestinationMaterial = true
-        }
-        return hasDestinationMaterial
-    }
-
-    private func preflightSccpDestinationProofMaterialTuple(_ fields: [String: Any]) throws {
-        let hasEvmFields = hasSccpDestinationField(fields, "verifier_address_hex")
-            || hasSccpDestinationField(fields, "bridge_address_hex")
-        let hasTronFields = hasSccpDestinationField(fields, "tron_verifier_address")
-        if hasEvmFields && hasTronFields {
-            throw ToriiClientError.invalidPayload(
-                "EVM and TRON SCCP destination fields cannot be mixed."
-            )
-        }
-
-        let sharedFields = [
-            "network_id_hex",
-            "verifier_code_hash_hex",
-            "verifier_key_hash_hex",
-            "expected_destination_binding_hash_hex"
-        ]
-        let hasSharedFields = sharedFields.contains { hasSccpDestinationField(fields, $0) }
-        if hasTronFields {
-            let required = [
-                "network_id_hex",
-                "tron_verifier_address",
-                "verifier_code_hash_hex",
-                "verifier_key_hash_hex",
-                "expected_destination_binding_hash_hex"
-            ]
-            let missing = required.filter { !hasSccpDestinationField(fields, $0) }
-            if !missing.isEmpty {
-                throw ToriiClientError.invalidPayload(
-                    "complete TRON SCCP deployment destination fields are required; missing \(missing.joined(separator: ", "))."
-                )
-            }
-            try preflightTronSccpDestinationBindingHash(fields)
-            return
-        }
-
-        if hasEvmFields {
-            let required = [
-                "network_id_hex",
-                "verifier_address_hex",
-                "bridge_address_hex",
-                "verifier_code_hash_hex",
-                "verifier_key_hash_hex",
-                "expected_destination_binding_hash_hex"
-            ]
-            let missing = required.filter { !hasSccpDestinationField(fields, $0) }
-            if !missing.isEmpty {
-                throw ToriiClientError.invalidPayload(
-                    "complete EVM SCCP deployment destination fields are required; missing \(missing.joined(separator: ", "))."
-                )
-            }
-            try preflightEvmSccpDestinationBindingHash(fields)
-            return
-        }
-
-        if hasSharedFields {
-            throw ToriiClientError.invalidPayload(
-                "complete EVM or TRON SCCP deployment destination fields are required."
-            )
-        }
-    }
-
-    private func preflightEvmSccpDestinationBindingHash(_ fields: [String: Any]) throws {
-        guard let networkId = fields["network_id_hex"] as? String,
-              let verifierAddress = fields["verifier_address_hex"] as? String,
-              let bridgeAddress = fields["bridge_address_hex"] as? String,
-              let verifierCodeHash = fields["verifier_code_hash_hex"] as? String,
-              let verifierKeyHash = fields["verifier_key_hash_hex"] as? String,
-              let expectedBindingHash = fields["expected_destination_binding_hash_hex"] else {
-            throw ToriiClientError.invalidPayload(
-                "complete EVM SCCP deployment destination fields are required."
-            )
-        }
-        let actual = try nonZeroHexData(
-            expectedBindingHash,
-            label: "expected_destination_binding_hash_hex",
-            expectedByteCount: 32
-        ).hexEncodedString()
-        for targetDomain in [sccpDomainEthereum, sccpDomainBsc] {
-            let expected = try sccpEvmDestinationBindingHash(
-                targetDomain: targetDomain,
-                networkId: networkId,
-                verifierAddress: verifierAddress,
-                bridgeAddress: bridgeAddress,
-                verifierCodeHash: verifierCodeHash,
-                verifierKeyHash: verifierKeyHash
-            ).lowercased().replacingOccurrences(of: "^0x", with: "", options: .regularExpression)
-            if actual == expected {
-                return
-            }
-        }
-        throw ToriiClientError.invalidPayload(
-            "expected_destination_binding_hash_hex must match canonical EVM destination binding."
+    /// Submit one closed destination-proof artifact derived from authoritative route state.
+    public func submitBridgeProof(
+        _ requestBody: ToriiBridgeProofSubmitRequest,
+        expectation: SccpBridgeResponseExpectation? = nil
+    ) async throws -> SccpBridgeSubmitResponse {
+        try await postSccpBridgeSubmit(
+            path: "/v1/bridge/proofs/submit",
+            body: JSONEncoder().encode(requestBody),
+            expectation: expectation
         )
     }
 
-    private func preflightTronSccpDestinationBindingHash(_ fields: [String: Any]) throws {
-        guard let networkId = fields["network_id_hex"] as? String,
-              let verifierAddress = fields["tron_verifier_address"] as? String,
-              let verifierCodeHash = fields["verifier_code_hash_hex"] as? String,
-              let verifierKeyHash = fields["verifier_key_hash_hex"] as? String,
-              let expectedBindingHash = fields["expected_destination_binding_hash_hex"] else {
-            throw ToriiClientError.invalidPayload(
-                "complete TRON SCCP deployment destination fields are required."
+    /// Submit one protocol-native inbound SCCP proof.
+    public func submitBridgeMessage(
+        _ requestBody: ToriiBridgeMessageSubmitRequest,
+        expectation: SccpBridgeResponseExpectation? = nil
+    ) async throws -> SccpBridgeSubmitResponse {
+        try await postSccpBridgeSubmit(
+            path: "/v1/bridge/messages",
+            body: JSONEncoder().encode(requestBody),
+            expectation: expectation
+        )
+    }
+
+    /// Fetch consensus-derived SCCP capabilities.
+    public func getSccpCapabilities() async throws -> SccpCapabilities {
+        let request = try makeRequest(
+            path: "/v1/sccp/capabilities",
+            method: .get,
+            headers: ["Accept": "application/json"]
+        )
+        return try SccpCapabilities.parse(
+            await exactSccpJSONResponse(
+                request,
+                context: "SCCP capabilities",
+                maximumBytes: Self.sccpCapabilitiesResponseMaximumBytes
             )
-        }
-        let expected = try sccpTronDestinationBindingHash(
-            networkId: networkId,
-            verifierAddress: verifierAddress,
-            verifierCodeHash: verifierCodeHash,
-            verifierKeyHash: verifierKeyHash
-        ).lowercased().replacingOccurrences(of: "^0x", with: "", options: .regularExpression)
-        let actual = try nonZeroHexData(
-            expectedBindingHash,
-            label: "expected_destination_binding_hash_hex",
-            expectedByteCount: 32
-        ).hexEncodedString()
-        if actual != expected {
-            throw ToriiClientError.invalidPayload(
-                "expected_destination_binding_hash_hex must match canonical TRON destination binding."
+        )
+    }
+
+    /// Fetch the authoritative typed SCCP route registry.
+    public func getSccpRegistry() async throws -> SccpRegistryV1 {
+        let request = try makeRequest(
+            path: "/v1/sccp/registry",
+            method: .get,
+            headers: ["Accept": "application/json"]
+        )
+        return try SccpRegistryV1.parse(
+            await exactSccpJSONResponse(
+                request,
+                context: "SCCP registry",
+                maximumBytes: Self.sccpDiscoveryResponseMaximumBytes
             )
-        }
+        )
     }
 
-    private func hasSccpDestinationField(_ fields: [String: Any], _ field: String) -> Bool {
-        guard let value = fields[field], !(value is NSNull) else {
-            return false
-        }
-        return true
+    /// Fetch the authoritative registry as canonical Norito bytes.
+    public func getSccpRegistryNorito() async throws -> Data {
+        try await getExactSccpNorito(
+            path: "/v1/sccp/registry",
+            context: "SCCP registry",
+            maximumBytes: SccpSubmitValidation.maximumNativeArtifactBytes,
+            expectedTypeName: SccpSubmitValidation.registryTypeName
+        )
     }
 
-    private func preflightSccpBridgeSubmitBundleSelection(_ fields: [String: Any],
-                                                          context: String) throws {
-        let hasBurnBundle = hasSccpDestinationField(fields, "burn_bundle")
-        let hasMessageBundle = hasSccpDestinationField(fields, "message_bundle")
-        if context == "bridge proof submit" {
-            guard (hasBurnBundle ? 1 : 0) + (hasMessageBundle ? 1 : 0) == 1 else {
-                throw ToriiClientError.invalidPayload(
-                    "bridge proof submit must provide exactly one of burn_bundle or message_bundle."
+    /// Fetch one finalized SORA-origin SCCP message bundle by its exact message id.
+    public func getSccpMessageBundle(messageIdHex: String) async throws -> SccpMessageBundleV1 {
+        let id = try exactSccpMessageId(messageIdHex)
+        let request = try makeRequest(
+            path: "/v1/sccp/proofs/message/\(id)",
+            method: .get,
+            headers: ["Accept": "application/json"]
+        )
+        let bundle = try SccpMessageBundleV1.parse(
+            await exactSccpJSONResponse(
+                request,
+                context: "SCCP message bundle",
+                maximumBytes: Self.sccpDiscoveryResponseMaximumBytes
+            )
+        )
+        guard bundle.messageId == "0x\(id)" else {
+            throw ToriiClientError.invalidPayload("SCCP bundle message id does not match the requested id")
+        }
+        return bundle
+    }
+
+    /// Fetch one finalized SCCP message bundle as canonical Norito bytes.
+    public func getSccpMessageBundleNorito(messageIdHex: String) async throws -> Data {
+        let id = try exactSccpMessageId(messageIdHex)
+        return try await getExactSccpNorito(
+            path: "/v1/sccp/proofs/message/\(id)",
+            context: "SCCP message bundle",
+            maximumBytes: SccpSubmitValidation.maximumNativeArtifactBytes,
+            expectedTypeName: SccpSubmitValidation.messageBundleTypeName
+        )
+    }
+
+    /// Fetch the query-free, state-derived Groth16 request for one finalized message.
+    public func getSccpProofRequest(messageIdHex: String) async throws -> SccpGroth16ProofRequestV1 {
+        let id = try exactSccpMessageId(messageIdHex)
+        let request = try makeRequest(
+            path: "/v1/sccp/proof-requests/\(id)",
+            method: .get,
+            headers: ["Accept": "application/json"]
+        )
+        let proofRequest = try SccpGroth16ProofRequestV1.parse(
+            await exactSccpJSONResponse(
+                request,
+                context: "SCCP proof request",
+                maximumBytes: Self.sccpDiscoveryResponseMaximumBytes
+            )
+        )
+        guard proofRequest.messageId == "0x\(id)" else {
+            throw ToriiClientError.invalidPayload("SCCP proof request message id does not match the requested id")
+        }
+        return proofRequest
+    }
+
+    /// Fetch a state-derived Groth16 request as canonical Norito bytes.
+    public func getSccpProofRequestNorito(messageIdHex: String) async throws -> Data {
+        let id = try exactSccpMessageId(messageIdHex)
+        return try await getExactSccpNorito(
+            path: "/v1/sccp/proof-requests/\(id)",
+            context: "SCCP proof request",
+            maximumBytes: SccpSubmitValidation.maximumDestinationArtifactBytes,
+            expectedTypeName: SccpSubmitValidation.proofRequestTypeName
+        )
+    }
+
+    /// Fetch newest-first committed outbound SCCP messages.
+    public func getSccpRecentMessages(
+        from: UInt64? = nil,
+        limit: UInt32? = nil
+    ) async throws -> SccpRecentMessages {
+        if from == 0 {
+            throw ToriiClientError.invalidPayload("from must be a positive block height")
+        }
+        if let limit, !(1...50).contains(limit) {
+            throw ToriiClientError.invalidPayload("limit must be in 1...50")
+        }
+        var components = URLComponents()
+        components.queryItems = [
+            from.map { URLQueryItem(name: "from", value: String($0)) },
+            limit.map { URLQueryItem(name: "limit", value: String($0)) },
+        ].compactMap { $0 }
+        let query = components.percentEncodedQuery.map { "?\($0)" } ?? ""
+        let request = try makeRequest(
+            path: "/v1/sccp/messages/recent\(query)",
+            method: .get,
+            headers: ["Accept": "application/json"]
+        )
+        return try SccpRecentMessages.parse(
+            await exactSccpJSONResponse(
+                request,
+                context: "SCCP recent messages",
+                maximumBytes: Self.sccpRecentMessagesResponseMaximumBytes
+            )
+        )
+    }
+
+    private func postSccpBridgeSubmit(
+        path: String,
+        body: Data,
+        expectation: SccpBridgeResponseExpectation?
+    ) async throws -> SccpBridgeSubmitResponse {
+        let request = try makeRequest(
+            path: path,
+            method: .post,
+            body: body,
+            headers: ["Content-Type": "application/json", "Accept": "application/json"]
+        )
+        let data = try await exactSccpJSONResponse(
+            request,
+            context: "SCCP bridge submit",
+            maximumBytes: Self.sccpDiscoveryResponseMaximumBytes
+        )
+        return try SccpBridgeSubmitResponse.parse(data, expectation: expectation)
+    }
+
+    private func sendBoundedSccpResponse(
+        _ request: URLRequest,
+        context: String,
+        maximumBytes: Int
+    ) async throws -> (Data, HTTPURLResponse) {
+        precondition(maximumBytes > 0)
+        if let url = request.url,
+           let violation = IrohaTransportSecurity.httpViolation(
+               context: "ToriiClient",
+               baseURL: baseURL,
+               targetURL: url,
+               headers: request.allHTTPHeaderFields ?? [:],
+               body: request.httpBody
+           )
+        {
+            throw ToriiClientError.invalidPayload(violation)
+        }
+
+        do {
+            let observedAtLocalMs = Self.currentEpochMs()
+            let (bytes, response) = try await session.bytes(for: request, delegate: nil)
+            guard let http = response as? HTTPURLResponse else {
+                bytes.task.cancel()
+                throw ToriiClientError.invalidResponse
+            }
+            recordObservedServerClock(from: http, observedAtLocalMs: observedAtLocalMs)
+
+            let declaredLength: Int?
+            do {
+                declaredLength = try Self.validatedSccpContentLength(
+                    http,
+                    context: context,
+                    maximumBytes: maximumBytes
                 )
+            } catch {
+                bytes.task.cancel()
+                throw error
             }
-            if hasBurnBundle && hasSccpDestinationProofOrMaterial(fields) {
-                throw ToriiClientError.invalidPayload(
-                    "SCCP destination fields and proof_bytes_hex are only valid for message_bundle submissions."
-                )
-            }
-        } else if context == "bridge message submit" {
-            guard hasMessageBundle else {
-                throw ToriiClientError.invalidPayload(
-                    "bridge message submit requires message_bundle."
-                )
-            }
-            guard !hasBurnBundle else {
-                throw ToriiClientError.invalidPayload(
-                    "bridge message submit does not accept burn_bundle."
-                )
-            }
-        }
-    }
 
-    private func hasSccpDestinationProofOrMaterial(_ fields: [String: Any]) -> Bool {
-        if hasSccpDestinationField(fields, "proof_bytes_hex") {
-            return true
-        }
-        return Self.sccpDestinationProofMaterialHexFields.contains {
-            hasSccpDestinationField(fields, $0.0)
-        } || hasSccpDestinationField(fields, "tron_verifier_address")
-    }
-
-    private static func normalizeTronBase58CheckAddress(_ value: Any, label: String) throws -> String {
-        guard let string = value as? String else {
-            throw ToriiClientError.invalidPayload("\(label) must be a non-empty string.")
-        }
-        guard !string.isEmpty else {
-            throw ToriiClientError.invalidPayload("\(label) must be a non-empty string.")
-        }
-        guard string.trimmingCharacters(in: .whitespacesAndNewlines) == string else {
-            throw ToriiClientError.invalidPayload("\(label) must be a TRON Base58Check address.")
-        }
-        let decoded = try decodeBase58(string, label: label)
-        guard decoded.count == 25 else {
-            throw ToriiClientError.invalidPayload("\(label) must be a TRON Base58Check address.")
-        }
-        let payload = decoded.prefix(21)
-        let checksum = decoded.suffix(4)
-        let firstHash = Data(SHA256.hash(data: payload))
-        let expectedChecksum = Data(SHA256.hash(data: firstHash)).prefix(4)
-        guard checksum.elementsEqual(expectedChecksum) else {
-            throw ToriiClientError.invalidPayload("\(label) must be a TRON Base58Check address.")
-        }
-        guard payload[payload.startIndex] == 0x41,
-              payload.dropFirst().contains(where: { $0 != 0 })
-        else {
-            throw ToriiClientError.invalidPayload("\(label) must be a TRON Base58Check address.")
-        }
-        return string
-    }
-
-    private static func decodeBase58(_ value: String, label: String) throws -> Data {
-        var bytes: [UInt8] = []
-        for character in value {
-            guard let digit = tronBase58Index[character] else {
-                throw ToriiClientError.invalidPayload("\(label) must be a TRON Base58Check address.")
-            }
-            var carry = digit
-            if !bytes.isEmpty {
-                for index in stride(from: bytes.count - 1, through: 0, by: -1) {
-                    let next = Int(bytes[index]) * 58 + carry
-                    bytes[index] = UInt8(next & 0xff)
-                    carry = next >> 8
+            var data = Data()
+            data.reserveCapacity(min(declaredLength ?? 64 * 1024, 64 * 1024))
+            do {
+                for try await byte in bytes {
+                    guard data.count < maximumBytes else {
+                        bytes.task.cancel()
+                        throw ToriiClientError.invalidPayload(
+                            "\(context) response exceeded the \(maximumBytes)-byte limit"
+                        )
+                    }
+                    data.append(byte)
                 }
+            } catch {
+                bytes.task.cancel()
+                throw error
             }
-            while carry > 0 {
-                bytes.insert(UInt8(carry & 0xff), at: 0)
-                carry >>= 8
-            }
-        }
-        let leadingZeroes = value.prefix { $0 == "1" }.count
-        var result = Data(repeating: 0, count: leadingZeroes)
-        result.append(contentsOf: bytes)
-        return result
-    }
 
-    private func preflightSccpGroth16ProofBytes(_ bytes: Data,
-                                                fields: [String: Any]) throws {
-        if let field = sccpGroth16Bn254ProofTupleInvalidField(bytes) {
-            let proofBytesHexField = field.replacingOccurrences(
-                of: "proofBytes",
-                with: "proof_bytes_hex"
-            )
-            throw ToriiClientError.invalidPayload("\(proofBytesHexField) is invalid.")
-        }
-        if proofWord(bytes, index: 2) != abiWordU32(0) {
-            throw ToriiClientError.invalidPayload("proof_bytes_hex.source_domain must be SORA.")
-        }
-        guard let context = try optionalSccpMessageProofContext(fields) else {
-            return
-        }
-        if proofWord(bytes, index: 0) != abiWordU32(1) {
-            throw ToriiClientError.invalidPayload("proof_bytes_hex.version must be 1.")
-        }
-        if proofWord(bytes, index: 1) != context.messageId {
-            throw ToriiClientError.invalidPayload(
-                "proof_bytes_hex.message_id must match message_bundle.commitment.message_id."
-            )
-        }
-        if proofWord(bytes, index: 2) != abiWordU32(0) {
-            throw ToriiClientError.invalidPayload("proof_bytes_hex.source_domain must be SORA.")
-        }
-        if proofWord(bytes, index: 3) != context.commitmentRoot {
-            throw ToriiClientError.invalidPayload(
-                "proof_bytes_hex.commitment_root must match message_bundle.commitment_root."
-            )
+            let contentEncoding = http.value(forHTTPHeaderField: "Content-Encoding")?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            let hasIdentityRepresentation = contentEncoding == nil
+                || contentEncoding?.isEmpty == true
+                || contentEncoding == "identity"
+            if hasIdentityRepresentation, let declaredLength, data.count != declaredLength {
+                bytes.task.cancel()
+                throw ToriiClientError.invalidPayload(
+                    "\(context) response length did not match its Content-Length header"
+                )
+            }
+            return (data, http)
+        } catch let error as ToriiClientError {
+            throw error
+        } catch {
+            if error is CancellationError || Self.isCancelledTransportError(error) {
+                throw CancellationError()
+            }
+            throw ToriiClientError.transport(error)
         }
     }
 
-    private func optionalSccpMessageProofContext(_ fields: [String: Any]) throws -> (messageId: Data, commitmentRoot: Data)? {
-        guard let messageBundleValue = fields["message_bundle"] else {
+    private static func validatedSccpContentLength(
+        _ response: HTTPURLResponse,
+        context: String,
+        maximumBytes: Int
+    ) throws -> Int? {
+        guard let raw = response.value(forHTTPHeaderField: "Content-Length") else {
             return nil
         }
-        guard let messageBundle = messageBundleValue as? [String: Any] else {
-            throw ToriiClientError.invalidPayload("message_bundle must contain commitment metadata.")
-        }
-        guard let commitment = messageBundle["commitment"] as? [String: Any] else {
-            throw ToriiClientError.invalidPayload("message_bundle.commitment.message_id is required.")
-        }
-        let messageIdValue = commitment["message_id"] ?? commitment["messageId"]
-        let commitmentRootValue = messageBundle["commitment_root"] ?? messageBundle["commitmentRoot"]
-        guard let messageIdValue, let commitmentRootValue else {
+        let isCanonical = !raw.isEmpty
+            && raw.utf8.allSatisfy { (48...57).contains($0) }
+            && (raw == "0" || !raw.hasPrefix("0"))
+        guard isCanonical, let value = UInt64(raw), value <= UInt64(Int.max) else {
             throw ToriiClientError.invalidPayload(
-                "message_bundle.commitment.message_id and message_bundle.commitment_root are required."
+                "\(context) response has a malformed or noncanonical Content-Length header"
             )
         }
-        return (
-            try hex32Data(messageIdValue, label: "message_bundle.commitment.message_id"),
-            try hex32Data(commitmentRootValue, label: "message_bundle.commitment_root")
+        guard value <= UInt64(maximumBytes) else {
+            throw ToriiClientError.invalidPayload(
+                "\(context) response declares more than the \(maximumBytes)-byte limit"
+            )
+        }
+        return Int(value)
+    }
+
+    private func exactSccpJSONResponse(
+        _ request: URLRequest,
+        context: String,
+        maximumBytes: Int
+    ) async throws -> Data {
+        let (data, response) = try await sendBoundedSccpResponse(
+            request,
+            context: context,
+            maximumBytes: maximumBytes
         )
+        try ensureStatus(response, equals: 200, responseBody: data)
+        let contentType = response.value(forHTTPHeaderField: "Content-Type")?
+            .split(separator: ";", maxSplits: 1)
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard contentType == "application/json" else {
+            throw ToriiClientError.invalidPayload("\(context) response must use application/json")
+        }
+        guard !data.isEmpty else { throw ToriiClientError.emptyBody }
+        return data
     }
 
-    private func hex32Data(_ value: Any, label: String) throws -> Data {
-        try hexData(value, label: label, expectedByteCount: 32)
-    }
-
-    private func nonZeroHexData(_ value: Any, label: String, expectedByteCount: Int) throws -> Data {
-        let data = try hexData(value, label: label, expectedByteCount: expectedByteCount)
-        guard data.contains(where: { $0 != 0 }) else {
-            throw ToriiClientError.invalidPayload("\(label) must not be all zero.")
+    private func getExactSccpNorito(
+        path: String,
+        context: String,
+        maximumBytes: Int,
+        expectedTypeName: String
+    ) async throws -> Data {
+        let request = try makeRequest(
+            path: path,
+            method: .get,
+            headers: ["Accept": "application/x-norito"]
+        )
+        let (data, response) = try await sendBoundedSccpResponse(
+            request,
+            context: context,
+            maximumBytes: maximumBytes
+        )
+        try ensureStatus(response, equals: 200, responseBody: data)
+        let contentType = response.value(forHTTPHeaderField: "Content-Type")?
+            .split(separator: ";", maxSplits: 1)
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard contentType == "application/x-norito" else {
+            throw ToriiClientError.invalidPayload("\(context) response must use application/x-norito")
+        }
+        guard !data.isEmpty,
+              let frame = noritoDecodeFrame(data),
+              frame.header.compression == .none,
+              frame.header.schema == noritoSchemaHash(forTypeName: expectedTypeName),
+              frame.paddingLength == 0,
+              data.prefix(NoritoHeader.encodedLength) == frame.header.encode()
+        else {
+            throw ToriiClientError.invalidPayload(
+                "\(context) response is not the exact canonical uncompressed SCCP Norito type"
+            )
         }
         return data
     }
 
-    private func hexData(_ value: Any, label: String, expectedByteCount: Int) throws -> Data {
-        guard let string = value as? String else {
-            throw ToriiClientError.invalidPayload("\(label) must be a \(expectedByteCount)-byte hex string.")
+    private func exactSccpMessageId(_ value: String) throws -> String {
+        do {
+            return try SccpSubmitValidation.responseHash(value, field: "message_id")
+        } catch {
+            throw ToriiClientError.invalidPayload("message_id must be canonical lowercase nonzero prefixless 32-byte hex")
         }
-        guard string.trimmingCharacters(in: .whitespacesAndNewlines) == string else {
-            throw ToriiClientError.invalidPayload("\(label) must be a canonical hex string.")
-        }
-        var normalized = string
-        if normalized.hasPrefix("0x") || normalized.hasPrefix("0X") {
-            normalized = String(normalized.dropFirst(2))
-        }
-        guard let data = Data(hexString: normalized), data.count == expectedByteCount else {
-            throw ToriiClientError.invalidPayload("\(label) must be a \(expectedByteCount)-byte hex string.")
-        }
-        return data
-    }
-
-    private func proofWord(_ bytes: Data, index: Int) -> Data {
-        let start = index * 32
-        return bytes.subdata(in: start..<(start + 32))
-    }
-
-    private func abiWordU32(_ value: UInt32) -> Data {
-        var out = Data(repeating: 0, count: 32)
-        out[28] = UInt8((value >> 24) & 0xff)
-        out[29] = UInt8((value >> 16) & 0xff)
-        out[30] = UInt8((value >> 8) & 0xff)
-        out[31] = UInt8(value & 0xff)
-        return out
     }
 
     private func submitNoritoTransactionPayload(path: String,
@@ -20338,8 +22124,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func streamTransactionStatusEvents(hashHex: String,
-                                              lastEventId: String? = nil) -> AsyncThrowingStream<ToriiPipelineTransactionEvent, Error> {
+    public func streamTransactionStatusEvents(hashHex: String) -> AsyncThrowingStream<ToriiPipelineTransactionEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -20348,14 +22133,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                         decoding: Self.queryEqualsFilter(field: "tx_hash", value: normalizedHash).encodedData(),
                         as: UTF8.self
                     )
-                    var headers = ["Accept": "text/event-stream"]
-                    if let lastEventId {
-                        headers["Last-Event-ID"] = lastEventId
-                    }
                     let request = try makeRequest(
                         path: "/v1/events/sse",
                         queryItems: [URLQueryItem(name: "filter", value: filterValue)],
-                        headers: headers
+                        headers: ["Accept": "text/event-stream"]
                     )
                     let (bytes, response) = try await session.bytes(for: request)
                     guard let httpResponse = response as? HTTPURLResponse else {
@@ -20496,7 +22277,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     public func getSumeragiCommitQc(blockHashHex: String) async throws -> ToriiSumeragiCommitQcRecord {
         let normalized = try ToriiClient.normalizeHex32(blockHashHex, field: "block_hash")
-        let request = try makeRequest(path: "/v1/sumeragi/commit_qc/\(normalized)",
+        let request = try makeRequest(path: "/v1/sumeragi/commit-qcs/\(normalized)",
                                       headers: ["Accept": "application/json"])
         let data = try await data(for: request)
         return try decodeJSON(ToriiSumeragiCommitQcRecord.self, from: data)
@@ -21103,6 +22884,26 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         }
     }
 
+    private func ensureResponseMediaType(
+        _ response: HTTPURLResponse,
+        equals expected: String
+    ) throws {
+        guard let rawValue = response.value(forHTTPHeaderField: "Content-Type") else {
+            throw ToriiClientError.invalidPayload(
+                "response Content-Type must be \(expected)"
+            )
+        }
+        let mediaType = rawValue
+            .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)[0]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard mediaType == expected else {
+            throw ToriiClientError.invalidPayload(
+                "response Content-Type must be \(expected)"
+            )
+        }
+    }
+
     private func data(for request: URLRequest,
                       acceptedStatus: Range<Int> = 200..<300,
                       allowEmptyBody: Bool = false) async throws -> Data {
@@ -21215,6 +23016,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         guard let parsed = try parseServerSentEvent(from: lines) else {
             return nil
         }
+        try throwIfTerminalStreamError(parsed, context: "verifying-key SSE")
         guard let payloadString = parsed.data else {
             return nil
         }
@@ -21235,6 +23037,110 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let id: String?
         let retry: Int?
         let raw: String
+    }
+
+    private struct ToriiStreamErrorCodingKey: CodingKey {
+        let stringValue: String
+        let intValue: Int? = nil
+
+        init?(stringValue: String) {
+            self.stringValue = stringValue
+        }
+
+        init?(intValue: Int) {
+            return nil
+        }
+    }
+
+    private struct ToriiStreamErrorEnvelope: Decodable {
+        let code: String
+        let message: String
+        let droppedMessages: UInt64?
+        let replayAvailable: Bool
+
+        private enum CodingKeys: String, CodingKey {
+            case code
+            case message
+            case droppedMessages = "dropped_messages"
+            case replayAvailable = "replay_available"
+        }
+
+        init(from decoder: Decoder) throws {
+            let dynamic = try decoder.container(keyedBy: ToriiStreamErrorCodingKey.self)
+            let expected = Set(["code", "message", "dropped_messages", "replay_available"])
+            let actual = Set(dynamic.allKeys.map(\.stringValue))
+            guard actual == expected else {
+                throw DecodingError.dataCorrupted(
+                    .init(codingPath: decoder.codingPath,
+                          debugDescription: "A v1 stream error must contain exactly code, message, dropped_messages, and replay_available.")
+                )
+            }
+
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            code = try container.decode(String.self, forKey: .code)
+            message = try container.decode(String.self, forKey: .message)
+            droppedMessages = try container.decodeIfPresent(UInt64.self, forKey: .droppedMessages)
+            replayAvailable = try container.decode(Bool.self, forKey: .replayAvailable)
+
+            guard Self.isExactText(code, token: true) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .code,
+                    in: container,
+                    debugDescription: "Stream error code must be a non-empty exact token."
+                )
+            }
+            guard Self.isExactText(message, token: false) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .message,
+                    in: container,
+                    debugDescription: "Stream error message must be non-empty exact text."
+                )
+            }
+        }
+
+        private static func isExactText(_ value: String, token: Bool) -> Bool {
+            guard !value.isEmpty,
+                  value.trimmingCharacters(in: .whitespacesAndNewlines) == value,
+                  !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+                return false
+            }
+            return !token || !value.unicodeScalars.contains(where: CharacterSet.whitespacesAndNewlines.contains)
+        }
+    }
+
+    private func throwIfTerminalStreamError(_ parsed: ToriiSseParsedEvent,
+                                            context: String) throws {
+        guard parsed.eventName == "stream_error" else {
+            return
+        }
+        guard let payloadString = parsed.data,
+              let payloadData = payloadString.data(using: .utf8) else {
+            throw ToriiClientError.invalidPayload("\(context) terminal stream error must contain UTF-8 JSON data.")
+        }
+
+        do {
+            try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(in: payloadData)
+        } catch {
+            throw ToriiClientError.invalidPayload(
+                "\(context) terminal stream error must be valid JSON without duplicate object keys."
+            )
+        }
+
+        let envelope: ToriiStreamErrorEnvelope
+        do {
+            envelope = try JSONDecoder().decode(ToriiStreamErrorEnvelope.self, from: payloadData)
+        } catch {
+            throw ToriiClientError.invalidPayload(
+                "\(context) terminal stream error is malformed: \(ToriiClientError.describeDecodingError(error))"
+            )
+        }
+
+        throw ToriiClientError.stream(
+            ToriiStreamError(code: envelope.code,
+                             message: envelope.message,
+                             droppedMessages: envelope.droppedMessages,
+                             replayAvailable: envelope.replayAvailable)
+        )
     }
 
     private func parseServerSentEvent(from lines: [String]) throws -> ToriiSseParsedEvent? {
@@ -21311,6 +23217,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         guard let parsed = try parseServerSentEvent(from: lines) else {
             return nil
         }
+        try throwIfTerminalStreamError(parsed, context: "transaction-status SSE")
         guard let payloadString = parsed.data else {
             return nil
         }
@@ -21397,6 +23304,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         guard let parsed = try parseServerSentEvent(from: lines) else {
             return nil
         }
+        try throwIfTerminalStreamError(parsed, context: "trigger SSE")
         guard let payloadString = parsed.data else {
             return nil
         }
@@ -21491,6 +23399,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         guard let parsed = try parseServerSentEvent(from: lines) else {
             return nil
         }
+        try throwIfTerminalStreamError(parsed, context: "proof SSE")
         guard let payloadString = parsed.data else {
             return nil
         }

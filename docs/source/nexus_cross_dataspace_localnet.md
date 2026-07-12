@@ -8,10 +8,11 @@ description: Reproducible workflow for proving ds1/ds2 atomic all-or-nothing set
 
 This runbook executes the Nexus integration proof that:
 
-- boots a 4-peer localnet with two restricted private dataspaces (`ds1`, `ds2`),
+- boots a 12-peer localnet with disjoint four-validator Nexus, `ds1`, and `ds2` committees,
 - routes account traffic into each dataspace,
 - creates an asset in each dataspace,
 - executes atomic swap settlement across dataspaces in both directions,
+- runs ten paired forward/reverse swaps under the strict DvP liveness gate,
 - proves rollback semantics by submitting an underfunded leg and checking balances stay unchanged.
 
 The canonical test is:
@@ -68,7 +69,7 @@ Targeted proof test:
 
 ```bash
 IROHA_TEST_SKIP_BUILD=1 NORITO_SKIP_BINDINGS_SYNC=1 \
-  cargo test -p integration_tests --test nexus_and_streaming \
+  cargo test --locked --offline -p integration_tests --test nexus_and_streaming \
   nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing \
   -- --nocapture --test-threads=1
 ```
@@ -77,7 +78,7 @@ Full Nexus subset:
 
 ```bash
 IROHA_TEST_SKIP_BUILD=1 NORITO_SKIP_BINDINGS_SYNC=1 \
-  cargo test -p integration_tests --test nexus_and_streaming nexus:: -- --nocapture --test-threads=1
+  cargo test --locked --offline -p integration_tests --test nexus_and_streaming nexus:: -- --nocapture --test-threads=1
 ```
 
 ## Expected Proof Signals
@@ -90,9 +91,14 @@ IROHA_TEST_SKIP_BUILD=1 NORITO_SKIP_BINDINGS_SYNC=1 \
   - successful reverse swap,
   - failed underfunded swap (rollback unchanged balances).
 
-## Current Validation Snapshot
+## Release validation requirement
 
-As of **February 19, 2026**, this workflow passed with:
+The former February 19, 2026 four-peer snapshot predates the disjoint 12-peer corridor and is not
+release evidence for the current implementation. A production sign-off requires the actual network
+startup logs, all three four-validator committees, at least 9 of 10 successful paired swap
+iterations with no more than two retries, and the final adversarial underfunded rollback. A sandbox
+bind skip or a partial 3-of-10 run is not a pass.
 
-- targeted test: `1 passed; 0 failed`,
-- full Nexus subset: `24 passed; 0 failed`.
+For a multi-seed run, use `scripts/nexus/run_cross_runtime_matrix.sh` after prebuilding a compatible
+`irohad`; do not rely on `IROHA_TEST_SKIP_BUILD=1` unless that binary is present and matches the
+workspace.

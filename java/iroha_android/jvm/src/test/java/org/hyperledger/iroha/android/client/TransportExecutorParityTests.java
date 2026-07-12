@@ -10,6 +10,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -99,6 +100,74 @@ public final class TransportExecutorParityTests {
     }
   }
 
+  @Test
+  public void jdkExecutorAcceptsBodyAtConfiguredLimit() throws Exception {
+    try (MockWebServer server = new MockWebServer()) {
+      server.enqueue(new MockResponse().setResponseCode(200).setBody("12345678"));
+      server.start(InetAddress.getByName("127.0.0.1"), 0);
+
+      final TransportRequest request =
+          TransportRequest.builder()
+              .setMethod("GET")
+              .setUri(server.url("/exact").uri())
+              .setHeaders(Map.of())
+              .setMaximumResponseBytes(8L)
+              .build();
+      final TransportResponse response =
+          new JavaHttpExecutor(JDK_CLIENT).execute(request).get(5, TimeUnit.SECONDS);
+
+      assert Arrays.equals("12345678".getBytes(StandardCharsets.UTF_8), response.body())
+          : "exact-limit response should be accepted";
+    }
+  }
+
+  @Test
+  public void jdkExecutorRejectsChunkedBodyAboveConfiguredLimit() throws Exception {
+    try (MockWebServer server = new MockWebServer()) {
+      server.enqueue(
+          new MockResponse().setResponseCode(500).setChunkedBody("123456789", 3));
+      server.start(InetAddress.getByName("127.0.0.1"), 0);
+
+      final TransportRequest request =
+          TransportRequest.builder()
+              .setMethod("GET")
+              .setUri(server.url("/overflow").uri())
+              .setHeaders(Map.of())
+              .setMaximumResponseBytes(8L)
+              .build();
+      try {
+        new JavaHttpExecutor(JDK_CLIENT).execute(request).get(5, TimeUnit.SECONDS);
+        throw new AssertionError("oversized chunked response should be rejected");
+      } catch (final ExecutionException expected) {
+        assert hasCauseMessage(expected, "body exceeds the 8-byte limit")
+            : "expected bounded-reader failure";
+      }
+    }
+  }
+
+  @Test
+  public void jdkExecutorRejectsDeclaredBodyAbovePerRequestLimit() throws Exception {
+    try (MockWebServer server = new MockWebServer()) {
+      server.enqueue(new MockResponse().setResponseCode(500).setBody("123456789"));
+      server.start(InetAddress.getByName("127.0.0.1"), 0);
+
+      final TransportRequest request =
+          TransportRequest.builder()
+              .setMethod("GET")
+              .setUri(server.url("/declared-overflow").uri())
+              .setHeaders(Map.of())
+              .setMaximumResponseBytes(8L)
+              .build();
+      try {
+        new JavaHttpExecutor(JDK_CLIENT).execute(request).get(5, TimeUnit.SECONDS);
+        throw new AssertionError("declared oversized response should be rejected");
+      } catch (final ExecutionException expected) {
+        assert hasCauseMessage(expected, "Content-Length 9 exceeds the 8-byte limit")
+            : "expected declared-length precheck failure";
+      }
+    }
+  }
+
   private static final class OkHttpTestExecutor implements HttpTransportExecutor {
     private final OkHttpClient client = new OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS).build();
 
@@ -183,5 +252,16 @@ public final class TransportExecutorParityTests {
       }
       return output.toString(StandardCharsets.UTF_8);
     }
+  }
+
+  private static boolean hasCauseMessage(final Throwable failure, final String fragment) {
+    Throwable current = failure;
+    while (current != null) {
+      if (current.getMessage() != null && current.getMessage().contains(fragment)) {
+        return true;
+      }
+      current = current.getCause();
+    }
+    return false;
   }
 }

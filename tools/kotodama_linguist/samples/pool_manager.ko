@@ -1,31 +1,45 @@
-// Representative liquidity-pool contract for Kotodama grammar validation.
+// Representative liquidity-pool seiyaku for Kotodama grammar validation.
 seiyaku PoolManager {
-  state PoolAccount: Map<Name, AccountId>;
-  state ReserveA: Map<Name, int>;
-  state ReserveB: Map<Name, int>;
-
-  fn min(a: int, b: int) -> int {
-    if (a < b) { return a; } else { return b; }
-  }
-
-  #[access(read="*", write="*")]
-  kotoage fn quote_or_deposit(
-    trader: AccountId,
-    pool: Name,
-    amount_a: int,
-    amount_b: int
-  ) -> int permission(Admin) {
-    let reserve_a = get_or_insert_default(ReserveA, pool, 0);
-    let reserve_b = get_or_insert_default(ReserveB, pool, 0);
-    let quoted = (reserve_a == 0) ? amount_b : min((amount_a * reserve_b) / reserve_a, amount_b);
-
-    if (quoted > 0) {
-      transfer_asset(trader, PoolAccount[pool], asset_definition!("asset#a"), amount_a);
-      transfer_asset(trader, PoolAccount[pool], asset_definition!("asset#b"), quoted);
+    state StateMap<Name, AccountId> PoolAccount;
+    state StateMap<Name, quantity> ReserveA;
+    state StateMap<Name, quantity> ReserveB;
+    fn min_value(quantity a, quantity b) -> quantity {
+        if (a < b) {
+            return a;
+        } else {
+            return b;
+        }
     }
 
-    ReserveA[pool] = reserve_a + amount_a;
-    ReserveB[pool] = reserve_b + quoted;
-    return quoted;
-  }
+    kotoage fn quote_or_deposit(AccountId trader, Name pool, quantity amount_a, quantity amount_b) -> quantity authorize(
+        "Admin"
+    ) {
+        let quantity zero = 0;
+        let reserve_a = ReserveA.ensure(pool, zero);
+        let reserve_b = ReserveB.ensure(pool, zero);
+        let pool_account = PoolAccount.get(pool).unwrap_or(trader);
+        let quoted = (reserve_a == zero) ? amount_b : min_value(
+            a: reserve_b * (amount_a / reserve_a),
+            b: amount_b,
+        );
+        if (quoted > zero) {
+            ledger::asset::transfer(
+                source: trader,
+                destination: pool_account,
+                asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+                amount: amount_a,
+                dataspace: DataSpaceId::parse("0"),
+            );
+            ledger::asset::transfer(
+                source: trader,
+                destination: pool_account,
+                asset_definition: AssetDefinitionId::parse("6pEP9RjNoZ7beWkT3pLfKoM1dyfi"),
+                amount: quoted,
+                dataspace: DataSpaceId::parse("0"),
+            );
+        }
+        ReserveA[pool] = reserve_a + amount_a;
+        ReserveB[pool] = reserve_b + quoted;
+        return quoted;
+    }
 }

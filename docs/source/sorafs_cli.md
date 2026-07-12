@@ -222,7 +222,6 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   norito build \
   --source contracts/register_domain.ko \
   --bytecode-out artifacts/register_domain.to \
-  --abi-version=1 \
   --summary-out artifacts/register_domain.bytecode.json
 ```
 
@@ -674,10 +673,15 @@ filters accept the canonical labels (`pending`, `verified`, `failed`,
 `repaired`, `forced`) and the CLI validates the manifest/provider digests before
 dispatching the request so typos fail fast in CI.
 
-Challenge creation is internal to the verified coordinator scheduler. The
-first-release CLI intentionally exposes no command for injecting challenges or
-manual success/failure observations. Operators use the read-only commands below
-and the authenticated provider-proof and auditor-verdict lifecycle instead.
+### Challenge authority
+
+Torii exposes no manual or externally supplied challenge-ingress route. The
+coordinator scheduler is the sole challenge authority, and PoR automation fails
+closed until authenticated external drand/VRF feeds are configured. Operators
+inspect scheduler output with the status, report, and export commands; they do
+not submit challenges through the CLI. The CLI also exposes no command for
+recording manual success/failure observations; provider proofs and auditor
+verdicts use the authenticated lifecycle instead.
 
 ### Export GovernanceLog verdicts
 

@@ -4485,8 +4485,8 @@ pub struct Pipeline {
     pub overlay_chunk_instructions: usize,
     /// Gas fees configuration.
     pub gas: Gas,
-    /// Admission-time ceiling for `ProgramMetadata.max_cycles` (0 disables the check).
-    pub ivm_max_cycles_upper_bound: u64,
+    /// Mandatory admission-time ceiling for `ProgramMetadata.max_cycles`.
+    pub ivm_max_cycles_upper_bound: NonZeroU64,
     /// Maximum decoded Kotodama instructions accepted during admission (0 = unlimited).
     pub ivm_max_decoded_instructions: u64,
     /// Maximum decoded Kotodama byte length accepted during admission (0 = unlimited).
@@ -5918,6 +5918,10 @@ pub struct SumeragiPersistence {
     pub kura_retry_max_attempts: u32,
     /// Timeout for inflight commit jobs before liveness recovery reports a stall.
     pub commit_inflight_timeout: Duration,
+    /// Maximum synchronous wait for the height-local I/O worker to report body
+    /// cleanup after Kura-authorized finality. This node-local maintenance
+    /// policy is excluded from the shared consensus fingerprint.
+    pub post_finality_cleanup_timeout: Duration,
     /// Commit worker work-queue capacity.
     pub commit_work_queue_cap: usize,
     /// Commit worker result-queue capacity.
@@ -7122,6 +7126,8 @@ pub struct ProofApi {
     pub max_body_bytes: Bytes<u64>,
     /// Maximum proof request bodies buffered concurrently before handler admission.
     pub body_max_inflight: NonZeroUsize,
+    /// Absolute deadline for reading one admitted proof request body.
+    pub body_read_timeout: Duration,
     /// Egress budget for proof responses (bytes/sec). None disables.
     pub egress_bytes_per_sec: Option<NonZeroU64>,
     /// Burst budget for proof responses (bytes).
@@ -7277,14 +7283,6 @@ impl Default for Push {
 pub struct Torii {
     /// API listening address.
     pub address: WithOrigin<SocketAddr>,
-    /// Supported Torii API versions (semantic `major.minor`, oldest → newest).
-    pub api_versions: Vec<String>,
-    /// Default API version assumed when the client omits the header.
-    pub api_version_default: String,
-    /// Minimum API version required for proof/staking/fee endpoints.
-    pub api_min_proof_version: String,
-    /// Optional unix timestamp when the oldest supported version sunsets.
-    pub api_version_sunset_unix: Option<u64>,
     /// Maximum request body size.
     pub max_content_len: Bytes<u64>,
     /// Base directory for Torii persistence (attachments, webhooks, DA queues).
@@ -8153,6 +8151,10 @@ pub struct ToriiOfflineIssuer {
     pub max_balance: Numeric,
     /// Maximum authorized value for one offline transaction.
     pub max_tx_value: Numeric,
+    /// Maximum number of accepted bindings plus in-flight reservations retained in memory.
+    pub operation_registry_max_entries: NonZeroUsize,
+    /// Maximum canonical bytes reserved by accepted bindings and in-flight operations.
+    pub operation_registry_max_bytes: NonZeroUsize,
     /// Certificate TTL.
     pub certificate_ttl: Duration,
     /// Authorization refresh interval.
@@ -9849,27 +9851,6 @@ impl Default for IsoReferenceData {
     }
 }
 
-/// SCCP lane activation policy selected by node configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SccpLaunchMode {
-    /// Require every supported counterparty lane to be ready together.
-    AllLanesAtOnce,
-    /// Admit only the Ethereum mainnet lane.
-    EthereumMainnetLane,
-    /// Admit only the BSC mainnet lane.
-    BscMainnetLane,
-    /// Admit only the Solana testnet lane.
-    SolanaTestnetLane,
-    /// Admit only the TON mainnet lane.
-    TonMainnetLane,
-}
-
-impl Default for SccpLaunchMode {
-    fn default() -> Self {
-        Self::EthereumMainnetLane
-    }
-}
-
 /// Zero-knowledge proof configuration namespace.
 #[derive(Debug, Clone)]
 pub struct Zk {
@@ -9879,6 +9860,8 @@ pub struct Zk {
     pub fastpq: Fastpq,
     /// Native STARK/FRI verification settings.
     pub stark: Stark,
+    /// SCCP proof-admission and deterministic verifier-work limits.
+    pub sccp: Sccp,
     /// Cap on the number of recent shielded Merkle roots kept per asset.
     pub root_history_cap: usize,
     /// Cap on the number of recent ballot ciphertexts kept per election.
@@ -9903,18 +9886,6 @@ pub struct Zk {
     pub bridge_proof_max_past_age_blocks: u64,
     /// Maximum future drift (in blocks) a bridge proof's end height may lead the current block (0 = unlimited).
     pub bridge_proof_max_future_drift_blocks: u64,
-    /// Explicit SCCP lane launch policy for this node deployment.
-    pub sccp_launch_mode: SccpLaunchMode,
-    /// SCCP source-chain verifier material that can enable non-SORA source lanes.
-    pub sccp_source_verifier_materials: Vec<SccpSourceVerifierMaterial>,
-    /// SCCP source adapter engine deployments that can enable non-SORA source lanes.
-    pub sccp_source_adapter_engine_deployments: Vec<SccpSourceAdapterEngineDeployment>,
-    /// SCCP destination verifier rollout material that can enable SCCP lanes.
-    pub sccp_destination_rollouts: Vec<SccpDestinationRollout>,
-    /// SCCP governed route allowlist material that can enable SCCP lanes.
-    pub sccp_route_allowlists: Vec<SccpRouteAllowlist>,
-    /// Concrete SCCP route manifests advertised to wallet clients.
-    pub sccp_route_manifests: Vec<SccpRouteManifest>,
     /// Poseidon parameter set identifier to embed into policies (if any).
     pub poseidon_params_id: Option<u32>,
     /// Pedersen parameter set identifier to embed into policies (if any).
@@ -9965,443 +9936,86 @@ pub struct Zk {
     pub gas: ConfidentialGas,
 }
 
-/// Configured SCCP source-chain verifier material.
-#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
-pub struct SccpSourceVerifierMaterial {
-    /// Material format version.
-    pub version: u8,
-    /// SCCP source domain identifier.
-    pub source_domain: u32,
-    /// Canonical source-chain key such as `eth`, `bsc`, or `sol`.
-    pub source_chain: String,
-    /// Source proof plan name.
-    pub source_proof_plan: String,
-    /// Source-chain finality model name.
-    pub finality_model: String,
-    /// Source adapter circuit identifier.
-    pub adapter_circuit_id: String,
-    /// Trust-anchor record identifier.
-    pub source_trust_anchor_id: String,
-    /// Hex-encoded 32-byte trust-anchor digest.
-    pub source_trust_anchor_hash: String,
-    /// Consensus verifier identifier.
-    pub consensus_verifier_id: String,
-    /// Hex-encoded 32-byte consensus verifier digest.
-    pub consensus_verifier_hash: String,
-    /// Message inclusion verifier identifier.
-    pub message_inclusion_verifier_id: String,
-    /// Hex-encoded 32-byte message inclusion verifier digest.
-    pub message_inclusion_verifier_hash: String,
-    /// Source-state verifier identifier, if the source plan binds one.
-    pub source_state_verifier_id: String,
-    /// Hex-encoded 32-byte source-state verifier digest, if required by the source plan.
-    pub source_state_verifier_hash: String,
-    /// Governed source bridge emitter identifier, if the source plan binds one.
-    pub source_bridge_emitter_id: String,
-    /// Hex-encoded governed source bridge emitter address, if required by the source plan.
-    pub source_bridge_emitter_address: String,
-    /// Hex-encoded 32-byte governed source bridge emitter runtime bytecode hash.
-    pub source_bridge_emitter_code_hash: String,
-    /// Hex-encoded 32-byte governed source bridge network identifier.
-    pub source_bridge_network_id: String,
-    /// Hex-encoded 20-byte governed source bridge owner address.
-    pub source_bridge_owner_address: String,
-    /// Hex-encoded 32-byte governed source bridge config hash, when required by the source plan.
-    pub source_bridge_config_hash: String,
-    /// Finality policy identifier.
-    pub finality_policy_id: String,
-    /// Hex-encoded 32-byte finality policy digest.
-    pub finality_policy_hash: String,
-    /// Whether this record is placeholder material and must remain disabled.
-    pub placeholder_material: bool,
+/// SCCP proof-admission and deterministic verifier-work limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sccp {
+    /// Maximum closed SCCP proofs in one transaction.
+    pub max_proofs_per_transaction: NonZeroU32,
+    /// Maximum closed SCCP proofs committed in one block.
+    pub max_proofs_per_block: NonZeroU32,
+    /// Maximum canonical bytes retained for one closed SCCP proof.
+    pub max_proof_bytes_per_proof: NonZeroU64,
+    /// Maximum aggregate SCCP proof bytes in one transaction.
+    pub max_proof_bytes_per_transaction: NonZeroU64,
+    /// Maximum aggregate SCCP proof bytes committed in one block.
+    pub max_proof_bytes_per_block: NonZeroU64,
+    /// Maximum native-finality continuation headers in one transaction.
+    pub max_native_headers_per_transaction: NonZeroU32,
+    /// Maximum native-finality continuation headers committed in one block.
+    pub max_native_headers_per_block: NonZeroU32,
+    /// Maximum Ethereum light-client updates in one transaction.
+    pub max_ethereum_light_client_updates_per_transaction: NonZeroU32,
+    /// Maximum Ethereum light-client updates committed in one block.
+    pub max_ethereum_light_client_updates_per_block: NonZeroU32,
+    /// Maximum framed native-finality header bytes in one transaction.
+    pub max_native_header_bytes_per_transaction: NonZeroU64,
+    /// Maximum framed native-finality header bytes committed in one block.
+    pub max_native_header_bytes_per_block: NonZeroU64,
+    /// Maximum secp256k1 recoveries in one transaction.
+    pub max_secp256k1_recoveries_per_transaction: NonZeroU32,
+    /// Maximum secp256k1 recoveries committed in one block.
+    pub max_secp256k1_recoveries_per_block: NonZeroU32,
+    /// Maximum BLS aggregate-signature checks in one transaction.
+    pub max_bls_aggregate_checks_per_transaction: NonZeroU32,
+    /// Maximum BLS aggregate-signature checks committed in one block.
+    pub max_bls_aggregate_checks_per_block: NonZeroU32,
+    /// Maximum BLS public-key contributions processed in one transaction.
+    pub max_bls_signer_contributions_per_transaction: NonZeroU32,
+    /// Maximum BLS public-key contributions committed in one block.
+    pub max_bls_signer_contributions_per_block: NonZeroU32,
+    /// Maximum BN254 Groth16 pairing-product checks in one transaction.
+    pub max_bn254_pairing_checks_per_transaction: NonZeroU32,
+    /// Maximum BN254 Groth16 pairing-product checks committed in one block.
+    pub max_bn254_pairing_checks_per_block: NonZeroU32,
 }
 
-/// Configured SCCP source adapter engine deployment material.
-#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
-pub struct SccpSourceAdapterEngineDeployment {
-    /// Material format version.
-    pub version: u8,
-    /// SCCP source domain identifier.
-    pub source_domain: u32,
-    /// SCCP target domain identifier.
-    pub target_domain: u32,
-    /// Canonical source-chain key such as `eth`, `bsc`, or `sol`.
-    pub source_chain: String,
-    /// Source proof plan name.
-    pub source_proof_plan: String,
-    /// Source-chain finality model name.
-    pub finality_model: String,
-    /// Source adapter proof family identifier.
-    pub adapter_proof_family: String,
-    /// Source adapter circuit identifier.
-    pub adapter_circuit_id: String,
-    /// Hex-encoded 32-byte OpenVerify verifier-key commitment for this source->target lane.
-    pub adapter_verifier_vk_hash: String,
-    /// Trust-anchor record identifier.
-    pub source_trust_anchor_id: String,
-    /// Hex-encoded 32-byte trust-anchor digest.
-    pub source_trust_anchor_hash: String,
-    /// Consensus verifier identifier.
-    pub consensus_verifier_id: String,
-    /// Hex-encoded 32-byte consensus verifier digest.
-    pub consensus_verifier_hash: String,
-    /// Message inclusion verifier identifier.
-    pub message_inclusion_verifier_id: String,
-    /// Hex-encoded 32-byte message inclusion verifier digest.
-    pub message_inclusion_verifier_hash: String,
-    /// Source-state verifier identifier, if the source plan binds one.
-    pub source_state_verifier_id: String,
-    /// Hex-encoded 32-byte source-state verifier digest, if required by the source plan.
-    pub source_state_verifier_hash: String,
-    /// Governed source bridge emitter identifier, if the source plan binds one.
-    pub source_bridge_emitter_id: String,
-    /// Hex-encoded governed source bridge emitter address, if required by the source plan.
-    pub source_bridge_emitter_address: String,
-    /// Hex-encoded 32-byte governed source bridge emitter runtime bytecode hash.
-    pub source_bridge_emitter_code_hash: String,
-    /// Hex-encoded 32-byte governed source bridge network identifier.
-    pub source_bridge_network_id: String,
-    /// Hex-encoded 20-byte governed source bridge owner address.
-    pub source_bridge_owner_address: String,
-    /// Hex-encoded 32-byte governed source bridge config hash, when required by the source plan.
-    pub source_bridge_config_hash: String,
-    /// Finality policy identifier.
-    pub finality_policy_id: String,
-    /// Hex-encoded 32-byte finality policy digest.
-    pub finality_policy_hash: String,
-    /// Hex-encoded 32-byte deployment receipt digest.
-    pub deployment_receipt_hash: String,
-    /// Hex-encoded 32-byte Solana Tower replay verifier digest, when auditing SOL source readiness.
-    pub solana_tower_replay_verifier_hash: String,
-    /// Hex-encoded 32-byte Solana full AccountsDB lattice verifier digest, when auditing SOL source readiness.
-    pub solana_full_accountsdb_lattice_verifier_hash: String,
-    /// Hex-encoded 32-byte Solana bank/fork-choice verifier digest, when auditing SOL source readiness.
-    pub solana_bank_fork_choice_verifier_hash: String,
-    /// Hex-encoded Solana full-light-client audit digest derived from the three SOL verifier hashes.
-    pub solana_full_light_client_gate_hash: String,
-    /// Hex-encoded 32-byte TON masterchain config verifier digest, when auditing TON source readiness.
-    pub ton_masterchain_config_verifier_hash: String,
-    /// Hex-encoded 32-byte TON validator-set transition verifier digest, when auditing TON source readiness.
-    pub ton_validator_set_transition_verifier_hash: String,
-    /// Hex-encoded 32-byte TON shard-accounts dictionary verifier digest, when auditing TON source readiness.
-    pub ton_shard_accounts_dictionary_verifier_hash: String,
-    /// Hex-encoded TON full-light-client audit digest derived from the three TON verifier hashes.
-    pub ton_full_light_client_gate_hash: String,
-    /// Hex-encoded TRON DPoS source gate digest derived from the governed source deployment bundle.
-    pub tron_dpos_source_gate_hash: String,
-}
-
-/// Configured SCCP destination verifier rollout material.
-#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
-pub struct SccpDestinationRollout {
-    /// Material format version.
-    pub version: u8,
-    /// SCCP counterparty domain identifier.
-    pub domain: u32,
-    /// Canonical counterparty chain key.
-    pub chain: String,
-    /// Destination verifier plan name.
-    pub verifier_plan: String,
-    /// Whether the destination verifier deployment is immutable.
-    pub immutable_verifier_ready: bool,
-    /// Whether the destination cryptographic anchors are active.
-    pub anchors_ready: bool,
-    /// Chain-specific verifier identity, such as a contract address or program id.
-    pub verifier_identity: Option<String>,
-    /// Hex-encoded 32-byte verifier code digest.
-    pub verifier_code_hash: Option<String>,
-    /// Hex-encoded 32-byte verifier key digest for Groth16-backed verifier deployments.
-    pub verifier_key_hash: Option<String>,
-    /// Hex-encoded EVM-family destination network id used in destination binding evidence.
-    pub destination_network_id: Option<String>,
-    /// Hex-encoded EVM-family bridge wrapper address used in destination binding evidence.
-    pub destination_bridge_address: Option<String>,
-    /// Canonical destination binding key derived from rollout deployment evidence.
-    pub destination_binding_key: Option<String>,
-    /// Hex-encoded canonical destination binding hash derived from rollout deployment evidence.
-    pub destination_binding_hash: Option<String>,
-    /// Destination trust-anchor profile id.
-    pub anchor_id: Option<String>,
-    /// Solana RPC commitment used for live ProgramData evidence.
-    pub solana_rpc_commitment: Option<String>,
-    /// Solana verifier Program account owner.
-    pub solana_program_owner: Option<String>,
-    /// Solana verifier ProgramData account owner.
-    pub solana_programdata_owner: Option<String>,
-    /// Whether Solana ProgramData is immutable with no upgrade authority.
-    pub solana_program_immutable: Option<bool>,
-    /// Base64-encoded Solana Program account data.
-    pub solana_program_account_data_base64: Option<String>,
-    /// Solana ProgramData account address for the verifier program.
-    pub solana_programdata_address: Option<String>,
-    /// Canonical decimal Solana ProgramData deployment slot.
-    pub solana_programdata_slot: Option<String>,
-    /// Canonical decimal expected Solana ProgramData deployment slot.
-    pub solana_expected_programdata_slot: Option<String>,
-    /// Canonical decimal RPC context slot for the Solana Program account.
-    pub solana_program_account_context_slot: Option<String>,
-    /// Canonical decimal RPC context slot for the Solana ProgramData account.
-    pub solana_programdata_account_context_slot: Option<String>,
-    /// Hex-encoded BLAKE2b-256 digest of the immutable Solana ProgramData metadata header.
-    pub solana_programdata_metadata_blake2b256: Option<String>,
-    /// Base64-encoded immutable Solana ProgramData metadata header.
-    pub solana_programdata_metadata_base64: Option<String>,
-    /// Hex-encoded BLAKE2b-256 digest of the deployed Solana verifier executable.
-    pub solana_programdata_executable_blake2b256: Option<String>,
-    /// Base64-encoded deployed Solana verifier executable bytes.
-    pub solana_programdata_executable_base64: Option<String>,
-    /// TON live account status observed for the verifier contract.
-    pub ton_account_status: Option<String>,
-    /// Hex-encoded TON live account state hash for the verifier contract.
-    pub ton_account_state_hash: Option<String>,
-    /// Canonical positive decimal TON last-transaction logical time.
-    pub ton_last_transaction_lt: Option<String>,
-    /// Hex-encoded TON live last-transaction hash for the verifier contract.
-    pub ton_last_transaction_hash: Option<String>,
-    /// Hex-encoded TON verifier code BoC root hash.
-    pub ton_verifier_code_boc_root_hash: Option<String>,
-    /// Hex-encoded TON verifier code BoC bytes.
-    pub ton_verifier_code_boc: Option<String>,
-    /// Remaining rollout blockers. Must be empty for production.
-    pub blockers: Vec<String>,
-}
-
-/// Configured SCCP governed route allowlist material.
-#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
-pub struct SccpRouteAllowlist {
-    /// Material format version.
-    pub version: u8,
-    /// SCCP counterparty domain identifier.
-    pub domain: u32,
-    /// Canonical counterparty chain key.
-    pub chain: String,
-    /// Route activation policy name.
-    pub activation_policy: String,
-    /// Governed route allowlist profile id.
-    pub route_allowlist_id: Option<String>,
-    /// Hex-encoded 32-byte route allowlist policy digest.
-    pub route_allowlist_hash: Option<String>,
-    /// Route canary status, expected to be `passed` for production launch.
-    pub route_canary_status: Option<String>,
-    /// Hex-encoded 32-byte post-deploy route canary evidence digest.
-    pub route_canary_evidence_hash: Option<String>,
-    /// Hex-encoded route allowlist hash bound by the route canary evidence.
-    pub route_canary_route_allowlist_hash: Option<String>,
-    /// Hex-encoded destination binding hash bound by the route canary evidence.
-    pub route_canary_destination_binding_hash: Option<String>,
-    /// Hex-encoded EVM MessageProofAccepted transaction hash bound by route canary evidence.
-    pub evm_route_canary_transaction_hash: Option<String>,
-    /// EVM MessageProofAccepted log index bound by route canary evidence.
-    pub evm_route_canary_log_index: Option<u32>,
-    /// Positive EVM block number containing the route canary receipt.
-    pub evm_route_canary_receipt_block_number: Option<u64>,
-    /// Hex-encoded EVM block hash for the route canary receipt block.
-    pub evm_route_canary_receipt_block_hash: Option<String>,
-    /// Whether the EVM route canary receipt block was read through finalized state.
-    pub evm_route_canary_receipt_block_finalized: Option<bool>,
-    /// Hex-encoded EVM receiptsRoot for the route canary receipt block.
-    pub evm_route_canary_block_receipts_root: Option<String>,
-    /// Hex-encoded SHA-256 digest of the EVM submitSccpMessageProof calldata.
-    pub evm_route_canary_call_data_sha256: Option<String>,
-    /// Hex-encoded EVM MessageProofAccepted message id bound by route canary evidence.
-    pub evm_route_canary_message_id: Option<String>,
-    /// Hex-encoded EVM submitSccpMessageProof payload hash.
-    pub evm_route_canary_payload_hash: Option<String>,
-    /// SCCP target domain decoded from the EVM submitSccpMessageProof calldata.
-    pub evm_route_canary_target_domain: Option<u32>,
-    /// Hex-encoded EVM MessageProofAccepted statement hash bound by route canary evidence.
-    pub evm_route_canary_statement_hash: Option<String>,
-    /// Hex-encoded EVM MessageProofAccepted commitment root bound by route canary evidence.
-    pub evm_route_canary_commitment_root: Option<String>,
-    /// Hex-encoded finality height decoded from the EVM submitSccpMessageProof calldata.
-    pub evm_route_canary_finality_height: Option<String>,
-    /// Hex-encoded finality block hash decoded from the EVM submitSccpMessageProof calldata.
-    pub evm_route_canary_finality_block_hash: Option<String>,
-    /// Proof version decoded from the EVM submitSccpMessageProof calldata.
-    pub evm_route_canary_proof_version: Option<u32>,
-    /// SCCP source domain decoded from the EVM submitSccpMessageProof calldata proof descriptor.
-    pub evm_route_canary_proof_source_domain: Option<u32>,
-    /// Whether EVM `usedMessageProofs(messageId)` was true for the canary.
-    pub evm_route_canary_used_message_proof: Option<bool>,
-    /// Hex-encoded TRON MessageProofAccepted transaction id bound by route canary evidence.
-    pub tron_route_canary_transaction_id: Option<String>,
-    /// Hex-encoded 0x41-prefixed TRON transaction owner address bound by route canary evidence.
-    pub tron_route_canary_transaction_owner_address: Option<String>,
-    /// Positive TRON block number containing the route canary transaction.
-    pub tron_route_canary_block_number: Option<u64>,
-    /// TRON block timestamp in milliseconds containing the route canary transaction.
-    pub tron_route_canary_block_timestamp: Option<u64>,
-    /// TRON MessageProofAccepted log index bound by route canary evidence.
-    pub tron_route_canary_log_index: Option<u32>,
-    /// Hex-encoded TRON MessageProofAccepted message id bound by route canary evidence.
-    pub tron_route_canary_message_id: Option<String>,
-    /// Hex-encoded SHA-256 digest of the TRON submitSccpMessageProof calldata.
-    pub tron_route_canary_call_data_sha256: Option<String>,
-    /// Hex-encoded TRON submitSccpMessageProof payload hash.
-    pub tron_route_canary_payload_hash: Option<String>,
-    /// SCCP target domain decoded from the TRON submitSccpMessageProof calldata.
-    pub tron_route_canary_target_domain: Option<u32>,
-    /// Hex-encoded TRON MessageProofAccepted statement hash bound by route canary evidence.
-    pub tron_route_canary_statement_hash: Option<String>,
-    /// Hex-encoded TRON MessageProofAccepted commitment root bound by route canary evidence.
-    pub tron_route_canary_commitment_root: Option<String>,
-    /// Hex-encoded finality height decoded from the TRON submitSccpMessageProof calldata.
-    pub tron_route_canary_finality_height: Option<String>,
-    /// Hex-encoded finality block hash decoded from the TRON submitSccpMessageProof calldata.
-    pub tron_route_canary_finality_block_hash: Option<String>,
-    /// Proof version decoded from the TRON submitSccpMessageProof calldata.
-    pub tron_route_canary_proof_version: Option<u32>,
-    /// SCCP source domain decoded from the TRON submitSccpMessageProof calldata proof descriptor.
-    pub tron_route_canary_proof_source_domain: Option<u32>,
-    /// Whether TRON `usedMessageProofs(messageId)` was true for the canary.
-    pub tron_route_canary_used_message_proof: Option<bool>,
-    /// Whether TRON raw transaction owner matched the visible transaction owner.
-    pub tron_route_canary_raw_data_owner_matches_transaction: Option<bool>,
-    /// Hex-encoded SHA-256 digest of the TRON route-canary transaction signature.
-    pub tron_route_canary_signature_sha256: Option<String>,
-    /// Hex-encoded 0x41-prefixed address recovered from the TRON route-canary signature.
-    pub tron_route_canary_signature_recovered_address: Option<String>,
-    /// Whether the TRON route-canary signature recovered to the transaction owner.
-    pub tron_route_canary_signature_recovers_to_owner: Option<bool>,
-    /// Hex-encoded TON live account state hash bound by route canary evidence.
-    pub ton_route_canary_account_state_hash: Option<String>,
-    /// Canonical positive decimal TON last-transaction logical time bound by route canary evidence.
-    pub ton_route_canary_last_transaction_lt: Option<String>,
-    /// Hex-encoded TON last-transaction hash bound by route canary evidence.
-    pub ton_route_canary_last_transaction_hash: Option<String>,
-    /// Whether governance has activated this route profile.
-    pub routes_allowlisted: bool,
-    /// Remaining route blockers. Must be empty for production.
-    pub blockers: Vec<String>,
-}
-
-/// Route-bound browser prover manifest reference advertised to wallet clients.
-#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
-pub struct SccpRouteBrowserProverManifestRef {
-    /// Browser-safe prover module URL.
-    pub module_url: String,
-    /// Optional package/module specifier for reproducible builds.
-    pub module_specifier: Option<String>,
-    /// Hex-encoded SHA-256 digest of the browser module bytes.
-    pub module_hash: String,
-    /// Hex-encoded SHA-256 digest of the public browser prover manifest.
-    pub manifest_hash: String,
-    /// Expected exported symbols in the browser module.
-    pub expected_exports: Vec<String>,
-    /// Hex-encoded route/deployment hash this prover manifest is bound to.
-    pub bound_route_hash: String,
-    /// Hex-encoded proof/material hash this prover manifest is bound to.
-    pub bound_proof_hash: String,
-}
-
-/// Configured SCCP route manifest material advertised to wallet clients.
-#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
-pub struct SccpRouteManifest {
-    /// Material format version.
-    pub version: u8,
-    /// Stable route identifier.
-    pub route_id: String,
-    /// Stable asset key within the route.
-    pub asset_key: String,
-    /// Route network key, for example `mainnet`, `testnet`, or `bsc-testnet`.
-    #[norito(default)]
-    pub network: String,
-    /// Canonical counterparty chain key.
-    pub chain: String,
-    /// CAIP-compatible TRON chain id hex.
-    pub chain_id_hex: String,
-    /// Canonical counterparty explorer base URL.
-    pub explorer_url: Option<String>,
-    /// Canonical counterparty explorer host.
-    pub explorer_host: Option<String>,
-    /// SCCP counterparty account codec id.
-    pub counterparty_account_codec: Option<u8>,
-    /// Stable logical key for the counterparty account codec.
-    pub counterparty_account_codec_key: Option<String>,
-    /// SCCP counterparty domain identifier.
-    pub counterparty_domain: u32,
-    /// Destination verifier target name.
-    pub verifier_target: String,
-    /// Whether this route is production-ready.
-    pub production_ready: bool,
-    /// Disabled reason surfaced when the route is not production-ready.
-    pub disabled_reason: Option<String>,
-    /// Hex-encoded destination network id used in destination binding evidence.
-    pub network_id_hex: String,
-    /// Counterparty TairaXOR token contract address.
-    pub taira_xor_token_address: String,
-    /// Counterparty TairaXOR bridge contract address.
-    pub taira_xor_bridge_address: String,
-    /// SCCP source bridge contract address.
-    #[norito(default)]
-    pub source_bridge_address: String,
-    /// Destination verifier contract address.
-    #[norito(default)]
-    pub destination_verifier_address: String,
-    /// TON verifier internal message value in nanoTON.
-    pub ton_finalize_message_value_nano: Option<String>,
-    /// Hex-encoded verifier code digest.
-    pub verifier_code_hash: String,
-    /// Hex-encoded verifier key digest.
-    pub verifier_key_hash: String,
-    /// Optional hex-encoded browser/local prover artifact digest.
-    pub proof_artifact_hash: Option<String>,
-    /// Optional hex-encoded proving key digest.
-    pub proving_key_hash: Option<String>,
-    /// Optional hex-encoded native EVM prover bundle digest.
-    pub native_evm_prover_bundle_hash: Option<String>,
-    /// Optional canonical native EVM prover bundle JSON.
-    pub native_evm_prover_bundle: Option<iroha_primitives::json::Json>,
-    /// Optional source verifier material used to verify counterparty-to-TAIRA messages.
-    pub source_verifier_material: Option<iroha_primitives::json::Json>,
-    /// Optional source adapter engine deployment evidence used by counterparty-to-TAIRA proofs.
-    pub source_adapter_engine_deployment: Option<iroha_primitives::json::Json>,
-    /// Optional source adapter engine descriptor used by counterparty-to-TAIRA proofs.
-    pub source_adapter_engine: Option<iroha_primitives::json::Json>,
-    /// Optional route-bound TAIRA-to-counterparty browser prover manifest reference.
-    pub destination_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
-    /// Optional route-bound counterparty-to-TAIRA browser prover manifest reference.
-    pub source_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
-    /// Optional hash of the normalized deployment evidence used to build this route.
-    pub deployment_evidence_sha256: Option<String>,
-    /// Canonical destination binding key.
-    pub destination_binding_key: String,
-    /// Hex-encoded canonical destination binding hash.
-    pub destination_binding_hash: String,
-    /// Canonical TAIRA settlement asset definition id.
-    pub taira_burn_record_settlement_asset_definition_id: String,
-    /// Base64-encoded TAIRA burn-record contract artifact.
-    pub taira_burn_record_contract_artifact_b64: String,
-    /// Hex-encoded SHA-256 digest of the TAIRA burn-record artifact.
-    pub taira_burn_record_artifact_sha256: String,
-    /// Hex-encoded TAIRA burn-record contract code hash.
-    pub taira_burn_record_code_hash: String,
-    /// TAIRA burn-record verifier backend.
-    pub taira_burn_record_vk_backend: String,
-    /// TAIRA burn-record verifier key name.
-    pub taira_burn_record_vk_name: String,
-    /// TAIRA burn-record settlement gas limit.
-    pub taira_burn_record_gas_limit: u64,
-    /// Optional settlement contract address.
-    pub settlement_contract_address: Option<String>,
-    /// Optional settlement contract alias.
-    pub settlement_contract_alias: Option<String>,
-    /// Whether post-deploy route evidence is complete.
-    pub post_deploy_full_toml_ready: Option<bool>,
-    /// Hex-encoded source bridge config hash.
-    pub post_deploy_source_bridge_config_hash: Option<String>,
-    /// Hex-encoded source event transaction id.
-    pub post_deploy_source_event_transaction_id: Option<String>,
-    /// Canonical BSC testnet explorer URL for the source event transaction.
-    pub post_deploy_source_event_explorer_url: Option<String>,
-    /// Hex-encoded route canary evidence hash.
-    pub post_deploy_route_canary_evidence_hash: Option<String>,
-    /// Hex-encoded route canary transaction id.
-    pub post_deploy_route_canary_transaction_id: Option<String>,
-    /// Canonical BSC testnet explorer URL for the route canary transaction.
-    pub post_deploy_route_canary_explorer_url: Option<String>,
-    /// Hex-encoded offline full TOML SHA-256 digest.
-    pub post_deploy_offline_full_toml_sha256: Option<String>,
+impl Default for Sccp {
+    fn default() -> Self {
+        Self {
+            max_proofs_per_transaction: defaults::zk::sccp::MAX_PROOFS_PER_TRANSACTION,
+            max_proofs_per_block: defaults::zk::sccp::MAX_PROOFS_PER_BLOCK,
+            max_proof_bytes_per_proof: defaults::zk::sccp::MAX_PROOF_BYTES_PER_PROOF,
+            max_proof_bytes_per_transaction: defaults::zk::sccp::MAX_PROOF_BYTES_PER_TRANSACTION,
+            max_proof_bytes_per_block: defaults::zk::sccp::MAX_PROOF_BYTES_PER_BLOCK,
+            max_native_headers_per_transaction:
+                defaults::zk::sccp::MAX_NATIVE_HEADERS_PER_TRANSACTION,
+            max_native_headers_per_block: defaults::zk::sccp::MAX_NATIVE_HEADERS_PER_BLOCK,
+            max_ethereum_light_client_updates_per_transaction:
+                defaults::zk::sccp::MAX_ETHEREUM_LIGHT_CLIENT_UPDATES_PER_TRANSACTION,
+            max_ethereum_light_client_updates_per_block:
+                defaults::zk::sccp::MAX_ETHEREUM_LIGHT_CLIENT_UPDATES_PER_BLOCK,
+            max_native_header_bytes_per_transaction:
+                defaults::zk::sccp::MAX_NATIVE_HEADER_BYTES_PER_TRANSACTION,
+            max_native_header_bytes_per_block:
+                defaults::zk::sccp::MAX_NATIVE_HEADER_BYTES_PER_BLOCK,
+            max_secp256k1_recoveries_per_transaction:
+                defaults::zk::sccp::MAX_SECP256K1_RECOVERIES_PER_TRANSACTION,
+            max_secp256k1_recoveries_per_block:
+                defaults::zk::sccp::MAX_SECP256K1_RECOVERIES_PER_BLOCK,
+            max_bls_aggregate_checks_per_transaction:
+                defaults::zk::sccp::MAX_BLS_AGGREGATE_CHECKS_PER_TRANSACTION,
+            max_bls_aggregate_checks_per_block:
+                defaults::zk::sccp::MAX_BLS_AGGREGATE_CHECKS_PER_BLOCK,
+            max_bls_signer_contributions_per_transaction:
+                defaults::zk::sccp::MAX_BLS_SIGNER_CONTRIBUTIONS_PER_TRANSACTION,
+            max_bls_signer_contributions_per_block:
+                defaults::zk::sccp::MAX_BLS_SIGNER_CONTRIBUTIONS_PER_BLOCK,
+            max_bn254_pairing_checks_per_transaction:
+                defaults::zk::sccp::MAX_BN254_PAIRING_CHECKS_PER_TRANSACTION,
+            max_bn254_pairing_checks_per_block:
+                defaults::zk::sccp::MAX_BN254_PAIRING_CHECKS_PER_BLOCK,
+        }
+    }
 }
 
 /// CABAC runtime mode compiled into the host.

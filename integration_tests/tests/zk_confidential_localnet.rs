@@ -19,10 +19,7 @@ use eyre::{Report, Result, WrapErr as _, eyre};
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
-    config::{
-        AnonymityPolicy, Config, DEFAULT_TORII_API_MIN_PROOF_VERSION, default_connect_queue_root,
-        default_torii_api_version,
-    },
+    config::{AnonymityPolicy, Config, default_connect_queue_root},
     data_model::{
         ChainId,
         confidential::ConfidentialEncryptedPayload,
@@ -4535,8 +4532,6 @@ fn pressure_submitter_clients_applies_short_timeouts() {
         account_chain_discriminant: iroha_config::parameters::defaults::common::chain_discriminant(
         ),
         torii_api_url: "http://127.0.0.1:1".parse().expect("valid url"),
-        torii_api_version: default_torii_api_version(),
-        torii_api_min_proof_version: DEFAULT_TORII_API_MIN_PROOF_VERSION.to_string(),
         torii_request_timeout: Duration::from_millis(50),
         basic_auth: None,
         transaction_add_nonce: false,

@@ -9,13 +9,27 @@ transports land in the maintained SDK surface.
 TypeScript consumers can import the bundled `index.d.ts` definitions for the
 SDK surface.
 
-Run the native build (wrapping `cargo build -p iroha_js_host`) before
-importing:
+From an Iroha source checkout, run the native build (wrapping
+`cargo build -p iroha_js_host`) before using native-backed APIs:
 
 ```bash
 npm install
 npm run build:native
 ```
+
+The registry tarball intentionally contains no platform-specific `.node`
+binary, Cargo workspace, install hook, or implicit downloader. Consequently,
+`npm run build:native` is a source-checkout command, not a supported operation
+inside a clean registry installation. Registry consumers can use the portable
+browser exports (`/browser`, `/transaction-codec`, `/canonical-request`,
+`/ivm-artifact`, `/connect-browser`, and `/nexus-app`) and the Node Ed25519
+fallback without a native host. Applications that need native-only APIs must
+provide a separately built and checksum-verified host through
+`IROHA_JS_NATIVE_DIR`. The registry artifact includes only two portable,
+offline examples: `recipes/iso_bridge_builder.mjs` and
+`recipes/nexus_app_transfer.mjs`. The wider recipe catalog is kept in the
+source repository where its native and live-service prerequisites are
+available.
 
 When publishing or testing the packaged layout, build the ESM dist tree:
 
@@ -29,10 +43,14 @@ inter-process lock, validates a staging tree, and publishes only when source and
 distribution content differ, so explicit concurrent builds are deterministic.
 
 Native bindings load only after verifying the platform-specific SHA-256 recorded
-in `native/iroha_js_host.checksums.json`. When the checksum is missing or
-mismatched, SDK startup fails. Run `npm run build:native` explicitly after
-installing the Rust toolchain. Set `IROHA_JS_NATIVE_DIR` only in test harnesses
-that need to point at an alternate `native/` folder.
+in `native/iroha_js_host.checksums.json`. When a binding is present but its
+checksum is missing or mismatched, native access fails closed; it never falls
+back around a present-but-unverified binary. The loader authenticates the
+complete manifest, then loads a private, read-only, content-addressed snapshot
+of the exact bytes it hashed so replacing the original path cannot race module
+loading. Run `npm run build:native` explicitly from a source checkout after
+installing the Rust toolchain. Set `IROHA_JS_NATIVE_DIR` only to a separately
+verified native artifact directory.
 
 ## Native SoraFS Reference Validation
 
@@ -169,7 +187,8 @@ requests must still include the append lineage key artifacts in the raw Norito
 request. Use `kagemushaRecursiveSpendLineageKeyArtifactsForInit(...)` and
 `kagemushaRecursiveSpendLineageKeyArtifactsForAppend(...)` to package and
 validate these verifier/proving key artifacts before building a witnessless
-Reserved-lineage request.
+Reserved-lineage request once transition verification is wired. The current
+release does not select or prove that path.
 Verify request archives must pass the same public-binding preflight before the
 native host returns a `KagemushaRecursiveSpendVerifyResultV1`: Reserved-lineage
 bundles require a matching active `lineage_verifier_record`, semantic bundles
@@ -190,14 +209,15 @@ record there for vector-only callers.
 
 `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` is currently `64`,
 and `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1` is
-`true`: witnessless Reserved-lineage online redemption is available for lineage
-bundles inside the 64-hop cap.
+`false`. The hop constant is only the protocol bound: witnessless
+Reserved-lineage redeem and append fail closed for every circuit and hop count,
+and redeem requires a record-backed lineage witness.
 Wallets should use the exported `canRedeem...`, `requires...LineageWitness...`,
 `preferred...AppendOutput...`, and `canSelect...AppendOutput...` helpers and
-select Reserved-lineage append for previous hop counts `1..63`.
-Semantic append is bounded by the separate
-`KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS` constant; witnessless Reserved-lineage
-append and redeem use `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1`.
+select semantic recursive aggregation while transition verification is
+unavailable. Semantic append is bounded by the separate
+`KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS` constant; the witnessless max-hop constant
+does not enable witnessless admission.
 
 ## Native Privacy Bridge
 
@@ -317,20 +337,40 @@ the facade a bounded Fetch-based pipeline submit/status client; applications
 may instead inject `toriiClient` and `transactionCodec`. Torii response bodies
 are capped at 64 KiB, submission requests time out after 15 seconds, polling
 defaults to a 30-second budget, and credentials/query/fragment components are
-rejected in the configured Torii base URL. Requests omit ambient credentials
-and referrers and reject redirects.
+rejected in the configured Torii base URL. Request and polling deadlines cover
+headers, response-body reads/cancellation, and asynchronous status callbacks.
+Requests omit ambient credentials and referrers and reject redirects.
 
 The built-in Connect path keeps session proof keys separate from transaction
 signing keys. Browser Connect verifies the approval proof and returns its
 `accountId`, 32-byte X25519 `walletPublicKey`, and 64-byte `signature`.
 `walletPublicKey` authenticates the Connect session proof; it is not the
-Ed25519 transaction key. `NexusAppClient.awaitApproval()` validates that proof
-envelope, projects only `accountId` into the Nexus approval state, and derives
-the Ed25519 controller key from the canonical I105 account. For
+Ed25519 transaction key. Each approval consumer receives an immutable wrapper
+with detached proof-byte copies, so one consumer cannot rewrite verified state
+seen by another. On this built-in path, `NexusAppClient.awaitApproval()` accepts
+only that exact data-only `Uint8Array` proof shape, projects `accountId` into the
+Nexus approval state, and derives the Ed25519 controller key from the canonical
+I105 account. An injected `connectTransport.awaitApproval` instead returns the
+custom `{accountId, signingPublicKey?}` approval shape and must not forward the
+browser proof's `walletPublicKey` or `signature`. For
 `finalizeAndSubmit(..., { wait: true, signal })`, an already-aborted signal is
 rejected before finalization, and the signal is checked again after
-finalization but before Torii submission. This cancellation behavior is scoped
-to status-waiting submissions; `wait: false` does not apply the wait signal.
+finalization and capability capture but before Torii submission. Wait-enabled
+injected Torii clients must provide `waitForTransactionStatus`; the facade
+enforces the wait signal and deadline even if that client does not. Retry logic
+must inspect both `code` and `submissionState`: `operation_aborted` with
+`not_submitted` was stopped before dispatch; `submission_outcome_unknown` with
+`unknown` may already have reached Torii and includes
+`signedTransactionHashHex` for reconciliation; `invalid_submission_response`,
+`transaction_rejected`, `status_wait_aborted`, `status_wait_timeout`, and
+`status_wait_failed` with `submitted` refer to a transaction whose submit call
+resolved and may also expose the exact `submission` value. Do not automatically
+retry an `unknown` or `submitted` outcome. This cancellation behavior is scoped
+to status-waiting submissions; `wait: false` must omit `signal` and every other
+status-only polling option. See `recipes/nexus_app_transfer.mjs` for an offline,
+canonical end-to-end example.
+Custom success/failure status iterables are capped at 32 raw entries before
+duplicate removal.
 
 When supplying a custom `transactionCodec` to `NexusAppClient`, payload hash
 aliases must be exact lowercase 64-character hex and must match the returned
@@ -374,25 +414,71 @@ const transportKinds = offlineCashAvailableTransportKinds({
 });
 ```
 
-For browser-safe Kotodama contract compilation, use the dedicated compiler
-subpath. It emits the same `.to` artifact bytes and manifest metadata used by
-Torii contract deployment without importing the Node-first SDK surface:
+Kotodama V1 uses the Rust compiler as its only implementation. Node loads it
+through `iroha_js_host` and performs compilation off the event-loop thread:
 
 ```js
 import { compileKotodamaProgram } from "@iroha/iroha-js/kotodama-compiler";
 
-const compiled = compileKotodamaProgram(source, { sourceName: "contract.ko" });
-if (compiled.diagnostics.length > 0) {
-  throw new Error(compiled.diagnostics.map((item) => item.message).join("\n"));
-}
-
-console.log(compiled.codeHashHex);
-console.log(compiled.manifest);
+const result = await compileKotodamaProgram(source);
 ```
 
-The compiler defaults to production mode, which strips `#[test]` functions like
-Rust `CompilerMode::Production`. Pass `{ mode: "test" }` to retain supported
-Kotodama test helpers in local test artifacts.
+Pass a bounded logical path to preserve useful file names in diagnostics and
+sidecars. ZK contracts must explicitly select the canonical ZK policy; this is
+the only compiler feature policy exposed by the adapter:
+
+```js
+const result = await compileKotodamaProgram(source, {
+  sourceName: "contracts/private_transfer.ko",
+  zk: true,
+});
+```
+
+The browser export has no compiler implementation. It requires an explicit
+canonical Rust compiler-service endpoint:
+
+```js
+import { compileKotodamaProgram } from "@iroha/iroha-js/kotodama-compiler";
+
+const result = await compileKotodamaProgram(source, {
+  compilerUrl: "https://compiler.example",
+  sourceName: "contracts/payment.ko",
+  zk: false,
+});
+
+if (!result.ok) {
+  for (const diagnostic of result.diagnostics) {
+    console.error(diagnostic.code, diagnostic.primary_span, diagnostic.message);
+  }
+} else {
+  console.log(result.output.codeHashHex);
+  console.log(result.output.manifest);
+}
+```
+
+Offline browser compilation is intentionally unsupported so browser and Node
+artifacts cannot drift from the canonical Rust compiler. Remote compiler
+services must use HTTPS; loopback HTTP is accepted for local development. The
+service receives the complete source, so use only an endpoint you trust. Node
+and browser adapters reject source larger than the canonical 1 MiB UTF-8 limit
+before invoking the native binding or making a network request.
+The native binding and service receive the same canonical JSON-shaped request,
+`{ source, sourceName?, zk }`. `sourceName` is limited to 4096 UTF-8 bytes and
+must not contain control characters. Unknown options—including ABI, vector,
+debug-embedding, and test-mode selectors—fail closed.
+Compilation failures resolve to `{ ok: false, diagnostics }` with the exact
+structured Rust diagnostics; network, service, and malformed-response failures
+reject the promise. A compiler service returns both successful and failed
+compiler result envelopes with HTTP 200; non-success HTTP statuses are reserved
+for service and transport failures.
+
+This one-source API emits one deployable contract. Typed module graphs use the
+project driver behind `koto build` or `iroha contract dev`; the JavaScript
+adapter does not rewrite or flatten modules.
+Kotodama V1 source keeps its branded declaration spellings: deployable units
+use `seiyaku`/`誓約`, public calls use `kotoage`/`言挙げ`, and lifecycle hooks use
+`hajimari`/`始まり` and `kaizen`/`改善`. The English source spellings `contract`,
+`entry`, `init`, and `upgrade` are rejected by the canonical Rust parser.
 
 For browser-only Connect bootstrap without importing the Node-first `ToriiClient`
 surface, use the dedicated browser subpath:
@@ -406,7 +492,7 @@ import {
 } from "@iroha/iroha-js/connect-browser";
 
 const preview = createConnectSessionPreview({
-  chainId: "809574f5-fee7-5e69-bfcf-52451e42d50f",
+  chainId: "fc56984b-2be7-431d-840e-21514d1883f0",
   node: "https://taira.sora.org",
 });
 
@@ -527,7 +613,7 @@ const usagePlan = {
 };
 
 await torii.createSubscriptionPlan({
-  authority: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   private_key: "provider-private-key-hex",
   plan_id: "aws_compute#commerce",
   plan: usagePlan,
@@ -541,14 +627,14 @@ await torii.createSubscription({
 });
 
 await torii.recordSubscriptionUsage("sub-001", {
-  authority: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   private_key: "provider-private-key-hex",
   unit_key: "compute_ms",
   delta: "3600000",
 });
 
 await torii.chargeSubscriptionNow("sub-001", {
-  authority: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   private_key: "provider-private-key-hex",
 });
 ```
@@ -561,8 +647,8 @@ import { MultisigSpecBuilder, buildProposeMultisigInstruction } from "@iroha/iro
 const spec = new MultisigSpecBuilder()
   .setQuorum(3)
   .setTransactionTtlMs(86_400_000)
-  .addSignatory("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", 2)
-  .addSignatory("sorauﾛ1PｹiｺPﾖｿRhgﾗ1EｺﾘNｿnhﾚdｼﾕAYGwﾜﾃYqｹGLﾆwKﾍaQUJKW1", 1)
+  .addSignatory("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", 2)
+  .addSignatory("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", 1)
   .build();
 
 // Preview the effective TTL (clamped to the policy cap) and expiry time
@@ -580,7 +666,7 @@ const propose = buildProposeMultisigInstruction({
 // Register the multisig controller with an explicit (non-derived) account id
 const register = buildRegisterMultisigTransaction({
   chainId: "wonderland",
-  authority: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   accountId: "sorauﾛ1Ni1A1mYｲzｳﾚﾊGﾆｲgｵ4ﾜｾﾒﾔzｺﾍz6ﾀFoVDﾇXzｹCkﾙ4CQVXL",
   spec,
   privateKey: generateKeyPair().privateKey, // controller key is NOT used for signing
@@ -610,7 +696,7 @@ const args = buildMultisigTriggerArgs("lifecycle", {
   action: "create",
   requestId: "mr1",
   fiId: "banka",
-  toAccountId: "sorauﾛ1PｹiｺPﾖｿRhgﾗ1EｺﾘNｿnhﾚdｼﾕAYGwﾜﾃYqｹGLﾆwKﾍaQUJKW1",
+  toAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
   amountI64: 10,
   createdAtMs: Date.now(),
   expiresAtMs: Date.now() + 60_000,
@@ -625,7 +711,7 @@ const proposalInstruction = buildProposeMultisigExecuteTriggerInstruction({
   trigger: "staged_mint_request_hbl",
   args,
   spec,
-  signerAccountId: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  signerAccountId: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   strictSignerCheck: true,
   transactionTtlMs: 45_000,
 });
@@ -633,7 +719,7 @@ const proposalInstruction = buildProposeMultisigExecuteTriggerInstruction({
 // Build the normalized Torii request body for the multisig contract-call flow.
 const request = buildMultisigContractCallProposeRequest({
   multisigAccountAlias: "mintops@banka",
-  signerAccountId: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  signerAccountId: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
   entrypoint: "execute",
   trigger: "staged_mint_request_hbl",
@@ -840,7 +926,7 @@ for await (const lot of torii.iterateAccountRwas(authority, {
   console.log(`${lot.id} => ${lot.quantity}`);
 }
 
-for await (const holding of torii.iterateAccountAssetsQuery("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", {
+for await (const holding of torii.iterateAccountAssetsQuery("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   requirePermissions: true,
   pageSize: 2,
   filter: { Gte: ["quantity", 1] },
@@ -889,17 +975,17 @@ const registerDomain = noritoEncodeInstruction(
   buildRegisterDomainInstruction({ domainId: "wonderland" }),
 );
 const registerAccount = buildRegisterAccountInstruction({
-  accountId: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  accountId: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
 });
 const transfer = buildTransferAssetInstruction({
   sourceAssetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
-  destinationAccountId: "sorauﾛ1PｹiｺPﾖｿRhgﾗ1EｺﾘNｿnhﾚdｼﾕAYGwﾜﾃYqｹGLﾆwKﾍaQUJKW1",
+  destinationAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
   quantity: "5",
 });
 
 const transferTx = buildTransaction({
   chainId: "demo-chain",
-  authority: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   instructions: [transfer],
   privateKey,
 });
@@ -1333,8 +1419,10 @@ pinned to the configured base.
   `recipes/batching.mjs`) to confirm the payload shape matches your intent prior
   to signing or submitting transactions.
 
-The `recipes/batching.mjs` script demonstrates these patterns end-to-end and
-prints deterministic hashes for the batched transactions.
+The source-checkout-only `recipes/batching.mjs` script demonstrates these
+patterns end-to-end and prints deterministic hashes for the batched
+transactions. It is not included in the portable registry tarball because its
+generic transaction builder requires the verified native host.
 
 ## SM2 Deterministic Fixture & Helpers
 
@@ -1395,10 +1483,6 @@ const torii = new ToriiClient("http://localhost:8080", {
   config: { torii: { apiTokens: ["bridge-token"] } },
 });
 
-const voprf = await torii.evaluateAliasVoprf("deadbeef");
-console.log(voprf.backend); // "blake2b512-mock"
-console.log(voprf.evaluated_element_hex); // hex digest
-
 const resolved = await torii.resolveAlias("GB82 WEST 1234 5698 7654 32");
 if (resolved) {
   console.log(`${resolved.alias} → ${resolved.account_id}`);
@@ -1441,10 +1525,9 @@ The `canonical-request` subpath ships standalone DOM declarations, so browser
 TypeScript consumers do not need ambient Node types.
 
 > **Recipe:** run `node javascript/iroha_js/recipes/iso_alias.mjs` to exercise
-> the VOPRF and lookup endpoints from the CLI. The script accepts
-> `ISO_VOPRF_INPUT`, `ISO_ALIAS_LABEL`, and `ISO_ALIAS_INDEX` so ISO bridge gate
-> jobs can hash blinded elements and confirm deterministic account bindings
-> without writing bespoke tooling.
+> the lookup endpoints from the CLI. The script accepts `ISO_ALIAS_LABEL` and
+> `ISO_ALIAS_INDEX` so ISO bridge gate jobs can confirm deterministic account
+> bindings without writing bespoke tooling.
 
 Sumeragi consensus status is the authoritative protocol-v2 reducer snapshot.
 Use the typed helper for operator or automation decisions: it rejects unsupported
@@ -1929,10 +2012,11 @@ for await (const order of torii.iterateSorafsReplicationOrders({ pageSize: 25 })
 > continues to throw when the digest is absent so automation that expects a
 > manifest still fails fast.
 
-Uptime telemetry and PoR automation helpers surface the production endpoints so
-SDK callers can publish uptime samples, submit authenticated provider proofs and
-auditor verdicts, and retrieve coordinator exports. Challenge creation remains
-internal to the verified coordinator scheduler.
+Uptime telemetry and PoR automation helpers surface the first-release production
+endpoints so SDK callers can publish uptime samples, submit authenticated
+Norito-encoded provider proofs and auditor verdicts, and retrieve coordinator
+exports. Challenge issuance is owned by the verified coordinator scheduler;
+there is no client-side challenge or manual observation API.
 
 ```js
 await torii.submitSorafsUptimeObservation({ uptimeSecs: 540, observedSecs: 600 });
@@ -2024,7 +2108,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+    authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     manifest,
     reason: "Rotation to attester set v2",
@@ -2034,7 +2118,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+    authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid: "uaid:c2b61dd6bb73e91ee6d0949508d491bbc1b2a347a3f41b5cd35d733c1e751111",
     dataspaceId: 11,
@@ -2169,7 +2253,7 @@ console.log(status.message_id, status.status, status.transaction_hash);
 
 `submitIsoPacs008` and `submitIsoPacs009` accept strings or binary buffers and
 enforce `application/xml` content-type by default. `submitIsoPacs008AndWait` /
-`submitIsoPacs009AndWait` build on those helpers to poll `/v1/iso20022/status`
+`submitIsoPacs009AndWait` build on those helpers to poll `/v1/iso20022/messages`
 until the bridge reports a deterministic terminal state. Provide `wait` options
 to customise the cadence, attach telemetry hooks, or opt into resolving as soon
 as an `Accepted` status arrives (even before the Torii transaction hash is
@@ -2322,9 +2406,9 @@ const settlement = buildPacs008Message({
   instigatingAgent: { bic: "DEUTDEFF", lei: "529900ODI3047E2LIV03" },
   instructedAgent: { bic: "COBADEFF" },
   debtorAccount: { iban: "DE89370400440532013000" },
-  creditorAccount: { otherId: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4" },
+  creditorAccount: { otherId: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB" },
   purposeCode: "SECU",
-  supplementaryData: { account_id: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", leg: "delivery" },
+  supplementaryData: { account_id: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", leg: "delivery" },
 });
 
 const torii = new ToriiClient("http://localhost:8080");
@@ -2406,7 +2490,7 @@ const manifestTx = buildRegisterSmartContractCodeTransaction({
     abiHash: "hash:…",
     compilerFingerprint: "kotodama-1.2 rustc-1.79",
     accessSetHints: {
-      readKeys: ["account:sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4"],
+      readKeys: ["account:sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"],
       writeKeys: ["contract:apps:ledger"],
     },
   },
@@ -2437,7 +2521,7 @@ round-trips the full current manifest metadata surface including
 hash length and accept `Buffer`, typed arrays, or base64 strings. Public
 deployment is now alias-first through `ToriiClient.deployContract`, which
 requires `contractAlias`, returns a fresh immutable `contract_address`, and
-reports whether the deploy upgraded an existing alias binding.
+reports `kaizen` when the deploy replaces an existing alias binding.
 `buildRemoveSmartContractBytesInstruction/Transaction` wires the bytecode
 reclamation ISI into CI/governance tooling and rejects empty reason strings
 before submission so operators get fast feedback during rehearsals.
@@ -2451,9 +2535,10 @@ can stage a leased alias binding for rehearsal environments.
 
 `ToriiClient.callContract` wraps `/v1/contracts/call`, preparing the JSON
 payload that Torii expects (authority credentials, `contract_address` or `contract_alias`,
-optional entrypoint/payload plus gas settings with a required `gasLimit`) and normalising all hash fields. The
-helper returns the queued transaction hash along with the code/ABI hashes Torii
-resolved for the call.
+a required explicit entrypoint, an optional payload, and a positive `gasLimit`) and
+normalising all hash fields. The helper returns the queued transaction hash,
+transaction TTL and entrypoint hash when present, plus the mandatory normalized
+`operation_receipt` evidence and the code/ABI hashes Torii resolved for the call.
 
 ```js
 import { ToriiClient } from "@iroha/iroha-js";
@@ -2469,11 +2554,12 @@ const response = await torii.callContract({
   entrypoint: "increment",
   payload: { amount: 1 },
   gasAssetId: "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
-  gasLimit: 50_000,
+  gasLimit: 1_500_000,
 });
 
 console.log("queued tx:", response.tx_hash_hex);
 console.log("code hash:", response.code_hash_hex);
+console.log("payload digest:", response.operation_receipt.payload_digest_hex);
 ```
 
 Any JSON-serializable payload is cloned before submission so callers can reuse the
@@ -2609,8 +2695,8 @@ but it must equal the policy-derived transfer and cannot redirect or change the
 fee. It never appends an instruction: the deployed contract (including any
 nested pool call) must emit the transfer inside the proved overlay.
 
-The deployed artifact must be compiled in ZK mode (for `koto_compile`, use
-`--force-zk`), its manifest and bytecode must already be registered, and the
+The deployed artifact must be compiled in ZK mode with `koto build --zk`; its
+manifest and bytecode must already be registered, and the
 node must have an active `ivm-execution-v1` verifying-key record plus the
 matching proving key. A conventional non-ZK deployed artifact cannot be
 retrofitted by this client helper; it must be rebuilt and deployed by its owner.
@@ -2701,10 +2787,11 @@ Helper inputs accept either strings or raw `Buffer`s for 32-byte hashes, ensure
 referendum windows remain ordered, and convert ballot payloads to canonical
 Norito JSON before signing.
 
-See `recipes/governance.mjs` for an end-to-end script that assembles the common
-governance transactions, prints deterministic hashes, and optionally submits
-them to Torii (`GOV_SUBMIT=1`). Build the native binding first via
-`npm run build:native` so `hashSignedTransaction` is available.
+See the source-checkout-only `recipes/governance.mjs` for an end-to-end script
+that assembles the common governance transactions, prints deterministic hashes,
+and optionally submits them to Torii (`GOV_SUBMIT=1`). Build the native binding
+from the Iroha workspace first via `npm run build:native`; this recipe is not
+part of the portable registry tarball.
 
 ## Confidential Asset Helpers
 
@@ -2794,7 +2881,7 @@ const detail = await torii.getVerifyingKeyTyped("halo2/ipa", "vk_main");
 console.log(detail.record.status); // "Active"
 
 await torii.registerVerifyingKey({
-  authority: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   private_key: "ed0120…",
   backend: "halo2/ipa",
   name: "vk_main",
@@ -3281,7 +3368,7 @@ without provisioning infrastructure.
 - `IROHA_TORII_INTEGRATION_CONNECT_SESSION` — optional JSON string containing the payload for `createConnectSession()` (`{"sid":"<hex>","node":"torii.devnet.example"}` is a common pattern).
 - `IROHA_TORII_INTEGRATION_CONNECT_PREVIEW` — optional JSON object consumed by the Connect preview bootstrapper test (`{"node":"torii.devnet.example","sessionOptions":{"node":"ingress.devnet.example"}}` is sufficient). When present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite calls `bootstrapConnectPreviewSession()`, validates the deeplink URIs/tokens, and deletes the staged session.
 - `IROHA_TORII_INTEGRATION_CONNECT_APP` — optional JSON object describing a Connect app registration payload (`{"appId":"demo","namespaces":["apps"],"metadata":{"suite":"ci"}}`); when present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite registers the app, verifies that list/get/iterator APIs return it, and then deletes it.
-- `IROHA_TORII_INTEGRATION_CONTRACT_CALL` — optional JSON object describing a contract call payload (for example: `{"contractAddress":"tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7","entrypoint":"ping","payload":{"value":1},"gasLimit":50000}`). When supplied alongside `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite invokes `ToriiClient.callContract`, waits for the resulting transaction status, and asserts success. The helper accepts camelCase keys plus overrides for `authority`, `privateKeyHex`, `gasAssetId`, and `gasLimit` (required).
+- `IROHA_TORII_INTEGRATION_CONTRACT_CALL` — optional JSON object describing a contract call payload (for example: `{"contractAddress":"tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7","entrypoint":"ping","payload":{"value":1},"gasLimit":1500000}`). When supplied alongside `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite invokes `ToriiClient.callContract`, waits for the resulting transaction status, and asserts success. The helper accepts camelCase keys plus overrides for `authority`, `privateKeyHex`, `gasAssetId`, and `gasLimit` (required).
 - `IROHA_TORII_INTEGRATION_GOV_BALLOT` — optional JSON object ({`referendumId`,`owner`,`amount`,`durationBlocks`,`direction`} are the common keys) submitted via `governanceSubmitPlainBallot` when `IROHA_TORII_INTEGRATION_MUTATE=1`. Missing fields default to the configured `authority`/`chainId`, so the env var only needs to override vote-specific fields.
 - `IROHA_TORII_INTEGRATION_CHAIN_ID` — optional override for the default devnet chain id (`00000000-0000-0000-0000-000000000000`).
 - `IROHA_TORII_INTEGRATION_ACCOUNT_ID` / `IROHA_TORII_INTEGRATION_PRIVATE_KEY_HEX` — optional overrides for the default signer (`defaults/client.toml`); the defaults target the canonical encoded account id derived from `account.public_key`.
@@ -3292,7 +3379,6 @@ without provisioning infrastructure.
 - `IROHA_TORII_INTEGRATION_ISO_PACS009` — optional JSON object merged into the default pacs.009 builder fields (same structure as the pacs.008 overrides; handy for replaying RTGS transfers with custom identifiers).
 - `IROHA_TORII_INTEGRATION_ISO_ALIAS` — optional ISO alias (for example, `GB82 WEST 1234 5698 7654 32`) used by the alias-resolution integration test. Set alongside `IROHA_TORII_INTEGRATION_ISO_ENABLED=1` when the ISO runtime is active.
 - `IROHA_TORII_INTEGRATION_ISO_ALIAS_INDEX` — optional deterministic index (integer) for exercising `resolveAliasByIndex`. Provide this when the target node exposes indexed alias metadata so the integration suite can cover both alias endpoints.
-- `IROHA_TORII_INTEGRATION_ISO_VOPRF` — optional hex string forwarded to the alias VOPRF helper coverage (defaults to `deadbeef`); useful when replaying captured transcripts that require specific blinded elements.
 - `IROHA_TORII_INTEGRATION_SORAFS_ENABLED` — set to `1` to run the optional SoraFS registry/storage smoke test (lists manifests/aliases/replication orders and fetches the storage state). Leave unset/`0` when SoraFS endpoints are disabled on the target node.
 - `IROHA_TORII_INTEGRATION_SORAFS_POR_WEEK` — optional ISO week label such as `2026-W05`. When set alongside `IROHA_TORII_INTEGRATION_SORAFS_ENABLED=1`, the suite fetches the PoR weekly report for that week to exercise the Norito export path.
 - `IROHA_TORII_INTEGRATION_UAID` — optional UAID literal (`uaid:<hex>` or raw 64-hex digest, LSB=1). When provided, the integration suite exercises the UAID portfolio/bindings/manifests endpoints so cross-dataspace APIs stay covered.
@@ -3447,14 +3533,46 @@ They are normalised via the same unsigned-integer validators before any request 
 exactly like `25` while still surfacing a `TypeError` when the value is negative,
 fractional, NaN, or otherwise invalid.
 
-The supported first-release offline HTTP surface is Offline readiness. Retired
-Offline Note issuance, redemption, and audit transaction paths are retired; use
-Kagemusha readiness fields and payment flows for offline payments.
+The first-release Offline HTTP surface is a sharp `/v1` contract: asset-scoped
+readiness, asynchronous top-up and redemption commands, and one pollable
+operation resource. Requests use direct structured JSON. The SDK derives the
+`Idempotency-Key` from the command's non-zero 32-byte `operation_id` and rejects
+requests whose authorization carries a different ID.
 
 ```js
-const readiness = await torii.getOfflineReadiness();
-console.log("Kagemusha ready", readiness.offline_kagemusha_recursive_compact_available);
+const readiness = await torii.getOfflineReadiness("xor#sora");
+if (readiness.ready) {
+  const accepted = await torii.submitOfflineTopUp({
+    ...signedTopUp,
+    operation_id: [...operationIdBytes],
+    authorization: {
+      ...signedTopUp.authorization,
+      operation_id: [...operationIdBytes],
+    },
+  });
+  const status = await torii.getOfflineOperationStatus(accepted.operation_id);
+  console.log(status.state); // pending | applied | rejected
+}
 ```
+
+The exact routes are `GET /v1/offline/readiness?asset_definition_id=…`,
+`POST /v1/offline/top-up`, `POST /v1/offline/redeem`, and
+`GET /v1/offline/operations/{operation_id}`. Whole-payload base64/Norito
+wrappers and `/offline/v2` aliases are not supported.
+
+Offline responses use a lossless JSON parser. Integer tokens through
+`Number.MAX_SAFE_INTEGER` are returned as `number`; wider `u64`/`u128` values
+are returned as `bigint`. Duplicate object keys, malformed number spellings,
+non-finite values, excessive nesting, and unpaired Unicode surrogates are
+rejected before DTO normalization, so a JavaScript runtime never silently
+rounds an amount, height, or timestamp.
+
+The TypeScript surface exposes closed request DTOs and a typed
+`OfflineTopUpAnchor`; proof-bearing nested objects use named Norito-JSON DTOs
+instead of `Record<string, unknown>`. Asset scales are limited to `0..=28`.
+Applied top-up responses are accepted only when the anchor's operation ID,
+transaction hash, finality height, amount/scale, roots, note material, and
+one-or-two sorted input nullifiers are internally consistent.
 
 for await (const assetDef of torii.iterateAssetDefinitions({
   pageSize: 50,
@@ -3470,18 +3588,18 @@ const defs = await torii.queryAssetDefinitions({
 });
 console.log("filtered definitions", defs.items);
 
-const perms = await torii.listAccountPermissions("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", {
+const perms = await torii.listAccountPermissions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   limit: 5,
 });
 console.log("direct permissions", perms.items.map((item) => item.name));
-for await (const perm of torii.iterateAccountPermissions("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", {
+for await (const perm of torii.iterateAccountPermissions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   pageSize: 2,
 })) {
   console.log("paged permission", perm.name);
 }
 const nfts = await torii.listNfts({ limit: 10 });
 console.log("first NFT ids", nfts.items.map((nft) => nft.id));
-const balances = await torii.listAccountAssets("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", {
+const balances = await torii.listAccountAssets("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   limit: 3,
   assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
 });
@@ -3491,7 +3609,7 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
 });
 console.log("top holders", holders.items.map((entry) => entry.account_id));
-const history = await torii.listAccountTransactions("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", {
+const history = await torii.listAccountTransactions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   limit: 2,
   assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
 });
@@ -3502,13 +3620,13 @@ console.log(
 
 for await (const account of torii.iterateAccountsQuery({
   pageSize: 100,
-  filter: { Eq: ["id", "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4"] },
+  filter: { Eq: ["id", "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"] },
   select: [{ Fields: ["id", "metadata.display_name"] }],
 })) {
   console.log("matching account", account.id);
 }
 
-for await (const balance of torii.iterateAccountAssetsQuery("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", {
+for await (const balance of torii.iterateAccountAssetsQuery("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   pageSize: 32,
   filter: { Eq: ["asset_id.definition_id", "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"] },
 })) {
@@ -3522,7 +3640,7 @@ console.log("governed contract:", governedContract.contract_address, governedCon
 
 for await (const trigger of torii.iterateTriggersQuery({
   pageSize: 50,
-  filter: { Eq: ["object.authority", "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4"] },
+  filter: { Eq: ["object.authority", "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"] },
 })) {
   console.log("trigger id:", trigger.id);
 }
@@ -3530,7 +3648,7 @@ for await (const trigger of torii.iterateTriggersQuery({
 // Or mirror the same calls from the runnable recipe:
 //   node ./recipes/nft_account_iteration.mjs \
 //     TORII_URL=http://127.0.0.1:8080 \
-//     ACCOUNT_ID=sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4 \
+//     ACCOUNT_ID=sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB \
 //     ASSET_DEFINITION_ID=62Fk4FPcMuLvW5QjDGNF2a4jAmjM \
 //     NFT_DEFINITION_ID=5Pz9SwdN9eXPbiXPX9HRCpzCcE3o
 ```
@@ -3545,13 +3663,13 @@ console.log(policy.suffix, policy.pricing.length);
 
 const registration = await torii.registerSnsName({
   selector: { suffix_id: 0x1002, label: "demo" },
-  owner: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  owner: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   payment: {
     asset_id: "<base58-asset-definition-id>",
     gross_amount: 120,
     net_amount: 120,
     settlement_tx: { tx: "hash" },
-    payer: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+    payer: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
     signature: "sig-json",
   },
 });
@@ -3593,7 +3711,7 @@ if (explorerMetrics) {
   console.log("explorer metrics disabled on this node");
 }
 
-const qr = await torii.getExplorerAccountQr("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4");
+const qr = await torii.getExplorerAccountQr("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB");
 console.log(qr.literal); // i105 literal embedded in the QR SVG
 console.log(qr.svg); // inline SVG (192x192) ready to drop into your UI
 
@@ -3610,7 +3728,7 @@ for (const entry of recentBlocks.items) {
 
 // NFT and account-asset iteration mirrors the Torii JSON envelopes while handling pagination.
 const holdings = [];
-for await (const holding of torii.iterateAccountAssets("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", {
+for await (const holding of torii.iterateAccountAssets("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   pageSize: 2,
   maxItems: 5,
   sort: [{ key: "quantity", order: "desc" }],
@@ -3630,7 +3748,7 @@ for await (const nft of torii.iterateNftsQuery({
 console.log("matching NFTs", nftIds);
 
 const ownedNfts = [];
-for await (const nft of torii.iterateAccountNfts("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", {
+for await (const nft of torii.iterateAccountNfts("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   domainId: "wonderland",
   pageSize: 10,
 })) {
@@ -3738,7 +3856,7 @@ const deriveResponse = await torii.governanceDeriveCouncilVrf({
   committeeSize: 2,
   candidates: [
     {
-      accountId: "sorauﾛ1PｹiｺPﾖｿRhgﾗ1EｺﾘNｿnhﾚdｼﾕAYGwﾜﾃYqｹGLﾆwKﾍaQUJKW1",
+      accountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
       variant: "Normal",
       pk: validatorPublicKeyBytes,
       proof: validatorProofBytes,
@@ -3868,6 +3986,13 @@ await torii.registerTrigger({
   action: precommitAction,
 });
 ```
+
+The canonical `/v1/events/sse` and `/v1/contracts/events/sse` feeds are
+live-only and have no replay log. Their helpers intentionally expose no
+`lastEventId` option; reconnecting starts a new subscription and can have a
+gap. A terminal `event: stream_error` frame is yielded before the iterator
+ends, so applications must handle it instead of treating closure as a lossless
+continuation point.
 
 `list*`/`query*` helpers and explorer QR snapshots now emit canonical I105 account
 literals only; address-format hints are no longer supported.

@@ -133,14 +133,17 @@ fn lane_relay_envelope_roundtrips_and_verifies_hash() {
 }
 
 #[test]
-fn lane_relay_envelope_rejects_settlement_height_mismatch() {
+fn lane_relay_envelope_distinguishes_lane_local_and_global_heights() {
     let header = sample_block_header(None);
     let mut settlement = sample_settlement();
-    settlement.block_height = header.height().get() + 1;
+    settlement.block_height = 1;
+    assert_ne!(settlement.block_height, header.height().get());
 
-    let err = LaneRelayEnvelope::new(header, None, None, settlement, 0)
-        .expect_err("mismatched settlement height should be rejected");
-    assert_eq!(err, LaneRelayError::SettlementBlockHeightMismatch);
+    let envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
+        .expect("lane-local settlement height may differ from global proposal height");
+    assert_eq!(envelope.block_height, 1);
+    assert_eq!(envelope.block_header.height().get(), header.height().get());
+    envelope.verify().expect("separate height domains verify");
 }
 
 #[test]
@@ -176,14 +179,15 @@ fn lane_relay_envelope_detects_tampering_on_verify() {
     let envelope = LaneRelayEnvelope::new(header, Some(qc), da_hash, settlement, 2048)
         .expect("construct envelope");
 
-    // Block height tamper: header height diverges from stored height.
+    // Global proposal-height tamper: the QC still certifies the old height.
     let mut tampered = envelope.clone();
     tampered
         .block_header
-        .set_height(NonZeroU64::new(tampered.block_height + 1).unwrap());
+        .set_height(NonZeroU64::new(tampered.block_header.height().get() + 1).unwrap());
+    tampered.qc.as_mut().expect("QC present").subject_block_hash = tampered.block_header.hash();
     assert_eq!(
         tampered.verify().unwrap_err(),
-        LaneRelayError::BlockHeightMismatch
+        LaneRelayError::QcHeightMismatch
     );
 
     // Settlement height tamper.

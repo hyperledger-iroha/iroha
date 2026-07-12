@@ -1,64 +1,37 @@
-//! Focused runtime coverage for durable `state` helper parameters.
+//! Compile-fail coverage for removed first-class durable-state parameters.
 
-use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
-use norito::to_bytes;
+use ivm::kotodama::compiler::Compiler as KotodamaCompiler;
 
-fn run_with_host<F>(src: &str, seed: F) -> IVM
-where
-    F: FnOnce(&mut CoreHost),
-{
-    let code = KotodamaCompiler::new()
-        .compile_source(src)
-        .expect("compile kotodama");
-    let mut host = CoreHost::new();
-    seed(&mut host);
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_host(host);
-    vm.load_program(&code).expect("load program");
-    vm.run().expect("run program");
-    vm
+fn assert_state_parameter_rejected(source: &str) {
+    let error = KotodamaCompiler::new()
+        .compile_source(source)
+        .expect_err("V1 must reject first-class state handles");
+    assert!(
+        error.contains("state handles are not first-class parameters"),
+        "unexpected diagnostic: {error}"
+    );
 }
 
 #[test]
-fn state_scalar_helper_param_reads_durable_root() {
-    let src = r#"
-        state int counter;
-
-        fn read_counter(state int value) -> int {
-            return value;
+fn scalar_state_parameter_is_rejected() {
+    assert_state_parameter_rejected(
+        r#"
+        module RemovedScalarStateParameter {
+            fn read_counter(value: state int) -> int { return value; }
         }
-
-        fn main() -> int {
-            return read_counter(counter);
-        }
-    "#;
-
-    let vm = run_with_host(src, |host| {
-        host.insert_state_value("counter", to_bytes(&42_i64).expect("encode counter"));
-    });
-    assert_eq!(vm.register(10), 42);
+        "#,
+    );
 }
 
 #[test]
-fn state_scalar_helper_param_accepts_struct_child_handle() {
-    let src = r#"
-        struct Ledger { counter: int; flag: bool; }
-        state Ledger ledger;
-
-        fn read_counter(state int value) -> int {
-            return value;
+fn state_map_parameter_is_rejected() {
+    assert_state_parameter_rejected(
+        r#"
+        module RemovedMapStateParameter {
+            fn read_value(values: state StateMap<int, int>, int key) -> int {
+                return values.get(key).unwrap_or(0);
+            }
         }
-
-        fn main() -> int {
-            return read_counter(ledger.counter);
-        }
-    "#;
-
-    let vm = run_with_host(src, |host| {
-        host.insert_state_value(
-            "ledger_counter",
-            to_bytes(&7_i64).expect("encode ledger counter"),
-        );
-    });
-    assert_eq!(vm.register(10), 7);
+        "#,
+    );
 }

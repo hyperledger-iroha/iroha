@@ -913,7 +913,7 @@ mod tests {
         };
         let account = AccountBuilder::new(ALICE_ID.clone()).build(&ALICE_ID);
         let output = QueryOutput::new(
-            QueryOutputBatchBoxTuple::new(vec![QueryOutputBatchBox::Account(vec![account])]),
+            QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(vec![account])),
             0,
             None,
         );
@@ -946,7 +946,7 @@ mod tests {
         };
         let peer = PeerId::from(ALICE_KEYPAIR.public_key().clone());
         let output = QueryOutput::new(
-            QueryOutputBatchBoxTuple::new(vec![QueryOutputBatchBox::Peer(vec![peer])]),
+            QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Peer(vec![peer])),
             0,
             None,
         );
@@ -973,7 +973,7 @@ mod tests {
             return;
         };
         let output = QueryOutput::new(
-            QueryOutputBatchBoxTuple::new(vec![QueryOutputBatchBox::Asset(Vec::new())]),
+            QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Asset(Vec::new())),
             0,
             None,
         );

@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "`{func}` செயல்பாட்டில் `{name}` அளவுரு ஒருபோதும் பயன்படுத்தப்படவில்லை",
     lint_unreachable_after_return: "{context} இல் அணுக முடியாத கூற்று கண்டறியப்பட்டது: return க்கு பின் உள்ள குறியீடு ஒருபோதும் இயக்கப்படாது",
     lint_ok: "சரி",
-    lint_usage: "பயன்பாடு: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "பயன்பாடு: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "வழங்கப்பட்ட மூலங்களின் மீது Kotodama lint சோதனைகளை இயக்குகிறது.",
     ..english::MESSAGES
 };

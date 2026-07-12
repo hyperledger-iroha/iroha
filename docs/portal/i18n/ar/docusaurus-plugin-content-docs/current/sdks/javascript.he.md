@@ -180,13 +180,13 @@ console.log(balances.items, txs.items, holders.items);
 
 ## Offline readiness
 
-JavaScript integrations should use `GET /v1/offline/readiness` for offline feature discovery.
+JavaScript integrations should use `GET /v1/offline/readiness?asset_definition_id=xor%23wonderland` for offline feature discovery.
 Classic Offline Note issuance, redemption, and audit transaction paths are retired;
 Kagemusha readiness fields advertise the active offline payment implementation.
 
 ```ts
-const readiness = await torii.getOfflineReadiness();
-console.log("kagemusha", readiness.offline_kagemusha_recursive_compact_available);
+const readiness = await torii.getOfflineReadiness("xor#wonderland");
+console.log("offline ready", readiness.ready, readiness.blockers);
 ```
 ## Torii الاستعلامات والبث (WebSockets)تعرض مساعدات الاستعلام الحالة ومقاييس Prometheus ولقطات القياس عن بعد والحدث
 التدفقات باستخدام قواعد التصفية Norito. يتم ترقية البث تلقائيًا إلى
@@ -402,21 +402,18 @@ async function dialWithTelemetry(client: ToriiClient) {
 المعيار `connect.queue_depth`، و`connect.queue_overflow_total`، و
 مقاييس `connect.queue_expired_total` المشار إليها في خريطة الطريق.
 
-## مراقبو البث ومؤشرات الأحداثيعرض `ToriiClient.streamEvents()` `/v1/events/sse` كمكرر غير متزامن مع تلقائي
-إعادة المحاولة، لذلك يمكن لـ Node/Bun CLIs تتبع نشاط خط الأنابيب بنفس الطريقة التي تعمل بها Rust CLI.
-استمر في استخدام المؤشر `Last-Event-ID` بجانب عناصر دليل التشغيل الخاص بك حتى يتمكن المشغلون من
-استئناف الدفق دون تخطي الأحداث عند إعادة تشغيل العملية.
+## Live event streams
 
-```ts
-import fs from "node:fs/promises";
+`ToriiClient.streamEvents()` exposes `/v1/events/sse` as a live-only async
+iterator. Torii retains no replay log for this route, so the helper has no
+`lastEventId` option and reconnecting can leave a gap. A terminal
+`event: stream_error` is yielded before the iterator ends; handle it explicitly
+instead of treating closure as a lossless continuation point.
+
+```js
 import { ToriiClient, extractPipelineStatusKind } from "@iroha/iroha-js";
 
 const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080");
-const cursorFile = process.env.STREAM_CURSOR_FILE ?? ".cache/torii.cursor";
-const resumeId = await fs
-  .readFile(cursorFile, "utf8")
-  .then((value) => value.trim())
-  .catch(() => null);
 const controller = new AbortController();
 
 process.once("SIGINT", () => controller.abort());
@@ -424,28 +421,26 @@ process.once("SIGTERM", () => controller.abort());
 
 for await (const event of torii.streamEvents({
   filter: { Pipeline: { Transaction: { status: "Committed" } } },
-  lastEventId: resumeId || undefined,
   signal: controller.signal,
 })) {
-  if (event.id) {
-    await fs.writeFile(cursorFile, `${event.id}\n`, "utf8");
+  if (event.event === "stream_error") {
+    console.error("terminal stream error", event.data);
+    break;
   }
   const status = event.data ? extractPipelineStatusKind(event.data) : null;
-  console.log(`[${event.event}] id=${event.id ?? "∅"} status=${status ?? "n/a"}`);
+  console.log(`[${event.event}] status=${status ?? "n/a"}`);
 }
 ```
 
-- قم بالتبديل `PIPELINE_STATUS` (على سبيل المثال `Pending` أو `Applied` أو `Approved`) أو قم بتعيينه
-  `STREAM_FILTER_JSON` لإعادة تشغيل نفس المرشحات التي يقبلها CLI.
-- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` يبقي المكرِّر على قيد الحياة حتى أ
-  يتم استقبال الإشارة قم بتمرير `STREAM_MAX_EVENTS=25` عندما تحتاج فقط إلى الأحداث القليلة الأولى
-  لاختبار الدخان.
-- `ToriiClient.streamSumeragiStatus()` يعكس نفس الواجهة لـ
-  `/v1/sumeragi/status/sse` لذلك يمكن تفصيل القياس عن بعد المتفق عليه بشكل منفصل، و
-  يكرم المكرر `Last-Event-ID` بنفس الطريقة.
-- راجع `javascript/iroha_js/recipes/streaming.mjs` للتعرف على واجهة سطر الأوامر الجاهزة (استمرارية المؤشر،
-  تجاوزات مرشح env-var وتسجيل `extractPipelineStatusKind`) المستخدمة في JS4
-  البث / خريطة طريق WebSocket قابلة للتسليم.
+- Switch `PIPELINE_STATUS` (for example `Pending`, `Applied`, or `Approved`) or set
+  `STREAM_FILTER_JSON` to use the same filters the CLI accepts.
+- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` keeps the iterator alive until a
+  signal is received; pass `STREAM_MAX_EVENTS=25` when you only need the first few events
+  for a smoke test.
+- `ToriiClient.streamSumeragiStatus()` exposes the separate
+  `/v1/sumeragi/status/sse` consensus telemetry feed.
+- See `javascript/iroha_js/recipes/streaming.mjs` for a live-only turnkey CLI with
+  environment-driven filters and explicit terminal-error handling.
 
 ## محافظ UAID ودليل الفضاء
 

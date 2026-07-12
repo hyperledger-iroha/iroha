@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use iroha_primitives::{bigint::BigInt, numeric_abi::IntValueV1};
+
 use super::{AnalysisCategory, AnalysisFinding};
 use crate::{
     analysis::SimpleRng,
@@ -208,22 +210,33 @@ fn param_type_from_expr(expr: &Option<TypeExpr>) -> Result<Type, String> {
 
 fn convert_type_expr(expr: &TypeExpr) -> Result<Type, String> {
     Ok(match expr {
+        TypeExpr::Source { ty, .. } | TypeExpr::Resolved { ty, .. } => {
+            return convert_type_expr(ty);
+        }
         TypeExpr::Path(name) => match name.as_str() {
-            "int" | "i64" | "number" => Type::Int,
-            "fixed_u128" => Type::FixedU128,
-            "Amount" => Type::Amount,
-            "Balance" => Type::Balance,
+            "int" => Type::Int,
+            "quantity" => Type::Quantity,
             "bool" => Type::Bool,
-            "unit" | "()" => Type::Unit,
-            other => Type::Opaque(other.to_string()),
+            "()" => Type::Unit,
+            other => Type::NamedStruct(other.to_string()),
         },
         TypeExpr::Generic { base, args } => {
-            if base == "Map" && args.len() == 2 {
+            if base == "StateMap" && args.len() == 2 {
                 let key_ty = convert_type_expr(&args[0])?;
                 let value_ty = convert_type_expr(&args[1])?;
-                Type::Map(Box::new(key_ty), Box::new(value_ty))
+                Type::StateMap(Box::new(key_ty), Box::new(value_ty))
+            } else if base == "List" && args.len() == 2 {
+                let element = convert_type_expr(&args[0])?;
+                let TypeExpr::Const(capacity) = args[1].kind() else {
+                    return Err("List capacity must be a compile-time integer".to_owned());
+                };
+                let capacity = u8::try_from(*capacity)
+                    .ok()
+                    .filter(|capacity| (1..=64).contains(capacity))
+                    .ok_or_else(|| "List capacity must be in 1..=64".to_owned())?;
+                Type::List(Box::new(element), capacity)
             } else {
-                Type::Opaque(base.clone())
+                Type::NamedStruct(base.clone())
             }
         }
         TypeExpr::Tuple(items) => {
@@ -232,6 +245,11 @@ fn convert_type_expr(expr: &TypeExpr) -> Result<Type, String> {
                 out.push(convert_type_expr(item)?);
             }
             Type::Tuple(out)
+        }
+        TypeExpr::Const(value) => {
+            return Err(format!(
+                "compile-time integer `{value}` is only valid in List<T, N>"
+            ));
         }
     })
 }
@@ -248,19 +266,21 @@ fn build_samples(param_specs: &[ParamSpec]) -> Option<Vec<Vec<Value>>> {
 fn supported_type_samples(ty: &Type) -> Option<Vec<Value>> {
     match ty {
         Type::Int => Some(vec![
-            Value::Int(-2),
-            Value::Int(-1),
-            Value::Int(0),
-            Value::Int(1),
-            Value::Int(2),
-            Value::Int(i32::MIN as i64),
-            Value::Int(i32::MAX as i64),
-        ]),
-        Type::FixedU128 | Type::Amount | Type::Balance => Some(vec![
-            Value::Int(0),
-            Value::Int(1),
-            Value::Int(2),
-            Value::Int(i32::MAX as i64),
+            Value::Int(BigInt::from_i128(-2)),
+            Value::Int(BigInt::from_i128(-1)),
+            Value::Int(BigInt::zero()),
+            Value::Int(BigInt::one()),
+            Value::Int(BigInt::from_i128(2)),
+            Value::Int(
+                "-340282366920938463463374607431768211456"
+                    .parse()
+                    .expect("-2^128 is a V1 int"),
+            ),
+            Value::Int(
+                "340282366920938463463374607431768211456"
+                    .parse()
+                    .expect("2^128 is a V1 int"),
+            ),
         ]),
         Type::Bool => Some(vec![Value::Bool(false), Value::Bool(true)]),
         Type::Unit => Some(vec![Value::Unit]),
@@ -305,16 +325,16 @@ struct ParamSpec {
 
 #[derive(Debug, Clone)]
 enum Value {
-    Int(i64),
+    Int(BigInt),
     Bool(bool),
     Unit,
     Tuple(Vec<Value>),
 }
 
 impl Value {
-    fn as_int(&self) -> Option<i64> {
+    fn as_int(&self) -> Option<&BigInt> {
         match self {
-            Value::Int(v) => Some(*v),
+            Value::Int(value) => Some(value),
             _ => None,
         }
     }
@@ -325,6 +345,11 @@ impl Value {
             _ => None,
         }
     }
+}
+
+fn bounded_int(value: BigInt, operation: &'static str) -> Result<Value, EvalError> {
+    IntValueV1::try_new(value.clone()).map_err(|_| EvalError::ArithmeticOverflow(operation))?;
+    Ok(Value::Int(value))
 }
 
 struct Evaluator<'a> {
@@ -363,24 +388,33 @@ impl<'a> Evaluator<'a> {
         if depth >= self.recursion_limit {
             return Err(EvalError::RecursionLimitExceeded);
         }
-        let function = self
-            .functions
-            .get(name)
-            .ok_or_else(|| EvalError::Runtime(format!("unknown function `{name}`")))?;
-        if function.params.len() != args.len() {
+        let (params, body) = {
+            let function = self
+                .functions
+                .get(name)
+                .ok_or_else(|| EvalError::Runtime(format!("unknown function `{name}`")))?;
+            (function.params.clone(), function.body.clone())
+        };
+        if params.len() != args.len() {
             return Err(EvalError::Runtime(format!(
                 "function `{name}` parameter count mismatch: expected {}, got {}",
-                function.params.len(),
+                params.len(),
                 args.len()
             )));
         }
         let mut locals = HashMap::new();
-        for (param_name, arg) in function.params.iter().zip(args.iter()) {
+        for (param_name, arg) in params.iter().zip(args.iter()) {
             locals.insert(param_name.clone(), arg.clone());
         }
-        match self.exec_block(&function.body, &mut locals, depth)? {
+        match self.exec_block(&body, &mut locals, depth)? {
             FlowControl::Return(value) => Ok(value),
-            FlowControl::Next => Ok(Value::Unit),
+            FlowControl::Next => {
+                if let Some(tail) = &body.tail {
+                    self.eval_expr(tail, &mut locals, depth)
+                } else {
+                    Ok(Value::Unit)
+                }
+            }
             FlowControl::Break | FlowControl::ContinueLoop => Err(EvalError::Runtime(
                 "loop control statement escaped function body".into(),
             )),
@@ -442,13 +476,10 @@ impl<'a> Evaluator<'a> {
                     Ok(FlowControl::Next)
                 }
             }
+            TypedStatement::IfLet { .. } => Err(EvalError::UnsupportedFeature("if let statement")),
             TypedStatement::While { cond, body } => {
                 let mut iterations = 0usize;
                 loop {
-                    if iterations >= self.loop_limit {
-                        return Err(EvalError::LoopLimitExceeded);
-                    }
-                    iterations += 1;
                     let cond_val = self.eval_expr(cond, locals, depth)?;
                     let cond_bool = cond_val.as_bool().ok_or_else(|| {
                         EvalError::Runtime("while condition is not boolean".into())
@@ -456,6 +487,10 @@ impl<'a> Evaluator<'a> {
                     if !cond_bool {
                         break;
                     }
+                    if iterations >= self.loop_limit {
+                        return Err(EvalError::LoopLimitExceeded);
+                    }
+                    iterations += 1;
                     match self.exec_block(body, locals, depth)? {
                         FlowControl::Next => {}
                         FlowControl::ContinueLoop => continue,
@@ -465,9 +500,53 @@ impl<'a> Evaluator<'a> {
                 }
                 Ok(FlowControl::Next)
             }
-            TypedStatement::For { .. }
-            | TypedStatement::ForEachMap { .. }
-            | TypedStatement::MapSet { .. } => Err(EvalError::UnsupportedFeature("iterators")),
+            TypedStatement::For {
+                init,
+                cond,
+                step,
+                body,
+                ..
+            } => {
+                if let Some(init) = init {
+                    match self.exec_statement(init, locals, depth)? {
+                        FlowControl::Next => {}
+                        other => return Ok(other),
+                    }
+                }
+                let mut iterations = 0usize;
+                loop {
+                    if let Some(cond) = cond {
+                        let value = self.eval_expr(cond, locals, depth)?;
+                        let condition = value.as_bool().ok_or_else(|| {
+                            EvalError::Runtime("for condition is not boolean".into())
+                        })?;
+                        if !condition {
+                            break;
+                        }
+                    }
+                    if iterations >= self.loop_limit {
+                        return Err(EvalError::LoopLimitExceeded);
+                    }
+                    iterations += 1;
+                    match self.exec_block(body, locals, depth)? {
+                        FlowControl::Next | FlowControl::ContinueLoop => {}
+                        FlowControl::Break => break,
+                        FlowControl::Return(value) => return Ok(FlowControl::Return(value)),
+                    }
+                    if let Some(step) = step {
+                        match self.exec_statement(step, locals, depth)? {
+                            FlowControl::Next => {}
+                            FlowControl::Break => break,
+                            FlowControl::Return(value) => return Ok(FlowControl::Return(value)),
+                            FlowControl::ContinueLoop => {}
+                        }
+                    }
+                }
+                Ok(FlowControl::Next)
+            }
+            TypedStatement::ForEachMap { .. } | TypedStatement::MapSet { .. } => {
+                Err(EvalError::UnsupportedFeature("iterators"))
+            }
         }
     }
 
@@ -478,11 +557,16 @@ impl<'a> Evaluator<'a> {
         depth: usize,
     ) -> Result<Value, EvalError> {
         match &expr.expr {
-            ExprKind::Number(n) => Ok(Value::Int(*n)),
-            ExprKind::Decimal(_) => Err(EvalError::UnsupportedFeature("decimal literal")),
+            ExprKind::IntLiteral(value) => Ok(Value::Int(value.clone())),
+            ExprKind::DecimalLiteral { .. } => {
+                Err(EvalError::UnsupportedFeature("exact decimal literal"))
+            }
             ExprKind::Bool(b) => Ok(Value::Bool(*b)),
             ExprKind::String(_) | ExprKind::Bytes(_) => {
                 Err(EvalError::UnsupportedFeature("string literal"))
+            }
+            ExprKind::List(_) | ExprKind::ListComprehension { .. } => {
+                Err(EvalError::UnsupportedFeature("bounded lists"))
             }
             ExprKind::Ident(name) => locals
                 .get(name)
@@ -495,9 +579,10 @@ impl<'a> Evaluator<'a> {
                         let val = inner.as_int().ok_or_else(|| {
                             EvalError::Runtime("negation expects integer operand".into())
                         })?;
-                        val.checked_neg()
-                            .map(Value::Int)
-                            .ok_or(EvalError::ArithmeticOverflow("negation"))
+                        let value = val
+                            .checked_neg()
+                            .map_err(|_| EvalError::ArithmeticOverflow("negation"))?;
+                        bounded_int(value, "negation")
                     }
                     crate::ast::UnaryOp::Not => {
                         let val = inner.as_bool().ok_or_else(|| {
@@ -517,6 +602,9 @@ impl<'a> Evaluator<'a> {
                     ))
                 }
             }
+            ExprKind::NumericTryCast { .. } => Err(EvalError::Runtime(
+                "recoverable numeric conversions are not interpreted by the bounded fuzzer".into(),
+            )),
             ExprKind::Binary { op, left, right } => {
                 let lval = self.eval_expr(left, locals, depth)?;
                 let rval = self.eval_expr(right, locals, depth)?;
@@ -537,7 +625,17 @@ impl<'a> Evaluator<'a> {
                     self.eval_expr(else_expr, locals, depth)
                 }
             }
-            ExprKind::Call { name, args } => {
+            ExprKind::If { .. }
+            | ExprKind::IfLet { .. }
+            | ExprKind::Match { .. }
+            | ExprKind::OptionSome { .. }
+            | ExprKind::OptionNone
+            | ExprKind::ResultOk { .. }
+            | ExprKind::ResultErr { .. }
+            | ExprKind::Propagate { .. } => {
+                Err(EvalError::UnsupportedFeature("sum/control-flow expression"))
+            }
+            ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
                 let mut values = Vec::with_capacity(args.len());
                 for arg in args {
                     values.push(self.eval_expr(arg, locals, depth)?);
@@ -548,6 +646,13 @@ impl<'a> Evaluator<'a> {
                 let mut values = Vec::with_capacity(items.len());
                 for item in items {
                     values.push(self.eval_expr(item, locals, depth)?);
+                }
+                Ok(Value::Tuple(values))
+            }
+            ExprKind::StructLiteral { fields, .. } => {
+                let mut values = Vec::with_capacity(fields.len());
+                for (_, value) in fields {
+                    values.push(self.eval_expr(value, locals, depth)?);
                 }
                 Ok(Value::Tuple(values))
             }
@@ -571,6 +676,9 @@ impl<'a> Evaluator<'a> {
                 }
             }
             ExprKind::Index { .. } => Err(EvalError::UnsupportedFeature("index expression")),
+            ExprKind::JsonObject(_) | ExprKind::JsonArray(_) => {
+                Err(EvalError::UnsupportedFeature("native JSON construction"))
+            }
         }
     }
 
@@ -585,11 +693,10 @@ impl<'a> Evaluator<'a> {
             BinaryOp::Add => {
                 let (l, r) = (left.as_int(), right.as_int());
                 if let (Some(a), Some(b)) = (l, r) {
-                    let sum = (a as i128) + (b as i128);
-                    if sum < i64::MIN as i128 || sum > i64::MAX as i128 {
-                        return Err(EvalError::ArithmeticOverflow("addition"));
-                    }
-                    Ok(Value::Int(sum as i64))
+                    let value = a
+                        .checked_add(b)
+                        .map_err(|_| EvalError::ArithmeticOverflow("addition"))?;
+                    bounded_int(value, "addition")
                 } else {
                     Err(EvalError::Runtime("addition expects integers".into()))
                 }
@@ -597,11 +704,10 @@ impl<'a> Evaluator<'a> {
             BinaryOp::Sub => {
                 let (l, r) = (left.as_int(), right.as_int());
                 if let (Some(a), Some(b)) = (l, r) {
-                    let diff = (a as i128) - (b as i128);
-                    if diff < i64::MIN as i128 || diff > i64::MAX as i128 {
-                        return Err(EvalError::ArithmeticOverflow("subtraction"));
-                    }
-                    Ok(Value::Int(diff as i64))
+                    let value = a
+                        .checked_sub(b)
+                        .map_err(|_| EvalError::ArithmeticOverflow("subtraction"))?;
+                    bounded_int(value, "subtraction")
                 } else {
                     Err(EvalError::Runtime("subtraction expects integers".into()))
                 }
@@ -609,11 +715,10 @@ impl<'a> Evaluator<'a> {
             BinaryOp::Mul => {
                 let (l, r) = (left.as_int(), right.as_int());
                 if let (Some(a), Some(b)) = (l, r) {
-                    let prod = (a as i128) * (b as i128);
-                    if prod < i64::MIN as i128 || prod > i64::MAX as i128 {
-                        return Err(EvalError::ArithmeticOverflow("multiplication"));
-                    }
-                    Ok(Value::Int(prod as i64))
+                    let value = a
+                        .checked_mul(b)
+                        .map_err(|_| EvalError::ArithmeticOverflow("multiplication"))?;
+                    bounded_int(value, "multiplication")
                 } else {
                     Err(EvalError::Runtime("multiplication expects integers".into()))
                 }
@@ -621,10 +726,13 @@ impl<'a> Evaluator<'a> {
             BinaryOp::Div => {
                 let (l, r) = (left.as_int(), right.as_int());
                 if let (Some(a), Some(b)) = (l, r) {
-                    if b == 0 {
+                    if b.is_zero() {
                         return Err(EvalError::Runtime("division by zero".into()));
                     }
-                    Ok(Value::Int(a / b))
+                    let (quotient, _) = a
+                        .checked_div_rem(b)
+                        .map_err(|_| EvalError::ArithmeticOverflow("division"))?;
+                    bounded_int(quotient, "division")
                 } else {
                     Err(EvalError::Runtime("division expects integers".into()))
                 }
@@ -632,10 +740,15 @@ impl<'a> Evaluator<'a> {
             BinaryOp::Mod => {
                 let (l, r) = (left.as_int(), right.as_int());
                 if let (Some(a), Some(b)) = (l, r) {
-                    if b == 0 {
+                    if b.is_zero() {
                         return Err(EvalError::Runtime("modulo by zero".into()));
                     }
-                    Ok(Value::Int(a % b))
+                    let (quotient, remainder) = a
+                        .checked_div_rem(b)
+                        .map_err(|_| EvalError::ArithmeticOverflow("remainder"))?;
+                    IntValueV1::try_new(quotient)
+                        .map_err(|_| EvalError::ArithmeticOverflow("remainder"))?;
+                    Ok(Value::Int(remainder))
                 } else {
                     Err(EvalError::Runtime("modulo expects integers".into()))
                 }
@@ -711,7 +824,7 @@ enum FlowControl {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::parse;
+    use crate::parser::parse_test_fragment as parse;
 
     fn fuzz(source: &str) -> FuzzReport {
         let program = parse(source).expect("parse");
@@ -723,7 +836,7 @@ mod tests {
     fn fuzz_simple_add() {
         let report = fuzz(
             r#"
-            fn add(a: int, b: int) -> int {
+            fn add(int a, int b) -> int {
                 return a + b;
             }
         "#,
@@ -733,18 +846,35 @@ mod tests {
     }
 
     #[test]
-    fn fuzz_detects_loop_limit() {
+    fn fuzz_interpreter_executes_ints_wider_than_i64() {
         let report = fuzz(
             r#"
-            fn spin() {
-                while true { }
+            fn wide(int value) -> int {
+                return value + 340282366920938463463374607431768211456;
             }
         "#,
         );
         assert!(
-            report.findings.iter().any(|f| f.code == "fuzz-loop-limit"),
-            "expected loop limit finding, got {report:?}"
+            report.findings.is_empty(),
+            "signed-512 values must not be skipped or narrowed: {report:?}"
         );
+        assert!(report.cases_executed > 0);
+    }
+
+    #[test]
+    fn fuzz_executes_the_largest_v1_bounded_range() {
+        let report = fuzz(
+            r#"
+            fn spin() {
+                for index in range(64) { let value = index; }
+            }
+        "#,
+        );
+        assert!(
+            !report.findings.iter().any(|f| f.code == "fuzz-loop-limit"),
+            "a compiler-proven V1 loop must fit the fuzz evaluator budget: {report:?}"
+        );
+        assert!(report.cases_executed > 0);
     }
 
     #[test]
@@ -752,13 +882,17 @@ mod tests {
         let report = fuzz(
             r#"
             fn call_host() {
-                host::emit_event();
+                crypto::sha256(b"payload");
             }
         "#,
         );
+        assert_eq!(report.cases_executed, 0);
         assert!(
-            report.findings.iter().any(|f| f.code == "fuzz-skip-call"),
-            "expected skip-call finding, got {report:?}"
+            report
+                .findings
+                .iter()
+                .any(|finding| { matches!(finding.code, "fuzz-skip-call" | "fuzz-skip-feature") }),
+            "unsupported host-call fixtures must be skipped deterministically: {report:?}"
         );
     }
 }

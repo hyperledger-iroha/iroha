@@ -176,11 +176,6 @@ impl AuthenticatedPayloadChunk {
     pub(crate) const fn chunk(&self) -> &wire::PayloadChunk {
         &self.chunk
     }
-
-    /// Consume the token and recover the authenticated chunk.
-    pub(crate) fn into_inner(self) -> wire::PayloadChunk {
-        self.chunk
-    }
 }
 
 /// Certified-body request admitted through structural, identity, signature,
@@ -256,11 +251,6 @@ impl AuthenticatedCommitCertificateResponse {
     /// Hash of the outstanding request authenticated by this response.
     pub(crate) const fn request_hash(&self) -> HashOf<wire::CommitCertificateRequest> {
         self.request_hash
-    }
-
-    /// Borrow the authenticated response.
-    pub(crate) const fn response(&self) -> &wire::CommitCertificateResponse {
-        &self.response
     }
 
     /// Consume the token and recover the response.
@@ -573,11 +563,6 @@ impl OutstandingCommitCertificateRequests {
         self.requests.len()
     }
 
-    /// Whether no CommitQC discovery request remains outstanding.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.requests.is_empty()
-    }
-
     /// Whether the exact request remains outstanding.
     pub(crate) fn contains(&self, request_hash: HashOf<wire::CommitCertificateRequest>) -> bool {
         self.requests.contains_key(&request_hash)
@@ -667,11 +652,6 @@ impl OutstandingCommitCertificateRequests {
         let removed = self.identities.remove(&identity);
         debug_assert_eq!(removed, Some(request_hash));
         true
-    }
-
-    /// Cancel obsolete work when the active height changes by another path.
-    pub(crate) fn cancel(&mut self, request_hash: HashOf<wire::CommitCertificateRequest>) -> bool {
-        self.complete(request_hash)
     }
 }
 
@@ -794,6 +774,7 @@ mod tests {
                 height: 1,
                 epoch: 7,
                 epoch_end_height: 100,
+                next_epoch_snapshot: None,
                 mode: wire::ConsensusMode::Permissioned,
                 parent_commit_qc: None,
                 quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
@@ -869,6 +850,11 @@ mod tests {
                     round: self.manifest.round,
                     phase: wire::GlobalPhase::Prepare,
                     subject: self.manifest.subject,
+                    execution_commitment: wire::ExecutionCommitment::without_topups(
+                        Hash::new(b"transport fixture parent state"),
+                        Hash::new(b"transport fixture post state"),
+                        Hash::new(b"transport fixture ordinary writes"),
+                    ),
                     signers: vec![0, 1, 2],
                     aggregate_signature: vec![0xA5; 48],
                 },

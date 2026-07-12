@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2e4c6ed5974f623906f51259a634bcad5df703bcec899630ae29f4669b289ab6
-source_last_modified: "2026-01-08T21:52:45.509525+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-google-reviewed
 ---
 
@@ -14,111 +14,72 @@ translator: machine-google-reviewed
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# တံတားနောက်ဆုံးထွက်သက်သေများ
+# Bridge finality အထောက်အထားများ
 
-ဤစာတမ်းသည် Iroha အတွက် ကနဦး တံတားနောက်ဆုံးအဆင့် အထောက်အထားကို ဖော်ပြသည်။
-ရည်ရွယ်ချက်မှာ Iroha ပိတ်ဆို့ခြင်းကို ပြင်ပကြိုးများ သို့မဟုတ် အလင်းဖောက်သည်များအား စစ်ဆေးခွင့်ပြုရန်ဖြစ်သည်။
-ကွင်းဆက်တွက်ချက်ခြင်း သို့မဟုတ် ယုံကြည်စိတ်ချရသော relay များမပါဘဲ အပြီးသတ်သည်။
+ဤစာတမ်းသည် ပထမဆုံး release အတွက် bridge finality format ကို သတ်မှတ်သည်။ အထောက်အထားသည်
+Sumeragi v2 က ဖန်တီးပြီး အမြဲတမ်းသိမ်းထားသည့် အတိအကျ finality evidence ကို သယ်ဆောင်သည်။
+Proof envelope ၏ schema version သည် `1` ဖြစ်ပြီး အတွင်းရှိ consensus protocol version သည်
+`2` ဖြစ်သည်။ Sumeragi v1 certificate projection၊ decoder သို့မဟုတ် fallback လမ်းကြောင်း မရှိပါ။
 
-## အထောက်အထားပုံစံ
+## အတိအကျ proof format
 
-`BridgeFinalityProof` (Norito/JSON) ပါဝင်သည်-
+Norito သို့မဟုတ် Norito JSON ဖြင့် encode လုပ်ထားသော `BridgeFinalityProof` တွင် field သုံးခုသာရှိသည်။
 
-- `height`: ဘလောက်အမြင့်။
-- `chain_id`- Iroha ကွင်းဆက်ဖြတ်ကျော်ခြင်းအား တားဆီးရန် ကွင်းဆက်အမှတ်အသား။
-- `block_header`: canonical `BlockHeader`။
-- `block_hash`- ခေါင်းစီး၏ hash (ဖောက်သည်များသည် validate လုပ်ရန် ပြန်လည်တွက်ချက်သည်)။
-- `commit_certificate`- ပိတ်ဆို့ခြင်းကို အပြီးသတ်သည့် တရားဝင်သတ်မှတ်သူ + လက်မှတ်များ။
-- `validator_set_pops`- အထောက်အထားပိုင်နိုင်သော ဘိုက်များ
-  မှာယူမှု (BLS စုစည်းအတည်ပြုချက်အတွက် လိုအပ်သည်)။
+```text
+{ version, block_header, finality_artifact }
+```
 
-အထောက်အထားသည် ကိုယ်တိုင်ပါ၀င်သည်။ ပြင်ပဖော်ပြချက်များ သို့မဟုတ် မှိန်ဖျော့ဖျော့များ မလိုအပ်ပါ။
-ထိန်းသိမ်းခြင်း- Torii သည် မကြာသေးမီက ကတိပြုလက်မှတ်ဝင်းဒိုးအတွက် နောက်ဆုံးအထောက်အထားများကို ဆောင်ရွက်ပေးသည်
-(ပြင်ဆင်ထားသော မှတ်တမ်းထုပ်ဖြင့် ကန့်သတ်ထားသည်၊ ပုံသေအားဖြင့် 512 entry များဆီသို့
-`sumeragi.commit_cert_history_cap` / `SUMERAGI_COMMIT_CERT_HISTORY_CAP`)။ ဟိုဟာ
-၎င်းတို့သည် ပိုမိုကြာရှည်သော မိုးကုတ်စက်ဝိုင်းများ လိုအပ်ပါက ကက်ရှ် သို့မဟုတ် ကျောက်ချခြင်း အထောက်အထားများ ပြုလုပ်သင့်သည်။
-Canonical tuple သည် `(block_header, block_hash, commit_certificate)` ဖြစ်သည်
-ခေါင်းစီး၏ hash သည် commit လက်မှတ်အတွင်းရှိ hash နှင့် ကိုက်ညီရမည်။
-ကွင်းဆက် id သည် အထောက်အထားကို လယ်ဂျာတစ်ခုသို့ တွဲထားသည်။ ဆာဗာများက ငြင်းပယ်ပြီး မှတ်တမ်းတစ်ခု
-လက်မှတ်သည် မတူညီသော ဘလောက်တစ်ခုကို ညွှန်ပြသောအခါ `CommitCertificateHashMismatch`
-hash
+- `version` သည် `1` ဖြစ်ရမည်။
+- `block_header` သည် တောင်းဆိုထားသော height ၏ canonical `BlockHeader` ဖြစ်သည်။
+- `finality_artifact` သည် ထို block အတွက် သိမ်းထားသော အတိအကျ `V2FinalityArtifact` ဖြစ်သည်။
+  ၎င်းသည် height-context roster အစဉ်အတိုင်း validator တစ်ဦးချင်း၏ BLS-normal PoP
+  (`validator_set_pops`) ကို အမြဲတမ်း ထည့်သွင်းသိမ်းထားသည်။
 
-## ကတိကဝတ် အတွဲ
+Artifact တွင် ပြည့်စုံပြီး မပြောင်းလဲနိုင်သော `HeightContext`၊ အတိအကျ `BlockSubject`၊ block hash၊
+CommitQC နှင့် roster-aligned PoP များ ပါဝင်သည်။ Height context သည် chain၊ epoch၊ roster၊
+`DualQuorum`၊ DA layout၊ leader seed နှင့် အခြား consensus data များကို freeze လုပ်သည်။ Epoch ကို
+အဆုံးသတ်သော parent block ၏ context တွင် optional `next_epoch_snapshot` လည်း ပါသည်။ ဤ field သည်
+context id ၏ အစိတ်အပိုင်းဖြစ်သောကြောင့် child roster ကို ခွင့်ပြုမီ parent CommitQC က authenticate
+လုပ်ထားသည်။ Finalized snapshot သည် နောက် epoch parameters များနှင့်အတူ
+`epoch_end_height` နှင့် နောက် roster-aligned `validator_set_pops` ကိုလည်း authenticate လုပ်သည်။
 
-`BridgeFinalityBundle` (Norito/JSON) သည် အခြေခံအထောက်အထားကို ရှင်းလင်းပြတ်သားစွာ သက်တမ်းတိုးသည်
-ကတိကဝတ်နှင့် မျှတမှု-
+## အမြဲတမ်းသိမ်းဆည်းမှုနှင့် စစ်ဆေးမှု
 
-- `commitment`: `{ chain_id, authority_set { id, validator_set, validator_set_hash, validator_set_hash_version }, block_height, block_hash, mmr_root?, mmr_leaf_index?, mmr_peaks?, next_authority_set? }`
-- `justification`- ကတိကဝတ်အပေါ် သတ်မှတ်ထားသော အာဏာပိုင်ထံမှ လက်မှတ်များ
-  payload (commit-certificate လက်မှတ်များကို ပြန်သုံးသည်)။
-- `block_header`, `commit_certificate`: အခြေခံအထောက်အထားနှင့် အတူတူပင်။
+Sumeragi v2 apply path သည် artifact ကို စစ်ဆေးပြီး မပြောင်းလဲနိုင်သော Kura sidecar အဖြစ် သိမ်းသည်။
+Proof builder သည် canonical block နှင့် ၎င်း၏ sidecar ကို ဖတ်ပြီး သမိုင်းဝင် PoP သို့မဟုတ် certificate
+ကို ပြောင်းလဲနိုင်သော လက်ရှိ world state မှ ပြန်လည်မတည်ဆောက်ပါ။ Sidecar ပျောက်ဆုံးခြင်း၊ ပျက်စီးခြင်း၊
+ပဋိပက္ခဖြစ်ခြင်း သို့မဟုတ် မစစ်ဆေးနိုင်ခြင်းကို fail closed လုပ်ပြီး availability ကို နောက်ဆုံးပေါ်
+in-memory history window ဖြင့် မကန့်သတ်ပါ။
 
-လက်ရှိနေရာယူထားသည်- `mmr_root`/`mmr_peaks` ကို ပြန်လည်တွက်ချက်ခြင်းဖြင့် ဆင်းသက်လာပါသည်
-မှတ်ဉာဏ်ထဲတွင် block-hash MMR; ပါဝင်သည့် အထောက်အထားများ မပြန်ရသေးပါ။ ဟိုဟာလုပ်လို့ရတယ်။
-ကတိကဝတ် payload မှတစ်ဆင့် တူညီသော hash ကို ယနေ့ အတည်ပြုဆဲဖြစ်သည်။
+Stateless verifier သည် version၊ chain၊ height၊ header hash၊ header ၏ canonical predecessor နှင့်
+view၊ context၊ subject နှင့် CommitQC ကို အတိအကျ ကိုက်ညီစေပြီး artifact ထဲရှိ PoP အားလုံးကို
+စစ်ဆေးသည်။ Signer index များသည် တင်းကျပ်စွာ
+တိုးလာပြီး range အတွင်းရှိရမည်။ CommitQC သည် validator count နှင့် voting power quorum နှစ်ခုလုံးကို
+ဖြည့်ဆည်းရမည်ဖြစ်ပြီး အတိအကျ Sumeragi v2 vote preimage ပေါ်ရှိ BLS aggregate signature သည် valid
+ဖြစ်ရမည်။
 
-MMR ထိပ်များကို ဘယ်မှညာသို့ စီထားသည်။ အထွတ်အထိပ်များကို အိတ်ထုတ်ခြင်းဖြင့် `mmr_root` ကို ပြန်လည်တွက်ချက်ပါ။
-ညာမှဘယ်သို့- `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`။
+## Trust anchor နှင့် successor စစ်ဆေးမှု
 
-API- `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON)။
+သီးခြား proof တစ်ခုသည် ၎င်းနှင့်အတူပါသော roster အောက်တွင် အတွင်းပိုင်းညီညွတ်မှုကိုသာ ပြသည်။
+`BridgeFinalityVerifier` သည် ပထမ proof ကို လက်မခံမီ ရှင်းလင်းစွာ trusted ဖြစ်သော
+`HeightContextId` ကို လိုအပ်သည်။ ထို့နောက် ချက်ချင်းနောက် height ကိုသာ လက်ခံပြီး child context ၏
+parent CommitQC ကို ယခင် frozen roster နှင့် PoP ဖြင့် စစ်ဆေးသည်။ Epoch အတွင်း child artifact သည်
+ယခင် artifact PoP များကို copy လုပ်သည်။ Boundary တွင် epoch၊ roster၊ quorum၊ seed နှင့် PoP များသည်
+parent CommitQC က authenticate လုပ်ထားသော `next_epoch_snapshot` နှင့် ၎င်း၏
+`epoch_end_height` အပါအဝင် ကိုက်ညီရမည်။ အဟောင်း၊ ကျော်သွားသော၊ ချိတ်ဆက်မထားသော height များကို ပယ်ချသည်။
 
-အတည်ပြုခြင်းသည် အခြေခံအထောက်အထားနှင့် ဆင်တူသည်- `block_hash` ကို မှ ပြန်လည်တွက်ချက်ပါ။
-ခေါင်းစီး၊ ကတိသစ္စာပြုလက်မှတ်များကို စစ်ဆေးအတည်ပြုပြီး ကတိကဝတ်ကို စစ်ဆေးပါ။
-အကွက်များသည် လက်မှတ်နှင့် block hash နှင့် ကိုက်ညီသည်။ အစုအဝေးသည် ကတိကဝတ်တစ်ခု ထပ်လောင်းသည်/
-ခြားနားခြင်းကိုနှစ်သက်သော တံတားပရိုတိုကောများအတွက် တရားမျှတမှု ခြုံငုံသုံးသပ်ချက်။
+SCCP သည် တူညီသော `BridgeFinalityProof` ကို အသုံးပြုသည်။ Message ကပေးသော roster အောက်ရှိ signature
+တစ်ခုတည်းကို မယုံကြည်ရပါ။ Governance ဖြင့် ချိတ်ထားသော checkpoint context/artifact မှ message
+artifact အထိ immediate successor တစ်ခုချင်းကို စစ်ဆေးရမည်။
 
-## အတည်ပြုခြင်းအဆင့်များ1. `block_hash` ကို `block_header` မှ ပြန်လည်တွက်ချက်ပါ။ မတိုက်ဆိုင်မှုအပေါ် ငြင်းပယ်ပါ။
-2. စစ်ဆေးပြီး `commit_certificate.block_hash` သည် ပြန်လည်တွက်ချက်ထားသော `block_hash` နှင့် ကိုက်ညီပါသည်။
-   မကိုက်ညီသော ခေါင်းစီး/လက်မှတ်အတွဲများကို ငြင်းပယ်ပါ။
-3. `chain_id` သည် မျှော်လင့်ထားသည့် Iroha ကွင်းဆက်နှင့် ကိုက်ညီကြောင်း စစ်ဆေးပါ။
-4. `validator_set_hash` ကို `commit_certificate.validator_set` မှ ပြန်လည်တွက်ချက်ပြီး
-   မှတ်ထားသော hash/version နှင့် ကိုက်ညီကြောင်း စစ်ဆေးပါ။
-5. `validator_set_pops` အရှည်သည် validator set နှင့် ကိုက်ညီကြောင်း သေချာစေပြီး validate
-   PoP တစ်ခုစီသည် ၎င်း၏ BLS အများသူငှာသော့နှင့် ဆန့်ကျင်ဘက်ဖြစ်သည်။
-6. ခေါင်းစီး hash ကိုအသုံးပြု၍ commit လက်မှတ်ရှိ လက်မှတ်များကို အတည်ပြုပါ။
-   ရည်ညွှန်းအတည်ပြုသူ အများသူငှာသော့များနှင့် အညွှန်းကိန်းများ၊ အထမြောက်သည်။
-   (`2f+1`၊ `n>3`၊ အခြား `n`) နှင့် ပွားနေသော/အကွာအဝေး အညွှန်းကိန်းများကို ငြင်းပယ်ပါ။
-7. တရားဝင်သူသတ်မှတ်ထားသော hash ကို နှိုင်းယှဉ်ခြင်းဖြင့် ယုံကြည်စိတ်ချရသော စစ်ဆေးရေးဂိတ်သို့ စိတ်ကြိုက်ရွေးချယ်နိုင်သည်။
-   ကျောက်ချထားသည့်တန်ဖိုး (weak-subjectivity anchor) သို့။
-8. အဟောင်း/အသစ်များမှ အထောက်အထားများကို မျှော်လင့်ထားသည့် ခေတ်ကျောက်ဆူးတစ်ခုတွင် စိတ်ကြိုက်ရွေးချယ်နိုင်သည်။
-   ကျောက်ဆူးကို ရည်ရွယ်ချက်ရှိရှိ လှည့်ပြီးသည်အထိ အပိုင်းများကို ပယ်ချပါသည်။
+## Bundle နှင့် API
 
-`BridgeFinalityVerifier` (`iroha_data_model::bridge`) တွင် ဤစစ်ဆေးမှုများ အကျုံးဝင်သည်၊
-chain-id/height drift ၊ validator-set hash/version မကိုက်ညီမှုများ၊ ပျောက်ဆုံးနေသည်
-သို့မဟုတ် မမှန်ကန်သော PoPs၊ မိတ္တူပွား/ပြင်ပ လက်မှတ်ထိုးသူများ၊ မမှန်ကန်သော လက်မှတ်များနှင့်
-အလင်းဖောက်သည်များသည် တစ်ခုတည်းကို ပြန်သုံးနိုင်စေရန် အထမြောက်ရေတွက်ခြင်းမပြုမီ မျှော်လင့်မထားသောအချိန်များ
-အတည်ပြုသူ။
+`BridgeFinalityBundle` သည် အတိအကျ `{ commitment, finality_proof }` ဖြစ်သည်။ Commitment သည်
+`{ chain_id, height_context_id, block_height, block_hash }` ဖြစ်သည်။
 
-## အကိုးအကား အတည်ပြုသူ
+- `GET /v1/bridge/finality/{height}` သည် `BridgeFinalityProof` ကို ပြန်ပေးသည်။
+- `GET /v1/bridge/finality/bundle/{height}` သည် `BridgeFinalityBundle` ကို ပြန်ပေးသည်။
 
-`BridgeFinalityVerifier` သည် မျှော်လင့်ထားသော `chain_id` နှင့် ရွေးချယ်နိုင်သော ယုံကြည်စိတ်ချရမှုကို လက်ခံသည်
-validator-set နှင့် epoch ကျောက်ဆူးများ။ ၎င်းသည် header/block-hash/ ကို ပြဌာန်းသည်
-commit-certificate tuple၊ validator-set hash/version၊ စစ်ဆေးမှုများကို validate လုပ်ပေးသည်။
-ကြော်ငြာထားသော တရားဝင်သူစာရင်းကို ဆန့်ကျင်သည့် လက်မှတ်များ/အထမြောက်ပြီး နောက်ဆုံးထွက်ကို ခြေရာခံပါ။
-ဖောက်ပြန်/ကျော်သွားသောအထောက်အထားများကို ငြင်းပယ်ရန် အမြင့်။ ကျောက်ဆူးတွေ ပေးတဲ့အခါ ငြင်းပယ်ပါတယ်။
-တိကျသော `UnexpectedEpoch`/ ဖြင့် အပိုင်းများ/စာရင်းဇယားများတစ်လျှောက် ပြန်လည်ပြသသည်
-`UnexpectedValidatorSet` အမှားအယွင်းများ; ကျောက်ဆူးများမပါဘဲ၎င်းသည်ပထမအထောက်အထားကိုလက်ခံသည်။
-မိတ္တူပွားခြင်း/ပြင်ပ-ကို ဆက်လက်မကျင့်သုံးမီ တရားဝင်သူသတ်မှတ်ထားသော ဟက်ရှ်နှင့် အပိုင်း
-အဆုံးအဖြတ်အမှားများဖြင့် အပိုင်းအခြား/မလုံလောက်သော လက်မှတ်များ။
-
-## API မျက်နှာပြင်
-
-- `GET /v1/bridge/finality/{height}` - `BridgeFinalityProof` အတွက် ပြန်ပေးသည်
-  တောင်းဆိုထားသော ဘလောက်အမြင့်။ အကြောင်းအရာညှိနှိုင်းမှုကို `Accept` မှတစ်ဆင့် Norito ကို ပံ့ပိုးပေးသည် သို့မဟုတ်
-  JSON
-- `GET /v1/bridge/finality/bundle/{height}` - `BridgeFinalityBundle` ပြန်ပေးသည်
-  တောင်းဆိုထားသော အမြင့်အတွက် (ကတိကဝတ် + မျှတမှု + ခေါင်းစီး/လက်မှတ်)။
-
-## မှတ်စုများနှင့် နောက်ဆက်တွဲ
-
-- အထောက်အထားများသည် လက်ရှိသိမ်းဆည်းထားသော commit လက်မှတ်များမှ ဆင်းသက်လာသည်။ ကန့်သတ်ထားသည်။
-  မှတ်တမ်းသည် ကတိပြုလက်မှတ် သိမ်းဆည်းခြင်းဝင်းဒိုးကို လိုက်နာသည်။ client များသည် cache ရှိသင့်သည်။
-  ပိုရှည်သော မိုးကုတ်စက်ဝိုင်းများ လိုအပ်ပါက ကျောက်ချခြင်း အထောက်အထားများ။ ပြတင်းပေါက်အပြင်ဘက်မှ တောင်းဆိုမှုများ
-  `CommitCertificateNotFound(height)`; error ကို ပြင်ပြီး တစ်ခုသို့ ပြန်ပြောင်းပါ။
-  ကျောက်ချစစ်ဆေးရေးဂိတ်။
-- မကိုက်ညီသော `block_hash` (ခေါင်းစီးနှင့် အတုလုပ်ထားသော အထောက်အထားများ ပြန်လည်ပြသခြင်း သို့မဟုတ် အတုလုပ်ခြင်း
-  လက်မှတ်) ကို `CommitCertificateHashMismatch` ဖြင့် ပယ်ချသည်။ ဖောက်သည်များသင့်သည်။
-  လက်မှတ်အတည်ပြုခြင်းမပြုမီ တူညီသော tuple check ကိုလုပ်ဆောင်ပါ။
-  ဝန်ဆောင်ခများ မကိုက်ညီပါ။
-- အထောက်အထားအရွယ်အစားကို လျှော့ချရန်အတွက် အနာဂတ်လုပ်ငန်းသည် MMR/ အာဏာပိုင်-သတ်မှတ်ကတိကဝတ်ကြိုးများကို ပေါင်းထည့်နိုင်သည်။
-  ပိုမိုကြွယ်ဝသောကတိကဝတ်စာအိတ်များအတွင်းရှိ commit လက်မှတ်။
+Block သို့မဟုတ် အတိအကျ အမြဲတမ်း v2 artifact မရှိခြင်း သို့မဟုတ် invalid ဖြစ်ခြင်းတွင် endpoint နှစ်ခုလုံး
+fail closed ဖြစ်သည်။ မသိသော field များ၊ မထောက်ပံ့သော version များနှင့် retired proof shape များကို
+ပယ်ချရမည်။

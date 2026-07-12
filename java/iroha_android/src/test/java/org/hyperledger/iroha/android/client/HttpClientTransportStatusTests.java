@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.client;
 
+import java.math.BigInteger;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -10,7 +11,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.hyperledger.iroha.android.client.stream.ToriiStreamException;
+import org.hyperledger.iroha.android.client.stream.ToriiStreamProtocolException;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.model.TransactionPayload;
@@ -37,7 +41,11 @@ public final class HttpClientTransportStatusTests {
     waitForTransactionStatusTruncatesOversizedErrorBody();
     waitForTransactionStatusMatchesSharedErrorMessageContractFixture();
     waitForTransactionStatusHonoursMaxAttempts();
+    waitForTransactionStatusSaturatesOverflowingDeadline();
     waitForTransactionStatusFailsOnInvalidPayload();
+    waitForTransactionStatusStreamSurfacesTerminalStreamErrorBeforeFiltering();
+    waitForTransactionStatusStreamFailsClosedOnMalformedTerminalError();
+    waitForTransactionStatusStreamRejectsResumeHeaderWithoutDispatchingStream();
     submitTransactionProvidesCanonicalHashForPolling();
     submitTransactionPrefersAuthoritativeReceiptHashHeaderForPolling();
     System.out.println("[IrohaAndroid] HTTP client status tests passed.");
@@ -536,6 +544,40 @@ public final class HttpClientTransportStatusTests {
     assert threw : "Expected waitForTransactionStatus to time out";
   }
 
+  private static void waitForTransactionStatusSaturatesOverflowingDeadline() {
+    final AtomicInteger requests = new AtomicInteger();
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            request -> {
+              requests.incrementAndGet();
+              return CompletableFuture.completedFuture(
+                  newResponse(200, statusPayload("Pending")));
+            },
+            ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
+
+    boolean threw = false;
+    try {
+      transport
+          .waitForTransactionStatus(
+              "feed",
+              PipelineStatusOptions.builder()
+                  .intervalMillis(0L)
+                  .maxAttempts(2)
+                  .timeoutMillis(Long.MAX_VALUE)
+                  .build())
+          .join();
+    } catch (final RuntimeException ex) {
+      threw = true;
+      final Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+      assert cause instanceof TransactionTimeoutException
+          : "Expected TransactionTimeoutException";
+      assert ((TransactionTimeoutException) cause).attempts() == 2
+          : "Expected two attempts";
+    }
+    assert threw : "Expected waitForTransactionStatus to reach maxAttempts";
+    assert requests.get() == 2 : "Overflowing timeout must not expire after one request";
+  }
+
   private static void waitForTransactionStatusFailsOnInvalidPayload() {
     final HttpClientTransport transport = HttpClientTransport.withExecutor(
         request -> CompletableFuture.completedFuture(
@@ -555,6 +597,108 @@ public final class HttpClientTransportStatusTests {
           : "Expected parsing error to propagate";
     }
     assert threw : "Expected waitForTransactionStatus to fail on invalid payload";
+  }
+
+  private static void waitForTransactionStatusStreamSurfacesTerminalStreamErrorBeforeFiltering() {
+    final String terminalPayload =
+        "event: stream_error\n"
+            + "data: {\"code\":\"stream_lagged\",\"message\":\"receiver lagged\","
+            + "\"dropped_messages\":7,\"replay_available\":false}\n\n";
+    final SequencedExecutor executor =
+        new SequencedExecutor(
+            newResponse(202, statusPayload("Pending")),
+            newResponse(200, terminalPayload.getBytes(StandardCharsets.UTF_8)));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder()
+                .setBaseUri(URI.create("http://localhost:8080"))
+                .setRequestTimeout(Duration.ofSeconds(5))
+                .build());
+
+    try {
+      transport
+          .waitForTransactionStatusStream(
+              "deadbeef", PipelineStatusOptions.builder().timeoutMillis(5_000L).build())
+          .join();
+    } catch (final CompletionException expected) {
+      if (!(expected.getCause() instanceof ToriiStreamException terminal)) {
+        throw new AssertionError("expected typed terminal stream failure", expected);
+      }
+      assert "stream_lagged".equals(terminal.code()) : "terminal code mismatch";
+      assert BigInteger.valueOf(7L).equals(terminal.droppedMessages())
+          : "terminal dropped-message count mismatch";
+      assert !terminal.replayAvailable() : "canonical live stream must not advertise replay";
+      return;
+    }
+    throw new AssertionError("Expected pipeline stream to fail on terminal stream_error");
+  }
+
+  private static void waitForTransactionStatusStreamFailsClosedOnMalformedTerminalError() {
+    final String[] malformedPayloads = {
+      "{\"code\":\"stream_lagged\",\"message\":\"lagged\",\"dropped_messages\":1}",
+      "{\"code\":\"stream_lagged\",\"message\":\"lagged\",\"dropped_messages\":-1,\"replay_available\":false}",
+      "{\"code\":\"stream_lagged\",\"message\":\"lagged\",\"dropped_messages\":1,\"replay_available\":false,\"extra\":true}"
+    };
+    for (final String payload : malformedPayloads) {
+      final String terminalPayload = "event: stream_error\ndata: " + payload + "\n\n";
+      final SequencedExecutor executor =
+          new SequencedExecutor(
+              newResponse(202, statusPayload("Pending")),
+              newResponse(200, terminalPayload.getBytes(StandardCharsets.UTF_8)));
+      final HttpClientTransport transport =
+          HttpClientTransport.withExecutor(
+              executor,
+              ClientConfig.builder()
+                  .setBaseUri(URI.create("http://localhost:8080"))
+                  .setRequestTimeout(Duration.ofSeconds(5))
+                  .build());
+
+      try {
+        transport
+            .waitForTransactionStatusStream(
+                "deadbeef", PipelineStatusOptions.builder().timeoutMillis(5_000L).build())
+            .join();
+      } catch (final CompletionException expected) {
+        if (!(expected.getCause() instanceof ToriiStreamProtocolException protocolError)) {
+          throw new AssertionError("expected malformed terminal protocol failure", expected);
+        }
+        assert payload.equals(protocolError.rawData()) : "malformed raw payload mismatch";
+        continue;
+      }
+      throw new AssertionError("Expected malformed terminal stream_error rejection: " + payload);
+    }
+  }
+
+  private static void waitForTransactionStatusStreamRejectsResumeHeaderWithoutDispatchingStream() {
+    final AtomicInteger dispatches = new AtomicInteger();
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            request -> {
+              dispatches.incrementAndGet();
+              return CompletableFuture.completedFuture(
+                  newResponse(202, statusPayload("Pending")));
+            },
+            ClientConfig.builder()
+                .setBaseUri(URI.create("http://localhost:8080"))
+                .putDefaultHeader("lAsT-eVeNt-Id", "stale")
+                .build());
+
+    try {
+      transport
+          .waitForTransactionStatusStream(
+              "deadbeef", PipelineStatusOptions.builder().timeoutMillis(5_000L).build())
+          .join();
+    } catch (final CompletionException expected) {
+      if (!(expected.getCause() instanceof IllegalArgumentException)
+          || !expected.getCause().getMessage().contains("no replay log")) {
+        throw new AssertionError("expected canonical resume-header rejection", expected);
+      }
+      assert dispatches.get() == 1
+          : "only the bounded status snapshot may dispatch before stream rejection";
+      return;
+    }
+    throw new AssertionError("Expected pipeline stream resume header rejection");
   }
 
   private static void submitTransactionProvidesCanonicalHashForPolling() {

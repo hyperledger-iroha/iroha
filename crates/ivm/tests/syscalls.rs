@@ -111,8 +111,10 @@ fn syscall_abort_marks_failure() {
     let mut vm = IVM::new(u64::MAX);
     let prog = assemble_syscall(syscalls::SYSCALL_ABORT as u8);
     vm.load_program(&prog).unwrap();
+    vm.set_register(10, 0xA11CE);
     let result = vm.run();
     assert!(matches!(result, Err(VMError::AssertionFailed)));
+    assert_eq!(vm.register(10), 0xA11CE, "abort code must survive in r10");
 }
 
 #[test]
@@ -283,6 +285,14 @@ fn set_account_quorum_rejects_zero() {
 struct AddHost;
 
 impl ivm::IVMHost for AddHost {
+    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        if number == 1 {
+            Ok(0)
+        } else {
+            Err(VMError::UnknownSyscall(number))
+        }
+    }
+
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         if number == 1 {
             let a0 = vm.register(10);

@@ -14,8 +14,6 @@ pub struct ProofFilters<'a> {
     pub status: Option<ProofStatus>,
     /// When true, only bridge proof records are returned.
     pub bridge_only: bool,
-    /// When true, only pinned bridge proof records are returned (implies `bridge_only`).
-    pub pinned_only: bool,
     /// Minimum bridge range start height (inclusive) when `bridge_only` is set.
     pub bridge_min_range_start: Option<u64>,
     /// Maximum bridge range end height (inclusive) when `bridge_only` is set.
@@ -151,12 +149,9 @@ fn proof_matches_filters(id: &ProofId, record: &ProofRecord, filters: &ProofFilt
             _ => return false,
         }
     }
-    if filters.bridge_only || filters.pinned_only {
+    if filters.bridge_only {
         match record.bridge.as_ref() {
             Some(bridge) => {
-                if filters.pinned_only && !bridge.proof.pinned {
-                    return false;
-                }
                 if let Some(min_range_start) = filters.bridge_min_range_start
                     && bridge.proof.range.start_height < min_range_start
                 {
@@ -212,19 +207,12 @@ mod tests {
 
     fn bridge_proof_record(
         range: BridgeProofRange,
-        pinned: bool,
         payload: BridgeProofPayload,
-        manifest_hash: [u8; 32],
         commitment: [u8; 32],
         size_bytes: u32,
     ) -> BridgeProofRecord {
         BridgeProofRecord {
-            proof: BridgeProof {
-                range,
-                manifest_hash,
-                payload,
-                pinned,
-            },
+            proof: BridgeProof { range, payload },
             commitment,
             size_bytes,
         }
@@ -321,7 +309,6 @@ mod tests {
             backend: Some(backend),
             status: Some(ProofStatus::Verified),
             bridge_only: false,
-            pinned_only: false,
             bridge_min_range_start: None,
             bridge_max_range_end: None,
             has_tag: Some(*b"PROF"),
@@ -405,7 +392,6 @@ mod tests {
             backend: Some(backend),
             status: Some(ProofStatus::Verified),
             bridge_only: false,
-            pinned_only: false,
             bridge_min_range_start: None,
             bridge_max_range_end: None,
             has_tag: None,
@@ -427,7 +413,6 @@ mod tests {
             backend: Some(backend),
             status: Some(ProofStatus::Verified),
             bridge_only: false,
-            pinned_only: false,
             bridge_min_range_start: None,
             bridge_max_range_end: None,
             has_tag: None,
@@ -449,7 +434,6 @@ mod tests {
             backend: Some(backend),
             status: None,
             bridge_only: false,
-            pinned_only: false,
             bridge_min_range_start: None,
             bridge_max_range_end: None,
             has_tag: None,
@@ -473,7 +457,6 @@ mod tests {
                 backend: Some(backend),
                 status: Some(ProofStatus::Verified),
                 bridge_only: false,
-                pinned_only: false,
                 bridge_min_range_start: None,
                 bridge_max_range_end: None,
                 has_tag: None,
@@ -496,39 +479,36 @@ mod tests {
         let mut stx = block.transaction();
 
         let payload = BridgeProofPayload::TransparentZk(BridgeTransparentProof {
+            verifier_manifest_hash: [0x11; 32],
             proof: ProofBox::new(backend.into(), vec![0xAA, 0xBB]),
             recursion_depth: Some(1),
         });
 
-        // Unpinned bridge proof
+        // Early bridge proof.
         let bridge_proof = bridge_proof_record(
             BridgeProofRange {
                 start_height: 1,
                 end_height: 3,
             },
-            false,
             payload.clone(),
-            [0x11; 32],
             [0x10; 32],
             2,
         );
         let (_, rec_bridge) = bridge_record(backend, [0x01; 32], bridge_proof, 5);
         stx.world.insert_proof_record(rec_bridge);
 
-        // Pinned bridge proof with later range
-        let pinned_proof = bridge_proof_record(
+        // Bridge proof with a later range.
+        let later_proof = bridge_proof_record(
             BridgeProofRange {
                 start_height: 20,
                 end_height: 25,
             },
-            true,
             payload,
-            [0x22; 32],
             [0x11; 32],
             3,
         );
-        let (id_pinned, rec_pinned) = bridge_record(backend, [0x02; 32], pinned_proof, 6);
-        stx.world.insert_proof_record(rec_pinned);
+        let (id_later, rec_later) = bridge_record(backend, [0x02; 32], later_proof, 6);
+        stx.world.insert_proof_record(rec_later);
 
         // Non-bridge proof should be filtered out.
         let (_, plain) = plain_record("halo2/ipa", [0x03; 32], ProofStatus::Verified, Some(7));
@@ -542,7 +522,6 @@ mod tests {
                 backend: None,
                 status: Some(ProofStatus::Verified),
                 bridge_only: true,
-                pinned_only: false,
                 bridge_min_range_start: None,
                 bridge_max_range_end: None,
                 has_tag: None,
@@ -553,30 +532,12 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|row| row.record.bridge.is_some()));
 
-        let pinned_rows = list_for_filters(
-            &state,
-            ProofFilters {
-                backend: None,
-                status: None,
-                bridge_only: true,
-                pinned_only: true,
-                bridge_min_range_start: None,
-                bridge_max_range_end: None,
-                has_tag: None,
-                min_height: None,
-                max_height: None,
-            },
-        );
-        assert_eq!(pinned_rows.len(), 1);
-        assert_eq!(pinned_rows[0].id, id_pinned);
-
         let range_filtered = list_for_filters(
             &state,
             ProofFilters {
                 backend: None,
                 status: None,
                 bridge_only: true,
-                pinned_only: false,
                 bridge_min_range_start: Some(10),
                 bridge_max_range_end: Some(30),
                 has_tag: None,
@@ -585,6 +546,6 @@ mod tests {
             },
         );
         assert_eq!(range_filtered.len(), 1);
-        assert_eq!(range_filtered[0].id, id_pinned);
+        assert_eq!(range_filtered[0].id, id_later);
     }
 }

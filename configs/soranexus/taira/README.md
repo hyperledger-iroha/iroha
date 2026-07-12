@@ -108,7 +108,7 @@ config rather than wrapper-local defaults:
   `config.toml` generation so public Torii ingress cannot drift onto stale
   loopback ports.
 - `check_mcp_rollout.sh`: smoke script for the local and public `/v1/mcp`
-  checks used by the Taira Codex rollout, with commit-QC validator health read
+  checks used by the Taira Codex rollout, with protocol-2 reducer health read
   from `/v1/sumeragi/status` and an optional signed write canary for final
   public cutover.
 - `check_sorafs_rollout.sh`: public SoraFS surface + signed capacity-declaration
@@ -222,29 +222,40 @@ That avoids the common drift where the copied nginx snippet still points at
 different loopback ports such as `127.0.0.1:29080..29083`, which turns
 `GET /v1/mcp` and the generic public API surface into `502 Bad Gateway`.
 
-## SCCP TAIRA/TRON Nile Route
+## SCCP V1 on Taira
 
-For the `taira_tron_xor` Nile smoke route, generate the full validator config
-from the route manifest instead of hand-merging the `[zk]` overlay:
+Taira is the only SORA settlement target for SCCP V1. The exact runtime target
+is the public chain id above and I105 discriminant `369` (`0x0171`). Do not use
+the generic/default `753` discriminant for SCCP authorities or recipients.
 
-```bash
-node scripts/sccp_tron_taira_xor_deploy.mjs route-config \
-  --manifest artifacts/sccp-tron/nile-taira-xor-route.manifest.json \
-  --base-config configs/soranexus/taira/config.toml \
-  --out artifacts/sccp-tron/nile-taira-xor-route.full-taira-config.toml
-```
+SCCP policy is not a validator-local `[zk]` overlay and is not loaded from a
+route manifest. Consensus owns one typed `SccpRegistryV1`, changed through
+authorized `ApplySccpRouteGovernance` transactions. Rendered validator bundles
+therefore use the normal Taira configuration; never hand-merge SCCP route
+material into per-host TOML files.
 
-Install the generated full config on every public Taira validator and restart
-Iroha/Torii. Then rerun the wallet preflight without `--manifest-file`:
+The public read-only discovery surface is:
 
-```bash
-cd ../iroha-demo-javascript
-VITE_SCCP_TRON_NETWORK=nile node scripts/e2e/sccp-route-preflight.mjs \
-  --tron-network nile --check-tron-contracts true
-```
+- `GET /v1/sccp/capabilities`;
+- `GET /v1/sccp/registry`;
+- `GET /v1/sccp/proofs/message/{message_id}`;
+- `GET /v1/sccp/proof-requests/{message_id}`; and
+- `GET /v1/sccp/messages/recent`.
 
-The route is not ready for live UI bridge smoke until the public endpoint
-advertises `route=taira_tron_xor` and `asset=xor` from `/v1/sccp/manifests`.
+The exact submit endpoints are `POST /v1/bridge/proofs/submit` for a governed
+destination artifact and `POST /v1/bridge/messages` for a native inbound proof.
+Preparation omits both detached-signing fields; direct submission provides both
+`signature_b64` and the prepared `transaction_payload_b64` with the exact
+positive `creation_time_ms`. Do not send private keys, governance credentials,
+or node-local route overrides to Torii.
+
+Ethereum, BSC, and TRON mainnet are the production remote profiles. Sepolia,
+BSC testnet, Nile, and Shasta are test profiles only and cannot certify public
+Taira production readiness. A lane becomes usable only after typed governance,
+authenticated contract/native-verifier readback, audited proof material, and
+the signed SCCP release-evidence corridor all succeed. The retired
+`/v1/sccp/manifests` route readiness check and the old Nile route-config script
+are not part of the first-release operator workflow.
 
 ## Validator container image
 
@@ -370,7 +381,7 @@ bash configs/soranexus/taira/check_mcp_rollout.sh \
 ```
 
 That path is now validated on this host: peer0 publishes Torii counters on
-`/status`, detailed commit-QC validator health on `/v1/sumeragi/status`, and
+`/status`, detailed protocol-2 reducer health on `/v1/sumeragi/status`, and
 the repo rollout script passes end to end against the local cluster.
 
 ## Minimum viable topology
@@ -418,7 +429,7 @@ allowlisting:
    views rather than a static file roster:
    - `iroha app nexus public-lane validators --lane 0 --summary`
    - `iroha app nexus public-lane stake --lane 0 --validator <i105-account-id> --summary`
-   - `curl -sS "${PUBLIC_TORII_ROOT}/v1/nexus/public_lanes/0/validators" | jq .`
+   - `curl -sS "${PUBLIC_TORII_ROOT}/v1/nexus/public-lanes/0/validators" | jq .`
    - `curl -sS "${PUBLIC_TORII_ROOT}/v1/sumeragi/validator-sets" | jq .`
 
 ## Public endpoints
@@ -438,13 +449,13 @@ allowlisting:
 Taira serves SoraFS-published static content primarily through immutable CID
 gateway paths on the Torii origin:
 
-- `GET /sorafs/cid/<cid>/`
+- `GET /sorafs/cid/<cid>`
 - `GET /sorafs/cid/<cid>/<path...>`
 - `GET /v1/sorafs/cid/<cid>` for lookup metadata
 
 For the Polkaswap static bundle, the browser URL is:
 
-- `${PUBLIC_TORII_ROOT}/sorafs/cid/<cid>/`
+- `${PUBLIC_TORII_ROOT}/sorafs/cid/<cid>`
 
 This keeps the chosen public node as the Torii/API origin while giving every
 public Torii node an IPFS-style address surface for static content.
@@ -463,7 +474,7 @@ Gateway behavior:
 
 Named host bindings in `sorafs_sites.json` remain available as an optional
 alias layer, but they are no longer the primary deployment path. Reserve
-`taira.sora.org` for Torii itself and serve apps from `/sorafs/cid/<cid>/` or
+`taira.sora.org` for Torii itself and serve apps from `/sorafs/cid/<cid>` or
 `<cid>.sorafs.taira.sora.org`.
 
 Named bindings are production configuration, not a runtime environment
@@ -602,10 +613,10 @@ Then gate the SoraFS path on the same public node:
 
 - `bash configs/soranexus/taira/check_sorafs_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml`
 
-When `--write-config` is supplied, `check_sorafs_rollout.sh` reads that
-runtime-only signer config as-is and fails if it is missing; it does not
-bootstrap over the supplied path. Omit `--write-config` only when the intended
-flow is to bootstrap the default runtime canary config automatically.
+When `--write-config` is supplied, both rollout scripts read that runtime-only
+signer config as-is and fail if it is missing; neither script overwrites or
+bootstraps over an operator-supplied path. Omit `--write-config` only when the
+intended flow is to bootstrap the default runtime canary config automatically.
 
 Expected result:
 
@@ -631,8 +642,9 @@ is stale and missing the SoraFS capacity/order entries in
 `iroha_core`'s instruction dispatch table even if the Torii route surface is
 otherwise up.
 
-On a freshly reset local bundle, the same signed canary tolerates an
-authoritative v2 snapshot at the genesis frontier before a CommitQC exists,
+On a freshly reset local bundle, the same signed canary tolerates the brief
+startup window where the authoritative v2 snapshot is still at the genesis
+frontier and no CommitQC exists yet,
 submits the first post-genesis write, and then re-checks `/status` plus
 `/v1/sumeragi/status` strictly after that write lands.
 
@@ -647,10 +659,10 @@ clear volatile consensus state before debugging ingress or MCP. It also verifies
 that the same direct node serves:
 
 - `/v1/sccp/capabilities`
-- `/v1/sccp/manifests`
+- `/v1/sccp/registry`
 - `/v1/zk/proofs/count`
 - `/v1/sumeragi/validator-sets`
-- `/v1/nexus/public_lanes/0/{validators,stake}`
+- `/v1/nexus/public-lanes/0/{validators,stake}`
 - `/v1/bridge/messages` preflight
 - `/v1/contracts/deploy`
 - `/v1/contracts/state`
@@ -658,10 +670,12 @@ that the same direct node serves:
 That config must be a normal `iroha` client TOML for a low-risk runtime-only
 signer. Start from `taira-canary-client.example.toml`, not
 `defaults/client.toml`: the generic repo client uses the zero chain id and is
-not valid for Taira. If the configured file is missing or still contains the
-placeholder authority, the rollout scripts now generate a fresh keypair,
-onboard the account on public Taira, and write a runtime-only config
-automatically before the signed ping. With the default Taira XOR gas asset
+not valid for Taira. When `--write-config` is omitted and the automatically
+selected runtime path is missing, the rollout scripts generate a fresh
+keypair, onboard the account on public Taira, and write that runtime-only
+config before the signed ping. An explicit config path is never replaced,
+including when it contains a stale or placeholder authority. With the default
+Taira XOR gas asset
 configured, bootstrap passes the same gas asset to onboarding and skips faucet
 funding by default, so the write canary proves the sponsored-fee path directly
 instead of depending on faucet finality first. Set
@@ -1031,9 +1045,10 @@ From `../iroha2-block-explorer-web`:
      script patches them from `configs/soranexus/taira/config.toml`, but a
      stale bundle can still bring the old default back.
    - confirm those peer configs also retain the Taira `[sumeragi.block]`
-     `max_transactions = 96`, `max_payload_bytes = 16777216`, and
-     `proposal_queue_scan_multiplier = 4` bounds before running public write
-     canaries or scenario sweeps. Fast-finality caps are retired in v2.
+     `max_transactions = 96`, `max_ivm_transactions = 32`,
+     `max_payload_bytes = 16777216`, and `proposal_queue_scan_multiplier = 4`
+     bounds before running public write canaries or scenario sweeps.
+     Fast-finality caps are retired in v2.
    - keep `[sorafs.quota] storage_pin_max_events = 64` in the Taira profile and
      served peer configs; otherwise a handful of failed storage-pin probes can
      exhaust the default `4 requests / 3600s` window before a real

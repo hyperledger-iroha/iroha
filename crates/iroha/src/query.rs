@@ -97,9 +97,10 @@ fn decode_query_response(resp: &http::Response<Vec<u8>>) -> QueryResult<QueryRes
                 .and_then(|h| h.to_str().ok())
                 .is_some_and(|ct| {
                     let media_type = ct.split(';').next().map(str::trim).unwrap_or_default();
+                    let media_type_lower = media_type.to_ascii_lowercase();
                     media_type.eq_ignore_ascii_case("application/json")
-                        || media_type.eq_ignore_ascii_case("text/json")
-                        || media_type.to_ascii_lowercase().ends_with("+json")
+                        || (media_type_lower.starts_with("application/")
+                            && media_type_lower.ends_with("+json"))
                 });
             if is_json {
                 return json::from_slice::<QueryResponse>(body).map_err(|error| {
@@ -196,6 +197,7 @@ where
 fn is_retryable_query_error(err: &QueryError) -> bool {
     match err {
         QueryError::Validation(_) => false,
+        QueryError::ResponseShape(_) => false,
         QueryError::Other(report) => report.chain().any(|cause| {
             cause.downcast_ref::<ReqwestError>().map_or_else(
                 || {
@@ -247,6 +249,7 @@ where
 fn is_decode_error(err: &QueryError) -> bool {
     match err {
         QueryError::Validation(_) => false,
+        QueryError::ResponseShape(_) => false,
         QueryError::Other(report) => report.chain().any(|cause| {
             cause.is::<NoritoDecodeError>()
                 || cause.is::<norito::json::Error>()
@@ -307,6 +310,8 @@ impl QueryCursor {
 pub enum QueryError {
     /// Query validation error
     Validation(#[from] ValidationFail),
+    /// Iterable query response has an invalid batch shape: {0}
+    ResponseShape(#[from] iroha_data_model::query::builder::TypedBatchDowncastError),
     /// Other error
     Other(#[from] eyre::Error),
 }
@@ -601,7 +606,7 @@ mod query_errors_handling {
     use iroha_config::parameters::actual::SorafsRolloutPhase;
     use iroha_data_model::{
         ChainId,
-        query::{QueryOutput, QueryOutputBatchBoxTuple, QueryResponse},
+        query::{QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse},
     };
     use iroha_test_samples::gen_account_in;
     use norito::codec::Encode;
@@ -649,9 +654,24 @@ mod query_errors_handling {
     }
 
     #[test]
+    fn malformed_iterable_response_error_remains_typed() {
+        let error = QueryError::from(
+            iroha_data_model::query::builder::TypedBatchDowncastError::WrongType { column: 2 },
+        );
+        assert!(!is_retryable_query_error(&error));
+        assert!(!is_decode_error(&error));
+        assert!(matches!(
+            error,
+            QueryError::ResponseShape(
+                iroha_data_model::query::builder::TypedBatchDowncastError::WrongType { column: 2 }
+            )
+        ));
+    }
+
+    #[test]
     fn norito_body_with_json_content_type_errors_cleanly() -> Result<()> {
         let expected = QueryResponse::Iterable(QueryOutput {
-            batch: QueryOutputBatchBoxTuple { tuple: Vec::new() },
+            batch: QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::String(Vec::new())),
             remaining_items: Some(0),
             has_more: false,
             continue_cursor: None,
@@ -670,7 +690,7 @@ mod query_errors_handling {
     #[test]
     fn json_body_decodes_iterable_response() -> Result<()> {
         let expected = QueryResponse::Iterable(QueryOutput {
-            batch: QueryOutputBatchBoxTuple { tuple: Vec::new() },
+            batch: QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::String(Vec::new())),
             remaining_items: Some(0),
             has_more: false,
             continue_cursor: None,
@@ -683,6 +703,26 @@ mod query_errors_handling {
         let decoded = decode_query_response(&response)?;
         assert_eq!(decoded, expected);
 
+        Ok(())
+    }
+
+    #[test]
+    fn text_json_is_not_a_supported_response_media_type() -> Result<()> {
+        let payload = QueryResponse::Iterable(QueryOutput {
+            batch: QueryOutputBatchBoxTuple { tuple: Vec::new() },
+            remaining_items: Some(0),
+            has_more: false,
+            continue_cursor: None,
+        });
+        let response = Response::builder()
+            .status(HttpStatusCode::OK)
+            .header("content-type", "text/json")
+            .body(norito::json::to_vec(&payload)?)?;
+
+        assert!(
+            matches!(decode_query_response(&response), Err(QueryError::Other(_))),
+            "the retired text/json alias must not select JSON decoding"
+        );
         Ok(())
     }
 
@@ -712,7 +752,7 @@ mod query_errors_handling {
     #[test]
     fn missing_content_type_defaults_to_norito_decode() -> Result<()> {
         let expected = QueryResponse::Iterable(QueryOutput {
-            batch: QueryOutputBatchBoxTuple { tuple: Vec::new() },
+            batch: QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::String(Vec::new())),
             remaining_items: Some(0),
             has_more: false,
             continue_cursor: None,
@@ -852,7 +892,7 @@ mod query_errors_handling {
         };
 
         let encoded_response = norito::to_bytes(&QueryResponse::Iterable(QueryOutput {
-            batch: QueryOutputBatchBoxTuple { tuple: Vec::new() },
+            batch: QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::String(Vec::new())),
             remaining_items: Some(0),
             has_more: false,
             continue_cursor: None,

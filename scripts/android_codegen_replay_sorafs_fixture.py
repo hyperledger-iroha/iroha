@@ -435,7 +435,9 @@ def main(argv: list[str] | None = None) -> int:
 
     report_path = args.report_dir / f"{fixture_name}.json"
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    temporary_root = Path(tempfile.gettempdir()).resolve(strict=True)
+    validate_codegen_path(temporary_root, "temporary output root")
+    with tempfile.TemporaryDirectory(dir=temporary_root) as tmpdir:
         tmp_report = Path(tmpdir) / "manifest_report.json"
         tmp_manifest = Path(tmpdir) / "manifest.to"
         run_manifest_stub(

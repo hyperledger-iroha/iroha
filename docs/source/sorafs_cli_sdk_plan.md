@@ -17,7 +17,7 @@ summary: Implemented SF-6 CLI, validator, release, self-cert, and SDK parity sur
 Implemented command families:
 - `sorafs_cli car pack`, `manifest build`, `manifest sign`, `manifest verify-signature`, `manifest proposal`, and `manifest submit` cover manifest and release packaging.
 - `sorafs_cli storage prepare`, `storage pin`, `fetch`, `proof stream`, and `proof verify` cover local storage preparation, gateway fetches, proof requests, and trustless verification.
-- `sorafs_cli por status`, `por export`, and `por report` cover the local PoR operator surface; challenge creation remains internal to the verified coordinator scheduler.
+- `sorafs_cli por status`, `por export`, and `por report` cover the local PoR operator surface. Challenge issuance belongs exclusively to the coordinator scheduler, and no command records manual success/failure observations.
 - `sorafs_cli reputation publish`, `snapshot`, `fetch`, `watch`, and `verify` cover the reputation workflow.
 - `sorafs-validate` validates and signs reference SDK fixtures; `soranet_trustless_verifier --validation-outcome` emits the same outcome contract for manifest/CAR replay.
 - `scripts/sorafs_gateway_self_cert.sh` and `cargo xtask sorafs-gateway-attest` generate and verify gateway conformance attestations.

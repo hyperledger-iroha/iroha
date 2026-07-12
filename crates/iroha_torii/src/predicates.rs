@@ -1,11 +1,10 @@
-//! Experimental predicate builders for server-side transaction queries.
+//! Predicate builders for server-side transaction queries.
 //!
-//! This module is compiled only when the `tx_predicates` feature is enabled.
-//! It provides a single entrypoint `build_tx_predicate` that converts the
-//! app-facing JSON filter DSL into a `CompoundPredicate<CommittedTransaction>`.
+//! This module is part of the app API and converts its JSON filter DSL into a
+//! `CompoundPredicate<CommittedTransaction>`.
 //!
-//! README (expected atom API)
-//! ==========================
+//! Typed atom mapping
+//! ==================
 //! When the data model exposes predicate atoms for `CommittedTransaction`, the
 //! following atom accessors and operators are expected (names indicative):
 //!
@@ -42,10 +41,8 @@
 //! Implementation notes:
 //! - This module now builds a typed predicate tree (`CommittedTxPredicate`) and
 //!   embeds it into the `CompoundPredicate`. The executor evaluates it server-side
-//!   via `EvaluatePredicate` without falling back to local filtering when the
-//!   `tx_predicates` feature is enabled.
-
-#![allow(dead_code)]
+//!   via `EvaluatePredicate`; endpoint-only fields such as `asset_id` remain
+//!   under the authoritative local transaction filter.
 
 use iroha_data_model::{
     name::Name,
@@ -57,21 +54,32 @@ use iroha_data_model::{
 use iroha_primitives::json::Json;
 use norito::json::Value;
 
-use crate::filter::FilterExpr;
+use crate::filter::{FilterExpr, validate_filter};
 
 /// Build a server-side predicate for `CommittedTransaction` from the JSON DSL.
 pub fn build_tx_predicate(expr: &FilterExpr) -> CP<CommittedTransaction> {
+    if validate_filter(expr).is_err() {
+        return CP::from_committed_tx_predicate(TP::Const(false));
+    }
     // Map a JSON DSL filter into a typed predicate tree for committed transactions
     fn parse_acc(s: &str) -> Option<iroha_data_model::account::AccountId> {
         iroha_data_model::account::AccountId::parse_encoded(s)
             .ok()
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .filter(|account| account.to_string() == s)
     }
     fn parse_hash(
         s: &str,
     ) -> Option<iroha_crypto::HashOf<iroha_data_model::transaction::signed::TransactionEntrypoint>>
     {
-        s.parse().ok()
+        let hash = s
+            .parse::<
+                iroha_crypto::HashOf<
+                    iroha_data_model::transaction::signed::TransactionEntrypoint,
+                >,
+            >()
+            .ok()?;
+        (hash.to_string() == s).then_some(hash)
     }
     fn map(expr: &FilterExpr) -> TP {
         use FilterExpr as F;
@@ -79,9 +87,11 @@ pub fn build_tx_predicate(expr: &FilterExpr) -> CP<CommittedTransaction> {
         use crate::filter::FieldPath;
 
         fn metadata_key(field: &str) -> Option<Name> {
-            field
-                .strip_prefix("metadata.")
-                .and_then(|rest| rest.parse::<Name>().ok())
+            field.strip_prefix("metadata.").and_then(|rest| {
+                rest.parse::<Name>()
+                    .ok()
+                    .filter(|name| name.to_string() == rest)
+            })
         }
 
         fn json_from_value(value: &Value) -> Option<Json> {
@@ -166,41 +176,35 @@ pub fn build_tx_predicate(expr: &FilterExpr) -> CP<CommittedTransaction> {
                         None => TP::Const(false),
                     }
                 } else if f == "authority" {
-                    let set: Vec<_> = vals
+                    let set: Option<Vec<_>> = vals
                         .iter()
-                        .filter_map(|v| v.as_str().and_then(parse_acc))
+                        .map(|v| v.as_str().and_then(parse_acc))
                         .collect();
-                    if set.is_empty() {
-                        TP::Const(false)
-                    } else {
-                        TP::AuthorityIn(set)
+                    match set {
+                        Some(set) if !set.is_empty() => TP::AuthorityIn(set),
+                        _ => TP::Const(false),
                     }
                 } else if f == "entrypoint_hash" {
-                    let set: Vec<_> = vals
+                    let set: Option<Vec<_>> = vals
                         .iter()
-                        .filter_map(|v| v.as_str().and_then(parse_hash))
+                        .map(|v| v.as_str().and_then(parse_hash))
                         .collect();
-                    if set.is_empty() {
-                        TP::Const(false)
-                    } else {
-                        TP::EntryIn(set)
+                    match set {
+                        Some(set) if !set.is_empty() => TP::EntryIn(set),
+                        _ => TP::Const(false),
                     }
                 } else if f == "result_ok" {
-                    let set: Vec<_> = vals.iter().filter_map(|v| v.as_bool()).collect();
-                    if set.is_empty() {
-                        TP::Const(false)
-                    } else {
-                        TP::ResultIn(set)
+                    let set: Option<Vec<_>> = vals.iter().map(|v| v.as_bool()).collect();
+                    match set {
+                        Some(set) if !set.is_empty() => TP::ResultIn(set),
+                        _ => TP::Const(false),
                     }
                 } else if f == "timestamp_ms" {
-                    let set: Vec<_> = vals
-                        .iter()
-                        .filter_map(norito::json::Value::as_u64)
-                        .collect();
-                    if set.is_empty() {
-                        TP::Const(false)
-                    } else {
-                        TP::TsIn(set)
+                    let set: Option<Vec<_>> =
+                        vals.iter().map(norito::json::Value::as_u64).collect();
+                    match set {
+                        Some(set) if !set.is_empty() => TP::TsIn(set),
+                        _ => TP::Const(false),
                     }
                 } else {
                     TP::Const(false)
@@ -213,45 +217,39 @@ pub fn build_tx_predicate(expr: &FilterExpr) -> CP<CommittedTransaction> {
                             key: name,
                             values: set,
                         },
-                        Some(_) => TP::Const(true),
+                        Some(_) => TP::Const(false),
                         None => TP::Const(false),
                     }
                 } else if f == "authority" {
-                    let set: Vec<_> = vals
+                    let set: Option<Vec<_>> = vals
                         .iter()
-                        .filter_map(|v| v.as_str().and_then(parse_acc))
+                        .map(|v| v.as_str().and_then(parse_acc))
                         .collect();
-                    if set.is_empty() {
-                        TP::Const(true)
-                    } else {
-                        TP::AuthorityNin(set)
+                    match set {
+                        Some(set) if !set.is_empty() => TP::AuthorityNin(set),
+                        _ => TP::Const(false),
                     }
                 } else if f == "entrypoint_hash" {
-                    let set: Vec<_> = vals
+                    let set: Option<Vec<_>> = vals
                         .iter()
-                        .filter_map(|v| v.as_str().and_then(parse_hash))
+                        .map(|v| v.as_str().and_then(parse_hash))
                         .collect();
-                    if set.is_empty() {
-                        TP::Const(true)
-                    } else {
-                        TP::EntryNin(set)
+                    match set {
+                        Some(set) if !set.is_empty() => TP::EntryNin(set),
+                        _ => TP::Const(false),
                     }
                 } else if f == "result_ok" {
-                    let set: Vec<_> = vals.iter().filter_map(|v| v.as_bool()).collect();
-                    if set.is_empty() {
-                        TP::Const(true)
-                    } else {
-                        TP::ResultNin(set)
+                    let set: Option<Vec<_>> = vals.iter().map(|v| v.as_bool()).collect();
+                    match set {
+                        Some(set) if !set.is_empty() => TP::ResultNin(set),
+                        _ => TP::Const(false),
                     }
                 } else if f == "timestamp_ms" {
-                    let set: Vec<_> = vals
-                        .iter()
-                        .filter_map(norito::json::Value::as_u64)
-                        .collect();
-                    if set.is_empty() {
-                        TP::Const(true)
-                    } else {
-                        TP::TsNin(set)
+                    let set: Option<Vec<_>> =
+                        vals.iter().map(norito::json::Value::as_u64).collect();
+                    match set {
+                        Some(set) if !set.is_empty() => TP::TsNin(set),
+                        _ => TP::Const(false),
                     }
                 } else {
                     TP::Const(false)
@@ -312,5 +310,89 @@ pub fn build_tx_predicate(expr: &FilterExpr) -> CP<CommittedTransaction> {
         }
     }
     let tree = map(expr);
+    let tree = norito::json::to_value(&tree)
+        .ok()
+        .and_then(|value| norito::json::from_value::<TP>(value).ok())
+        .unwrap_or(TP::Const(false));
     CP::from_committed_tx_predicate(tree)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::filter::{FieldPath, QueryEnvelope};
+
+    fn serialized_tree(expr: &FilterExpr) -> TP {
+        let predicate = build_tx_predicate(expr);
+        let raw = norito::json::to_json(&predicate).expect("serialize compound predicate");
+        assert_ne!(raw, "{}", "committed filters must never serialize as pass");
+        norito::json::from_json(&raw).expect("decode typed predicate tree")
+    }
+
+    #[test]
+    fn query_envelope_filter_reaches_lossless_typed_predicate_codec() {
+        let envelope: QueryEnvelope = norito::json::from_value(norito::json!({
+            "filter": {
+                "op": "or",
+                "args": [
+                    {"op": "eq", "args": ["result_ok", true]},
+                    {"op": "eq", "args": ["metadata.tier", "gold"]},
+                    {"op": "is_null", "args": ["metadata.note"]}
+                ]
+            }
+        }))
+        .expect("query envelope");
+        let expr = envelope.filter.expect("filter");
+        validate_filter(&expr).expect("validated envelope filter");
+
+        assert_eq!(
+            serialized_tree(&expr),
+            TP::Or(vec![
+                TP::ResultEq(true),
+                TP::MetadataEq {
+                    key: "tier".parse().expect("metadata key"),
+                    value: Json::new("gold"),
+                },
+                TP::MetadataIsNull {
+                    key: "note".parse().expect("metadata key"),
+                    is_null: true,
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn malformed_or_unsafe_envelope_filters_fail_closed_not_pass() {
+        let invalid = vec![
+            FilterExpr::And(Vec::new()),
+            FilterExpr::Or(Vec::new()),
+            FilterExpr::In(FieldPath("timestamp_ms".into()), Vec::new()),
+            FilterExpr::Nin(FieldPath("result_ok".into()), Vec::new()),
+            FilterExpr::In(
+                FieldPath("timestamp_ms".into()),
+                vec![Value::from(1_u64), Value::String("bad".into())],
+            ),
+            FilterExpr::Nin(
+                FieldPath("result_ok".into()),
+                vec![Value::Bool(true), Value::Bool(true)],
+            ),
+            FilterExpr::Eq(
+                FieldPath("entrypoint_hash".into()),
+                Value::String("AA".repeat(iroha_crypto::Hash::LENGTH)),
+            ),
+        ];
+
+        for expr in invalid {
+            assert_eq!(serialized_tree(&expr), TP::Const(false));
+        }
+    }
+
+    #[test]
+    fn overdeep_programmatic_envelope_filter_fails_closed() {
+        let mut expr = FilterExpr::Eq(FieldPath("result_ok".into()), Value::Bool(true));
+        for _ in 0..=crate::filter::FILTER_EXPR_MAX_DEPTH {
+            expr = FilterExpr::Not(Box::new(expr));
+        }
+        assert_eq!(serialized_tree(&expr), TP::Const(false));
+    }
 }

@@ -55,7 +55,7 @@ import {
   buildRegisterSmartContractBytesInstruction,
   buildRemoveSmartContractBytesInstruction,
   buildProposeDeployContractInstruction,
-  buildProposeSccpRouteManifestInstruction,
+  buildProposeSccpRouteGovernanceInstruction,
   buildCastZkBallotInstruction,
   buildCastPlainBallotInstruction,
   buildEnactReferendumInstruction,
@@ -73,6 +73,7 @@ import {
   normalizeAccountId,
   normalizeAssetId,
 } from "./instructionBuilders.js";
+import { normalizeSccpRouteGovernanceAction } from "./sccp.js";
 
 const submissionAbortSignalAbortedGetter =
   typeof AbortSignal === "undefined"
@@ -672,76 +673,25 @@ export function buildTransaction(input) {
 }
 
 /**
- * Build an `UpsertSccpRouteManifest` instruction from a canonical data-model
- * route manifest. The manifest should use snake_case fields accepted by the
- * native host and chain-side ISI validation.
- * @param {{manifest?: object, routeManifest?: object, route_manifest?: object} | object} input
- * @returns {{UpsertSccpRouteManifest: {manifest: object}}}
+ * Build an `ApplySccpRouteGovernance` instruction from one closed atomic action.
+ * @param {object} action
+ * @returns {{ApplySccpRouteGovernance: {action: object}}}
  */
-export function buildUpsertSccpRouteManifestInstruction(input) {
-  const source = normalizePlainObject(
-    input,
-    "buildUpsertSccpRouteManifestInstruction input",
-  );
-  const hasExplicitManifest =
-    Object.prototype.hasOwnProperty.call(source, "manifest") ||
-    Object.prototype.hasOwnProperty.call(source, "routeManifest") ||
-    Object.prototype.hasOwnProperty.call(source, "route_manifest");
-  const manifest = hasExplicitManifest
-    ? source.manifest ?? source.routeManifest ?? source.route_manifest
-    : source;
+export function buildApplySccpRouteGovernanceInstruction(action) {
   return {
-    UpsertSccpRouteManifest: {
-      manifest: normalizePlainObject(
-        manifest,
-        "buildUpsertSccpRouteManifestInstruction.manifest",
-      ),
+    ApplySccpRouteGovernance: {
+      action: normalizeSccpRouteGovernanceAction(action),
     },
   };
 }
 
 /**
- * Build a `RemoveSccpRouteManifest` instruction.
- * @param {{routeId?: string, route_id?: string, assetKey?: string, asset_key?: string, counterpartyDomain?: number|string|bigint, counterparty_domain?: number|string|bigint, chainIdHex?: string, chain_id_hex?: string}} input
- * @returns {{RemoveSccpRouteManifest: {route_id: string, asset_key: string, counterparty_domain: number, chain_id_hex: string}}}
+ * Build and sign a transaction containing one `ApplySccpRouteGovernance` instruction.
  */
-export function buildRemoveSccpRouteManifestInstruction(input) {
-  const source = normalizePlainObject(
-    input,
-    "buildRemoveSccpRouteManifestInstruction input",
-  );
-  return {
-    RemoveSccpRouteManifest: {
-      route_id: normalizeNonEmptyString(
-        source.route_id ?? source.routeId,
-        "buildRemoveSccpRouteManifestInstruction.routeId",
-      ),
-      asset_key: normalizeNonEmptyString(
-        source.asset_key ?? source.assetKey,
-        "buildRemoveSccpRouteManifestInstruction.assetKey",
-      ),
-      counterparty_domain: normalizeUint32(
-        source.counterparty_domain ?? source.counterpartyDomain,
-        "buildRemoveSccpRouteManifestInstruction.counterpartyDomain",
-      ),
-      chain_id_hex: normalizeNonEmptyString(
-        source.chain_id_hex ?? source.chainIdHex,
-        "buildRemoveSccpRouteManifestInstruction.chainIdHex",
-      ),
-    },
-  };
-}
-
-/**
- * Build and sign a transaction containing one `UpsertSccpRouteManifest`
- * instruction.
- */
-export function buildUpsertSccpRouteManifestTransaction({
+export function buildApplySccpRouteGovernanceTransaction({
   chainId,
   authority,
-  manifest,
-  routeManifest,
-  route_manifest,
+  action,
   metadata = null,
   creationTimeMs = null,
   ttlMs = null,
@@ -749,50 +699,7 @@ export function buildUpsertSccpRouteManifestTransaction({
   privateKey,
   privateKeyAlgorithm = null,
 }) {
-  const instruction = buildUpsertSccpRouteManifestInstruction({
-    manifest: manifest ?? routeManifest ?? route_manifest,
-  });
-  return buildTransaction({
-    chainId,
-    authority,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-    privateKeyAlgorithm,
-  });
-}
-
-/**
- * Build and sign a transaction containing one `RemoveSccpRouteManifest`
- * instruction.
- */
-export function buildRemoveSccpRouteManifestTransaction({
-  chainId,
-  authority,
-  routeId,
-  route_id,
-  assetKey,
-  asset_key,
-  counterpartyDomain,
-  counterparty_domain,
-  chainIdHex,
-  chain_id_hex,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
-  const instruction = buildRemoveSccpRouteManifestInstruction({
-    routeId: routeId ?? route_id,
-    assetKey: assetKey ?? asset_key,
-    counterpartyDomain: counterpartyDomain ?? counterparty_domain,
-    chainIdHex: chainIdHex ?? chain_id_hex,
-  });
+  const instruction = buildApplySccpRouteGovernanceInstruction(action);
   return buildTransaction({
     chainId,
     authority,
@@ -4693,15 +4600,13 @@ export function buildProposeDeployContractTransaction({
 }
 
 /**
- * Build a transaction containing a `ProposeSccpRouteManifest` instruction.
+ * Build a transaction containing a `ProposeSccpRouteGovernance` instruction.
  */
-export function buildProposeSccpRouteManifestTransaction({
+export function buildProposeSccpRouteGovernanceTransaction({
   chainId,
   authority,
   proposal,
-  manifest,
-  routeManifest,
-  route_manifest,
+  action,
   metadata = null,
   creationTimeMs = null,
   ttlMs = null,
@@ -4709,10 +4614,8 @@ export function buildProposeSccpRouteManifestTransaction({
   privateKey,
   privateKeyAlgorithm = null,
 }) {
-  const instruction = buildProposeSccpRouteManifestInstruction(
-    proposal ?? {
-      manifest: manifest ?? routeManifest ?? route_manifest,
-    },
+  const instruction = buildProposeSccpRouteGovernanceInstruction(
+    proposal ?? { action },
   );
   return buildTransaction({
     chainId,

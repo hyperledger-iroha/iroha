@@ -95,7 +95,6 @@ Torii пересылает входящие заголовки, связанны
 - `x-api-token`
 - `x-iroha-account`
 - `x-iroha-signature`
-- `x-iroha-api-version`
 
 Клиенты также могут предоставлять дополнительные заголовки для каждого вызова через `arguments.headers`.
 `content-length`, `host` и `connection` из `arguments.headers` игнорируются.

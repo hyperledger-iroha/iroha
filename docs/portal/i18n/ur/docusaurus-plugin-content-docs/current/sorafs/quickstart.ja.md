@@ -134,3 +134,23 @@ payload اگر manifest سے ہٹے تو فوراً fail ہو جائے۔
   ترجیح دینی چاہیے۔
 - **CI automation** – اوپر دی گئی کمانڈز کو release pipelines میں شامل کریں تاکہ docs،
   fixtures، اور artifacts signed metadata کے ساتھ deterministic manifests شائع کریں۔
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

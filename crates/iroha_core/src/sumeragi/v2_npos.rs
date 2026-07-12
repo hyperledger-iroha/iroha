@@ -1344,6 +1344,7 @@ mod tests {
             height,
             epoch: 0,
             epoch_end_height: 10,
+            next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Npos,
             parent_commit_qc: (height > 1).then(|| unreachable_parent_qc(height - 1)),
             quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
@@ -1380,6 +1381,11 @@ mod tests {
                 )),
                 payload_hash: Hash::new(b"parent-payload"),
             },
+            execution_commitment: wire::ExecutionCommitment::without_topups(
+                Hash::new(b"parent-state"),
+                Hash::new(b"parent-post-state"),
+                Hash::new(b"parent-ordinary-writes"),
+            ),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![1],
         }

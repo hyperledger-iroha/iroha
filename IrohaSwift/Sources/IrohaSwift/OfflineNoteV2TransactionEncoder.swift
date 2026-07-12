@@ -1,6 +1,22 @@
 import Foundation
 
-private enum OfflineNoteV2SwiftNoritoEncoder {
+/// Unsigned registration transaction for external/secure-element signing.
+public struct OfflineDeviceAttestationUnsignedTransaction: Sendable {
+    /// Digest that the account signing service must sign.
+    public let signingHash: Data
+
+    fileprivate let transactionPayload: Data
+
+    /// Attach one canonical Ed25519 signature and produce the Torii envelope.
+    public func signed(signature: Data) throws -> SignedTransactionEnvelope {
+        try AttestedOfflineNoteSwiftNoritoEncoder.finalizeUnsignedTransaction(
+            transactionPayload: transactionPayload,
+            signature: signature
+        )
+    }
+}
+
+private enum AttestedOfflineNoteSwiftNoritoEncoder {
     private static let signedTransactionWireVersion: UInt8 = 1
 
     static func encodeIssue(chainId: String,
@@ -8,13 +24,13 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
                             creationTimeMs: UInt64,
                             ttlMs: UInt64?,
                             nonce: UInt32?,
-                            issue: OfflineNoteIssueV2,
+                            issue: AttestedOfflineNoteIssue,
                             metadata: [String: ToriiJSONValue],
                             signingKey: SigningKey) throws -> SignedTransactionEnvelope {
         let instruction = try encodeInstruction(
-            wireName: OfflineNoteV2TypeNames.issueInstruction,
-            typeName: OfflineNoteV2TypeNames.issueInstruction,
-            modelPayload: OfflineNoteV2Encoding.encodeIssue(issue)
+            wireName: AttestedOfflineNoteTypeNames.issueInstruction,
+            typeName: AttestedOfflineNoteTypeNames.issueInstruction,
+            modelPayload: AttestedOfflineNoteEncoding.encodeIssue(issue)
         )
         return try encodeTransaction(
             chainId: chainId,
@@ -33,14 +49,14 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
                              creationTimeMs: UInt64,
                              ttlMs: UInt64?,
                              nonce: UInt32?,
-                             redemption: OfflineNoteRedeemV2,
+                             redemption: AttestedOfflineNoteRedeem,
                              metadata: [String: ToriiJSONValue],
                              signingKey: SigningKey) throws -> SignedTransactionEnvelope {
         try redemption.validateProofBinding()
         let instruction = try encodeInstruction(
-            wireName: OfflineNoteV2TypeNames.redeemInstruction,
-            typeName: OfflineNoteV2TypeNames.redeemInstruction,
-            modelPayload: OfflineNoteV2Encoding.encodeRedeem(redemption)
+            wireName: AttestedOfflineNoteTypeNames.redeemInstruction,
+            typeName: AttestedOfflineNoteTypeNames.redeemInstruction,
+            modelPayload: AttestedOfflineNoteEncoding.encodeRedeem(redemption)
         )
         return try encodeTransaction(
             chainId: chainId,
@@ -59,14 +75,14 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
                             creationTimeMs: UInt64,
                             ttlMs: UInt64?,
                             nonce: UInt32?,
-                            audit: OfflineNoteAuditBundleV2,
+                            audit: AttestedOfflineNoteAuditBundle,
                             metadata: [String: ToriiJSONValue],
                             signingKey: SigningKey) throws -> SignedTransactionEnvelope {
         try audit.validateProofBinding()
         let instruction = try encodeInstruction(
-            wireName: OfflineNoteV2TypeNames.auditInstruction,
-            typeName: OfflineNoteV2TypeNames.auditInstruction,
-            modelPayload: OfflineNoteV2Encoding.encodeAudit(audit)
+            wireName: AttestedOfflineNoteTypeNames.auditInstruction,
+            typeName: AttestedOfflineNoteTypeNames.auditInstruction,
+            modelPayload: AttestedOfflineNoteEncoding.encodeAudit(audit)
         )
         return try encodeTransaction(
             chainId: chainId,
@@ -88,20 +104,43 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
                                                 registration: OfflineDeviceAttestationRegistration,
                                                 metadata: [String: ToriiJSONValue],
                                                 signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        let instruction = try encodeInstruction(
-            wireName: OfflineNoteV2TypeNames.registerDeviceAttestationInstruction,
-            typeName: OfflineNoteV2TypeNames.registerDeviceAttestationInstruction,
-            modelPayload: OfflineNoteV2Encoding.encodeDeviceAttestationRegistration(registration)
+        let unsigned = try encodeRegisterDeviceAttestationUnsigned(
+            chainId: chainId,
+            authority: authority,
+            creationTimeMs: creationTimeMs,
+            ttlMs: ttlMs,
+            nonce: nonce,
+            registration: registration,
+            metadata: metadata
         )
-        return try encodeTransaction(
+        return try unsigned.signed(signature: signingKey.sign(unsigned.signingHash))
+    }
+
+    static func encodeRegisterDeviceAttestationUnsigned(chainId: String,
+                                                        authority: String,
+                                                        creationTimeMs: UInt64,
+                                                        ttlMs: UInt64?,
+                                                        nonce: UInt32?,
+                                                        registration: OfflineDeviceAttestationRegistration,
+                                                        metadata: [String: ToriiJSONValue]) throws
+        -> OfflineDeviceAttestationUnsignedTransaction {
+        let instruction = try encodeInstruction(
+            wireName: AttestedOfflineNoteTypeNames.registerDeviceAttestationInstruction,
+            typeName: AttestedOfflineNoteTypeNames.registerDeviceAttestationInstruction,
+            modelPayload: AttestedOfflineNoteEncoding.encodeDeviceAttestationRegistration(registration)
+        )
+        let payload = try encodeTransactionPayload(
             chainId: chainId,
             authority: authority,
             creationTimeMs: creationTimeMs,
             ttlMs: ttlMs,
             nonce: nonce,
             instructionPayload: instruction,
-            metadata: metadata,
-            signingKey: signingKey
+            metadata: metadata
+        )
+        return OfflineDeviceAttestationUnsignedTransaction(
+            signingHash: IrohaHash.hash(payload),
+            transactionPayload: payload
         )
     }
 
@@ -140,6 +179,28 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
             metadata: metadata
         )
         let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
+        let signedTransaction = encodeSignedTransaction(
+            signature: signature,
+            transactionPayload: transactionPayload
+        )
+        let transactionHash = IrohaHash.hash(encodeTransactionEntrypoint(signedTransaction))
+        var norito = Data([signedTransactionWireVersion])
+        norito.append(signedTransaction)
+        return SignedTransactionEnvelope(
+            norito: norito,
+            signedTransaction: signedTransaction,
+            payload: nil,
+            transactionHash: transactionHash
+        )
+    }
+
+    fileprivate static func finalizeUnsignedTransaction(
+        transactionPayload: Data,
+        signature: Data
+    ) throws -> SignedTransactionEnvelope {
+        guard signature.count == 64, signature.contains(where: { $0 != 0 }) else {
+            throw AttestedOfflineNoteError.nonCanonicalField(field: "transaction_signature")
+        }
         let signedTransaction = encodeSignedTransaction(
             signature: signature,
             transactionPayload: transactionPayload
@@ -204,22 +265,22 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
 }
 
 extension SwiftTransactionEncoder {
-    private static func retiredOfflineNoteV2PaymentTransaction() throws -> SignedTransactionEnvelope {
+    private static func retiredAttestedOfflineNotePaymentTransaction() throws -> SignedTransactionEnvelope {
         throw SwiftTransactionEncoderError.retiredOfflineNotePayment
     }
 
-    static func encodeIssueOfflineNoteV2(request: IssueOfflineNoteV2Request,
+    static func encodeAttestedOfflineNoteIssue(request: AttestedOfflineNoteIssueRequest,
                                          keypair: Keypair,
                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
-        return try encodeIssueOfflineNoteV2(
+        return try encodeAttestedOfflineNoteIssue(
             request: request,
             signingKey: signingKey,
             creationTimeMs: creationTimeMs
         )
     }
 
-    static func encodeIssueOfflineNoteV2(request: IssueOfflineNoteV2Request,
+    static func encodeAttestedOfflineNoteIssue(request: AttestedOfflineNoteIssueRequest,
                                          signingKey: SigningKey,
                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
         _ = try TransactionInputValidator.validate(
@@ -227,21 +288,21 @@ extension SwiftTransactionEncoder {
             authorityId: request.authority
         )
         _ = (signingKey, creationTimeMs)
-        return try retiredOfflineNoteV2PaymentTransaction()
+        return try retiredAttestedOfflineNotePaymentTransaction()
     }
 
-    static func encodeRedeemOfflineNoteV2(request: RedeemOfflineNoteV2Request,
+    static func encodeAttestedOfflineNoteRedeem(request: AttestedOfflineNoteRedeemRequest,
                                           keypair: Keypair,
                                           creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
-        return try encodeRedeemOfflineNoteV2(
+        return try encodeAttestedOfflineNoteRedeem(
             request: request,
             signingKey: signingKey,
             creationTimeMs: creationTimeMs
         )
     }
 
-    static func encodeRedeemOfflineNoteV2(request: RedeemOfflineNoteV2Request,
+    static func encodeAttestedOfflineNoteRedeem(request: AttestedOfflineNoteRedeemRequest,
                                           signingKey: SigningKey,
                                           creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
         _ = try TransactionInputValidator.validate(
@@ -250,21 +311,21 @@ extension SwiftTransactionEncoder {
         )
         try request.redemption.validateProofBinding()
         _ = (signingKey, creationTimeMs)
-        return try retiredOfflineNoteV2PaymentTransaction()
+        return try retiredAttestedOfflineNotePaymentTransaction()
     }
 
-    static func encodeAuditOfflineNoteV2(request: AuditOfflineNoteV2Request,
+    static func encodeAttestedOfflineNoteAudit(request: AttestedOfflineNoteAuditRequest,
                                          keypair: Keypair,
                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
-        return try encodeAuditOfflineNoteV2(
+        return try encodeAttestedOfflineNoteAudit(
             request: request,
             signingKey: signingKey,
             creationTimeMs: creationTimeMs
         )
     }
 
-    static func encodeAuditOfflineNoteV2(request: AuditOfflineNoteV2Request,
+    static func encodeAttestedOfflineNoteAudit(request: AttestedOfflineNoteAuditRequest,
                                          signingKey: SigningKey,
                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
         _ = try TransactionInputValidator.validate(
@@ -273,7 +334,7 @@ extension SwiftTransactionEncoder {
         )
         try request.audit.validateProofBinding()
         _ = (signingKey, creationTimeMs)
-        return try retiredOfflineNoteV2PaymentTransaction()
+        return try retiredAttestedOfflineNotePaymentTransaction()
     }
 
     static func encodeRegisterOfflineDeviceAttestation(request: RegisterOfflineDeviceAttestationRequest,
@@ -294,7 +355,7 @@ extension SwiftTransactionEncoder {
             chainId: request.chainId,
             authorityId: request.authority
         )
-        return try OfflineNoteV2SwiftNoritoEncoder.encodeRegisterDeviceAttestation(
+        return try AttestedOfflineNoteSwiftNoritoEncoder.encodeRegisterDeviceAttestation(
             chainId: ids.chainId,
             authority: ids.authorityId,
             creationTimeMs: creationTimeMs,
@@ -305,57 +366,76 @@ extension SwiftTransactionEncoder {
             signingKey: signingKey
         )
     }
+
+    static func encodeUnsignedRegisterOfflineDeviceAttestation(
+        request: RegisterOfflineDeviceAttestationRequest,
+        creationTimeMs: UInt64
+    ) throws -> OfflineDeviceAttestationUnsignedTransaction {
+        let ids = try TransactionInputValidator.validate(
+            chainId: request.chainId,
+            authorityId: request.authority
+        )
+        return try AttestedOfflineNoteSwiftNoritoEncoder.encodeRegisterDeviceAttestationUnsigned(
+            chainId: ids.chainId,
+            authority: ids.authorityId,
+            creationTimeMs: creationTimeMs,
+            ttlMs: request.ttlMs,
+            nonce: request.nonce,
+            registration: request.registration,
+            metadata: request.metadata
+        )
+    }
 }
 
 public extension IrohaSDK {
-    func buildIssueOfflineNoteV2(request: IssueOfflineNoteV2Request,
+    func buildAttestedOfflineNoteIssue(request: AttestedOfflineNoteIssueRequest,
                                  keypair: Keypair) throws -> SignedTransactionEnvelope {
-        try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
+        try SwiftTransactionEncoder.encodeAttestedOfflineNoteIssue(
             request: request,
             keypair: keypair,
             creationTimeMs: creationTimeProvider()
         )
     }
 
-    func buildIssueOfflineNoteV2(request: IssueOfflineNoteV2Request,
+    func buildAttestedOfflineNoteIssue(request: AttestedOfflineNoteIssueRequest,
                                  signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
+        try SwiftTransactionEncoder.encodeAttestedOfflineNoteIssue(
             request: request,
             signingKey: signingKey,
             creationTimeMs: creationTimeProvider()
         )
     }
 
-    func buildRedeemOfflineNoteV2(request: RedeemOfflineNoteV2Request,
+    func buildAttestedOfflineNoteRedeem(request: AttestedOfflineNoteRedeemRequest,
                                   keypair: Keypair) throws -> SignedTransactionEnvelope {
-        try SwiftTransactionEncoder.encodeRedeemOfflineNoteV2(
+        try SwiftTransactionEncoder.encodeAttestedOfflineNoteRedeem(
             request: request,
             keypair: keypair,
             creationTimeMs: creationTimeProvider()
         )
     }
 
-    func buildRedeemOfflineNoteV2(request: RedeemOfflineNoteV2Request,
+    func buildAttestedOfflineNoteRedeem(request: AttestedOfflineNoteRedeemRequest,
                                   signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        try SwiftTransactionEncoder.encodeRedeemOfflineNoteV2(
+        try SwiftTransactionEncoder.encodeAttestedOfflineNoteRedeem(
             request: request,
             signingKey: signingKey,
             creationTimeMs: creationTimeProvider()
         )
     }
 
-    func buildAuditOfflineNoteV2(request: AuditOfflineNoteV2Request,
+    func buildAttestedOfflineNoteAudit(request: AttestedOfflineNoteAuditRequest,
                                  keypair: Keypair) throws -> SignedTransactionEnvelope {
-        try SwiftTransactionEncoder.encodeAuditOfflineNoteV2(
+        try SwiftTransactionEncoder.encodeAttestedOfflineNoteAudit(
             request: request,
             keypair: keypair,
             creationTimeMs: creationTimeProvider()
         )
     }
 
-    func buildAuditOfflineNoteV2(request: AuditOfflineNoteV2Request,
+    func buildAttestedOfflineNoteAudit(request: AttestedOfflineNoteAuditRequest,
                                  signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        try SwiftTransactionEncoder.encodeAuditOfflineNoteV2(
+        try SwiftTransactionEncoder.encodeAttestedOfflineNoteAudit(
             request: request,
             signingKey: signingKey,
             creationTimeMs: creationTimeProvider()
@@ -371,6 +451,25 @@ public extension IrohaSDK {
         )
     }
 
+    /// Build the exact transaction digest without exporting account key material.
+    func buildUnsignedRegisterOfflineDeviceAttestation(
+        request: RegisterOfflineDeviceAttestationRequest
+    ) throws -> OfflineDeviceAttestationUnsignedTransaction {
+        try SwiftTransactionEncoder.encodeUnsignedRegisterOfflineDeviceAttestation(
+            request: request,
+            creationTimeMs: creationTimeProvider()
+        )
+    }
+
+    /// Build registration with an external signer such as a transient signing service.
+    func buildRegisterOfflineDeviceAttestation(
+        request: RegisterOfflineDeviceAttestationRequest,
+        signer: (Data) throws -> Data
+    ) throws -> SignedTransactionEnvelope {
+        let unsigned = try buildUnsignedRegisterOfflineDeviceAttestation(request: request)
+        return try unsigned.signed(signature: signer(unsigned.signingHash))
+    }
+
     func buildRegisterOfflineDeviceAttestation(request: RegisterOfflineDeviceAttestationRequest,
                                                signingKey: SigningKey) throws -> SignedTransactionEnvelope {
         try SwiftTransactionEncoder.encodeRegisterOfflineDeviceAttestation(
@@ -380,45 +479,45 @@ public extension IrohaSDK {
         )
     }
 
-    func submit(issueOfflineNoteV2 request: IssueOfflineNoteV2Request,
+    func submit(issueAttestedOfflineNote request: AttestedOfflineNoteIssueRequest,
                 keypair: Keypair,
                 completion: @Sendable @escaping (Error?) -> Void) throws {
-        let envelope = try buildIssueOfflineNoteV2(request: request, keypair: keypair)
+        let envelope = try buildAttestedOfflineNoteIssue(request: request, keypair: keypair)
         submit(envelope: envelope, completion: completion)
     }
 
-    func submit(issueOfflineNoteV2 request: IssueOfflineNoteV2Request,
+    func submit(issueAttestedOfflineNote request: AttestedOfflineNoteIssueRequest,
                 signingKey: SigningKey,
                 completion: @Sendable @escaping (Error?) -> Void) throws {
-        let envelope = try buildIssueOfflineNoteV2(request: request, signingKey: signingKey)
+        let envelope = try buildAttestedOfflineNoteIssue(request: request, signingKey: signingKey)
         submit(envelope: envelope, completion: completion)
     }
 
-    func submit(redeemOfflineNoteV2 request: RedeemOfflineNoteV2Request,
+    func submit(redeemAttestedOfflineNote request: AttestedOfflineNoteRedeemRequest,
                 keypair: Keypair,
                 completion: @Sendable @escaping (Error?) -> Void) throws {
-        let envelope = try buildRedeemOfflineNoteV2(request: request, keypair: keypair)
+        let envelope = try buildAttestedOfflineNoteRedeem(request: request, keypair: keypair)
         submit(envelope: envelope, completion: completion)
     }
 
-    func submit(redeemOfflineNoteV2 request: RedeemOfflineNoteV2Request,
+    func submit(redeemAttestedOfflineNote request: AttestedOfflineNoteRedeemRequest,
                 signingKey: SigningKey,
                 completion: @Sendable @escaping (Error?) -> Void) throws {
-        let envelope = try buildRedeemOfflineNoteV2(request: request, signingKey: signingKey)
+        let envelope = try buildAttestedOfflineNoteRedeem(request: request, signingKey: signingKey)
         submit(envelope: envelope, completion: completion)
     }
 
-    func submit(auditOfflineNoteV2 request: AuditOfflineNoteV2Request,
+    func submit(auditAttestedOfflineNote request: AttestedOfflineNoteAuditRequest,
                 keypair: Keypair,
                 completion: @Sendable @escaping (Error?) -> Void) throws {
-        let envelope = try buildAuditOfflineNoteV2(request: request, keypair: keypair)
+        let envelope = try buildAttestedOfflineNoteAudit(request: request, keypair: keypair)
         submit(envelope: envelope, completion: completion)
     }
 
-    func submit(auditOfflineNoteV2 request: AuditOfflineNoteV2Request,
+    func submit(auditAttestedOfflineNote request: AttestedOfflineNoteAuditRequest,
                 signingKey: SigningKey,
                 completion: @Sendable @escaping (Error?) -> Void) throws {
-        let envelope = try buildAuditOfflineNoteV2(request: request, signingKey: signingKey)
+        let envelope = try buildAttestedOfflineNoteAudit(request: request, signingKey: signingKey)
         submit(envelope: envelope, completion: completion)
     }
 
@@ -437,39 +536,39 @@ public extension IrohaSDK {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func submit(issueOfflineNoteV2 request: IssueOfflineNoteV2Request,
+    func submit(issueAttestedOfflineNote request: AttestedOfflineNoteIssueRequest,
                 keypair: Keypair) async throws {
-        try await submit(envelope: buildIssueOfflineNoteV2(request: request, keypair: keypair))
+        try await submit(envelope: buildAttestedOfflineNoteIssue(request: request, keypair: keypair))
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func submit(issueOfflineNoteV2 request: IssueOfflineNoteV2Request,
+    func submit(issueAttestedOfflineNote request: AttestedOfflineNoteIssueRequest,
                 signingKey: SigningKey) async throws {
-        try await submit(envelope: buildIssueOfflineNoteV2(request: request, signingKey: signingKey))
+        try await submit(envelope: buildAttestedOfflineNoteIssue(request: request, signingKey: signingKey))
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func submit(redeemOfflineNoteV2 request: RedeemOfflineNoteV2Request,
+    func submit(redeemAttestedOfflineNote request: AttestedOfflineNoteRedeemRequest,
                 keypair: Keypair) async throws {
-        try await submit(envelope: buildRedeemOfflineNoteV2(request: request, keypair: keypair))
+        try await submit(envelope: buildAttestedOfflineNoteRedeem(request: request, keypair: keypair))
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func submit(redeemOfflineNoteV2 request: RedeemOfflineNoteV2Request,
+    func submit(redeemAttestedOfflineNote request: AttestedOfflineNoteRedeemRequest,
                 signingKey: SigningKey) async throws {
-        try await submit(envelope: buildRedeemOfflineNoteV2(request: request, signingKey: signingKey))
+        try await submit(envelope: buildAttestedOfflineNoteRedeem(request: request, signingKey: signingKey))
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func submit(auditOfflineNoteV2 request: AuditOfflineNoteV2Request,
+    func submit(auditAttestedOfflineNote request: AttestedOfflineNoteAuditRequest,
                 keypair: Keypair) async throws {
-        try await submit(envelope: buildAuditOfflineNoteV2(request: request, keypair: keypair))
+        try await submit(envelope: buildAttestedOfflineNoteAudit(request: request, keypair: keypair))
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func submit(auditOfflineNoteV2 request: AuditOfflineNoteV2Request,
+    func submit(auditAttestedOfflineNote request: AttestedOfflineNoteAuditRequest,
                 signingKey: SigningKey) async throws {
-        try await submit(envelope: buildAuditOfflineNoteV2(request: request, signingKey: signingKey))
+        try await submit(envelope: buildAttestedOfflineNoteAudit(request: request, signingKey: signingKey))
     }
 
     @available(iOS 15.0, macOS 12.0, *)

@@ -11215,7 +11215,12 @@ mod tests {
         .with_instructions([Log::new(Level::DEBUG, message.to_owned())])
         .sign(genesis_key.private_key());
         let view = state.view();
-        let digest = crate::state::compute_confidential_feature_digest(view.world(), &view.zk, 1);
+        let digest = crate::state::compute_confidential_feature_digest(
+            view.world(),
+            &view.zk,
+            view.sccp_registry.as_ref(),
+            1,
+        );
         let confidential_features = (!digest.is_empty()).then_some(digest);
         SignedBlock::genesis(
             vec![tx],

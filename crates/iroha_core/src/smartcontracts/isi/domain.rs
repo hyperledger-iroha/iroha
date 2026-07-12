@@ -1216,6 +1216,17 @@ pub mod isi {
         ) -> Result<(), Error> {
             let account_id = self.object().clone();
 
+            if crate::smartcontracts::isi::asset::isi::is_sccp_custody_account(
+                state_transaction,
+                &account_id,
+            ) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("cannot unregister account {account_id}: it is governed SCCP custody")
+                        .into(),
+                )
+                .into());
+            }
+
             if let Some(primary_label) = state_transaction.world.account(&account_id)?.label() {
                 ensure_alias_can_change_recovery_binding(state_transaction, primary_label)?;
             }
@@ -2166,6 +2177,19 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_definition_id = self.object().clone();
+
+            if crate::smartcontracts::isi::asset::isi::is_sccp_settlement_asset_definition(
+                state_transaction,
+                &asset_definition_id,
+            ) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister asset definition {asset_definition_id}: it is governed SCCP settlement backing"
+                    )
+                    .into(),
+                )
+                .into());
+            }
 
             if asset_definition_id == state_transaction.gov.voting_asset_id {
                 return Err(InstructionExecutionError::InvariantViolation(

@@ -33,7 +33,7 @@ title: Bootstrap e observaviidade do Sora Nexus
 ## アンビエンテス デ レッド
 - オペレーターは環境 Nexus com 接頭辞を読み取ります:
 - **Sora Nexus (メインネット)** - 生産物 `nexus` のプレフィックス、統治機関カノニカとサービスのピギーバック SoraFS/SoraNet (チェーン ID `0x02F1` / UUID) `00000000-0000-0000-0000-000000000753`)。
-- **Sora Testus (テストネット)** - ステージング `testus` のプレフィックス、テスト統合のためのメインネットの設定、およびプレリリースの検証を実行します (チェーン UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`)。
+- **Sora Testus (テストネット)** - ステージング `testus` のプレフィックス、テスト統合のためのメインネットの設定、およびプレリリースの検証を実行します (チェーン UUID `fc56984b-2be7-431d-840e-21514d1883f0`)。
 - 分離の起源、統治下の管理、および環境のインフラストラクチャーの足跡を管理します。 Testus atua como Campo de provas para rollout SoraFS/SoraNet antes de promover para Nexus。
 - パイプラインの CI/CD 開発は、Testus と executar のスモーク テストを自動展開し、Nexus でのプロモーション マニュアルを実行して、OS をチェックします。
 - `configs/soranexus/nexus/` (メインネット) および `configs/soranexus/testus/` (テストネット) の参照用設定バンドル、`config.toml`、`genesis.json` および管理者 Torii の例。

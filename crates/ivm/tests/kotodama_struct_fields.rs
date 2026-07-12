@@ -6,6 +6,7 @@ use ivm::{
     IVM, KotodamaCompiler,
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
 };
+mod common;
 
 #[test]
 fn struct_fields_lower_to_syscall_args() {
@@ -18,13 +19,13 @@ fn struct_fields_lower_to_syscall_args() {
     // Define a struct with pointer-ABI fields and use it to call a builtin.
     let src = r#"
         seiyaku C {
-            struct TransferArgs { domain: DomainId; to: AccountId; }
-            fn main() {
-                let args = TransferArgs(
-                    domain("wonderland.universal"),
-                    account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
-                );
-                transfer_domain(authority(), args.domain, args.to);
+            struct TransferArgs { DomainId domain; AccountId to; }
+            kotoage fn main() authorize("TransferDomain") {
+                let args = TransferArgs {
+                    domain: DomainId::parse("wonderland.universal"),
+                    to: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+                };
+                ledger::domain::transfer(source: context::authority(), domain: args.domain, destination: args.to);
             }
         }
     "#;
@@ -45,5 +46,6 @@ fn struct_fields_lower_to_syscall_args() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
+    common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run().expect("transfer_domain via struct fields");
 }

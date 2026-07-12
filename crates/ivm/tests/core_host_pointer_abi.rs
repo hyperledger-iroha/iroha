@@ -1,6 +1,6 @@
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::nexus::DataSpaceId;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use ivm::{CoreHost, IVM, Memory, PointerType, encoding, instruction::wide, syscalls};
 use norito::to_bytes;
 
@@ -60,9 +60,9 @@ fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
-    let buf = to_bytes(&amount.into()).expect("encode numeric into Norito");
-    make_tlv(PointerType::NoritoBytes as u16, 1, &buf)
+fn make_quantity_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
+    let quantity = Quantity::try_from_numeric(amount.into()).expect("canonical quantity");
+    ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity pointer envelope")
 }
 
 fn make_dataspace_tlv(dataspace: DataSpaceId) -> Vec<u8> {
@@ -181,7 +181,7 @@ fn transfer_asset_validates_tlvs() {
         12,
         Memory::INPUT_START + from.len() as u64 + to.len() as u64 + 16,
     );
-    let amount = make_numeric_tlv(42_u64);
+    let amount = make_quantity_tlv(42_u64);
     let amount_offset = from.len() as u64 + to.len() as u64 + asset.len() as u64 + 24;
     vm.memory
         .preload_input(amount_offset, &amount)
@@ -227,7 +227,7 @@ fn transfer_asset_rejects_wrong_asset_type() {
         12,
         Memory::INPUT_START + from.len() as u64 + to.len() as u64 + 16,
     );
-    let amount = make_numeric_tlv(1_u64);
+    let amount = make_quantity_tlv(1_u64);
     let amount_offset = from.len() as u64 + to.len() as u64 + wrong.len() as u64 + 24;
     vm.memory
         .preload_input(amount_offset, &amount)

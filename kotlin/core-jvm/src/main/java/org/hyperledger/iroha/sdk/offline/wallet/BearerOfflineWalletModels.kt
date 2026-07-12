@@ -6,7 +6,7 @@ import java.time.Instant
 import java.util.Base64
 import java.util.Locale
 import org.hyperledger.iroha.sdk.offline.OfflineNote
-import org.hyperledger.iroha.sdk.offline.OfflineNoteV2
+import org.hyperledger.iroha.sdk.offline.AttestedOfflineNote
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -46,8 +46,8 @@ data class OfflineCompactKeyCertificate(
     @SerialName("issuer_signature_payload_base64") val issuerSignaturePayloadBase64: String? = null
 ) {
     init {
-        require(version == OfflineNoteV2.KEY_CERTIFICATE_VERSION) {
-            "version must be ${OfflineNoteV2.KEY_CERTIFICATE_VERSION}"
+        require(version == AttestedOfflineNote.KEY_CERTIFICATE_VERSION) {
+            "version must be ${AttestedOfflineNote.KEY_CERTIFICATE_VERSION}"
         }
         require(appAttestPublicKeyBase64 == null) {
             "app_attest_public_key_base64 is retired; use assertion_public_key"
@@ -108,22 +108,22 @@ data class OfflineRecursiveProof(
 
 private fun expectedAssertionScheme(platform: String): String =
     when (platform) {
-        OfflineNoteV2.ANDROID_KEYMINT_PLATFORM -> OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME
-        OfflineNoteV2.IOS_APP_ATTEST_PLATFORM -> OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_SCHEME
+        AttestedOfflineNote.ANDROID_KEYMINT_PLATFORM -> AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_SCHEME
+        AttestedOfflineNote.IOS_APP_ATTEST_PLATFORM -> AttestedOfflineNote.IOS_APP_ATTEST_ASSERTION_SCHEME
         else -> throw IllegalArgumentException("platform must be a supported first-release value")
     }
 
 private fun expectedAssertionKeyAlgorithm(platform: String): String =
     when (platform) {
-        OfflineNoteV2.ANDROID_KEYMINT_PLATFORM -> OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM
-        OfflineNoteV2.IOS_APP_ATTEST_PLATFORM -> OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM
+        AttestedOfflineNote.ANDROID_KEYMINT_PLATFORM -> AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM
+        AttestedOfflineNote.IOS_APP_ATTEST_PLATFORM -> AttestedOfflineNote.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM
         else -> throw IllegalArgumentException("platform must be a supported first-release value")
     }
 
 private fun expectedAssertionUsageCountLimit(platform: String): Int? =
     when (platform) {
-        OfflineNoteV2.ANDROID_KEYMINT_PLATFORM -> 1
-        OfflineNoteV2.IOS_APP_ATTEST_PLATFORM -> null
+        AttestedOfflineNote.ANDROID_KEYMINT_PLATFORM -> 1
+        AttestedOfflineNote.IOS_APP_ATTEST_PLATFORM -> null
         else -> throw IllegalArgumentException("platform must be a supported first-release value")
     }
 

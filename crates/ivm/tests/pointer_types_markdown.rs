@@ -4,24 +4,7 @@ use ivm::{
 };
 
 fn all_pointer_types() -> Vec<PointerType> {
-    use PointerType::*;
-    vec![
-        AccountId,
-        AssetDefinitionId,
-        Name,
-        Json,
-        NftId,
-        Blob,
-        AssetId,
-        DomainId,
-        NoritoBytes,
-        DataSpaceId,
-        AxtDescriptor,
-        AssetHandle,
-        ProofBlob,
-        SoracloudRequest,
-        SoracloudResponse,
-    ]
+    PointerType::all().to_vec()
 }
 
 #[test]

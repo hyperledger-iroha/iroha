@@ -10,17 +10,10 @@ translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
 ---
 
-# Kotodama Kompilyator Səhv Kodları
+# Kotodama Compiler Error Codes
 
-Kotodama kompilyatoru sabit xəta kodları yayır ki, alətlər və CLI istifadəçiləri
-uğursuzluğun səbəbini tez anlayın. `koto_compile --explain <code>` istifadə edin
-müvafiq işarəni çap etmək üçün.
+The canonical V1 diagnostic registry and reference are maintained in
+[`kotodama_error_codes.md`](./kotodama_error_codes.md).
 
-| Kod | Təsvir | Tipik Düzəltmə |
-|-------|-------------|-------------|
-| `E0001` | Filial hədəfi IVM keçid kodlaşdırması üçün əhatə dairəsindən kənardadır. | Əsas blok məsafələri ±1MiB daxilində qalması üçün çox böyük funksiyaları ayırın və ya daxili xətti azaldın. |
-| `E0002` | Zəng saytları heç vaxt müəyyən edilməmiş funksiyaya istinad edir. | Zəng edəni silən yazı xətalarını, görünürlük dəyişdiricilərini və ya xüsusiyyət bayraqlarını yoxlayın. |
-| `E0003` | Davamlı vəziyyət sistem zəngləri ABI v1 aktiv edilmədən buraxıldı. | `CompilerOptions::abi_version = 1` təyin edin və ya `seiyaku` müqaviləsi daxilində `meta { abi_version: 1 }` əlavə edin. |
-| `E0004` | Aktivlə əlaqəli sistemlər hərfi olmayan göstəricilər aldı. | `account_id(...)`, `asset_definition(...)` və s. istifadə edin və ya host defoltları üçün 0 gözətçi keçirin. |
-| `E0005` | `for`-loop başlatıcısı bu gün dəstəklənəndən daha mürəkkəbdir. | Döngədən əvvəl kompleks quraşdırmanı köçürün; hazırda yalnız sadə `let`/ifadə başlatıcıları qəbul edilir. |
-| `E0006` | `for`-loop addım bəndi bu gün dəstəklənəndən daha mürəkkəbdir. | Döngə sayğacını sadə bir ifadə ilə yeniləyin (məsələn, `i = i + 1`). |
+This former translation is retained as a stable link only. `koto explain
+<code>` reads the same registry used by the compiler.

@@ -19,6 +19,10 @@ const FIXTURE_BOB_ID = AccountAddress.fromAccount({
     "hex",
   ),
 }).toI105();
+const OFFLINE_OPERATION_BYTES = Array.from({ length: 32 }, () => 0x11);
+const OFFLINE_OPERATION_ID = "11".repeat(32);
+const OFFLINE_TRANSACTION_HASH = "22".repeat(32);
+const OFFLINE_STATUS_URI = `/v1/offline/operations/${OFFLINE_OPERATION_ID}`;
 
 function jsonResponse(payload, init = {}) {
   return new Response(JSON.stringify(payload), {
@@ -27,11 +31,168 @@ function jsonResponse(payload, init = {}) {
   });
 }
 
+function browserOfflineTopUpRequest(overrides = {}) {
+  return {
+    asset: "xor#sora",
+    amount: { atomic_units: 9_007_199_254_740_993n, scale: 4 },
+    current_note: { version: 2 },
+    record_bundle: { version: 2 },
+    pallas_open_envelopes_archive: [1, 2],
+    artifact_generation: "generation-1",
+    operation_id: [...OFFLINE_OPERATION_BYTES],
+    authorization: { operation_id: [...OFFLINE_OPERATION_BYTES] },
+    ...overrides,
+  };
+}
+
+test("ToriiBrowserClient implements the complete first-release Offline JSON flow", async () => {
+  const requests = [];
+  const fetchImpl = async (url, init) => {
+    const parsed = new URL(url);
+    requests.push({ parsed, init });
+    if (parsed.pathname === "/v1/offline/readiness") {
+      return jsonResponse({
+        asset_definition_id: "xor#sora",
+        evaluated_block_height: 7,
+        evaluated_block_hash: "ab".repeat(32),
+        ready: true,
+        blockers: [],
+      });
+    }
+    if (parsed.pathname === "/v1/offline/top-up") {
+      return jsonResponse(
+        {
+          operation_id: OFFLINE_OPERATION_ID,
+          kind: { kind: "top_up", value: null },
+          state: { state: "pending", value: null },
+          transaction_hash: OFFLINE_TRANSACTION_HASH,
+          status_uri: OFFLINE_STATUS_URI,
+          submitted_at_ms: 10,
+        },
+        { status: 202, headers: { location: OFFLINE_STATUS_URI } },
+      );
+    }
+    return jsonResponse({
+      state: "pending",
+      value: {
+        operation_id: OFFLINE_OPERATION_ID,
+        kind: { kind: "top_up", value: null },
+        transaction_hash: OFFLINE_TRANSACTION_HASH,
+        submitted_at_ms: 10,
+      },
+    });
+  };
+  const client = new ToriiBrowserClient("https://torii.example/v1", { fetchImpl });
+
+  const readiness = await client.getOfflineReadiness("xor#sora");
+  assert.equal(readiness.ready, true);
+  const reference = await client.submitOfflineTopUp(browserOfflineTopUpRequest());
+  assert.equal(reference.operation_id, OFFLINE_OPERATION_ID);
+  const status = await client.getOfflineOperationStatus(OFFLINE_OPERATION_ID);
+  assert.equal(status.state, "pending");
+
+  assert.equal(requests[0].parsed.pathname, "/v1/offline/readiness");
+  assert.equal(requests[0].parsed.searchParams.get("asset_definition_id"), "xor#sora");
+  assert.equal(requests[1].parsed.pathname, "/v1/offline/top-up");
+  assert.equal(requests[1].init.headers["Idempotency-Key"], OFFLINE_OPERATION_ID);
+  assert.equal(requests[1].init.headers["Content-Type"], "application/json");
+  assert.match(requests[1].init.body, /"atomic_units":9007199254740993/u);
+  assert.equal(requests[2].parsed.pathname, OFFLINE_STATUS_URI);
+});
+
+test("ToriiBrowserClient preserves wide Offline response integers", async () => {
+  const fetchImpl = async () => new Response(
+    '{"asset_definition_id":"xor#sora",'
+      + `"evaluated_block_height":18446744073709551615,"evaluated_block_hash":"${"ab".repeat(32)}","ready":true,"blockers":[]}`,
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+  const client = new ToriiBrowserClient("https://torii.example", { fetchImpl });
+
+  const readiness = await client.getOfflineReadiness("xor#sora");
+  assert.equal(readiness.evaluated_block_height, (1n << 64n) - 1n);
+});
+
+test("ToriiBrowserClient rejects adversarial Offline inputs before fetch", async () => {
+  let fetchCount = 0;
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => {
+      fetchCount += 1;
+      throw new Error("must not fetch");
+    },
+  });
+  await assert.rejects(() => client.getOfflineReadiness(" xor#sora"), /assetDefinitionId/);
+  await assert.rejects(
+    () => client.submitOfflineTopUp(browserOfflineTopUpRequest({ operation_id: Array(32).fill(0) })),
+    /all zero/,
+  );
+  await assert.rejects(
+    () => client.submitOfflineTopUp(browserOfflineTopUpRequest({
+      authorization: { operation_id: Array(32).fill(0x12) },
+    })),
+    /must match/,
+  );
+  await assert.rejects(
+    () => client.submitOfflineTopUp(browserOfflineTopUpRequest({
+      amount: { atomic_units: 1, scale: 29 },
+    })),
+    /scale/,
+  );
+  await assert.rejects(
+    () => client.submitOfflineTopUp(browserOfflineTopUpRequest({
+      artifact_generation: "é".repeat(65),
+    })),
+    /128/,
+  );
+  await assert.rejects(
+    () => client.getOfflineOperationStatus("AB".repeat(32)),
+    /lowercase/,
+  );
+  await assert.rejects(
+    () => client.getOfflineReadiness("xor#sora", { headers: {} }),
+    /unsupported fields/,
+  );
+  assert.equal(fetchCount, 0);
+});
+
+test("ToriiBrowserClient requires the canonical Location on Offline acceptance", async () => {
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => jsonResponse(
+      {
+        operation_id: OFFLINE_OPERATION_ID,
+        kind: { kind: "top_up", value: null },
+        state: { state: "pending", value: null },
+        transaction_hash: OFFLINE_TRANSACTION_HASH,
+        status_uri: OFFLINE_STATUS_URI,
+        submitted_at_ms: 10,
+      },
+      { status: 202 },
+    ),
+  });
+  await assert.rejects(
+    () => client.submitOfflineTopUp(browserOfflineTopUpRequest()),
+    /Location header/,
+  );
+
+  const wrongMediaTypeClient = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => new Response(JSON.stringify({
+      asset_definition_id: "xor#sora",
+      evaluated_block_height: 1,
+      evaluated_block_hash: "ab".repeat(32),
+      ready: true,
+      blockers: [],
+    }), { status: 200, headers: { "content-type": "text/plain" } }),
+  });
+  await assert.rejects(
+    () => wrongMediaTypeClient.getOfflineReadiness("xor#sora"),
+    /Content-Type application\/json/,
+  );
+});
+
 test("ToriiBrowserClient strips API suffixes and calls current explorer block routes", async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(String(url), "https://localhost:8080/v1/explorer/blocks?page=2&per_page=5");
     assert.equal(init.method, "GET");
-    assert.equal(init.headers["x-iroha-api-version"], "1.1");
+    assert.equal(init.headers["x-test-client"], "browser-sdk");
     return jsonResponse({
       pagination: { page: 2, per_page: 5, total_pages: 3, total_items: 11 },
       items: [],
@@ -39,7 +200,7 @@ test("ToriiBrowserClient strips API suffixes and calls current explorer block ro
   };
   const client = new ToriiBrowserClient(BASE_URL, {
     fetchImpl,
-    defaultHeaders: { "x-iroha-api-version": "1.1" },
+    defaultHeaders: { "x-test-client": "browser-sdk" },
   });
   const payload = await client.listExplorerBlocks({ page: 2, perPage: 5 });
   assert.equal(payload.pagination.page, 2);
@@ -227,13 +388,13 @@ test("ToriiBrowserClient posts multisig proposal lookups to registered routes", 
     instructionsHash: "a".repeat(64),
   });
 
-  assert.equal(calls[0].url, "https://torii.example/v1/multisig/proposals/list");
+  assert.equal(calls[0].url, "https://torii.example/v1/multisig/proposals/query");
   assert.equal(calls[0].init.method, "POST");
   assert.deepEqual(JSON.parse(calls[0].init.body), {
     multisig_account_alias: "cbdc@banka",
     status: ["COLLECTING_SIGNATURES"],
   });
-  assert.equal(calls[1].url, "https://torii.example/v1/multisig/proposals/get");
+  assert.equal(calls[1].url, "https://torii.example/v1/multisig/proposals/lookup");
   assert.equal(calls[1].init.method, "POST");
   assert.deepEqual(JSON.parse(calls[1].init.body), {
     multisig_account_alias: "cbdc@banka",
@@ -255,7 +416,7 @@ test("ToriiBrowserClient preserves legacy multisig proposal lookup signature", a
   const client = new ToriiBrowserClient("https://torii.example", { fetchImpl });
   await client.getMultisigProposal(FIXTURE_ALICE_ID, "b".repeat(64));
 
-  assert.equal(captured.url, "https://torii.example/v1/multisig/proposals/get");
+  assert.equal(captured.url, "https://torii.example/v1/multisig/proposals/lookup");
   assert.deepEqual(JSON.parse(captured.init.body), {
     multisig_account_id: FIXTURE_ALICE_ID,
     proposal_id: "b".repeat(64),
@@ -292,14 +453,14 @@ test("ToriiBrowserClient posts multisig approvals to registered routes", async (
   });
   await client.getMultisigApproval({ proposalId: "c".repeat(64) });
 
-  assert.equal(calls[0].url, "https://torii.example/v1/multisig/approvals/list");
+  assert.equal(calls[0].url, "https://torii.example/v1/multisig/approvals/query");
   assert.deepEqual(JSON.parse(calls[0].init.body), {
     status: ["COLLECTING_SIGNATURES"],
     operation_type: ["TRANSFER"],
     requires_my_signature: true,
     limit: 5,
   });
-  assert.equal(calls[1].url, "https://torii.example/v1/multisig/approvals/get");
+  assert.equal(calls[1].url, "https://torii.example/v1/multisig/approvals/lookup");
   assert.deepEqual(JSON.parse(calls[1].init.body), {
     proposal_id: "c".repeat(64),
   });
@@ -316,13 +477,13 @@ test("ToriiBrowserClient maps pending approval compatibility helpers to approval
   await client.listPendingMultisigApprovals({ operationType: ["MINT"], limit: 3 });
   await client.getPendingMultisigApproval("d".repeat(64));
 
-  assert.equal(calls[0].url, "https://torii.example/v1/multisig/approvals/list");
+  assert.equal(calls[0].url, "https://torii.example/v1/multisig/approvals/query");
   assert.deepEqual(JSON.parse(calls[0].init.body), {
     operation_type: ["MINT"],
     limit: 3,
     status: ["COLLECTING_SIGNATURES"],
   });
-  assert.equal(calls[1].url, "https://torii.example/v1/multisig/approvals/get");
+  assert.equal(calls[1].url, "https://torii.example/v1/multisig/approvals/lookup");
   assert.deepEqual(JSON.parse(calls[1].init.body), {
     proposal_id: "d".repeat(64),
   });

@@ -28,10 +28,10 @@ slug: /norito/quickstart
 
 - Compose V2 が有効な [Docker](https://docs.docker.com/engine/install/) ( `defaults/docker-compose.single.yml` で定義されたサンプルピアの起動に使用します)。
 - 公開済みバイナリをダウンロードしない場合に備えて、Rust ツールチェーン (1.76+)。
-- `koto_compile`、`ivm_run`、`iroha_cli` のバイナリ。以下のように workspace のチェックアウトからビルドするか、対応するリリースアーティファクトをダウンロードできます:
+- `koto build`、`ivm_run`、`iroha_cli` のバイナリ。以下のように workspace のチェックアウトからビルドするか、対応するリリースアーティファクトをダウンロードできます:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -55,22 +55,22 @@ docker compose -f defaults/docker-compose.single.yml up --build
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -82,15 +82,14 @@ KO
 コントラクトを IVM/Norito バイトコード (`.to`) にコンパイルし、ネットワークに触れる前にローカルで実行してホストの syscalls が成功することを確認します:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-ランナーは `info("Hello from Kotodama")` のログを出力し、モックされたホストに対して `SET_ACCOUNT_DETAIL` syscall を実行します。オプションの `ivm_tool` バイナリがある場合、`ivm_tool inspect target/quickstart/hello.to` で ABI ヘッダ、feature bits、エクスポートされた entrypoints を表示できます。
+ランナーは `debug::info("Hello from Kotodama")` のログを出力し、モックされたホストに対して `SET_ACCOUNT_DETAIL` syscall を実行します。オプションの `ivm_tool` バイナリがある場合、`ivm_tool inspect target/quickstart/hello.to` で ABI ヘッダ、feature bits、エクスポートされた entrypoints を表示できます。
 
 ## 4. Torii 経由でバイトコードを送信する
 

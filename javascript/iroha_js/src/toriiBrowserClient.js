@@ -1,3 +1,19 @@
+import {
+  OFFLINE_OPERATIONS_PATH,
+  OFFLINE_READINESS_PATH,
+  OFFLINE_REDEEM_PATH,
+  OFFLINE_TOP_UP_PATH,
+  normalizeOfflineOperationReference,
+  normalizeOfflineOperationStatus,
+  normalizeOfflineReadinessResponse,
+  normalizeOfflineRedeemRequest,
+  normalizeOfflineTopUpRequest,
+  parseOfflineJson,
+  requireOfflineAssetDefinitionId,
+  requireOfflineJsonContentType,
+  requireOfflineOperationId,
+} from "./offlineApi.js";
+
 const DEFAULT_SUCCESS_STATUSES = [200];
 
 let noritoEncodersPromise;
@@ -247,6 +263,25 @@ function signalFrom(options) {
   return options.signal === undefined ? undefined : options.signal;
 }
 
+function offlineSignalOnlyOptions(options, context) {
+  const record = requireObject(options, `${context} options`);
+  const extras = Object.keys(record).filter((key) => key !== "signal");
+  if (extras.length > 0) {
+    throw new TypeError(`${context} options contains unsupported fields: ${extras.join(", ")}`);
+  }
+  const signal = signalFrom(record);
+  if (
+    signal !== undefined &&
+    signal !== null &&
+    (typeof signal !== "object" ||
+      typeof signal.aborted !== "boolean" ||
+      typeof signal.addEventListener !== "function")
+  ) {
+    throw new TypeError(`${context} options.signal must be an AbortSignal`);
+  }
+  return signal ?? undefined;
+}
+
 function copyRequestFields(source) {
   const body = { ...source };
   delete body.signal;
@@ -423,12 +458,25 @@ export class ToriiBrowserClient {
       const bodyText = await responseText(response);
       throw new ToriiBrowserHttpError(errorResponse, bodyText, status);
     }
+    if (normalizedOptions.responseObserver !== undefined) {
+      if (typeof normalizedOptions.responseObserver !== "function") {
+        throw new TypeError(`${method} ${path} responseObserver must be a function`);
+      }
+      normalizedOptions.responseObserver(response);
+    }
     if (status === 204) return null;
+    const jsonParser = normalizedOptions.jsonParser ?? JSON.parse;
+    if (typeof jsonParser !== "function") {
+      throw new TypeError(`${method} ${path} jsonParser must be a function`);
+    }
     if (typeof response.text !== "function" && typeof response.json === "function") {
+      if (normalizedOptions.jsonParser !== undefined) {
+        throw new TypeError(`${method} ${path} requires a text-capable response`);
+      }
       return response.json();
     }
     const text = await response.text();
-    return text ? JSON.parse(text) : null;
+    return text ? jsonParser(text) : null;
   }
 
   listExplorerAccounts(options = {}) {
@@ -770,7 +818,7 @@ export class ToriiBrowserClient {
 
   listMultisigProposals(selector, options = {}) {
     const opts = requireObject(options, "listMultisigProposals options");
-    return this._json("POST", "/v1/multisig/proposals/list", {
+    return this._json("POST", "/v1/multisig/proposals/query", {
       body: normalizeMultisigSelectorBody(selector, "listMultisigProposals selector"),
       signal: signalFrom(opts),
     });
@@ -791,7 +839,7 @@ export class ToriiBrowserClient {
       legacySignature ? options : proposalIdOrOptions,
       "getMultisigProposal options",
     );
-    return this._json("POST", "/v1/multisig/proposals/get", {
+    return this._json("POST", "/v1/multisig/proposals/lookup", {
       body: request,
       signal: signalFrom(opts),
     });
@@ -799,7 +847,7 @@ export class ToriiBrowserClient {
 
   listMultisigApprovals(request = {}, options = {}) {
     const opts = requireObject(options, "listMultisigApprovals options");
-    return this._json("POST", "/v1/multisig/approvals/list", {
+    return this._json("POST", "/v1/multisig/approvals/query", {
       body: normalizeMultisigApprovalsListBody(request, "listMultisigApprovals request"),
       signal: signalFrom(opts),
     });
@@ -807,7 +855,7 @@ export class ToriiBrowserClient {
 
   getMultisigApproval(request, options = {}) {
     const opts = requireObject(options, "getMultisigApproval options");
-    return this._json("POST", "/v1/multisig/approvals/get", {
+    return this._json("POST", "/v1/multisig/approvals/lookup", {
       body: normalizeMultisigApprovalLookupBody(request, "getMultisigApproval request"),
       signal: signalFrom(opts),
     });
@@ -868,6 +916,79 @@ export class ToriiBrowserClient {
       headers: { Accept: "application/json", ...(opts.headers ?? {}) },
       signal: signalFrom(opts),
       successStatuses: opts.successStatuses ?? [200, 202],
+    });
+  }
+
+  async getOfflineReadiness(assetDefinitionId, options = {}) {
+    const asset = requireOfflineAssetDefinitionId(assetDefinitionId);
+    const signal = offlineSignalOnlyOptions(options, "getOfflineReadiness");
+    const payload = await this._json("GET", OFFLINE_READINESS_PATH, {
+      params: { asset_definition_id: asset },
+      signal,
+      jsonParser: (text) => parseOfflineJson(text, "offline readiness response"),
+      responseObserver(response) {
+        requireOfflineJsonContentType(
+          response.headers?.get?.("content-type"),
+          "offline readiness response",
+        );
+      },
+    });
+    return normalizeOfflineReadinessResponse(payload, asset);
+  }
+
+  async submitOfflineTopUp(request, options = {}) {
+    const command = normalizeOfflineTopUpRequest(request);
+    return this._submitOfflineCommand(OFFLINE_TOP_UP_PATH, "top_up", command, options);
+  }
+
+  async submitOfflineRedeem(request, options = {}) {
+    const command = normalizeOfflineRedeemRequest(request);
+    return this._submitOfflineCommand(OFFLINE_REDEEM_PATH, "redeem", command, options);
+  }
+
+  async getOfflineOperationStatus(operationId, options = {}) {
+    const canonicalId = requireOfflineOperationId(operationId);
+    const signal = offlineSignalOnlyOptions(options, "getOfflineOperationStatus");
+    const payload = await this._json(
+      "GET",
+      `${OFFLINE_OPERATIONS_PATH}/${canonicalId}`,
+      {
+        signal,
+        jsonParser: (text) => parseOfflineJson(text, "offline operation status response"),
+        responseObserver(response) {
+          requireOfflineJsonContentType(
+            response.headers?.get?.("content-type"),
+            "offline operation status response",
+          );
+        },
+      },
+    );
+    return normalizeOfflineOperationStatus(payload, canonicalId);
+  }
+
+  async _submitOfflineCommand(path, expectedKind, command, options) {
+    const methodName = expectedKind === "top_up" ? "submitOfflineTopUp" : "submitOfflineRedeem";
+    const signal = offlineSignalOnlyOptions(options, methodName);
+    let location;
+    const payload = await this._json("POST", path, {
+      rawBody: command.body,
+      contentType: "application/json",
+      headers: { "Idempotency-Key": command.operationId },
+      signal,
+      successStatuses: [202],
+      jsonParser: (text) => parseOfflineJson(text, "offline operation reference response"),
+      responseObserver(response) {
+        requireOfflineJsonContentType(
+          response.headers?.get?.("content-type"),
+          "offline operation reference response",
+        );
+        location = response.headers?.get?.("location") ?? null;
+      },
+    });
+    return normalizeOfflineOperationReference(payload, {
+      expectedOperationId: command.operationId,
+      expectedKind,
+      location,
     });
   }
 

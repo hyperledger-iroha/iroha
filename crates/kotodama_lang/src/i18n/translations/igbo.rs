@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "parámịtà `{name}` n'ọrụ `{func}` adịghị eji ya eme ihe",
     lint_unreachable_after_return: "achọpụtara okwu a na-agaghị enweta na {context}: koodu dị mgbe return anaghị agba ọsọ",
     lint_ok: "ọ dị mma",
-    lint_usage: "Ojiji: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Ojiji: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Gbaa nyocha lint Kotodama na isi mmalite enyere.",
     ..english::MESSAGES
 };

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
+import re
 import signal
 import sys
 import threading
@@ -129,8 +132,14 @@ class _MockState:
         self.gov_locks: Dict[str, Dict[str, Any]] = {}
         self.gov_tallies: Dict[str, Dict[str, Any]] = {}
         self.gov_unlock_stats: Dict[str, Any] = {}
-        self.sccp_message_artifacts: Dict[str, Dict[str, Any]] = {}
-        self.sccp_message_jobs: Dict[str, Dict[str, Any]] = {}
+        self.sccp_registry: Dict[str, Any] = {}
+        self.sccp_recent_messages: Dict[str, Any] = {}
+        self.sccp_message_bundles: Dict[str, Dict[str, Any]] = {}
+        self.sccp_message_bundle_norito: Dict[str, bytes] = {}
+        self.sccp_proof_requests: Dict[str, Dict[str, Any]] = {}
+        self.sccp_proof_request_norito: Dict[str, bytes] = {}
+        self.sccp_bridge_proof_response: Dict[str, Any] = {}
+        self.sccp_bridge_message_response: Dict[str, Any] = {}
         self.reset()
 
     # ------------------------------------------------------------------
@@ -244,14 +253,28 @@ class _MockState:
             return _json_response(HTTPStatus.OK, self.node_capabilities)
         if method == "GET" and path == "/v1/sccp/capabilities":
             return _json_response(HTTPStatus.OK, self.sccp_capabilities)
-        if method == "GET" and path == "/v1/sccp/manifests":
-            return _json_response(HTTPStatus.OK, self.sccp_proof_manifests)
-        if method == "GET" and path.startswith("/v1/sccp/artifacts/message/"):
-            message_id = path.split("/")[-1].lower()
-            return self._sccp_message_artifact_get(message_id)
-        if method == "GET" and path.startswith("/v1/sccp/jobs/message/"):
-            message_id = path.split("/")[-1].lower()
-            return self._sccp_message_job_get(message_id)
+        if method == "GET" and path == "/v1/sccp/registry":
+            return _json_response(HTTPStatus.OK, self.sccp_registry)
+        if method == "GET" and path.startswith("/v1/sccp/proofs/message/"):
+            return self._sccp_typed_get(
+                path.removeprefix("/v1/sccp/proofs/message/"),
+                headers,
+                json_values=self.sccp_message_bundles,
+                norito_values=self.sccp_message_bundle_norito,
+            )
+        if method == "GET" and path.startswith("/v1/sccp/proof-requests/"):
+            return self._sccp_typed_get(
+                path.removeprefix("/v1/sccp/proof-requests/"),
+                headers,
+                json_values=self.sccp_proof_requests,
+                norito_values=self.sccp_proof_request_norito,
+            )
+        if method == "GET" and path == "/v1/sccp/messages/recent":
+            return self._sccp_recent_get(params)
+        if method == "POST" and path == "/v1/bridge/proofs/submit":
+            return self._sccp_bridge_submit(body, endpoint="proof")
+        if method == "POST" and path == "/v1/bridge/messages":
+            return self._sccp_bridge_submit(body, endpoint="message")
         if method == "POST" and path == "/__mock__/pipeline/config":
             return self._pipeline_config(body)
         if method == "POST" and path == "/__mock__/accounts/config":
@@ -349,7 +372,7 @@ class _MockState:
                         "contract_alias": "router::universal",
                         "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
                         "previous_contract_address": None,
-                        "upgraded": False,
+                        "kaizen": False,
                         "dataspace": "universal",
                         "deploy_nonce": 0,
                         "tx_hash_hex": "11" * 32,
@@ -359,7 +382,7 @@ class _MockState:
                         "status": "submitted",
                     }
                 ],
-                "init_calls": [],
+                "hajimari_calls": [],
                 "assertions": [],
             }
             self.contract_bundle_response = {
@@ -379,9 +402,27 @@ class _MockState:
                 "tx_hash_hex": "44" * 32,
                 "pipeline_status": self._queued_pipeline_status("44" * 32),
                 "entrypoint": "ping",
+                "transaction_ttl_ms": 60_000,
+                "entrypoint_hash_hex": "55" * 32,
                 "transaction_scaffold_b64": "AQID",
                 "signed_transaction_b64": "BAUG",
                 "signing_message_b64": "BwgJ",
+                "operation_receipt": {
+                    "operation_kind": "contract_call",
+                    "status": "submitted",
+                    "transport": "torii",
+                    "dataspace": "universal",
+                    "contract_alias": "router::universal",
+                    "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                    "code_hash_hex": "22" * 32,
+                    "abi_hash_hex": "33" * 32,
+                    "tx_hash_hex": "44" * 32,
+                    "entrypoint": "ping",
+                    "entrypoint_hash_hex": "55" * 32,
+                    "gas_limit": 5_000,
+                    "gas_used": None,
+                    "payload_digest_hex": "66" * 32,
+                },
             }
             self.gov_proposals.clear()
             self.gov_propose_deploy_response = {"ok": True, "proposal_id": "mock-proposal"}
@@ -402,36 +443,69 @@ class _MockState:
                 "signed_transaction_schema_hash_hex": "7ab5ff9c572efb316deac478f19209c5",
             }
             self.sccp_capabilities = {
-                "local_domain": 0,
-                "local_chain": "sora",
-                "proof_family": "stark-fri-v1",
-                "burn_bundle_path": "/v1/sccp/proofs/burn/{message_id}",
+                "version": 1,
+                "registry_revision": "0x" + "11" * 32,
+                "registry_path": "/v1/sccp/registry",
                 "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
-                "message_proof_path": "/v1/sccp/artifacts/message/{message_id}",
-                "message_job_path": "/v1/sccp/jobs/message/{message_id}",
-                "proof_manifest_path": "/v1/sccp/manifests",
-                "burn_registry_backend": "bridge/sccp/burn-v1",
+                "proof_request_path": "/v1/sccp/proof-requests/{message_id}",
+                "recent_messages_path": "/v1/sccp/messages/recent",
+                "registry_limits": {
+                    "max_governed_lanes": 16,
+                    "max_live_governed_routes": 64,
+                    "max_live_routes_per_lane": 8,
+                    "max_retained_routes_per_lane": 64,
+                    "max_retained_native_trust_anchors_per_lane": 4_096,
+                },
+                "resource_limits": {
+                    "max_proofs_per_transaction": 1,
+                    "max_proofs_per_block": 4,
+                    "max_proof_bytes_per_proof": 8 * 1024 * 1024,
+                    "max_proof_bytes_per_transaction": 8 * 1024 * 1024,
+                    "max_proof_bytes_per_block": 32 * 1024 * 1024,
+                    "max_native_headers_per_transaction": 1_004,
+                    "max_native_headers_per_block": 4_016,
+                    "max_ethereum_light_client_updates_per_transaction": 128,
+                    "max_ethereum_light_client_updates_per_block": 512,
+                    "max_native_header_bytes_per_transaction": 8 * 1024 * 1024,
+                    "max_native_header_bytes_per_block": 32 * 1024 * 1024,
+                    "max_secp256k1_recoveries_per_transaction": 1_005,
+                    "max_secp256k1_recoveries_per_block": 4_020,
+                    "max_bls_aggregate_checks_per_transaction": 1_004,
+                    "max_bls_aggregate_checks_per_block": 4_016,
+                    "max_bls_signer_contributions_per_transaction": 131_713,
+                    "max_bls_signer_contributions_per_block": 526_852,
+                    "max_bn254_pairing_checks_per_transaction": 1,
+                    "max_bn254_pairing_checks_per_block": 4,
+                },
                 "proof_submit_path": "/v1/bridge/proofs/submit",
-                "message_submit_path": "/v1/bridge/messages",
-                "message_payload_kinds": [
-                    "asset_register",
-                    "route_activate",
-                    "transfer",
-                    "token_add",
-                    "token_pause",
-                    "token_resume",
-                ],
-                "codecs": [],
-                "counterparties": [],
+                "native_message_submit_path": "/v1/bridge/messages",
             }
-            self.sccp_proof_manifests = {
-                "local_domain": 0,
-                "local_chain": "sora",
-                "proof_family": "stark-fri-v1",
-                "manifests": [],
+            self.sccp_registry = {"version": 1, "lanes": []}
+            self.sccp_recent_messages = {"items": []}
+            self.sccp_message_bundles.clear()
+            self.sccp_message_bundle_norito.clear()
+            self.sccp_proof_requests.clear()
+            self.sccp_proof_request_norito.clear()
+            transaction = b"\x01\x02\x03"
+            signing_message = bytearray(hashlib.blake2b(transaction, digest_size=32).digest())
+            signing_message[-1] |= 1
+            prepared = {
+                "submitted": False,
+                "payload_kind": "transfer",
+                "message_id_hex": "22" * 32,
+                "backend": "bridge/sccp/native/bsc-parlia-v1",
+                "counterparty_domain": 2,
+                "counterparty_chain": "bsc-mainnet",
+                "route_configuration_hash_hex": "33" * 32,
+                "range_start_height": 1,
+                "range_end_height": 1,
+                "creation_time_ms": 1,
+                "tx_hash_hex": None,
+                "transaction_payload_b64": base64.b64encode(transaction).decode("ascii"),
+                "signing_message_b64": base64.b64encode(signing_message).decode("ascii"),
             }
-            self.sccp_message_artifacts = {}
-            self.sccp_message_jobs = {}
+            self.sccp_bridge_proof_response = dict(prepared)
+            self.sccp_bridge_message_response = dict(prepared)
             self._seed_reports()
             self._seed_sumeragi()
 
@@ -484,47 +558,140 @@ class _MockState:
                 raise ValueError("capabilities must be an object")
             self.sccp_capabilities = dict(capabilities)
 
-        manifests = payload.get("manifests")
-        if manifests is not None:
-            if not isinstance(manifests, dict):
-                raise ValueError("manifests must be an object")
-            self.sccp_proof_manifests = dict(manifests)
+        for field, attribute in (
+            ("registry", "sccp_registry"),
+            ("recent_messages", "sccp_recent_messages"),
+            ("bridge_proof_response", "sccp_bridge_proof_response"),
+            ("bridge_message_response", "sccp_bridge_message_response"),
+        ):
+            value = payload.get(field)
+            if value is not None:
+                if not isinstance(value, dict):
+                    raise ValueError(f"{field} must be an object")
+                setattr(self, attribute, dict(value))
 
-        artifacts = payload.get("message_artifacts")
-        if artifacts is not None:
-            if not isinstance(artifacts, dict):
-                raise ValueError("message_artifacts must be an object")
-            normalized_artifacts: Dict[str, Dict[str, Any]] = {}
-            for message_id, artifact in artifacts.items():
-                if not isinstance(artifact, dict):
-                    raise ValueError("message_artifacts entry must be an object")
-                normalized_artifacts[str(message_id).lower()] = dict(artifact)
-            self.sccp_message_artifacts = normalized_artifacts
+        for field, attribute in (
+            ("message_bundles", "sccp_message_bundles"),
+            ("proof_requests", "sccp_proof_requests"),
+        ):
+            value = payload.get(field)
+            if value is not None:
+                if not isinstance(value, dict) or not all(
+                    isinstance(key, str) and isinstance(entry, dict)
+                    for key, entry in value.items()
+                ):
+                    raise ValueError(f"{field} must map message ids to objects")
+                setattr(self, attribute, {key: dict(entry) for key, entry in value.items()})
 
-        jobs = payload.get("message_jobs")
-        if jobs is not None:
-            if not isinstance(jobs, dict):
-                raise ValueError("message_jobs must be an object")
-            normalized_jobs: Dict[str, Dict[str, Any]] = {}
-            for message_id, job in jobs.items():
-                if not isinstance(job, dict):
-                    raise ValueError("message_jobs entry must be an object")
-                normalized_jobs[str(message_id).lower()] = dict(job)
-            self.sccp_message_jobs = normalized_jobs
+        for field, attribute in (
+            ("message_bundle_norito_b64", "sccp_message_bundle_norito"),
+            ("proof_request_norito_b64", "sccp_proof_request_norito"),
+        ):
+            value = payload.get(field)
+            if value is not None:
+                if not isinstance(value, dict) or not all(
+                    isinstance(key, str) and isinstance(entry, str)
+                    for key, entry in value.items()
+                ):
+                    raise ValueError(f"{field} must map message ids to base64 strings")
+                try:
+                    decoded = {
+                        key: base64.b64decode(entry, validate=True) for key, entry in value.items()
+                    }
+                except ValueError as err:
+                    raise ValueError(f"{field} contains invalid base64") from err
+                setattr(self, attribute, decoded)
 
         return _json_response(HTTPStatus.OK, {"ok": True})
 
-    def _sccp_message_artifact_get(self, message_id: str) -> _Response:
-        payload = self.sccp_message_artifacts.get(message_id)
-        if payload is None:
-            return _json_response(HTTPStatus.NOT_FOUND, {"error": "not found"})
+    def _sccp_recent_get(self, params: Mapping[str, List[str]]) -> _Response:
+        payload = dict(self.sccp_recent_messages)
+        items = payload.get("items", [])
+        if not isinstance(items, list):
+            raise ValueError("configured SCCP recent messages must contain an items array")
+        limit = _parse_int(params.get("limit"))
+        from_height = _parse_int(params.get("from"))
+        if from_height is not None:
+            if not 1 <= from_height <= 0xFFFF_FFFF_FFFF_FFFF:
+                raise ValueError("SCCP recent-message from must be a positive u64")
+            items = [
+                item
+                for item in items
+                if isinstance(item, dict)
+                and isinstance(item.get("height"), int)
+                and item["height"] <= from_height
+            ]
+        if limit is not None:
+            if not 1 <= limit <= 50:
+                raise ValueError("SCCP recent-message limit must be in 1..50")
+            items = items[:limit]
+        payload["items"] = items
         return _json_response(HTTPStatus.OK, payload)
 
-    def _sccp_message_job_get(self, message_id: str) -> _Response:
-        payload = self.sccp_message_jobs.get(message_id)
-        if payload is None:
-            return _json_response(HTTPStatus.NOT_FOUND, {"error": "not found"})
-        return _json_response(HTTPStatus.OK, payload)
+    @staticmethod
+    def _sccp_typed_get(
+        message_id: str,
+        headers: Mapping[str, str],
+        *,
+        json_values: Mapping[str, Dict[str, Any]],
+        norito_values: Mapping[str, bytes],
+    ) -> _Response:
+        if re.fullmatch(r"[0-9a-f]{64}", message_id) is None or set(message_id) == {"0"}:
+            raise ValueError("SCCP message id must be canonical lowercase nonzero hex")
+        accept = headers.get("Accept", "application/json")
+        if accept == "application/x-norito":
+            try:
+                body = norito_values[message_id]
+            except KeyError:
+                raise KeyError(message_id) from None
+            return _Response(
+                HTTPStatus.OK, body=body, headers={"Content-Type": "application/x-norito"}
+            )
+        if accept != "application/json":
+            raise ValueError("unsupported SCCP Accept header")
+        try:
+            value = json_values[message_id]
+        except KeyError:
+            raise KeyError(message_id) from None
+        return _json_response(HTTPStatus.OK, value)
+
+    def _sccp_bridge_submit(self, body: bytes, *, endpoint: str) -> _Response:
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as err:
+            raise ValueError(f"invalid SCCP bridge submit JSON: {err}") from err
+        if not isinstance(payload, dict):
+            raise ValueError("SCCP bridge submit payload must be an object")
+        common = {
+            "authority",
+            "signature_b64",
+            "transaction_payload_b64",
+            "creation_time_ms",
+        }
+        if endpoint == "proof":
+            allowed = common | {"destination_proof_b64"}
+            required = "destination_proof_b64"
+            configured = self.sccp_bridge_proof_response
+        else:
+            allowed = common | {"native_proof_b64"}
+            required = "native_proof_b64"
+            configured = self.sccp_bridge_message_response
+        unknown = next((field for field in payload if field not in allowed), None)
+        if unknown is not None:
+            raise ValueError(f"unknown or retired bridge submit field `{unknown}`")
+        if "authority" not in payload or required not in payload:
+            raise ValueError(f"authority and {required} are required")
+        signed = "signature_b64" in payload
+        if signed != ("transaction_payload_b64" in payload):
+            raise ValueError(
+                "signature_b64 and transaction_payload_b64 must be omitted or provided together"
+            )
+        if signed and "creation_time_ms" not in payload:
+            raise ValueError("creation_time_ms is required for signed SCCP submission")
+        response = dict(configured)
+        if "creation_time_ms" in payload:
+            response["creation_time_ms"] = payload["creation_time_ms"]
+        return _json_response(HTTPStatus.OK, response)
 
     # ------------------------------------------------------------------
     # Governance endpoints
@@ -1068,7 +1235,7 @@ class _MockState:
             "completed_stages": ["plan"] if dry_run else ["plan", "deploy"],
             "failure_point": None,
             "contracts": [],
-            "init_calls": [],
+            "hajimari_calls": [],
             "assertions": [],
         }
         if self.contract_bundle_response:
@@ -1083,7 +1250,7 @@ class _MockState:
                     "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
                 )[:59],
                 "previous_contract_address": None,
-                "upgraded": False,
+                "kaizen": False,
                 "dataspace": contract["contract_alias"].rsplit("::", 1)[-1],
                 "deploy_nonce": index,
                 "code_hash_hex": "22" * 32,
@@ -1097,10 +1264,10 @@ class _MockState:
             for index, contract in enumerate(contracts)
         ]
 
-        init_calls = payload.get("init_calls", [])
-        if not isinstance(init_calls, list):
-            raise ValueError("contract bundle payload init_calls must be a list")
-        receipt["init_calls"] = [
+        hajimari_calls = payload.get("hajimari_calls", [])
+        if not isinstance(hajimari_calls, list):
+            raise ValueError("contract bundle payload hajimari_calls must be a list")
+        receipt["hajimari_calls"] = [
             {
                 "id": call.get("id", f"init-{index}"),
                 "contract_alias": call.get("contract_alias", contracts[0]["contract_alias"]),
@@ -1111,7 +1278,7 @@ class _MockState:
                 else self._queued_pipeline_status(f"{index + 17:02x}" * 32),
                 "status": "pending" if dry_run else "submitted",
             }
-            for index, call in enumerate(init_calls)
+            for index, call in enumerate(hajimari_calls)
             if isinstance(call, dict)
         ]
 
@@ -1153,19 +1320,40 @@ class _MockState:
             raise ValueError(f"invalid contract call payload: {err}") from err
         if not isinstance(payload, dict):
             raise ValueError("contract call payload must be an object")
-        for key in ("authority", "private_key"):
+        for key in ("authority", "private_key", "entrypoint"):
             value = payload.get(key)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"contract call payload missing '{key}'")
         if ("contract_address" in payload) == ("contract_alias" in payload):
             raise ValueError("contract call payload must include exactly one of contract_address or contract_alias")
         gas_limit = payload.get("gas_limit")
-        if not isinstance(gas_limit, (int, float, str)):
+        if not isinstance(gas_limit, int) or isinstance(gas_limit, bool) or gas_limit <= 0:
             raise ValueError("contract call payload missing 'gas_limit'")
         response = dict(self.contract_call_response)
         tx_hash_hex = response.get("tx_hash_hex")
         if isinstance(tx_hash_hex, str):
             response.setdefault("pipeline_status", self._queued_pipeline_status(tx_hash_hex))
+        response.setdefault(
+            "operation_receipt",
+            {
+                "operation_kind": "contract_call",
+                "status": "submitted",
+                "transport": "torii",
+                "dataspace": response.get("dataspace", "universal"),
+                "contract_alias": payload.get("contract_alias"),
+                "contract_address": response.get("contract_address"),
+                "code_hash_hex": response.get("code_hash_hex"),
+                "abi_hash_hex": response.get("abi_hash_hex"),
+                "tx_hash_hex": tx_hash_hex,
+                "entrypoint": payload["entrypoint"],
+                "entrypoint_hash_hex": response.get("entrypoint_hash_hex"),
+                "gas_limit": gas_limit,
+                "gas_used": None,
+                "gas_asset_id": payload.get("gas_asset_id"),
+                "fee_sponsor": payload.get("fee_sponsor"),
+                "payload_digest_hex": "00" * 32,
+            },
+        )
         return _json_response(HTTPStatus.ACCEPTED, response)
 
     def _gov_proposals_get(self, proposal_id: str) -> _Response:

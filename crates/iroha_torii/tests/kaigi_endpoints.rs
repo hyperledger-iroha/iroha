@@ -471,6 +471,13 @@ async fn kaigi_endpoints_reject_when_supported_media_types_have_zero_quality() {
 }
 
 #[tokio::test]
+async fn kaigi_endpoints_reject_retired_text_json_alias() {
+    let (app, _relay_account, _owner_account) = build_app();
+    let response = get_kaigi(&app, "/v1/kaigi/relays", Some("text/json")).await;
+    assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+}
+
+#[tokio::test]
 async fn kaigi_endpoints_accept_json_compatible_media_ranges() {
     let (app, relay_account, _owner_account) = build_app();
     let relay_literal = relay_account.to_string();
@@ -479,7 +486,6 @@ async fn kaigi_endpoints_accept_json_compatible_media_ranges() {
         "*/*",
         "application/*",
         "application/problem+json",
-        "text/json",
         "text/plain, , application/json",
     ] {
         let resp = get_kaigi(&app, "/v1/kaigi/relays", Some(accept)).await;

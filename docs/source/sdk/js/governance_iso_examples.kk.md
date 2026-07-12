@@ -91,7 +91,7 @@ bridge. Configure the helper with the following environment variables:
 Use the `contentType` option whenever your payload uses a more specific MIME
 type. The SDK enforces that overrides are non-empty strings, so mistakes are
 caught locally before Torii sees a malformed header. Call the `AndWait`
-convenience wrapper when you want the helper to poll `/v1/iso20022/status`
+convenience wrapper when you want the helper to poll `/v1/iso20022/messages`
 before returning:
 
 ```js
@@ -141,39 +141,34 @@ await torii.submitIsoMessage(
 );
 ```
 
-### ISO alias helper
+### ISO бүркеншік ат көмекшісі
 
-`recipes/iso_alias.mjs` exercises the alias endpoints that back the ISO bridge.
-It evaluates a blinded alias element via `ToriiClient.evaluateAliasVoprf` and
-resolves aliases either by literal label (IBAN-style strings) or by deterministic
-index (`resolveAlias` / `resolveAliasByIndex`). Configure it with:
+`recipes/iso_alias.mjs` арнайы құралдарды қажет етпей, ISO бүркеншік аттарын іздеуді тексереді.
+Ол `resolveAlias` және `resolveAliasByIndex` әдістерін шақырады, содан кейін Torii қайтарған тіркелгі байланысын, дереккөзді және детерминирленген индексті басып шығарады.
 
-- `TORII_URL` — Torii endpoint exposing the ISO alias APIs.
-- `ISO_VOPRF_INPUT` — hex-encoded blinded element forwarded to the VOPRF helper
-  (defaults to `deadbeef`). Set `ISO_SKIP_VOPRF=1` to skip this call.
-- `ISO_ALIAS_LABEL` — literal alias to resolve; omit when only testing VOPRF or indexed lookups.
-- `ISO_ALIAS_INDEX` — decimal or `0x`-prefixed index used with `resolveAliasByIndex`.
-- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — optional headers for locked-down deployments.
+Қоршаған ортаның айнымалылары:
+
+- `TORII_URL` — Torii соңғы нүкте бүркеншік ат көмекшілерін көрсетеді.
+- `ISO_ALIAS_LABEL` — шешуге арналған әріптік бүркеншік ат (мысалы, IBAN стиліндегі жолдар).
+- `ISO_ALIAS_INDEX` — ондық немесе `0x`-префиксті индекс `resolveAliasByIndex`-қа өтті.
+- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — қорғалған Torii орналастыруларына арналған қосымша тақырыптар.
 
 ```bash
-# Evaluate a blinded element and resolve both a label and deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
-# Skip VOPRF and only resolve a stored alias.
+# Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```
 
-The script prints the backend/digest metadata for the VOPRF helper and displays
-the account, source, and deterministic index returned by the alias resolution
-endpoints. When the ISO bridge runtime is disabled, the helper reports the same
-error message surfaced by Torii so CI runs can treat it as a soft skip.
+Көмекші Torii әрекетін көрсетеді: бүркеншік аттар болмаған кезде ол 404-ті көрсетеді
+және CI ағындары көпірге төзе алатындықтан, орындау уақытында өшірілген қателерді жұмсақ өткізіп жіберу ретінде қарастырады.
+техникалық қызмет көрсету терезелері.
 
 The ISO message builders apply the same identifier validation rules captured in
 [`docs/source/finance/settlement_iso_mapping.md`](../../finance/settlement_iso_mapping.md);

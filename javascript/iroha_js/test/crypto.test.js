@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   SUPPORTED_CRYPTO_ALGORITHMS,
   generateKeyPair,
@@ -37,6 +40,7 @@ import {
 } from "../src/crypto.js";
 import { verifyEd25519 as verifyBrowserEd25519 } from "../src/crypto.browser.js";
 import { ed25519 } from "@noble/curves/ed25519";
+import { __resetNativeStateForTests } from "../src/native.js";
 import {
   normalizeCryptoAlgorithm as normalizeDistCryptoAlgorithm,
 } from "../dist/crypto.js";
@@ -66,6 +70,29 @@ function withNativeBinding(binding, fn) {
     } else {
       globalThis.__IROHA_NATIVE_BINDING__ = previous;
     }
+  }
+}
+
+function withNativeDirectory(directory, fn) {
+  const previousDirectory = process.env.IROHA_JS_NATIVE_DIR;
+  const previousBinding = globalThis.__IROHA_NATIVE_BINDING__;
+  delete globalThis.__IROHA_NATIVE_BINDING__;
+  process.env.IROHA_JS_NATIVE_DIR = directory;
+  __resetNativeStateForTests();
+  try {
+    return fn();
+  } finally {
+    if (previousDirectory === undefined) {
+      delete process.env.IROHA_JS_NATIVE_DIR;
+    } else {
+      process.env.IROHA_JS_NATIVE_DIR = previousDirectory;
+    }
+    if (previousBinding === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previousBinding;
+    }
+    __resetNativeStateForTests();
   }
 }
 
@@ -102,6 +129,75 @@ test("generateKeyPair hashes non-32 seed material", () => {
   assert.equal(kp1.privateKey.length, 32);
   assert.deepEqual(kp1.privateKey, kp2.privateKey);
   assert.deepEqual(kp1.publicKey, kp2.publicKey);
+});
+
+test("Ed25519 key generation and derivation remain available without the native host", () => {
+  const seed = Buffer.from(Array.from({ length: 32 }, (_, index) => index + 1));
+  withNativeBinding(Object.create(null), () => {
+    const generated = generateKeyPair({ seed });
+    const expectedPublicKey = Buffer.from(ed25519.getPublicKey(seed));
+
+    assert.deepEqual(supportedCryptoAlgorithms(), SUPPORTED_CRYPTO_ALGORITHMS);
+    assert.equal(generated.algorithm, "ed25519");
+    assert.deepEqual(generated.privateKey, seed);
+    assert.deepEqual(generated.publicKey, expectedPublicKey);
+    assert.deepEqual(publicKeyFromPrivate(seed), expectedPublicKey);
+    assert.deepEqual(
+      publicKeyFromPrivate(Buffer.concat([seed, expectedPublicKey])),
+      expectedPublicKey,
+    );
+
+    const signature = signEd25519(MESSAGE, generated.privateKey);
+    assert.equal(verifyEd25519(MESSAGE, signature, generated.publicKey), true);
+    assert.throws(
+      () =>
+        publicKeyFromPrivate(
+          Buffer.concat([seed, Buffer.alloc(32, 0xff)]),
+        ),
+      /mismatched public key/u,
+    );
+  });
+});
+
+test("missing native files use the portable Ed25519 path", () => {
+  const directory = mkdtempSync(join(tmpdir(), "iroha-js-missing-native-"));
+  try {
+    withNativeDirectory(directory, () => {
+      const seed = Buffer.alloc(32, 0x5a);
+      const generated = generateKeyPair({ seed });
+      assert.deepEqual(generated.publicKey, Buffer.from(ed25519.getPublicKey(seed)));
+      assert.deepEqual(publicKeyFromPrivate(seed), generated.publicKey);
+    });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a present native file with a bad checksum never falls back", () => {
+  const directory = mkdtempSync(join(tmpdir(), "iroha-js-invalid-native-"));
+  try {
+    writeFileSync(join(directory, "iroha_js_host.node"), "not-a-native-addon");
+    writeFileSync(
+      join(directory, "iroha_js_host.checksums.json"),
+      `${JSON.stringify({
+        entries: {
+          [`${process.platform}-${process.arch}`]: { sha256: "0".repeat(64) },
+        },
+      })}\n`,
+    );
+    withNativeDirectory(directory, () => {
+      assert.throws(
+        () => generateKeyPair({ seed: Buffer.alloc(32, 0x5b) }),
+        /checksum mismatch/u,
+      );
+      assert.throws(
+        () => publicKeyFromPrivate(Buffer.alloc(32, 0x5b)),
+        /checksum mismatch/u,
+      );
+    });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("signEd25519 and verifyEd25519 round-trip", () => {

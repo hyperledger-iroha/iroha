@@ -45,10 +45,6 @@ const ISO_PACS008_OVERRIDES = parseJsonEnv(
 const ISO_PACS009_OVERRIDES = parseJsonEnv(
   process.env.IROHA_TORII_INTEGRATION_ISO_PACS009 ?? null,
 );
-const ISO_VOPRF_INPUT_RAW =
-  process.env.IROHA_TORII_INTEGRATION_ISO_VOPRF ?? "";
-const ISO_VOPRF_INPUT =
-  ISO_VOPRF_INPUT_RAW.trim().length === 0 ? "deadbeef" : ISO_VOPRF_INPUT_RAW.trim();
 const ISO_POLL_INTERVAL_MS = parsePositiveIntegerEnv(
   process.env.IROHA_TORII_INTEGRATION_ISO_POLL_MS,
   2_000,
@@ -2522,25 +2518,19 @@ test(
       apiToken: API_TOKEN,
     });
 
-    const readiness = await client.getOfflineReadiness();
-    assert.equal(Object.prototype.hasOwnProperty.call(readiness, "offline_kagemusha_abi7"), false);
-    assert.equal(Object.prototype.hasOwnProperty.call(readiness, "offline_kagemusha_abi7_mode"), false);
-    assert.equal(
-      Object.prototype.hasOwnProperty.call(readiness, "offline_kagemusha_abi7_bridge_abi_version"),
-      false,
-    );
-    assert.equal(Object.prototype.hasOwnProperty.call(readiness, "offline_kagemusha_abi7_circuit_id"), false);
-    assert.equal(Object.prototype.hasOwnProperty.call(readiness, "offline_kagemusha_abi7_artifacts"), false);
-    assert.equal(readiness.offline_kagemusha_recursive_compact_available, true);
-    assert.equal(readiness.offline_kagemusha_recursive_compact_mode, "recursive_compact_v1");
-    assert.equal(readiness.offline_kagemusha_recursive_compact_required_native_bridge_abi_version, 7);
-    assert.equal(
-      readiness.offline_kagemusha_recursive_compact_circuit_id,
-      "kagemusha-recursive-compact-v1",
-    );
-    assert.equal(readiness.offline_kagemusha_recursive_compact_artifacts_available, false);
-    assert.equal(readiness.offline_telemetry, true);
-    assert.equal(Object.prototype.hasOwnProperty.call(readiness, "offline_note"), false);
+    const assetDefinitionId = INTEGRATION_ASSET_DEFINITION_IDS[0];
+    const readiness = await client.getOfflineReadiness(assetDefinitionId);
+    assert.equal(readiness.asset_definition_id, assetDefinitionId);
+    assert.equal(Number.isSafeInteger(readiness.evaluated_block_height), true);
+    assert.equal(readiness.evaluated_block_height >= 0, true);
+    assert.match(readiness.evaluated_block_hash, /^[0-9a-f]{64}$/u);
+    assert.equal(typeof readiness.ready, "boolean");
+    assert.equal(Array.isArray(readiness.blockers), true);
+    assert.equal(readiness.ready, readiness.blockers.length === 0);
+    for (const blocker of readiness.blockers) {
+      assert.match(blocker.code, /^[a-z][a-z0-9_]*$/u);
+      assert.equal(typeof blocker.message, "string");
+    }
   },
 );
 
@@ -2612,9 +2602,13 @@ test(
 
     const entrypoint =
       CONTRACT_CALL_OPTIONS.entrypoint ?? CONTRACT_CALL_OPTIONS.entryPoint ?? null;
-    if (isNonEmptyString(entrypoint)) {
-      request.entrypoint = entrypoint;
+    if (!isNonEmptyString(entrypoint)) {
+      t.diagnostic(
+        "contract call payload must include non-empty `entrypoint`/`entryPoint`",
+      );
+      return;
     }
+    request.entrypoint = entrypoint;
     if (Object.prototype.hasOwnProperty.call(CONTRACT_CALL_OPTIONS, "payload")) {
       request.payload = CONTRACT_CALL_OPTIONS.payload;
     }
@@ -3026,7 +3020,7 @@ test(
 );
 
 test(
-  "SoraFS capacity sampling endpoints respond (optional)",
+  "SoraFS uptime sampling endpoint responds (optional)",
   {
     skip: !!SKIP_REASON,
     timeout: 90_000,
@@ -4549,54 +4543,6 @@ test(
     t.diagnostic(
       `governance ballot accepted=${response.accepted} instructions=${response.tx_instructions.length} proposal=${response.proposal_id ?? "none"}`,
     );
-  },
-);
-
-test(
-  "ISO bridge alias VOPRF helper responds (optional)",
-  {
-    skip: !!SKIP_REASON,
-    timeout: 60_000,
-  },
-  async (t) => {
-    if (!ISO_ENABLED) {
-      t.diagnostic("set IROHA_TORII_INTEGRATION_ISO_ENABLED=1 to exercise ISO alias coverage");
-      return;
-    }
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-    try {
-      const response = await client.evaluateAliasVoprf(ISO_VOPRF_INPUT);
-      assert.ok(
-        typeof response.evaluated_element_hex === "string" &&
-          response.evaluated_element_hex.length > 0,
-        "alias VOPRF response must include evaluated_element_hex",
-      );
-      assert.ok(
-        typeof response.backend === "string" && response.backend.length > 0,
-        "alias VOPRF response must include backend label",
-      );
-      t.diagnostic(
-        `alias VOPRF backend=${response.backend} digest=${response.evaluated_element_hex.slice(
-          0,
-          16,
-        )}…`,
-      );
-    } catch (error) {
-      if (isIsoBridgeDisabledError(error)) {
-        t.diagnostic(`ISO bridge disabled on target node: ${error.message}`);
-        return;
-      }
-      if (error instanceof Error && /hex string/i.test(error.message ?? "")) {
-        t.diagnostic(
-          `alias VOPRF helper rejected configured input '${ISO_VOPRF_INPUT}': ${error.message}`,
-        );
-        return;
-      }
-      throw error;
-    }
   },
 );
 

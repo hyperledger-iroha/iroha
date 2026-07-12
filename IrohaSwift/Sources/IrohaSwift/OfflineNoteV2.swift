@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-public enum OfflineNoteV2Constants {
+public enum AttestedOfflineNoteConstants {
     public static let keyCertificatePayloadDomain = "iroha:offline-note:key-certificate-payload"
     public static let issuedClaimDomain = "iroha:offline-note:issued-claim"
     public static let redeemPublicInputsDomain = "iroha:offline-note:redeem-public-inputs"
@@ -26,7 +26,7 @@ public enum OfflineNoteV2Constants {
     }
 }
 
-public enum OfflineNoteV2Error: Error, LocalizedError, Equatable {
+public enum AttestedOfflineNoteError: Error, LocalizedError, Equatable {
     case invalidHashLength(field: String, expected: Int, actual: Int)
     case invalidHash(field: String)
     case invalidCertificateVersion(UInt16)
@@ -57,43 +57,43 @@ public enum OfflineNoteV2Error: Error, LocalizedError, Equatable {
         case let .invalidHash(field):
             return "\(field) must be a canonical Iroha hash."
         case let .invalidCertificateVersion(version):
-            return "Offline V2 key certificate version must be \(OfflineNoteV2Constants.keyCertificateVersion) (found \(version))."
+            return "Attested Offline Note key certificate version must be \(AttestedOfflineNoteConstants.keyCertificateVersion) (found \(version))."
         case .certificateMustBeOneUse:
-            return "Offline V2 key certificate must be marked one-use."
+            return "Attested Offline Note key certificate must be marked one-use."
         case let .invalidNotePublicKeyLength(expected, actual):
-            return "Offline V2 note public key must be \(expected) bytes (found \(actual))."
+            return "Attested Offline Note public key must be \(expected) bytes (found \(actual))."
         case let .invalidIssuerSignatureLength(expected, actual):
-            return "Offline V2 issuer signature must be \(expected) bytes (found \(actual))."
+            return "Attested Offline Note issuer signature must be \(expected) bytes (found \(actual))."
         case .emptyProofBytes:
-            return "Offline V2 proof bytes must not be empty."
+            return "Attested Offline Note proof bytes must not be empty."
         case .emptyProofBackend:
-            return "Offline V2 proof backend must not be empty."
+            return "Attested Offline Note proof backend must not be empty."
         case .emptyInputNullifiers:
-            return "Offline V2 input nullifiers must not be empty."
+            return "Attested Offline Note input nullifiers must not be empty."
         case .emptyInputClaims:
-            return "Offline V2 audit input claims must not be empty."
+            return "Attested Offline Note audit input claims must not be empty."
         case .emptyOutputCommitments:
-            return "Offline V2 audit output commitments must not be empty."
+            return "Attested Offline Note audit output commitments must not be empty."
         case .emptyOutputClaims:
-            return "Offline V2 audit output claims must not be empty."
+            return "Attested Offline Note audit output claims must not be empty."
         case let .auditInputCountMismatch(nullifiers, claims):
-            return "Offline V2 audit input nullifier count \(nullifiers) must match input claim count \(claims)."
+            return "Attested Offline Note audit input nullifier count \(nullifiers) must match input claim count \(claims)."
         case let .auditOutputClaimNotCommitted(commitment):
-            return "Offline V2 audit output claim \(commitment) is not listed in output commitments."
+            return "Attested Offline Note audit output claim \(commitment) is not listed in output commitments."
         case let .proofPublicInputsHashMismatch(expected, actual):
-            return "Offline V2 recursive proof public input hash mismatch: expected \(expected), got \(actual)."
+            return "Attested Offline Note recursive proof public input hash mismatch: expected \(expected), got \(actual)."
         case let .deviceAttestationChallengeHashMismatch(expected, actual):
-            return "Offline V2 device attestation challenge hash mismatch: expected \(expected), got \(actual)."
+            return "Attested Offline Note device attestation challenge hash mismatch: expected \(expected), got \(actual)."
         case let .deviceAttestationHashMismatch(field):
-            return "Offline V2 device attestation \(field) does not match the submitted bytes."
+            return "Attested Offline Note device attestation \(field) does not match the submitted bytes."
         case let .invalidDigestLength(field, expected, actual):
             return "\(field) must be exactly \(expected) bytes (found \(actual))."
         case let .unsupportedRecursiveProofBackend(expected, actual):
-            return "Offline V2 recursive proof backend must be \(expected), got \(actual)."
+            return "Attested Offline Note recursive proof backend must be \(expected), got \(actual)."
         case let .unsupportedDomain(field, expected, actual):
             return "\(field) must be \(expected), got \(actual)."
         case let .unsupportedDeviceAttestationProfile(reason):
-            return "Unsupported Offline V2 device attestation profile: \(reason)."
+            return "Unsupported Attested Offline Note device attestation profile: \(reason)."
         case let .nonCanonicalField(field):
             return "\(field) must be canonical."
         }
@@ -127,7 +127,7 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
     public let recentBlockHash: Data
     public let expiresAtMs: UInt64
 
-    public init(version: UInt16 = OfflineNoteV2Constants.keyCertificateVersion,
+    public init(version: UInt16 = AttestedOfflineNoteConstants.keyCertificateVersion,
                 platform: String,
                 keyId: String,
                 deviceId: String,
@@ -152,14 +152,14 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
                 recentBlockHeight: UInt64,
                 recentBlockHash: Data,
                 expiresAtMs: UInt64) throws {
-        try OfflineNoteV2Validation.validateCertificateCore(
+        try AttestedOfflineNoteValidation.validateCertificateCore(
             version: version,
             accountId: accountId,
             publicKey: publicKey,
             oneUse: oneUse
         )
-        try OfflineNoteV2Validation.validateAttestationIdentity(keyId: keyId, deviceId: deviceId)
-        try OfflineNoteV2Validation.validateOptionalAttestationMetadata(
+        try AttestedOfflineNoteValidation.validateAttestationIdentity(keyId: keyId, deviceId: deviceId)
+        try AttestedOfflineNoteValidation.validateOptionalAttestationMetadata(
             iosTeamId: iosTeamId,
             iosBundleId: iosBundleId,
             iosEnvironment: iosEnvironment,
@@ -170,7 +170,7 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
         }
         if let androidSigningCertificateSha256,
            androidSigningCertificateSha256.count != 32 {
-            throw OfflineNoteV2Error.invalidDigestLength(
+            throw AttestedOfflineNoteError.invalidDigestLength(
                 field: "android_signing_certificate_sha256",
                 expected: 32,
                 actual: androidSigningCertificateSha256.count
@@ -184,9 +184,9 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
             assertionPublicKey: assertionPublicKey,
             assertionUsageCountLimit: assertionUsageCountLimit
         )
-        try OfflineNoteV2Validation.validateHash(recentBlockHash, field: "recent_block_hash")
+        try AttestedOfflineNoteValidation.validateHash(recentBlockHash, field: "recent_block_hash")
 
-        let resolvedChallengeHash = try Self.computeChallengeHash(
+        let resolvedChallengeHash = try Self.preAttestationChallengeHash(
             version: version,
             platform: platform,
             keyId: keyId,
@@ -201,7 +201,6 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
             publicKey: publicKey,
             assertionScheme: assertionScheme,
             assertionKeyAlgorithm: assertionKeyAlgorithm,
-            assertionPublicKey: assertionPublicKey,
             assertionUsageCountLimit: assertionUsageCountLimit,
             oneUse: oneUse,
             recentBlockHeight: recentBlockHeight,
@@ -209,9 +208,9 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
             expiresAtMs: expiresAtMs
         )
         if let challengeHash {
-            try OfflineNoteV2Validation.validateHash(challengeHash, field: "challenge_hash")
+            try AttestedOfflineNoteValidation.validateHash(challengeHash, field: "challenge_hash")
             guard challengeHash == resolvedChallengeHash else {
-                throw OfflineNoteV2Error.deviceAttestationChallengeHashMismatch(
+                throw AttestedOfflineNoteError.deviceAttestationChallengeHashMismatch(
                     expected: resolvedChallengeHash.hexLowercased(),
                     actual: challengeHash.hexLowercased()
                 )
@@ -219,28 +218,28 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
         }
 
         let resolvedAttestationReportHash = attestationReportHash ?? IrohaHash.hash(attestationReport)
-        try OfflineNoteV2Validation.validateHash(resolvedAttestationReportHash, field: "attestation_report_hash")
+        try AttestedOfflineNoteValidation.validateHash(resolvedAttestationReportHash, field: "attestation_report_hash")
         guard resolvedAttestationReportHash == IrohaHash.hash(attestationReport) else {
-            throw OfflineNoteV2Error.deviceAttestationHashMismatch(field: "attestation_report_hash")
+            throw AttestedOfflineNoteError.deviceAttestationHashMismatch(field: "attestation_report_hash")
         }
 
         let resolvedEvidence: Data
         if attestationReport.isEmpty, evidence.isEmpty, evidenceHash == nil {
-            resolvedEvidence = OfflineNoteV2Validation.attestationEvidenceEnvelope(
+            resolvedEvidence = AttestedOfflineNoteValidation.attestationEvidenceEnvelope(
                 attestationReportHash: resolvedAttestationReportHash
             )
         } else {
             resolvedEvidence = evidence
         }
-        try OfflineNoteV2Validation.validateAttestationEvidenceEnvelope(
+        try AttestedOfflineNoteValidation.validateAttestationEvidenceEnvelope(
             resolvedEvidence,
             attestationReportHash: resolvedAttestationReportHash
         )
         let expectedEvidenceHash = IrohaHash.hash(resolvedEvidence)
         let resolvedEvidenceHash = evidenceHash ?? expectedEvidenceHash
-        try OfflineNoteV2Validation.validateHash(resolvedEvidenceHash, field: "evidence_hash")
+        try AttestedOfflineNoteValidation.validateHash(resolvedEvidenceHash, field: "evidence_hash")
         guard resolvedEvidenceHash == expectedEvidenceHash else {
-            throw OfflineNoteV2Error.deviceAttestationHashMismatch(field: "evidence_hash")
+            throw AttestedOfflineNoteError.deviceAttestationHashMismatch(field: "evidence_hash")
         }
 
         self.version = version
@@ -276,7 +275,7 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
                                                    assertionKeyAlgorithm: String,
                                                    assertionPublicKey: Data,
                                                    assertionUsageCountLimit: UInt32?) throws {
-        try OfflineNoteV2Validation.validateDeviceAttestationProfile(
+        try AttestedOfflineNoteValidation.validateDeviceAttestationProfile(
             platform: platform,
             keyId: keyId,
             assertionScheme: assertionScheme,
@@ -286,8 +285,65 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
         )
     }
 
-    public func canonicalChallengeHash() throws -> Data {
-        try Self.computeChallengeHash(
+    /// Build the platform challenge before App Attest reveals its assertion public key.
+    ///
+    /// Chain admission later requires the credential and certificate keys in
+    /// the returned attestation report to equal the registration's
+    /// `assertionPublicKey`, so excluding that not-yet-known key here does not
+    /// weaken the final key binding.
+    public static func preAttestationChallengeHash(
+        version: UInt16 = AttestedOfflineNoteConstants.keyCertificateVersion,
+        platform: String,
+        keyId: String,
+        deviceId: String,
+        accountId: String,
+        assetDefinitionId: String? = nil,
+        iosTeamId: String? = nil,
+        iosBundleId: String? = nil,
+        iosEnvironment: String? = nil,
+        androidPackageName: String? = nil,
+        androidSigningCertificateSha256: Data? = nil,
+        publicKey: Data,
+        assertionScheme: String,
+        assertionKeyAlgorithm: String,
+        assertionUsageCountLimit: UInt32?,
+        oneUse: Bool = true,
+        recentBlockHeight: UInt64,
+        recentBlockHash: Data,
+        expiresAtMs: UInt64
+    ) throws -> Data {
+        try AttestedOfflineNoteValidation.validateCertificateCore(
+            version: version,
+            accountId: accountId,
+            publicKey: publicKey,
+            oneUse: oneUse
+        )
+        try AttestedOfflineNoteValidation.validateAttestationIdentity(keyId: keyId, deviceId: deviceId)
+        try AttestedOfflineNoteValidation.validateOptionalAttestationMetadata(
+            iosTeamId: iosTeamId,
+            iosBundleId: iosBundleId,
+            iosEnvironment: iosEnvironment,
+            androidPackageName: androidPackageName
+        )
+        if let assetDefinitionId, AssetDefinitionAddress.decode(assetDefinitionId) == nil {
+            throw OfflineNoritoError.invalidAssetId(assetDefinitionId)
+        }
+        if let androidSigningCertificateSha256,
+           androidSigningCertificateSha256.count != 32 {
+            throw AttestedOfflineNoteError.invalidDigestLength(
+                field: "android_signing_certificate_sha256",
+                expected: 32,
+                actual: androidSigningCertificateSha256.count
+            )
+        }
+        guard !assertionScheme.isEmpty,
+              assertionScheme == assertionScheme.trimmingCharacters(in: .whitespacesAndNewlines),
+              !assertionKeyAlgorithm.isEmpty,
+              assertionKeyAlgorithm == assertionKeyAlgorithm.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            throw AttestedOfflineNoteError.nonCanonicalField(field: "assertion_profile")
+        }
+        try AttestedOfflineNoteValidation.validateHash(recentBlockHash, field: "recent_block_hash")
+        return try computeChallengeHash(
             version: version,
             platform: platform,
             keyId: keyId,
@@ -302,7 +358,30 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
             publicKey: publicKey,
             assertionScheme: assertionScheme,
             assertionKeyAlgorithm: assertionKeyAlgorithm,
-            assertionPublicKey: assertionPublicKey,
+            assertionUsageCountLimit: assertionUsageCountLimit,
+            oneUse: oneUse,
+            recentBlockHeight: recentBlockHeight,
+            recentBlockHash: recentBlockHash,
+            expiresAtMs: expiresAtMs
+        )
+    }
+
+    public func canonicalChallengeHash() throws -> Data {
+        try Self.preAttestationChallengeHash(
+            version: version,
+            platform: platform,
+            keyId: keyId,
+            deviceId: deviceId,
+            accountId: accountId,
+            assetDefinitionId: assetDefinitionId,
+            iosTeamId: iosTeamId,
+            iosBundleId: iosBundleId,
+            iosEnvironment: iosEnvironment,
+            androidPackageName: androidPackageName,
+            androidSigningCertificateSha256: androidSigningCertificateSha256,
+            publicKey: publicKey,
+            assertionScheme: assertionScheme,
+            assertionKeyAlgorithm: assertionKeyAlgorithm,
             assertionUsageCountLimit: assertionUsageCountLimit,
             oneUse: oneUse,
             recentBlockHeight: recentBlockHeight,
@@ -341,9 +420,9 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
         )
     }
 
-    public func keyCertificatePayload() throws -> OfflineNoteKeyCertificatePayloadV2 {
-        try OfflineNoteKeyCertificatePayloadV2(
-            version: OfflineNoteV2Constants.keyCertificateVersion,
+    public func keyCertificatePayload() throws -> AttestedOfflineNoteKeyCertificatePayload {
+        try AttestedOfflineNoteKeyCertificatePayload(
+            version: AttestedOfflineNoteConstants.keyCertificateVersion,
             platform: platform,
             keyId: keyId,
             deviceId: deviceId,
@@ -362,9 +441,9 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
     }
 
     public func noritoEncoded() throws -> Data {
-        try OfflineNoteV2Encoding.wrap(
-            typeName: OfflineNoteV2TypeNames.deviceAttestationRegistration,
-            payload: OfflineNoteV2Encoding.encodeDeviceAttestationRegistration(self)
+        try AttestedOfflineNoteEncoding.wrap(
+            typeName: AttestedOfflineNoteTypeNames.deviceAttestationRegistration,
+            payload: AttestedOfflineNoteEncoding.encodeDeviceAttestationRegistration(self)
         )
     }
 
@@ -382,7 +461,6 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
                                              publicKey: Data,
                                              assertionScheme: String,
                                              assertionKeyAlgorithm: String,
-                                             assertionPublicKey: Data,
                                              assertionUsageCountLimit: UInt32?,
                                              oneUse: Bool,
                                              recentBlockHeight: UInt64,
@@ -403,7 +481,6 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
             publicKey: publicKey,
             assertionScheme: assertionScheme,
             assertionKeyAlgorithm: assertionKeyAlgorithm,
-            assertionPublicKey: assertionPublicKey,
             assertionUsageCountLimit: assertionUsageCountLimit,
             oneUse: oneUse,
             recentBlockHeight: recentBlockHeight,
@@ -429,7 +506,6 @@ fileprivate struct OfflineDeviceAttestationChallengePreimage {
     let publicKey: Data
     let assertionScheme: String
     let assertionKeyAlgorithm: String
-    let assertionPublicKey: Data
     let assertionUsageCountLimit: UInt32?
     let oneUse: Bool
     let recentBlockHeight: UInt64
@@ -437,69 +513,69 @@ fileprivate struct OfflineDeviceAttestationChallengePreimage {
     let expiresAtMs: UInt64
 
     func noritoEncoded() throws -> Data {
-        try OfflineNoteV2Encoding.wrap(
-            typeName: OfflineNoteV2TypeNames.deviceAttestationChallengePreimage,
-            payload: OfflineNoteV2Encoding.encodeDeviceAttestationChallengePreimage(self)
+        try AttestedOfflineNoteEncoding.wrap(
+            typeName: AttestedOfflineNoteTypeNames.deviceAttestationChallengePreimage,
+            payload: AttestedOfflineNoteEncoding.encodeDeviceAttestationChallengePreimage(self)
         )
     }
 }
 
-public struct OfflineNoteProofBoxV2: Equatable, Sendable {
+public struct AttestedOfflineNoteProofBox: Equatable, Sendable {
     public let backend: String
     public let bytes: Data
 
     public init(backend: String, bytes: Data) throws {
         let trimmedBackend = backend.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedBackend.isEmpty else {
-            throw OfflineNoteV2Error.emptyProofBackend
+            throw AttestedOfflineNoteError.emptyProofBackend
         }
         guard trimmedBackend == backend else {
-            throw OfflineNoteV2Error.unsupportedRecursiveProofBackend(
-                expected: OfflineNoteV2Constants.recursiveBackend,
+            throw AttestedOfflineNoteError.unsupportedRecursiveProofBackend(
+                expected: AttestedOfflineNoteConstants.recursiveBackend,
                 actual: backend
             )
         }
         guard !bytes.isEmpty else {
-            throw OfflineNoteV2Error.emptyProofBytes
+            throw AttestedOfflineNoteError.emptyProofBytes
         }
         self.backend = backend
         self.bytes = bytes
     }
 }
 
-public struct OfflineNoteRecursiveProofV2: Equatable, Sendable {
+public struct AttestedOfflineNoteRecursiveProof: Equatable, Sendable {
     public let verifierKeyId: VerifyingKeyIdReference
     public let publicInputsHash: Data
-    public let proof: OfflineNoteProofBoxV2
+    public let proof: AttestedOfflineNoteProofBox
 
     public init(verifierKeyId: VerifyingKeyIdReference,
                 publicInputsHash: Data,
-                proof: OfflineNoteProofBoxV2) throws {
-        try OfflineNoteV2Validation.validateHash(publicInputsHash, field: "public_inputs_hash")
+                proof: AttestedOfflineNoteProofBox) throws {
+        try AttestedOfflineNoteValidation.validateHash(publicInputsHash, field: "public_inputs_hash")
         self.verifierKeyId = verifierKeyId
         self.publicInputsHash = publicInputsHash
         self.proof = proof
     }
 
-    public init(verifierBackend: String = OfflineNoteV2Constants.recursiveBackend,
-                verifierName: String = OfflineNoteV2Constants.recursiveVerifierName,
+    public init(verifierBackend: String = AttestedOfflineNoteConstants.recursiveBackend,
+                verifierName: String = AttestedOfflineNoteConstants.recursiveVerifierName,
                 publicInputsHash: Data,
                 proofBytes: Data,
-                proofBackend: String = OfflineNoteV2Constants.recursiveBackend) throws {
+                proofBackend: String = AttestedOfflineNoteConstants.recursiveBackend) throws {
         let verifierKeyId = try VerifyingKeyIdReference(backend: verifierBackend, name: verifierName)
-        let proof = try OfflineNoteProofBoxV2(backend: proofBackend, bytes: proofBytes)
+        let proof = try AttestedOfflineNoteProofBox(backend: proofBackend, bytes: proofBytes)
         try self.init(verifierKeyId: verifierKeyId, publicInputsHash: publicInputsHash, proof: proof)
     }
 
     public func noritoEncoded() throws -> Data {
-        try OfflineNoteV2Encoding.wrap(
-            typeName: OfflineNoteV2TypeNames.recursiveProof,
-            payload: OfflineNoteV2Encoding.encodeRecursiveProof(self)
+        try AttestedOfflineNoteEncoding.wrap(
+            typeName: AttestedOfflineNoteTypeNames.recursiveProof,
+            payload: AttestedOfflineNoteEncoding.encodeRecursiveProof(self)
         )
     }
 }
 
-public struct OfflineNoteKeyCertificatePayloadV2: Equatable, Sendable {
+public struct AttestedOfflineNoteKeyCertificatePayload: Equatable, Sendable {
     public let domain: String
     public let version: UInt16
     public let platform: String
@@ -513,7 +589,7 @@ public struct OfflineNoteKeyCertificatePayloadV2: Equatable, Sendable {
     public let assertionUsageCountLimit: UInt32?
     public let oneUse: Bool
 
-    public init(domain: String = OfflineNoteV2Constants.keyCertificatePayloadDomain,
+    public init(domain: String = AttestedOfflineNoteConstants.keyCertificatePayloadDomain,
                 version: UInt16,
                 platform: String,
                 keyId: String,
@@ -525,19 +601,19 @@ public struct OfflineNoteKeyCertificatePayloadV2: Equatable, Sendable {
                 assertionPublicKey: Data,
                 assertionUsageCountLimit: UInt32?,
                 oneUse: Bool) throws {
-        try OfflineNoteV2Validation.validateDomain(
+        try AttestedOfflineNoteValidation.validateDomain(
             domain,
-            expected: OfflineNoteV2Constants.keyCertificatePayloadDomain,
+            expected: AttestedOfflineNoteConstants.keyCertificatePayloadDomain,
             field: "domain"
         )
-        try OfflineNoteV2Validation.validateCertificateCore(
+        try AttestedOfflineNoteValidation.validateCertificateCore(
             version: version,
             accountId: accountId,
             publicKey: publicKey,
             oneUse: oneUse
         )
-        try OfflineNoteV2Validation.validateAttestationIdentity(keyId: keyId, deviceId: deviceId)
-        try OfflineNoteV2Validation.validateKeyCertificateProfile(
+        try AttestedOfflineNoteValidation.validateAttestationIdentity(keyId: keyId, deviceId: deviceId)
+        try AttestedOfflineNoteValidation.validateKeyCertificateProfile(
             platform: platform,
             keyId: keyId,
             assertionScheme: assertionScheme,
@@ -560,14 +636,14 @@ public struct OfflineNoteKeyCertificatePayloadV2: Equatable, Sendable {
     }
 
     public func noritoEncoded() throws -> Data {
-        try OfflineNoteV2Encoding.wrap(
-            typeName: OfflineNoteV2TypeNames.keyCertificatePayload,
-            payload: OfflineNoteV2Encoding.encodeCertificatePayload(self)
+        try AttestedOfflineNoteEncoding.wrap(
+            typeName: AttestedOfflineNoteTypeNames.keyCertificatePayload,
+            payload: AttestedOfflineNoteEncoding.encodeCertificatePayload(self)
         )
     }
 }
 
-public struct OfflineNoteKeyCertificateV2: Equatable, Sendable {
+public struct AttestedOfflineNoteKeyCertificate: Equatable, Sendable {
     public let version: UInt16
     public let platform: String
     public let keyId: String
@@ -581,7 +657,7 @@ public struct OfflineNoteKeyCertificateV2: Equatable, Sendable {
     public let oneUse: Bool
     public let issuerSignature: Data
 
-    public init(version: UInt16 = OfflineNoteV2Constants.keyCertificateVersion,
+    public init(version: UInt16 = AttestedOfflineNoteConstants.keyCertificateVersion,
                 platform: String,
                 keyId: String,
                 deviceId: String,
@@ -593,14 +669,14 @@ public struct OfflineNoteKeyCertificateV2: Equatable, Sendable {
                 assertionUsageCountLimit: UInt32?,
                 oneUse: Bool = true,
                 issuerSignature: Data) throws {
-        try OfflineNoteV2Validation.validateCertificateCore(
+        try AttestedOfflineNoteValidation.validateCertificateCore(
             version: version,
             accountId: accountId,
             publicKey: publicKey,
             oneUse: oneUse
         )
-        try OfflineNoteV2Validation.validateAttestationIdentity(keyId: keyId, deviceId: deviceId)
-        try OfflineNoteV2Validation.validateKeyCertificateProfile(
+        try AttestedOfflineNoteValidation.validateAttestationIdentity(keyId: keyId, deviceId: deviceId)
+        try AttestedOfflineNoteValidation.validateKeyCertificateProfile(
             platform: platform,
             keyId: keyId,
             assertionScheme: assertionScheme,
@@ -609,7 +685,7 @@ public struct OfflineNoteKeyCertificateV2: Equatable, Sendable {
             assertionUsageCountLimit: assertionUsageCountLimit
         )
         guard issuerSignature.count == 64 else {
-            throw OfflineNoteV2Error.invalidIssuerSignatureLength(expected: 64, actual: issuerSignature.count)
+            throw AttestedOfflineNoteError.invalidIssuerSignatureLength(expected: 64, actual: issuerSignature.count)
         }
         self.version = version
         self.platform = platform
@@ -625,8 +701,8 @@ public struct OfflineNoteKeyCertificateV2: Equatable, Sendable {
         self.issuerSignature = issuerSignature
     }
 
-    public func signingPayload() throws -> OfflineNoteKeyCertificatePayloadV2 {
-        try OfflineNoteKeyCertificatePayloadV2(
+    public func signingPayload() throws -> AttestedOfflineNoteKeyCertificatePayload {
+        try AttestedOfflineNoteKeyCertificatePayload(
             version: version,
             platform: platform,
             keyId: keyId,
@@ -650,61 +726,61 @@ public struct OfflineNoteKeyCertificateV2: Equatable, Sendable {
     }
 
     public func noritoEncoded() throws -> Data {
-        try OfflineNoteV2Encoding.wrap(
-            typeName: OfflineNoteV2TypeNames.keyCertificate,
-            payload: OfflineNoteV2Encoding.encodeCertificate(self)
+        try AttestedOfflineNoteEncoding.wrap(
+            typeName: AttestedOfflineNoteTypeNames.keyCertificate,
+            payload: AttestedOfflineNoteEncoding.encodeCertificate(self)
         )
     }
 }
 
-public struct OfflineNoteIssueV2: Equatable, Sendable {
+public struct AttestedOfflineNoteIssue: Equatable, Sendable {
     public let noteCommitment: Data
-    public let keyCertificate: OfflineNoteKeyCertificateV2
+    public let keyCertificate: AttestedOfflineNoteKeyCertificate
     public let assetId: String
     public let amount: String
 
     public init(noteCommitment: Data,
-                keyCertificate: OfflineNoteKeyCertificateV2,
+                keyCertificate: AttestedOfflineNoteKeyCertificate,
                 assetId: String,
                 amount: String) throws {
-        try OfflineNoteV2Validation.validateHash(noteCommitment, field: "note_commitment")
+        try AttestedOfflineNoteValidation.validateHash(noteCommitment, field: "note_commitment")
         self.noteCommitment = noteCommitment
         self.keyCertificate = keyCertificate
         self.assetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
         self.amount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
     }
 
-    public func issuedClaim() throws -> OfflineNoteIssuedClaimV2 {
-        try OfflineNoteIssuedClaimV2.fromIssue(self)
+    public func issuedClaim() throws -> AttestedOfflineNoteIssuedClaim {
+        try AttestedOfflineNoteIssuedClaim.fromIssue(self)
     }
 
     public func noritoEncoded() throws -> Data {
-        try OfflineNoteV2Encoding.wrap(
-            typeName: OfflineNoteV2TypeNames.issue,
-            payload: OfflineNoteV2Encoding.encodeIssue(self)
+        try AttestedOfflineNoteEncoding.wrap(
+            typeName: AttestedOfflineNoteTypeNames.issue,
+            payload: AttestedOfflineNoteEncoding.encodeIssue(self)
         )
     }
 }
 
-public struct OfflineNoteIssuedClaimV2: Equatable, Sendable {
+public struct AttestedOfflineNoteIssuedClaim: Equatable, Sendable {
     public let domain: String
     public let noteCommitment: Data
     public let keyCertificatePayloadHash: Data
     public let assetId: String
     public let amount: String
 
-    public init(domain: String = OfflineNoteV2Constants.issuedClaimDomain,
+    public init(domain: String = AttestedOfflineNoteConstants.issuedClaimDomain,
                 noteCommitment: Data,
                 keyCertificatePayloadHash: Data,
                 assetId: String,
                 amount: String) throws {
-        try OfflineNoteV2Validation.validateDomain(
+        try AttestedOfflineNoteValidation.validateDomain(
             domain,
-            expected: OfflineNoteV2Constants.issuedClaimDomain,
+            expected: AttestedOfflineNoteConstants.issuedClaimDomain,
             field: "domain"
         )
-        try OfflineNoteV2Validation.validateHash(noteCommitment, field: "note_commitment")
-        try OfflineNoteV2Validation.validateHash(
+        try AttestedOfflineNoteValidation.validateHash(noteCommitment, field: "note_commitment")
+        try AttestedOfflineNoteValidation.validateHash(
             keyCertificatePayloadHash,
             field: "key_certificate_payload_hash"
         )
@@ -713,18 +789,18 @@ public struct OfflineNoteIssuedClaimV2: Equatable, Sendable {
         self.keyCertificatePayloadHash = keyCertificatePayloadHash
         let canonicalAssetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
         guard assetId == canonicalAssetId else {
-            throw OfflineNoteV2Error.nonCanonicalField(field: "asset_id")
+            throw AttestedOfflineNoteError.nonCanonicalField(field: "asset_id")
         }
         let canonicalAmount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
         guard amount == canonicalAmount else {
-            throw OfflineNoteV2Error.nonCanonicalField(field: "amount")
+            throw AttestedOfflineNoteError.nonCanonicalField(field: "amount")
         }
         self.assetId = canonicalAssetId
         self.amount = canonicalAmount
     }
 
-    public static func fromIssue(_ issue: OfflineNoteIssueV2) throws -> OfflineNoteIssuedClaimV2 {
-        try OfflineNoteIssuedClaimV2(
+    public static func fromIssue(_ issue: AttestedOfflineNoteIssue) throws -> AttestedOfflineNoteIssuedClaim {
+        try AttestedOfflineNoteIssuedClaim(
             noteCommitment: issue.noteCommitment,
             keyCertificatePayloadHash: issue.keyCertificate.payloadHash(),
             assetId: issue.assetId,
@@ -732,8 +808,8 @@ public struct OfflineNoteIssuedClaimV2: Equatable, Sendable {
         )
     }
 
-    public static func fromRedemption(_ redemption: OfflineNoteRedeemV2) throws -> OfflineNoteIssuedClaimV2 {
-        try OfflineNoteIssuedClaimV2(
+    public static func fromRedemption(_ redemption: AttestedOfflineNoteRedeem) throws -> AttestedOfflineNoteIssuedClaim {
+        try AttestedOfflineNoteIssuedClaim(
             noteCommitment: redemption.sourceNoteCommitment,
             keyCertificatePayloadHash: redemption.senderKeyCertificate.payloadHash(),
             assetId: redemption.assetId,
@@ -741,8 +817,8 @@ public struct OfflineNoteIssuedClaimV2: Equatable, Sendable {
         )
     }
 
-    public static func fromAuditOutput(_ output: OfflineNoteAuditOutputClaimV2) throws -> OfflineNoteIssuedClaimV2 {
-        try OfflineNoteIssuedClaimV2(
+    public static func fromAuditOutput(_ output: AttestedOfflineNoteAuditOutputClaim) throws -> AttestedOfflineNoteIssuedClaim {
+        try AttestedOfflineNoteIssuedClaim(
             noteCommitment: output.noteCommitment,
             keyCertificatePayloadHash: output.keyCertificate.payloadHash(),
             assetId: output.assetId,
@@ -755,24 +831,24 @@ public struct OfflineNoteIssuedClaimV2: Equatable, Sendable {
     }
 
     public func noritoEncoded() throws -> Data {
-        try OfflineNoteV2Encoding.wrap(
-            typeName: OfflineNoteV2TypeNames.issuedClaim,
-            payload: OfflineNoteV2Encoding.encodeIssuedClaim(self)
+        try AttestedOfflineNoteEncoding.wrap(
+            typeName: AttestedOfflineNoteTypeNames.issuedClaim,
+            payload: AttestedOfflineNoteEncoding.encodeIssuedClaim(self)
         )
     }
 }
 
-public struct OfflineNoteAuditOutputClaimV2: Equatable, Sendable {
+public struct AttestedOfflineNoteAuditOutputClaim: Equatable, Sendable {
     public let noteCommitment: Data
-    public let keyCertificate: OfflineNoteKeyCertificateV2
+    public let keyCertificate: AttestedOfflineNoteKeyCertificate
     public let assetId: String
     public let amount: String
 
     public init(noteCommitment: Data,
-                keyCertificate: OfflineNoteKeyCertificateV2,
+                keyCertificate: AttestedOfflineNoteKeyCertificate,
                 assetId: String,
                 amount: String) throws {
-        try OfflineNoteV2Validation.validateHash(noteCommitment, field: "note_commitment")
+        try AttestedOfflineNoteValidation.validateHash(noteCommitment, field: "note_commitment")
         self.noteCommitment = noteCommitment
         self.keyCertificate = keyCertificate
         self.assetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
@@ -780,14 +856,14 @@ public struct OfflineNoteAuditOutputClaimV2: Equatable, Sendable {
     }
 
     public func noritoEncoded() throws -> Data {
-        try OfflineNoteV2Encoding.wrap(
-            typeName: OfflineNoteV2TypeNames.auditOutputClaim,
-            payload: OfflineNoteV2Encoding.encodeAuditOutputClaim(self)
+        try AttestedOfflineNoteEncoding.wrap(
+            typeName: AttestedOfflineNoteTypeNames.auditOutputClaim,
+            payload: AttestedOfflineNoteEncoding.encodeAuditOutputClaim(self)
         )
     }
 }
 
-public struct OfflineNoteRedeemPublicInputsV2: Equatable, Sendable {
+public struct AttestedOfflineNoteRedeemPublicInputs: Equatable, Sendable {
     public let domain: String
     public let sourceNoteCommitment: Data
     public let inputNullifiers: [Data]
@@ -796,21 +872,21 @@ public struct OfflineNoteRedeemPublicInputsV2: Equatable, Sendable {
     public let assetId: String
     public let amount: String
 
-    public init(domain: String = OfflineNoteV2Constants.redeemPublicInputsDomain,
+    public init(domain: String = AttestedOfflineNoteConstants.redeemPublicInputsDomain,
                 sourceNoteCommitment: Data,
                 inputNullifiers: [Data],
                 keyCertificatePayloadHash: Data,
                 recipient: String,
                 assetId: String,
                 amount: String) throws {
-        try OfflineNoteV2Validation.validateDomain(
+        try AttestedOfflineNoteValidation.validateDomain(
             domain,
-            expected: OfflineNoteV2Constants.redeemPublicInputsDomain,
+            expected: AttestedOfflineNoteConstants.redeemPublicInputsDomain,
             field: "domain"
         )
-        try OfflineNoteV2Validation.validateHash(sourceNoteCommitment, field: "source_note_commitment")
-        try OfflineNoteV2Validation.validateHashes(inputNullifiers, field: "input_nullifiers")
-        try OfflineNoteV2Validation.validateHash(
+        try AttestedOfflineNoteValidation.validateHash(sourceNoteCommitment, field: "source_note_commitment")
+        try AttestedOfflineNoteValidation.validateHashes(inputNullifiers, field: "input_nullifiers")
+        try AttestedOfflineNoteValidation.validateHash(
             keyCertificatePayloadHash,
             field: "key_certificate_payload_hash"
         )
@@ -824,8 +900,8 @@ public struct OfflineNoteRedeemPublicInputsV2: Equatable, Sendable {
         self.amount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
     }
 
-    public static func fromRedemption(_ redemption: OfflineNoteRedeemV2) throws -> OfflineNoteRedeemPublicInputsV2 {
-        try OfflineNoteRedeemPublicInputsV2(
+    public static func fromRedemption(_ redemption: AttestedOfflineNoteRedeem) throws -> AttestedOfflineNoteRedeemPublicInputs {
+        try AttestedOfflineNoteRedeemPublicInputs(
             sourceNoteCommitment: redemption.sourceNoteCommitment,
             inputNullifiers: redemption.inputNullifiers,
             keyCertificatePayloadHash: redemption.senderKeyCertificate.payloadHash(),
@@ -840,31 +916,31 @@ public struct OfflineNoteRedeemPublicInputsV2: Equatable, Sendable {
     }
 
     public func noritoEncoded() throws -> Data {
-        try OfflineNoteV2Encoding.wrap(
-            typeName: OfflineNoteV2TypeNames.redeemPublicInputs,
-            payload: OfflineNoteV2Encoding.encodeRedeemPublicInputs(self)
+        try AttestedOfflineNoteEncoding.wrap(
+            typeName: AttestedOfflineNoteTypeNames.redeemPublicInputs,
+            payload: AttestedOfflineNoteEncoding.encodeRedeemPublicInputs(self)
         )
     }
 }
 
-public struct OfflineNoteRedeemV2: Equatable, Sendable {
+public struct AttestedOfflineNoteRedeem: Equatable, Sendable {
     public let sourceNoteCommitment: Data
     public let inputNullifiers: [Data]
-    public let senderKeyCertificate: OfflineNoteKeyCertificateV2
+    public let senderKeyCertificate: AttestedOfflineNoteKeyCertificate
     public let recipient: String
     public let assetId: String
     public let amount: String
-    public let recursiveProof: OfflineNoteRecursiveProofV2
+    public let recursiveProof: AttestedOfflineNoteRecursiveProof
 
     public init(sourceNoteCommitment: Data,
                 inputNullifiers: [Data],
-                senderKeyCertificate: OfflineNoteKeyCertificateV2,
+                senderKeyCertificate: AttestedOfflineNoteKeyCertificate,
                 recipient: String,
                 assetId: String,
                 amount: String,
-                recursiveProof: OfflineNoteRecursiveProofV2) throws {
-        try OfflineNoteV2Validation.validateHash(sourceNoteCommitment, field: "source_note_commitment")
-        try OfflineNoteV2Validation.validateHashes(inputNullifiers, field: "input_nullifiers")
+                recursiveProof: AttestedOfflineNoteRecursiveProof) throws {
+        try AttestedOfflineNoteValidation.validateHash(sourceNoteCommitment, field: "source_note_commitment")
+        try AttestedOfflineNoteValidation.validateHashes(inputNullifiers, field: "input_nullifiers")
         _ = try OfflineNorito.encodeAccountId(recipient)
         self.sourceNoteCommitment = sourceNoteCommitment
         self.inputNullifiers = inputNullifiers
@@ -875,12 +951,12 @@ public struct OfflineNoteRedeemV2: Equatable, Sendable {
         self.recursiveProof = recursiveProof
     }
 
-    public func issuedClaim() throws -> OfflineNoteIssuedClaimV2 {
-        try OfflineNoteIssuedClaimV2.fromRedemption(self)
+    public func issuedClaim() throws -> AttestedOfflineNoteIssuedClaim {
+        try AttestedOfflineNoteIssuedClaim.fromRedemption(self)
     }
 
-    public func publicInputs() throws -> OfflineNoteRedeemPublicInputsV2 {
-        try OfflineNoteRedeemPublicInputsV2.fromRedemption(self)
+    public func publicInputs() throws -> AttestedOfflineNoteRedeemPublicInputs {
+        try AttestedOfflineNoteRedeemPublicInputs.fromRedemption(self)
     }
 
     public func publicInputsHash() throws -> Data {
@@ -890,15 +966,15 @@ public struct OfflineNoteRedeemV2: Equatable, Sendable {
     public func validateProofBinding() throws {
         let expected = try publicInputsHash()
         guard recursiveProof.publicInputsHash == expected else {
-            throw OfflineNoteV2Error.proofPublicInputsHashMismatch(
+            throw AttestedOfflineNoteError.proofPublicInputsHashMismatch(
                 expected: expected.hexLowercased(),
                 actual: recursiveProof.publicInputsHash.hexLowercased()
             )
         }
     }
 
-    public func replacingRecursiveProof(_ recursiveProof: OfflineNoteRecursiveProofV2) throws -> OfflineNoteRedeemV2 {
-        try OfflineNoteRedeemV2(
+    public func replacingRecursiveProof(_ recursiveProof: AttestedOfflineNoteRecursiveProof) throws -> AttestedOfflineNoteRedeem {
+        try AttestedOfflineNoteRedeem(
             sourceNoteCommitment: sourceNoteCommitment,
             inputNullifiers: inputNullifiers,
             senderKeyCertificate: senderKeyCertificate,
@@ -910,54 +986,54 @@ public struct OfflineNoteRedeemV2: Equatable, Sendable {
     }
 
     public func noritoEncoded() throws -> Data {
-        try OfflineNoteV2Encoding.wrap(
-            typeName: OfflineNoteV2TypeNames.redeem,
-            payload: OfflineNoteV2Encoding.encodeRedeem(self)
+        try AttestedOfflineNoteEncoding.wrap(
+            typeName: AttestedOfflineNoteTypeNames.redeem,
+            payload: AttestedOfflineNoteEncoding.encodeRedeem(self)
         )
     }
 }
 
-public struct OfflineNoteAuditPublicInputsV2: Equatable, Sendable {
+public struct AttestedOfflineNoteAuditPublicInputs: Equatable, Sendable {
     public let domain: String
     public let tokenId: Data
     public let keyCertificatePayloadHash: Data
     public let inputNullifiers: [Data]
-    public let inputClaims: [OfflineNoteIssuedClaimV2]
+    public let inputClaims: [AttestedOfflineNoteIssuedClaim]
     public let outputCommitments: [Data]
-    public let outputClaims: [OfflineNoteIssuedClaimV2]
+    public let outputClaims: [AttestedOfflineNoteIssuedClaim]
 
-    public init(domain: String = OfflineNoteV2Constants.auditPublicInputsDomain,
+    public init(domain: String = AttestedOfflineNoteConstants.auditPublicInputsDomain,
                 tokenId: Data,
                 keyCertificatePayloadHash: Data,
                 inputNullifiers: [Data],
-                inputClaims: [OfflineNoteIssuedClaimV2],
+                inputClaims: [AttestedOfflineNoteIssuedClaim],
                 outputCommitments: [Data],
-                outputClaims: [OfflineNoteIssuedClaimV2]) throws {
-        try OfflineNoteV2Validation.validateDomain(
+                outputClaims: [AttestedOfflineNoteIssuedClaim]) throws {
+        try AttestedOfflineNoteValidation.validateDomain(
             domain,
-            expected: OfflineNoteV2Constants.auditPublicInputsDomain,
+            expected: AttestedOfflineNoteConstants.auditPublicInputsDomain,
             field: "domain"
         )
-        try OfflineNoteV2Validation.validateHash(tokenId, field: "token_id")
-        try OfflineNoteV2Validation.validateHash(
+        try AttestedOfflineNoteValidation.validateHash(tokenId, field: "token_id")
+        try AttestedOfflineNoteValidation.validateHash(
             keyCertificatePayloadHash,
             field: "key_certificate_payload_hash"
         )
-        try OfflineNoteV2Validation.validateHashes(
+        try AttestedOfflineNoteValidation.validateHashes(
             inputNullifiers,
             field: "input_nullifiers",
             emptyError: .emptyInputNullifiers
         )
-        try OfflineNoteV2Validation.validateHashes(
+        try AttestedOfflineNoteValidation.validateHashes(
             outputCommitments,
             field: "output_commitments",
             emptyError: .emptyOutputCommitments
         )
         guard !inputClaims.isEmpty else {
-            throw OfflineNoteV2Error.emptyInputClaims
+            throw AttestedOfflineNoteError.emptyInputClaims
         }
         guard !outputClaims.isEmpty else {
-            throw OfflineNoteV2Error.emptyOutputClaims
+            throw AttestedOfflineNoteError.emptyOutputClaims
         }
         self.domain = domain
         self.tokenId = tokenId
@@ -968,9 +1044,9 @@ public struct OfflineNoteAuditPublicInputsV2: Equatable, Sendable {
         self.outputClaims = outputClaims
     }
 
-    public static func fromAudit(_ audit: OfflineNoteAuditBundleV2) throws -> OfflineNoteAuditPublicInputsV2 {
-        let outputClaims = try audit.outputClaims.map(OfflineNoteIssuedClaimV2.fromAuditOutput)
-        return try OfflineNoteAuditPublicInputsV2(
+    public static func fromAudit(_ audit: AttestedOfflineNoteAuditBundle) throws -> AttestedOfflineNoteAuditPublicInputs {
+        let outputClaims = try audit.outputClaims.map(AttestedOfflineNoteIssuedClaim.fromAuditOutput)
+        return try AttestedOfflineNoteAuditPublicInputs(
             tokenId: audit.tokenId,
             keyCertificatePayloadHash: audit.senderKeyCertificate.payloadHash(),
             inputNullifiers: audit.inputNullifiers,
@@ -985,57 +1061,57 @@ public struct OfflineNoteAuditPublicInputsV2: Equatable, Sendable {
     }
 
     public func noritoEncoded() throws -> Data {
-        try OfflineNoteV2Encoding.wrap(
-            typeName: OfflineNoteV2TypeNames.auditPublicInputs,
-            payload: OfflineNoteV2Encoding.encodeAuditPublicInputs(self)
+        try AttestedOfflineNoteEncoding.wrap(
+            typeName: AttestedOfflineNoteTypeNames.auditPublicInputs,
+            payload: AttestedOfflineNoteEncoding.encodeAuditPublicInputs(self)
         )
     }
 }
 
-public struct OfflineNoteAuditBundleV2: Equatable, Sendable {
+public struct AttestedOfflineNoteAuditBundle: Equatable, Sendable {
     public let tokenId: Data
-    public let senderKeyCertificate: OfflineNoteKeyCertificateV2
+    public let senderKeyCertificate: AttestedOfflineNoteKeyCertificate
     public let inputNullifiers: [Data]
-    public let inputClaims: [OfflineNoteIssuedClaimV2]
+    public let inputClaims: [AttestedOfflineNoteIssuedClaim]
     public let outputCommitments: [Data]
-    public let outputClaims: [OfflineNoteAuditOutputClaimV2]
-    public let recursiveProof: OfflineNoteRecursiveProofV2
+    public let outputClaims: [AttestedOfflineNoteAuditOutputClaim]
+    public let recursiveProof: AttestedOfflineNoteRecursiveProof
 
     public init(tokenId: Data,
-                senderKeyCertificate: OfflineNoteKeyCertificateV2,
+                senderKeyCertificate: AttestedOfflineNoteKeyCertificate,
                 inputNullifiers: [Data],
-                inputClaims: [OfflineNoteIssuedClaimV2],
+                inputClaims: [AttestedOfflineNoteIssuedClaim],
                 outputCommitments: [Data],
-                outputClaims: [OfflineNoteAuditOutputClaimV2],
-                recursiveProof: OfflineNoteRecursiveProofV2) throws {
-        try OfflineNoteV2Validation.validateHash(tokenId, field: "token_id")
-        try OfflineNoteV2Validation.validateHashes(
+                outputClaims: [AttestedOfflineNoteAuditOutputClaim],
+                recursiveProof: AttestedOfflineNoteRecursiveProof) throws {
+        try AttestedOfflineNoteValidation.validateHash(tokenId, field: "token_id")
+        try AttestedOfflineNoteValidation.validateHashes(
             inputNullifiers,
             field: "input_nullifiers",
             emptyError: .emptyInputNullifiers
         )
-        try OfflineNoteV2Validation.validateHashes(
+        try AttestedOfflineNoteValidation.validateHashes(
             outputCommitments,
             field: "output_commitments",
             emptyError: .emptyOutputCommitments
         )
         guard !inputClaims.isEmpty else {
-            throw OfflineNoteV2Error.emptyInputClaims
+            throw AttestedOfflineNoteError.emptyInputClaims
         }
         guard inputClaims.count == inputNullifiers.count else {
-            throw OfflineNoteV2Error.auditInputCountMismatch(
+            throw AttestedOfflineNoteError.auditInputCountMismatch(
                 nullifiers: inputNullifiers.count,
                 claims: inputClaims.count
             )
         }
         guard !outputClaims.isEmpty else {
-            throw OfflineNoteV2Error.emptyOutputClaims
+            throw AttestedOfflineNoteError.emptyOutputClaims
         }
         let committed = Set(outputCommitments.map { $0.hexLowercased() })
         for claim in outputClaims {
             let commitment = claim.noteCommitment.hexLowercased()
             guard committed.contains(commitment) else {
-                throw OfflineNoteV2Error.auditOutputClaimNotCommitted(commitment)
+                throw AttestedOfflineNoteError.auditOutputClaimNotCommitted(commitment)
             }
         }
         self.tokenId = tokenId
@@ -1047,8 +1123,8 @@ public struct OfflineNoteAuditBundleV2: Equatable, Sendable {
         self.recursiveProof = recursiveProof
     }
 
-    public func publicInputs() throws -> OfflineNoteAuditPublicInputsV2 {
-        try OfflineNoteAuditPublicInputsV2.fromAudit(self)
+    public func publicInputs() throws -> AttestedOfflineNoteAuditPublicInputs {
+        try AttestedOfflineNoteAuditPublicInputs.fromAudit(self)
     }
 
     public func publicInputsHash() throws -> Data {
@@ -1058,15 +1134,15 @@ public struct OfflineNoteAuditBundleV2: Equatable, Sendable {
     public func validateProofBinding() throws {
         let expected = try publicInputsHash()
         guard recursiveProof.publicInputsHash == expected else {
-            throw OfflineNoteV2Error.proofPublicInputsHashMismatch(
+            throw AttestedOfflineNoteError.proofPublicInputsHashMismatch(
                 expected: expected.hexLowercased(),
                 actual: recursiveProof.publicInputsHash.hexLowercased()
             )
         }
     }
 
-    public func replacingRecursiveProof(_ recursiveProof: OfflineNoteRecursiveProofV2) throws -> OfflineNoteAuditBundleV2 {
-        try OfflineNoteAuditBundleV2(
+    public func replacingRecursiveProof(_ recursiveProof: AttestedOfflineNoteRecursiveProof) throws -> AttestedOfflineNoteAuditBundle {
+        try AttestedOfflineNoteAuditBundle(
             tokenId: tokenId,
             senderKeyCertificate: senderKeyCertificate,
             inputNullifiers: inputNullifiers,
@@ -1078,24 +1154,24 @@ public struct OfflineNoteAuditBundleV2: Equatable, Sendable {
     }
 
     public func noritoEncoded() throws -> Data {
-        try OfflineNoteV2Encoding.wrap(
-            typeName: OfflineNoteV2TypeNames.audit,
-            payload: OfflineNoteV2Encoding.encodeAudit(self)
+        try AttestedOfflineNoteEncoding.wrap(
+            typeName: AttestedOfflineNoteTypeNames.audit,
+            payload: AttestedOfflineNoteEncoding.encodeAudit(self)
         )
     }
 }
 
-public struct IssueOfflineNoteV2Request: Sendable {
+public struct AttestedOfflineNoteIssueRequest: Sendable {
     public let chainId: String
     public let authority: String
-    public let issue: OfflineNoteIssueV2
+    public let issue: AttestedOfflineNoteIssue
     public let ttlMs: UInt64?
     public let nonce: UInt32?
     public let metadata: [String: ToriiJSONValue]
 
     public init(chainId: String,
                 authority: String,
-                issue: OfflineNoteIssueV2,
+                issue: AttestedOfflineNoteIssue,
                 ttlMs: UInt64? = nil,
                 nonce: UInt32? = nil,
                 metadata: [String: ToriiJSONValue] = [:]) {
@@ -1108,17 +1184,17 @@ public struct IssueOfflineNoteV2Request: Sendable {
     }
 }
 
-public struct RedeemOfflineNoteV2Request: Sendable {
+public struct AttestedOfflineNoteRedeemRequest: Sendable {
     public let chainId: String
     public let authority: String
-    public let redemption: OfflineNoteRedeemV2
+    public let redemption: AttestedOfflineNoteRedeem
     public let ttlMs: UInt64?
     public let nonce: UInt32?
     public let metadata: [String: ToriiJSONValue]
 
     public init(chainId: String,
                 authority: String,
-                redemption: OfflineNoteRedeemV2,
+                redemption: AttestedOfflineNoteRedeem,
                 ttlMs: UInt64? = nil,
                 nonce: UInt32? = nil,
                 metadata: [String: ToriiJSONValue] = [:]) {
@@ -1131,17 +1207,17 @@ public struct RedeemOfflineNoteV2Request: Sendable {
     }
 }
 
-public struct AuditOfflineNoteV2Request: Sendable {
+public struct AttestedOfflineNoteAuditRequest: Sendable {
     public let chainId: String
     public let authority: String
-    public let audit: OfflineNoteAuditBundleV2
+    public let audit: AttestedOfflineNoteAuditBundle
     public let ttlMs: UInt64?
     public let nonce: UInt32?
     public let metadata: [String: ToriiJSONValue]
 
     public init(chainId: String,
                 authority: String,
-                audit: OfflineNoteAuditBundleV2,
+                audit: AttestedOfflineNoteAuditBundle,
                 ttlMs: UInt64? = nil,
                 nonce: UInt32? = nil,
                 metadata: [String: ToriiJSONValue] = [:]) {
@@ -1177,7 +1253,7 @@ public struct RegisterOfflineDeviceAttestationRequest: Sendable {
     }
 }
 
-enum OfflineNoteV2TypeNames {
+enum AttestedOfflineNoteTypeNames {
     static let deviceAttestationRegistration =
         "iroha_data_model::offline::OfflineDeviceAttestationRegistration"
     static let deviceAttestationChallengePreimage =
@@ -1199,10 +1275,10 @@ enum OfflineNoteV2TypeNames {
         "iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation"
 }
 
-enum OfflineNoteV2Validation {
+enum AttestedOfflineNoteValidation {
     static func validateDomain(_ value: String, expected: String, field: String) throws {
         guard value == expected else {
-            throw OfflineNoteV2Error.unsupportedDomain(
+            throw AttestedOfflineNoteError.unsupportedDomain(
                 field: field,
                 expected: expected,
                 actual: value
@@ -1212,16 +1288,16 @@ enum OfflineNoteV2Validation {
 
     static func validateHash(_ value: Data, field: String) throws {
         guard value.count == 32 else {
-            throw OfflineNoteV2Error.invalidHashLength(field: field, expected: 32, actual: value.count)
+            throw AttestedOfflineNoteError.invalidHashLength(field: field, expected: 32, actual: value.count)
         }
         guard let last = value.last, (last & 1) == 1 else {
-            throw OfflineNoteV2Error.invalidHash(field: field)
+            throw AttestedOfflineNoteError.invalidHash(field: field)
         }
     }
 
     static func validateHashes(_ values: [Data],
                                field: String,
-                               emptyError: OfflineNoteV2Error = .emptyInputNullifiers) throws {
+                               emptyError: AttestedOfflineNoteError = .emptyInputNullifiers) throws {
         guard !values.isEmpty else {
             throw emptyError
         }
@@ -1232,32 +1308,32 @@ enum OfflineNoteV2Validation {
 
     static func validateAttestationEvidenceEnvelope(_ evidence: Data,
                                                     attestationReportHash: Data) throws {
-        let prefix = Data(OfflineNoteV2Constants.deviceAttestationEvidencePrefix.utf8)
+        let prefix = Data(AttestedOfflineNoteConstants.deviceAttestationEvidencePrefix.utf8)
         guard evidence.count == prefix.count + attestationReportHash.count,
               Data(evidence.prefix(prefix.count)) == prefix,
               Data(evidence.suffix(attestationReportHash.count)) == attestationReportHash else {
-            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+            throw AttestedOfflineNoteError.unsupportedDeviceAttestationProfile(
                 "evidence envelope must be deviceAttestationEvidencePrefix || attestation_report_hash"
             )
         }
     }
 
     static func attestationEvidenceEnvelope(attestationReportHash: Data) -> Data {
-        Data(OfflineNoteV2Constants.deviceAttestationEvidencePrefix.utf8) + attestationReportHash
+        Data(AttestedOfflineNoteConstants.deviceAttestationEvidencePrefix.utf8) + attestationReportHash
     }
 
     static func validateCertificateCore(version: UInt16,
                                         accountId: String,
                                         publicKey: Data,
                                         oneUse: Bool) throws {
-        guard version == OfflineNoteV2Constants.keyCertificateVersion else {
-            throw OfflineNoteV2Error.invalidCertificateVersion(version)
+        guard version == AttestedOfflineNoteConstants.keyCertificateVersion else {
+            throw AttestedOfflineNoteError.invalidCertificateVersion(version)
         }
         guard oneUse else {
-            throw OfflineNoteV2Error.certificateMustBeOneUse
+            throw AttestedOfflineNoteError.certificateMustBeOneUse
         }
         guard publicKey.count == 32 else {
-            throw OfflineNoteV2Error.invalidNotePublicKeyLength(expected: 32, actual: publicKey.count)
+            throw AttestedOfflineNoteError.invalidNotePublicKeyLength(expected: 32, actual: publicKey.count)
         }
         _ = try OfflineNorito.encodeAccountId(accountId)
     }
@@ -1266,18 +1342,18 @@ enum OfflineNoteV2Validation {
         let trimmedKeyId = keyId.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedDeviceId = deviceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedKeyId.isEmpty else {
-            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile("attestation key_id must not be empty")
+            throw AttestedOfflineNoteError.unsupportedDeviceAttestationProfile("attestation key_id must not be empty")
         }
         guard trimmedKeyId == keyId else {
-            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+            throw AttestedOfflineNoteError.unsupportedDeviceAttestationProfile(
                 "attestation key_id must not contain surrounding whitespace"
             )
         }
         guard !trimmedDeviceId.isEmpty else {
-            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile("attestation device_id must not be empty")
+            throw AttestedOfflineNoteError.unsupportedDeviceAttestationProfile("attestation device_id must not be empty")
         }
         guard trimmedDeviceId == deviceId else {
-            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+            throw AttestedOfflineNoteError.unsupportedDeviceAttestationProfile(
                 "attestation device_id must not contain surrounding whitespace"
             )
         }
@@ -1304,12 +1380,12 @@ enum OfflineNoteV2Validation {
         }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+            throw AttestedOfflineNoteError.unsupportedDeviceAttestationProfile(
                 "\(field) must not be empty when present"
             )
         }
         guard trimmed == value else {
-            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+            throw AttestedOfflineNoteError.unsupportedDeviceAttestationProfile(
                 "\(field) must not contain surrounding whitespace"
             )
         }
@@ -1323,14 +1399,14 @@ enum OfflineNoteV2Validation {
                                                  assertionUsageCountLimit: UInt32?) throws {
         try validateP256AssertionPublicKey(assertionPublicKey)
         switch platform {
-        case OfflineNoteV2Constants.iosAppAttestPlatform:
+        case AttestedOfflineNoteConstants.iosAppAttestPlatform:
             try validateIosAppAttestRegistrationKeyId(keyId)
             try validateIosAppAttestProfile(
                 assertionScheme: assertionScheme,
                 assertionKeyAlgorithm: assertionKeyAlgorithm,
                 assertionUsageCountLimit: assertionUsageCountLimit
             )
-        case OfflineNoteV2Constants.androidKeyMintPlatform:
+        case AttestedOfflineNoteConstants.androidKeyMintPlatform:
             try validateAndroidKeyMintProfile(
                 keyId: keyId,
                 assertionScheme: assertionScheme,
@@ -1339,7 +1415,7 @@ enum OfflineNoteV2Validation {
                 assertionUsageCountLimit: assertionUsageCountLimit
             )
         default:
-            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile("unsupported platform \(platform)")
+            throw AttestedOfflineNoteError.unsupportedDeviceAttestationProfile("unsupported platform \(platform)")
         }
     }
 
@@ -1351,13 +1427,13 @@ enum OfflineNoteV2Validation {
                                               assertionUsageCountLimit: UInt32?) throws {
         try validateP256AssertionPublicKey(assertionPublicKey)
         switch platform {
-        case OfflineNoteV2Constants.iosAppAttestPlatform:
+        case AttestedOfflineNoteConstants.iosAppAttestPlatform:
             try validateIosAppAttestProfile(
                 assertionScheme: assertionScheme,
                 assertionKeyAlgorithm: assertionKeyAlgorithm,
                 assertionUsageCountLimit: assertionUsageCountLimit
             )
-        case OfflineNoteV2Constants.androidKeyMintPlatform:
+        case AttestedOfflineNoteConstants.androidKeyMintPlatform:
             try validateAndroidKeyMintProfile(
                 keyId: keyId,
                 assertionScheme: assertionScheme,
@@ -1366,7 +1442,7 @@ enum OfflineNoteV2Validation {
                 assertionUsageCountLimit: assertionUsageCountLimit
             )
         default:
-            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile("unsupported platform \(platform)")
+            throw AttestedOfflineNoteError.unsupportedDeviceAttestationProfile("unsupported platform \(platform)")
         }
     }
 
@@ -1374,7 +1450,7 @@ enum OfflineNoteV2Validation {
         guard let decoded = Data(base64Encoded: keyId),
               !decoded.isEmpty,
               decoded.base64EncodedString() == keyId else {
-            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+            throw AttestedOfflineNoteError.unsupportedDeviceAttestationProfile(
                 "iOS App Attest key_id must be canonical standard base64 credential bytes"
             )
         }
@@ -1383,11 +1459,11 @@ enum OfflineNoteV2Validation {
     private static func validateIosAppAttestProfile(assertionScheme: String,
                                                     assertionKeyAlgorithm: String,
                                                     assertionUsageCountLimit: UInt32?) throws {
-        guard assertionScheme == OfflineNoteV2Constants.iosAppAttestAssertionScheme,
-              assertionKeyAlgorithm == OfflineNoteV2Constants.iosAppAttestAssertionKeyAlgorithm,
+        guard assertionScheme == AttestedOfflineNoteConstants.iosAppAttestAssertionScheme,
+              assertionKeyAlgorithm == AttestedOfflineNoteConstants.iosAppAttestAssertionKeyAlgorithm,
               assertionUsageCountLimit == nil else {
-            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
-                "iOS App Attest requires \(OfflineNoteV2Constants.iosAppAttestAssertionScheme), \(OfflineNoteV2Constants.iosAppAttestAssertionKeyAlgorithm), and no assertion usage limit"
+            throw AttestedOfflineNoteError.unsupportedDeviceAttestationProfile(
+                "iOS App Attest requires \(AttestedOfflineNoteConstants.iosAppAttestAssertionScheme), \(AttestedOfflineNoteConstants.iosAppAttestAssertionKeyAlgorithm), and no assertion usage limit"
             )
         }
     }
@@ -1397,16 +1473,16 @@ enum OfflineNoteV2Validation {
                                                       assertionKeyAlgorithm: String,
                                                       assertionPublicKey: Data,
                                                       assertionUsageCountLimit: UInt32?) throws {
-        guard assertionScheme == OfflineNoteV2Constants.androidKeyMintAssertionScheme,
-              assertionKeyAlgorithm == OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm,
+        guard assertionScheme == AttestedOfflineNoteConstants.androidKeyMintAssertionScheme,
+              assertionKeyAlgorithm == AttestedOfflineNoteConstants.androidKeyMintAssertionKeyAlgorithm,
               assertionUsageCountLimit == 1 else {
-            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
-                "Android KeyMint requires \(OfflineNoteV2Constants.androidKeyMintAssertionScheme), \(OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm), and assertion usage limit 1"
+            throw AttestedOfflineNoteError.unsupportedDeviceAttestationProfile(
+                "Android KeyMint requires \(AttestedOfflineNoteConstants.androidKeyMintAssertionScheme), \(AttestedOfflineNoteConstants.androidKeyMintAssertionKeyAlgorithm), and assertion usage limit 1"
             )
         }
         let expectedKeyId = Data(SHA256.hash(data: assertionPublicKey)).hexLowercased()
         guard keyId == expectedKeyId else {
-            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+            throw AttestedOfflineNoteError.unsupportedDeviceAttestationProfile(
                 "Android KeyMint key_id must be lowercase hex SHA-256 of the assertion public key"
             )
         }
@@ -1415,19 +1491,19 @@ enum OfflineNoteV2Validation {
     private static func validateP256AssertionPublicKey(_ assertionPublicKey: Data) throws {
         guard assertionPublicKey.count == 65,
               assertionPublicKey.first == 0x04 else {
-            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+            throw AttestedOfflineNoteError.unsupportedDeviceAttestationProfile(
                 "assertion public key must be an uncompressed P-256 SEC1 point"
             )
         }
         guard (try? P256.Signing.PublicKey(x963Representation: assertionPublicKey)) != nil else {
-            throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
+            throw AttestedOfflineNoteError.unsupportedDeviceAttestationProfile(
                 "assertion public key must be a valid P-256 point"
             )
         }
     }
 }
 
-enum OfflineNoteV2Encoding {
+enum AttestedOfflineNoteEncoding {
     static func wrap(typeName: String, payload: Data) -> Data {
         noritoEncode(typeName: typeName, payload: payload, flags: 2)
     }
@@ -1489,7 +1565,7 @@ enum OfflineNoteV2Encoding {
         _ preimage: OfflineDeviceAttestationChallengePreimage
     ) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
-        writer.writeField(OfflineCompactNorito.encodeString(OfflineNoteV2Constants.deviceAttestationChallengeDomain))
+        writer.writeField(OfflineCompactNorito.encodeString(AttestedOfflineNoteConstants.deviceAttestationChallengeDomain))
         writer.writeField(OfflineCompactNorito.encodeUInt16(preimage.version))
         writer.writeField(OfflineCompactNorito.encodeString(preimage.platform))
         writer.writeField(OfflineCompactNorito.encodeString(preimage.keyId))
@@ -1522,7 +1598,6 @@ enum OfflineNoteV2Encoding {
         writer.writeField(encodeBytesVec(preimage.publicKey))
         writer.writeField(OfflineCompactNorito.encodeString(preimage.assertionScheme))
         writer.writeField(OfflineCompactNorito.encodeString(preimage.assertionKeyAlgorithm))
-        writer.writeField(encodeBytesVec(preimage.assertionPublicKey))
         writer.writeField(try OfflineCompactNorito.encodeOption(
             preimage.assertionUsageCountLimit,
             encode: OfflineCompactNorito.encodeUInt32
@@ -1534,7 +1609,7 @@ enum OfflineNoteV2Encoding {
         return writer.data
     }
 
-    static func encodeCertificatePayload(_ payload: OfflineNoteKeyCertificatePayloadV2) throws -> Data {
+    static func encodeCertificatePayload(_ payload: AttestedOfflineNoteKeyCertificatePayload) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(OfflineCompactNorito.encodeString(payload.domain))
         writer.writeField(OfflineCompactNorito.encodeUInt16(payload.version))
@@ -1554,7 +1629,7 @@ enum OfflineNoteV2Encoding {
         return writer.data
     }
 
-    static func encodeCertificate(_ certificate: OfflineNoteKeyCertificateV2) throws -> Data {
+    static func encodeCertificate(_ certificate: AttestedOfflineNoteKeyCertificate) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(OfflineCompactNorito.encodeUInt16(certificate.version))
         writer.writeField(OfflineCompactNorito.encodeString(certificate.platform))
@@ -1581,14 +1656,14 @@ enum OfflineNoteV2Encoding {
         return writer.data
     }
 
-    static func encodeProofBox(_ proof: OfflineNoteProofBoxV2) -> Data {
+    static func encodeProofBox(_ proof: AttestedOfflineNoteProofBox) -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(OfflineCompactNorito.encodeString(proof.backend))
         writer.writeField(encodeBytesVec(proof.bytes))
         return writer.data
     }
 
-    static func encodeRecursiveProof(_ proof: OfflineNoteRecursiveProofV2) throws -> Data {
+    static func encodeRecursiveProof(_ proof: AttestedOfflineNoteRecursiveProof) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(encodeVerifyingKeyId(proof.verifierKeyId))
         writer.writeField(try OfflineCompactNorito.encodeHash(proof.publicInputsHash))
@@ -1596,7 +1671,7 @@ enum OfflineNoteV2Encoding {
         return writer.data
     }
 
-    static func encodeIssue(_ issue: OfflineNoteIssueV2) throws -> Data {
+    static func encodeIssue(_ issue: AttestedOfflineNoteIssue) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(try OfflineCompactNorito.encodeHash(issue.noteCommitment))
         writer.writeField(try encodeCertificate(issue.keyCertificate))
@@ -1605,7 +1680,7 @@ enum OfflineNoteV2Encoding {
         return writer.data
     }
 
-    static func encodeIssuedClaim(_ claim: OfflineNoteIssuedClaimV2) throws -> Data {
+    static func encodeIssuedClaim(_ claim: AttestedOfflineNoteIssuedClaim) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(OfflineCompactNorito.encodeString(claim.domain))
         writer.writeField(try OfflineCompactNorito.encodeHash(claim.noteCommitment))
@@ -1615,7 +1690,7 @@ enum OfflineNoteV2Encoding {
         return writer.data
     }
 
-    static func encodeAuditOutputClaim(_ claim: OfflineNoteAuditOutputClaimV2) throws -> Data {
+    static func encodeAuditOutputClaim(_ claim: AttestedOfflineNoteAuditOutputClaim) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(try OfflineCompactNorito.encodeHash(claim.noteCommitment))
         writer.writeField(try encodeCertificate(claim.keyCertificate))
@@ -1624,7 +1699,7 @@ enum OfflineNoteV2Encoding {
         return writer.data
     }
 
-    static func encodeRedeemPublicInputs(_ inputs: OfflineNoteRedeemPublicInputsV2) throws -> Data {
+    static func encodeRedeemPublicInputs(_ inputs: AttestedOfflineNoteRedeemPublicInputs) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(OfflineCompactNorito.encodeString(inputs.domain))
         writer.writeField(try OfflineCompactNorito.encodeHash(inputs.sourceNoteCommitment))
@@ -1636,7 +1711,7 @@ enum OfflineNoteV2Encoding {
         return writer.data
     }
 
-    static func encodeRedeem(_ redemption: OfflineNoteRedeemV2) throws -> Data {
+    static func encodeRedeem(_ redemption: AttestedOfflineNoteRedeem) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(try OfflineCompactNorito.encodeHash(redemption.sourceNoteCommitment))
         writer.writeField(try encodeVec(redemption.inputNullifiers, encode: OfflineCompactNorito.encodeHash))
@@ -1648,7 +1723,7 @@ enum OfflineNoteV2Encoding {
         return writer.data
     }
 
-    static func encodeAuditPublicInputs(_ inputs: OfflineNoteAuditPublicInputsV2) throws -> Data {
+    static func encodeAuditPublicInputs(_ inputs: AttestedOfflineNoteAuditPublicInputs) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(OfflineCompactNorito.encodeString(inputs.domain))
         writer.writeField(try OfflineCompactNorito.encodeHash(inputs.tokenId))
@@ -1660,7 +1735,7 @@ enum OfflineNoteV2Encoding {
         return writer.data
     }
 
-    static func encodeAudit(_ audit: OfflineNoteAuditBundleV2) throws -> Data {
+    static func encodeAudit(_ audit: AttestedOfflineNoteAuditBundle) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(try OfflineCompactNorito.encodeHash(audit.tokenId))
         writer.writeField(try encodeCertificate(audit.senderKeyCertificate))

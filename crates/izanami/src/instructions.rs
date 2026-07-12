@@ -3838,7 +3838,9 @@ mod tests {
             SettlementInstructionBox::Dvp(isi) => {
                 assert_eq!(isi.delivery_leg.from, plan.signer.id);
             }
-            SettlementInstructionBox::Pvp(_) => {
+            SettlementInstructionBox::Pvp(_)
+            | SettlementInstructionBox::SetFxCorridorPolicy(_)
+            | SettlementInstructionBox::SettleFxCorridor(_) => {
                 panic!("expected DvP settlement instruction");
             }
         }

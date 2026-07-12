@@ -243,6 +243,68 @@ const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
 const NETWORK_PARALLELISM_ENV: &str = "IROHA_TEST_NETWORK_PARALLELISM";
 const NETWORK_PERMIT_WAIT_TIMEOUT_ENV: &str = "IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT";
 const NETWORK_PERMIT_WAIT_TIMEOUT_DEFAULT: Duration = Duration::from_secs(5 * 60);
+/// Test-only switch that turns a sandbox-related network skip into a test failure.
+pub const REQUIRE_NETWORK_ENV: &str = "IROHA_TEST_REQUIRE_NETWORK";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NetworkStartRequirement {
+    Optional,
+    Required,
+}
+
+fn parse_network_start_requirement(raw: Option<&str>) -> Result<NetworkStartRequirement> {
+    let Some(raw) = raw else {
+        return Ok(NetworkStartRequirement::Optional);
+    };
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(NetworkStartRequirement::Required),
+        "0" | "false" | "no" | "off" => Ok(NetworkStartRequirement::Optional),
+        _ => Err(Report::msg(format!(
+            "{REQUIRE_NETWORK_ENV} must be one of 1, true, yes, on, 0, false, no, or off; got {raw:?}"
+        ))),
+    }
+}
+
+fn network_start_requirement() -> Result<NetworkStartRequirement> {
+    match env::var(REQUIRE_NETWORK_ENV) {
+        Ok(raw) => parse_network_start_requirement(Some(&raw)),
+        Err(env::VarError::NotPresent) => parse_network_start_requirement(None),
+        Err(env::VarError::NotUnicode(_)) => Err(Report::msg(format!(
+            "{REQUIRE_NETWORK_ENV} must contain valid UTF-8"
+        ))),
+    }
+}
+
+fn apply_network_start_requirement<T>(
+    network: Option<T>,
+    context: &str,
+    requirement: NetworkStartRequirement,
+) -> Result<Option<T>> {
+    if network.is_none() && requirement == NetworkStartRequirement::Required {
+        return Err(Report::msg(format!(
+            "{context}: required integration-test network was unavailable; \
+             {REQUIRE_NETWORK_ENV}=1 forbids treating sandbox socket restrictions as a successful skip"
+        )));
+    }
+    Ok(network)
+}
+
+/// Enforce the test-network requirement selected by [`REQUIRE_NETWORK_ENV`].
+///
+/// Ordinary developer runs may retain an unavailable sandbox network as `None`. When the
+/// environment switch is enabled, the same condition is an explicit error so CI and release
+/// acceptance runs cannot report a skipped network scenario as passing. Invalid switch values
+/// also fail closed.
+///
+/// # Errors
+///
+/// Returns an error when the switch is malformed or requires a network that was unavailable.
+pub fn enforce_network_start_requirement<T>(
+    network: Option<T>,
+    context: &str,
+) -> Result<Option<T>> {
+    apply_network_start_requirement(network, context, network_start_requirement()?)
+}
 
 fn network_permit_state() -> &'static Arc<NetworkPermitState> {
     static NETWORK_STATE: OnceLock<Arc<NetworkPermitState>> = OnceLock::new();
@@ -853,6 +915,68 @@ mod tests {
                 .contains("sandboxed network restriction detected"),
             "non-permission errors should not be tagged as sandbox denials"
         );
+    }
+
+    #[test]
+    fn network_start_requirement_parser_is_explicit_and_fails_closed() {
+        assert_eq!(
+            parse_network_start_requirement(None).unwrap(),
+            NetworkStartRequirement::Optional
+        );
+        for raw in ["1", "true", "TRUE", " yes ", "on"] {
+            assert_eq!(
+                parse_network_start_requirement(Some(raw)).unwrap(),
+                NetworkStartRequirement::Required,
+                "{raw:?} must enable required-network mode"
+            );
+        }
+        for raw in ["0", "false", "FALSE", " no ", "off"] {
+            assert_eq!(
+                parse_network_start_requirement(Some(raw)).unwrap(),
+                NetworkStartRequirement::Optional,
+                "{raw:?} must disable required-network mode"
+            );
+        }
+        for raw in ["", "required", "tru", "2"] {
+            let err = parse_network_start_requirement(Some(raw)).unwrap_err();
+            assert!(
+                err.to_string().contains(REQUIRE_NETWORK_ENV),
+                "malformed value {raw:?} must report the controlling switch: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn required_network_mode_rejects_only_an_unavailable_network() {
+        assert_eq!(
+            apply_network_start_requirement(
+                Some(7),
+                "available",
+                NetworkStartRequirement::Required
+            )
+            .unwrap(),
+            Some(7)
+        );
+        assert_eq!(
+            apply_network_start_requirement::<()>(
+                None,
+                "optional",
+                NetworkStartRequirement::Optional,
+            )
+            .unwrap(),
+            None
+        );
+
+        let err = apply_network_start_requirement::<()>(
+            None,
+            "four_peer_acceptance",
+            NetworkStartRequirement::Required,
+        )
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("four_peer_acceptance"));
+        assert!(message.contains("IROHA_TEST_REQUIRE_NETWORK=1"));
+        assert!(message.contains("successful skip"));
     }
 
     #[test]

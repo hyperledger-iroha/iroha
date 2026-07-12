@@ -26,6 +26,8 @@ mod confidential_params_registry;
 mod confidential_policy_gates;
 #[path = "../contract_code_bytes.rs"]
 mod contract_code_bytes;
+#[path = "../contract_execution_header_binding.rs"]
+mod contract_execution_header_binding;
 #[path = "../contract_manifest_triggers.rs"]
 mod contract_manifest_triggers;
 #[path = "../deterministic_tie_break.rs"]

@@ -516,7 +516,7 @@ fn write_contract_app_manifest(dir: &torii_mock_support::TempDir) -> PathBuf {
         &contract_path,
         r#"
             seiyaku Greeter {
-                kotoage fn init(value: int) {}
+                hajimari(int value) {}
                 view fn status() -> int { return 7; }
             }
         "#,
@@ -536,19 +536,19 @@ fn write_contract_app_manifest(dir: &torii_mock_support::TempDir) -> PathBuf {
             source = "contracts/greeter.ko"
             artifact = "artifacts/greeter.to"
 
-            [[init]]
+            [[hajimari]]
             id = "seed"
             contract = "demo.greeter"
-            entrypoint = "init"
+            entrypoint = "hajimari"
             gas_limit = 1000
-            payload = { value = 7 }
+            payload = { value = "7" }
 
             [[assertions]]
             id = "status"
             contract = "demo.greeter"
             entrypoint = "status"
             gas_limit = 1000
-            expected_result = 7
+            expected_result = "7"
         "#,
     )
     .expect("write contract app manifest");
@@ -1561,7 +1561,7 @@ fn contract_app_resume_against_mock_uses_live_bundle_route() {
         &norito::json!({
             "bundle_response": {
                 "bundle_digest": "resume-bundle-digest",
-                "completed_stages": ["plan", "deploy", "init_calls", "assertions"],
+                "completed_stages": ["plan", "deploy", "hajimari_calls", "assertions"],
             }
         }),
     )

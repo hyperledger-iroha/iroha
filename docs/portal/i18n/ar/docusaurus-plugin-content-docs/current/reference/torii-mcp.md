@@ -95,7 +95,6 @@ description: الدليل المرجعي لاستخدام جسر بروتوكو�
 -`x-api-token`
 -`x-iroha-account`
 -`x-iroha-signature`
--`x-iroha-api-version`
 
 يمكن للعملاء أيضًا توفير رؤوس إضافية لكل مكالمة عبر `arguments.headers`.
 يتم تجاهل `content-length` و`host` و`connection` من `arguments.headers`.

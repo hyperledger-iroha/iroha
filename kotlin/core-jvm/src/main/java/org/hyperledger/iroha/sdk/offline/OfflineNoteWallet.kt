@@ -36,6 +36,9 @@ import org.hyperledger.iroha.sdk.norito.TypeAdapter
 import org.hyperledger.iroha.sdk.tx.norito.NoritoCodecAdapter
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
+internal const val RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE: String =
+    "Classic Offline Note issue transactions are retired; use Offline top-up."
+
 /**
  * Archived classic Offline Note wallet/model helpers kept as fixture-only
  * inputs; production offline payments use Kagemusha.
@@ -1413,7 +1416,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
 
     fun load(assetDefinitionId: String, amount: String): CompletableFuture<OfflineNoteWalletNote> {
         return failedFuture(
-            IllegalStateException(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE)
+            IllegalStateException(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE)
         )
     }
 

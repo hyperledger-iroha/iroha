@@ -16,14 +16,14 @@ O código de byte Kotodama é o código de bytecode Norito. کرنے, اسے م�
 
 1. Cadeia de ferramentas de ferrugem (1,76 یا جدید) انسٹال کریں اور اس ریپو کو چیک آؤٹ کریں۔
 2. O que você precisa fazer:
-   - `koto_compile` - Kotodama کمپائلر ou IVM/Norito bytecode خارج کرتا ہے
+   - `koto build` - Kotodama کمپائلر ou IVM/Norito bytecode خارج کرتا ہے
    - `ivm_run` ou `ivm_tool` - مقامی اجرا اور معائنہ یوٹیلٹیز
    - `iroha_cli` - Torii کے ذریعے کنٹریکٹ ڈپلائے کرنے کے لئے استعمال ہوتا ہے
 
    ریپو کا Makefile ان بائنریز کو `PATH` میں توقع کرتا ہے۔ آپ پری بلٹ artefatos ڈاؤن لوڈ کر سکتے ہیں یا سورس سے بنا سکتے ہیں۔ O conjunto de ferramentas que você possui é o conjunto de ferramentas do Makefile helpers e os ajudantes do Makefile são os seguintes:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. Você pode usar o cartão de crédito Iroha para usar o cartão Iroha. نیچے کی مثالیں فرض کرتی ہیں کہ Torii اس URL پر قابل رسائی ہے جو آپ کے `iroha_cli` پروفائل (`~/.config/iroha/cli.toml`) میں سیٹ ہے۔
@@ -34,16 +34,15 @@ O código de byte Kotodama é o código de bytecode Norito. کرنے, اسے م�
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 O que fazer:
 
-- `--abi 1` کنٹریکٹ کو ABI ورژن 1 پر لاک کرتا ہے (تحریر کے وقت واحد سپورٹڈ ورژن).
-- `--max-cycles 0` لامحدود اجرا کی درخواست کرتا ہے؛ provas de conhecimento zero کے لئے preenchimento de ciclo کو محدود کرنے کے لئے مثبت عدد دیں۔
+- `ABI V1` کنٹریکٹ کو ABI ورژن 1 پر لاک کرتا ہے (تحریر کے وقت واحد سپورٹڈ ورژن).
+- `--max-cycles 1000000` لامحدود اجرا کی درخواست کرتا ہے؛ provas de conhecimento zero کے لئے preenchimento de ciclo کو محدود کرنے کے لئے مثبت عدد دیں۔
 
 ## 2. Norito آرٹیفیکٹ کا معائنہ (اختیاری)
 
@@ -70,7 +69,7 @@ ivm_run target/examples/hello.to --args '{}'
 Você pode usar o CLI کے ذریعے اسے نوڈ پر ڈپلائے کریں۔ A autoridade اکاؤنٹ، اس کی chave de assinatura, اور `.to` é a carga útil Base64 فراہم کریں:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -79,8 +78,8 @@ iroha_cli app contracts deploy \
 یہ کمانڈ Torii کے ذریعے Norito manifesto + pacote de bytecode جمع کرتی ہے اور نتیجے میں ٹرانزیکشن کی حیثیت پرنٹ کرتی ہے۔ ٹرانزیکشن commit ہونے کے بعد, جواب میں دکھایا گیا código hash manifestos حاصل کرنے یا instâncias لسٹ کرنے کے لئے Como fazer isso:
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ## 5. Torii کے خلاف چلائیں
@@ -88,7 +87,7 @@ iroha_cli app contracts instances --namespace apps --table
 bytecode رجسٹر ہونے کے بعد، آپ ایک envio de instrução کر کے اسے کال کر سکتے ہیں جو محفوظ شدہ کوڈ کو Isso é (como `iroha_cli ledger transaction submit`). یقینی بنائیں کہ اکاؤنٹ permissões para syscalls (`set_account_detail`, `transfer_asset`, وغیرہ) کی اجازت دیتے ہیں۔
 
 ## تجاویز اور خرابیوں کا حل- `make examples-run` استعمال کریں تاکہ فراہم کردہ مثالیں ایک ہی قدم میں کمپائل اور چل سکیں۔ Você pode usar `PATH` como variável de ambiente `PATH`/`IVM` e substituir variáveis ​​de ambiente
-- اگر `koto_compile` ABI ورژن مسترد کرے تو تصدیق کریں کہ کمپائلر اور نوڈ دونوں ABI v1 کو ہدف Isso é um problema (`koto_compile --abi` بغیر دلائل کے چلائیں تاکہ سپورٹ دکھے).
+- اگر `koto build` ABI ورژن مسترد کرے تو تصدیق کریں کہ کمپائلر اور نوڈ دونوں ABI v1 کو ہدف Isso é um problema (`koto build --help` بغیر دلائل کے چلائیں تاکہ سپورٹ دکھے).
 - CLI hex یا Chaves de assinatura Base64 قبول کرتا ہے۔ ٹیسٹنگ کے لئے `iroha_cli tools crypto keypair` سے نکلے ہوئے chaves استعمال کیے جا سکتے ہیں۔
 - Cargas úteis Norito Kotodama سورس سے جوڑا جا سکے۔
 

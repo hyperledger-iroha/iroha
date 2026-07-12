@@ -6,12 +6,17 @@ use ivm::{
     IVM, KotodamaCompiler,
     mock_wsv::{AccountId, DomainId, MockWorldStateView, PermissionToken, WsvHost},
 };
+mod common;
 
 #[test]
 fn kotodama_unregister_domain() {
     // Program unregisters a domain using a constructor
     let src = r#"
-        fn main() { unregister_domain(domain("wonderland.universal")); }
+        seiyaku UnregisterDomain {
+            kotoage fn main() authorize("UnregisterDomain") {
+                ledger::domain::unregister(DomainId::parse("wonderland.universal"));
+            }
+        }
     "#;
     unsafe { std::env::set_var("IVM_COMPILER_DEBUG", "1") };
     let compiler = KotodamaCompiler::new();
@@ -32,19 +37,22 @@ fn kotodama_unregister_domain() {
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     assert!(wsv.register_domain(&alice, dom));
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
-    let mut vm = IVM::new(100_000);
+    let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
+    common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run()
         .expect("unregister_domain should validate TLV and queue ISI");
 }
 
 #[test]
 fn kotodama_transfer_domain() {
-    // Program transfers a domain from `authority()` to bob
+    // Program transfers a domain from the execution authority to bob.
     let src = r#"
-        fn main() {
-          transfer_domain(authority(), domain("wonderland.universal"), account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
+        seiyaku TransferDomain {
+        kotoage fn main() authorize("TransferDomain") {
+          ledger::domain::transfer(source: context::authority(), domain: DomainId::parse("wonderland.universal"), destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
+        }
         }
     "#;
     unsafe { std::env::set_var("IVM_COMPILER_DEBUG", "1") };
@@ -60,9 +68,10 @@ fn kotodama_transfer_domain() {
     );
     wsv.add_account_unchecked(alice.clone());
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
-    let mut vm = IVM::new(100_000);
+    let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
+    common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run()
         .expect("transfer_domain should validate TLVs and queue ISI");
 }

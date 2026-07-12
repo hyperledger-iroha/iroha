@@ -398,8 +398,6 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::bridge::SubmitBridgeProof>,
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordBridgeReceipt>,
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordSccpMessage>,
-    dispatch_instruction::<iroha_data_model::isi::bridge::UpsertSccpRouteManifest>,
-    dispatch_instruction::<iroha_data_model::isi::bridge::RemoveSccpRouteManifest>,
     dispatch_instruction::<confidential::PublishPedersenParams>,
     dispatch_instruction::<confidential::SetPedersenParamsLifecycle>,
     dispatch_instruction::<confidential::PublishPoseidonParams>,
@@ -413,7 +411,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::ministry::SubmitAgendaProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeDeployContract>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>,
-    dispatch_instruction::<iroha_data_model::isi::governance::ProposeSccpRouteManifest>,
+    dispatch_instruction::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>,
     dispatch_instruction::<iroha_data_model::isi::governance::CastZkBallot>,
     dispatch_instruction::<iroha_data_model::isi::governance::CastPlainBallot>,
     dispatch_instruction::<iroha_data_model::isi::governance::EnactReferendum>,
@@ -832,15 +830,18 @@ mod tests {
             abi_version: 1,
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "isi-mod-test".to_owned(),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
             entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
                 name: "main".to_owned(),
-                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
                 params: Vec::new(),
+                argument_schema: None,
                 return_type: None,
+                return_schema: None,
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -849,6 +850,7 @@ mod tests {
                 triggers: Vec::new(),
                 entry_pc: 0,
             }],
+            error_codes: Vec::new(),
             states: Vec::new(),
         };
         let mut code = Vec::new();
@@ -3087,8 +3089,10 @@ mod tests {
     }
 
     #[test]
-    async fn register_contract_manifest_is_queryable_without_permission() -> Result<()> {
-        use iroha_data_model::{isi::smart_contract_code, query::smart_contract::prelude};
+    async fn register_contract_manifest_is_queryable_with_runtime_authority() -> Result<()> {
+        use iroha_data_model::{
+            isi::smart_contract_code, permission, prelude as dm, query::smart_contract::prelude,
+        };
 
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
@@ -3099,6 +3103,10 @@ mod tests {
         let mut stx = state_block.transaction();
 
         let alice = ALICE_ID.clone();
+        let token =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
+        let permission: permission::Permission = token.into();
+        dm::Grant::account_permission(permission, alice.clone()).execute(&alice, &mut stx)?;
         let (code, manifest) = minimal_contract_artifact();
         let h = manifest.code_hash.expect("manifest code hash");
         smart_contract_code::RegisterSmartContractBytes { code_hash: h, code }
@@ -3143,6 +3151,7 @@ mod tests {
         let alice = ALICE_ID.clone();
         let h = Hash::new(b"dummy_code");
         let manifest = manifest::ContractManifest {
+            seiyaku_name: None,
             code_hash: Some(h),
             abi_hash: None,
             compiler_fingerprint: None,
@@ -3151,6 +3160,7 @@ mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         };
 
@@ -3189,6 +3199,7 @@ mod tests {
         let alice = ALICE_ID.clone();
         let h = Hash::new(b"dummy_code");
         let manifest = manifest::ContractManifest {
+            seiyaku_name: None,
             code_hash: Some(h),
             abi_hash: None,
             compiler_fingerprint: None,
@@ -3197,6 +3208,7 @@ mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         }
         .signed(&checked_keypair());

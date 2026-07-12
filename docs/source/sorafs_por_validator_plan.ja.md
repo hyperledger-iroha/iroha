@@ -13,7 +13,7 @@ translation_last_reviewed: 2026-06-25
 
 ## Goals & Scope
 - Provide auditors, SRE, and governance teams with deterministic tooling to inspect, validate, and export Proof-of-Replication (PoR) data produced by the coordinator (SF-9a).
-- Deliver command-line workflows and API surfaces that inspect challenge lifecycles and publish weekly health reports without relying on ad hoc scripts.
+- Deliver command-line workflows and API surfaces that track scheduler-issued challenge lifecycles and publish weekly health reports without relying on ad hoc scripts.
 - Ensure all outputs rely on Norito payloads, respect audit retention policies, and integrate cleanly with the repair automation and governance DAG pipelines.
 
 ## Status
@@ -22,9 +22,10 @@ exposes PoR status, export, report, and ingestion endpoints backed by
 `PorCoordinator`; `sorafs_cli por status`, `por export`, and `por report`
 consume those endpoints; and `sorafs-validate por` performs deterministic
 challenge/proof pair validation for offline fixture and release checks.
-Challenge creation is internal to the verified coordinator scheduler. The
-first-release public surface contains no command, client method, or HTTP endpoint
-for injecting challenges or recording manual success/failure observations.
+Manual and externally supplied challenge ingress is intentionally absent from
+the first-release API. Live challenges can originate only from the verified
+coordinator scheduler. The public surface likewise contains no command, client
+method, or HTTP endpoint for recording manual success/failure observations.
 
 Remaining SF-9b work is live auditor rollout evidence, production archive
 handoff, and any richer proof-bundle inspection commands required by operators.
@@ -41,11 +42,13 @@ planner. The shared checker exports its required top-level payload fields as
 can review the exact SF-9 artifact contract before promotion, and the runner
 validates the schema-closed collection plan, required kinds, thresholds,
 external evidence map, evidence contract, and command steps before dry-run
-output or verifier execution.
+output or verifier execution. Observability artifacts also bind `metric_count`
+to the unique canonical `metrics` inventory and reject duplicate metric labels
+before promotion can report ready.
 
 ## Validator Personas
 - **Auditor:** Independent or council-appointed reviewer validating provider proofs, filing slashing proposals, and verifying remediation.
-- **SRE / Ops:** Monitors live challenges and exports digests for dashboards and incident review.
+- **SRE / Ops:** Monitors live scheduler challenges and exports digests for dashboards and incident review.
 - **Governance Analyst:** Consumes weekly reports, reviews outstanding failures, and confirms that penalties/slashing align with policy.
 
 ## CLI Design (`sorafs_cli por ...`)
@@ -126,7 +129,13 @@ struct PorProviderSummaryV1 {
 }
 ```
 
-The CLI serialises these types using Norito JSON (`norito::json`) and ensures report outputs embed metadata (schema version, hash, generation timestamp).
+The CLI serialises these types using Norito JSON (`norito::json`) and ensures
+report outputs embed metadata (schema version, hash, generation timestamp).
+All consensus-adjacent report metrics use integer units: success rate is
+`0..=10_000` basis points and latency is an unsigned millisecond count. Provider
+lists are sorted canonically, duplicate provider IDs are rejected, and offender
+ties are resolved by provider ID so identical challenge histories produce
+byte-identical Norito reports on every host.
 
 ## Torii API Extensions
 | Method | Path | Description |
@@ -135,20 +144,48 @@ The CLI serialises these types using Norito JSON (`norito::json`) and ensures re
 | `GET` | `/v1/sorafs/por/export` | Return a Norito `PorStatusExportV1` for an optional epoch range. |
 | `GET` | `/v1/sorafs/por/report/{iso_week}` | Return a Norito `PorWeeklyReportV1` generated from coordinator history. |
 | `GET` | `/v1/sorafs/por/ingestion/{manifest_digest_hex}?limit=N` | Return `limit`-bounded provider backlog and last verdict timestamps from `sorafs_node`, with total provider counts retained. |
-| `POST` | `/v1/sorafs/capacity/por-proof` | Record a provider `PorProofV1`. |
-| `POST` | `/v1/sorafs/capacity/por-verdict` | Record an auditor `AuditVerdictV1` and update coordinator status. |
+| `POST` | `/v1/sorafs/capacity/por-proof` | Record a provider `PorProofV1`; requires a fresh operator request signature whose Ed25519 key matches both the proof signer and the provider's current admitted advert key. |
+| `POST` | `/v1/sorafs/capacity/por-verdict` | Record an auditor `AuditVerdictV1`; every unique signature must belong to the configured operator trust set, the authenticated request signer must be one of them, and `torii.sorafs_por.auditor_signature_threshold` must be met. |
 
-Legacy direct-storage mutations, external challenge submission, and manual
-outcome observation are absent from the first-release router. Requests to those
-removed surfaces resolve as unknown routes, so they cannot bypass the
-coordinator, provider-admission binding, replay protection, or auditor checks.
-The scheduler verifies authenticated beacon and provider VRF material before it
-creates and publishes a `PorChallengeV1`.
+The proof and verdict mutation routes use the canonical `x-iroha-operator-*` request-signature
+envelope. Method, path, canonical query, exact body digest, timestamp, and nonce
+are signed; stale timestamps, reused nonces, cross-path replays, body changes,
+and keys outside the configured operator allow-list fail before payload
+processing. PoR mutations fail closed when operator request signatures are
+disabled, even if another operator-auth fallback is configured. Provider proof
+and auditor verdict signatures use domain-separated canonical Norito payloads
+(`sorafs.por.proof.signature.v1` and
+`sorafs.por.verdict.signature.v1`). The proof signature covers the version,
+challenge, manifest, provider, ordered samples, authentication path, and
+`submitted_at`; the verdict signature covers the complete decision and
+metadata except the signatures themselves.
+
+Torii derives the trusted verdict-auditor set from the configured operator
+signature allow-list plus the node key when `allow_node_key` is enabled, filters
+it to Ed25519, and requires the non-zero
+`torii.sorafs_por.auditor_signature_threshold`. The manifest, coordinator, and
+node layers independently re-check that policy before committing state, so a
+self-signed key embedded by an attacker is never a trust root.
+
+The `/v1/sorafs/storage/por-challenge`, `por-proof`, and `por-verdict` method/path
+pairs are not registered. Keeping one authenticated capacity lifecycle prevents
+a direct-storage route from bypassing the coordinator, admission binding,
+replay protection, or auditor checks.
+
+`ManualPorChallengeV1` remains an offline fixture/tooling type only. Torii does
+not admit manual or externally supplied challenges. The verified scheduler is
+the only permitted production authority for the `PorChallengeV1` contract.
+Production startup currently
+rejects `torii.sorafs_por.enabled = true` because no authenticated external
+drand/VRF feed is wired; deterministic seed material is explicitly not a
+substitute.
 
 ## Offline Verification Pipeline
 - Implemented: `sorafs-validate por` loads Norito `PorChallengeV1` and
   `PorProofV1`, validates payload shape, seed/deadline policy, challenge/proof
-  binding, and exact sample-index coverage, then emits `ValidationOutcomeV1`.
+  binding, exact ordered sample-index coverage, and the provider's
+  domain-separated proof signature, then emits `ValidationOutcomeV1`. Offline
+  verification proves integrity but does not establish live provider admission.
 - Implemented: `sorafs_cli por status/export/report` consumes coordinator
   history for audit review.
 - Not yet shipped: single-challenge display, proof-bundle download, and richer
@@ -178,9 +215,19 @@ creates and publishes a `PorChallengeV1`.
   replay-protected operator signatures. Every verdict signer must be
   allow-listed in `torii.operator_signatures`, and the configured auditor
   threshold must be met; provider keys must additionally match the current
-  governance-admitted provider advert. The scheduler is the sole challenge
-  authority and no public challenge-injection or manual-observation route is
-  registered.
+  governance-admitted provider advert. External challenge ingestion and manual
+  observation method/path pairs are unregistered; the scheduler is the trusted
+  challenge authority.
+- Proofs must cover the exact ordered sample indices in the challenge and carry
+  a provider timestamp inside the inclusive issue/deadline window. Successful
+  or repaired verdicts require the recorded proof digest; failure verdicts may
+  omit it only when no proof arrived. Provider/manifest/digest/time mismatches
+  leave the legitimate challenge retryable. Exact challenge, proof, and verdict
+  replays are rejected, including attempts to resurrect a finalized challenge.
+  The Torii coordinator/node pipeline is serialized and uses compensating
+  rollback when the second state store rejects a transition. Coordinator
+  snapshot failures and repair-history persistence failures roll back the
+  in-memory transition before the other store is changed.
 - Export files currently contain the raw Norito `PorStatusExportV1` payload.
   Parquet/manifest packaging and SoraFS pinning are production archive tasks.
 - Governance meetings can reference `PorWeeklyReportV1` to decide on penalties,
@@ -210,13 +257,15 @@ replay, challenge/proof binding, exact sample coverage, deadline policy,
 Merkle/archive replay, `ValidationOutcomeV1` schema compatibility, bounded
 status/export/report route latency, weekly report generation, archive-retention
 policy, governance archive handoff, and the exact `archive_backend` value (`sql`
-or `parquet`). Raw challenge, proof, report, export, response-body, token,
-transaction, and secret material is rejected.
+or `parquet`). Raw challenge, proof, report,
+export, response-body, token, transaction, and secret material is rejected.
+The planner's dry-run output includes the same checker-owned field contract for
+the selected required kinds.
 
 ## Rollout Status
 Implemented locally:
 - `PorChallengeStatusV1`, `PorWeeklyReportV1`, `PorProviderSummaryV1`,
-  `PorSlashingEventV1`, and `PorStatusExportV1`.
+  `PorSlashingEventV1`, `ManualPorChallengeV1`, and `PorStatusExportV1`.
 - Torii status, export, report, ingestion, provider-proof, auditor-verdict, and
   authenticated provider-VRF routes.
 - `sorafs_cli por status`, `por export`, and `por report`.
@@ -226,7 +275,7 @@ Implemented locally:
 - Shared fail-closed SF-9 rollout evidence gate, collection planner, operator
   argfile templates, and focused Python tests for validator/reporting evidence,
   including exact SQL/Parquet archive backend enforcement for reporting/archive
-  evidence and static guards preventing retired mutation surfaces from returning.
+  evidence and negative route-registration checks for forbidden manual ingress.
 
 Remaining production gates:
 - Add proof-bundle fetch/show/offline replay commands if operators need them

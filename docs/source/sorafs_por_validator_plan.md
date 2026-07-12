@@ -7,7 +7,7 @@ summary: SF-9b implementation status for PoR validator tooling, status/report/ex
 
 ## Goals & Scope
 - Provide auditors, SRE, and governance teams with deterministic tooling to inspect, validate, and export Proof-of-Replication (PoR) data produced by the coordinator (SF-9a).
-- Deliver command-line workflows and API surfaces that inspect challenge lifecycles and publish weekly health reports without relying on ad hoc scripts.
+- Deliver command-line workflows and API surfaces that track scheduler-issued challenge lifecycles and publish weekly health reports without relying on ad hoc scripts.
 - Ensure all outputs rely on Norito payloads, respect audit retention policies, and integrate cleanly with the repair automation and governance DAG pipelines.
 
 ## Status
@@ -16,9 +16,10 @@ exposes PoR status, export, report, and ingestion endpoints backed by
 `PorCoordinator`; `sorafs_cli por status`, `por export`, and `por report`
 consume those endpoints; and `sorafs-validate por` performs deterministic
 challenge/proof pair validation for offline fixture and release checks.
-Challenge creation is internal to the verified coordinator scheduler. The
-first-release public surface contains no command, client method, or HTTP endpoint
-for injecting challenges or recording manual success/failure observations.
+Manual and externally supplied challenge ingress is intentionally absent from
+the first-release API. Live challenges can originate only from the verified
+coordinator scheduler. The public surface likewise contains no command, client
+method, or HTTP endpoint for recording manual success/failure observations.
 
 Remaining SF-9b work is live auditor rollout evidence, production archive
 handoff, and any richer proof-bundle inspection commands required by operators.
@@ -41,7 +42,7 @@ before promotion can report ready.
 
 ## Validator Personas
 - **Auditor:** Independent or council-appointed reviewer validating provider proofs, filing slashing proposals, and verifying remediation.
-- **SRE / Ops:** Monitors live challenges and exports digests for dashboards and incident review.
+- **SRE / Ops:** Monitors live scheduler challenges and exports digests for dashboards and incident review.
 - **Governance Analyst:** Consumes weekly reports, reviews outstanding failures, and confirms that penalties/slashing align with policy.
 
 ## CLI Design (`sorafs_cli por ...`)
@@ -160,12 +161,18 @@ it to Ed25519, and requires the non-zero
 node layers independently re-check that policy before committing state, so a
 self-signed key embedded by an attacker is never a trust root.
 
-Legacy direct-storage mutations, external challenge submission, and manual
-outcome observation are absent from the first-release router. Requests to those
-removed surfaces resolve as unknown routes, so they cannot bypass the
-coordinator, provider-admission binding, replay protection, or auditor checks.
-The scheduler verifies authenticated beacon and provider VRF material before it
-creates and publishes a `PorChallengeV1`.
+The `/v1/sorafs/storage/por-challenge`, `por-proof`, and `por-verdict` method/path
+pairs are not registered. Keeping one authenticated capacity lifecycle prevents
+a direct-storage route from bypassing the coordinator, admission binding,
+replay protection, or auditor checks.
+
+`ManualPorChallengeV1` remains an offline fixture/tooling type only. Torii does
+not admit manual or externally supplied challenges. The verified scheduler is
+the only permitted production authority for the `PorChallengeV1` contract.
+Production startup currently
+rejects `torii.sorafs_por.enabled = true` because no authenticated external
+drand/VRF feed is wired; deterministic seed material is explicitly not a
+substitute.
 
 ## Offline Verification Pipeline
 - Implemented: `sorafs-validate por` loads Norito `PorChallengeV1` and
@@ -202,9 +209,9 @@ creates and publishes a `PorChallengeV1`.
   replay-protected operator signatures. Every verdict signer must be
   allow-listed in `torii.operator_signatures`, and the configured auditor
   threshold must be met; provider keys must additionally match the current
-  governance-admitted provider advert. The scheduler is the sole challenge
-  authority and no public challenge-injection or manual-observation route is
-  registered.
+  governance-admitted provider advert. External challenge ingestion and manual
+  observation method/path pairs are unregistered; the scheduler is the trusted
+  challenge authority.
 - Proofs must cover the exact ordered sample indices in the challenge and carry
   a provider timestamp inside the inclusive issue/deadline window. Successful
   or repaired verdicts require the recorded proof digest; failure verdicts may
@@ -252,7 +259,7 @@ the selected required kinds.
 ## Rollout Status
 Implemented locally:
 - `PorChallengeStatusV1`, `PorWeeklyReportV1`, `PorProviderSummaryV1`,
-  `PorSlashingEventV1`, and `PorStatusExportV1`.
+  `PorSlashingEventV1`, `ManualPorChallengeV1`, and `PorStatusExportV1`.
 - Torii status, export, report, ingestion, provider-proof, auditor-verdict, and
   authenticated provider-VRF routes.
 - `sorafs_cli por status`, `por export`, and `por report`.
@@ -262,7 +269,7 @@ Implemented locally:
 - Shared fail-closed SF-9 rollout evidence gate, collection planner, operator
   argfile templates, and focused Python tests for validator/reporting evidence,
   including exact SQL/Parquet archive backend enforcement for reporting/archive
-  evidence and static guards preventing retired mutation surfaces from returning.
+  evidence and negative route-registration checks for forbidden manual ingress.
 
 Remaining production gates:
 - Add proof-bundle fetch/show/offline replay commands if operators need them

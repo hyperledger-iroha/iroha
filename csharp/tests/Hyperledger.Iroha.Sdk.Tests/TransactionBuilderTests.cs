@@ -1248,7 +1248,7 @@ public sealed class TransactionBuilderTests
                 malformedRequestArchive,
                 KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
                 hopCount: 2u,
-                hasLineageWitness: false,
+                hasLineageWitness: true,
                 hasLineageVerifierRecord: false,
                 lineageVerifierRecordCount: 2));
         Assert.Empty(builder.Instructions);
@@ -1288,7 +1288,7 @@ public sealed class TransactionBuilderTests
                 malformedRequestArchive,
                 KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
                 hopCount: 2u,
-                hasLineageWitness: false,
+                hasLineageWitness: true,
                 hasLineageVerifierRecord: false,
                 lineageVerifierRecordCount: 1,
                 publicAmount: "40",

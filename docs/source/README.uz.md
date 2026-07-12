@@ -44,7 +44,7 @@ Ushbu indeks IVM, Kotodama va IVM-birinchi quvur liniyasi uchun asosiy dizayn va
 - Docker quruvchi tasviridan foydalanish: `docker_build.md`
 
 Foydalanish bo'yicha maslahatlar
-- Tashqi asboblar (`koto_compile`, `ivm_run`) yordamida `examples/` da misollar yaratish va ishga tushirish:
+- Tashqi asboblar (`koto build`, `ivm_run`) yordamida `examples/` da misollar yaratish va ishga tushirish:
   - `make examples-run` (va agar `ivm_tool` mavjud bo'lsa, `make examples-inspect`)
 - Misollar va sarlavha tekshiruvlari uchun ixtiyoriy integratsiya testlari (sukut bo'yicha e'tiborga olinmaydi) `integration_tests/tests/` da ishlaydi.Quvur liniyasi konfiguratsiyasi
 - Ish vaqtining barcha xatti-harakatlari `iroha_config` fayllari orqali sozlangan. Atrof-muhit o'zgaruvchilari operatorlar uchun ishlatilmaydi.

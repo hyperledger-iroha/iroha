@@ -832,12 +832,6 @@ mod tests {
             },
             torii: Torii {
                 address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
-                api_versions: iroha_config::parameters::defaults::torii::api_supported_versions(),
-                api_version_default:
-                    iroha_config::parameters::defaults::torii::api_default_version(),
-                api_min_proof_version:
-                    iroha_config::parameters::defaults::torii::api_min_proof_version(),
-                api_version_sunset_unix: iroha_torii_shared::API_VERSION_SUNSET_UNIX,
                 cors: iroha_config::parameters::actual::ToriiCors::default(),
                 max_content_len: 1_048_576u64.into(),
                 data_dir: iroha_config::parameters::defaults::torii::data_dir(),
@@ -1021,6 +1015,9 @@ mod tests {
                     max_body_bytes: iroha_config::parameters::defaults::torii::PROOF_MAX_BODY_BYTES,
                     body_max_inflight:
                         iroha_config::parameters::defaults::torii::PROOF_BODY_MAX_INFLIGHT,
+                    body_read_timeout: Duration::from_millis(
+                        iroha_config::parameters::defaults::torii::PROOF_BODY_READ_TIMEOUT_MS,
+                    ),
                     egress_bytes_per_sec: iroha_config::parameters::defaults::torii::PROOF_EGRESS_BYTES_PER_SEC
                         .and_then(std::num::NonZeroU64::new),
                     egress_burst_bytes: iroha_config::parameters::defaults::torii::PROOF_EGRESS_BURST_BYTES
@@ -1282,6 +1279,9 @@ mod tests {
                         iroha_config::parameters::defaults::sumeragi::KURA_STORE_RETRY_MAX_ATTEMPTS,
                     commit_inflight_timeout: std::time::Duration::from_millis(
                         iroha_config::parameters::defaults::sumeragi::COMMIT_INFLIGHT_TIMEOUT_MS,
+                    ),
+                    post_finality_cleanup_timeout: std::time::Duration::from_millis(
+                        iroha_config::parameters::defaults::sumeragi::POST_FINALITY_CLEANUP_TIMEOUT_MS,
                     ),
                     commit_work_queue_cap:
                         iroha_config::parameters::defaults::sumeragi::COMMIT_WORK_QUEUE_CAP,
@@ -1813,6 +1813,7 @@ mod tests {
                         iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
                 },
                 stark: iroha_config::parameters::actual::Stark::default(),
+                sccp: iroha_config::parameters::actual::Sccp::default(),
                 root_history_cap: iroha_config::parameters::defaults::zk::ledger::ROOT_HISTORY_CAP,
                 ballot_history_cap:
                     iroha_config::parameters::defaults::zk::vote::BALLOT_HISTORY_CAP,
@@ -1834,13 +1835,6 @@ mod tests {
                     iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
                 bridge_proof_max_future_drift_blocks:
                     iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
-                sccp_launch_mode:
-                    iroha_config::parameters::actual::SccpLaunchMode::EthereumMainnetLane,
-                sccp_source_verifier_materials: Vec::new(),
-                sccp_source_adapter_engine_deployments: Vec::new(),
-                sccp_destination_rollouts: Vec::new(),
-                sccp_route_allowlists: Vec::new(),
-                sccp_route_manifests: Vec::new(),
                 poseidon_params_id:
                     iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
                 pedersen_params_id:

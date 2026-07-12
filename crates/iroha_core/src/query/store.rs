@@ -5,7 +5,7 @@ use std::{
     num::{NonZeroU64, NonZeroUsize},
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -15,7 +15,7 @@ use iroha_config::parameters::actual::LiveQueryStore as Config;
 use iroha_data_model::{
     account::AccountId,
     query::{
-        QueryOutput, QueryOutputBatchBoxTuple,
+        QueryOutput, QueryOutputBatchBoxTuple, QueryRequest,
         error::QueryExecutionFail,
         parameters::{ForwardCursor, QueryId},
     },
@@ -27,6 +27,8 @@ use tokio::task::JoinHandle;
 use super::cursor::ErasedQueryIterator;
 
 type DeferredMaterializer = Box<dyn FnOnce() -> ErasedQueryIterator + Send + Sync>;
+const QUERY_ID_BYTES: usize = 32;
+const QUERY_ID_ALLOCATION_ATTEMPTS: usize = 16;
 type PagedBatcher =
     Box<dyn Fn(u64, Option<u64>) -> Result<PagedQueryPage, QueryExecutionFail> + Send + Sync>;
 
@@ -333,7 +335,10 @@ impl LiveQuery {
 pub struct LiveQueryStore {
     queries: DashMap<QueryId, QueryInfo>,
     queries_per_user: DashMap<AccountId, usize>,
-    next_query_id: AtomicU64,
+    // Includes both inserted queries and insertion reservations. Keeping this
+    // independent of `DashMap::len` makes the global capacity check atomic
+    // across shards and authorities.
+    query_slots: AtomicUsize,
     // The maximum number of queries in the store
     capacity: NonZeroUsize,
     // The maximum number of queries in the store per user
@@ -348,6 +353,7 @@ struct QueryInfo {
     live_query: LiveQuery,
     last_access_time: Instant,
     authority: AccountId,
+    revalidation_request: Option<Arc<[u8]>>,
 }
 
 impl LiveQueryStore {
@@ -356,7 +362,7 @@ impl LiveQueryStore {
         Self {
             queries: DashMap::new(),
             queries_per_user: DashMap::new(),
-            next_query_id: AtomicU64::new(1),
+            query_slots: AtomicUsize::new(0),
             idle_time: cfg.idle_time,
             capacity: cfg.capacity,
             capacity_per_user: cfg.capacity_per_user,
@@ -417,18 +423,41 @@ impl LiveQueryStore {
             if query.last_access_time.elapsed() <= self.idle_time {
                 true
             } else {
-                expired.push(key.clone());
-                self.decrease_queries_per_user(query.authority.clone());
+                expired.push((key.clone(), query.authority.clone()));
                 false
             }
         });
-        expired
+        for (_, authority) in &expired {
+            self.decrease_queries_per_user(authority.clone());
+        }
+        self.release_query_slots(expired.len());
+        expired.into_iter().map(|(query_id, _)| query_id).collect()
     }
 
     fn remove(&self, query_id: &str) -> Option<QueryInfo> {
         let (_, query_info) = self.queries.remove(query_id)?;
         self.decrease_queries_per_user(query_info.authority.clone());
+        self.release_query_slots(1);
         Some(query_info)
+    }
+
+    fn try_reserve_query_slot(&self) -> bool {
+        self.query_slots
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                (current < self.capacity.get()).then_some(current + 1)
+            })
+            .is_ok()
+    }
+
+    fn release_query_slots(&self, count: usize) {
+        if count == 0 {
+            return;
+        }
+        self.query_slots
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current.checked_sub(count)
+            })
+            .expect("live-query slot accounting must not underflow");
     }
 
     fn decrease_queries_per_user(&self, authority: AccountId) {
@@ -443,20 +472,29 @@ impl LiveQueryStore {
         }
     }
 
-    fn next_query_id(&self) -> QueryId {
-        self.next_query_id
-            .fetch_add(1, Ordering::Relaxed)
-            .to_string()
+    fn random_query_id() -> QueryId {
+        let mut bytes = [0_u8; QUERY_ID_BYTES];
+        if rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut bytes).is_err() {
+            return String::new();
+        }
+        hex::encode(bytes)
     }
 
     fn insert_new_query(
         &self,
-        query_id: QueryId,
         live_query: LiveQuery,
         authority: AccountId,
-    ) -> Result<(), QueryExecutionFail> {
-        trace!(%query_id, "Inserting new query");
-        if self.queries.len() >= self.capacity.get() {
+    ) -> Result<QueryId, QueryExecutionFail> {
+        self.insert_new_query_with_generator(live_query, authority, Self::random_query_id)
+    }
+
+    fn insert_new_query_with_generator(
+        &self,
+        live_query: LiveQuery,
+        authority: AccountId,
+        mut generate_query_id: impl FnMut() -> QueryId,
+    ) -> Result<QueryId, QueryExecutionFail> {
+        if !self.try_reserve_query_slot() {
             warn!(
                 max_queries = self.capacity,
                 "Reached maximum allowed number of queries in LiveQueryStore"
@@ -466,6 +504,8 @@ impl LiveQueryStore {
 
         let mut user_count = self.queries_per_user.entry(authority.clone()).or_insert(0);
         if *user_count >= self.capacity_per_user.get() {
+            drop(user_count);
+            self.release_query_slots(1);
             warn!(
                 max_queries_per_user = self.capacity_per_user,
                 %authority,
@@ -476,22 +516,37 @@ impl LiveQueryStore {
         *user_count += 1;
         drop(user_count);
 
-        let previous = self.queries.insert(
-            query_id,
-            QueryInfo {
+        let mut live_query = Some(live_query);
+        for _ in 0..QUERY_ID_ALLOCATION_ATTEMPTS {
+            let query_id = generate_query_id();
+            if query_id.is_empty() {
+                continue;
+            }
+            let Entry::Vacant(entry) = self.queries.entry(query_id.clone()) else {
+                continue;
+            };
+            let Some(live_query) = live_query.take() else {
+                self.decrease_queries_per_user(authority);
+                self.release_query_slots(1);
+                return Err(QueryExecutionFail::CapacityLimit);
+            };
+            entry.insert(QueryInfo {
                 live_query,
                 last_access_time: Instant::now(),
-                authority: authority.clone(),
-            },
-        );
-        if previous.is_some() {
-            self.decrease_queries_per_user(authority);
-            debug_assert!(
-                false,
-                "monotonic query id generation should never collide in LiveQueryStore"
-            );
+                authority,
+                revalidation_request: None,
+            });
+            trace!(%query_id, "Inserted new query");
+            return Ok(query_id);
         }
-        Ok(())
+
+        self.decrease_queries_per_user(authority);
+        self.release_query_slots(1);
+        warn!(
+            attempts = QUERY_ID_ALLOCATION_ATTEMPTS,
+            "Failed to allocate a unique opaque query ID"
+        );
+        Err(QueryExecutionFail::CapacityLimit)
     }
 
     // For the existing query, takes and returns the first batch.
@@ -501,6 +556,7 @@ impl LiveQueryStore {
         query_id: &QueryId,
         cursor: NonZeroU64,
         gas_budget: Option<u64>,
+        authority: &AccountId,
     ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<NonZeroU64>), QueryExecutionFail>
     {
         trace!(%query_id, "Advancing existing query");
@@ -509,6 +565,12 @@ impl LiveQueryStore {
                 .queries
                 .get_mut(query_id)
                 .ok_or(QueryExecutionFail::Expired)?;
+            // Return the same error as an absent/expired cursor so callers cannot
+            // use continuation attempts to probe another authority's live-query IDs.
+            // Do not advance the iterator or refresh its idle timeout on mismatch.
+            if &entry.authority != authority {
+                return Err(QueryExecutionFail::Expired);
+            }
             let (next_batch, next_cursor) =
                 match entry.live_query.next_batch(cursor.get(), gas_budget) {
                     Ok(next) => next,
@@ -534,6 +596,48 @@ impl LiveQueryStore {
             self.remove(query_id);
         }
         Ok((next_batch, remaining, next_cursor))
+    }
+
+    fn bind_revalidation_request(
+        &self,
+        query_id: &QueryId,
+        authority: &AccountId,
+        archive: Arc<[u8]>,
+    ) -> Result<(), QueryExecutionFail> {
+        let mut entry = self
+            .queries
+            .get_mut(query_id)
+            .ok_or(QueryExecutionFail::Expired)?;
+        if &entry.authority != authority {
+            return Err(QueryExecutionFail::Expired);
+        }
+        if let Some(existing) = &entry.revalidation_request {
+            return if existing.as_ref() == archive.as_ref() {
+                Ok(())
+            } else {
+                Err(QueryExecutionFail::CursorMismatch)
+            };
+        }
+        entry.revalidation_request = Some(archive);
+        Ok(())
+    }
+
+    fn revalidation_request(
+        &self,
+        query_id: &QueryId,
+        authority: &AccountId,
+    ) -> Result<Arc<[u8]>, QueryExecutionFail> {
+        let entry = self
+            .queries
+            .get(query_id)
+            .ok_or(QueryExecutionFail::Expired)?;
+        if &entry.authority != authority {
+            return Err(QueryExecutionFail::Expired);
+        }
+        entry
+            .revalidation_request
+            .clone()
+            .ok_or(QueryExecutionFail::Expired)
     }
 }
 
@@ -567,8 +671,6 @@ impl LiveQueryStoreHandle {
         authority: &AccountId,
         gas_budget: Option<u64>,
     ) -> Result<QueryOutput, QueryExecutionFail> {
-        let query_id = self.store.next_query_id();
-
         let curr_cursor = 0;
         let (batch, next_cursor) = live_query.next_batch(curr_cursor)?;
 
@@ -576,13 +678,12 @@ impl LiveQueryStoreHandle {
         let remaining_items = live_query.remaining();
 
         // if the cursor is `None` - the query has ended, we can remove it from the store
-        if next_cursor.is_some() {
-            self.store.insert_new_query(
-                query_id.clone(),
-                LiveQuery::ready(live_query),
-                authority.clone(),
-            )?;
-        }
+        let query_id = if next_cursor.is_some() {
+            self.store
+                .insert_new_query(LiveQuery::ready(live_query), authority.clone())?
+        } else {
+            String::new()
+        };
         Ok(Self::construct_query_response(
             batch,
             remaining_items,
@@ -607,18 +708,18 @@ impl LiveQueryStoreHandle {
         authority: &AccountId,
         gas_budget: Option<u64>,
     ) -> Result<QueryOutput, QueryExecutionFail> {
-        let query_id = self.store.next_query_id();
         let next_cursor = deferred_continuation
             .as_ref()
             .map(DeferredQueryContinuation::expected_cursor);
 
-        if let Some(deferred_continuation) = deferred_continuation {
+        let query_id = if let Some(deferred_continuation) = deferred_continuation {
             self.store.insert_new_query(
-                query_id.clone(),
                 LiveQuery::deferred(deferred_continuation),
                 authority.clone(),
-            )?;
-        }
+            )?
+        } else {
+            String::new()
+        };
 
         Ok(Self::construct_query_response(
             first_batch,
@@ -643,7 +744,6 @@ impl LiveQueryStoreHandle {
         authority: &AccountId,
         gas_budget: Option<u64>,
     ) -> Result<QueryOutput, QueryExecutionFail> {
-        let query_id = self.store.next_query_id();
         let next_cursor = paged_continuation
             .as_ref()
             .map(PagedQueryContinuation::expected_cursor);
@@ -651,13 +751,12 @@ impl LiveQueryStoreHandle {
             .as_ref()
             .and_then(PagedQueryContinuation::remaining);
 
-        if let Some(paged_continuation) = paged_continuation {
-            self.store.insert_new_query(
-                query_id.clone(),
-                LiveQuery::paged(paged_continuation),
-                authority.clone(),
-            )?;
-        }
+        let query_id = if let Some(paged_continuation) = paged_continuation {
+            self.store
+                .insert_new_query(LiveQuery::paged(paged_continuation), authority.clone())?
+        } else {
+            String::new()
+        };
 
         Ok(Self::construct_query_response(
             first_batch,
@@ -685,12 +784,15 @@ impl LiveQueryStoreHandle {
         Ok(QueryOutput::new(batch, remaining_items, None))
     }
 
-    /// Retrieve next batch of query output using `cursor`.
+    /// Retrieve the next batch of query output using `cursor` as `authority`.
     ///
     /// # Errors
     ///
-    /// - Returns an [`QueryExecutionFail`] if the query id is not found,
-    ///   or if cursor position doesn't match or cannot continue.
+    /// - Returns [`QueryExecutionFail::Expired`] if the query id is absent, expired,
+    ///   or belongs to a different authority. These cases are deliberately
+    ///   indistinguishable so cursor IDs cannot be used as an existence oracle.
+    /// - Returns an [`QueryExecutionFail`] if the cursor position does not match
+    ///   or cannot continue.
     pub fn handle_iter_continue(
         &self,
         ForwardCursor {
@@ -698,10 +800,11 @@ impl LiveQueryStoreHandle {
             cursor,
             gas_budget,
         }: ForwardCursor,
+        authority: &AccountId,
     ) -> Result<QueryOutput, QueryExecutionFail> {
         let (batch, remaining, next_cursor) = self
             .store
-            .get_query_next_batch(&query, cursor, gas_budget)?;
+            .get_query_next_batch(&query, cursor, gas_budget, authority)?;
 
         Ok(Self::construct_query_response(
             batch,
@@ -710,6 +813,50 @@ impl LiveQueryStoreHandle {
             next_cursor,
             gas_budget,
         ))
+    }
+
+    /// Bind the canonical original query to a newly allocated stored cursor.
+    ///
+    /// Binding does not refresh the idle timer. Rebinding the same bytes is
+    /// idempotent; attempting to bind different bytes fails closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryExecutionFail::Expired`] when the cursor is absent or
+    /// belongs to another authority, and [`QueryExecutionFail::CursorMismatch`]
+    /// when a different request is already bound.
+    pub(crate) fn bind_revalidation_request(
+        &self,
+        cursor: &ForwardCursor,
+        authority: &AccountId,
+        archive: Vec<u8>,
+    ) -> Result<(), QueryExecutionFail> {
+        self.store
+            .bind_revalidation_request(&cursor.query, authority, Arc::<[u8]>::from(archive))
+    }
+
+    /// Decode the original query bound to a stored cursor without advancing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryExecutionFail::Expired`] for an absent, foreign,
+    /// unbound, malformed, non-canonical, or non-start request so those states
+    /// cannot be distinguished through the cursor namespace.
+    pub(crate) fn revalidation_request(
+        &self,
+        cursor: &ForwardCursor,
+        authority: &AccountId,
+    ) -> Result<QueryRequest, QueryExecutionFail> {
+        let archive = self.store.revalidation_request(&cursor.query, authority)?;
+        let request: QueryRequest =
+            norito::decode_from_bytes(archive.as_ref()).map_err(|_| QueryExecutionFail::Expired)?;
+        if !matches!(request, QueryRequest::Start(_))
+            || norito::to_bytes(&request).map_err(|_| QueryExecutionFail::Expired)?
+                != archive.as_ref()
+        {
+            return Err(QueryExecutionFail::Expired);
+        }
+        Ok(request)
     }
 
     /// Remove query from the storage if there is any.
@@ -741,7 +888,7 @@ mod tests {
     use std::{
         num::NonZeroU64,
         sync::{
-            Arc,
+            Arc, Barrier,
             atomic::{AtomicBool, AtomicUsize, Ordering},
         },
         time::Duration,
@@ -756,7 +903,7 @@ mod tests {
         },
     };
     use iroha_primitives::json::Json;
-    use iroha_test_samples::ALICE_ID;
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
 
     use super::*;
@@ -800,7 +947,7 @@ mod tests {
             counter += batch.len();
 
             while let Some(cursor) = current_cursor {
-                let Ok(batched) = query_handle.handle_iter_continue(cursor) else {
+                let Ok(batched) = query_handle.handle_iter_continue(cursor, &ALICE_ID) else {
                     break;
                 };
                 let (batch, _remaining_items, cursor) = batched.into_parts();
@@ -856,8 +1003,129 @@ mod tests {
         store.prune_expired_queries();
 
         cursor.gas_budget = Some(10);
-        let err = handle.handle_iter_continue(cursor).expect_err("expired");
+        let err = handle
+            .handle_iter_continue(cursor, &ALICE_ID)
+            .expect_err("expired");
         assert_eq!(err, QueryExecutionFail::Expired);
+    }
+
+    #[test]
+    fn revalidation_binding_is_authority_bound_immutable_and_non_consuming() {
+        let handle = LiveQueryStore::start_test();
+        let params = QueryParams {
+            fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
+            ..QueryParams::default()
+        };
+        let iter = crate::smartcontracts::query::apply_query_postprocessing(
+            (0..2).map(|index| Permission::new(format!("permission-{index}"), Json::from(false))),
+            SelectorTuple::default(),
+            &params,
+            QueryLimits::default(),
+        )
+        .expect("build paged query");
+        let (_batch, _remaining, cursor) = handle
+            .handle_iter_start(iter, &ALICE_ID, None)
+            .expect("store query")
+            .into_parts();
+        let cursor = cursor.expect("query has a continuation");
+
+        assert_eq!(
+            handle.bind_revalidation_request(&cursor, &BOB_ID, vec![0xaa]),
+            Err(QueryExecutionFail::Expired)
+        );
+        handle
+            .bind_revalidation_request(&cursor, &ALICE_ID, vec![0xaa])
+            .expect("bind owner request");
+        handle
+            .bind_revalidation_request(&cursor, &ALICE_ID, vec![0xaa])
+            .expect("identical binding is idempotent");
+        assert_eq!(
+            handle.bind_revalidation_request(&cursor, &ALICE_ID, vec![0xbb]),
+            Err(QueryExecutionFail::CursorMismatch)
+        );
+        assert!(matches!(
+            handle.revalidation_request(&cursor, &BOB_ID),
+            Err(QueryExecutionFail::Expired)
+        ));
+        assert!(matches!(
+            handle.revalidation_request(&cursor, &ALICE_ID),
+            Err(QueryExecutionFail::Expired)
+        ));
+
+        let next = handle
+            .handle_iter_continue(cursor, &ALICE_ID)
+            .expect("failed revalidation lookup must not consume the cursor");
+        assert_eq!(next.batch.len(), 1);
+    }
+
+    #[test]
+    fn stored_cursor_rejects_foreign_authority_without_advancing_or_refreshing() {
+        let store = Arc::new(LiveQueryStore::from_config(
+            Config {
+                idle_time: Duration::from_secs(60),
+                capacity: nonzero!(4_usize),
+                capacity_per_user: nonzero!(4_usize),
+            },
+            ShutdownSignal::new(),
+        ));
+        let handle = LiveQueryStoreHandle::new(Arc::clone(&store));
+        let query_output = (0..3).map(|i| Permission::new(format!("p{i}"), Json::from(false)));
+        let query_params = QueryParams {
+            fetch_size: FetchSize {
+                fetch_size: Some(nonzero!(1_u64)),
+            },
+            ..QueryParams::default()
+        };
+        let query_output = crate::smartcontracts::query::apply_query_postprocessing(
+            query_output,
+            SelectorTuple::default(),
+            &query_params,
+            QueryLimits::default(),
+        )
+        .unwrap();
+
+        let (_first_batch, _remaining, cursor) = handle
+            .handle_iter_start(query_output, &ALICE_ID, Some(10))
+            .expect("start cursor")
+            .into_parts();
+        let cursor = cursor.expect("stored cursor");
+        let last_access_before = store
+            .queries
+            .get(cursor.query())
+            .expect("stored query")
+            .last_access_time;
+
+        let foreign = handle
+            .handle_iter_continue(cursor.clone(), &BOB_ID)
+            .expect_err("another authority must not continue Alice's cursor");
+        assert_eq!(foreign, QueryExecutionFail::Expired);
+        let last_access_after = store
+            .queries
+            .get(cursor.query())
+            .expect("foreign attempt must not evict the cursor")
+            .last_access_time;
+        assert_eq!(
+            last_access_after, last_access_before,
+            "foreign attempts must not refresh cursor retention"
+        );
+
+        let mut unknown = cursor.clone();
+        unknown.query = "18446744073709551615".to_owned();
+        let unknown = handle
+            .handle_iter_continue(unknown, &BOB_ID)
+            .expect_err("guessed unknown cursor must fail");
+        assert_eq!(
+            unknown, foreign,
+            "foreign and unknown cursor IDs must be indistinguishable"
+        );
+
+        let (batch, remaining, next) = handle
+            .handle_iter_continue(cursor, &ALICE_ID)
+            .expect("the owning authority can still continue")
+            .into_parts();
+        assert_eq!(batch.len(), 1);
+        assert_eq!(remaining, 1);
+        assert!(next.is_some());
     }
 
     #[test]
@@ -950,12 +1218,12 @@ mod tests {
         bad_cursor.cursor =
             NonZeroU64::new(cursor.cursor.get().saturating_add(1)).expect("non-zero");
         let err = handle
-            .handle_iter_continue(bad_cursor)
+            .handle_iter_continue(bad_cursor, &ALICE_ID)
             .expect_err("mismatch");
         assert_eq!(err, QueryExecutionFail::CursorMismatch);
 
         let (batch, remaining, next) = handle
-            .handle_iter_continue(cursor)
+            .handle_iter_continue(cursor, &ALICE_ID)
             .expect("cursor still valid")
             .into_parts();
         assert_eq!(batch.len(), 1);
@@ -964,7 +1232,7 @@ mod tests {
     }
 
     #[test]
-    fn capacity_limit_is_enforced_with_monotonic_ids() {
+    fn capacity_limit_is_enforced_with_opaque_ids() {
         let config = Config {
             idle_time: Duration::from_secs(60),
             capacity: nonzero!(1_usize),
@@ -1003,7 +1271,49 @@ mod tests {
     }
 
     #[test]
-    fn query_ids_are_monotonic_decimal_strings() {
+    fn global_capacity_reservations_are_atomic_across_concurrent_callers() {
+        const CALLERS: usize = 32;
+        const CAPACITY: usize = 3;
+
+        let store = Arc::new(LiveQueryStore::from_config(
+            Config {
+                idle_time: Duration::from_secs(60),
+                capacity: nonzero!(3_usize),
+                capacity_per_user: nonzero!(32_usize),
+            },
+            ShutdownSignal::new(),
+        ));
+        let start = Arc::new(Barrier::new(CALLERS + 1));
+        let callers = (0..CALLERS)
+            .map(|_| {
+                let store = Arc::clone(&store);
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    start.wait();
+                    store.try_reserve_query_slot()
+                })
+            })
+            .collect::<Vec<_>>();
+
+        start.wait();
+        let admitted = callers
+            .into_iter()
+            .map(|caller| caller.join().expect("capacity caller must not panic"))
+            .filter(|admitted| *admitted)
+            .count();
+
+        assert_eq!(admitted, CAPACITY);
+        assert_eq!(store.query_slots.load(Ordering::Acquire), CAPACITY);
+        assert!(
+            store.queries.is_empty(),
+            "slot reservations alone must not manufacture live cursors"
+        );
+        store.release_query_slots(admitted);
+        assert_eq!(store.query_slots.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn query_ids_are_distinct_opaque_256_bit_values() {
         let handle = LiveQueryStore::start_test();
         let build_iter = || {
             let query_output = (0..2).map(|i| Permission::new(format!("p{i}"), Json::from(false)));
@@ -1027,20 +1337,56 @@ mod tests {
             .expect("first query")
             .into_parts();
         let first_cursor = first_cursor.expect("first cursor");
-        let first_id: u64 = first_cursor.query.parse().expect("decimal query id");
-        handle.drop_query(first_cursor.query());
 
         let (_batch, _remaining, second_cursor) = handle
             .handle_iter_start(build_iter(), &ALICE_ID, None)
             .expect("second query")
             .into_parts();
         let second_cursor = second_cursor.expect("second cursor");
-        let second_id: u64 = second_cursor.query.parse().expect("decimal query id");
+        for query_id in [&first_cursor.query, &second_cursor.query] {
+            assert_eq!(query_id.len(), QUERY_ID_BYTES * 2);
+            assert!(
+                query_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')),
+                "query IDs must use canonical lowercase hexadecimal"
+            );
+        }
+        assert_ne!(first_cursor.query, second_cursor.query);
+    }
 
-        assert!(
-            second_id > first_id,
-            "query ids must increase monotonically"
-        );
+    #[test]
+    fn opaque_query_id_allocation_retries_without_overwriting_on_collision() {
+        let store = LiveQueryStore::from_config(Config::default(), ShutdownSignal::new());
+        let make_query = |label: &'static str| {
+            LiveQuery::ready(ErasedQueryIterator::new(
+                vec![Permission::new(label.to_owned(), Json::from(false))].into_iter(),
+                SelectorTuple::default(),
+                nonzero!(1_u64),
+            ))
+        };
+        let first_id = "11".repeat(QUERY_ID_BYTES);
+        let second_id = "22".repeat(QUERY_ID_BYTES);
+
+        let inserted = store
+            .insert_new_query_with_generator(make_query("first"), ALICE_ID.clone(), || {
+                first_id.clone()
+            })
+            .expect("insert first fixed test ID");
+        assert_eq!(inserted, first_id);
+
+        let mut candidates = [first_id.clone(), second_id.clone()].into_iter();
+        let inserted = store
+            .insert_new_query_with_generator(make_query("second"), ALICE_ID.clone(), || {
+                candidates
+                    .next()
+                    .expect("test generator has a unique retry")
+            })
+            .expect("retry after forced collision");
+        assert_eq!(inserted, second_id);
+        assert_eq!(store.queries.len(), 2);
+        assert!(store.queries.contains_key(&first_id));
+        assert!(store.queries.contains_key(&second_id));
     }
 
     #[test]
@@ -1050,11 +1396,12 @@ mod tests {
         let flag = Arc::clone(&materialized);
 
         let prepared = PreparedQueryStart {
-            first_batch: QueryOutputBatchBoxTuple {
-                tuple: vec![iroha_data_model::query::QueryOutputBatchBox::Permission(
-                    vec![Permission::new("p0".to_owned(), Json::from(false))],
-                )],
-            },
+            first_batch: QueryOutputBatchBoxTuple::from_batch(
+                iroha_data_model::query::QueryOutputBatchBox::Permission(vec![Permission::new(
+                    "p0".to_owned(),
+                    Json::from(false),
+                )]),
+            ),
             remaining_items: Some(1),
             deferred_continuation: Some(DeferredQueryContinuation::new(
                 nonzero!(1_u64),
@@ -1113,7 +1460,7 @@ mod tests {
         bad_cursor.cursor =
             NonZeroU64::new(cursor.cursor.get().saturating_add(1)).expect("non-zero");
         let err = handle
-            .handle_iter_continue(bad_cursor)
+            .handle_iter_continue(bad_cursor, &ALICE_ID)
             .expect_err("cursor mismatch");
         assert_eq!(err, QueryExecutionFail::CursorMismatch);
         assert_eq!(
@@ -1123,7 +1470,7 @@ mod tests {
         );
 
         let (batch, remaining, next) = handle
-            .handle_iter_continue(cursor.clone())
+            .handle_iter_continue(cursor.clone(), &ALICE_ID)
             .expect("original cursor remains valid")
             .into_parts();
         assert_eq!(batch.len(), 1);
@@ -1132,7 +1479,7 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
         let err = handle
-            .handle_iter_continue(cursor)
+            .handle_iter_continue(cursor, &ALICE_ID)
             .expect_err("drained cursor expires");
         assert_eq!(err, QueryExecutionFail::Expired);
     }
@@ -1226,7 +1573,7 @@ mod tests {
         let cursor = cursor.expect("stored cursor");
 
         let err = handle
-            .handle_iter_continue(cursor.clone())
+            .handle_iter_continue(cursor.clone(), &ALICE_ID)
             .expect_err("expired continuation");
         assert_eq!(err, QueryExecutionFail::Expired);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -1240,7 +1587,7 @@ mod tests {
             .expect("expired paged cursor should release capacity");
 
         let err = handle
-            .handle_iter_continue(cursor)
+            .handle_iter_continue(cursor, &ALICE_ID)
             .expect_err("evicted cursor is expired");
         assert_eq!(err, QueryExecutionFail::Expired);
         assert_eq!(
@@ -1276,7 +1623,7 @@ mod tests {
         let cursor = cursor.expect("stored cursor");
 
         let err = handle
-            .handle_iter_continue(cursor.clone())
+            .handle_iter_continue(cursor.clone(), &ALICE_ID)
             .expect_err("done continuation");
         assert_eq!(err, QueryExecutionFail::CursorDone);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -1290,7 +1637,7 @@ mod tests {
             .expect("cursor-done paged cursor should release capacity");
 
         let err = handle
-            .handle_iter_continue(cursor)
+            .handle_iter_continue(cursor, &ALICE_ID)
             .expect_err("evicted cursor is expired");
         assert_eq!(err, QueryExecutionFail::Expired);
         assert_eq!(
@@ -1332,7 +1679,7 @@ mod tests {
         let cursor = cursor.expect("stored cursor");
 
         let err = handle
-            .handle_iter_continue(cursor.clone())
+            .handle_iter_continue(cursor.clone(), &ALICE_ID)
             .expect_err("non-advancing cursor must be rejected");
         assert_eq!(err, QueryExecutionFail::CursorDone);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -1346,7 +1693,7 @@ mod tests {
             .expect("non-advancing cursor should release capacity");
 
         let err = handle
-            .handle_iter_continue(cursor)
+            .handle_iter_continue(cursor, &ALICE_ID)
             .expect_err("rejected cursor should be evicted");
         assert_eq!(err, QueryExecutionFail::Expired);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -1375,13 +1722,13 @@ mod tests {
         let first_cursor = first.continue_cursor.expect("first cursor");
 
         let second = handle
-            .handle_iter_continue(first_cursor)
+            .handle_iter_continue(first_cursor, &ALICE_ID)
             .expect("second counted page");
         assert_eq!(second.remaining_items, Some(1));
         let second_cursor = second.continue_cursor.expect("second cursor");
 
         let third = handle
-            .handle_iter_continue(second_cursor)
+            .handle_iter_continue(second_cursor, &ALICE_ID)
             .expect("terminal counted page");
         assert_eq!(third.remaining_items, Some(0));
         assert!(third.continue_cursor.is_none());
@@ -1444,7 +1791,7 @@ mod tests {
         assert_eq!(err, QueryExecutionFail::AuthorityQuotaExceeded);
 
         let err = handle
-            .handle_iter_continue(cursor)
+            .handle_iter_continue(cursor, &ALICE_ID)
             .expect_err("expired continuation");
         assert_eq!(err, QueryExecutionFail::Expired);
 
@@ -1483,7 +1830,7 @@ mod tests {
         let cursor = cursor.expect("stored cursor");
 
         let err = handle
-            .handle_iter_continue(cursor.clone())
+            .handle_iter_continue(cursor.clone(), &ALICE_ID)
             .expect_err("transient continuation error");
         assert_eq!(err, QueryExecutionFail::GasBudgetExceeded);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -1498,7 +1845,7 @@ mod tests {
         assert_eq!(err, QueryExecutionFail::CapacityLimit);
 
         let err = handle
-            .handle_iter_continue(cursor)
+            .handle_iter_continue(cursor, &ALICE_ID)
             .expect_err("resident cursor can be retried");
         assert_eq!(err, QueryExecutionFail::GasBudgetExceeded);
         assert_eq!(
@@ -1556,7 +1903,7 @@ mod tests {
             .expect("dropping paged cursor should release capacity and quota");
 
         let err = handle
-            .handle_iter_continue(cursor)
+            .handle_iter_continue(cursor, &ALICE_ID)
             .expect_err("dropped cursor should expire");
         assert_eq!(err, QueryExecutionFail::Expired);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -1588,7 +1935,7 @@ mod tests {
         let cursor = cursor.expect("stored cursor");
 
         let err = handle
-            .handle_iter_continue(cursor.clone())
+            .handle_iter_continue(cursor.clone(), &ALICE_ID)
             .expect_err("transient continuation error");
         assert_eq!(err, QueryExecutionFail::GasBudgetExceeded);
 
@@ -1602,7 +1949,7 @@ mod tests {
         assert_eq!(err, QueryExecutionFail::AuthorityQuotaExceeded);
 
         let err = handle
-            .handle_iter_continue(cursor)
+            .handle_iter_continue(cursor, &ALICE_ID)
             .expect_err("resident cursor can still be retried");
         assert_eq!(err, QueryExecutionFail::GasBudgetExceeded);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
@@ -1632,13 +1979,13 @@ mod tests {
     }
 
     fn permission_batch(names: impl IntoIterator<Item = &'static str>) -> QueryOutputBatchBoxTuple {
-        QueryOutputBatchBoxTuple {
-            tuple: vec![iroha_data_model::query::QueryOutputBatchBox::Permission(
+        QueryOutputBatchBoxTuple::from_batch(
+            iroha_data_model::query::QueryOutputBatchBox::Permission(
                 names
                     .into_iter()
                     .map(|name| Permission::new(name.to_owned(), Json::from(false)))
                     .collect(),
-            )],
-        }
+            ),
+        )
     }
 }

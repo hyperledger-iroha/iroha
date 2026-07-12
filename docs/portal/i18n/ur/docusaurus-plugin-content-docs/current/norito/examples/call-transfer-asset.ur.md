@@ -31,17 +31,21 @@ source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 
 [Kotodama سورس ڈاؤن لوڈ کریں](/norito-snippets/call-transfer-asset.ko)
 
-```text
+```kotodama
 // Direct builtin call (no contract-style call syntax) inside a contract.
 seiyaku TransferCall {
-  kotoage fn pay() permission(AssetTransferRole) {
-    transfer_asset(
-      account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-      account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
-      asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-      10,
-      dataspace_id("0")
-    );
-  }
+    kotoage fn pay() authorize("AssetTransferRole") {
+        ledger::asset::transfer(
+            source: AccountId::parse(
+                "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            ),
+            destination: AccountId::parse(
+                "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+            ),
+            asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+            amount: 10,
+            dataspace: DataSpaceId::parse("0"),
+        );
+    }
 }
 ```

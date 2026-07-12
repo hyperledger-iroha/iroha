@@ -1,10 +1,13 @@
 //! Native MCP endpoint support for Torii.
 //!
 //! This module exposes a lightweight JSON-RPC bridge that maps MCP tool calls to
-//! existing Torii HTTP routes. Tool definitions are derived from Torii's OpenAPI
-//! document so the MCP surface tracks the documented API.
+//! existing Torii HTTP routes. OpenAPI supplies operation schemas, but an HTTP
+//! operation becomes an MCP tool only after its exact method/path pair opts
+//! into the catalog's MCP projection. Purpose-built `iroha.*` tools form a
+//! separate, explicit allowlist.
 
 use std::{
+    collections::BTreeSet,
     fmt::Write as _,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::LazyLock,
@@ -20,6 +23,10 @@ use base64::Engine as _;
 use blake3::Hasher as Blake3Hasher;
 use dashmap::DashMap;
 use http_body_util::BodyExt as _;
+use iroha_torii_shared::route_catalog::{
+    self, ApiSurface, CatalogProjection, EnabledFeatures, HttpMethod as CatalogHttpMethod,
+    RouteCatalog, RouteDescriptor,
+};
 use norito::json::{self, Map, Value};
 use rand::{
     rand_core::{TryCryptoRng, TryRngCore as _},
@@ -47,7 +54,6 @@ const MCP_JOB_NOT_FOUND: &str = "job_not_found";
 const HEADER_X_API_TOKEN: &str = "x-api-token";
 const HEADER_X_IROHA_ACCOUNT: &str = "x-iroha-account";
 const HEADER_X_IROHA_SIGNATURE: &str = "x-iroha-signature";
-const HEADER_X_IROHA_API_VERSION: &str = "x-iroha-api-version";
 const HEADER_X_FORWARDED_PROTO: &str = "x-forwarded-proto";
 const DEFAULT_TX_SUBMIT_WAIT_TIMEOUT_MS: u64 = 30_000;
 const MAX_TX_SUBMIT_WAIT_TIMEOUT_MS: u64 = 600_000;
@@ -208,8 +214,48 @@ struct ParameterInfo {
     schema: Value,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct CatalogProjectionGroup {
+    routes: &'static [RouteDescriptor],
+    enabled_features: EnabledFeatures<'static>,
+}
+
+const COMPILED_CATALOG_FEATURES: &[&str] = &[
+    #[cfg(feature = "app_api")]
+    "app_api",
+    #[cfg(feature = "profiling")]
+    "profiling",
+    #[cfg(feature = "schema")]
+    "schema",
+    #[cfg(feature = "telemetry")]
+    "telemetry",
+    #[cfg(feature = "p2p_ws")]
+    "p2p_ws",
+    #[cfg(feature = "connect")]
+    "connect",
+    #[cfg(feature = "gov_vrf")]
+    "gov_vrf",
+];
+
+// OpenAPI-derived tools fail closed against this catalog. A route which has not
+// entered the authoritative catalog is not an MCP operation; adding it to
+// OpenAPI alone can never expand the agent-facing tool surface.
+const CATALOG_PROJECTION_GROUPS: &[CatalogProjectionGroup] = &[CatalogProjectionGroup {
+    routes: route_catalog::CATALOGED_ROUTES,
+    enabled_features: EnabledFeatures::new(COMPILED_CATALOG_FEATURES),
+}];
+
+static VALIDATED_MCP_ROUTE_CATALOG: LazyLock<()> = LazyLock::new(|| {
+    for group in CATALOG_PROJECTION_GROUPS {
+        if let Err(errors) = RouteCatalog::new(group.routes).validate() {
+            panic!("invalid Torii route catalog used for MCP projection: {errors:?}");
+        }
+    }
+});
+
 /// Build the MCP tool registry from OpenAPI operations.
 pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp) -> Vec<ToolSpec> {
+    LazyLock::force(&VALIDATED_MCP_ROUTE_CATALOG);
     let mut tools = Vec::new();
     let spec = openapi::generate_spec();
     let Some(paths) = spec.get("paths").and_then(Value::as_object) else {
@@ -232,7 +278,13 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
             let Some(method) = method_from_key(method_key) else {
                 continue;
             };
-            if should_skip_operation(path, operation, allow_operator_routes) {
+            if should_skip_operation(path, operation, allow_operator_routes)
+                || catalog_mcp_projection_decision(
+                    CATALOG_PROJECTION_GROUPS,
+                    &method,
+                    path.as_str(),
+                ) != Some(true)
+            {
                 continue;
             }
 
@@ -289,7 +341,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_node_query_projection_checkpoint_tool());
     tools.push(iroha_time_now_tool());
     tools.push(iroha_time_status_tool());
-    tools.push(iroha_api_versions_tool());
     tools.push(iroha_sumeragi_commit_certificates_tool());
     tools.push(iroha_sumeragi_validator_sets_list_tool());
     tools.push(iroha_sumeragi_validator_sets_get_tool());
@@ -455,7 +506,13 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_transactions_wait_tool());
     tools.push(iroha_transactions_status_tool());
 
+    // Manual tools share the same projection boundary as OpenAPI-derived tools.
+    // Keep this final guard so a custom dispatcher cannot bypass the catalog.
+    retain_catalog_mcp_tools(&mut tools, CATALOG_PROJECTION_GROUPS);
     tools.sort_by(|a, b| a.name.cmp(&b.name));
+    if let Err(error) = validate_tool_registry(&tools, CATALOG_PROJECTION_GROUPS) {
+        panic!("invalid Torii MCP tool registry: {error}");
+    }
     tools
 }
 
@@ -495,7 +552,12 @@ pub(crate) fn capabilities_payload(tools: &[&ToolSpec]) -> Value {
 
 pub(crate) fn capabilities_payload_for_state(app: &SharedAppState) -> Value {
     let visible_tools = visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice());
-    capabilities_payload(&visible_tools)
+    let mut payload = capabilities_payload(&visible_tools);
+    payload
+        .as_object_mut()
+        .expect("MCP capabilities payload is an object")
+        .insert("enabled".into(), Value::Bool(app.mcp.enabled));
+    payload
 }
 
 fn default_tool_output_schema() -> Value {
@@ -630,6 +692,7 @@ fn is_manual_read_tool_name(name: &str) -> bool {
             | "iroha.accounts.history"
             | "iroha.da.commitments.prove"
             | "iroha.da.pin_intents.prove"
+            | "iroha.gov.council.derive_vrf"
             | "iroha.node.query_projection_checkpoint"
             | "iroha.node.query_projection_checkpoint_plan"
             | "iroha.node.query_projection_shard_catalog"
@@ -736,11 +799,7 @@ pub(crate) async fn handle_jsonrpc_request(
     let Some(req_obj) = request.as_object() else {
         return jsonrpc_invalid_request("request must be an object");
     };
-    if req_obj
-        .get("jsonrpc")
-        .and_then(Value::as_str)
-        .is_some_and(|v| v != JSONRPC_VERSION)
-    {
+    if req_obj.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION) {
         return jsonrpc_error_response(
             req_obj.get("id").cloned(),
             JSONRPC_INVALID_REQUEST,
@@ -789,11 +848,7 @@ pub(crate) fn is_initialized_notification(request: &Value) -> bool {
     let Some(req_obj) = request.as_object() else {
         return false;
     };
-    if req_obj
-        .get("jsonrpc")
-        .and_then(Value::as_str)
-        .is_some_and(|version| version != JSONRPC_VERSION)
-    {
+    if req_obj.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION) {
         return false;
     }
 
@@ -1021,12 +1076,6 @@ async fn handle_tools_call(
         }
         "iroha.time.status" => {
             match dispatch_iroha_time_status(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.api.versions" => {
-            match dispatch_iroha_api_versions(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -2694,6 +2743,144 @@ fn method_from_key(key: &str) -> Option<Method> {
     }
 }
 
+fn catalog_method(method: &Method) -> Option<CatalogHttpMethod> {
+    match *method {
+        Method::GET => Some(CatalogHttpMethod::Get),
+        Method::POST => Some(CatalogHttpMethod::Post),
+        Method::PUT => Some(CatalogHttpMethod::Put),
+        Method::PATCH => Some(CatalogHttpMethod::Patch),
+        Method::DELETE => Some(CatalogHttpMethod::Delete),
+        _ => None,
+    }
+}
+
+/// Return the explicit MCP decision for a cataloged method/path pair.
+///
+/// `None` means the operation is not represented by one of `groups`. Callers
+/// which generate tools must treat that as deny: OpenAPI presence alone is not
+/// authorization to expose a route through MCP.
+fn catalog_mcp_projection_decision(
+    groups: &[CatalogProjectionGroup],
+    method: &Method,
+    path: &str,
+) -> Option<bool> {
+    let method = catalog_method(method)?;
+
+    for group in groups {
+        let catalog = RouteCatalog::new(group.routes);
+        let is_cataloged = catalog
+            .routes()
+            .iter()
+            .any(|route| route.method() == method && route.path() == path);
+        if !is_cataloged {
+            continue;
+        }
+
+        return Some(
+            catalog
+                .project(CatalogProjection::Mcp, group.enabled_features)
+                .into_iter()
+                .any(|route| route.method() == method && route.path() == path),
+        );
+    }
+
+    None
+}
+
+fn retain_catalog_mcp_tools(tools: &mut Vec<ToolSpec>, groups: &[CatalogProjectionGroup]) {
+    tools.retain(|tool| {
+        !matches!(
+            catalog_mcp_projection_decision(groups, &tool.method, tool.path_template.as_str()),
+            Some(false)
+        )
+    });
+}
+
+fn validate_tool_registry(
+    tools: &[ToolSpec],
+    groups: &[CatalogProjectionGroup],
+) -> Result<(), String> {
+    let mut names = BTreeSet::new();
+    for tool in tools {
+        if !names.insert(tool.name.as_str()) {
+            return Err(format!("duplicate tool name `{}`", tool.name));
+        }
+
+        let descriptor =
+            catalog_descriptor_for_method_path(groups, &tool.method, tool.path_template.as_str());
+        if descriptor.is_some_and(|route| route.surface() == ApiSurface::Operator)
+            && tool.effect != ToolEffect::Operator
+        {
+            return Err(format!(
+                "operator route tool `{}` must have operator effect, not {:?}",
+                tool.name, tool.effect
+            ));
+        }
+
+        if !tool.name.starts_with("torii.") {
+            if !tool.name.starts_with("iroha.") && !tool.name.starts_with("connect.") {
+                return Err(format!(
+                    "purpose-built tool `{}` is outside the explicit iroha.* or connect.* namespaces",
+                    tool.name
+                ));
+            }
+            continue;
+        }
+
+        if catalog_mcp_projection_decision(groups, &tool.method, tool.path_template.as_str())
+            != Some(true)
+        {
+            return Err(format!(
+                "OpenAPI-derived tool `{}` lacks an enabled exact catalog MCP projection for {} {}",
+                tool.name, tool.method, tool.path_template
+            ));
+        }
+
+        descriptor.expect("an enabled catalog MCP projection has an exact descriptor");
+
+        let Some(method_key) = canonical_tool_method_key(&tool.method) else {
+            return Err(format!(
+                "OpenAPI-derived tool `{}` uses unsupported HTTP method {}",
+                tool.name, tool.method
+            ));
+        };
+        let expected = format!(
+            "torii.{}",
+            generated_operation_id(method_key, tool.path_template.as_str())
+        );
+        if tool.name != expected {
+            return Err(format!(
+                "OpenAPI-derived tool `{}` is an alias; canonical exact name is `{expected}`",
+                tool.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn catalog_descriptor_for_method_path(
+    groups: &[CatalogProjectionGroup],
+    method: &Method,
+    path: &str,
+) -> Option<&'static RouteDescriptor> {
+    let method = catalog_method(method)?;
+    groups
+        .iter()
+        .flat_map(|group| group.routes)
+        .find(|route| route.method() == method && route.path() == path)
+}
+
+fn canonical_tool_method_key(method: &Method) -> Option<&'static str> {
+    match *method {
+        Method::GET => Some("get"),
+        Method::POST => Some("post"),
+        Method::PUT => Some("put"),
+        Method::PATCH => Some("patch"),
+        Method::DELETE => Some("delete"),
+        _ => None,
+    }
+}
+
 fn should_skip_operation(path: &str, operation: &Map, expose_operator_routes: bool) -> bool {
     if matches!(
         path,
@@ -2745,58 +2932,8 @@ fn generated_operation_id(method: &str, path: &str) -> String {
     out.trim_matches('_').to_owned()
 }
 
-fn method_key(method: &Method) -> &'static str {
-    match *method {
-        Method::GET => "get",
-        Method::POST => "post",
-        Method::PUT => "put",
-        Method::PATCH => "patch",
-        Method::DELETE => "delete",
-        Method::HEAD => "head",
-        Method::OPTIONS => "options",
-        _ => "get",
-    }
-}
-
-fn openapi_operation_alias(tool: &ToolSpec, spec: &Value) -> Option<String> {
-    if !tool.name.starts_with("torii.") {
-        return None;
-    }
-    let paths = spec.get("paths")?.as_object()?;
-    let path_item = paths.get(&tool.path_template)?.as_object()?;
-    let operation = path_item.get(method_key(&tool.method))?.as_object()?;
-    let operation_id = operation.get("operationId")?.as_str()?.trim();
-    if operation_id.is_empty() {
-        return None;
-    }
-    let alias = format!("torii.{operation_id}");
-    (alias != tool.name).then_some(alias)
-}
-
 fn find_tool_spec_by_name<'a>(tools: &'a [ToolSpec], requested_name: &str) -> Option<&'a ToolSpec> {
-    if let Some(tool) = tools.iter().find(|tool| tool.name == requested_name) {
-        return Some(tool);
-    }
-    if let Some(tool) = tools
-        .iter()
-        .find(|tool| is_legacy_torii_tool_alias(tool, requested_name))
-    {
-        return Some(tool);
-    }
-    if !requested_name.starts_with("torii.") {
-        return None;
-    }
-
-    let spec = openapi::generate_spec();
-    tools
-        .iter()
-        .find(|tool| openapi_operation_alias(tool, &spec).as_deref() == Some(requested_name))
-}
-
-fn is_legacy_torii_tool_alias(tool: &ToolSpec, requested_name: &str) -> bool {
-    requested_name == "torii.post_transaction"
-        && tool.method == Method::POST
-        && tool.path_template == iroha_torii_shared::uri::TRANSACTION
+    tools.iter().find(|tool| tool.name == requested_name)
 }
 
 async fn dispatch_openapi_tool(
@@ -3454,27 +3591,6 @@ async fn dispatch_iroha_time_status(
     .await
 }
 
-async fn dispatch_iroha_api_versions(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/api/versions",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
 async fn dispatch_iroha_sumeragi_commit_certificates(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3746,7 +3862,7 @@ async fn dispatch_iroha_sumeragi_bls_keys(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/bls_keys",
+        "/v1/sumeragi/bls-keys",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -3767,7 +3883,7 @@ async fn dispatch_iroha_da_proof_policies(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/da/proof_policies",
+        "/v1/da/proof-policies",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -3847,11 +3963,11 @@ async fn dispatch_iroha_sumeragi_commit_qc_get(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let hash = extract_transaction_hash_argument(arguments)?;
+    let block_hash = extract_block_hash_argument(arguments)?;
     let mut path_args = Map::new();
-    path_args.insert("hash".into(), Value::String(hash));
+    path_args.insert("block_hash".into(), Value::String(block_hash));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/sumeragi/commit_qc/{hash}", Some(&path_value))?;
+    let route = fill_path_template("/v1/sumeragi/commit-qcs/{block_hash}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3965,7 +4081,7 @@ async fn dispatch_iroha_sumeragi_new_view(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/new_view/json",
+        "/v1/sumeragi/new-view",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -4157,7 +4273,7 @@ async fn dispatch_iroha_da_proof_policy_snapshot(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/da/proof_policy_snapshot",
+        "/v1/da/proof-policies/snapshot",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -4275,7 +4391,7 @@ async fn dispatch_iroha_da_pin_intents_list(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/da/pin_intents",
+        "/v1/da/pin-intents",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -4298,7 +4414,7 @@ async fn dispatch_iroha_da_pin_intents_prove(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/da/pin_intents/prove",
+        "/v1/da/pin-intents/prove",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -4321,7 +4437,7 @@ async fn dispatch_iroha_da_pin_intents_verify(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/da/pin_intents/verify",
+        "/v1/da/pin-intents/verify",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -5253,7 +5369,7 @@ async fn dispatch_iroha_aliases_resolve_index(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/aliases/resolve_index",
+        "/v1/aliases/resolve-index",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -5276,7 +5392,7 @@ async fn dispatch_iroha_aliases_by_account(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/aliases/by_account",
+        "/v1/aliases/by-account",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -7116,7 +7232,7 @@ async fn dispatch_iroha_iso20022_status_get(
     let mut path_args = Map::new();
     path_args.insert("msg_id".into(), Value::String(msg_id));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/iso20022/status/{msg_id}", Some(&path_value))?;
+    let route = fill_path_template("/v1/iso20022/messages/{msg_id}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -8044,6 +8160,24 @@ fn extract_transaction_hash_argument(arguments: &Map) -> Result<String, String> 
         })
 }
 
+fn extract_block_hash_argument(arguments: &Map) -> Result<String, String> {
+    if let Some(path) = arguments.get("path") {
+        let path = path
+            .as_object()
+            .ok_or_else(|| "`path` must be an object".to_owned())?;
+        if let Some(block_hash) = path.get("block_hash").and_then(Value::as_str) {
+            return Ok(block_hash.to_owned());
+        }
+    }
+    arguments
+        .get("block_hash")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            "`block_hash` is required (provide `block_hash` or `path.block_hash`)".to_owned()
+        })
+}
+
 fn extract_code_hash_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -8725,7 +8859,6 @@ fn forward_auth_headers(out: &mut HeaderMap, inbound: &HeaderMap) {
         HeaderName::from_static(HEADER_X_API_TOKEN),
         HeaderName::from_static(HEADER_X_IROHA_ACCOUNT),
         HeaderName::from_static(HEADER_X_IROHA_SIGNATURE),
-        HeaderName::from_static(HEADER_X_IROHA_API_VERSION),
     ] {
         if let Some(value) = inbound.get(&header_name) {
             out.insert(header_name, value.clone());
@@ -9743,27 +9876,6 @@ fn iroha_time_status_tool() -> ToolSpec {
     }
 }
 
-fn iroha_api_versions_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.api.versions".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.api.versions"),
-        description: "List supported Torii API versions (`/v1/api/versions`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/api/versions".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
 fn iroha_sumeragi_commit_certificates_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.commit_certificates".to_owned(),
@@ -10046,9 +10158,9 @@ fn iroha_sumeragi_bls_keys_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.bls_keys".to_owned(),
         effect: manual_tool_effect_from_name("iroha.sumeragi.bls_keys"),
-        description: "Fetch Sumeragi BLS key roster (`/v1/sumeragi/bls_keys`).".to_owned(),
+        description: "Fetch Sumeragi BLS key roster (`/v1/sumeragi/bls-keys`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/bls_keys".to_owned(),
+        path_template: "/v1/sumeragi/bls-keys".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10133,23 +10245,25 @@ fn iroha_sumeragi_commit_qc_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.commit_qc.get".to_owned(),
         effect: manual_tool_effect_from_name("iroha.sumeragi.commit_qc.get"),
-        description: "Fetch Sumeragi commit QC by block hash (`/v1/sumeragi/commit_qc/{hash}`; `hash` shortcut supported).".to_owned(),
+        description:
+            "Fetch Sumeragi commit QC by block hash (`/v1/sumeragi/commit-qcs/{block_hash}`)."
+                .to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/commit_qc/{hash}".to_owned(),
+        path_template: "/v1/sumeragi/commit-qcs/{block_hash}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
             "properties": {
-                "hash": {
+                "block_hash": {
                     "type": "string",
-                    "description": "Convenience shortcut for `path.hash`."
+                    "description": "Block hash identifying the commit quorum certificate."
                 },
                 "path": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["hash"],
+                    "required": ["block_hash"],
                     "properties": {
-                        "hash": { "type": "string" }
+                        "block_hash": { "type": "string" }
                     }
                 },
                 "headers": {
@@ -10267,9 +10381,9 @@ fn iroha_sumeragi_new_view_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.new_view".to_owned(),
         effect: manual_tool_effect_from_name("iroha.sumeragi.new_view"),
-        description: "Fetch NEW_VIEW counters (`/v1/sumeragi/new_view/json`).".to_owned(),
+        description: "Fetch NEW_VIEW counters (`/v1/sumeragi/new-view`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/new_view/json".to_owned(),
+        path_template: "/v1/sumeragi/new-view".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10493,9 +10607,9 @@ fn iroha_da_proof_policies_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.proof_policies".to_owned(),
         effect: manual_tool_effect_from_name("iroha.da.proof_policies"),
-        description: "Fetch DA proof policies (`/v1/da/proof_policies`).".to_owned(),
+        description: "Fetch DA proof policies (`/v1/da/proof-policies`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/da/proof_policies".to_owned(),
+        path_template: "/v1/da/proof-policies".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10514,9 +10628,10 @@ fn iroha_da_proof_policy_snapshot_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.proof_policy_snapshot".to_owned(),
         effect: manual_tool_effect_from_name("iroha.da.proof_policy_snapshot"),
-        description: "Fetch DA proof policy snapshot (`/v1/da/proof_policy_snapshot`).".to_owned(),
+        description: "Fetch DA proof policy snapshot (`/v1/da/proof-policies/snapshot`)."
+            .to_owned(),
         method: Method::GET,
-        path_template: "/v1/da/proof_policy_snapshot".to_owned(),
+        path_template: "/v1/da/proof-policies/snapshot".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10663,10 +10778,10 @@ fn iroha_da_pin_intents_list_tool() -> ToolSpec {
         name: "iroha.da.pin_intents.list".to_owned(),
         effect: manual_tool_effect_from_name("iroha.da.pin_intents.list"),
         description:
-            "List DA pin intents (`/v1/da/pin_intents`); accepts raw `body` or flat top-level body shortcuts."
+            "List DA pin intents (`/v1/da/pin-intents`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/da/pin_intents".to_owned(),
+        path_template: "/v1/da/pin-intents".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -10691,10 +10806,10 @@ fn iroha_da_pin_intents_prove_tool() -> ToolSpec {
         name: "iroha.da.pin_intents.prove".to_owned(),
         effect: manual_tool_effect_from_name("iroha.da.pin_intents.prove"),
         description:
-            "Fetch indexed DA pin intent location data (`/v1/da/pin_intents/prove`); accepts raw `body` or flat top-level body shortcuts."
+            "Fetch indexed DA pin intent location data (`/v1/da/pin-intents/prove`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/da/pin_intents/prove".to_owned(),
+        path_template: "/v1/da/pin-intents/prove".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -10719,10 +10834,10 @@ fn iroha_da_pin_intents_verify_tool() -> ToolSpec {
         name: "iroha.da.pin_intents.verify".to_owned(),
         effect: manual_tool_effect_from_name("iroha.da.pin_intents.verify"),
         description:
-            "Verify indexed DA pin intent location data (`/v1/da/pin_intents/verify`); accepts raw `body` or flat top-level body shortcuts."
+            "Verify indexed DA pin intent location data (`/v1/da/pin-intents/verify`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/da/pin_intents/verify".to_owned(),
+        path_template: "/v1/da/pin-intents/verify".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -11707,10 +11822,10 @@ fn iroha_aliases_resolve_index_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.aliases.resolve_index".to_owned(),
         effect: manual_tool_effect_from_name("iroha.aliases.resolve_index"),
-        description: "Resolve an alias index to its account binding (`/v1/aliases/resolve_index`)."
+        description: "Resolve an alias index to its account binding (`/v1/aliases/resolve-index`)."
             .to_owned(),
         method: Method::POST,
-        path_template: "/v1/aliases/resolve_index".to_owned(),
+        path_template: "/v1/aliases/resolve-index".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -11738,9 +11853,9 @@ fn iroha_aliases_by_account_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.aliases.by_account".to_owned(),
         effect: manual_tool_effect_from_name("iroha.aliases.by_account"),
-        description: "List aliases bound to an account (`/v1/aliases/by_account`).".to_owned(),
+        description: "List aliases bound to an account (`/v1/aliases/by-account`).".to_owned(),
         method: Method::POST,
-        path_template: "/v1/aliases/by_account".to_owned(),
+        path_template: "/v1/aliases/by-account".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -13956,7 +14071,7 @@ fn iroha_iso20022_status_get_tool() -> ToolSpec {
         effect: manual_tool_effect_from_name("iroha.iso20022.status.get"),
         description: "Fetch ISO 20022 bridge status by message id (`msg_id`/`message_id` shortcuts supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/iso20022/status/{msg_id}".to_owned(),
+        path_template: "/v1/iso20022/messages/{msg_id}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -15041,7 +15156,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_extra_headers_blocks_reserved_internal_headers_but_allows_api_version() {
+    fn apply_extra_headers_blocks_reserved_internal_headers() {
         let mut out = HeaderMap::new();
         let headers = norito::json!({
             "x-test": "1",
@@ -15051,7 +15166,6 @@ mod tests {
             "x-api-token": "injected",
             "x-iroha-account": "injected",
             "x-iroha-signature": "injected",
-            "x-iroha-api-version": "injected",
             "x-iroha-timestamp-ms": "injected",
             "x-iroha-nonce": "injected",
             "x-iroha-witness": "injected",
@@ -15063,11 +15177,6 @@ mod tests {
         assert_eq!(
             out.get("x-test").and_then(|value| value.to_str().ok()),
             Some("1")
-        );
-        assert_eq!(
-            out.get("x-iroha-api-version")
-                .and_then(|value| value.to_str().ok()),
-            Some("injected")
         );
         assert!(!out.contains_key("x-iroha-remote-addr"));
         assert!(!out.contains_key("x-forwarded-client-cert"));
@@ -15312,6 +15421,333 @@ mod tests {
     }
 
     #[test]
+    fn catalog_projection_decision_is_fail_closed_and_feature_aware() {
+        use iroha_torii_shared::route_catalog::{
+            ApiSurface, FeatureGate, Listener, RouteProjections,
+        };
+
+        const ROUTES: &[RouteDescriptor] = &[
+            RouteDescriptor::new(
+                "test.mcp_included",
+                CatalogHttpMethod::Get,
+                "/v1/tests/mcp-included",
+                ApiSurface::Public,
+                Listener::Torii,
+            )
+            .with_projections(RouteProjections::MCP),
+            RouteDescriptor::new(
+                "test.mcp_excluded",
+                CatalogHttpMethod::Post,
+                "/v1/tests/mcp-excluded",
+                ApiSurface::Public,
+                Listener::Torii,
+            )
+            .with_projections(RouteProjections::OPENAPI_AND_SDK),
+            RouteDescriptor::new(
+                "test.mcp_featured",
+                CatalogHttpMethod::Get,
+                "/v1/tests/mcp-featured",
+                ApiSurface::Public,
+                Listener::Torii,
+            )
+            .with_feature_gate(FeatureGate::Feature("test_feature"))
+            .with_projections(RouteProjections::MCP),
+        ];
+        const DISABLED_GROUPS: &[CatalogProjectionGroup] = &[CatalogProjectionGroup {
+            routes: ROUTES,
+            enabled_features: EnabledFeatures::none(),
+        }];
+        const ENABLED_GROUPS: &[CatalogProjectionGroup] = &[CatalogProjectionGroup {
+            routes: ROUTES,
+            enabled_features: EnabledFeatures::new(&["test_feature"]),
+        }];
+
+        assert_eq!(
+            catalog_mcp_projection_decision(
+                DISABLED_GROUPS,
+                &Method::GET,
+                "/v1/tests/mcp-included",
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            catalog_mcp_projection_decision(
+                DISABLED_GROUPS,
+                &Method::POST,
+                "/v1/tests/mcp-excluded",
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            catalog_mcp_projection_decision(
+                DISABLED_GROUPS,
+                &Method::GET,
+                "/v1/tests/mcp-excluded",
+            ),
+            None,
+            "catalog policy is keyed by the exact method/path pair"
+        );
+        assert_eq!(
+            catalog_mcp_projection_decision(DISABLED_GROUPS, &Method::GET, "/v1/tests/uncataloged",),
+            None,
+            "uncataloged OpenAPI operations must remain distinguishable and fail closed"
+        );
+        assert_eq!(
+            catalog_mcp_projection_decision(
+                DISABLED_GROUPS,
+                &Method::GET,
+                "/v1/tests/mcp-featured",
+            ),
+            Some(false),
+            "a disabled feature gate excludes an otherwise allowlisted operation"
+        );
+        assert_eq!(
+            catalog_mcp_projection_decision(ENABLED_GROUPS, &Method::GET, "/v1/tests/mcp-featured",),
+            Some(true)
+        );
+
+        let mut tools = vec![
+            sample_tool_at(
+                "test.catalog_included",
+                Method::GET,
+                "/v1/tests/mcp-included",
+                ToolEffect::Read,
+            ),
+            sample_tool_at(
+                "test.catalog_excluded",
+                Method::POST,
+                "/v1/tests/mcp-excluded",
+                ToolEffect::Write,
+            ),
+            sample_tool_at(
+                "test.uncataloged",
+                Method::GET,
+                "/v1/tests/uncataloged",
+                ToolEffect::Read,
+            ),
+            sample_tool_at(
+                "iroha.tests.featured",
+                Method::GET,
+                "/v1/tests/mcp-featured",
+                ToolEffect::Read,
+            ),
+        ];
+        retain_catalog_mcp_tools(&mut tools, DISABLED_GROUPS);
+        assert_eq!(
+            tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["test.catalog_included", "test.uncataloged"],
+            "purpose-built manual tools remain an explicit allowlist even when their HTTP family is not cataloged"
+        );
+
+        let mut enabled_tools = vec![sample_tool_at(
+            "iroha.tests.featured",
+            Method::GET,
+            "/v1/tests/mcp-featured",
+            ToolEffect::Read,
+        )];
+        retain_catalog_mcp_tools(&mut enabled_tools, ENABLED_GROUPS);
+        assert_eq!(enabled_tools.len(), 1, "enabled feature keeps the tool");
+    }
+
+    #[test]
+    fn every_openapi_derived_tool_has_an_enabled_exact_catalog_projection() {
+        let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+        cfg.profile = ToriiMcpProfile::Operator;
+        cfg.expose_operator_routes = true;
+        let tools = build_tool_specs(&cfg);
+        let mut derived_count = 0_usize;
+
+        for tool in tools.iter().filter(|tool| tool.name.starts_with("torii.")) {
+            derived_count += 1;
+            assert_eq!(
+                catalog_mcp_projection_decision(
+                    CATALOG_PROJECTION_GROUPS,
+                    &tool.method,
+                    tool.path_template.as_str(),
+                ),
+                Some(true),
+                "OpenAPI-derived tool is not explicitly enabled by the exact catalog method/path pair: {} {} ({})",
+                tool.method,
+                tool.path_template,
+                tool.name,
+            );
+            assert!(!tool.path_template.ends_with("/sse"));
+            assert!(!matches!(
+                tool.path_template.as_str(),
+                "/metrics" | "/debug/pprof/profile" | "/p2p"
+            ));
+        }
+
+        assert!(derived_count > 0, "the guard must exercise derived tools");
+    }
+
+    #[test]
+    fn offline_lifecycle_routes_are_excluded_from_operator_mcp_tools() {
+        let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+        cfg.profile = ToriiMcpProfile::Operator;
+        cfg.expose_operator_routes = true;
+        let tools = build_tool_specs(&cfg);
+
+        for path in [
+            iroha_torii_shared::route_catalog::offline::READINESS_PATH,
+            iroha_torii_shared::route_catalog::offline::TOP_UP_PATH,
+            iroha_torii_shared::route_catalog::offline::REDEEM_PATH,
+            iroha_torii_shared::route_catalog::offline::OPERATION_PATH,
+        ] {
+            assert!(
+                tools.iter().all(|tool| tool.path_template != path),
+                "offline route leaked into the operator MCP registry: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_registry_validation_rejects_duplicates_aliases_and_implicit_routes() {
+        use iroha_torii_shared::route_catalog::{
+            ApiSurface, AuthenticationPolicy, Listener, RouteProjections,
+        };
+
+        const ROUTES: &[RouteDescriptor] = &[
+            RouteDescriptor::new(
+                "test.allowed",
+                CatalogHttpMethod::Get,
+                "/v1/tests/allowed",
+                ApiSurface::Public,
+                Listener::Torii,
+            )
+            .with_projections(RouteProjections::MCP),
+            RouteDescriptor::new(
+                "test.operator",
+                CatalogHttpMethod::Post,
+                "/v1/tests/operator",
+                ApiSurface::Operator,
+                Listener::Torii,
+            )
+            .with_authentication(AuthenticationPolicy::OperatorSignature)
+            .with_projections(RouteProjections::MCP),
+        ];
+        const GROUPS: &[CatalogProjectionGroup] = &[CatalogProjectionGroup {
+            routes: ROUTES,
+            enabled_features: EnabledFeatures::none(),
+        }];
+
+        let canonical = sample_tool_at(
+            "torii.get_v1_tests_allowed",
+            Method::GET,
+            "/v1/tests/allowed",
+            ToolEffect::Read,
+        );
+        let manual = sample_tool_at(
+            "iroha.tests.allowed",
+            Method::GET,
+            "/v1/tests/allowed",
+            ToolEffect::Read,
+        );
+        assert_eq!(
+            validate_tool_registry(&[canonical.clone(), manual], GROUPS),
+            Ok(())
+        );
+
+        let duplicate = canonical.clone();
+        assert!(
+            validate_tool_registry(&[canonical.clone(), duplicate], GROUPS)
+                .expect_err("duplicate names must fail")
+                .contains("duplicate tool name")
+        );
+
+        let alias = sample_tool_at(
+            "torii.allowedOperation",
+            Method::GET,
+            "/v1/tests/allowed",
+            ToolEffect::Read,
+        );
+        assert!(
+            validate_tool_registry(&[alias], GROUPS)
+                .expect_err("operationId-style aliases must fail")
+                .contains("is an alias")
+        );
+
+        let uncataloged = sample_tool_at(
+            "torii.get_v1_tests_uncataloged",
+            Method::GET,
+            "/v1/tests/uncataloged",
+            ToolEffect::Read,
+        );
+        assert!(
+            validate_tool_registry(&[uncataloged], GROUPS)
+                .expect_err("uncataloged OpenAPI route must fail")
+                .contains("lacks an enabled exact catalog MCP projection")
+        );
+
+        let unreviewed_namespace = sample_tool_at(
+            "admin.tests.allowed",
+            Method::GET,
+            "/v1/tests/allowed",
+            ToolEffect::Operator,
+        );
+        assert!(
+            validate_tool_registry(&[unreviewed_namespace], GROUPS)
+                .expect_err("unreviewed manual namespace must fail")
+                .contains("outside the explicit")
+        );
+
+        for name in ["torii.post_v1_tests_operator", "iroha.tests.operator"] {
+            let misclassified_operator =
+                sample_tool_at(name, Method::POST, "/v1/tests/operator", ToolEffect::Write);
+            assert!(
+                validate_tool_registry(&[misclassified_operator], GROUPS)
+                    .expect_err("operator routes must not inherit writer visibility")
+                    .contains("must have operator effect"),
+                "operator-effect guard must apply to {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_registry_honors_offline_catalog_mcp_exclusion() {
+        let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+        cfg.profile = ToriiMcpProfile::Operator;
+        cfg.expose_operator_routes = true;
+        let tools = build_tool_specs(&cfg);
+
+        for route in route_catalog::offline::ROUTES {
+            let method = match route.method() {
+                CatalogHttpMethod::Any => {
+                    panic!("offline routes must never use protocol-wide ANY matching")
+                }
+                CatalogHttpMethod::Get => Method::GET,
+                CatalogHttpMethod::Post => Method::POST,
+                CatalogHttpMethod::Put => Method::PUT,
+                CatalogHttpMethod::Patch => Method::PATCH,
+                CatalogHttpMethod::Delete => Method::DELETE,
+            };
+            assert!(
+                tools
+                    .iter()
+                    .all(|tool| tool.method != method || tool.path_template != route.path()),
+                "catalog-excluded route leaked into MCP: {} {}",
+                route.method().as_str(),
+                route.path()
+            );
+        }
+
+        assert!(tools.iter().any(|tool| tool.name == "iroha.health"));
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.transactions.submit")
+        );
+        assert!(tools.iter().any(|tool| {
+            tool.method == Method::POST
+                && tool.path_template == iroha_torii_shared::uri::TRANSACTION
+                && tool.name.starts_with("torii.")
+        }));
+    }
+
+    #[test]
     fn tool_registry_skips_ws_and_sse_routes() {
         let cfg = iroha_config::parameters::actual::ToriiMcp::default();
         let tools = build_tool_specs(&cfg);
@@ -15338,7 +15774,7 @@ mod tests {
                 .any(|tool| tool.name == "iroha.connect.session.create_and_ticket")
         );
         assert!(tools.iter().any(|tool| tool.name == "iroha.health"));
-        assert!(tools.iter().any(|tool| tool.name == "iroha.status"));
+        assert!(tools.iter().all(|tool| tool.name != "iroha.status"));
         assert!(tools.iter().any(|tool| tool.name == "iroha.parameters.get"));
         assert!(
             tools
@@ -15365,9 +15801,13 @@ mod tests {
                 .iter()
                 .any(|tool| tool.name == "iroha.node.query_projection_checkpoint")
         );
-        assert!(tools.iter().any(|tool| tool.name == "iroha.time.now"));
-        assert!(tools.iter().any(|tool| tool.name == "iroha.time.status"));
-        assert!(tools.iter().any(|tool| tool.name == "iroha.api.versions"));
+        assert!(tools.iter().all(|tool| tool.name != "iroha.time.now"));
+        assert!(tools.iter().all(|tool| tool.name != "iroha.time.status"));
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "torii.get_v1_api_version")
+        );
         assert!(
             tools
                 .iter()
@@ -15581,21 +16021,21 @@ mod tests {
                 .iter()
                 .any(|tool| tool.name == "iroha.runtime.upgrades.cancel")
         );
-        assert!(tools.iter().any(|tool| tool.name == "iroha.ledger.headers"));
+        assert!(tools.iter().all(|tool| tool.name != "iroha.ledger.headers"));
         assert!(
             tools
                 .iter()
-                .any(|tool| tool.name == "iroha.ledger.state_root")
+                .all(|tool| tool.name != "iroha.ledger.state_root")
         );
         assert!(
             tools
                 .iter()
-                .any(|tool| tool.name == "iroha.ledger.state_proof")
+                .all(|tool| tool.name != "iroha.ledger.state_proof")
         );
         assert!(
             tools
                 .iter()
-                .any(|tool| tool.name == "iroha.ledger.block_proof")
+                .all(|tool| tool.name != "iroha.ledger.block_proof")
         );
         assert!(
             tools
@@ -15607,12 +16047,12 @@ mod tests {
                 .iter()
                 .any(|tool| tool.name == "iroha.bridge.finality.bundle")
         );
-        assert!(tools.iter().any(|tool| tool.name == "iroha.proofs.get"));
+        assert!(tools.iter().all(|tool| tool.name != "iroha.proofs.get"));
         assert!(tools.iter().any(|tool| tool.name == "iroha.proofs.query"));
         assert!(
             tools
                 .iter()
-                .any(|tool| tool.name == "iroha.proofs.retention")
+                .all(|tool| tool.name != "iroha.proofs.retention")
         );
         assert!(
             tools
@@ -16041,23 +16481,25 @@ mod tests {
     }
 
     #[test]
-    fn find_tool_spec_by_name_accepts_openapi_operation_id_alias() {
+    fn find_tool_spec_by_name_accepts_only_listed_exact_names() {
         let cfg = iroha_config::parameters::actual::ToriiMcp::default();
         let tools = build_tool_specs(&cfg);
 
-        let tool = find_tool_spec_by_name(&tools, "torii.healthCheck")
-            .expect("operationId alias should resolve to the health tool");
+        assert!(find_tool_spec_by_name(&tools, "torii.healthCheck").is_none());
+        let tool = find_tool_spec_by_name(&tools, "torii.get_health")
+            .expect("the exact tools/list name should resolve to the health tool");
         assert_eq!(tool.path_template, "/health");
         assert_eq!(tool.method, Method::GET);
     }
 
     #[test]
-    fn find_tool_spec_by_name_accepts_legacy_post_transaction_alias() {
+    fn find_tool_spec_by_name_rejects_removed_post_transaction_alias() {
         let cfg = iroha_config::parameters::actual::ToriiMcp::default();
         let tools = build_tool_specs(&cfg);
 
-        let tool = find_tool_spec_by_name(&tools, "torii.post_transaction")
-            .expect("legacy transaction alias should resolve to transaction submit");
+        assert!(find_tool_spec_by_name(&tools, "torii.post_transaction").is_none());
+        let tool = find_tool_spec_by_name(&tools, "iroha.transactions.submit")
+            .expect("canonical transaction submit tool must remain available");
         assert_eq!(tool.path_template, iroha_torii_shared::uri::TRANSACTION);
         assert_eq!(tool.method, Method::POST);
     }
@@ -16669,6 +17111,28 @@ mod tests {
         let hash =
             extract_transaction_hash_argument(args.as_object().expect("object")).expect("hash");
         assert_eq!(hash, "deadbeef");
+    }
+
+    #[test]
+    fn extract_block_hash_argument_uses_only_the_canonical_name() {
+        for args in [
+            norito::json!({ "block_hash": "deadbeef" }),
+            norito::json!({ "path": { "block_hash": "deadbeef" } }),
+        ] {
+            let block_hash = extract_block_hash_argument(args.as_object().expect("object"))
+                .expect("canonical block hash");
+            assert_eq!(block_hash, "deadbeef");
+        }
+
+        for retired in [
+            norito::json!({ "hash": "deadbeef" }),
+            norito::json!({ "path": { "hash": "deadbeef" } }),
+        ] {
+            assert!(
+                extract_block_hash_argument(retired.as_object().expect("object")).is_err(),
+                "retired hash aliases must not survive the first-release cutover"
+            );
+        }
     }
 
     #[test]

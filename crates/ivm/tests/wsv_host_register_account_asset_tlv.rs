@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use iroha_crypto::{Hash, PublicKey};
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use ivm::{
     IVM, Memory, PointerType,
     mock_wsv::{
@@ -28,9 +28,9 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
-    let buf = to_bytes(&amount.into()).expect("encode numeric into Norito");
-    make_tlv(PointerType::NoritoBytes as u16, &buf)
+fn make_quantity_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
+    let quantity = Quantity::try_from_numeric(amount.into()).expect("canonical quantity");
+    ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity pointer envelope")
 }
 
 fn make_account_tlv(account: &AccountId) -> Vec<u8> {
@@ -125,7 +125,7 @@ fn register_account_and_asset_then_mint() {
     vm.memory
         .preload_input(tlv_bob.len() as u64 + 8, &tlv_rose)
         .expect("preload input");
-    let tlv_amount = make_numeric_tlv(7_u64);
+    let tlv_amount = make_quantity_tlv(7_u64);
     let amount_offset = tlv_bob.len() as u64 + tlv_rose.len() as u64 + 16;
     vm.memory
         .preload_input(amount_offset, &tlv_amount)

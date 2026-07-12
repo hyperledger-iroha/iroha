@@ -31,7 +31,7 @@ Cette page reflète `docs/source/soranexus_bootstrap_plan.md`. Mantenha as duas 
 - La configuration du bootstrap actualisée (`configs/nexus/bootstrap/*.toml`) reflète les paramètres de consensus les plus récents.## Ambiances de rede
 - Utiliser deux ambiances Nexus avec des préfixes de réseau distincts :
 - **Sora Nexus (réseau principal)** - préfixe de réseau de production `nexus`, hôpital de gouvernance canonique et services piggyback SoraFS/SoraNet (ID de chaîne `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - préfixe de rede de staging `testus`, destiné à la configuration du réseau principal pour les tests d'intégration et de validation pré-version (chaîne UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - préfixe de rede de staging `testus`, destiné à la configuration du réseau principal pour les tests d'intégration et de validation pré-version (chaîne UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Manter arquivos genesis separados, chaves de gouvernance et empreintes de l'infrastructure pour chaque environnement. Testus est devenu un camp de tests pour les déploiements SoraFS/SoraNet avant de promouvoir pour Nexus.
 - Les pipelines de CI/CD doivent être déployés d'abord dans Testus, exécuter des tests de fumée automatisés et fournir un manuel de promotion pour Nexus lorsque les contrôles sont effectués.
 - Les bundles de configuration de référence se trouvent dans `configs/soranexus/nexus/` (mainnet) et `configs/soranexus/testus/` (testnet), chacun avec un support `config.toml`, `genesis.json` et des répertoires d'admission Torii par exemple.## Étape 1 - Révision de la configuration

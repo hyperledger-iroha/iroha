@@ -145,6 +145,8 @@ declare_permissions! {
     iroha_executor_data_model::permission::asset::{CanBurnAsset},
     iroha_executor_data_model::permission::asset::{CanTransferAsset},
     iroha_executor_data_model::permission::asset::{CanModifyAssetMetadata},
+    iroha_executor_data_model::permission::asset::{CanSetAssetTransferFreeze},
+    iroha_executor_data_model::permission::asset::{CanSetAssetTransferDailyLimit},
     iroha_executor_data_model::permission::zk_ace::{CanManageZkAceIdentityForAccount},
 
     iroha_executor_data_model::permission::nft::{CanRegisterNft},
@@ -153,6 +155,8 @@ declare_permissions! {
     iroha_executor_data_model::permission::nft::{CanModifyNftMetadata},
 
     iroha_executor_data_model::permission::parameter::{CanSetParameters},
+    iroha_executor_data_model::permission::sccp::{CanManageSccpGovernance},
+    iroha_executor_data_model::permission::sccp::{CanProposeSccpRouteGovernance},
     iroha_executor_data_model::permission::role::{CanManageRoles},
 
     iroha_executor_data_model::permission::trigger::{CanRegisterTrigger},
@@ -164,6 +168,10 @@ declare_permissions! {
     iroha_executor_data_model::permission::executor::{CanUpgradeExecutor},
 
     iroha_executor_data_model::permission::smart_contract::{CanRegisterSmartContractCode},
+    iroha_executor_data_model::permission::smart_contract::{CanInvokeContractEntrypoint},
+    iroha_executor_data_model::permission::settlement::{CanManageFxCorridors},
+    iroha_executor_data_model::permission::settlement::{CanSetFxCorridorPolicy},
+    iroha_executor_data_model::permission::settlement::{CanSettleFxCorridor},
     iroha_executor_data_model::permission::sorafs::{CanRegisterSorafsPin},
     iroha_executor_data_model::permission::sorafs::{CanApproveSorafsPin},
     iroha_executor_data_model::permission::sorafs::{CanRetireSorafsPin},
@@ -321,7 +329,9 @@ mod executor {
 }
 
 mod smart_contract {
-    use iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
+    use iroha_executor_data_model::permission::smart_contract::{
+        CanInvokeContractEntrypoint, CanRegisterSmartContractCode,
+    };
 
     use super::*;
 
@@ -338,6 +348,118 @@ mod smart_contract {
             OnlyGenesis::from(self).validate(authority, host, context)
         }
     }
+
+    impl CanInvokeContractEntrypoint {
+        fn validate_payload(&self) -> Result {
+            let entrypoint = self.entrypoint.as_str();
+            if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
+                return Err(ValidationFail::NotPermitted(
+                    "contract entrypoint permission must use a non-empty canonical selector"
+                        .to_owned(),
+                ));
+            }
+            Ok(())
+        }
+
+        fn validate_delegation(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            self.validate_payload()?;
+            if context.curr_block.is_genesis()
+                || self.contract.subject_id() == *authority
+                || CanRegisterSmartContractCode.is_owned_by(authority, host)
+            {
+                return Ok(());
+            }
+
+            Err(ValidationFail::NotPermitted(
+                "only genesis, the deployed contract subject, or a smart-contract registrar may delegate an exact contract entrypoint permission"
+                    .to_owned(),
+            ))
+        }
+    }
+
+    impl ValidateGrantRevoke for CanInvokeContractEntrypoint {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            self.validate_delegation(authority, context, host)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            self.validate_delegation(authority, context, host)
+        }
+    }
+}
+
+mod settlement {
+    use iroha_executor_data_model::permission::settlement::{
+        CanManageFxCorridors, CanSetFxCorridorPolicy, CanSettleFxCorridor,
+    };
+
+    use super::*;
+
+    impl ValidateGrantRevoke for CanManageFxCorridors {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            OnlyGenesis::from(self).validate(authority, host, context)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            OnlyGenesis::from(self).validate(authority, host, context)
+        }
+    }
+
+    fn validate_corridor_delegation(
+        authority: &AccountId,
+        context: &Context,
+        host: &Iroha,
+    ) -> Result {
+        if context.curr_block.is_genesis() || CanManageFxCorridors.is_owned_by(authority, host) {
+            return Ok(());
+        }
+
+        Err(ValidationFail::NotPermitted(
+            "only genesis or an FX corridor manager may delegate corridor permissions".to_owned(),
+        ))
+    }
+
+    macro_rules! impl_corridor_permission {
+        ($ty:ty) => {
+            impl ValidateGrantRevoke for $ty {
+                fn validate_grant(
+                    &self,
+                    authority: &AccountId,
+                    context: &Context,
+                    host: &Iroha,
+                ) -> Result {
+                    validate_corridor_delegation(authority, context, host)
+                }
+
+                fn validate_revoke(
+                    &self,
+                    authority: &AccountId,
+                    context: &Context,
+                    host: &Iroha,
+                ) -> Result {
+                    validate_corridor_delegation(authority, context, host)
+                }
+            }
+        };
+    }
+
+    impl_corridor_permission!(CanSetFxCorridorPolicy);
+    impl_corridor_permission!(CanSettleFxCorridor);
 }
 
 mod nexus {
@@ -637,12 +759,72 @@ mod parameter {
     }
 }
 
+mod sccp {
+    //! Pass conditions for governed SCCP state management.
+    use iroha_executor_data_model::permission::sccp::{
+        CanManageSccpGovernance, CanProposeSccpRouteGovernance,
+    };
+
+    use super::*;
+
+    impl ValidateGrantRevoke for CanManageSccpGovernance {
+        fn validate_grant(
+            &self,
+            authority: &AccountId,
+            _context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            ensure_permission_owned(self, authority, host, "CanManageSccpGovernance")
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            _context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            ensure_permission_owned(self, authority, host, "CanManageSccpGovernance")
+        }
+    }
+
+    impl ValidateGrantRevoke for CanProposeSccpRouteGovernance {
+        fn validate_grant(
+            &self,
+            authority: &AccountId,
+            _context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            if CanManageSccpGovernance.is_owned_by(authority, host) {
+                return Ok(());
+            }
+            Err(ValidationFail::NotPermitted(
+                "Only SCCP governance managers may grant CanProposeSccpRouteGovernance".to_owned(),
+            ))
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            _context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            if CanManageSccpGovernance.is_owned_by(authority, host) {
+                return Ok(());
+            }
+            Err(ValidationFail::NotPermitted(
+                "Only SCCP governance managers may revoke CanProposeSccpRouteGovernance".to_owned(),
+            ))
+        }
+    }
+}
+
 pub mod asset {
     //! Module with pass conditions for asset related tokens
 
     use iroha_executor_data_model::permission::asset::{
         CanBurnAsset, CanBurnAssetWithDefinition, CanMintAsset, CanMintAssetWithDefinition,
-        CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition, CanTransferAsset,
+        CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition,
+        CanSetAssetTransferDailyLimit, CanSetAssetTransferFreeze, CanTransferAsset,
         CanTransferAssetWithDefinition,
     };
 
@@ -732,6 +914,33 @@ pub mod asset {
             super::asset_definition::Owner::from(self).validate(authority, host, context)
         }
     }
+
+    macro_rules! impl_asset_definition_control_permission {
+        ($ty:ty) => {
+            impl ValidateGrantRevoke for $ty {
+                fn validate_grant(
+                    &self,
+                    authority: &AccountId,
+                    context: &Context,
+                    host: &Iroha,
+                ) -> Result {
+                    super::asset_definition::Owner::from(self).validate(authority, host, context)
+                }
+
+                fn validate_revoke(
+                    &self,
+                    authority: &AccountId,
+                    context: &Context,
+                    host: &Iroha,
+                ) -> Result {
+                    super::asset_definition::Owner::from(self).validate(authority, host, context)
+                }
+            }
+        };
+    }
+
+    impl_asset_definition_control_permission!(CanSetAssetTransferFreeze);
+    impl_asset_definition_control_permission!(CanSetAssetTransferDailyLimit);
 
     impl ValidateGrantRevoke for CanMintAsset {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
@@ -913,6 +1122,8 @@ pub mod asset_definition {
         iroha_executor_data_model::permission::asset::CanBurnAssetWithDefinition,
         iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition,
         iroha_executor_data_model::permission::asset::CanModifyAssetMetadataWithDefinition,
+        iroha_executor_data_model::permission::asset::CanSetAssetTransferFreeze,
+        iroha_executor_data_model::permission::asset::CanSetAssetTransferDailyLimit,
     );
 }
 

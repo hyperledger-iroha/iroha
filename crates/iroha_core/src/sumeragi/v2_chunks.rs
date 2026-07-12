@@ -40,11 +40,6 @@ impl EncodedV2Payload {
         &self.manifest
     }
 
-    /// Borrow encoded chunks in manifest-index order.
-    pub(crate) fn chunks(&self) -> &[Vec<u8>] {
-        &self.chunks
-    }
-
     /// Consume the encoded payload.
     pub(crate) fn into_parts(self) -> (wire::PayloadManifest, Vec<Vec<u8>>) {
         (self.manifest, self.chunks)
@@ -184,17 +179,6 @@ impl V2ChunkSession {
             return Err(V2ChunkError::PayloadMismatch);
         }
         Ok(Some(payload))
-    }
-
-    /// Remove this transport session after a matching Kura receipt authorized
-    /// higher-level retirement.
-    pub(crate) fn retire(self) -> Result<(), V2ChunkError> {
-        let parent = self.directory.parent().map(Path::to_path_buf);
-        fs::remove_dir_all(&self.directory).map_err(|source| io_error(&self.directory, source))?;
-        if let Some(parent) = parent {
-            sync_directory(&parent)?;
-        }
-        Ok(())
     }
 
     fn replay_chunks(&mut self) -> Result<(), V2ChunkError> {
@@ -543,6 +527,7 @@ mod tests {
             height: 2,
             epoch: 0,
             epoch_end_height: u64::MAX,
+            next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Permissioned,
             parent_commit_qc: Some(parent_qc(&roster)),
             quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
@@ -567,6 +552,7 @@ mod tests {
             height: 1,
             epoch: 0,
             epoch_end_height: u64::MAX,
+            next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Permissioned,
             parent_commit_qc: None,
             quorum: wire::DualQuorum::from_roster(roster).expect("quorum"),
@@ -595,6 +581,11 @@ mod tests {
             },
             phase: wire::GlobalPhase::Commit,
             subject,
+            execution_commitment: wire::ExecutionCommitment::without_topups(
+                Hash::new(b"chunk fixture parent state"),
+                Hash::new(b"chunk fixture post state"),
+                Hash::new(b"chunk fixture ordinary writes"),
+            ),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0xA5; 48],
         }

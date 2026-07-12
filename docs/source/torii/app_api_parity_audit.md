@@ -63,14 +63,6 @@ val headers = CanonicalRequestSigner.buildHeaders(
 - Owner: Torii Platform.
 - Notes: Response is a Norito JSON body with `items`/`total`, matching SDK pagination helpers.
 
-#### Alias OPRF evaluate (`POST /v1/aliases/voprf/evaluate`) — Covered
-- Handler: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
-- DTOs: `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`
-  (`crates/iroha_torii/src/routing.rs:809-865`).
-- Router binding: `Torii::add_alias_routes` (`crates/iroha_torii/src/lib.rs:6357-6380`).
-- Tests: inline handler tests (`crates/iroha_torii/src/lib.rs:9945-9986`) plus SDK coverage
-  (`javascript/iroha_js/test/toriiClient.test.js:72`).
-- Owner: Torii Platform.
 - Notes: Response surface already enforces deterministic hex and backend identifiers; SDKs consume the DTO.
 
 #### Proof events SSE (`GET /v1/events/sse`) — Covered
@@ -99,7 +91,7 @@ val headers = CanonicalRequestSigner.buildHeaders(
 - Owner: Smart Contract WG with Torii Platform.
 - Notes: Public lifecycle is alias-first. `/v1/contracts/deploy` requires
   `contract_alias`, returns a fresh immutable `contract_address`, and reusing
-  the alias performs an in-place upgrade. Runtime calls are by-reference
+  the alias performs an in-place `kaizen`/`改善`. Runtime calls are by-reference
   `ContractCall` executions that accept exactly one of `contract_address` or
   `contract_alias`; the older `/v1/contracts/instance*` server-side-signing
   flow is no longer part of the public lifecycle surface.
@@ -154,7 +146,7 @@ val headers = CanonicalRequestSigner.buildHeaders(
   route and that OpenAPI generation stays in sync.
 - Endpoint-specific suites cover account queries, contract lifecycle, ZK verifying keys, SSE proof filters, and Nexus
   Connect behaviours.
-- SDK parity harnesses (JavaScript, Swift, Python) already consume Alias VOPRF and SSE endpoints; no additional work
+- SDK parity harnesses (JavaScript, Swift, Python) already consume the supported alias and SSE endpoints; no additional work
   required.
 
 ### Open Actions

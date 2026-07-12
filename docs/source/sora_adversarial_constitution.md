@@ -1,6 +1,8 @@
 # SORA Adversarial Constitution
 
-Status: design draft
+Status: design draft v0.2
+
+Last revised: 2026-07-09
 
 This document defines a self-contained game-theoretic frame for SORA as an
 opt-in network state. It treats SORA as a set of games among self-interested
@@ -14,6 +16,41 @@ The core thesis is:
 SORA should not be designed for honest citizens only. It should be designed so
 that selfish citizens, producers, auditors, experts, and capital providers find
 it safer and more profitable to build within the system than to capture it.
+
+## 0. Scope and Maturity
+
+This constitution separates implemented behavior from target design and open
+research. A mechanism must not be used as a security assumption before it is
+implemented, tested, audited, and activated.
+
+| Label | Meaning |
+|---|---|
+| Implemented | Present in the current SORA/Iroha runtime and covered by tests |
+| Specified | Normative target defined here, but not necessarily implemented |
+| Research | Promising mechanism whose security or implementation remains open |
+| Rejected | Design that conflicts with this constitution |
+
+Current maturity snapshot:
+
+| Mechanism | Maturity |
+|---|---|
+| Equal signed ballots from seated Parliament members | Implemented |
+| Deterministic, domain-separated citizen sortition | Implemented |
+| XOR purchasing-power target and reserve balance sheet | Specified |
+| Phoenix Capital Certificates | Specified |
+| Producer Credit Facilities | Specified |
+| Risk-tiered governance lanes | Specified |
+| Receipt-free, coercion-resistant Parliament voting | Research |
+| Privacy-preserving uniqueness credentials | Research |
+| Prediction markets for governance outcomes | Research |
+| Token-weighted Parliament voting | Rejected |
+| Phoenix as XOR reserve collateral | Rejected |
+| Unbacked XOR rewards or guaranteed Phoenix APY | Rejected |
+
+The current governance implementation is described in
+[`governance_pipeline.md`](./governance_pipeline.md). Where it differs from this
+document, the implemented behavior is authoritative until a separately
+reviewed upgrade is enacted.
 
 ## 1. Constitutional Axioms
 
@@ -80,51 +117,100 @@ A useful cultural warning label:
 
 ## 3. Core Assets and Power Separation
 
-SORA separates safety, upside, and governance.
+SORA separates money, risk capital, credit allocation, and governance. No
+instrument may silently acquire rights from another layer.
 
-### 3.1 XOR
+### 3.1 XOR: Senior Money
 
-XOR is the senior stable-money layer.
+XOR is the senior money and unit-of-account layer. It targets a governed SORA
+purchasing-power unit derived from a transparent basket index.
 
-Design intent:
+The index specification must define:
 
-- stable purchasing power against a basket of goods or other governed target;
-- useful unit of account for wages, contracts, public works, imports, exports,
-  savings, and credit;
-- senior to Phoenix in stress;
-- not marketed as a moonshot asset;
-- not used to buy extra Parliament votes.
+- goods and services included;
+- regional sampling and data providers;
+- weights and quality adjustments;
+- update cadence;
+- outlier rejection and missing-data behavior;
+- upper and lower intervention bands;
+- delayed governance procedure for changing the basket.
 
-XOR holders should expect stability and utility, not unlimited appreciation.
+No single oracle, market, ministry, or Parliament term may change the target.
+Basket changes activate only after a review delay and must preserve a published
+overlap calculation between the old and new indices. A constitutional basket
+change requires proposal in one Parliament selection epoch and ratification by
+an independently drawn later epoch.
 
-### 3.2 Phoenix
+When XOR trades above the upper band, the stabilization facility may issue and
+sell XOR for eligible reserve assets. When XOR trades below the lower band, it
+may spend liquid reserves to buy and retire XOR. Intervention size, price
+limits, and per-period loss limits are fixed by policy before the market moves.
 
-Phoenix is the junior growth-claim layer.
+XOR does not promise unlimited appreciation. Any redemption facility, if one
+exists, must state its eligible counterparties, price, capacity, queue, and
+suspension rules explicitly. Stability must never be implied from an undefined
+redemption promise.
 
-Design intent:
+XOR balances do not grant extra Parliament votes.
 
-- risky upside claim on SORA surplus;
-- first-loss or junior buffer before XOR stability is threatened;
-- reward for risk capital, productive expansion, liquidity support, and useful
-  service;
-- no Parliament votes;
-- no permanent claim on SORA sovereignty;
-- no promise of continuous yield.
+### 3.2 Phoenix: Subordinated Capital Certificates
 
-Phoenix may be implemented as a separate token, but the preferred design is a
-locked-XOR position or receipt:
+Phoenix is not a second currency and not a perpetual farming token. Phoenix is
+a family of term-dated, series-specific subordinated capital certificates, for
+example `PHX-2032-A`.
 
-```text
-lock XOR -> receive Phoenix position
-Phoenix position -> earns surplus share when reserve rules permit
-Phoenix position -> has maturity, exit queue, haircut, and dilution rules
-Phoenix position -> has no governance vote
-```
+A Phoenix series is created through a published offering with:
 
-Phoenix should not be a simple farming token. If Phoenix value depends on
-continuous payout, then payout pauses can become a death-spiral signal. Phoenix
-must be understood as junior risk capital: it receives upside only after XOR
-stability and reserves are protected.
+- a hard issuance cap;
+- an entry price denominated in XOR or eligible external reserve assets;
+- a defined term and final review date;
+- an identified surplus source, payment priority, and fixed maximum share;
+- a maximum cumulative payout multiple;
+- no guaranteed principal redemption;
+- no guaranteed payout or APY;
+- no Parliament voting rights;
+- explicit loss, transfer, and buyback rules.
+
+Each series declares exactly one use of proceeds:
+
+- **Stabilization series:** entry XOR is retired, reducing senior XOR
+  liabilities; eligible external assets enter the declared reserve tier.
+- **Producer-credit series:** entry XOR enters a segregated credit pool and is
+  disbursed under that facility's mandate without increasing XOR supply;
+  eligible external assets are converted or held under the published FX and
+  custody policy.
+
+The certificate is a claim on the series' defined future residual surplus, not
+a receipt redeemable for the entry principal. A producer-credit series is
+capitalized by the contributed assets, while its resulting producer loans are
+valued separately under Tier 2 or Tier 3 haircuts. The Phoenix certificate
+itself is never an asset of the system.
+
+Phoenix may be transferable on a secondary market, but the protocol provides
+no demand redemption before maturity. A secondary-market price decline must
+not create an XOR reserve outflow.
+
+Phoenix is never:
+
+- counted as a reserve asset backing XOR;
+- accepted as collateral for minting or borrowing XOR;
+- cross-collateralized with the stabilization facility;
+- convertible into governance power;
+- paid from unrealized asset gains or new unbacked XOR issuance.
+
+A Phoenix series receives value only through its stated share of realized
+surplus. It can receive zero payout and expire worthless. This is the
+first-loss property: Phoenix holders lose expected upside before XOR's monetary
+rules are relaxed.
+
+Optional treasury buybacks may occur only in the Green reserve regime, from
+already distributable surplus, under precommitted auction rules.
+
+An on-chain encumbrance registry records every outstanding claim on each
+surplus source. A new series is invalid if its maximum claim would cause the
+aggregate pledged share or payment priority to exceed the constitutional cap.
+Governance cannot sell the same future revenue twice or dilute an existing
+series through a later issuance.
 
 ### 3.3 Parliament
 
@@ -136,33 +222,102 @@ Design intent:
 - temporary service;
 - no permanent seats;
 - no extra votes from extra XOR or Phoenix;
-- private and receipt-free ballots where feasible;
+- equal signed clear ballots in the current implementation;
+- private and receipt-free ballots only after the research mechanism is
+  implemented, audited, and separately activated;
 - challenge windows and delayed enactment for high-risk actions;
 - accountability through bonds, clawbacks, public records, and later review.
 
 Parliament power is borrowed. It is not owned.
 
-## 4. Reserve Regimes
+## 4. XOR Balance Sheet and Reserve Regimes
 
-SORA should avoid cliff behavior by defining visible reserve regimes. Thresholds
-are parameters, but the state machine should be simple.
+SORA must distinguish liquidity from solvency. A productive loan can be sound
+and still be unusable against a withdrawal today.
 
-| Regime | Meaning | Phoenix | XOR |
-|---|---|---|---|
-| Green | Reserves exceed target and stress metrics are normal | Surplus payouts allowed | Stable |
-| Yellow | Reserves or liquidity are weakening | Payouts reduced, more surplus retained | Stable |
-| Red | Reserve defense is active | Payouts stop, exits queue, haircuts may apply | Defended |
-| Black | Recapitalization required | Phoenix diluted or auctioned, junior losses realized | Senior claim protected first |
+### 4.1 Balance-Sheet Classes
 
-Surplus distribution must be reserve-gated:
+Liabilities include:
+
+- circulating XOR;
+- XOR that is immediately redeemable under an explicit facility;
+- accrued but unpaid senior operating or settlement obligations;
+- committed milestone disbursements not already held in segregated escrow.
+
+Assets are classified by liquidity and risk:
+
+| Tier | Assets | Maximum constitutional role |
+|---|---|---|
+| Tier 1 | Cash, short-duration FX reserves, and immediately realizable low-risk assets | Intervention and short-term outflows |
+| Tier 2 | Short-dated diversified receivables with observable repayment | Limited liquidity buffer after haircut |
+| Tier 3 | Productive loans, infrastructure claims, and long-duration investments | Solvency only, with severe haircuts |
+| Excluded | XOR, Phoenix, governance reputation, unrealized protocol goodwill | Never counted as backing |
+
+Each asset class requires a published valuation source, haircut, concentration
+limit, maturity bucket, and liquidation assumption.
+
+### 4.2 Coverage Tests
+
+At minimum, the protocol calculates:
 
 ```text
-distributable_surplus =
-  max(0, liquid_reserves + haircut_assets - required_reserve_buffer)
+liquidity_coverage =
+  tier_1_liquid_value / stressed_short_term_net_outflows
+
+solvency_coverage =
+  total_haircut_asset_value / total_senior_xor_liabilities
+
+realized_surplus =
+  realized_fees
+  + realized_seigniorage
+  + cash_interest_and_realized_investment_income
+  - operating_and_security_costs
+  - realized_losses
+  - expected_loss_provision
+  - required_reserve_top_up
 ```
 
-No Phoenix payout should occur from unbacked issuance. If a reward is not backed
-by real surplus, it is inflation.
+`realized_seigniorage` means issuance proceeds remaining only after the full
+required backing for newly issued senior XOR and issuance costs are reserved.
+Loan-principal repayment improves liquidity and replaces a receivable with
+cash; it is not income and is not distributable surplus.
+
+Unrealized Phoenix value, unrealized productive-asset appreciation, and
+expected future fees are not distributable surplus.
+
+### 4.3 Reserve Regimes
+
+Regimes depend on both coverage tests, oracle health, and market liquidity.
+They use hysteresis and minimum dwell periods so a single observation cannot
+flip the state repeatedly.
+
+| Regime | Entry condition | Phoenix | New producer credit | XOR stabilization |
+|---|---|---|---|---|
+| Green | Both coverage tests exceed policy buffers | Series payouts and buybacks may occur | Normal risk budgets | Two-sided operations |
+| Yellow | A buffer is breached but minimum coverage remains | Payouts reduced or deferred | Tighter underwriting and lower caps | Reserve accumulation prioritized |
+| Red | Minimum liquidity or solvency coverage is breached | No payouts or protocol buybacks | New commitments paused except protected completions | Tier 1 reserves defend XOR within loss limits |
+| Black | Recovery plan triggered or senior impairment is plausible | Certificates may expire worthless; new recapitalization series may be offered | Only resolution funding | Emergency containment and governed recovery |
+
+Already committed producer milestones must be prefunded into segregated escrow
+before a pool enters Yellow or Red. The protocol must not promise a milestone
+and later divert its cash to monetary defense.
+
+No Phoenix payout occurs from unbacked issuance. If a reward is not funded by
+realized surplus, it is inflation.
+
+### 4.4 Cash-Flow Waterfall
+
+Realized cash enters the following order:
+
+1. Settlement finality and essential operating/security costs.
+2. Contractually committed senior XOR obligations.
+3. Expected-loss provisions and reserve-buffer restoration.
+4. Prefunded producer milestones and approved restructurings.
+5. Phoenix series payouts under their published terms.
+6. New public investment and commons allocations.
+
+Parliament may change future policy parameters, but it cannot reorder an
+already issued series or retroactively subordinate senior claims.
 
 ## 5. Actor Model
 
@@ -174,7 +329,9 @@ effectiveness = people + 2 * energy + 4 * coordination
 ```
 
 Coordination dominates. A small, disciplined group can beat a large passive
-group.
+group. This heuristic is an alarm, not a security proof. Every use must define
+the population, time window, and normalized scales for people, energy, and
+coordination.
 
 | Actor | Wants | Likely Strategy | Capture Risk | Productive Path |
 |---|---|---|---|---|
@@ -186,12 +343,42 @@ group.
 | Experts | status, accuracy rewards, influence | write briefs and forecasts | capture the information supply chain | bonded prediction and analysis |
 | Phoenix holders | surplus, buybacks, upside | support growth if payouts credible | pressure short-term extraction | junior risk capital |
 | Market makers | spreads, rules, liquidity | stabilize if rules are predictable | attack weak reserve rules | provide liquidity around target |
+| Credit underwriters | fees, reputation, repeat mandates | select and monitor borrowers | approve cronies or hide losses | allocate capital within risk limits |
 | Rent seekers | grants, titles, permanent claims | optimize metrics and committees | turn programs into entitlements | should face negative expected value |
+| External speculators | profit from price movement | arbitrage, leverage, or short | profit from destabilization | reveal weak policy and provide liquidity |
 | External states | compliance, control, taxes | tolerate, regulate, or attack | choke points and legal pressure | trade, lawful integration, public utility |
 
-## 6. Core Games
+## 6. Threat Model and Security Limits
 
-### 6.1 Money Game
+SORA distinguishes four attacker classes:
+
+| Class | Objective | Primary response |
+|---|---|---|
+| Self-interested participant | Earn more within SORA | Incentive compatibility |
+| Internal cartel | Capture grants, policy, or markets | Anti-collusion and defection mechanisms |
+| Externally financed attacker | Profit from shorts, competitors, or side payments | Bounded authority, delays, and containment |
+| Non-economic attacker | Disrupt for political, ideological, or military reasons | Byzantine safety, recovery, and redundancy |
+
+Economic mechanisms can redirect the first class and raise costs for the
+second. They cannot guarantee that attacks by the third or fourth class have
+negative expected value because external payoffs are unobservable and may be
+larger than SORA itself.
+
+Therefore every high-risk authority must have:
+
+- a maximum value and state-change scope per action;
+- an enactment delay proportional to irreversible loss;
+- independent monitoring and challenge paths;
+- a tested rollback or containment procedure;
+- automatic expiry for emergency authority;
+- a published maximum irreversible loss if all incentives fail.
+
+The constitutional objective is bounded damage and recovery, not a claim that
+all attackers can be economically persuaded.
+
+## 7. Core Games
+
+### 7.1 Money Game
 
 Players want stable savings, liquidity, and upside.
 
@@ -200,7 +387,8 @@ Desired equilibrium:
 - XOR remains stable and useful;
 - Phoenix absorbs risk and receives upside only from surplus;
 - people who want safety hold XOR;
-- people who want upside accept Phoenix lockup and loss risk.
+- people who want upside buy term-dated Phoenix certificates and accept loss
+  risk.
 
 Failure mode:
 
@@ -215,7 +403,7 @@ XOR = stable money
 Phoenix = risky growth claim
 ```
 
-### 6.2 Production Game
+### 7.2 Production Game
 
 Players want capital, customers, and profit.
 
@@ -242,7 +430,7 @@ Countermeasure:
 - real third-party payments;
 - export or import-substitution proofs where relevant.
 
-### 6.3 Governance Game
+### 7.3 Governance Game
 
 Players want influence, status, and protection.
 
@@ -251,7 +439,8 @@ Desired equilibrium:
 - governance is temporary service;
 - citizens can rise into governance through sortition;
 - wealth cannot buy sovereignty;
-- jurors can vote without giving bribers proof.
+- current jurors cast equal signed ballots;
+- the target design lets jurors vote without giving bribers proof.
 
 Failure mode:
 
@@ -264,12 +453,12 @@ Countermeasure:
 - Phoenix has no votes;
 - equal-citizen sortition;
 - no permanent seats;
-- receipt-free ballots;
+- receipt-free ballots after the research design is implemented and audited;
 - challenge windows;
 - bonded minority escalations;
 - defection bounties.
 
-### 6.4 Expert Game
+### 7.4 Expert Game
 
 Players want influence and reputation.
 
@@ -287,13 +476,16 @@ experts become priesthood -> citizens rubber-stamp captured framing
 
 Countermeasure:
 
-- anyone may submit a bonded brief;
-- briefs include falsifiable predictions;
+- anyone may submit a brief under a bounded bond, with bond assistance for
+  qualified capital-poor authors;
+- factual briefs include calibrated probabilities and falsifiable predictions;
+- normative arguments are labeled separately and are not scored as forecasts;
 - red-team briefs are required for high-risk proposals;
-- bad-faith briefs can be challenged and slashed;
-- brief authors gain or lose reputation after outcomes are observed.
+- fraud and material misrepresentation can be challenged and slashed;
+- forecast authors gain or lose calibration reputation under a proper scoring
+  rule rather than being punished merely because an uncertain event occurred.
 
-### 6.5 Identity Game
+### 7.5 Identity Game
 
 Players want eligibility and influence while remaining pseudonymous.
 
@@ -317,17 +509,19 @@ Countermeasure:
 - reputation decay;
 - no consecutive high-risk service;
 - random duty timing;
-- slashed vouching;
+- limited-liability slashed vouching;
 - trust-cluster rate limits;
+- independent entry paths and newcomer seats;
 - optional privacy-preserving uniqueness credentials.
 
-## 7. Anti-Collusion Mechanisms
+## 8. Anti-Collusion Mechanisms
 
-### 7.1 Receipt-Free Voting
+### 8.1 Receipt-Free Voting
 
 Private voting is not enough. Bribers must be unable to verify compliance.
 
-SORA should use MACI-like properties where feasible:
+Receipt-free voting is a research target, not current behavior. A candidate
+design should provide MACI-like properties:
 
 - voters can change votes;
 - later valid messages override earlier coerced messages;
@@ -342,99 +536,224 @@ The goal:
 
 If a briber cannot verify the vote, bribery becomes harder to enforce.
 
-### 7.2 Whistleblower and Defection Bounties
+Receipt-freeness does not solve endpoint compromise, physical coercion,
+voluntary key transfer, malware, or every form of screen sharing. Before
+activation, the protocol requires an explicit coercion threat model, client
+security review, recovery tests, and a stated residual-risk bound.
+
+### 8.2 Whistleblower and Defection Bounties
 
 Collusion is strongest when cartel members can trust each other. SORA should
 make cartel trust unstable.
 
 For bribery, fake productivity, auditor capture, expert capture, and Sybil
-clusters, the first credible defector should receive a large reward.
+clusters, the first credible defector may receive a bounded reward after an
+independent evidence process.
 
-One possible rule:
+A bounty cannot be guaranteed to exceed unknown off-chain bribes or external
+short positions. Its purpose is to destabilize internal cartels without
+creating an unlimited treasury liability.
+
+One possible bound is:
 
 ```text
-whistleblower_bounty = max(base_bounty, alpha * protected_value_at_risk)
+verified_bounty = min(
+  bounty_cap,
+  seized_collateral + beta * independently_verified_loss_avoided
+)
 ```
 
 Funding sources may include:
 
 - slashed briber bonds;
 - slashed colluder bonds;
-- Phoenix haircut pool;
 - fraud insurance fund;
 - treasury security budget.
 
-The bounty must be large enough that betrayal is an attractive strategy from
-inside the cartel.
+Claims require evidence that could not have been profitably manufactured by the
+claimant. Self-created bribe offers, duplicate reports, and collusive bounty
+farming are rejected or penalized. The first-report advantage, immunity terms,
+appeal process, and maximum treasury contribution are fixed in advance.
 
-### 7.3 Dark DAO Resistance
+### 8.3 Dark DAO Resistance
 
 A Dark DAO is a trustless collusion contract that pays bribes and enforces
 commitments through collateral. SORA cannot assume bribers are informal.
 
 Countermeasures:
 
-- receipt-free voting;
-- vote override and key rotation;
-- dynamic whistleblower bounties;
+- research receipt-free voting, vote override, and key rotation;
+- bounded whistleblower bounties;
 - delayed enactment;
 - rollback and challenge paths;
 - high penalties for exposed coordination.
 
-The goal is to make the expected return on trustless collusion negative.
+The goal is to reduce enforceability and contain damage. SORA does not claim it
+can make every Dark DAO negative-EV when attackers have unobservable external
+capital or non-economic objectives.
 
-## 8. Production Funding Rules
+## 9. Producer Finance and Productive Funding
 
-Production funding should not reward easily faked metrics.
+Retrospective rewards alone cannot finance producers who need inputs, payroll,
+or equipment before output exists. SORA therefore uses Producer Credit
+Facilities for recoverable finance and separate grant programs for public
+goods whose value cannot be repaid directly.
 
-### 8.1 Negative Expected Value for Fake Activity
+### 9.1 Institutional Roles
 
-Every subsidy formula should ask:
+| Role | Responsibility | Constraint |
+|---|---|---|
+| Parliament | Set facility mandate, risk budget, and concentration limits | Does not select individual borrowers |
+| Facility manager | Execute the published mandate | Replaceable, bonded, and performance reviewed |
+| Underwriter | Assess cash flow, counterparties, milestones, and collateral | Compensation vests over the credit life |
+| Producer | Deliver output and repay under the contract | Contributes first-loss capital or a service bond |
+| Senior capital provider | Fund low-risk portion of diversified pools | No governance rights from capital supplied |
+| Phoenix series | Fund a defined junior risk tranche | Losses before senior pool or XOR reserves |
+| Milestone attestor | Verify a narrow factual claim | Random assignment, bond, and challenge exposure |
+| Auditor | Test underwriting, related parties, and evidence | Independent of approval and servicing |
+| Servicer | Collect payments and execute restructurings | Cannot alter waterfall or forgive related parties alone |
+
+Parliament governs the rules of credit allocation, not each loan. This avoids
+turning routine financing into a political favor market.
+
+### 9.2 Financing Products
+
+Facilities may offer only products with specified evidence and resolution
+paths:
+
+| Product | Up-front use | Primary repayment source | Typical evidence |
+|---|---|---|---|
+| Purchase-order finance | Inputs for a committed order | Buyer payment | Buyer bond, order, delivery acceptance |
+| Import finance | Foreign-currency equipment or materials | Sale of resulting output | Supplier invoice, shipment, customs or delivery proof |
+| Invoice finance | Liquidity after delivery | Receivable collection | Accepted invoice and counterparty confirmation |
+| Working-capital line | Inventory and payroll | Recurring operating cash flow | Sales history, inventory, payroll escrow |
+| Milestone capex | Equipment and productive capacity | Project revenue | Independent milestones and asset inspection |
+| Public-works contract | Shared infrastructure | Budgeted public payment | Reverse auction, completion evidence, maintenance bond |
+| Public-good grant | Non-excludable benefit | No direct repayment | Retrospective impact review and capped staged grants |
+
+### 9.3 Funding Stack and Loss Waterfall
+
+Each credit pool publishes its capital structure. A default absorbs losses in
+this order unless a proposal defines a stricter project-specific order:
+
+1. Producer equity, retained payment, or performance bond.
+2. Project-specific guarantor or buyer bond.
+3. Project or facility Phoenix junior tranche.
+4. Facility insurance and accumulated loss reserve.
+5. Senior pool capital.
+6. General treasury only under an explicit, pre-funded guarantee.
+
+XOR monetary reserves do not automatically socialize producer-credit losses.
+Any treasury guarantee is priced, capped, visible in solvency coverage, and
+approved before origination.
+
+Senior capital enters a ring-fenced facility through fixed-term facility notes,
+not demand deposits. Those notes have claims only on the specified pool and any
+explicit pre-funded guarantee. Neither senior facility notes nor Phoenix
+certificates are redeemable against the XOR monetary reserve.
+
+### 9.4 Staged Disbursement
+
+Up-front finance should reach the productive bottleneck without becoming an
+unrestricted withdrawal.
+
+Preferred disbursement methods:
+
+- direct payment to independently verified suppliers;
+- payroll streaming from segregated escrow;
+- shipping or customs escrow for imports;
+- milestone tranches released after a challenge period;
+- retained final payment until acceptance and warranty conditions are met.
+
+Every approved milestone is prefunded before work begins. Attestors verify
+narrow facts, not broad political judgments. Large milestones require several
+independent evidence types and at least one randomly selected verifier.
+
+### 9.5 Underwriting and Pricing
+
+Underwriting considers:
+
+- repayment source and downside cash-flow scenarios;
+- producer contribution and prior repayment history;
+- buyer, supplier, and guarantor independence;
+- related-party and circular-payment risk;
+- sector, geography, maturity, and counterparty concentration;
+- oracle, legal-enforcement, custody, and physical-delivery risk;
+- loss given default and time to recovery.
+
+Interest, fees, collateral, and junior-capital requirements rise with expected
+loss, correlation, evidence weakness, and illiquidity. Successful repayment
+lowers future financing cost, creating upward mobility through performance
+rather than inherited access.
+
+Underwriter compensation is partly deferred until repayment. Underwriters lose
+their deferred compensation or bond for fraud, hidden conflicts, or material
+policy violations, not merely because a properly disclosed risk defaults.
+
+### 9.6 Default and Restructuring
+
+Default is expected in productive finance and must not be treated as proof of
+fraud.
+
+Each product defines:
+
+- missed-payment and covenant thresholds;
+- cure and grace periods;
+- temporary payment reduction rules;
+- restructuring authority and voting thresholds;
+- collateral realization or replacement rights;
+- producer appeal and independent review;
+- final write-off and loss allocation.
+
+Restructuring should preserve a viable producer when its continuation value
+exceeds liquidation value. Fraud and asset diversion follow a separate
+enforcement path with clawbacks and exclusion.
+
+### 9.7 Portfolio Limits
+
+Facilities enforce ex ante caps for:
+
+- one producer or control cluster;
+- one buyer, supplier, guarantor, or underwriter;
+- one sector, geography, currency, and maturity bucket;
+- unsecured and weak-evidence exposures;
+- related-party transactions;
+- total treasury-guaranteed loss.
+
+Limits tighten automatically in Yellow and Red reserve regimes. Originators
+cannot evade limits by splitting one economic exposure across pseudonyms.
+Control-cluster findings are challengeable and privacy-preserving where
+possible, but unresolved identity correlation receives the more conservative
+capital treatment.
+
+### 9.8 Grants, Subsidies, and Fake Activity
+
+Grants supplement credit where repayment cannot capture the public benefit.
+They do not replace working-capital finance.
+
+Every subsidy formula asks:
 
 ```text
 If a cartel fakes this metric with circular activity, does it lose money?
 ```
 
-A base rule:
+A base constraint is:
 
 ```text
-subsidy <= value_signal * haircut
+subsidy <= independently_observed_value_signal * conservative_haircut
 ```
 
-The haircut should be severe until a producer demonstrates durable,
-diversified, non-circular demand.
+Use sublinear matching, delayed vesting, counterparty diversity, randomized
+audits, and clawbacks. Do not subsidize raw transactions, signups, page views,
+or self-reported activity.
 
-### 8.2 Prefer Retrospective Funding
+Prefer repeat independent buyers, external revenue, delivery proofs, repayment
+history, export receipts, import substitution, and maintained public
+infrastructure. A negative-EV fake-activity test is necessary but not
+sufficient: externally financed attackers may accept a loss, so each program
+also has a hard maximum extraction and reversible payout schedule.
 
-Where possible, SORA should pay for observed outcomes, not promises.
-
-Preferred mechanisms:
-
-- retroactive public goods funding;
-- reverse auctions for public works;
-- milestone escrow;
-- matching real third-party payments;
-- import-credit loans tied to delivered output;
-- export-revenue recognition;
-- clawbacks for fraud;
-- randomized audits.
-
-### 8.3 Avoid Direct Volume Subsidies
-
-Do not subsidize raw transactions, signups, page views, or self-reported
-activity. These are easy to farm.
-
-Prefer signals with friction:
-
-- repeat buyers;
-- buyer diversity;
-- external revenue;
-- delivery proofs;
-- inventory or infrastructure inspection;
-- repayment history;
-- independent customer attestations with slashing risk.
-
-## 9. Auditing Game
+## 10. Auditing and Physical-World Evidence
 
 Auditors are also self-interested actors. They may shirk, extort, collude, or
 be captured.
@@ -453,10 +772,39 @@ Audit design should include:
 
 Auditing should be an adversarial market, not a priesthood.
 
-## 10. Parliament and Proposal Lifecycle
+Real production cannot be proven by cryptography alone. Physical delivery,
+asset ownership, legal claims, customs events, and buyer acceptance require
+accountable off-chain institutions. Evidence should combine independent
+sources such as suppliers, buyers, insurers, custodians, local inspectors, and
+legal registries. No single attestor should both create and approve the same
+claim.
 
-High-stakes governance should be delayed, staged, challengeable, and reversible
-where possible.
+Auditors are penalized for fraud, concealed conflicts, fabricated evidence, or
+material policy violations. They are not automatically penalized because an
+honestly assessed uncertain project later fails. This preserves incentives to
+report uncertainty instead of hiding risk.
+
+## 11. Risk-Tiered Governance
+
+Applying the maximum process to every decision creates rational ignorance,
+gridlock, and veto rents. SORA assigns each action to a risk lane before
+substantive review.
+
+| Lane | Scope | Process | Authority limit |
+|---|---|---|---|
+| Routine | Deterministic actions inside an existing mandate | Automatic or delegated execution with audit log | Cannot change policy or exceed mandate |
+| Standard | Reversible parameter, facility, or budget changes | Bonded proposal, adversarial brief, ordinary Parliament gate, challenge window | Bounded value and rollback time |
+| Constitutional | Monetary target, reserve waterfall, runtime, rights, or high irreversible loss | Full multibody Parliament, red teams, longer challenge, staged enactment | Explicit maximum irreversible loss |
+| Emergency | Immediate containment of a live incident | Narrow temporary authority followed by mandatory review | Hard scope cap and automatic expiry |
+
+The proposer must justify the selected lane. Underclassification is itself
+challengeable. Routine and emergency authority cannot be chained to achieve a
+constitutional change incrementally.
+
+### 11.1 Constitutional Lifecycle
+
+High-risk governance is delayed, staged, challengeable, and reversible where
+possible.
 
 An ideal lifecycle:
 
@@ -465,7 +813,7 @@ proposal submitted
 -> bonded expert briefs and red-team briefs
 -> public comment and prediction market window
 -> sortition roster commitment
--> private receipt-free voting
+-> equal signed ballots under the current implementation
 -> aggregate result
 -> challenge window
 -> canary or staged rollout
@@ -474,6 +822,10 @@ proposal submitted
 -> clawback or rollback if needed
 ```
 
+After a coercion-resistant ballot protocol is implemented, audited, and
+activated, it may replace the clear-ballot step without changing the remaining
+lifecycle.
+
 For high-risk proposals, require:
 
 - larger juries;
@@ -481,9 +833,9 @@ For high-risk proposals, require:
 - longer challenge windows;
 - stronger expert red-team requirements;
 - explicit rollback plan;
-- Phoenix first-loss exposure if the action damages reserves.
+- an explicit maximum irreversible loss and containment plan.
 
-## 11. Minority Delay Without Extortion
+## 12. Minority Delay Without Extortion
 
 Minority escalation can protect against capture, but free delay becomes a
 rent-seeking weapon.
@@ -498,75 +850,147 @@ Rules:
 
 The goal is to make delay a truth-discovery tool, not a veto market.
 
-## 12. Phoenix Design Constraints
+## 13. Phoenix Series Governance
 
 Phoenix must attract early capital without creating a permanent rentier class.
 
-Recommended constraints:
+Every series preserves the constraints in section 3.2. In addition:
 
 - no Parliament votes;
 - no continuous yield promise;
 - reserve-gated payouts;
-- maturity or exit queue;
-- withdrawal cooldowns;
-- stress haircuts;
-- dilution before XOR impairment;
-- smooth decay rather than cliff expiry;
+- no demand redemption or withdrawal queue;
+- no cross-series claim on another series' allocation;
+- no issuance that over-encumbers an already pledged surplus source;
+- a published payout schedule that declines smoothly if the series uses
+  time-weighted participation;
 - maximum return multiples or buyout rights where appropriate;
 - program-specific vintages for high-risk projects;
 - transparent reserve regime and payout formula.
 
-Avoid a hard cliff sunset. Cliff sunsets create short-term extraction pressure.
-Use smooth decay and vintage-based maturities:
+Series maturity ends future participation according to terms known at issuance.
+Avoid a payout cliff immediately before maturity, which creates short-term
+extraction pressure. Use smooth scheduled decline where appropriate:
 
 ```text
 early Phoenix share high at launch
 -> gradually declines as SORA matures
--> matures into lower-yield reserve participation or expires by rule
+-> closes at its stated term or earlier maximum payout cap
 ```
 
-## 13. Identity and Vouching
+## 14. Identity, Vouching, and Upward Mobility
 
 Because SORA permits pseudonymity, identity cannot rely on real-world names.
 The problem is Sybil resistance, not "false identity" in a legal-name sense.
 
-SORA should combine:
+Anonymous one-person-one-vote cannot be assumed without a scarce uniqueness
+signal. SORA combines imperfect layers and treats unresolved correlation
+conservatively:
 
 - persistent pseudonymous citizen keys;
 - aged citizenship bonds;
 - service history;
 - no-show and misconduct records;
 - cooldowns after powerful service;
-- slashed vouching;
+- limited-liability slashed vouching;
 - cluster-level introduction limits;
+- several independent trust paths for high-risk eligibility;
+- expiring vouching edges and appeal rights;
+- newcomer seats and bond assistance that do not give sponsors vote control;
 - privacy-preserving uniqueness credentials where acceptable.
 
-Vouching must be costly:
+Vouching must be costly but bounded:
 
 ```text
 vouch for citizen -> bond at risk
-Sybil cluster exposed -> vouching bonds slash backward through introducers
+Sybil cluster proven -> direct vouchers may lose up to their published cap
 ```
 
-This makes identity farming require time, capital, and social-graph risk.
+There is no unbounded backward cascade. A sponsor cannot vote for, revoke, or
+direct the citizen it helped onboard. The design makes identity farming require
+time, capital, and social-graph risk without converting established trust hubs
+into hereditary gatekeepers.
 
-## 14. Capture Path Register
+## 15. Capture Path Register
 
 | Capture Path | Attack | Countermeasure |
 |---|---|---|
-| Capital to governance | Phoenix whales buy policy | Phoenix has no votes, Parliament sortition, receipt-free voting |
+| Monetary run | Illiquid assets cannot meet XOR outflows | Separate liquidity and solvency tests, Tier 1 intervention reserve |
+| Oracle capture | Basket or reserve valuations are manipulated | Multiple sources, delayed basket changes, outlier rules, loss caps |
+| Phoenix reflexivity | Phoenix price collapse weakens XOR | Phoenix excluded from reserves and XOR collateral |
+| Capital to governance | Phoenix holders buy policy | Phoenix has no votes, Parliament sortition, bounded authority |
 | Expert capture | Captured experts frame choices | Bonded adversarial briefs and red teams |
-| Vote bribery | Briber buys vote | Receipt-free voting, decoy keys, vote override |
-| Key sale | Briber buys private key | Key rotation, master key recovery, decoy credentials |
-| Dark DAO | Smart contract enforces collusion | Dynamic bounties, receipt-freeness, delayed enactment |
-| Sybil farming | AI agents farm citizenship | Aged bonds, slashed vouching, service history |
+| Vote bribery | Briber buys vote | Current public audit; research receipt-free voting, decoy keys, vote override |
+| Key sale | Briber buys private key | Research key rotation, recovery, and decoy credentials; residual risk accepted |
+| Dark DAO | Smart contract enforces collusion | Bounded bounties, research receipt-freeness, delayed enactment, damage caps |
+| External short attack | Attacker profits from system failure elsewhere | Authority caps, staged changes, circuit breakers, recovery |
+| Sybil farming | AI agents farm citizenship | Aged bonds, limited vouching, service history, newcomer protections |
 | Fake demand | Cartel circulates payments | Sublinear subsidies, haircuts, audits, clawbacks |
+| Credit cronyism | Underwriters finance affiliates or hide losses | Deferred compensation, cluster limits, independent audits |
 | Auditor capture | Auditors extort or shirk | Auditor bonds, second opinions, anti-auditor bounties |
 | Minority extortion | Delays used as ransom | Bonded challenges and penalties for frivolous delay |
 | Founder priesthood | Builders become permanent rulers | Term limits, open expert markets, no permanent seats |
-| Hereditary rent | Early claims become tribute | Smooth decay, caps, maturity, buyout rights |
+| Vouching gatekeepers | Established trust hubs block entrants | Limited liability, multiple paths, expiry, appeals, newcomer seats |
+| Hereditary rent | Early claims become tribute | Series caps, fixed terms, payout caps, no governance rights |
 
-## 15. Proposal Template
+## 16. Quantitative Acceptance and Simulation
+
+The three constitutional questions are necessary but easy to answer
+rhetorically. Every material proposal therefore includes a reproducible
+quantitative annex.
+
+### 16.1 Economic Tests
+
+- liquidity coverage before and after enactment;
+- solvency coverage before and after enactment;
+- stressed reserve outflow and intervention capacity;
+- expected loss, unexpected-loss scenario, and loss waterfall;
+- maximum exposure to one economic control cluster;
+- maturity, currency, geography, and sector concentration;
+- realized source of every proposed payout;
+- maximum treasury and senior-XOR loss.
+
+### 16.2 Governance Tests
+
+- minimum internal capture budget under stated assumptions;
+- externally financed and non-economic attacker scenario;
+- time from malicious approval to detection and containment;
+- maximum irreversible state change per action;
+- expected participation cost and decision latency;
+- number and independence of effective veto players;
+- concentration and repeated overlap among bodies, experts, and auditors.
+
+### 16.3 Producer-Finance Tests
+
+- median and tail time from application to first disbursement;
+- producer cost of capital and required own contribution;
+- expected default, recovery, and restructuring rates;
+- senior and junior tranche loss under correlated defaults;
+- subsidy leakage under circular-payment simulation;
+- access rate for new producers versus established borrowers;
+- percentage of funds paid directly to productive inputs.
+
+### 16.4 Mandatory Adversarial Scenarios
+
+At minimum, simulation covers:
+
+- a rapid XOR run;
+- correlated producer defaults;
+- basket-oracle manipulation;
+- Phoenix secondary-market collapse;
+- a patient AI-assisted identity farm;
+- expert and auditor cartels;
+- an attacker with a profitable external short;
+- frivolous challenge flooding;
+- a facility manager hiding losses through refinancing;
+- failure of a major buyer, supplier, custodian, or reserve counterparty.
+
+The proposal states model assumptions, parameter sources, uncertainty ranges,
+and conditions that would falsify its safety case. Passing a model is not proof
+of safety; unexplained sensitivity to small assumption changes blocks
+enactment.
+
+## 17. Proposal Template
 
 Every formal SORA proposal should include this header.
 
@@ -576,6 +1000,13 @@ Every formal SORA proposal should include this header.
 ## Summary
 
 What changes, who benefits, and what state transitions occur?
+
+## Maturity and Governance Lane
+
+- Mechanisms used: Implemented / Specified / Research
+- Requested lane: Routine / Standard / Constitutional / Emergency
+- Why a lower-risk lane is insufficient:
+- Maximum authority and value affected:
 
 ## Production Over Extraction
 
@@ -595,6 +1026,8 @@ Does this make capture more expensive, slower, or easier to reverse?
 - Challenge window:
 - Reversal or rollback path:
 - Minority escalation rules:
+- Maximum irreversible loss:
+- External short/non-economic attacker scenario:
 
 ## Temporary Advantage
 
@@ -620,10 +1053,21 @@ Does this create permanent power, or only temporary earned advantage?
 
 ## Reserve and Phoenix Impact
 
-- XOR reserve impact:
-- Phoenix payout or dilution impact:
+- Liquidity coverage before/after:
+- Solvency coverage before/after:
+- Realized source of distributions:
+- Phoenix series affected and contractual basis:
 - Reserve regime transition risk:
 - Stress behavior:
+
+## Producer Finance Impact
+
+- Credit facility and product:
+- Funding and loss waterfall:
+- Up-front or milestone disbursement:
+- Underwriter and related-party exposure:
+- Default/restructuring path:
+- Portfolio concentration impact:
 
 ## Audit and Clawback
 
@@ -638,33 +1082,51 @@ Does this create permanent power, or only temporary earned advantage?
 - Full activation condition:
 - Rollback plan:
 - Sunset or review date:
+
+## Quantitative Annex
+
+- Economic tests:
+- Governance tests:
+- Producer-finance tests:
+- Adversarial simulations:
+- Assumptions and falsification conditions:
 ```
 
-## 16. Implementation Phases
+## 18. Implementation Phases
 
 ### Phase 0: Doctrine
 
 - Publish this constitution.
 - Require the three-question design test for governance proposals.
-- Document XOR as stable money and Phoenix as junior risk capital.
+- Keep the maturity matrix current and distinguish implemented guarantees from
+  research targets.
 
-### Phase 1: Minimal Mechanisms
+### Phase 1: Monetary and Credit Specification
 
-- Equal-citizen Parliament sortition.
-- Reserve-gated Phoenix payout rules.
-- Bonded challenge windows.
-- Basic expert brief format.
-- Basic producer milestone escrow and clawback rules.
+- Specify and test the basket index, intervention band, and oracle rules.
+- Implement the XOR balance sheet, coverage tests, and reserve regimes.
+- Define Phoenix series issuance, accounting, payout, and termination.
+- Implement a limited producer-credit pilot with prefunded milestones, direct
+  supplier payments, and explicit default resolution.
+- Build reproducible stress and agent-based simulation harnesses.
 
-### Phase 2: Anti-Collusion Hardening
+### Phase 2: Governance and Credit Hardening
 
-- MACI-like private and receipt-free ballots.
-- Vote override and key rotation.
-- Whistleblower bounties.
-- Slashed vouching.
-- Auditor bonds and second-opinion audits.
+- Implement risk-tiered governance lanes and authority caps.
+- Add bonded challenge windows and rollback rehearsals.
+- Add bounded whistleblower bounties and evidence adjudication.
+- Add limited-liability vouching, appeals, and newcomer access.
+- Implement auditor bonds and second-opinion audits.
 
-### Phase 3: Market-Based Governance Inputs
+### Phase 3: Anti-Collusion Research and Pilot
+
+- Specify, prototype, and audit MACI-like receipt-free ballots.
+- Test vote override, key rotation, client compromise, and coercion recovery.
+- Pilot calibrated expert forecasts with bond assistance.
+- Measure whether the mechanisms improve decisions without excluding
+  capital-poor participants.
+
+### Phase 4: Market-Based Governance Inputs
 
 - Bonded expert market.
 - Prediction markets for proposal outcomes.
@@ -672,15 +1134,15 @@ Does this create permanent power, or only temporary earned advantage?
 - Sublinear matching and anti-circularity scoring.
 - Public capture-risk dashboards.
 
-### Phase 4: Full Adversarial Network State
+### Phase 5: Full Adversarial Network State
 
 - Mature reserve regimes.
-- Phoenix vintages and smooth decay.
+- Phoenix series accounting, encumbrance limits, maturity, and closure.
 - High-risk proposal canaries.
 - Automated challenge and rollback paths.
 - Continuous adversarial simulation.
 
-## 17. Non-Goals
+## 19. Non-Goals
 
 SORA should not promise:
 
@@ -690,19 +1152,22 @@ SORA should not promise:
 - permanent passive income;
 - a moonshot XOR price;
 - technocratic rule by experts;
-- permanent governance by founders, whales, or early citizens.
+- permanent governance by founders, whales, or early citizens;
+- proof that every externally financed or non-economic attack is negative-EV;
+- cryptographic proof of every physical-world event.
 
 SORA should promise a harder thing:
 
 > Capture is never impossible, but production should usually be cheaper.
 
-## 18. Glossary
+## 20. Glossary
 
 **Capture**: Any strategy that converts temporary advantage, capital, expertise,
 or office into persistent control over SORA rules or surplus.
 
-**Phoenix**: Junior growth claim or locked-XOR position that receives upside
-from surplus and absorbs stress before XOR holders.
+**Phoenix Capital Certificate**: A term-dated, series-specific subordinated
+claim on defined realized surplus. It has no guaranteed principal redemption,
+is excluded from XOR reserves and collateral, and grants no governance rights.
 
 **XOR**: Senior stable-money unit intended for savings, wages, trade, credit,
 and contracts.
@@ -729,7 +1194,17 @@ that expires, decays, vests, or remains subject to review.
 funding, or rule changes that persists without continuous productive
 justification.
 
-## 19. Final Principle
+**Producer Credit Facility**: A governed pool that finances eligible productive
+activity under a mandate, capital structure, underwriting policy, milestone
+process, portfolio limits, and default waterfall.
+
+**Liquidity coverage**: Tier 1 liquid reserve value divided by stressed
+short-term net outflows.
+
+**Solvency coverage**: Haircut value of eligible assets divided by senior XOR
+liabilities.
+
+## 21. Final Principle
 
 The constitutional posture is:
 

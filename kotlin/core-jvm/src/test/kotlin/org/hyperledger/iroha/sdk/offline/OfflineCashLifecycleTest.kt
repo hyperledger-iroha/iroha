@@ -75,7 +75,7 @@ class OfflineCashLifecycleTest {
             runSuspend { controller.load("pkr#sbp", "10") }
         }
 
-        assertEquals(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, error.message)
+        assertEquals(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, error.message)
         assertEquals(listOf("hasPending", "sync"), events)
     }
 
@@ -281,6 +281,7 @@ class OfflineCashLifecycleTest {
         assertEquals("expired", expired.code)
     }
 
+    /* Retired pre-release Kagemusha ABI-6 wire-name test.
     @Test
     fun `kagemusha wire name constants are canonical`() {
         assertEquals(
@@ -297,6 +298,7 @@ class OfflineCashLifecycleTest {
         )
         assertEquals(KagemushaWireNames.TRANSFER_INSTRUCTION, KagemushaInstructionType.TRANSFER.wireName)
     }
+    */
 
     private class RecordingSynchronizer(
         private val events: MutableList<String>,

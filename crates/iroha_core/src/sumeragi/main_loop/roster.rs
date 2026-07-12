@@ -177,11 +177,7 @@ fn guard_pop_quorum(filtered: Vec<PeerId>, baseline: &[PeerId], pops_len: usize)
         return Vec::new();
     }
     let baseline_len = baseline.len();
-    let needed = if baseline_len > 3 {
-        baseline_len.saturating_mul(2) / 3 + 1
-    } else {
-        baseline_len
-    };
+    let needed = crate::sumeragi::network_topology::commit_quorum_from_len(baseline_len);
     if filtered.len() < needed {
         warn!(
             filtered = filtered.len(),

@@ -55,7 +55,7 @@ fn test_zk_mode_padding_and_assert() {
 fn test_exceed_max_cycles_error() {
     // Infinite loop using JMP with zero offset
     let prog: [u8; 4] =
-        encoding::wide::encode_jump(ivm::instruction::wide::control::JMP, 0, 0).to_le_bytes();
+        encoding::wide::encode_offset24(ivm::instruction::wide::control::JMP, 0).to_le_bytes();
     let mut vm = IVM::new(u64::MAX);
     vm.set_max_cycles(10);
     let prog = assemble_zk(&prog, 10);

@@ -4,10 +4,17 @@ import test from 'node:test';
 import {
   MANIFEST_VERSION,
   TEMPLATE_REVISION,
+  containsSeiyakuDeclaration,
   formatLedgerSection,
   formatSdkGuideSection,
   manifestNeedsUpdate
 } from '../sync-norito-snippets.mjs';
+
+test('quickstart matching accepts only canonical seiyaku spellings', () => {
+  assert.strictEqual(containsSeiyakuDeclaration('seiyaku Hello {}', 'Hello'), true);
+  assert.strictEqual(containsSeiyakuDeclaration('誓約 Hello {}', 'Hello'), true);
+  assert.strictEqual(containsSeiyakuDeclaration('contract Hello {}', 'Hello'), false);
+});
 
 function entry(overrides = {}) {
   return {

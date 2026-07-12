@@ -33,7 +33,7 @@ Esta página é `docs/source/soranexus_bootstrap_plan.md`. Selecione uma cópia 
 ## Сетевые окружения
 - Exclua a configuração Nexus com as seguintes configurações:
 - **Sora Nexus (mainnet)** - Conjunto de produção profissional `nexus`, размещает каноническое управление и piggyback сервисы SoraFS/SoraNet (ID de cadeia `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - site de teste profissional `testus`, configure a configuração da mainnet para testes de integração e validação de pré-lançamento (cadeia UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - site de teste profissional `testus`, configure a configuração da mainnet para testes de integração e validação de pré-lançamento (cadeia UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Держите отдельные genesis файлы, chaves de governança e инфраструктурные pegadas para каждого окружения. Testus oferece uma política para todos os seus lançamentos SoraFS/SoraNet antes de serem implementados em Nexus.
 - Pipelines CI/CD são implementados no Testus, testes de fumaça automatizados e testes de fumaça promovidos em Nexus после прохождения проверок.
 - Pacotes de configuração de configuração regulares colocados em `configs/soranexus/nexus/` (mainnet) e `configs/soranexus/testus/` (testnet), каждая содержит образцы `config.toml`, `genesis.json` e catálogos de admissão Torii.

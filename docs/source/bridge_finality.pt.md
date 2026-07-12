@@ -4,116 +4,118 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2e4c6ed5974f623906f51259a634bcad5df703bcec899630ae29f4669b289ab6
-source_last_modified: "2026-01-08T21:52:45.509525+00:00"
-translation_last_reviewed: 2026-01-08
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 ---
 
 <!--
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Provas de finalizacao de bridge
+# Provas de finalidade da bridge
 
-Este documento descreve a superficie inicial de provas de finalizacao de bridge para Iroha.
-O objetivo e permitir que cadeias externas ou light clients verifiquem que um bloco Iroha
-esta finalizado sem computacao off-chain ou relays confiaveis.
+Este documento define o formato da primeira versão. Ele transporta a evidência
+durável exata produzida pelo Sumeragi v2. O envelope tem versão de esquema `1`,
+mas o protocolo de consenso contido nele é a versão `2`. Não existe projeção,
+decodificador nem fallback para Sumeragi v1.
 
-## Formato de prova
+## Formato exato
 
-`BridgeFinalityProof` (Norito/JSON) contem:
+`BridgeFinalityProof` (Norito ou Norito JSON) contém exatamente três campos:
 
-- `height`: altura do bloco.
-- `chain_id`: identificador de cadeia Iroha para evitar replay entre cadeias.
-- `block_header`: `BlockHeader` canonico.
-- `block_hash`: hash do header (clientes recomputam para validar).
-- `commit_certificate`: conjunto de validadores + assinaturas que finalizaram o bloco.
-- `validator_set_pops`: provas de posse (PoP) alinhadas com a ordem do validator set
-  (necessarias para verificacao BLS agregada).
+```text
+{ version, block_header, finality_artifact }
+```
 
-A prova e autocontida; nenhum manifest externo ou blob opaco e necessario.
-Retencao: Torii serve provas de finalizacao para a janela recente de commit-certificate
-(limitada pelo cap de historico configurado; padrao de 512 entradas via
-`sumeragi.commit_cert_history_cap` / `SUMERAGI_COMMIT_CERT_HISTORY_CAP`). Clientes
-devem cachear ou ancorar provas se precisarem de horizontes mais longos.
-A tupla canonica e `(block_header, block_hash, commit_certificate)`: o hash do header deve
-corresponder ao hash dentro do commit certificate, e o chain id vincula a prova a um unico
-ledger. Servidores rejeitam e registram `CommitCertificateHashMismatch` quando o certificate
-aponta para um hash de bloco diferente.
+- `version` deve ser `1`;
+- `block_header` é o `BlockHeader` canônico;
+- `finality_artifact` é o `V2FinalityArtifact` exato e imutável persistido pelo
+  caminho de aplicação do Sumeragi v2; ele incorpora de forma durável um PoP
+  BLS-normal por entrada, na ordem de seu roster.
 
-## Commitment bundle
+O artefato é a única fonte dos fatos de consenso. Ele inclui versões de formato
+e protocolo, altura, `HeightContext` imutável completo, `BlockSubject` exato,
+hash do bloco, CommitQC e PoPs alinhados ao roster. O contexto congela chain id,
+limites de época, modo, CommitQC pai, roster ordenado de `ValidatorPower`,
+`DualQuorum`, compromisso Nexus/AMX, layout de DA e semente do líder. O contexto
+do pai que encerra uma época também
+incorpora o `next_epoch_snapshot` opcional; como ele faz parte do context id, o
+CommitQC do pai o autentica antes que possa autorizar o roster filho. O snapshot
+finalizado também vincula seu `epoch_end_height` e os `validator_set_pops`
+alinhados do próximo roster, além dos parâmetros da época. O sujeito vincula
+`parent_block_hash`, `block_hash` e `payload_hash`. A prova não aceita cópias duplicadas de altura,
+chain, hash, roster ou certificado.
 
-`BridgeFinalityBundle` (Norito/JSON) estende a prova basica com um commitment e justificativa
-explicitos:
+## Fonte durável e verificação
 
-- `commitment`: `{ chain_id, authority_set { id, validator_set, validator_set_hash, validator_set_hash_version }, block_height, block_hash, mmr_root?, mmr_leaf_index?, mmr_peaks?, next_authority_set? }`
-- `justification`: assinaturas do authority set sobre o payload do commitment
-  (reutiliza as assinaturas do commit certificate).
-- `block_header`, `commit_certificate`: iguais a prova basica.
+Após aplicar o bloco, Sumeragi v2 valida e grava o artefato como sidecar Kura
+imutável. A gravação é idempotente e Kura rejeita artefatos conflitantes na
+mesma altura. A recuperação pode completar um sidecar ausente sem executar o
+bloco novamente. O construtor lê bloco e sidecar por altura, verifica a
+associação e executa o verificador canônico. Os PoPs históricos vêm do sidecar
+e nunca são substituídos pelos do estado mundial mutável. Ele não usa uma
+janela recente de certificados.
 
-Placeholder atual: `mmr_root`/`mmr_peaks` sao derivados recomputando um MMR de hash de bloco em
-memoria; proofs de inclusao ainda nao sao retornadas. Clientes ainda podem verificar o mesmo
-hash via o payload de commitment hoje.
+`verify_bridge_finality_proof` exige:
 
-MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
-from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
+1. esquema `1`, formato do artefato `1` e protocolo Sumeragi `2`;
+2. contexto, roster ponderado, quorum, pai e transição de época válidos;
+3. igualdade exata de altura, context id, sujeito, hash repetido e CommitQC,
+   sempre na fase `Commit`;
+4. chain id esperado e altura, hash, predecessor e view recalculados do header,
+   todos vinculados exatamente ao artefato;
+5. um PoP BLS-normal durável e válido no artefato para cada membro do roster;
+6. índices de signatários estritamente crescentes e dentro do intervalo;
+7. simultaneamente pelo menos `floor(2n/3) + 1` signatários distintos e poder
+   assinado estritamente maior que dois terços do total;
+8. a assinatura BLS agregada sobre o preimage exato do voto v2.
 
-API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
+O preimage usa o domínio `iroha:sumeragi:v2:vote` e codifica em Norito
+`{ protocol_version: 2, round: { context_id, height, view }, phase: Commit,
+subject: { parent_block_hash, block_hash, payload_hash } }`. Índice e assinatura
+individual ficam fora; a lista ordenada do CommitQC seleciona chaves e PoPs. A
+verificação BLS/PoP é sempre obrigatória.
 
-A verificacao e analoga a prova basica: recompute `block_hash` a partir do header, verifique
-as assinaturas do commit certificate e confirme que os campos do commitment correspondem ao
-certificate e ao hash do bloco. O bundle adiciona um wrapper de commitment/justification para
-protocolos de bridge que preferem a separacao.
+## Âncora de confiança e sucessores
 
-## Passos de verificacao
+Uma prova isolada demonstra coerência criptográfica sob o roster que carrega,
+mas não que esse roster seja canônico. Por isso, `BridgeFinalityVerifier` exige
+um `HeightContextId` explicitamente confiável antes da primeira prova e nunca
+aprende confiança dela. Depois só aceita a altura imediatamente seguinte,
+verifica o CommitQC pai com o contexto e PoPs anteriores e aplica as regras de
+transição v2. Dentro de uma época, o filho copia os PoPs alinhados do artefato
+anterior; no limite, época, roster, quorum, semente e PoPs devem corresponder ao
+`next_epoch_snapshot` do contexto pai, incluindo seu `epoch_end_height`, tudo
+autenticado pelo CommitQC pai.
+Alturas antigas, puladas ou sem vínculo são rejeitadas.
 
-1. Recompute `block_hash` a partir de `block_header`; rejeite se nao coincidir.
-2. Verifique que `commit_certificate.block_hash` corresponde ao `block_hash` recomputado;
-   rejeite pares header/commit certificate em mismatch.
-3. Verifique que `chain_id` corresponde a cadeia Iroha esperada.
-4. Recompute `validator_set_hash` de `commit_certificate.validator_set` e verifique que
-   corresponde ao hash/versao registrados.
-5. Verifique que o comprimento de `validator_set_pops` corresponde ao validator set e valide
-   cada PoP contra sua chave publica BLS.
-6. Verifique assinaturas no commit certificate contra o hash do header usando as chaves
-   publicas e indices de validadores referenciados; imponha quorum (`2f+1` quando `n>3`,
-   caso contrario `n`) e rejeite indices duplicados/fora do intervalo.
-7. Opcionalmente vincule a um checkpoint confiavel comparando o hash do validator set com
-   um valor ancorado (anchor de weak-subjectivity).
-8. Opcionalmente vincule a um anchor de epoch esperado para rejeitar provas de epochs mais
-   antigos/novos ate que o anchor seja rotacionado intencionalmente.
+## Limite de confiança do SCCP
 
-`BridgeFinalityVerifier` (em `iroha_data_model::bridge`) aplica essas checagens, rejeitando
-chain-id/height drift, mismatches de hash/versao do validator set, PoPs ausentes ou invalidas,
-signatarios duplicados/fora do intervalo, assinaturas invalidas e epochs inesperados antes de
-contar quorum para que light clients possam reutilizar um unico verificador.
+`TairaSccpMessageProofV1.finality_proof` é a codificação Norito do mesmo tipo;
+SCCP não possui outro transcript nem outro cálculo de quorum. Header, raiz SCCP
+e ramo Merkle autenticam a mensagem. A prova bruta só estabelece coerência sob
+seu roster congelado.
 
-## Verificador de referencia
+A confiança vem do `SccpSoraFinalityAnchorV1` governado: rede Taira exata,
+protocolo `2`, hash do chain id, altura/hash do checkpoint,
+`checkpoint_context_id` e hash com domínio separado do artefato durável. O
+circuito semântico expõe o hash da âncora como último sinal público. A admissão
+deve autenticar o artefato do checkpoint e verificar cada sucessor imediato até
+o artefato da mensagem, ou comparar os mesmos artefatos locais confiáveis. Uma
+assinatura válida sob roster fornecido pela mensagem não prova finalidade de
+Taira.
 
-`BridgeFinalityVerifier` aceita um `chain_id` esperado mais anchors opcionais de validator set
-e epoch. Ele aplica o tuple header/block-hash/commit-certificate, valida hash/versao do validator
-set, verifica assinaturas/quorum contra o roster de validadores anunciado e rastreia a ultima
-altura para rejeitar provas antigas/puladas. Quando anchors sao fornecidos, ele rejeita replays
-entre epochs/rosters com erros `UnexpectedEpoch`/`UnexpectedValidatorSet`; sem anchors ele adota
-o hash do validator set e o epoch da primeira prova antes de continuar a impor erros
- deterministas para assinaturas duplicadas/fora do intervalo/insuficientes.
+## Bundle e API
 
-## Superficie de API
+`BridgeFinalityBundle` contém exatamente `{ commitment, finality_proof }`. O
+compromisso é exatamente
+`{ chain_id, height_context_id, block_height, block_hash }`. SCCP usa seu ramo
+Merkle tipado e sua âncora governada.
 
-- `GET /v1/bridge/finality/{height}` - retorna `BridgeFinalityProof` para a altura de bloco
-  solicitada. A negociacao de conteudo via `Accept` suporta Norito ou JSON.
-- `GET /v1/bridge/finality/bundle/{height}` - retorna `BridgeFinalityBundle`
-  (commitment + justification + header/certificate) para a altura solicitada.
+- `GET /v1/bridge/finality/{height}` retorna `BridgeFinalityProof`.
+- `GET /v1/bridge/finality/bundle/{height}` retorna `BridgeFinalityBundle`.
 
-## Notas e follow-ups
-
-- As provas atualmente sao derivadas de commit certificates armazenados. O historico limitado
-  segue a janela de retencao do commit certificate; clientes devem cachear provas de ancoragem
-  se precisarem de horizontes mais longos. Requisicoes fora da janela retornam
-  `CommitCertificateNotFound(height)`; exponha o erro e recorra a um checkpoint ancorado.
-- Uma prova reusada ou forjada com `block_hash` em mismatch (header vs. certificate) e rejeitada
-  com `CommitCertificateHashMismatch`; clientes devem executar a mesma checagem de tupla antes de
-  verificar assinaturas e descartar payloads em mismatch.
-- Trabalho futuro pode adicionar MMR/authority-set commitment chains para reduzir o tamanho das
-  provas para historicos muito longos. O commit certificate passa a ser encapsulado em envelopes
-  de commitment mais ricos.
+As duas rotas falham de forma fechada se o bloco ou sidecar v2 exato estiver
+ausente ou inválido. Consumidores da primeira versão devem rejeitar formatos ou
+versões desconhecidos; não há fallback de compatibilidade.

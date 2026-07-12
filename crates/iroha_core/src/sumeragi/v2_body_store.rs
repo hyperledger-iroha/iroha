@@ -29,7 +29,7 @@ use crate::kura::KuraV2CommitReceipt;
 
 const STORE_MAGIC: &[u8; 8] = b"SUM2BODY";
 const VALIDATED_MAGIC: &[u8; 8] = b"SUM2VALD";
-const STORE_VERSION: u16 = 1;
+const STORE_VERSION: u16 = 2;
 const FRAME_HEADER_LEN: usize = STORE_MAGIC.len() + size_of::<u16>() + size_of::<u64>();
 const CHECKSUM_LEN: usize = 32;
 
@@ -54,6 +54,7 @@ struct ValidatedBodyMarker {
     subject: wire::BlockSubject,
     manifest_hash: HashOf<wire::PayloadManifest>,
     body_frame_hash: Hash,
+    execution_commitment: wire::ExecutionCommitment,
 }
 
 /// Non-forgeable acknowledgement that one exact body is durable locally.
@@ -73,6 +74,7 @@ pub(crate) struct DurableBodyReceipt {
 #[must_use]
 pub(crate) struct ValidatedBodyReceipt {
     durable: DurableBodyReceipt,
+    execution_commitment: wire::ExecutionCommitment,
 }
 
 /// Completion minted only after an exact body task reaches durable storage.
@@ -220,9 +222,43 @@ impl ValidatedBodyReceipt {
         &self.durable
     }
 
+    /// Exact deterministic execution result fsynced with the validation marker.
+    pub(crate) const fn execution_commitment(&self) -> wire::ExecutionCommitment {
+        self.execution_commitment
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(durable: DurableBodyReceipt) -> Self {
-        Self { durable }
+        let empty = Hash::new([]);
+        let bind_frame = |domain: &[u8]| {
+            let mut preimage = Vec::with_capacity(domain.len() + 1 + Hash::LENGTH);
+            preimage.extend_from_slice(domain);
+            preimage.push(0);
+            preimage.extend_from_slice(durable.frame_hash.as_ref());
+            Hash::new(preimage)
+        };
+        Self {
+            execution_commitment: wire::ExecutionCommitment::new(
+                bind_frame(b"iroha:sumeragi:v2:test-parent-state-root:v1"),
+                bind_frame(b"iroha:sumeragi:v2:test-post-state-root:v1"),
+                empty,
+                None,
+                0,
+            )
+            .expect("test execution commitment is canonical"),
+            durable,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn for_test_with_commitment(
+        durable: DurableBodyReceipt,
+        execution_commitment: wire::ExecutionCommitment,
+    ) -> Self {
+        Self {
+            durable,
+            execution_commitment,
+        }
     }
 }
 
@@ -362,7 +398,13 @@ impl V2BodyStore {
             store.validate_marker(&marker, &receipt)?;
             if store
                 .validated
-                .insert(key, ValidatedBodyReceipt { durable: receipt })
+                .insert(
+                    key,
+                    ValidatedBodyReceipt {
+                        durable: receipt,
+                        execution_commitment: marker.execution_commitment,
+                    },
+                )
                 .is_some()
             {
                 return Err(V2BodyStoreError::DuplicateValidationMarker);
@@ -483,7 +525,7 @@ impl V2BodyStore {
         validator: F,
     ) -> Result<BodyValidationCompletion, V2BodyStoreError>
     where
-        F: FnOnce(&SignedBlock) -> Result<(), E>,
+        F: FnOnce(&SignedBlock) -> Result<wire::ExecutionCommitment, E>,
         E: BodyValidationError,
     {
         if task.round() != task.durable_receipt().round()
@@ -504,10 +546,11 @@ impl V2BodyStore {
         }
         let block = self.load(task.durable_receipt())?;
         match validator(&block) {
-            Ok(()) => Ok(BodyValidationCompletion::Validated {
+            Ok(execution_commitment) => Ok(BodyValidationCompletion::Validated {
                 work_id: task.id(),
                 tag: task.tag(),
-                receipt: self.persist_validated_receipt(task.durable_receipt())?,
+                receipt: self
+                    .persist_validated_receipt(task.durable_receipt(), execution_commitment)?,
             }),
             Err(error) => {
                 if let Some(reference) = error.missing_certified_merge_sidecar() {
@@ -626,7 +669,7 @@ impl V2BodyStore {
         validator: F,
     ) -> Result<ValidatedBodyReceipt, V2BodyStoreError>
     where
-        F: FnOnce(&SignedBlock) -> Result<(), E>,
+        F: FnOnce(&SignedBlock) -> Result<wire::ExecutionCommitment, E>,
         E: std::fmt::Display,
     {
         let key = (receipt.round, receipt.subject);
@@ -637,24 +680,29 @@ impl V2BodyStore {
             return Ok(validated.clone());
         }
         let block = self.load(receipt)?;
-        validator(&block)
+        let execution_commitment = validator(&block)
             .map_err(|error| V2BodyStoreError::DeterministicValidation(error.to_string()))?;
-        self.persist_validated_receipt(receipt)
+        self.persist_validated_receipt(receipt, execution_commitment)
     }
 
     fn persist_validated_receipt(
         &mut self,
         receipt: &DurableBodyReceipt,
+        execution_commitment: wire::ExecutionCommitment,
     ) -> Result<ValidatedBodyReceipt, V2BodyStoreError> {
+        execution_commitment.validate()?;
         let key = (receipt.round, receipt.subject);
         if let Some(validated) = self.validated.get(&key) {
-            if validated.durable() != receipt {
+            if validated.durable() != receipt
+                || validated.execution_commitment() != execution_commitment
+            {
                 return Err(V2BodyStoreError::ReceiptMismatch);
             }
             return Ok(validated.clone());
         }
         let validated = ValidatedBodyReceipt {
             durable: receipt.clone(),
+            execution_commitment,
         };
         let marker = ValidatedBodyMarker {
             version: STORE_VERSION,
@@ -663,6 +711,7 @@ impl V2BodyStore {
             subject: receipt.subject,
             manifest_hash: receipt.manifest_hash,
             body_frame_hash: receipt.frame_hash,
+            execution_commitment,
         };
         write_validated_marker(
             &self.validated_path_for(receipt.round, receipt.subject),
@@ -834,6 +883,7 @@ impl V2BodyStore {
         {
             return Err(V2BodyStoreError::ValidationMarkerMismatch);
         }
+        marker.execution_commitment.validate()?;
         Ok(())
     }
 
@@ -1177,6 +1227,7 @@ mod tests {
             height: 1,
             epoch: 0,
             epoch_end_height: 100,
+            next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Permissioned,
             parent_commit_qc: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
@@ -1310,14 +1361,17 @@ mod tests {
         let receipt = store
             .store(manifest.clone(), body.clone())
             .expect("store exact body");
+        let execution_commitment =
+            ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
         let validated = store
             .validate(&receipt, |block| {
                 (block.hash() == receipt.subject().block_hash)
-                    .then_some(())
+                    .then_some(execution_commitment)
                     .ok_or("wrong block")
             })
             .expect("validate exact durable body");
         assert_eq!(validated.durable(), &receipt);
+        assert_eq!(validated.execution_commitment(), execution_commitment);
         assert_eq!(
             store
                 .load(&receipt)
@@ -1359,11 +1413,20 @@ mod tests {
                 .map(ValidatedBodyReceipt::durable),
             Some(&receipt),
         );
+        assert_eq!(
+            reopened
+                .validated_recovery_catalog()
+                .get(&(receipt.round(), receipt.subject()))
+                .map(ValidatedBodyReceipt::execution_commitment),
+            Some(execution_commitment),
+        );
         let callback_ran = Cell::new(false);
         let _validated = reopened
             .validate(&receipt, |_| {
                 callback_ran.set(true);
-                Err("persisted validation must bypass changed post-apply state")
+                Err::<wire::ExecutionCommitment, _>(
+                    "persisted validation must bypass changed post-apply state",
+                )
             })
             .expect("durable validation marker resumes without revalidation");
         assert!(!callback_ran.get());
@@ -1382,10 +1445,12 @@ mod tests {
             receipt.clone(),
         );
         let reference = missing_merge_reference(&receipt);
+        let execution_commitment =
+            ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
 
         let deferred = store
             .execute_validation_task(&task, |_| {
-                Err::<(), _>(FixtureValidationError::MissingMergeSidecar(
+                Err::<wire::ExecutionCommitment, _>(FixtureValidationError::MissingMergeSidecar(
                     reference.clone(),
                 ))
             })
@@ -1406,7 +1471,9 @@ mod tests {
 
         let rejected = store
             .execute_validation_task(&task, |_| {
-                Err::<(), _>(FixtureValidationError::Invalid("invalid candidate"))
+                Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Invalid(
+                    "invalid candidate",
+                ))
             })
             .expect("return terminal deterministic rejection");
         assert_eq!(rejected.rejection_reason(), Some("invalid candidate"));
@@ -1418,7 +1485,9 @@ mod tests {
         );
 
         let validated = store
-            .execute_validation_task(&task, |_| Ok::<(), FixtureValidationError>(()))
+            .execute_validation_task(&task, |_| {
+                Ok::<_, FixtureValidationError>(execution_commitment)
+            })
             .expect("persist validation only after success");
         assert_eq!(
             validated
@@ -1440,8 +1509,10 @@ mod tests {
         let (body, manifest) = body_and_manifest(&context, &keys, None);
         let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
         let receipt = store.store(manifest, body).expect("store exact body");
+        let execution_commitment =
+            ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
         let _validated = store
-            .validate(&receipt, |_| Ok::<_, &'static str>(()))
+            .validate(&receipt, |_| Ok::<_, &'static str>(execution_commitment))
             .expect("persist validation marker");
         let marker_path = store.validated_path_for(receipt.round(), receipt.subject());
         let mut marker_bytes = fs::read(&marker_path).expect("read marker");
@@ -1465,6 +1536,7 @@ mod tests {
             subject: receipt.subject(),
             manifest_hash: receipt.manifest_hash(),
             body_frame_hash: receipt.frame_hash,
+            execution_commitment,
         };
         let orphan_path = reopened.validated_path_for(marker.round, marker.subject);
         write_validated_marker(&orphan_path, &marker).expect("write orphan marker");

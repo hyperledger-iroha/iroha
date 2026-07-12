@@ -1,4 +1,4 @@
-//! Verify dynamic durable lowering for state Map<int,int>: uses path_map_key and encode_int.
+//! Verify dynamic durable lowering for `StateMap<int, int>`.
 
 use std::str::FromStr;
 
@@ -25,8 +25,8 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
 fn dynamic_map_set_uses_durable_state() {
     let src = r#"
         seiyaku C {
-            state Map<int, int> M;
-            fn main() {
+            state StateMap<int, int> M;
+            kotoage fn main() authorize("WriteState") {
                 let k = 2;
                 let v = 5;
                 M[k] = v;
@@ -39,10 +39,13 @@ fn dynamic_map_set_uses_durable_state() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&code).expect("load");
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run");
 
-    // Verify durable state via STATE_GET("M/2") == Norito(i64=5)
-    let path = Name::from_str("M/2").expect("valid path");
+    // Verify durable state via the reversible canonical pointer-ABI key path.
+    let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(2))
+        .expect("encode canonical int key");
+    let path = Name::from_str(&format!("M/{}", hex::encode(key))).expect("valid path");
     let path_tlv = make_tlv(PointerType::Name, path.as_ref().as_bytes());
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     let mut get_prog = Vec::with_capacity(8);
@@ -61,6 +64,5 @@ fn dynamic_map_set_uses_durable_state() {
     let p_out = vm.register(10);
     let tlv = vm.memory.validate_tlv(p_out).expect("validate out");
     assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    let stored: i64 = norito::decode_from_bytes(tlv.payload).expect("decode stored int");
-    assert_eq!(stored, 5);
+    assert_eq!(common::decode_int_state_value(tlv.payload), 5);
 }

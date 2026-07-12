@@ -42,7 +42,7 @@ pub struct LaneRelayEnvelope {
     pub lane_incarnation: Hash,
     /// Numeric dataspace identifier.
     pub dataspace_id: DataSpaceId,
-    /// Block height associated with the settlement commitment.
+    /// Lane-local block height associated with the settlement commitment.
     pub block_height: u64,
     /// Full lane block header being relayed.
     pub block_header: BlockHeader,
@@ -387,9 +387,9 @@ impl LaneRelayEnvelope {
     ///
     /// Returns [`LaneRelayError::QcSubjectMismatch`] if the optional QC
     /// does not certify the provided block header, [`LaneRelayError::QcHeightMismatch`]
-    /// when the QC height diverges from the block, [`LaneRelayError::DaCommitmentHashMismatch`]
-    /// when the DA commitment hash differs from the header, [`LaneRelayError::SettlementBlockHeightMismatch`]
-    /// when the settlement commitment height does not match the header, or [`LaneRelayError::Encode`]
+    /// when the QC height diverges from the global proposal header,
+    /// [`LaneRelayError::DaCommitmentHashMismatch`] when the DA commitment hash differs from the
+    /// header, or [`LaneRelayError::Encode`]
     /// if hashing the settlement commitment fails.
     pub fn new(
         block_header: BlockHeader,
@@ -399,10 +399,10 @@ impl LaneRelayEnvelope {
         rbc_bytes_total: u64,
     ) -> Result<Self, LaneRelayError> {
         let settlement_hash = compute_settlement_hash(&settlement_commitment)?;
-        let block_height = block_header.height().get();
-
-        if settlement_commitment.block_height != block_height {
-            return Err(LaneRelayError::SettlementBlockHeightMismatch);
+        let block_height = settlement_commitment.block_height;
+        let proposal_height = block_header.height().get();
+        if block_height == 0 {
+            return Err(LaneRelayError::BlockHeightMismatch);
         }
         if settlement_commitment
             .lane_incarnation
@@ -419,9 +419,15 @@ impl LaneRelayEnvelope {
             return Err(LaneRelayError::QcSubjectMismatch);
         }
         if let Some(qc) = qc.as_ref()
-            && qc.height != block_height
+            && qc.height != proposal_height
         {
             return Err(LaneRelayError::QcHeightMismatch);
+        }
+        if let Some(qc) = qc.as_ref()
+            && (qc.phase != crate::block::consensus::CertPhase::Commit
+                || qc.view != block_header.view_change_index())
+        {
+            return Err(LaneRelayError::AggregateSignatureInvalid);
         }
 
         if block_header.da_commitments_hash() != da_commitment_hash {
@@ -462,11 +468,12 @@ impl LaneRelayEnvelope {
     ///
     /// Propagates [`LaneRelayError::QcSubjectMismatch`], [`LaneRelayError::QcHeightMismatch`],
     /// [`LaneRelayError::DaCommitmentHashMismatch`], [`LaneRelayError::SettlementBlockHeightMismatch`],
-    /// [`LaneRelayError::BlockHeightMismatch`], [`LaneRelayError::SettlementLaneMismatch`],
+    /// [`LaneRelayError::SettlementLaneMismatch`],
     /// [`LaneRelayError::SettlementDataspaceMismatch`], or [`LaneRelayError::SettlementHashMismatch`]
     /// when validation fails, and may surface [`LaneRelayError::Encode`] if settlement hashing encounters an encoding error.
     pub fn verify(&self) -> Result<(), LaneRelayError> {
-        if self.block_height != self.block_header.height().get() {
+        let proposal_height = self.block_header.height().get();
+        if self.block_height == 0 {
             return Err(LaneRelayError::BlockHeightMismatch);
         }
         if self.settlement_commitment.block_height != self.block_height {
@@ -490,9 +497,15 @@ impl LaneRelayEnvelope {
             return Err(LaneRelayError::QcSubjectMismatch);
         }
         if let Some(qc) = self.qc.as_ref()
-            && qc.height != self.block_height
+            && qc.height != proposal_height
         {
             return Err(LaneRelayError::QcHeightMismatch);
+        }
+        if let Some(qc) = self.qc.as_ref()
+            && (qc.phase != crate::block::consensus::CertPhase::Commit
+                || qc.view != self.block_header.view_change_index())
+        {
+            return Err(LaneRelayError::AggregateSignatureInvalid);
         }
         if self.block_header.da_commitments_hash() != self.da_commitment_hash {
             return Err(LaneRelayError::DaCommitmentHashMismatch);
@@ -514,7 +527,14 @@ impl LaneRelayEnvelope {
     /// Whether this relay satisfies merge-admission prerequisites.
     #[must_use]
     pub fn is_merge_admissible(&self) -> bool {
-        self.qc.is_some() && self.has_fastpq_proof_material()
+        self.block_height > 0
+            && self.qc.as_ref().is_some_and(|qc| {
+                qc.phase == crate::block::consensus::CertPhase::Commit
+                    && qc.height == self.block_header.height().get()
+                    && qc.view == self.block_header.view_change_index()
+                    && qc.subject_block_hash == self.block_header.hash()
+            })
+            && self.has_fastpq_proof_material()
     }
 
     /// Compute the canonical lane merge-hint root.
@@ -658,7 +678,7 @@ impl LaneRelayEnvelope {
         if is_zero_like {
             return Err(LaneRelayError::InvalidFastpqProof);
         }
-        if material.verified_at_height < self.block_height {
+        if material.verified_at_height < self.block_header.height().get() {
             return Err(LaneRelayError::InvalidFastpqProof);
         }
         Ok(())
@@ -686,10 +706,12 @@ impl LaneRelayEnvelope {
         let mut total_xor_after_haircut_micro = 0u128;
         let mut total_xor_variance_micro = 0u128;
         let mut settlement_sources = std::collections::BTreeSet::new();
+        let mut all_sources = std::collections::BTreeSet::new();
         for receipt in &settlement.receipts {
             if !settlement_sources.insert(receipt.source_id) {
                 return Err(LaneRelayError::DuplicateSettlementSource);
             }
+            all_sources.insert(receipt.source_id);
             total_local_micro = total_local_micro
                 .checked_add(receipt.local_amount_micro)
                 .ok_or(LaneRelayError::SettlementTotalsMismatch)?;
@@ -723,27 +745,26 @@ impl LaneRelayEnvelope {
             if !nexus_fee_sources.insert(receipt.source_id) {
                 return Err(LaneRelayError::DuplicateSettlementSource);
             }
+            all_sources.insert(receipt.source_id);
         }
 
         let mut native_amx_sources = std::collections::BTreeSet::new();
         for receipt in &settlement.native_amx_receipts {
             if receipt.lane_id != settlement.lane_id
                 || receipt.dataspace_id != settlement.dataspace_id
-                || receipt.authority_context_height != settlement.block_height
+                || receipt.lane_incarnation != settlement.lane_incarnation
+                || receipt.authority_context_height != self.block_header.height().get()
+                || receipt.lane_block_height != settlement.block_height
             {
                 return Err(LaneRelayError::SettlementReceiptCoordinateMismatch);
             }
             if !native_amx_sources.insert(receipt.source_id) {
                 return Err(LaneRelayError::DuplicateSettlementSource);
             }
+            all_sources.insert(receipt.source_id);
         }
 
-        let receipt_count = settlement
-            .receipts
-            .len()
-            .max(settlement.nexus_fee_receipts.len())
-            .max(settlement.native_amx_receipts.len());
-        if settlement.tx_count < u64::try_from(receipt_count).unwrap_or(u64::MAX) {
+        if settlement.tx_count < u64::try_from(all_sources.len()).unwrap_or(u64::MAX) {
             return Err(LaneRelayError::SettlementTxCountMismatch);
         }
         Ok(())
@@ -1289,6 +1310,65 @@ mod tests {
     }
 
     #[test]
+    fn settlement_tx_count_covers_union_of_receipt_sources() {
+        let mut envelope = build_envelope(6, None);
+        envelope
+            .settlement_commitment
+            .nexus_fee_receipts
+            .push(NexusFeeReceipt {
+                version: 1,
+                source_id: [0xB6; 32],
+                payer_account_id: checked_account_id(),
+                fee_asset_id: "xor#universal".to_owned(),
+                fee_amount: Numeric::from(1_u32),
+                schedule: NexusFeeScheduleInputs {
+                    tx_bytes_len: 1,
+                    instruction_count: 1,
+                    gas_used: 0,
+                    base_fee: Numeric::zero(),
+                    per_byte_fee: Numeric::zero(),
+                    per_instruction_fee: Numeric::from(1_u32),
+                    per_gas_unit_fee: Numeric::zero(),
+                },
+                lane_id: envelope.lane_id,
+                dataspace_id: envelope.dataspace_id,
+                block_height: envelope.block_height,
+            });
+        envelope
+            .settlement_commitment
+            .native_amx_receipts
+            .push(NativeAmxReceipt {
+                version: 1,
+                source_id: [0xC7; 32],
+                chain_id_hash: Hash::new(b"receipt-union-chain"),
+                plan_digest: Hash::new(b"receipt-union-plan"),
+                lane_id: envelope.lane_id,
+                dataspace_id: envelope.dataspace_id,
+                lane_incarnation: envelope.lane_incarnation,
+                authority_context_height: envelope.block_header.height().get(),
+                lane_block_height: envelope.block_height,
+                lane_block_view: 0,
+                coordinator_proposal_hash: Hash::new(b"receipt-union-proposal"),
+                legs: Vec::new(),
+            });
+        envelope.settlement_hash =
+            compute_settlement_hash(&envelope.settlement_commitment).expect("settlement hash");
+
+        assert_eq!(
+            envelope.verify(),
+            Err(LaneRelayError::SettlementTxCountMismatch)
+        );
+
+        envelope.settlement_commitment.nexus_fee_receipts[0].source_id = [0xA5; 32];
+        envelope.settlement_commitment.native_amx_receipts[0].source_id = [0xA5; 32];
+        envelope.settlement_hash =
+            compute_settlement_hash(&envelope.settlement_commitment).expect("settlement hash");
+        envelope
+            .verify()
+            .expect("one transaction may produce evidence in every receipt category");
+    }
+
+    #[test]
     fn verify_accepts_native_amx_receipt_with_lane_local_height() {
         let mut envelope = build_envelope(6, None);
         envelope
@@ -1301,9 +1381,9 @@ mod tests {
                 plan_digest: Hash::new(b"native-amx-relay-test-plan"),
                 lane_id: envelope.lane_id,
                 dataspace_id: envelope.dataspace_id,
-                lane_incarnation: Hash::new(b"native-amx-relay-test-incarnation"),
-                authority_context_height: envelope.block_height,
-                lane_block_height: 7,
+                lane_incarnation: envelope.lane_incarnation,
+                authority_context_height: envelope.block_header.height().get(),
+                lane_block_height: envelope.block_height,
                 lane_block_view: 2,
                 coordinator_proposal_hash: Hash::new(b"native-amx-relay-test-proposal"),
                 legs: Vec::new(),
@@ -1338,7 +1418,7 @@ mod tests {
             parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
             post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
             height,
-            view: 1,
+            view: 0,
             epoch: 0,
             chain_order_hash: crate::consensus::default_chain_order_hash(),
             rechain_seq: 0,
@@ -1363,6 +1443,61 @@ mod tests {
         envelope
             .verify_with_quorum(quorum)
             .expect("quorum validation should pass");
+    }
+
+    #[test]
+    fn relay_rejects_zero_and_accepts_independent_lane_local_height() {
+        let header = sample_header(8, None);
+        assert_eq!(
+            LaneRelayEnvelope::new(header.clone(), None, None, sample_commitment(0, 3, 2), 0,),
+            Err(LaneRelayError::BlockHeightMismatch)
+        );
+        let envelope = LaneRelayEnvelope::new(header, None, None, sample_commitment(9, 3, 2), 0)
+            .expect("lane-local height is independent of global proposal height");
+        envelope
+            .verify()
+            .expect("independent lane-local and global height domains verify");
+
+        let boundary = LaneRelayEnvelope::new(
+            sample_header(1, None),
+            None,
+            None,
+            sample_commitment(u64::MAX, 3, 2),
+            0,
+        )
+        .expect("maximal lane-local height is valid at a non-zero global proposal height");
+        boundary
+            .verify()
+            .expect("independent height boundary verifies");
+    }
+
+    #[test]
+    fn relay_rejects_non_commit_or_wrong_view_qc() {
+        let mut prepare = qc_with_bitmap(vec![0b0000_0001], 8, vec![0xCC; 48]);
+        prepare.phase = CertPhase::Prepare;
+        assert_eq!(
+            LaneRelayEnvelope::new(
+                sample_header(8, None),
+                Some(prepare),
+                None,
+                sample_commitment(8, 3, 2),
+                0,
+            ),
+            Err(LaneRelayError::AggregateSignatureInvalid)
+        );
+
+        let mut wrong_view = qc_with_bitmap(vec![0b0000_0001], 8, vec![0xCC; 48]);
+        wrong_view.view = 1;
+        assert_eq!(
+            LaneRelayEnvelope::new(
+                sample_header(8, None),
+                Some(wrong_view),
+                None,
+                sample_commitment(8, 3, 2),
+                0,
+            ),
+            Err(LaneRelayError::AggregateSignatureInvalid)
+        );
     }
 
     #[test]
@@ -1503,7 +1638,17 @@ mod tests {
 
     #[test]
     fn native_amx_relay_coordinate_uses_global_authority_height() {
-        let mut envelope = build_envelope(8, None);
+        let proposal_height = 8;
+        let lane_block_height = 3;
+        let mut settlement = sample_commitment(lane_block_height, 3, 2);
+        let mut envelope = LaneRelayEnvelope::new(
+            sample_header(proposal_height, None),
+            None,
+            None,
+            settlement.clone(),
+            0,
+        )
+        .expect("relay with independent height domains");
         let receipt = NativeAmxReceipt {
             version: 1,
             source_id: [0x31; 32],
@@ -1512,20 +1657,19 @@ mod tests {
             lane_id: envelope.lane_id,
             dataspace_id: envelope.dataspace_id,
             lane_incarnation: envelope.lane_incarnation,
-            authority_context_height: envelope.block_height,
-            lane_block_height: 3,
+            authority_context_height: proposal_height,
+            lane_block_height,
             lane_block_view: 1,
             coordinator_proposal_hash: Hash::new(b"relay-native-amx-proposal"),
             legs: Vec::new(),
         };
         assert_ne!(
-            receipt.lane_block_height, envelope.block_height,
+            receipt.lane_block_height,
+            envelope.block_header.height().get(),
             "fixture must keep the lane-local and global authority heights distinct"
         );
-        envelope
-            .settlement_commitment
-            .native_amx_receipts
-            .push(receipt);
+        settlement.native_amx_receipts.push(receipt);
+        envelope.settlement_commitment = settlement;
         envelope.settlement_hash =
             compute_settlement_hash(&envelope.settlement_commitment).expect("settlement hash");
         envelope

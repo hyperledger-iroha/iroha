@@ -10,10 +10,10 @@ This document describes the app-facing HTTP endpoints for deploying self-describ
   - Response body: `ContractCodeRecordDto` (JSON) with `manifest` populated.
 
 - POST `/v1/contracts/deploy`
-  - Accepts base64 `.to` bytecode with authority, private key, and a stable `contract_alias`; verifies the embedded `CNTR` contract interface, computes `code_hash` from the full artifact body after the fixed IVM header, computes `abi_hash` from the enforced ABI policy declared by the verified header, derives a fresh immutable `contract_address`, and binds the alias in the requested dataspace (`universal` by default).
+  - Accepts base64 `.to` bytecode with authority, private key, and a stable `contract_alias`; verifies the embedded `CNTR` contract interface, computes the domain-separated `code_hash` over the complete artifact including the fixed IVM execution header, computes `abi_hash` from the enforced ABI policy declared by the verified header, derives a fresh immutable `contract_address`, and binds the alias in the requested dataspace (`universal` by default).
   - Request body: `DeployContractDto`; response body: `DeployContractBundleReceiptDto` with exactly one `contracts[]` receipt entry.
   - Submits a single transaction that registers the manifest, stores the bytecode, activates the fresh address-backed instance, and binds the alias.
-  - Reusing an existing `contract_alias` performs an in-place upgrade: `contracts[0]` reports the new `contract_address`, the previous address, and `upgraded = true`.
+  - Reusing an existing `contract_alias` performs an in-place `kaizen`/`改善`: `contracts[0]` reports the new `contract_address`, the previous address, and `kaizen = true`.
   - Body size is limited by the `max_contract_code_bytes` custom parameter (default 16 MiB); raise the cap before uploading larger programs.
   - Telemetry: increments `torii_contract_errors_total{endpoint="deploy"}` on handler errors and `torii_contract_throttled_total{endpoint="deploy"}` when the limiter fires.
 
@@ -61,7 +61,7 @@ Notes:
       "contract_alias": "router::universal",
       "contract_address": "tairac1…",
       "previous_contract_address": null,
-      "upgraded": false,
+      "kaizen": false,
       "dataspace": "universal",
       "deploy_nonce": 0,
       "tx_hash_hex": "0123…cdef",
@@ -70,30 +70,56 @@ Notes:
       "status": "submitted"
     }
   ],
-  "init_calls": [],
+  "hajimari_calls": [],
   "assertions": []
 }
 ```
 
 ### Type encodings (JSON)
 
-- `Hash` values (e.g., `code_hash`, `abi_hash`) are encoded as 64‑char lowercase hex strings (32 bytes).
+- `Hash` values inside a canonical manifest (for example `code_hash` and
+  `abi_hash`) use the checksummed Norito JSON literal
+  `hash:<64 uppercase hex>#<4 uppercase checksum hex>`. SDK convenience APIs
+  may validate that literal and expose the underlying 64-character lowercase
+  hex, but must not accept malformed checksums or non-canonical spellings.
+- Receipt fields whose names end in `_hex` remain raw 64-character lowercase
+  hex by definition; they are not `Hash` JSON values.
 - `AccountId` strings use canonical I105 literals (domainless encoded literal).
   Strict parser paths accept only canonical I105 literals (no `@<domain>` suffix).
 - `ExposedPrivateKey` accepts either a bare multihash hex string or its algorithm-prefixed variant (e.g., `ed25519:…`). Responses normalise to bare multihash hex. Multihash hex is canonical: varint bytes are lowercase, payload bytes are uppercase, and `0x` prefixes are rejected.
+- `features_bitmap` is compiler-derived, hash-covered execution metadata. V1
+  mirrors the artifact header's ZK and deterministic VECTOR capability bits;
+  it is not source-selectable and never reports host SIMD, Metal, or CUDA
+  availability.
 
 ### GET response: ContractCodeRecordDto
 
 ```jsonc
 {
+  "code_hash": "0123…cdef",
+  "abi_hash": "89ab…7654",
   "manifest": {
-    "code_hash": "0123…cdef",
-    "abi_hash":  "89ab…7654",
-    "compiler_fingerprint": "rustc-1.79 llvm-16",
-    "features_bitmap": 0
+    "seiyaku_name": "Treasury",
+    "code_hash": "hash:0123…CDEF#ABCD",
+    "abi_hash":  "hash:89AB…7654#1234",
+    "compiler_fingerprint": "kotodama_lang/…",
+    "features_bitmap": 0,
+    "access_set_hints": { "read_keys": [], "write_keys": [], "dynamic_reads": [], "dynamic_writes": [] },
+    "entrypoints": [],
+    "states": [],
+    "error_codes": null,
+    "kotoba": null,
+    "provenance": null
   }
 }
 ```
+
+The `manifest` value is the complete canonical Norito JSON representation of
+`ContractManifest`; Torii does not truncate or rename its fields. Entrypoint
+descriptors therefore retain exact argument/return schemas, access metadata,
+and trigger declarations. The top-level `code_hash` and `abi_hash` convenience
+fields are raw lowercase hex derived from the exact same manifest values; the
+optional `code_bytes` field is omitted by this endpoint.
 
 ### Norito payloads
 
@@ -150,14 +176,17 @@ Manifests may include an `abi_hash` that binds the program to the node’s IVM A
 ```bash
 # ABI v1
 iroha tools ivm abi-hash --policy v1 --uppercase
+```
 
 The command prints a 32‑byte hex digest. Embed this value in `manifest.abi_hash`. Nodes verify that `abi_hash` equals their runtime policy hash and reject mismatches at admission.
 
 ## Security and governance
 
-- Manifest and bytecode registration are public. Torii prepends a domainless
-  self-registration for contract lifecycle writes so a signer can materialize
-  its authority account in the same transaction when the network allows it.
+- Manifest registration, bytecode registration, activation, deactivation, and
+  bytecode removal require the signing authority to hold
+  `CanRegisterSmartContractCode`. Torii prepends a domainless self-registration
+  so a permitted signer can materialize its authority account in the same
+  transaction when the network allows it; this does not grant lifecycle authority.
 - Alias-backed public deployment is the only supported app-facing activation
   flow. `ContractAddress` remains immutable per deployment, while
   `ContractAlias` is the stable public handle. Governance-controlled namespace

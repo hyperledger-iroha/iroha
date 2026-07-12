@@ -415,10 +415,8 @@ pub(super) fn read_active_publications(
         ));
     }
     let root = decode_root_payload(&root_record.canonical_root_payload, true)?;
-    let revocations = decode_revocation_payload(
-        &revocation_record.canonical_revocation_list_payload,
-        true,
-    )?;
+    let revocations =
+        decode_revocation_payload(&revocation_record.canonical_revocation_list_payload, true)?;
     Ok(Some(ActivePopPublicationsV1 {
         status,
         issuer_policy_digest: policy.policy_digest,

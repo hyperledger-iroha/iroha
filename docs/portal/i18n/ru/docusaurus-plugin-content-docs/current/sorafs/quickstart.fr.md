@@ -129,3 +129,23 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
 - **Автоматизация CI** – включает команды ci-dessus aux Pipelines de Release для того, чтобы
   документация, приспособления и опубликованные артефакты детерминированных манифестов
   с подписанными метадонами.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

@@ -2,7 +2,9 @@
 //! alongside functions for converting them into HTTP responses.
 
 use std::{
+    cell::Cell,
     collections::BinaryHeap,
+    mem,
     num::NonZeroU64,
     ops::ControlFlow,
     sync::{Arc, Mutex, Weak},
@@ -24,6 +26,8 @@ use iroha_data_model::{
         parameters::{DEFAULT_FETCH_SIZE, QueryParams, SortOrder},
     },
 };
+use mv::storage::StorageReadOnly as _;
+use norito::core::{Archived, Header, NoritoSerialize};
 
 use crate::{
     prelude::ValidSingularQuery,
@@ -82,7 +86,7 @@ fn ensure_query_registry_initialized() {
 /// Allows to generalize retrieving the metadata key for all the query output types
 pub trait SortableQueryOutput {
     /// Type used for deterministic tie-breaking when metadata sort keys are equal.
-    type TiebreakKey: Ord + Send + Sync;
+    type TiebreakKey: Ord + NoritoSerialize + Send + Sync;
 
     /// Get the sorting key for the output, from metadata
     ///
@@ -93,6 +97,12 @@ pub trait SortableQueryOutput {
     /// Implementations should return a deterministic key that uniquely and
     /// stably identifies the item so that sorting remains stable across nodes.
     fn tiebreak_key(&self) -> Self::TiebreakKey;
+
+    /// Measure the encoded tiebreak key without materializing it.
+    ///
+    /// Metered sorting calls this before [`Self::tiebreak_key`], so an
+    /// attacker-sized key is rejected before any key allocation or clone.
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error>;
 
     /// Compare two items by their deterministic tie-break order.
     fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
@@ -114,6 +124,282 @@ pub enum QueryCountMode {
     Exact,
     /// Stop once enough items are available to answer the requested page and `has_more`.
     Bounded,
+}
+
+/// Deterministic work budget for an ephemeral query.
+///
+/// The weighted limit prevents callers from independently exhausting the item
+/// and byte ceilings from the same pool of execution units. Bytes are measured
+/// without allocating an encoded buffer and include every value traversed by
+/// sorting or pagination, plus the final framed response.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct QueryExecutionBudget {
+    max_items: u64,
+    max_bytes: u64,
+    max_units: u64,
+    units_per_item: u64,
+    units_per_byte: u64,
+}
+
+impl QueryExecutionBudget {
+    /// Build a budget from one shared weighted work limit.
+    #[must_use]
+    pub const fn from_weighted_limit(
+        max_units: u64,
+        units_per_item: u64,
+        units_per_byte: u64,
+    ) -> Self {
+        let max_items = if units_per_item == 0 {
+            u64::MAX
+        } else {
+            max_units / units_per_item
+        };
+        let max_bytes = if units_per_byte == 0 {
+            u64::MAX
+        } else {
+            max_units / units_per_byte
+        };
+        Self {
+            max_items,
+            max_bytes,
+            max_units,
+            units_per_item,
+            units_per_byte,
+        }
+    }
+
+    /// Maximum number of charged items when no bytes are consumed.
+    #[must_use]
+    pub const fn max_items(self) -> u64 {
+        self.max_items
+    }
+
+    /// Maximum number of charged bytes when no items are consumed.
+    #[must_use]
+    pub const fn max_bytes(self) -> u64 {
+        self.max_bytes
+    }
+
+    fn ensure(self, items: u64, bytes: u64) -> Result<(), Error> {
+        let weighted = self
+            .units_per_item
+            .saturating_mul(items)
+            .saturating_add(self.units_per_byte.saturating_mul(bytes));
+        if items > self.max_items || bytes > self.max_bytes || weighted > self.max_units {
+            return Err(Error::GasBudgetExceeded);
+        }
+        Ok(())
+    }
+
+    fn remaining_bytes(self, items: u64, bytes: u64) -> Result<u64, Error> {
+        self.ensure(items, bytes)?;
+        let cap_remaining = self.max_bytes.saturating_sub(bytes);
+        if self.units_per_byte == 0 {
+            return Ok(cap_remaining);
+        }
+        let item_units = self.units_per_item.saturating_mul(items);
+        let byte_units = self.units_per_byte.saturating_mul(bytes);
+        let units_remaining = self
+            .max_units
+            .saturating_sub(item_units.saturating_add(byte_units));
+        Ok(cap_remaining.min(units_remaining / self.units_per_byte))
+    }
+}
+
+/// Work observed while executing an ephemeral query.
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+pub struct QueryExecutionStats {
+    processed_items: u64,
+    processed_bytes: u64,
+}
+
+impl QueryExecutionStats {
+    /// Number of items charged by query execution.
+    #[must_use]
+    pub const fn processed_items(self) -> u64 {
+        self.processed_items
+    }
+
+    /// Number of encoded bytes charged by query execution.
+    ///
+    /// This intentionally includes both source values traversed by the query
+    /// and the final framed response: scanning/sorting and response encoding
+    /// are separate pieces of deterministic work.
+    #[must_use]
+    pub const fn processed_bytes(self) -> u64 {
+        self.processed_bytes
+    }
+
+    fn record_item<T: NoritoSerialize>(
+        &mut self,
+        value: &T,
+        budget: Option<QueryExecutionBudget>,
+    ) -> Result<(), Error> {
+        self.processed_items = self.processed_items.saturating_add(1);
+        self.record_value_bytes(value, budget)
+    }
+
+    fn record_skipped_value<T: NoritoSerialize>(
+        &mut self,
+        value: &T,
+        budget: Option<QueryExecutionBudget>,
+    ) -> Result<(), Error> {
+        self.record_value_bytes(value, budget)
+    }
+
+    fn record_value_bytes<T: NoritoSerialize>(
+        &mut self,
+        value: &T,
+        budget: Option<QueryExecutionBudget>,
+    ) -> Result<(), Error> {
+        let Some(budget) = budget else {
+            return Ok(());
+        };
+        let remaining = budget.remaining_bytes(self.processed_items, self.processed_bytes)?;
+        let encoded = bounded_bare_encoded_len(value, remaining)?;
+        self.processed_bytes = self.processed_bytes.saturating_add(encoded);
+        budget.ensure(self.processed_items, self.processed_bytes)
+    }
+
+    fn record_response<T: NoritoSerialize>(
+        &mut self,
+        value: &T,
+        budget: Option<QueryExecutionBudget>,
+    ) -> Result<(), Error> {
+        let Some(budget) = budget else {
+            return Ok(());
+        };
+        let remaining = budget.remaining_bytes(self.processed_items, self.processed_bytes)?;
+        let encoded = bounded_framed_encoded_len(value, remaining)?;
+        self.processed_bytes = self.processed_bytes.saturating_add(encoded);
+        budget.ensure(self.processed_items, self.processed_bytes)
+    }
+
+    fn record_precomputed_bytes(
+        &mut self,
+        encoded: u64,
+        budget: Option<QueryExecutionBudget>,
+    ) -> Result<(), Error> {
+        let Some(budget) = budget else {
+            return Ok(());
+        };
+        let remaining = budget.remaining_bytes(self.processed_items, self.processed_bytes)?;
+        if encoded > remaining {
+            return Err(Error::GasBudgetExceeded);
+        }
+        self.processed_bytes = self.processed_bytes.saturating_add(encoded);
+        budget.ensure(self.processed_items, self.processed_bytes)
+    }
+
+    fn record_preflighted_item(
+        &mut self,
+        encoded: u64,
+        budget: Option<QueryExecutionBudget>,
+    ) -> Result<(), Error> {
+        self.processed_items = self.processed_items.saturating_add(1);
+        self.record_precomputed_bytes(encoded, budget)
+    }
+}
+
+struct BoundedLengthWriter {
+    bytes: u64,
+    limit: u64,
+    exceeded: bool,
+}
+
+impl BoundedLengthWriter {
+    const fn new(limit: u64) -> Self {
+        Self {
+            bytes: 0,
+            limit,
+            exceeded: false,
+        }
+    }
+}
+
+impl std::io::Write for BoundedLengthWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let len = u64::try_from(buf.len()).unwrap_or(u64::MAX);
+        let Some(next) = self.bytes.checked_add(len) else {
+            self.exceeded = true;
+            return Err(std::io::Error::other("query byte budget exceeded"));
+        };
+        if next > self.limit {
+            self.exceeded = true;
+            return Err(std::io::Error::other("query byte budget exceeded"));
+        }
+        self.bytes = next;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn bounded_bare_encoded_len<T: NoritoSerialize>(value: &T, limit: u64) -> Result<u64, Error> {
+    if let Some(exact) = value.encoded_len_exact() {
+        let exact = u64::try_from(exact).unwrap_or(u64::MAX);
+        return (exact <= limit)
+            .then_some(exact)
+            .ok_or(Error::GasBudgetExceeded);
+    }
+
+    let mut writer = BoundedLengthWriter::new(limit);
+    if value.serialize(&mut writer).is_err() {
+        return if writer.exceeded {
+            Err(Error::GasBudgetExceeded)
+        } else {
+            Err(Error::Conversion(
+                "failed to measure query result encoding".to_owned(),
+            ))
+        };
+    }
+    Ok(writer.bytes)
+}
+
+fn bounded_framed_encoded_len<T: NoritoSerialize>(value: &T, limit: u64) -> Result<u64, Error> {
+    let header = u64::try_from(Header::SIZE).unwrap_or(u64::MAX);
+    let align = mem::align_of::<Archived<T>>();
+    let padding = if align <= 1 {
+        0
+    } else {
+        let remainder = Header::SIZE % align;
+        if remainder == 0 { 0 } else { align - remainder }
+    };
+    let overhead = header.saturating_add(u64::try_from(padding).unwrap_or(u64::MAX));
+    if overhead > limit {
+        return Err(Error::GasBudgetExceeded);
+    }
+    bounded_bare_encoded_len(value, limit - overhead)
+        .map(|payload| overhead.saturating_add(payload))
+}
+
+fn bounded_encoded_vec_tiebreak_len<T: NoritoSerialize>(
+    value: &T,
+    limit: u64,
+) -> Result<u64, Error> {
+    // `Encode::encode(value)` is the bare archived payload. The resulting
+    // `Vec<u8>` tiebreak key adds Norito's fixed u64 sequence length prefix.
+    const VEC_LENGTH_PREFIX: u64 = 8;
+    if limit < VEC_LENGTH_PREFIX {
+        return Err(Error::GasBudgetExceeded);
+    }
+    let payload = bounded_bare_encoded_len(value, limit - VEC_LENGTH_PREFIX)?;
+    Ok(VEC_LENGTH_PREFIX.saturating_add(payload))
+}
+
+fn materialize_admitted_tiebreak_key<T: SortableQueryOutput>(
+    value: &T,
+    stats: &mut QueryExecutionStats,
+    budget: Option<QueryExecutionBudget>,
+) -> Result<T::TiebreakKey, Error> {
+    if let Some(budget) = budget {
+        let remaining = budget.remaining_bytes(stats.processed_items, stats.processed_bytes)?;
+        let encoded = value.bounded_tiebreak_key_len(remaining)?;
+        stats.record_precomputed_bytes(encoded, Some(budget))?;
+    }
+    Ok(value.tiebreak_key())
 }
 
 impl QueryLimits {
@@ -169,6 +455,10 @@ impl SortableQueryOutput for Account {
         self.id().clone()
     }
 
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(self.id(), limit)
+    }
+
     fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.id().cmp(other.id())
     }
@@ -183,6 +473,10 @@ impl SortableQueryOutput for AccountId {
 
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         self.clone()
+    }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(self, limit)
     }
 
     fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
@@ -201,6 +495,10 @@ impl SortableQueryOutput for Domain {
         self.id().clone()
     }
 
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(self.id(), limit)
+    }
+
     fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.id().cmp(other.id())
     }
@@ -215,6 +513,10 @@ impl SortableQueryOutput for AssetDefinition {
 
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         self.id().clone()
+    }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(self.id(), limit)
     }
 
     fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
@@ -233,6 +535,10 @@ impl SortableQueryOutput for Asset {
         self.id().clone()
     }
 
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(self.id(), limit)
+    }
+
     fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.id().cmp(other.id())
     }
@@ -247,6 +553,10 @@ impl SortableQueryOutput for Nft {
 
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         self.id().clone()
+    }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(self.id(), limit)
     }
 
     fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
@@ -265,6 +575,10 @@ impl SortableQueryOutput for Rwa {
         self.id().clone()
     }
 
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(self.id(), limit)
+    }
+
     fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.id().cmp(other.id())
     }
@@ -279,6 +593,10 @@ impl SortableQueryOutput for Role {
 
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         self.id.clone()
+    }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&self.id, limit)
     }
 
     fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
@@ -297,6 +615,10 @@ impl SortableQueryOutput for RoleId {
         self.clone()
     }
 
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(self, limit)
+    }
+
     fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.cmp(other)
     }
@@ -311,6 +633,10 @@ impl SortableQueryOutput for CommittedTransaction {
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         norito::codec::Encode::encode(self)
     }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_encoded_vec_tiebreak_len(self, limit)
+    }
 }
 
 impl SortableQueryOutput for PeerId {
@@ -322,6 +648,10 @@ impl SortableQueryOutput for PeerId {
 
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         norito::codec::Encode::encode(self)
+    }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_encoded_vec_tiebreak_len(self, limit)
     }
 }
 
@@ -335,6 +665,10 @@ impl SortableQueryOutput for iroha_data_model::nexus::FeeSponsorPolicy {
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         self.id.clone()
     }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&self.id, limit)
+    }
 }
 
 impl SortableQueryOutput for iroha_data_model::nexus::FeeSponsorPolicyId {
@@ -346,6 +680,10 @@ impl SortableQueryOutput for iroha_data_model::nexus::FeeSponsorPolicyId {
 
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         self.clone()
+    }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(self, limit)
     }
 
     fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
@@ -363,6 +701,10 @@ impl SortableQueryOutput for Permission {
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         norito::codec::Encode::encode(self)
     }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_encoded_vec_tiebreak_len(self, limit)
+    }
 }
 
 impl SortableQueryOutput for Trigger {
@@ -374,6 +716,10 @@ impl SortableQueryOutput for Trigger {
 
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         self.id().clone()
+    }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(self.id(), limit)
     }
 
     fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
@@ -392,6 +738,10 @@ impl SortableQueryOutput for TriggerId {
         self.clone()
     }
 
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(self, limit)
+    }
+
     fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.cmp(other)
     }
@@ -406,6 +756,10 @@ impl SortableQueryOutput for RepoAgreement {
 
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         self.id().clone()
+    }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(self.id(), limit)
     }
 
     fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
@@ -423,6 +777,10 @@ impl SortableQueryOutput for AssetEscrowRecord {
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         self.id
     }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&self.id, limit)
+    }
 }
 
 impl SortableQueryOutput for AnonymousAssetEscrowRecord {
@@ -435,10 +793,272 @@ impl SortableQueryOutput for AnonymousAssetEscrowRecord {
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         self.id
     }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&self.id, limit)
+    }
 }
 
 trait ExecuteSingularQuery {
     fn execute(self, state: &impl StateReadOnly) -> Result<SingularQueryOutputBox, Error>;
+}
+
+fn preflight_singular_source_materialization(
+    query: &SingularQueryBox,
+    state: &impl StateReadOnly,
+    budget: Option<QueryExecutionBudget>,
+) -> Result<u64, Error> {
+    let Some(budget) = budget else {
+        return Ok(0);
+    };
+    let limit = budget.remaining_bytes(1, 0)?;
+    let world = state.world();
+
+    fn charge<T: NoritoSerialize>(value: &T, remaining: &mut u64) -> Result<(), Error> {
+        let bytes = bounded_bare_encoded_len(value, *remaining)?;
+        *remaining = (*remaining).saturating_sub(bytes);
+        Ok(())
+    }
+
+    fn reject_unbounded(name: &str) -> Error {
+        Error::Conversion(format!(
+            "IVM singular query `{name}` has no bounded materialization adapter"
+        ))
+    }
+
+    let mut remaining = limit;
+
+    // These entity queries otherwise clone arbitrarily large metadata/content
+    // before the generic output enum can be measured. Measure the borrowed
+    // state value first, so the only owned materialization is already bounded.
+    // The match is deliberately exhaustive: a new singular variant cannot enter
+    // metered IVM execution until it supplies either a borrowed preflight or an
+    // explicitly fixed-size result. Synthesized/decode-heavy legacy singulars
+    // fail closed instead of allocating first and checking later.
+    match query {
+        SingularQueryBox::FindExecutorDataModel(_) => {
+            let model = world.executor_data_model();
+            if model.permissions().is_empty() {
+                return Err(reject_unbounded("FindExecutorDataModel fallback"));
+            }
+            charge(model, &mut remaining)?;
+        }
+        SingularQueryBox::FindParameters(_) => charge(world.parameters(), &mut remaining)?,
+        SingularQueryBox::FindAccountById(query) => {
+            if let Ok(account) = world.account(query.account_id()) {
+                charge(account.value().as_ref(), &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindAccountByAlias(query) => {
+            let account_id = world
+                .account_rekey_records()
+                .get(query.alias())
+                .map(|record| &record.active_account_id)
+                .or_else(|| world.account_aliases().get(query.alias()))
+                .ok_or_else(|| reject_unbounded("FindAccountByAlias without indexed binding"))?;
+            if let Ok(account) = world.account(account_id) {
+                charge(account.value().as_ref(), &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindAliasesByAccountId(_) => {
+            return Err(reject_unbounded("FindAliasesByAccountId"));
+        }
+        SingularQueryBox::FindAccountRecoveryPolicyByAlias(query) => {
+            if let Some(policy) = world.account_recovery_policies().get(query.alias()) {
+                charge(policy, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindAccountRecoveryRequestByAlias(query) => {
+            if let Some(request) = world.account_recovery_requests().get(query.alias()) {
+                charge(request, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindProofRecordById(query) => {
+            if let Some(record) = world.proofs().get(&query.id) {
+                charge(record, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindContractManifestByCodeHash(query) => {
+            if let Some(manifest) = world.contract_manifests().get(&query.code_hash) {
+                charge(manifest, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindAbiVersion(_) => {}
+        SingularQueryBox::FindAssetById(query) => {
+            if let Ok(asset) = world.asset(query.asset_id()) {
+                charge(asset.value().as_ref(), &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindDomainById(query) => {
+            if let Ok(domain) = world.domain(query.domain_id()) {
+                charge(domain, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindAssetDefinitionById(query) => {
+            if let Some(definition) = world.asset_definitions().get(query.asset_definition_id()) {
+                charge(definition, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindAssetEscrowById(query) => {
+            if let Some(record) = world.asset_escrows().get(&query.escrow_id) {
+                charge(record, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindAnonymousAssetEscrowById(query) => {
+            if let Some(record) = world.anonymous_asset_escrows().get(&query.escrow_id) {
+                charge(record, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindTriggerById(_) => {
+            return Err(reject_unbounded("FindTriggerById"));
+        }
+        SingularQueryBox::FindTwitterBindingByHash(query) => {
+            if let Some(record) = world.twitter_bindings().get(&query.binding_hash.digest) {
+                charge(record, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindOracleFeedById(query) => {
+            if let Some(record) = world.oracle_feeds().get(&query.feed_id) {
+                charge(record, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindOracleDisputeById(query) => {
+            if let Some(record) = world.oracle_disputes().get(&query.dispute_id) {
+                charge(record, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindOracleChangeById(query) => {
+            if let Some(record) = world.oracle_changes().get(&query.change_id) {
+                charge(record, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindOracleProviderStatsByKey(_) => {}
+        SingularQueryBox::FindLatestDefiOracleAttestation(query) => {
+            if let Some(record) = world
+                .defi_oracle_attestations()
+                .get(&query.key)
+                .and_then(|records| records.last())
+            {
+                charge(record, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindDomainEndorsements(query) => {
+            if let Some(hashes) = world.domain_endorsements_by_domain().get(&query.domain_id) {
+                charge(hashes, &mut remaining)?;
+                for hash in hashes {
+                    if let Some(record) = world.domain_endorsements().get(hash) {
+                        charge(record, &mut remaining)?;
+                    }
+                }
+            }
+        }
+        SingularQueryBox::FindDomainEndorsementPolicy(query) => {
+            if let Some(policy) = world.domain_endorsement_policies().get(&query.domain_id) {
+                charge(policy, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindDomainCommittee(query) => {
+            if let Some(committee) = world.domain_committees().get(&query.committee_id) {
+                charge(committee, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindDaPinIntentByTicket(query) => {
+            if let Some(intent) = world.da_pin_intents_by_ticket().get(&query.storage_ticket) {
+                charge(intent, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindDaPinIntentByManifest(query) => {
+            if let Some(ticket) = world.da_pin_intents_by_manifest().get(&query.manifest_hash)
+                && let Some(intent) = world.da_pin_intents_by_ticket().get(ticket)
+            {
+                charge(intent, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindDaPinIntentByAlias(query) => {
+            if let Some(ticket) = world.da_pin_intents_by_alias().get(&query.alias)
+                && let Some(intent) = world.da_pin_intents_by_ticket().get(ticket)
+            {
+                charge(intent, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindDaPinIntentByLaneEpochSequence(query) => {
+            if let Some(ticket) = world.da_pin_intents_by_lane_epoch().get(&(
+                query.lane_id,
+                query.epoch,
+                query.sequence,
+            )) && let Some(intent) = world.da_pin_intents_by_ticket().get(ticket)
+            {
+                charge(intent, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindLaneRelayEnvelopeByRef(_) => {
+            return Err(reject_unbounded("FindLaneRelayEnvelopeByRef"));
+        }
+        SingularQueryBox::FindFeeSponsorPolicyById(query) => {
+            if let Some(policy) = world.fee_sponsor_policies().get(&query.id) {
+                charge(policy, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindSorafsProviderOwner(query) => {
+            if let Some(owner) = world.provider_owners().get(&query.provider_id) {
+                charge(owner, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindSorafsOrderbookPolicy(_)
+        | SingularQueryBox::FindSorafsOrderbookOrderById(_)
+        | SingularQueryBox::FindSorafsOrderbookCancellationByOrderId(_)
+        | SingularQueryBox::FindSorafsOrderbookReceiptById(_)
+        | SingularQueryBox::FindSorafsOrderbookStatus(_)
+        | SingularQueryBox::FindSorafsOrderbookOrders(_)
+        | SingularQueryBox::FindSorafsOrderbookReceipts(_) => {
+            return Err(reject_unbounded("SoraFS orderbook query"));
+        }
+        SingularQueryBox::FindSorafsPopIssuerPolicy(_)
+        | SingularQueryBox::FindSorafsPopCredentialCommitmentByDigest(_)
+        | SingularQueryBox::FindSorafsPopCommitmentRootByVersion(_)
+        | SingularQueryBox::FindSorafsPopRevocationPublicationByVersion(_)
+        | SingularQueryBox::FindSorafsPopRevocationByNonceCommitment(_)
+        | SingularQueryBox::FindSorafsPopAuditDigestBySequence(_)
+        | SingularQueryBox::FindSorafsPopRegistryStatus(_) => {
+            return Err(reject_unbounded("SoraFS PoP registry query"));
+        }
+        SingularQueryBox::FindSorafsModerationPolicy(_)
+        | SingularQueryBox::FindSorafsModerationAppeal(_)
+        | SingularQueryBox::FindSorafsModerationJurorEligibility(_)
+        | SingularQueryBox::FindSorafsModerationCase(_)
+        | SingularQueryBox::FindSorafsModerationCommit(_)
+        | SingularQueryBox::FindSorafsModerationReveal(_)
+        | SingularQueryBox::FindSorafsModerationChallenge(_)
+        | SingularQueryBox::FindSorafsModerationOutcome(_)
+        | SingularQueryBox::FindSorafsModerationNoShow(_)
+        | SingularQueryBox::FindSorafsModerationStatus(_) => {
+            return Err(reject_unbounded("SoraFS moderation query"));
+        }
+        SingularQueryBox::FindDataspaceNameOwnerById(_) => {
+            return Err(reject_unbounded("FindDataspaceNameOwnerById"));
+        }
+        SingularQueryBox::FindMusubiReleaseByRef(_) => {
+            return Err(reject_unbounded("FindMusubiReleaseByRef"));
+        }
+        SingularQueryBox::FindMusubiPackageVersions(_) => {
+            return Err(reject_unbounded("FindMusubiPackageVersions"));
+        }
+        SingularQueryBox::FindMusubiPackageReleases(_) => {
+            return Err(reject_unbounded("FindMusubiPackageReleases"));
+        }
+        SingularQueryBox::SearchMusubiPackages(_) => {
+            return Err(reject_unbounded("SearchMusubiPackages"));
+        }
+        SingularQueryBox::FindMusubiShortAliasByName(_) => {
+            return Err(reject_unbounded("FindMusubiShortAliasByName"));
+        }
+        SingularQueryBox::FindNftById(query) => {
+            if let Ok(nft) = world.nft(query.nft_id()) {
+                charge(nft.value().as_ref(), &mut remaining)?;
+            }
+        }
+    }
+    Ok(limit.saturating_sub(remaining))
 }
 
 impl ExecuteSingularQuery for SingularQueryBox {
@@ -630,6 +1250,7 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindDomainById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindNftById(q) => Ok(SingularQueryOutputBox::from(q.execute(state)?)),
         }
     }
 }
@@ -707,7 +1328,6 @@ impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
                 Err(err) => return Some(Err(err)),
             };
             let batch = tuple
-                .tuple
                 .into_iter()
                 .next()
                 .unwrap_or_else(|| QueryOutputBatchBox::from(Vec::<T>::new()));
@@ -779,6 +1399,10 @@ impl SortableQueryOutput for iroha_data_model::block::SignedBlock {
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         norito::codec::Encode::encode(self)
     }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_encoded_vec_tiebreak_len(self, limit)
+    }
 }
 
 impl SortableQueryOutput for iroha_data_model::block::BlockHeader {
@@ -791,6 +1415,10 @@ impl SortableQueryOutput for iroha_data_model::block::BlockHeader {
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         norito::codec::Encode::encode(self)
     }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_encoded_vec_tiebreak_len(self, limit)
+    }
 }
 
 impl SortableQueryOutput for iroha_data_model::proof::ProofRecord {
@@ -802,6 +1430,10 @@ impl SortableQueryOutput for iroha_data_model::proof::ProofRecord {
 
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         self.id.clone()
+    }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&self.id, limit)
     }
 
     fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
@@ -819,6 +1451,10 @@ impl SortableQueryOutput for iroha_data_model::oracle::FeedConfig {
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         self.feed_id.clone()
     }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&self.feed_id, limit)
+    }
 }
 
 impl SortableQueryOutput for iroha_data_model::events::data::oracle::FeedEventRecord {
@@ -830,6 +1466,10 @@ impl SortableQueryOutput for iroha_data_model::events::data::oracle::FeedEventRe
 
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         norito::codec::Encode::encode(&self.event)
+    }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_encoded_vec_tiebreak_len(&self.event, limit)
     }
 }
 
@@ -843,6 +1483,10 @@ impl SortableQueryOutput for iroha_data_model::oracle::OracleProviderStatsRecord
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         self.key.clone()
     }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&self.key, limit)
+    }
 }
 
 impl SortableQueryOutput for iroha_data_model::oracle::OracleDispute {
@@ -854,6 +1498,10 @@ impl SortableQueryOutput for iroha_data_model::oracle::OracleDispute {
 
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         self.id
+    }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&self.id, limit)
     }
 }
 
@@ -867,6 +1515,10 @@ impl SortableQueryOutput for iroha_data_model::oracle::OracleChangeProposal {
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         self.id
     }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&self.id, limit)
+    }
 }
 
 impl SortableQueryOutput for iroha_data_model::oracle::TwitterBindingRecord {
@@ -879,6 +1531,10 @@ impl SortableQueryOutput for iroha_data_model::oracle::TwitterBindingRecord {
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         self.binding_digest()
     }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&self.binding_digest(), limit)
+    }
 }
 
 impl SortableQueryOutput for iroha_data_model::oracle::DefiOracleAttestation {
@@ -890,6 +1546,10 @@ impl SortableQueryOutput for iroha_data_model::oracle::DefiOracleAttestation {
 
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         (self.key, self.oracle_slot)
+    }
+
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&(self.key, self.oracle_slot), limit)
     }
 }
 
@@ -915,17 +1575,17 @@ where
     Ok(output)
 }
 
-fn compare_sorted_query_values<T: SortableQueryOutput>(
-    left_value: &T,
+fn compare_sorted_query_keys<K: Ord>(
     left_key: Option<&Json>,
-    right_value: &T,
+    left_tiebreak: &K,
     right_key: Option<&Json>,
+    right_tiebreak: &K,
     order: SortOrder,
 ) -> core::cmp::Ordering {
     use core::cmp::Ordering::*;
 
     match (left_key, right_key) {
-        (None, None) => left_value.tiebreak_cmp(right_value),
+        (None, None) => left_tiebreak.cmp(right_tiebreak),
         (None, Some(_)) => Greater,
         (Some(_), None) => Less,
         (Some(left_key), Some(right_key)) => {
@@ -934,7 +1594,7 @@ fn compare_sorted_query_values<T: SortableQueryOutput>(
                 SortOrder::Desc => right_key.cmp(left_key),
             };
             if primary == Equal {
-                left_value.tiebreak_cmp(right_value)
+                left_tiebreak.cmp(right_tiebreak)
             } else {
                 primary
             }
@@ -945,26 +1605,23 @@ fn compare_sorted_query_values<T: SortableQueryOutput>(
 fn compare_sorted_query_indices<T: SortableQueryOutput>(
     left_index: usize,
     right_index: usize,
-    values: &[Option<T>],
     sort_keys: &[Option<Json>],
+    tiebreak_keys: &[T::TiebreakKey],
     order: SortOrder,
 ) -> core::cmp::Ordering {
-    compare_sorted_query_values(
-        values[left_index]
-            .as_ref()
-            .expect("sorted query item should be present"),
+    compare_sorted_query_keys(
         sort_keys[left_index].as_ref(),
-        values[right_index]
-            .as_ref()
-            .expect("sorted query item should be present"),
+        &tiebreak_keys[left_index],
         sort_keys[right_index].as_ref(),
+        &tiebreak_keys[right_index],
         order,
     )
 }
 
-struct EphemeralSortedEntry<T> {
+struct EphemeralSortedEntry<T: SortableQueryOutput> {
     value: T,
     sort_key: Option<Json>,
+    tiebreak_key: T::TiebreakKey,
     order: SortOrder,
 }
 
@@ -984,11 +1641,11 @@ impl<T: SortableQueryOutput> PartialOrd for EphemeralSortedEntry<T> {
 
 impl<T: SortableQueryOutput> Ord for EphemeralSortedEntry<T> {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        compare_sorted_query_values(
-            &self.value,
+        compare_sorted_query_keys(
             self.sort_key.as_ref(),
-            &other.value,
+            &self.tiebreak_key,
             other.sort_key.as_ref(),
+            &other.tiebreak_key,
             self.order,
         )
     }
@@ -1000,7 +1657,7 @@ struct ScannedTransactionPage {
     values: Vec<CommittedTransaction>,
     remaining_items: Option<u64>,
     has_more: bool,
-    processed_items: u64,
+    stats: QueryExecutionStats,
     history_cursor: Option<TransactionHistoryCursor>,
 }
 
@@ -1027,6 +1684,7 @@ fn scan_unsorted_transaction_page(
     history_cursor: Option<TransactionHistoryCursor>,
     known_remaining_items: Option<u64>,
     budget_items: Option<u64>,
+    execution_budget: Option<QueryExecutionBudget>,
 ) -> Result<ScannedTransactionPage, Error> {
     let fetch_size = transaction_fetch_size(params, limits)?;
     let remaining_limit = params
@@ -1062,7 +1720,8 @@ fn scan_unsorted_transaction_page(
     let exact_full_scan = exact && known_remaining_items.is_none();
 
     let mut matched = 0_u64;
-    let mut processed_items = 0_u64;
+    let processed_items = Cell::new(0_u64);
+    let processed_bytes = Cell::new(0_u64);
     let mut values = Vec::with_capacity(page_capacity.min(1024));
     let mut has_more = false;
     let mut next_history_cursor = None;
@@ -1072,13 +1731,23 @@ fn scan_unsorted_transaction_page(
         anchor,
         history_cursor,
         |projection_work| {
-            processed_items = processed_items.saturating_add(projection_work);
-            if budget_items.is_some_and(|budget| processed_items > budget) {
+            let next_items = processed_items.get().saturating_add(projection_work);
+            processed_items.set(next_items);
+            if budget_items.is_some_and(|budget| next_items > budget) {
                 return Err(Error::GasBudgetExceeded);
+            }
+            if let Some(budget) = execution_budget {
+                budget.ensure(next_items, processed_bytes.get())?;
             }
             Ok(())
         },
         |transaction, matches, cursor_after| {
+            let mut current_stats = QueryExecutionStats {
+                processed_items: processed_items.get(),
+                processed_bytes: processed_bytes.get(),
+            };
+            current_stats.record_skipped_value(&transaction, execution_budget)?;
+            processed_bytes.set(current_stats.processed_bytes);
             if !matches {
                 return Ok(ControlFlow::Continue(()));
             }
@@ -1120,6 +1789,10 @@ fn scan_unsorted_transaction_page(
             Ok(ControlFlow::Continue(()))
         },
     )?;
+    let stats = QueryExecutionStats {
+        processed_items: processed_items.get(),
+        processed_bytes: processed_bytes.get(),
+    };
 
     if let Some(known_remaining_items) = known_remaining_items {
         let returned = u64::try_from(values.len()).unwrap_or(u64::MAX);
@@ -1135,7 +1808,7 @@ fn scan_unsorted_transaction_page(
             values,
             remaining_items: Some(remaining_items),
             has_more,
-            processed_items,
+            stats,
             history_cursor: next_history_cursor,
         })
     } else if exact {
@@ -1149,7 +1822,7 @@ fn scan_unsorted_transaction_page(
             values,
             remaining_items: Some(remaining_items),
             has_more,
-            processed_items,
+            stats,
             history_cursor: next_history_cursor,
         })
     } else {
@@ -1157,7 +1830,7 @@ fn scan_unsorted_transaction_page(
             values,
             remaining_items: None,
             has_more,
-            processed_items,
+            stats,
             history_cursor: next_history_cursor,
         })
     }
@@ -1194,13 +1867,15 @@ fn collect_sorted_transaction_prefix(
     keep: usize,
     anchor: TransactionHistoryAnchor,
     budget_items: Option<u64>,
-) -> Result<(Vec<CommittedTransaction>, u64, u64), Error> {
+    execution_budget: Option<QueryExecutionBudget>,
+) -> Result<(Vec<CommittedTransaction>, u64, QueryExecutionStats), Error> {
     if keep > STREAMING_SORTED_PREFIX_LIMIT {
         return Err(Error::GasBudgetExceeded);
     }
     let mut heap = BinaryHeap::with_capacity(keep);
     let mut matched = 0_u64;
-    let mut processed_items = 0_u64;
+    let processed_items = Cell::new(0_u64);
+    let processed_bytes = Cell::new(0_u64);
 
     visit_committed_transactions(
         state,
@@ -1208,22 +1883,41 @@ fn collect_sorted_transaction_prefix(
         anchor,
         None,
         |projection_work| {
-            processed_items = processed_items.saturating_add(projection_work);
-            if budget_items.is_some_and(|budget| processed_items > budget) {
+            let next_items = processed_items.get().saturating_add(projection_work);
+            processed_items.set(next_items);
+            if budget_items.is_some_and(|budget| next_items > budget) {
                 return Err(Error::GasBudgetExceeded);
+            }
+            if let Some(budget) = execution_budget {
+                budget.ensure(next_items, processed_bytes.get())?;
             }
             Ok(())
         },
         |value, matches, _| {
+            let mut current_stats = QueryExecutionStats {
+                processed_items: processed_items.get(),
+                processed_bytes: processed_bytes.get(),
+            };
+            current_stats.record_skipped_value(&value, execution_budget)?;
             if !matches {
+                processed_bytes.set(current_stats.processed_bytes);
                 return Ok(ControlFlow::Continue(()));
             }
             matched = matched.saturating_add(1);
             if keep == 0 {
+                processed_bytes.set(current_stats.processed_bytes);
                 return Ok(ControlFlow::Continue(()));
             }
+            let sort_key = value.get_metadata_sorting_key(key);
+            if let Some(sort_key) = sort_key {
+                current_stats.record_skipped_value(sort_key, execution_budget)?;
+            }
+            let tiebreak_key =
+                materialize_admitted_tiebreak_key(&value, &mut current_stats, execution_budget)?;
+            processed_bytes.set(current_stats.processed_bytes);
             let entry = EphemeralSortedEntry {
-                sort_key: value.get_metadata_sorting_key(key).cloned(),
+                sort_key: sort_key.cloned(),
+                tiebreak_key,
                 value,
                 order,
             };
@@ -1239,13 +1933,17 @@ fn collect_sorted_transaction_prefix(
             Ok(ControlFlow::Continue(()))
         },
     )?;
+    let stats = QueryExecutionStats {
+        processed_items: processed_items.get(),
+        processed_bytes: processed_bytes.get(),
+    };
 
     let mut entries = heap.into_vec();
     entries.sort_unstable();
     Ok((
         entries.into_iter().map(|entry| entry.value).collect(),
         matched,
-        processed_items,
+        stats,
     ))
 }
 
@@ -1257,6 +1955,7 @@ fn scan_sorted_transaction_page(
     returned_offset: u64,
     anchor: TransactionHistoryAnchor,
     budget_items: Option<u64>,
+    execution_budget: Option<QueryExecutionBudget>,
 ) -> Result<ScannedTransactionPage, Error> {
     let keep = transaction_sorted_prefix_keep(params, limits, returned_offset)?;
     let key = params
@@ -1265,8 +1964,16 @@ fn scan_sorted_transaction_page(
         .as_ref()
         .ok_or_else(|| Error::Conversion("sorted transaction scan has no metadata key".into()))?;
     let order = params.sorting.order.unwrap_or(SortOrder::Asc);
-    let (entries, matched, processed_items) =
-        collect_sorted_transaction_prefix(state, filter, key, order, keep, anchor, budget_items)?;
+    let (entries, matched, stats) = collect_sorted_transaction_prefix(
+        state,
+        filter,
+        key,
+        order,
+        keep,
+        anchor,
+        budget_items,
+        execution_budget,
+    )?;
 
     let offset = params
         .pagination
@@ -1290,7 +1997,7 @@ fn scan_sorted_transaction_page(
         values,
         remaining_items: exact.then_some(remaining_items),
         has_more: remaining_items > 0,
-        processed_items,
+        stats,
         history_cursor: None,
     })
 }
@@ -1315,8 +2022,16 @@ fn materialize_sorted_transaction_window(
         .as_ref()
         .ok_or_else(|| Error::Conversion("sorted transaction scan has no metadata key".into()))?;
     let order = params.sorting.order.unwrap_or(SortOrder::Asc);
-    let (prefix, _, _) =
-        collect_sorted_transaction_prefix(state, filter, key, order, keep, anchor, budget_items)?;
+    let (prefix, _, _) = collect_sorted_transaction_prefix(
+        state,
+        filter,
+        key,
+        order,
+        keep,
+        anchor,
+        budget_items,
+        None,
+    )?;
     let offset = usize::try_from(offset).unwrap_or(usize::MAX);
     let limit = usize::try_from(limit.get()).unwrap_or(usize::MAX);
     Ok(prefix.into_iter().skip(offset).take(limit).collect())
@@ -1415,6 +2130,7 @@ fn scan_transaction_page(
     history_cursor: Option<TransactionHistoryCursor>,
     known_remaining_items: Option<u64>,
     budget_items: Option<u64>,
+    execution_budget: Option<QueryExecutionBudget>,
 ) -> Result<ScannedTransactionPage, Error> {
     if params.sorting.sort_by_metadata_key.is_some() {
         if history_cursor.is_some() || known_remaining_items.is_some() {
@@ -1430,6 +2146,7 @@ fn scan_transaction_page(
             returned_offset,
             anchor,
             budget_items,
+            execution_budget,
         )
     } else {
         scan_unsorted_transaction_page(
@@ -1442,6 +2159,7 @@ fn scan_transaction_page(
             history_cursor,
             known_remaining_items,
             budget_items,
+            execution_budget,
         )
     }
 }
@@ -1498,6 +2216,7 @@ fn try_handle_find_transactions_stored(
         None,
         None,
         gas_budget,
+        None,
     )?;
     let page_len = page.values.len();
     let first_batch = project_transaction_page(page.values, selector.clone(), fetch_size)?;
@@ -1551,6 +2270,7 @@ fn try_handle_find_transactions_stored(
             Some(checkpoint.history_cursor),
             checkpoint.remaining_items,
             gas_budget,
+            None,
         )?;
         let page_len = u64::try_from(page.values.len()).unwrap_or(u64::MAX);
         let batch = project_transaction_page(page.values, selector_for_replay.clone(), fetch_size)?;
@@ -1621,8 +2341,8 @@ fn try_handle_find_transactions_ephemeral(
     selector: SelectorTuple<CommittedTransaction>,
     params: &QueryParams,
     limits: QueryLimits,
-    budget_items: Option<u64>,
-) -> Result<(QueryOutput, u64), Error> {
+    budget: Option<QueryExecutionBudget>,
+) -> Result<(QueryOutput, QueryExecutionStats), Error> {
     validate_transaction_sorted_materialization_budget(params, limits)?;
     let page = scan_transaction_page(
         state,
@@ -1633,7 +2353,8 @@ fn try_handle_find_transactions_ephemeral(
         TransactionHistoryAnchor::capture(state),
         None,
         None,
-        budget_items,
+        budget.map(QueryExecutionBudget::max_items),
+        budget,
     )?;
     let batch = project_transaction_page(
         page.values,
@@ -1644,7 +2365,7 @@ fn try_handle_find_transactions_ephemeral(
         Some(remaining_items) => QueryOutput::new(batch, remaining_items, None),
         None => QueryOutput::new_bounded(batch, page.has_more, None),
     };
-    Ok((output, page.processed_items))
+    Ok((output, page.stats))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1678,9 +2399,9 @@ fn handle_find_transactions_ephemeral(
     selector: SelectorTuple<CommittedTransaction>,
     params: &QueryParams,
     limits: QueryLimits,
-    budget_items: Option<u64>,
-) -> Result<(QueryOutput, u64), Error> {
-    try_handle_find_transactions_ephemeral(state, &filter, selector, params, limits, budget_items)
+    budget: Option<QueryExecutionBudget>,
+) -> Result<(QueryOutput, QueryExecutionStats), Error> {
+    try_handle_find_transactions_ephemeral(state, &filter, selector, params, limits, budget)
 }
 
 fn collect_ephemeral_sorted_prefix<I>(
@@ -1688,19 +2409,18 @@ fn collect_ephemeral_sorted_prefix<I>(
     key: &Name,
     order: SortOrder,
     keep: usize,
-    budget_items: Option<u64>,
+    budget: Option<QueryExecutionBudget>,
+    stats: &mut QueryExecutionStats,
 ) -> Result<(Vec<I::Item>, u64), Error>
 where
     I: Iterator,
-    I::Item: SortableQueryOutput,
+    I::Item: SortableQueryOutput + NoritoSerialize,
 {
     let mut count = 0_u64;
     if keep == 0 {
-        for _ in iter {
+        for value in iter {
             count = count.saturating_add(1);
-            if budget_items.is_some_and(|limit| count > limit) {
-                return Err(Error::GasBudgetExceeded);
-            }
+            stats.record_item(&value, budget)?;
         }
         return Ok((Vec::new(), count));
     }
@@ -1708,12 +2428,17 @@ where
     let mut heap = BinaryHeap::with_capacity(keep);
     for value in iter {
         count = count.saturating_add(1);
-        if budget_items.is_some_and(|limit| count > limit) {
-            return Err(Error::GasBudgetExceeded);
+        stats.record_item(&value, budget)?;
+        let sort_key = value.get_metadata_sorting_key(key);
+        if let Some(sort_key) = sort_key {
+            stats.record_skipped_value(sort_key, budget)?;
         }
+        let sort_key = sort_key.cloned();
+        let tiebreak_key = materialize_admitted_tiebreak_key(&value, stats, budget)?;
 
         let entry = EphemeralSortedEntry {
-            sort_key: value.get_metadata_sorting_key(key).cloned(),
+            sort_key,
+            tiebreak_key,
             value,
             order,
         };
@@ -1827,6 +2552,7 @@ where
 
         let entry = EphemeralSortedEntry {
             sort_key: value.get_metadata_sorting_key(&key).cloned(),
+            tiebreak_key: value.tiebreak_key(),
             value,
             order,
         };
@@ -1896,8 +2622,10 @@ where
         DeferredQueryContinuation::new(first_cursor, Some(remaining_items), move || {
             let mut values = Vec::with_capacity(deferred_raw_values.len());
             let mut sort_keys = Vec::with_capacity(deferred_raw_values.len());
+            let mut tiebreak_keys = Vec::with_capacity(deferred_raw_values.len());
             for value in deferred_raw_values {
                 sort_keys.push(value.get_metadata_sorting_key(&key).cloned());
+                tiebreak_keys.push(value.tiebreak_key());
                 values.push(Some(value));
             }
 
@@ -1906,7 +2634,14 @@ where
                 limit: Some(continuation_limit),
             };
             ErasedQueryIterator::new_with_cursor(
-                IncrementalSortedValues::new(values, sort_keys, pagination, fetch_size, order),
+                IncrementalSortedValues::new(
+                    values,
+                    sort_keys,
+                    tiebreak_keys,
+                    pagination,
+                    fetch_size,
+                    order,
+                ),
                 selector_for_deferred,
                 fetch_size,
                 first_cursor.get(),
@@ -2170,9 +2905,10 @@ where
     )
 }
 
-struct IncrementalSortedValues<T> {
+struct IncrementalSortedValues<T: SortableQueryOutput> {
     values: Vec<Option<T>>,
     sort_keys: Vec<Option<Json>>,
+    tiebreak_keys: Vec<T::TiebreakKey>,
     order_indices: Vec<usize>,
     prepared: usize,
     next: usize,
@@ -2185,6 +2921,7 @@ impl<T: SortableQueryOutput> IncrementalSortedValues<T> {
     fn new(
         values: Vec<Option<T>>,
         sort_keys: Vec<Option<Json>>,
+        tiebreak_keys: Vec<T::TiebreakKey>,
         pagination: iroha_data_model::query::parameters::Pagination,
         chunk_size: NonZeroU64,
         order: SortOrder,
@@ -2205,6 +2942,7 @@ impl<T: SortableQueryOutput> IncrementalSortedValues<T> {
         Self {
             values,
             sort_keys,
+            tiebreak_keys,
             order_indices,
             prepared: 0,
             next,
@@ -2222,18 +2960,18 @@ impl<T: SortableQueryOutput> IncrementalSortedValues<T> {
             return;
         }
 
-        let values = &self.values;
         let sort_keys = &self.sort_keys;
+        let tiebreak_keys = &self.tiebreak_keys;
         let order = self.order;
         let additional = required - self.prepared;
         let tail = &mut self.order_indices[self.prepared..];
         if additional < tail.len() {
             tail.select_nth_unstable_by(additional - 1, |left, right| {
-                compare_sorted_query_indices(*left, *right, values, sort_keys, order)
+                compare_sorted_query_indices::<T>(*left, *right, sort_keys, tiebreak_keys, order)
             });
         }
         tail[..additional].sort_by(|left, right| {
-            compare_sorted_query_indices(*left, *right, values, sort_keys, order)
+            compare_sorted_query_indices::<T>(*left, *right, sort_keys, tiebreak_keys, order)
         });
         self.prepared = required;
     }
@@ -2277,11 +3015,11 @@ fn apply_query_postprocessing_ephemeral_with_budget<I>(
     selector: SelectorTuple<I::Item>,
     params: &QueryParams,
     limits: QueryLimits,
-    budget_items: Option<u64>,
-) -> Result<(QueryOutput, u64), Error>
+    budget: Option<QueryExecutionBudget>,
+) -> Result<(QueryOutput, QueryExecutionStats), Error>
 where
     I: Iterator<Item: SortableQueryOutput>,
-    I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
+    I::Item: HasProjection<SelectorMarker, AtomType = ()> + NoritoSerialize + Send + Sync + 'static,
     <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
@@ -2293,11 +3031,12 @@ where
     if batch_size.get() > max_fetch {
         return Err(Error::FetchSizeTooBig);
     }
+    let mut stats = QueryExecutionStats::default();
 
     if limits.count_mode == QueryCountMode::Bounded && params.sorting.sort_by_metadata_key.is_none()
     {
         let fetch_size = usize::try_from(batch_size.get()).unwrap_or(usize::MAX);
-        let offset = usize::try_from(params.pagination.offset_value()).unwrap_or(usize::MAX);
+        let offset = params.pagination.offset_value();
         let limit = params.pagination.limit_value().map(|limit| limit.get());
         let probe = limit.map_or_else(
             || fetch_size.saturating_add(1),
@@ -2308,13 +3047,23 @@ where
             },
         );
         let mut processed = 0_u64;
+        let mut skipped = 0_u64;
         let mut has_more = false;
         let mut first_batch_values = Vec::with_capacity(fetch_size.min(1024));
-        for value in iter.skip(offset).take(probe) {
+        let mut iter = iter;
+        while skipped < offset {
+            let Some(value) = iter.next() else {
+                break;
+            };
+            stats.record_skipped_value(&value, budget)?;
+            skipped = skipped.saturating_add(1);
+        }
+        while usize::try_from(processed).unwrap_or(usize::MAX) < probe {
+            let Some(value) = iter.next() else {
+                break;
+            };
             processed = processed.saturating_add(1);
-            if budget_items.is_some_and(|limit| processed > limit) {
-                return Err(Error::GasBudgetExceeded);
-            }
+            stats.record_item(&value, budget)?;
             if first_batch_values.len() < fetch_size {
                 first_batch_values.push(value);
             } else {
@@ -2326,7 +3075,8 @@ where
         let mut batch_iter =
             ErasedQueryIterator::new(first_batch_values.into_iter(), selector, batch_size);
         let (batch, _next) = batch_iter.next_batch(0)?;
-        return Ok((QueryOutput::new_bounded(batch, has_more, None), processed));
+        debug_assert_eq!(stats.processed_items(), processed);
+        return Ok((QueryOutput::new_bounded(batch, has_more, None), stats));
     }
 
     if let Some(key) = params.sorting.sort_by_metadata_key.as_ref() {
@@ -2340,7 +3090,7 @@ where
 
         if keep <= STREAMING_SORTED_PREFIX_LIMIT {
             let (values, count) =
-                collect_ephemeral_sorted_prefix(iter, key, order, keep, budget_items)?;
+                collect_ephemeral_sorted_prefix(iter, key, order, keep, budget, &mut stats)?;
             let total_after_pagination = usize::try_from(count)
                 .unwrap_or(usize::MAX)
                 .saturating_sub(offset)
@@ -2352,18 +3102,24 @@ where
             let (batch, _next) = batch_iter.next_batch(0)?;
             let remaining_items =
                 u64::try_from(total_after_pagination.saturating_sub(batch_len)).unwrap_or(u64::MAX);
-            return Ok((QueryOutput::new(batch, remaining_items, None), count));
+            debug_assert_eq!(stats.processed_items(), count);
+            return Ok((QueryOutput::new(batch, remaining_items, None), stats));
         }
 
         let mut count = 0_u64;
         let mut values = Vec::new();
         let mut sort_keys = Vec::new();
+        let mut tiebreak_keys = Vec::new();
         for value in iter {
             count = count.saturating_add(1);
-            if budget_items.is_some_and(|limit| count > limit) {
-                return Err(Error::GasBudgetExceeded);
+            stats.record_item(&value, budget)?;
+            let sort_key = value.get_metadata_sorting_key(key);
+            if let Some(sort_key) = sort_key {
+                stats.record_skipped_value(sort_key, budget)?;
             }
-            sort_keys.push(value.get_metadata_sorting_key(key).cloned());
+            sort_keys.push(sort_key.cloned());
+            let tiebreak_key = materialize_admitted_tiebreak_key(&value, &mut stats, budget)?;
+            tiebreak_keys.push(tiebreak_key);
             values.push(Some(value));
         }
 
@@ -2375,12 +3131,24 @@ where
             let keep = offset.saturating_add(batch_len);
             if keep < order_indices.len() {
                 order_indices.select_nth_unstable_by(keep - 1, |left, right| {
-                    compare_sorted_query_indices(*left, *right, &values, &sort_keys, order)
+                    compare_sorted_query_indices::<I::Item>(
+                        *left,
+                        *right,
+                        &sort_keys,
+                        &tiebreak_keys,
+                        order,
+                    )
                 });
                 order_indices.truncate(keep);
             }
             order_indices.sort_by(|left, right| {
-                compare_sorted_query_indices(*left, *right, &values, &sort_keys, order)
+                compare_sorted_query_indices::<I::Item>(
+                    *left,
+                    *right,
+                    &sort_keys,
+                    &tiebreak_keys,
+                    order,
+                )
             });
         }
 
@@ -2399,17 +3167,30 @@ where
         let (batch, _next) = batch_iter.next_batch(0)?;
         let remaining_items =
             u64::try_from(total_after_pagination.saturating_sub(batch_len)).unwrap_or(u64::MAX);
-        return Ok((QueryOutput::new(batch, remaining_items, None), count));
+        debug_assert_eq!(stats.processed_items(), count);
+        return Ok((QueryOutput::new(batch, remaining_items, None), stats));
     }
 
     let fetch_size = usize::try_from(batch_size.get()).unwrap_or(usize::MAX);
+    let offset = params.pagination.offset_value();
+    let limit = params.pagination.limit_value().map(|limit| limit.get());
+    let mut skipped = 0_u64;
     let mut count = 0_u64;
     let mut first_batch_values = Vec::with_capacity(fetch_size.min(1024));
-    for value in iter.paginate(params.pagination) {
+    let mut iter = iter;
+    while skipped < offset {
+        let Some(value) = iter.next() else {
+            break;
+        };
+        stats.record_skipped_value(&value, budget)?;
+        skipped = skipped.saturating_add(1);
+    }
+    while !limit.is_some_and(|limit| count >= limit) {
+        let Some(value) = iter.next() else {
+            break;
+        };
         count = count.saturating_add(1);
-        if budget_items.is_some_and(|limit| count > limit) {
-            return Err(Error::GasBudgetExceeded);
-        }
+        stats.record_item(&value, budget)?;
         if first_batch_values.len() < fetch_size {
             first_batch_values.push(value);
         }
@@ -2420,7 +3201,8 @@ where
         ErasedQueryIterator::new(first_batch_values.into_iter(), selector, batch_size);
     let (batch, _next) = batch_iter.next_batch(0)?;
     let remaining_items = count.saturating_sub(u64::try_from(batch_len).unwrap_or(u64::MAX));
-    Ok((QueryOutput::new(batch, remaining_items, None), count))
+    debug_assert_eq!(stats.processed_items(), count);
+    Ok((QueryOutput::new(batch, remaining_items, None), stats))
 }
 
 fn apply_query_postprocessing_with_budget<I>(
@@ -2453,12 +3235,14 @@ where
         let mut count = 0_u64;
         let mut values = Vec::new();
         let mut sort_keys = Vec::new();
+        let mut tiebreak_keys = Vec::new();
         for value in iter {
             count = count.saturating_add(1);
             if budget_items.is_some_and(|limit| count > limit) {
                 return Err(Error::GasBudgetExceeded);
             }
             sort_keys.push(value.get_metadata_sorting_key(key).cloned());
+            tiebreak_keys.push(value.tiebreak_key());
             values.push(Some(value));
         }
         let order = params.sorting.order.unwrap_or(SortOrder::Asc);
@@ -2468,6 +3252,7 @@ where
                 IncrementalSortedValues::new(
                     values,
                     sort_keys,
+                    tiebreak_keys,
                     params.pagination,
                     fetch_size,
                     order,
@@ -2871,7 +3656,7 @@ impl ValidQueryRequest {
         state: &impl StateReadOnly,
         authority: &AccountId,
     ) -> Result<QueryResponse, Error> {
-        self.execute_stored_inner(live_query_store, state, authority, None, None)
+        self.execute_stored_and_bind_revalidation(live_query_store, state, authority, None, None)
     }
 
     /// Execute a validated query request with an optional state handle for
@@ -2887,7 +3672,13 @@ impl ValidQueryRequest {
         authority: &AccountId,
         replay_state: Weak<State>,
     ) -> Result<QueryResponse, Error> {
-        self.execute_stored_inner(live_query_store, state, authority, Some(replay_state), None)
+        self.execute_stored_and_bind_revalidation(
+            live_query_store,
+            state,
+            authority,
+            Some(replay_state),
+            None,
+        )
     }
 
     /// Execute a validated stored query with an owning replay state and the
@@ -2904,13 +3695,55 @@ impl ValidQueryRequest {
         replay_state: Weak<State>,
         stored_start_budget: Option<u64>,
     ) -> Result<QueryResponse, Error> {
-        self.execute_stored_inner(
+        self.execute_stored_and_bind_revalidation(
             live_query_store,
             state,
             authority,
             Some(replay_state),
             stored_start_budget,
         )
+    }
+
+    fn execute_stored_and_bind_revalidation(
+        self,
+        live_query_store: &LiveQueryStoreHandle,
+        state: &impl StateReadOnly,
+        authority: &AccountId,
+        replay_state: Option<Weak<State>>,
+        stored_start_budget: Option<u64>,
+    ) -> Result<QueryResponse, Error> {
+        let revalidation_archive = matches!(&self.request, QueryRequest::Start(_))
+            .then(|| {
+                norito::to_bytes(&self.request).map_err(|error| {
+                    Error::Conversion(format!(
+                        "failed to encode stored-query authorization request: {error}"
+                    ))
+                })
+            })
+            .transpose()?;
+        let response = self.execute_stored_inner(
+            live_query_store,
+            state,
+            authority,
+            replay_state,
+            stored_start_budget,
+        )?;
+
+        if let (
+            Some(archive),
+            QueryResponse::Iterable(QueryOutput {
+                continue_cursor: Some(cursor),
+                ..
+            }),
+        ) = (revalidation_archive, &response)
+            && let Err(error) =
+                live_query_store.bind_revalidation_request(cursor, authority, archive)
+        {
+            live_query_store.drop_query(&cursor.query);
+            return Err(error);
+        }
+
+        Ok(response)
     }
 
     #[allow(clippy::too_many_lines)] // not much we can do, we _need_ to list all the box types here
@@ -4442,7 +5275,7 @@ impl ValidQueryRequest {
                 ))
             }
             QueryRequest::Continue(cursor) => Ok(QueryResponse::Iterable(
-                live_query_store.handle_iter_continue(cursor)?,
+                live_query_store.handle_iter_continue(cursor, authority)?,
             )),
         }
     }
@@ -4470,9 +5303,12 @@ impl ValidQueryRequest {
         live_query_store: &LiveQueryStoreHandle,
         state: &impl StateReadOnly,
         authority: &AccountId,
-        budget_items: Option<u64>,
-    ) -> Result<(QueryResponse, u64), Error> {
-        self.execute_ephemeral_inner_with_stats(live_query_store, state, authority, budget_items)
+        budget: Option<QueryExecutionBudget>,
+    ) -> Result<(QueryResponse, QueryExecutionStats), Error> {
+        let (response, mut stats) =
+            self.execute_ephemeral_inner_with_stats(live_query_store, state, authority, budget)?;
+        stats.record_response(&response, budget)?;
+        Ok((response, stats))
     }
 
     #[allow(clippy::too_many_lines)]
@@ -4481,13 +5317,25 @@ impl ValidQueryRequest {
         live_query_store: &LiveQueryStoreHandle,
         state: &impl StateReadOnly,
         authority: &AccountId,
-        budget_items: Option<u64>,
-    ) -> Result<(QueryResponse, u64), Error> {
+        budget: Option<QueryExecutionBudget>,
+    ) -> Result<(QueryResponse, QueryExecutionStats), Error> {
         let Self { request, limits } = self;
+        let budget_items = budget;
         match request {
             QueryRequest::Singular(singular_query) => {
+                let source_bytes =
+                    preflight_singular_source_materialization(&singular_query, state, budget)?;
+                let mut stats = QueryExecutionStats::default();
+                // The borrowed preflight is real deterministic work and must
+                // be admitted together with the one result item before the
+                // query clones or synthesizes its owned output.
+                stats.record_preflighted_item(source_bytes, budget)?;
                 let output = singular_query.execute(state)?;
-                Ok((QueryResponse::Singular(output), 1))
+                // Materializing the generic output and framing the response
+                // are separate serialization passes, charged below and by
+                // `execute_ephemeral_with_stats`, respectively.
+                stats.record_value_bytes(&output, budget)?;
+                Ok((QueryResponse::Singular(output), stats))
             }
             QueryRequest::Start(iter_query) => {
                 use iroha_data_model::query;
@@ -4514,19 +5362,20 @@ impl ValidQueryRequest {
                     qbox: &query::QueryBox<query::QueryOutputBatchBox>,
                     params: &query::parameters::QueryParams,
                     limits: QueryLimits,
-                    budget_items: Option<u64>,
+                    budget: Option<QueryExecutionBudget>,
                     state: &impl StateReadOnly,
                     _live_query_store: &LiveQueryStoreHandle,
                     _authority: &AccountId,
                     __stored_cursor_budget: Option<u64>,
                     decode: F,
-                ) -> Result<Option<(QueryResponse, u64)>, Error>
+                ) -> Result<Option<(QueryResponse, QueryExecutionStats)>, Error>
                 where
                     T: Send + Sync + 'static,
                     Q: super::super::ValidQuery<Item = T>,
                     T: HasProjection<SelectorMarker, AtomType = ()>
                         + HasProjection<PredicateMarker>
                         + crate::smartcontracts::isi::query::SortableQueryOutput
+                        + NoritoSerialize
                         + Send
                         + Sync
                         + 'static,
@@ -4544,15 +5393,14 @@ impl ValidQueryRequest {
                         let iter = ValidQuery::execute(concrete, erased.predicate_cloned(), state)?;
 
                         // Postprocess: sort/paginate/project and return only the first batch (no cursor)
-                        let (output, processed_items) =
-                            apply_query_postprocessing_ephemeral_with_budget(
-                                iter,
-                                erased.selector_cloned(),
-                                params,
-                                limits,
-                                budget_items,
-                            )?;
-                        return Ok(Some((QueryResponse::Iterable(output), processed_items)));
+                        let (output, stats) = apply_query_postprocessing_ephemeral_with_budget(
+                            iter,
+                            erased.selector_cloned(),
+                            params,
+                            limits,
+                            budget,
+                        )?;
+                        return Ok(Some((QueryResponse::Iterable(output), stats)));
                     }
                     Ok(None)
                 }
@@ -5766,6 +6614,424 @@ mod tests {
         assert_eq!(v[1].id, d3.id);
     }
 
+    fn domain_with_query_payload(name: &str, payload_bytes: usize, rank: u64) -> Domain {
+        let mut domain =
+            Domain::new(DomainId::try_new(name, "universal").expect("domain id")).build(&ALICE_ID);
+        domain.metadata_mut().insert(
+            "payload".parse().expect("metadata key"),
+            Json::new("x".repeat(payload_bytes)),
+        );
+        domain
+            .metadata_mut()
+            .insert("rank".parse().expect("metadata key"), Json::new(rank));
+        domain
+    }
+
+    #[test]
+    fn query_budget_enforces_the_shared_item_and_byte_limit() {
+        let value = Permission::new("query_budget".to_owned(), Json::new("small"));
+        let bytes = bounded_bare_encoded_len(&value, u64::MAX).expect("measure permission");
+        let budget = QueryExecutionBudget::from_weighted_limit(bytes, bytes, 1);
+        assert_eq!(budget.max_items(), 1);
+        assert_eq!(budget.max_bytes(), bytes);
+
+        let error = QueryExecutionStats::default()
+            .record_item(&value, Some(budget))
+            .expect_err("item and byte work must share one budget");
+        assert!(matches!(error, Error::GasBudgetExceeded));
+    }
+
+    fn root_account_alias(label: &str) -> iroha_data_model::account::AccountAlias {
+        iroha_data_model::account::AccountAlias::domainless(
+            label.parse().expect("alias label"),
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+    }
+
+    #[test]
+    fn singular_alias_preflight_uses_the_index_and_rejects_large_account_before_clone() {
+        let alias = root_account_alias("budgeted-alias");
+        let account_id = ALICE_ID.clone();
+        let mut account = Account::new(account_id.clone())
+            .with_label(Some(alias.clone()))
+            .build(&account_id);
+        account.metadata.insert(
+            "oversized".parse().expect("metadata key"),
+            Json::new("x".repeat(128 * 1024)),
+        );
+        let mut world = World::with([], [account], []);
+        world
+            .account_aliases
+            .insert(alias.clone(), account_id.clone());
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let query = SingularQueryBox::FindAccountByAlias(
+            iroha_data_model::query::account::prelude::FindAccountByAlias { alias },
+        );
+        let budget = QueryExecutionBudget::from_weighted_limit(512, 0, 1);
+
+        let error = preflight_singular_source_materialization(&query, &state.view(), Some(budget))
+            .expect_err("large indexed account must fail before materialization");
+        assert!(matches!(error, Error::GasBudgetExceeded));
+    }
+
+    #[test]
+    fn singular_alias_preflight_never_falls_back_to_a_world_scan() {
+        let alias = root_account_alias("unindexed-alias");
+        let account_id = ALICE_ID.clone();
+        let account = Account::new(account_id.clone())
+            .with_label(Some(alias.clone()))
+            .build(&account_id);
+        let state = State::new_for_testing(
+            World::with([], [account], []),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let query = SingularQueryBox::FindAccountByAlias(
+            iroha_data_model::query::account::prelude::FindAccountByAlias { alias },
+        );
+
+        let error = preflight_singular_source_materialization(
+            &query,
+            &state.view(),
+            Some(QueryExecutionBudget::from_weighted_limit(1_000_000, 1, 1)),
+        )
+        .expect_err("unindexed aliases must fail closed without scanning accounts");
+        assert!(matches!(error, Error::Conversion(_)));
+    }
+
+    #[test]
+    fn singular_manifest_preflight_rejects_large_record_before_clone() {
+        let code_hash = Hash::new(b"large-manifest");
+        let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
+            seiyaku_name: Some("x".repeat(128 * 1024)),
+            code_hash: Some(code_hash),
+            abi_hash: None,
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: None,
+            states: None,
+            error_codes: None,
+            kotoba: None,
+            provenance: None,
+        };
+        let mut world = World::default();
+        world.contract_manifests.insert(code_hash, manifest);
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let query = SingularQueryBox::FindContractManifestByCodeHash(
+            iroha_data_model::query::smart_contract::prelude::FindContractManifestByCodeHash {
+                code_hash,
+            },
+        );
+
+        let error = preflight_singular_source_materialization(
+            &query,
+            &state.view(),
+            Some(QueryExecutionBudget::from_weighted_limit(512, 0, 1)),
+        )
+        .expect_err("large manifest must fail before materialization");
+        assert!(matches!(error, Error::GasBudgetExceeded));
+    }
+
+    #[test]
+    fn singular_preflight_work_is_charged_and_exact_budget_passes() {
+        let code_hash = Hash::new(b"metered-manifest");
+        let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
+            seiyaku_name: Some("metered".repeat(32)),
+            code_hash: Some(code_hash),
+            abi_hash: None,
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: None,
+            states: None,
+            error_codes: None,
+            kotoba: None,
+            provenance: None,
+        };
+        let mut world = World::default();
+        world.contract_manifests.insert(code_hash, manifest.clone());
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let query = SingularQueryBox::FindContractManifestByCodeHash(
+            iroha_data_model::query::smart_contract::prelude::FindContractManifestByCodeHash {
+                code_hash,
+            },
+        );
+        let output = SingularQueryOutputBox::ContractManifest(manifest.clone());
+        let response = QueryResponse::Singular(output.clone());
+        let source_bytes =
+            bounded_bare_encoded_len(&manifest, u64::MAX).expect("measure borrowed manifest");
+        let output_bytes =
+            bounded_bare_encoded_len(&output, u64::MAX).expect("measure generic output");
+        let response_bytes =
+            bounded_framed_encoded_len(&response, u64::MAX).expect("measure framed response");
+        let exact_units = 1_u64
+            .saturating_add(source_bytes)
+            .saturating_add(output_bytes)
+            .saturating_add(response_bytes);
+
+        let tight_budget = QueryExecutionBudget::from_weighted_limit(
+            exact_units.saturating_sub(source_bytes).saturating_sub(1),
+            1,
+            1,
+        );
+        let measured =
+            preflight_singular_source_materialization(&query, &state.view(), Some(tight_budget))
+                .expect("borrowed source fits the initial preflight window");
+        assert_eq!(measured, source_bytes);
+        let mut tight_stats = QueryExecutionStats::default();
+        tight_stats
+            .record_preflighted_item(measured, Some(tight_budget))
+            .expect("item and preflight source fit before owned materialization");
+        tight_stats
+            .record_value_bytes(&output, Some(tight_budget))
+            .expect("generic output still fits");
+        assert!(matches!(
+            tight_stats.record_response(&response, Some(tight_budget)),
+            Err(Error::GasBudgetExceeded)
+        ));
+
+        let exact_budget = QueryExecutionBudget::from_weighted_limit(exact_units, 1, 1);
+        let measured =
+            preflight_singular_source_materialization(&query, &state.view(), Some(exact_budget))
+                .expect("exact budget admits borrowed source");
+        let mut exact_stats = QueryExecutionStats::default();
+        exact_stats
+            .record_preflighted_item(measured, Some(exact_budget))
+            .expect("charge borrowed source");
+        exact_stats
+            .record_value_bytes(&output, Some(exact_budget))
+            .expect("charge generic output");
+        exact_stats
+            .record_response(&response, Some(exact_budget))
+            .expect("charge framed response");
+        assert_eq!(exact_stats.processed_items(), 1);
+        assert_eq!(exact_stats.processed_bytes(), exact_units - 1);
+    }
+
+    #[test]
+    fn ephemeral_offset_charges_bytes_for_skipped_values() {
+        let oversized = domain_with_query_payload("oversized", 128 * 1024, 0);
+        let retained = domain_with_query_payload("retained", 8, 1);
+        let oversized_bytes =
+            bounded_bare_encoded_len(&oversized, u64::MAX).expect("measure oversized domain");
+        let params = QueryParams {
+            pagination: Pagination::new(None, 1),
+            fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
+            ..QueryParams::default()
+        };
+        let budget =
+            QueryExecutionBudget::from_weighted_limit(oversized_bytes.saturating_sub(1), 0, 1);
+
+        let error = apply_query_postprocessing_ephemeral_with_budget(
+            vec![oversized, retained].into_iter(),
+            SelectorTuple::default(),
+            &params,
+            QueryLimits::new(2),
+            Some(budget),
+        )
+        .expect_err("an oversized skipped value must exhaust the byte budget");
+        assert!(matches!(error, Error::GasBudgetExceeded));
+    }
+
+    #[test]
+    fn ephemeral_sort_rejects_oversized_values_before_retaining_them() {
+        let oversized = domain_with_query_payload("oversized-sort", 128 * 1024, 2);
+        let small = domain_with_query_payload("small-sort", 8, 1);
+        let oversized_bytes =
+            bounded_bare_encoded_len(&oversized, u64::MAX).expect("measure oversized domain");
+        let params = QueryParams {
+            sorting: Sorting::by_metadata_key("rank".parse().expect("sort key")),
+            fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
+            ..QueryParams::default()
+        };
+        let budget = QueryExecutionBudget::from_weighted_limit(oversized_bytes, 1, 1);
+
+        let error = apply_query_postprocessing_ephemeral_with_budget(
+            vec![oversized, small].into_iter(),
+            SelectorTuple::default(),
+            &params,
+            QueryLimits::new(2),
+            Some(budget),
+        )
+        .expect_err("sorting must meter a value before inserting it into the heap");
+        assert!(matches!(error, Error::GasBudgetExceeded));
+    }
+
+    #[derive(norito::derive::NoritoSerialize)]
+    struct CountingTiebreakValue {
+        id: u8,
+    }
+
+    static TIEBREAK_DERIVATIONS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    impl SortableQueryOutput for CountingTiebreakValue {
+        type TiebreakKey = Vec<u8>;
+
+        fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+            None
+        }
+
+        fn tiebreak_key(&self) -> Self::TiebreakKey {
+            TIEBREAK_DERIVATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            vec![self.id; 16 * 1024]
+        }
+
+        fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+            let encoded = 8_u64.saturating_add(16 * 1024);
+            (encoded <= limit)
+                .then_some(encoded)
+                .ok_or(Error::GasBudgetExceeded)
+        }
+    }
+
+    #[test]
+    fn ephemeral_sort_derives_and_charges_each_large_tiebreak_key_once() {
+        TIEBREAK_DERIVATIONS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let mut stats = QueryExecutionStats::default();
+        let values = (0_u8..32).map(|id| CountingTiebreakValue { id });
+        let budget = QueryExecutionBudget::from_weighted_limit(2_000_000, 1, 1);
+
+        let (sorted, count) = collect_ephemeral_sorted_prefix(
+            values,
+            &"unused".parse().expect("sort key"),
+            SortOrder::Asc,
+            16,
+            Some(budget),
+            &mut stats,
+        )
+        .expect("sort values with precomputed keys");
+
+        assert_eq!(count, 32);
+        assert_eq!(sorted.len(), 16);
+        assert_eq!(
+            TIEBREAK_DERIVATIONS.load(std::sync::atomic::Ordering::Relaxed),
+            32,
+            "sorting comparisons must reuse the one admitted key per item",
+        );
+        assert!(stats.processed_bytes() >= 32 * 16 * 1024);
+    }
+
+    #[test]
+    fn ephemeral_sort_rejects_large_tiebreak_key_before_materialization() {
+        TIEBREAK_DERIVATIONS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let value = CountingTiebreakValue { id: 7 };
+        let item_bytes = bounded_bare_encoded_len(&value, u64::MAX).expect("measure item");
+        let key_bytes = value
+            .bounded_tiebreak_key_len(u64::MAX)
+            .expect("measure tiebreak key");
+        let budget = QueryExecutionBudget::from_weighted_limit(
+            item_bytes.saturating_add(key_bytes).saturating_sub(1),
+            0,
+            1,
+        );
+        let mut stats = QueryExecutionStats::default();
+        stats
+            .record_item(&value, Some(budget))
+            .expect("item fits before its large key");
+
+        let error = materialize_admitted_tiebreak_key(&value, &mut stats, Some(budget))
+            .expect_err("oversized key must fail its allocation-free preflight");
+        assert!(matches!(error, Error::GasBudgetExceeded));
+        assert_eq!(
+            TIEBREAK_DERIVATIONS.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "rejected keys must never be constructed",
+        );
+    }
+
+    #[test]
+    fn singular_response_is_measured_before_host_serialization() {
+        let domain = domain_with_query_payload("singular-budget", 64 * 1024, 0);
+        let output = SingularQueryOutputBox::Domain(domain);
+        let response = QueryResponse::Singular(output.clone());
+        let item_bytes =
+            bounded_bare_encoded_len(&output, u64::MAX).expect("measure singular output");
+        let response_bytes =
+            bounded_framed_encoded_len(&response, u64::MAX).expect("measure query response");
+        assert_eq!(
+            response_bytes,
+            u64::try_from(
+                norito::to_bytes(&response)
+                    .expect("encode query response")
+                    .len()
+            )
+            .expect("response length fits u64"),
+            "manual Norito framing measurement must match the canonical codec",
+        );
+        let budget = QueryExecutionBudget::from_weighted_limit(
+            item_bytes.saturating_add(response_bytes).saturating_sub(1),
+            0,
+            1,
+        );
+        let mut stats = QueryExecutionStats::default();
+        stats
+            .record_item(&output, Some(budget))
+            .expect("singular item alone fits");
+
+        let error = stats
+            .record_response(&response, Some(budget))
+            .expect_err("framed response must be admitted before serialization");
+        assert!(matches!(error, Error::GasBudgetExceeded));
+    }
+
+    #[test]
+    fn query_budget_allows_a_legitimate_offset_page() {
+        let skipped = domain_with_query_payload("skip-ok", 16, 0);
+        let first = domain_with_query_payload("first-ok", 16, 1);
+        let second = domain_with_query_payload("second-ok", 16, 2);
+        let byte_budget = [&skipped, &first, &second]
+            .into_iter()
+            .map(|value| bounded_bare_encoded_len(value, u64::MAX).expect("measure domain"))
+            .fold(0_u64, u64::saturating_add);
+        let params = QueryParams {
+            pagination: Pagination::new(Some(nonzero!(2_u64)), 1),
+            fetch_size: FetchSize::new(Some(nonzero!(2_u64))),
+            ..QueryParams::default()
+        };
+        let budget = QueryExecutionBudget::from_weighted_limit(byte_budget.saturating_add(2), 1, 1);
+
+        let (output, stats) = apply_query_postprocessing_ephemeral_with_budget(
+            vec![skipped, first.clone(), second.clone()].into_iter(),
+            SelectorTuple::default(),
+            &params,
+            QueryLimits::new(3),
+            Some(budget),
+        )
+        .expect("legitimate offset page should fit its exact budget");
+        let iterable_response = QueryResponse::Iterable(output.clone());
+        assert_eq!(
+            bounded_framed_encoded_len(&iterable_response, u64::MAX)
+                .expect("measure iterable response"),
+            u64::try_from(
+                norito::to_bytes(&iterable_response)
+                    .expect("encode iterable response")
+                    .len(),
+            )
+            .expect("response length fits u64"),
+            "iterable framing measurement must match the canonical codec",
+        );
+        assert_eq!(stats.processed_items(), 2);
+        assert_eq!(stats.processed_bytes(), byte_budget);
+        assert_eq!(
+            domain_ids_from_batch(output.batch),
+            vec![first.id, second.id]
+        );
+    }
+
     #[tokio::test]
     async fn ephemeral_unsorted_query_returns_first_batch_and_remaining_without_cursor() {
         use iroha_data_model::{
@@ -5787,7 +7053,7 @@ mod tests {
         };
         let selector = SelectorTuple::<Domain>::default();
 
-        let (output, processed_items) = apply_query_postprocessing_ephemeral_with_budget(
+        let (output, stats) = apply_query_postprocessing_ephemeral_with_budget(
             vec![d1.clone(), d2.clone(), d3].into_iter(),
             selector,
             &params,
@@ -5799,7 +7065,7 @@ mod tests {
         let (batch, remaining, cursor) = output.into_parts();
         assert!(cursor.is_none());
         assert_eq!(remaining, 1);
-        assert_eq!(processed_items, 3);
+        assert_eq!(stats.processed_items(), 3);
         assert_eq!(domain_ids_from_batch(batch), vec![d1.id, d2.id]);
     }
 
@@ -5825,7 +7091,7 @@ mod tests {
         };
         let selector = SelectorTuple::<Domain>::default();
 
-        let (output, processed_items) = apply_query_postprocessing_ephemeral_with_budget(
+        let (output, stats) = apply_query_postprocessing_ephemeral_with_budget(
             vec![d1.clone(), d2.clone(), d3, d4].into_iter(),
             selector,
             &params,
@@ -5839,7 +7105,7 @@ mod tests {
         let (batch, remaining_hint, cursor) = output.into_parts();
         assert!(cursor.is_none());
         assert_eq!(remaining_hint, 0);
-        assert_eq!(processed_items, 3);
+        assert_eq!(stats.processed_items(), 3);
         assert_eq!(domain_ids_from_batch(batch), vec![d1.id, d2.id]);
     }
 
@@ -5905,7 +7171,7 @@ mod tests {
         );
 
         let second = handle
-            .handle_iter_continue(cursor.expect("first cursor"))
+            .handle_iter_continue(cursor.expect("first cursor"), &ALICE_ID)
             .expect("second page");
         assert_eq!(second.remaining_items, None);
         assert!(second.has_more);
@@ -5916,7 +7182,7 @@ mod tests {
         );
 
         let third = handle
-            .handle_iter_continue(cursor.expect("second cursor"))
+            .handle_iter_continue(cursor.expect("second cursor"), &ALICE_ID)
             .expect("third page");
         assert_eq!(third.remaining_items, None);
         assert!(!third.has_more);
@@ -6005,7 +7271,7 @@ mod tests {
         );
 
         let err = handle
-            .handle_iter_continue(cursor.expect("first cursor"))
+            .handle_iter_continue(cursor.expect("first cursor"), &ALICE_ID)
             .expect_err("missing replay state expires the cursor");
         assert!(matches!(err, Error::Expired));
     }
@@ -6309,7 +7575,7 @@ mod tests {
             .into_parts();
         let cursor = cursor.expect("cursor");
         let next = handle
-            .handle_iter_continue(cursor)
+            .handle_iter_continue(cursor, &ALICE_ID)
             .expect("first continuation")
             .into_parts();
 
@@ -6581,7 +7847,7 @@ mod tests {
 
         // Continue for the remaining item
         let cursor = cursor.expect("should continue");
-        let next = handle.handle_iter_continue(cursor).unwrap();
+        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
         let (batch2, _rem2, cur2) = next.into_parts();
         let mut tuple_iter2 = batch2.into_iter();
         let v2 = match tuple_iter2.next().expect("slice") {
@@ -7198,7 +8464,7 @@ mod tests {
 
         // Continue for the last (no-rank) domain
         let next = handle
-            .handle_iter_continue(cursor.expect("should continue"))
+            .handle_iter_continue(cursor.expect("should continue"), &ALICE_ID)
             .unwrap();
         let (batch2, _rem2, cur2) = next.into_parts();
         let mut tuple_iter2 = batch2.into_iter();
@@ -7493,7 +8759,9 @@ mod tests {
         assert!(cursor.is_some());
 
         // Next batch should contain the last within limit: 'd'
-        let next = handle.handle_iter_continue(cursor.unwrap()).unwrap();
+        let next = handle
+            .handle_iter_continue(cursor.unwrap(), &ALICE_ID)
+            .unwrap();
         let (batch2, remaining2, cursor2) = next.into_parts();
         let mut tuple_iter2 = batch2.into_iter();
         let v2 = match tuple_iter2.next().expect("slice") {
@@ -8510,7 +9778,9 @@ mod tests {
             let mut ids = to_ids(batch);
 
             while let Some(c) = cursor {
-                let next = handle.handle_iter_continue(c).expect("continue cursor");
+                let next = handle
+                    .handle_iter_continue(c, &ALICE_ID)
+                    .expect("continue cursor");
                 let (next_batch, _next_remaining, next_cursor) = next.into_parts();
                 ids.extend(to_ids(next_batch));
                 cursor = next_cursor;
@@ -8701,7 +9971,7 @@ mod tests {
 
         while let Some(current) = cursor {
             let next = query_handle
-                .handle_iter_continue(current)
+                .handle_iter_continue(current, &ALICE_ID)
                 .expect("continue bounded replay query");
             collected.extend(transactions_from_batch(next.batch));
             cursor = next.continue_cursor;
@@ -8730,8 +10000,9 @@ mod tests {
         .expect("validate exact transaction query");
         state_view.kura().reset_merge_query_read_counters_for_test();
 
-        let (QueryResponse::Iterable(output), processed_items) = validated
-            .execute_ephemeral_with_stats(&query_handle, &state_view, &ALICE_ID, Some(64))
+        let item_budget = QueryExecutionBudget::from_weighted_limit(64, 1, 0);
+        let (QueryResponse::Iterable(output), stats) = validated
+            .execute_ephemeral_with_stats(&query_handle, &state_view, &ALICE_ID, Some(item_budget))
             .expect("execute exact transaction query")
         else {
             panic!("expected iterable transaction output");
@@ -8741,7 +10012,7 @@ mod tests {
         assert_eq!(remaining_items, Some(29));
         assert!(has_more);
         assert!(cursor.is_none());
-        assert_eq!(processed_items, 32);
+        assert_eq!(stats.processed_items(), 32);
         assert_eq!(
             state_view.kura().merge_query_read_counters_for_test(),
             (0, 0, 16),
@@ -8771,8 +10042,14 @@ mod tests {
                 limits,
             )
             .expect("validate budgeted exact transaction query");
+            let item_budget = QueryExecutionBudget::from_weighted_limit(1, 1, 0);
             let err = validated
-                .execute_ephemeral_with_stats(&query_handle, &state_view, &ALICE_ID, Some(1))
+                .execute_ephemeral_with_stats(
+                    &query_handle,
+                    &state_view,
+                    &ALICE_ID,
+                    Some(item_budget),
+                )
                 .expect_err("exact full-history scan must exceed a one-item budget");
             assert_eq!(err, Error::GasBudgetExceeded);
         }
@@ -8820,8 +10097,14 @@ mod tests {
             .expect("validate false-predicate transaction query");
             crate::smartcontracts::isi::tx::reset_certified_merge_projection_calls_for_test();
 
+            let item_budget = QueryExecutionBudget::from_weighted_limit(1, 1, 0);
             let err = validated
-                .execute_ephemeral_with_stats(&query_handle, &state_view, &ALICE_ID, Some(1))
+                .execute_ephemeral_with_stats(
+                    &query_handle,
+                    &state_view,
+                    &ALICE_ID,
+                    Some(item_budget),
+                )
                 .expect_err("eager carrier projection must be precharged before proof work");
             assert_eq!(err, Error::GasBudgetExceeded);
             assert_eq!(
@@ -8966,7 +10249,7 @@ mod tests {
         state_view.kura().reset_merge_query_read_counters_for_test();
         crate::smartcontracts::isi::tx::reset_certified_merge_projection_calls_for_test();
         let err = query_handle
-            .handle_iter_continue(underfunded)
+            .handle_iter_continue(underfunded, &ALICE_ID)
             .expect_err("continuation must enforce its current request budget");
         assert_eq!(err, Error::GasBudgetExceeded);
         assert_eq!(
@@ -8981,7 +10264,7 @@ mod tests {
         );
 
         let next = query_handle
-            .handle_iter_continue(original_cursor)
+            .handle_iter_continue(original_cursor, &ALICE_ID)
             .expect("the same cursor remains retryable with sufficient budget");
         assert_eq!(transactions_from_batch(next.batch).len(), 1);
         assert!(
@@ -9032,7 +10315,7 @@ mod tests {
         let mut expected_remaining = 27_u64;
         while let Some(current) = cursor {
             let next = query_handle
-                .handle_iter_continue(current)
+                .handle_iter_continue(current, &ALICE_ID)
                 .expect("continue exact transaction query");
             let page = transactions_from_batch(next.batch);
             expected_remaining = expected_remaining
@@ -9118,7 +10401,7 @@ mod tests {
         let mut cursor = first.continue_cursor;
         while let Some(current) = cursor {
             let next = query_handle
-                .handle_iter_continue(current)
+                .handle_iter_continue(current, &ALICE_ID)
                 .expect("continue sorted transaction query");
             collected.extend(transactions_from_batch(next.batch));
             cursor = next.continue_cursor;
@@ -9164,7 +10447,7 @@ mod tests {
             .kura()
             .remove_merge_entry_payload_for_test(target_entry_hash);
         loop {
-            match query_handle.handle_iter_continue(cursor) {
+            match query_handle.handle_iter_continue(cursor, &ALICE_ID) {
                 Ok(next) => {
                     cursor = next.continue_cursor.expect(
                         "replay must encounter selected corruption before exhausting the cursor",
@@ -10398,7 +11681,7 @@ mod tests {
         assert_eq!(remaining, 1);
         let cursor = cursor.expect("should continue");
 
-        let next = handle.handle_iter_continue(cursor).unwrap();
+        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
         let (batch2, remaining2, cursor2) = next.into_parts();
         let v2 = match batch2.into_iter().next().expect("slice") {
             iroha_data_model::query::QueryOutputBatchBox::Account(v) => v,
@@ -10496,7 +11779,7 @@ mod tests {
         assert_eq!(remaining, 1);
         let cursor = cursor.expect("should continue");
 
-        let next = handle.handle_iter_continue(cursor).unwrap();
+        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
         let (batch2, remaining2, cursor2) = next.into_parts();
         let v2 = match batch2.into_iter().next().expect("slice") {
             iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
@@ -10598,7 +11881,7 @@ mod tests {
         assert_eq!(remaining, 1);
 
         let cursor = cursor.expect("should continue");
-        let next = handle.handle_iter_continue(cursor).unwrap();
+        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
         let (batch2, remaining2, cursor2) = next.into_parts();
         let v2 = match batch2.into_iter().next().expect("slice") {
             iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
@@ -10700,7 +11983,7 @@ mod tests {
         assert_eq!(remaining, 1);
 
         let cursor = cursor.expect("should continue");
-        let next = handle.handle_iter_continue(cursor).unwrap();
+        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
         let (batch2, remaining2, cursor2) = next.into_parts();
         let v2 = match batch2.into_iter().next().expect("slice") {
             iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
@@ -10805,7 +12088,7 @@ mod tests {
 
         // Second batch: should contain rank=2 (c)
         let cursor = cursor.expect("should continue");
-        let next = handle.handle_iter_continue(cursor).unwrap();
+        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
         let (batch2, remaining2, cursor2) = next.into_parts();
         let v2 = match batch2.into_iter().next().expect("slice") {
             iroha_data_model::query::QueryOutputBatchBox::Account(v) => v,
@@ -10908,7 +12191,7 @@ mod tests {
         assert_eq!(remaining, 1);
 
         let cursor = cursor.expect("should continue");
-        let next = handle.handle_iter_continue(cursor).unwrap();
+        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
         let (batch2, remaining2, cursor2) = next.into_parts();
         let v2 = match batch2.into_iter().next().expect("slice") {
             iroha_data_model::query::QueryOutputBatchBox::Account(v) => v,

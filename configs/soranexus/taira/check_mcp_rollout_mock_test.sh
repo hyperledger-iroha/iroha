@@ -41,7 +41,7 @@ if output_path is None:
 
 with open(output_path, "w", encoding="utf-8") as handle:
     handle.write(
-        'chain = "iroha3-taira"\n'
+        'chain = "fc56984b-2be7-431d-840e-21514d1883f0"\n'
         '\n'
         '[account]\n'
         'domain = "universal"\n'
@@ -187,15 +187,15 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/stat
   fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/capabilities" ]]; then
   body='{}'
-elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/manifests" ]]; then
-  body='{}'
+elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/registry" ]]; then
+  body='{"version":1,"lanes":[]}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/zk/proofs/count" ]]; then
   body='{}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/validator-sets" ]]; then
   body='{}'
-elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/nexus/public_lanes/0/validators" ]]; then
+elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/nexus/public-lanes/0/validators" ]]; then
   body='{}'
-elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/nexus/public_lanes/0/stake" ]]; then
+elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/nexus/public-lanes/0/stake" ]]; then
   body='{}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/contracts/state" ]]; then
   status="400"
@@ -241,6 +241,10 @@ if [[ "$*" == *"ledger transaction ping"* ]]; then
         exit 1
         ;;
       sumeragi_highest_qc_behind_commit|sumeragi_locked_qc_behind_commit|sumeragi_idle_high_view_missing_qc|post_canary_sumeragi_missing_validator_set)
+        echo "pong"
+        exit 0
+        ;;
+      success)
         echo "pong"
         exit 0
         ;;
@@ -301,12 +305,12 @@ run_case() {
       MOCK_SCENARIO="$scenario" \
       MOCK_STATE_DIR="${root}/state" \
       EXPECTED_TAIRA_GIT_SHA="$expected_git_sha" \
+      WRITE_CONFIG_DEFAULT="${root}/canary.toml" \
       POST_CANARY_STATUS_RECHECK_ATTEMPTS=2 \
       POST_CANARY_STATUS_RECHECK_DELAY_SECONDS=0 \
       "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
         --skip-local \
         --public-root https://taira.sora.org \
-        --write-config "${root}/canary.toml" \
         --iroha-bin "${root}/mockbin/iroha" \
         >"$output_file" 2>&1; then
     echo "case ${scenario} unexpectedly succeeded" >&2
@@ -327,6 +331,57 @@ run_case() {
   fi
 }
 
+run_invalid_canary_identity_case() {
+  local mutation="$1"
+  local expected_pattern="$2"
+  local root output_file config_path
+
+  root="$(mktemp -d)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+  output_file="${root}/invalid-${mutation}.log"
+  config_path="${root}/canary.toml"
+  "${root}/scripts/taira_bootstrap_canary.py" --output-config "$config_path"
+  python3 - "$config_path" "$mutation" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+mutation = sys.argv[2]
+text = path.read_text(encoding="utf-8")
+if mutation == "archived-chain":
+    text = text.replace(
+        "fc56984b-2be7-431d-840e-21514d1883f0",
+        "809574f5-fee7-5e69-bfcf-52451e42d50f",
+        1,
+    )
+elif mutation == "wrong-discriminant":
+    text = text.replace("chain_discriminant = 369", "chain_discriminant = 753", 1)
+else:
+    raise SystemExit(f"unknown mutation: {mutation}")
+path.write_text(text, encoding="utf-8")
+PY
+
+  if PATH="${root}/mockbin:${PATH}" \
+      MOCK_SCENARIO="cargo_success" \
+      MOCK_STATE_DIR="${root}/state" \
+      "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+        --skip-local \
+        --public-root https://taira.sora.org \
+        --write-config "$config_path" \
+        --iroha-bin "${root}/mockbin/iroha" \
+        >"$output_file" 2>&1; then
+    echo "invalid canary identity case ${mutation} unexpectedly succeeded" >&2
+    sed -n '1,200p' "$output_file" >&2 || true
+    return 1
+  fi
+  if ! grep -q "$expected_pattern" "$output_file"; then
+    echo "invalid canary identity case ${mutation} did not emit expected pattern: ${expected_pattern}" >&2
+    sed -n '1,200p' "$output_file" >&2 || true
+    return 1
+  fi
+}
+
 run_case txn_expired 'write canary failed: transaction expired' '"commit_qc_height": 707'
 run_case permission_403 'write canary failed: signer or permission check returned 403' '"blocks": 707'
 run_case public_502 'public Torii ingress looks degraded' 'HTTP 502'
@@ -340,6 +395,55 @@ run_case sumeragi_highest_qc_behind_commit 'durable CommitQC height does not mat
 run_case sumeragi_locked_qc_behind_commit 'durable CommitQC does not satisfy its frozen dual quorum'
 run_case sumeragi_idle_high_view_missing_qc 'v2 status omitted required last_commit_qc object'
 run_case post_canary_sumeragi_missing_validator_set '/v1/sumeragi/status still did not publish a healthy commit QC snapshot after the signed write canary' 'reported invalid height_context.validator_count: 0'
+run_invalid_canary_identity_case \
+  archived-chain \
+  'write canary config must target the public Sumeragi-v2 Taira chain'
+run_invalid_canary_identity_case \
+  wrong-discriminant \
+  'write canary config must use Taira chain discriminant 369'
+
+root="$(mktemp -d)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+if PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="cargo_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --write-config "${root}/missing-canary.toml" \
+      --iroha-bin "${root}/mockbin/iroha" \
+      >"${root}/missing-canary-output.log" 2>&1; then
+  echo "explicit missing write-config case unexpectedly succeeded" >&2
+  sed -n '1,200p' "${root}/missing-canary-output.log" >&2 || true
+  exit 1
+fi
+grep -q 'write canary config not found:' "${root}/missing-canary-output.log"
+
+root="$(mktemp -d)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+"${root}/scripts/taira_bootstrap_canary.py" \
+  --output-config "${root}/explicit-canary.toml"
+before_hash="$(shasum -a 256 "${root}/explicit-canary.toml" | awk '{print $1}')"
+if ! PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="success" \
+    MOCK_STATE_DIR="${root}/state" \
+    POST_CANARY_STATUS_RECHECK_ATTEMPTS=2 \
+    POST_CANARY_STATUS_RECHECK_DELAY_SECONDS=0 \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --write-config "${root}/explicit-canary.toml" \
+      --iroha-bin "${root}/mockbin/iroha" \
+      >"${root}/explicit-canary-output.log" 2>&1; then
+  echo "explicit write-config preservation case unexpectedly failed" >&2
+  sed -n '1,200p' "${root}/explicit-canary-output.log" >&2 || true
+  exit 1
+fi
+after_hash="$(shasum -a 256 "${root}/explicit-canary.toml" | awk '{print $1}')"
+[[ "$before_hash" == "$after_hash" ]]
+grep -q 'Taira MCP rollout checks passed.' "${root}/explicit-canary-output.log"
 
 root="$(mktemp -d)"
 cleanup_paths+=("$root")
@@ -442,11 +546,11 @@ make_fake_repo "$root"
 if PATH="${root}/mockbin:${PATH}" \
     MOCK_SCENARIO="txn_expired" \
     MOCK_STATE_DIR="${root}/state" \
+    WRITE_CONFIG_DEFAULT="${root}/canary.toml" \
     "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
       --skip-local \
       --public-root https://taira.sora.org \
       --resolve-host taira.sora.org:443:127.0.0.1 \
-      --write-config "${root}/canary.toml" \
       --iroha-bin "${root}/mockbin/iroha" \
       >"${root}/resolve-output.log" 2>&1; then
   echo "resolve-host case unexpectedly succeeded" >&2

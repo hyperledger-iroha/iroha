@@ -23,9 +23,9 @@ object GovernanceInstructionUtils {
             @JvmStatic
             fun parse(raw: String): VotingMode {
                 require(raw.isNotBlank()) { "mode must not be blank" }
-                return when (raw.trim().lowercase()) {
-                    "zk" -> ZK
-                    "plain" -> PLAIN
+                return when (raw) {
+                    "Zk" -> ZK
+                    "Plain" -> PLAIN
                     else -> throw IllegalArgumentException("Unknown voting mode: $raw")
                 }
             }

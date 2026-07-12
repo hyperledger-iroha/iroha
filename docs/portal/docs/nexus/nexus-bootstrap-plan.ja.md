@@ -4,7 +4,7 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: aa25c267f36e3245866776d5149039e1b9833407a84126d66a21cf5296e51414
+source_hash: 1859a31eac02d839cfb032c9a2bea520272c8310554f1fbc4e3691fc35cd7318
 source_last_modified: "2025-11-10T17:34:36.494808+00:00"
 translation_last_reviewed: 2025-12-30
 ---
@@ -34,7 +34,7 @@ description: SoraFS/SoraNet サービスを重ねる前に Nexus の中核バリ
 ## ネットワーク環境
 - 異なるネットワークプレフィックスを持つ 2 つの Nexus 環境を運用する:
 - **Sora Nexus (mainnet)** - 本番ネットワークプレフィックス `nexus`。カノニカルなガバナンスと SoraFS/SoraNet の piggyback サービスをホスト (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`)。
-- **Sora Taira (testnet)** - ステージングのネットワークプレフィックス `taira`。統合テストと pre-release 検証のために mainnet 設定をミラー (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`)。
+- **Sora Taira (testnet)** - ステージングのネットワークプレフィックス `taira`。統合テストと pre-release 検証のために mainnet 設定をミラー (chain UUID `fc56984b-2be7-431d-840e-21514d1883f0`)。
 - 各環境ごとに genesis ファイル、ガバナンスキー、インフラフットプリントを分離する。Taira は Nexus への昇格前に SoraFS/SoraNet の rollouts を検証する場として機能する。
 - CI/CD パイプラインはまず Taira へデプロイし、自動 smoke tests を実行し、チェック合格後に Nexus への手動プロモーションを要求する。
 - 参照用の設定 bundle は `configs/soranexus/nexus/` (mainnet) と `configs/soranexus/taira/` (testnet) にあり、それぞれにサンプル `config.toml`、`genesis.json`、Torii admission ディレクトリが含まれる。

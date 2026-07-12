@@ -53,21 +53,34 @@ client = create_torii_client(
 )
 ```
 
-## Offline readiness
+## Offline lifecycle
 
-Torii exposes only the Offline readiness endpoint for offline HTTP discovery.
-Retired Offline Note issuance, redemption, and audit transaction paths are
-retired. Kagemusha readiness fields advertise the active offline payment
-implementation.
+The first-release HTTP lifecycle has exactly four canonical routes:
+
+- `GET /v1/offline/readiness?asset_definition_id=...`
+- `POST /v1/offline/top-up`
+- `POST /v1/offline/redeem`
+- `GET /v1/offline/operations/{operation_id}`
+
+Top-up and redemption submit the typed request directly as JSON or Norito and
+return `202 Accepted` with a typed operation reference and `Location`. A
+readiness response with `ready: false` is a successfully evaluated domain
+state; `503 readiness_unavailable` means the node could not evaluate it.
 
 ```python
 from iroha_python import ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
 
-readiness = client.get_offline_readiness()
-print("kagemusha", readiness.offline_kagemusha_recursive_compact_available)
+readiness = client.get_offline_readiness(asset_definition_id="xor#wonderland")
+print("offline ready", readiness.ready, readiness.blockers)
 ```
+
+`OfflineTopUpRequest` and `OfflineRedeemRequest` are exported `TypedDict`
+contracts, and an applied top-up returns a frozen `OfflineTopUpAnchor` rather
+than an untyped mapping. The decoder enforces the `0..=28` scale bound and
+cross-checks the anchor's operation ID, transaction hash, finality height,
+amount, roots, current note, and sorted nullifier set before returning it.
 
 For app-facing offline cash flows, use `iroha_python.offline_cash` to keep the
 online load lifecycle separate from local exchange. The lifecycle controller
@@ -221,7 +234,8 @@ requests must still include the append lineage key artifacts in the raw Norito
 request. Use `kagemusha_recursive_spend_lineage_key_artifacts_for_init(...)`
 and `kagemusha_recursive_spend_lineage_key_artifacts_for_append(...)` to
 package and validate these verifier/proving key artifacts before building a
-witnessless Reserved-lineage request.
+witnessless Reserved-lineage request once transition verification is wired.
+The current release does not select or prove that path.
 Verify request archives must pass the same public-binding preflight before the
 PyO3 host returns a `KagemushaRecursiveSpendVerifyResultV1`: Reserved-lineage
 bundles require a matching active `lineage_verifier_record`, semantic bundles
@@ -259,13 +273,14 @@ rejected before native dispatch.
 
 `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` is currently `64`,
 and `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1` is
-`True`: witnessless Reserved-lineage online redemption is available for lineage
-bundles inside the 64-hop cap.
-Use the exported redeem/append decision helpers; append selects Reserved-lineage
-for previous hop counts `1..63`.
+`False`. The hop constant is only the protocol bound: witnessless
+Reserved-lineage redeem and append fail closed for every circuit and hop count,
+and redeem requires a record-backed lineage witness. Use the exported
+redeem/append decision helpers; append selects semantic recursive aggregation
+while transition verification is unavailable.
 Semantic append is bounded by the separate
-`KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS` constant; witnessless Reserved-lineage
-append and redeem use `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1`.
+`KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS` constant; the witnessless max-hop constant
+does not enable witnessless admission.
 
 ## Native Privacy Bridge
 
@@ -371,7 +386,7 @@ call = client.call_contract_and_wait(
     contract_alias="boi-lock::is",
     entrypoint="create_lock",
     payload={"amount": "10"},
-    gas_limit=100_000,
+    gas_limit=1_500_000,
 )
 
 policy = client.get_sns_policy(2)
@@ -683,13 +698,20 @@ client.charge_subscription_now(
 ## Streaming events
 
 All streaming helpers decode JSON payloads by default. Pass `with_metadata=True` to receive full
-`SseEvent` objects (event name, id, retry hint, raw payload) and pair the stream with an
-`EventCursor` to persist the latest event id so long-running consumers can resume automatically
-after reconnects. The optional `on_event` callback mirrors this behaviour: it receives a decoded
-payload when metadata is disabled and the full `SseEvent` when metadata is requested.
+`SseEvent` objects (event name, id, retry hint, raw payload). The optional `on_event` callback
+mirrors this behaviour: it receives a decoded payload when metadata is disabled and the full
+`SseEvent` when metadata is requested.
+
+The canonical `/v1/events/sse` feed is live-only: it emits no SSE ids and retains no replay log.
+Its helpers therefore expose no cursor, resume flag, or `last_event_id` argument. A transport
+reconnect establishes a new live subscription and can have a gap. Use `/v1/blocks/stream` from a
+known height when complete ledger history is required. If an established SSE feed reports a
+terminal `event: stream_error`, the iterator raises `SseStreamError` with the stable `code`,
+`message`, `dropped_messages`, and `replay_available` fields. `EventCursor` remains available only
+for explicitly replayable feeds such as the SoraFS event logs.
 
 ```python
-from iroha_python import create_torii_client, DataEventFilter
+from iroha_python import create_torii_client, DataEventFilter, SseStreamError
 
 client = create_torii_client("http://127.0.0.1:8080", auth_token="admin-token")
 
@@ -699,8 +721,11 @@ for event in client.stream_verifying_key_events(updated=True):
 
 # Stream proof verification results for a specific proof id
 proof_filter = DataEventFilter.proof(backend="halo2/ipa", proof_hash_hex="deadbeef" * 8)
-for event in client.stream_events(filter=proof_filter, resume=True):
-    print("Proof event", event)
+try:
+    for event in client.stream_events(filter=proof_filter):
+        print("Proof event", event)
+except SseStreamError as error:
+    print("Event stream terminated", error.code, error.dropped_messages)
 
 # Stream pipeline activity with typed helpers
 for event in client.stream_pipeline_transactions(status="Queued"):
@@ -709,16 +734,9 @@ for event in client.stream_pipeline_transactions(status="Queued"):
 for block_event in client.stream_pipeline_blocks(status="Committed"):
     print("Committed block", block_event)
 
-# Structured events and cursor-based resume support
-from iroha_python import EventCursor
-
-cursor = EventCursor()
-for evt in client.stream_events(filter=proof_filter, cursor=cursor, resume=True, with_metadata=True):
+# Structured live events include framing metadata but no replay cursor.
+for evt in client.stream_events(filter=proof_filter, with_metadata=True):
     print(evt.id, evt.event, evt.data)
-
-# The cursor tracks the last event id automatically, so a later run can resume where it left off.
-for evt in client.stream_events(filter=proof_filter, cursor=cursor, resume=True):
-    print("Replayed proof event", evt)
 
 # Inspect Connect availability with typed helpers
 status = client.get_connect_status_typed()
@@ -814,7 +832,8 @@ for row in client.query_triggers(filter={"authority": "sorauﾛ1NcMBm2dﾌBokヱ
     print("Trigger row", row)
 client.delete_trigger("notify-admins")
 
-# Capture SoraFS PoR telemetry
+# Submit authenticated SoraFS PoR lifecycle evidence. Challenge issuance is
+# owned by the coordinator scheduler; the client exposes no manual ingress.
 proof_payload = b"...PorProofV1 bytes..."
 verdict_payload = b"...AuditVerdictV1 bytes..."
 
@@ -1652,8 +1671,8 @@ assert status["kind"] == "Committed"
 details = client.get_trigger(trigger_id)
 print(details["status"])
 
-# 4) Stream trigger execution events with the typed filter.
-for event in client.stream_trigger_events(trigger_id=trigger_id, resume=True):
+# 4) Stream live trigger execution events with the typed filter.
+for event in client.stream_trigger_events(trigger_id=trigger_id):
     print("Trigger event:", event)
     break  # demonstration
 
@@ -1681,9 +1700,8 @@ print([row["height"] for row in recent_blocks.get("items", [])])
 sidecar = client.get_pipeline_recovery(height=42)
 print(sidecar.get("transactions", []))
 
-# Subscribe to pipeline transaction events (Queued → Executed → Committed).
-filter_obj = DataEventFilter.pipeline_transaction(status="Queued")
-for event in client.stream_pipeline_transactions(filter_obj, resume=True):
+# Subscribe to live pipeline transaction events (Queued → Executed → Committed).
+for event in client.stream_pipeline_transactions(status="Queued"):
     tx = event["payload"]
     print("Queued tx:", tx["hash_hex"], tx["status"]["kind"])
     break
@@ -1694,12 +1712,9 @@ for block_event in client.stream_pipeline_blocks(status="Committed"):
     print("Committed block", block["height"], block["hash_hex"])
     break
 
-# Resume SSE consumption using the last event id exposed by the client helper.
-resume_filter = DataEventFilter.pipeline_witness(epoch=0)
+# Watch execution-witness events. The canonical feed is live-only and cannot replay gaps.
 client.stream_pipeline_witnesses(
-    filter=resume_filter,
-    last_event_id="opaque-event-id",
-    resume=True,
+    height=42,
     on_event=lambda payload, eid: print("Witness", payload["id"], eid),
 )
 ```
@@ -2053,8 +2068,8 @@ no environment variables need to be exported.
   for replaying JSON envelopes from stdin or a file via the Torii client.
 - Include structured account query envelopes plus Torii helpers for
   `/v1/accounts/query`, `/v1/accounts/{id}/assets`, and
-  `/v1/accounts/{id}/transactions`, alongside a basic SSE consumer for
-  `/v1/events/sse` streams with Last-Event-ID resume. A lightweight filter DSL
+  `/v1/accounts/{id}/transactions`, alongside a live-only SSE consumer for
+  `/v1/events/sse` that surfaces terminal stream errors. A lightweight filter DSL
   (`Eq`, `Between`, `metadata_eq`, `metadata_exists`, `field_in`, …) keeps
   payloads deterministic without hand-crafted JSON.
 - Offer a `wait_for_transaction_status` helper that polls pipeline status until

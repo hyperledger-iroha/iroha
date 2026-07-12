@@ -24,7 +24,7 @@ use axum::{
     Json,
     body::{Body, Bytes},
     extract::{
-        ConnectInfo, Path, State,
+        ConnectInfo, Extension, Path, State,
         ws::{Message as WsMessage, Utf8Bytes, WebSocket, WebSocketUpgrade},
     },
     http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
@@ -8230,6 +8230,7 @@ pub(crate) async fn handle_get_sorafs_reputation_events_stream(
 
 pub(crate) async fn handle_get_sorafs_reputation_events_ws(
     State(state): State<SharedAppState>,
+    preauth_guard: Option<Extension<crate::PreAuthGuardHandoff>>,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     ws: WebSocketUpgrade,
 ) -> Response {
@@ -8245,7 +8246,9 @@ pub(crate) async fn handle_get_sorafs_reputation_events_ws(
         .sorafs_node
         .reputation_events_since(query.since, limit);
     let receiver = state.sorafs_node.subscribe_reputation_events();
+    let preauth_guard = crate::take_preauth_upgrade_guard(preauth_guard);
     ws.on_upgrade(move |socket| async move {
+        let _preauth_guard = preauth_guard;
         if let Err(err) = reputation_event_websocket_stream(socket, initial_events, receiver).await
         {
             debug!(%err, "SoraFS reputation WebSocket stream closed with error");
@@ -11649,6 +11652,7 @@ pub(crate) async fn handle_get_sorafs_orderbook_events_stream(
 
 pub(crate) async fn handle_get_sorafs_orderbook_events_ws(
     State(state): State<SharedAppState>,
+    preauth_guard: Option<Extension<crate::PreAuthGuardHandoff>>,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     ws: WebSocketUpgrade,
 ) -> Response {
@@ -11663,7 +11667,9 @@ pub(crate) async fn handle_get_sorafs_orderbook_events_ws(
         let limit = normalize_limit(query.limit);
         let initial_events = state.sorafs_node.orderbook_events_since(query.since, limit);
         let receiver = state.sorafs_node.subscribe_orderbook_events();
+        let preauth_guard = crate::take_preauth_upgrade_guard(preauth_guard);
         ws.on_upgrade(move |socket| async move {
+            let _preauth_guard = preauth_guard;
             if let Err(err) =
                 orderbook_event_websocket_stream(socket, initial_events, receiver).await
             {
@@ -12188,6 +12194,7 @@ pub(crate) async fn handle_get_sorafs_reserve_lifecycle_events_stream(
 
 pub(crate) async fn handle_get_sorafs_reserve_lifecycle_events_ws(
     State(state): State<SharedAppState>,
+    preauth_guard: Option<Extension<crate::PreAuthGuardHandoff>>,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     ws: WebSocketUpgrade,
 ) -> Response {
@@ -12203,7 +12210,9 @@ pub(crate) async fn handle_get_sorafs_reserve_lifecycle_events_ws(
         .sorafs_node
         .reserve_lifecycle_events_since(query.since, limit);
     let receiver = state.sorafs_node.subscribe_reserve_lifecycle_events();
+    let preauth_guard = crate::take_preauth_upgrade_guard(preauth_guard);
     ws.on_upgrade(move |socket| async move {
+        let _preauth_guard = preauth_guard;
         if let Err(err) =
             reserve_lifecycle_event_websocket_stream(socket, initial_events, receiver).await
         {
@@ -12479,6 +12488,7 @@ pub(crate) async fn handle_get_sorafs_repair_events_stream(
 
 pub(crate) async fn handle_get_sorafs_repair_events_ws(
     State(state): State<SharedAppState>,
+    preauth_guard: Option<Extension<crate::PreAuthGuardHandoff>>,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     ws: WebSocketUpgrade,
 ) -> Response {
@@ -12489,7 +12499,9 @@ pub(crate) async fn handle_get_sorafs_repair_events_ws(
     let limit = normalize_limit(query.limit);
     let initial_events = state.sorafs_node.repair_events_since(query.since, limit);
     let receiver = state.sorafs_node.subscribe_repair_events();
+    let preauth_guard = crate::take_preauth_upgrade_guard(preauth_guard);
     ws.on_upgrade(move |socket| async move {
+        let _preauth_guard = preauth_guard;
         if let Err(err) = repair_event_websocket_stream(socket, initial_events, receiver).await {
             debug!(%err, "SoraFS repair WebSocket stream closed with error");
         }
@@ -24637,29 +24649,6 @@ pub(crate) async fn handle_get_sorafs_cid_lookup(
         json_entry("moderation", cid_lookup_moderation_json(&state, &stored)),
     ]);
     JsonBody(value).into_response()
-}
-
-#[cfg(feature = "app_api")]
-pub(crate) async fn handle_get_sorafs_cid_root_redirect(
-    State(state): State<SharedAppState>,
-    headers: HeaderMap,
-    uri: Uri,
-    Path(cid): Path<String>,
-) -> Response {
-    if decode_canonical_content_cid(&cid).is_none() {
-        return json_error(StatusCode::BAD_REQUEST, "invalid content CID");
-    }
-
-    if let Some(response) = maybe_redirect_cid_gateway_request(&state, &headers, &uri, &cid) {
-        return response;
-    }
-
-    let mut location = format!("/sorafs/cid/{cid}/");
-    if let Some(query) = uri.query() {
-        location.push('?');
-        location.push_str(query);
-    }
-    permanent_redirect(location)
 }
 
 #[cfg(feature = "app_api")]
@@ -48872,7 +48861,7 @@ mod advert_tests {
         let cid_root = handle_get_sorafs_cid_root(
             State(state.clone()),
             cid_headers.clone(),
-            format!("/sorafs/cid/{content_cid}/")
+            format!("/sorafs/cid/{content_cid}")
                 .parse::<Uri>()
                 .expect("cid root uri"),
             Path(content_cid.clone()),
@@ -49553,7 +49542,7 @@ mod advert_tests {
         let cid_root = handle_get_sorafs_cid_root(
             State(state.clone()),
             cid_headers,
-            format!("/sorafs/cid/{content_cid}/")
+            format!("/sorafs/cid/{content_cid}")
                 .parse::<Uri>()
                 .expect("preferred cid root uri"),
             Path(content_cid.clone()),
@@ -49731,7 +49720,7 @@ mod advert_tests {
         let cid_root = handle_get_sorafs_cid_root(
             State(state),
             HeaderMap::new(),
-            format!("/sorafs/cid/{content_cid}/")
+            format!("/sorafs/cid/{content_cid}")
                 .parse::<Uri>()
                 .expect("cid root uri"),
             Path(content_cid),
@@ -49879,7 +49868,7 @@ mod advert_tests {
         let cid_root = handle_get_sorafs_cid_root(
             State(state.clone()),
             HeaderMap::new(),
-            format!("/sorafs/cid/{content_cid}/")
+            format!("/sorafs/cid/{content_cid}")
                 .parse::<Uri>()
                 .expect("remote cid root uri"),
             Path(content_cid.clone()),
@@ -49955,7 +49944,7 @@ mod advert_tests {
         let cached_root = handle_get_sorafs_cid_root(
             State(state.clone()),
             isolated_headers,
-            format!("/sorafs/cid/{content_cid}/")
+            format!("/sorafs/cid/{content_cid}")
                 .parse::<Uri>()
                 .expect("cached CID root URI"),
             Path(content_cid),

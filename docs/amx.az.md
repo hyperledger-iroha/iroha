@@ -197,7 +197,7 @@ kilidləri əvvəlcədən gətirin və ya UAID manifestlərini tətbiq edin. Yen
 (`crates/ivm/src/analysis.rs`) kodu deşifrə edən `analyze_program(&[u8])`-i ifşa edir.
 `.to` artefakt, oxunuşların/yazmaların, yaddaş əməliyyatlarının və sistem zənglərinin istifadəsini qeyd edir,
 və SDK manifestlərinin yerləşdirə biləcəyi JSON-a uyğun hesabat hazırlayır. Çalıştır
-UAID-ləri dərc edərkən `koto_lint` ilə yanaşı yaradılan R/W xülasəsi
+UAID-ləri dərc edərkən `koto check` ilə yanaşı yaradılan R/W xülasəsi
 NX-17 hazırlığının nəzərdən keçirilməsi zamanı istinad edilən sübut paketində ələ keçirilib.
 
 ## Space Directory siyasətinin tətbiqi

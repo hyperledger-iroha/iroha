@@ -105,32 +105,25 @@ node javascript/iroha_js/recipes/iso_bridge.mjs
 
 ### ISO მეტსახელის დამხმარე
 
-`recipes/iso_alias.mjs` მიზნად ისახავს ISO მეტსახელის საბოლოო წერტილებს, რათა რეპეტიციები დაფაროს
-დაბრმავებული ელემენტების ჰეშირება და ფსევდონიმების ძიება შეკვეთილი ხელსაწყოების დაწერის გარეშე. ის
-ზარები `ToriiClient.evaluateAliasVoprf` პლუს `resolveAlias` / `resolveAliasByIndex`
-და ბეჭდავს backend, დაიჯესტი, ანგარიშის სავალდებულო, წყარო და დეტერმინისტული ინდექსი
-დააბრუნა Torii.
+`recipes/iso_alias.mjs` სპეციალური ხელსაწყოების გარეშე ამოწმებს ISO ფსევდონიმების მოძიებას.
+ის იძახებს `resolveAlias` და `resolveAliasByIndex` ფუნქციებს, შემდეგ კი ბეჭდავს Torii-ის მიერ დაბრუნებულ ანგარიშის მიბმას, წყაროსა და დეტერმინისტულ ინდექსს.
 
 გარემოს ცვლადები:
 
 - `TORII_URL` — Torii საბოლოო წერტილი, რომელიც ავლენს მეტსახელის დამხმარეებს.
-- `ISO_VOPRF_INPUT` — თექვსმეტობით დაშიფრული დაბრმავებული ელემენტი (ნაგულისხმევად არის `deadbeef`).
-- `ISO_SKIP_VOPRF=1` — გამოტოვეთ VOPRF ზარი მხოლოდ ძიების ტესტირებისას.
 - `ISO_ALIAS_LABEL` — პირდაპირი მეტსახელი ამოსახსნელად (მაგ., IBAN-ის სტილის სტრიქონები).
 - `ISO_ALIAS_INDEX` — ათობითი ან `0x` პრეფიქსის ინდექსი გადავიდა `resolveAliasByIndex`-ზე.
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — არჩევითი სათაურები დაცული Torii განლაგებისთვის.
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```

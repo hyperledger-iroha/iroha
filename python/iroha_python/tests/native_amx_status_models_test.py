@@ -45,7 +45,7 @@ def _qc(
             },
             "epoch": 3,
             "chain_id_hash": _hash(0x11),
-            "source_id": "ab" * 32,
+            "source_id": "AB" * 32,
             "tx_entrypoint_hash": entrypoint_hash,
             "plan_digest": _hash(0x23),
             "phase": {"phase": phase, "detail": None},
@@ -112,7 +112,7 @@ def _commitment() -> dict[str, Any]:
         "nexus_fee_receipts": [
             {
                 "version": 1,
-                "source_id": "cd" * 32,
+                "source_id": "CD" * 32,
                 "dataspace_id": 11,
                 "lane_id": 7,
                 "block_height": 42,
@@ -133,7 +133,7 @@ def _commitment() -> dict[str, Any]:
         "native_amx_receipts": [
             {
                 "version": 2,
-                "source_id": "ab" * 32,
+                "source_id": "AB" * 32,
                 "chain_id_hash": _hash(0x11),
                 "plan_digest": _hash(0x23),
                 "lane_id": 7,
@@ -213,9 +213,9 @@ def test_lane_commitment_preserves_exact_native_amx_and_fee_evidence() -> None:
     assert receipt.legs[0].prepare_qc.bls_aggregate_signature == (0x9A,) * 96
 
 
-def test_lane_commitment_accepts_derived_json_integer_totals_and_tagged_swap_enums() -> None:
+def test_lane_commitment_accepts_canonical_maximum_total_and_tagged_swap_enums() -> None:
     payload = _commitment()
-    payload["total_local_micro"] = (1 << 128) - 1
+    payload["total_local_micro"] = str((1 << 128) - 1)
     payload["swap_metadata"] = {
         "epsilon_bps": 25,
         "twap_window_seconds": 300,
@@ -230,6 +230,15 @@ def test_lane_commitment_accepts_derived_json_integer_totals_and_tagged_swap_enu
     assert parsed.swap_metadata is not None
     assert parsed.swap_metadata.liquidity_profile == "Tier2"
     assert parsed.swap_metadata.volatility_class == "Elevated"
+
+
+@pytest.mark.parametrize("invalid", [(1 << 128) - 1, "01", str(1 << 128)])
+def test_lane_commitment_rejects_noncanonical_u128_wire_values(invalid: Any) -> None:
+    payload = _commitment()
+    payload["total_local_micro"] = invalid
+
+    with pytest.raises((TypeError, ValueError), match="canonical|128-bit range"):
+        SumeragiLaneSettlementCommitment.from_payload(payload)
 
 
 def test_lane_relay_preserves_the_exact_embedded_native_amx_receipt() -> None:
@@ -251,6 +260,7 @@ def test_lane_relay_preserves_the_exact_embedded_native_amx_receipt() -> None:
         _delete(("native_amx_receipts", 0, "chain_id_hash")),
         _set(("native_amx_receipts", 0, "version"), 1),
         _set(("native_amx_receipts", 0, "source_id"), "ab" * 31),
+        _set(("native_amx_receipts", 0, "source_id"), "ab" * 32),
         _set(("native_amx_receipts", 0, "plan_digest"), "hash:BAD#0000"),
         _set(("native_amx_receipts", 0, "lane_id"), 9),
         _set(("native_amx_receipts", 0, "dataspace_id"), 13),
@@ -317,14 +327,27 @@ def test_native_amx_parser_rejects_duplicate_participant_legs() -> None:
         SumeragiLaneSettlementCommitment.from_payload(payload)
 
 
+def test_native_amx_parser_rejects_participant_leg_overflow_before_decode() -> None:
+    payload = _commitment()
+    payload["native_amx_receipts"][0]["legs"] = [
+        deepcopy(payload["native_amx_receipts"][0]["legs"][0])
+        for _ in range(256)
+    ]
+
+    with pytest.raises(TypeError, match="bounded non-empty list"):
+        SumeragiLaneSettlementCommitment.from_payload(payload)
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
         _delete(("nexus_fee_receipts", 0, "schedule")),
         _set(("nexus_fee_receipts", 0, "fee_amount"), 1.25),
         _set(("nexus_fee_receipts", 0, "fee_amount"), "01.25"),
+        _set(("nexus_fee_receipts", 0, "source_id"), "cd" * 32),
         _set(("nexus_fee_receipts", 0, "schedule", "gas_used"), "123"),
         _set(("nexus_fee_receipts", 0, "schedule", "base_fee"), "-1"),
+        _set(("nexus_fee_receipts", 0, "schedule", "legacy_rate"), "1"),
         _set(("nexus_fee_receipts", 0, "lane_id"), 8),
     ],
 )
@@ -335,6 +358,22 @@ def test_nexus_fee_parser_rejects_lossy_or_inconsistent_values(
     mutate(payload)
 
     with pytest.raises((TypeError, ValueError)):
+        SumeragiLaneSettlementCommitment.from_payload(payload)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ("legacy_total",),
+        ("nexus_fee_receipts", 0, "legacy_fee"),
+        ("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "legacy_round"),
+    ],
+)
+def test_lane_commitment_rejects_unknown_nested_wire_fields(path: tuple[Any, ...]) -> None:
+    payload = _commitment()
+    _set(path, 1)(payload)
+
+    with pytest.raises(ValueError, match="unknown field"):
         SumeragiLaneSettlementCommitment.from_payload(payload)
 
 

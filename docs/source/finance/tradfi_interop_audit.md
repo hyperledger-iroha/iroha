@@ -2592,7 +2592,7 @@ verification.
   - `POST /v1/iso20022/sese024`
   - `POST /v1/iso20022/sese025`
   - `POST /v1/iso20022/colr012`
-  - `GET /v1/iso20022/status/{msg_id}`
+  - `GET /v1/iso20022/messages/{msg_id}`
 - New/readable endpoints:
   - `GET /v1/iso20022/messages/{msg_id}`
   - `GET /v1/iso20022/audit/messages`

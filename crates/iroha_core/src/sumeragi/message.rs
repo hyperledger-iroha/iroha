@@ -111,48 +111,52 @@ impl BlockMessage {
         }
     }
 
-    /// Return whether queue saturation must never drop this consensus message.
+    /// Return whether this message belongs to the authoritative live v2 ingress.
     ///
-    /// Callers on asynchronous network workers should offload blocking enqueue
-    /// operations before forwarding messages in this class.  The match is
-    /// intentionally exhaustive so every newly introduced wire variant must
-    /// make an explicit liveness decision.
+    /// The first release admits explicitly versioned global v2 traffic, the
+    /// lane-local artifacts consumed by the v2 lane adapter, and authenticated
+    /// v2 NPoS VRF observations. Legacy global messages remain decodable for
+    /// archival data, but must never claim live queue capacity. A wrong-version
+    /// v2 envelope also fails closed before relay allocation.
     #[must_use]
-    pub fn requires_blocking_ingress(&self) -> bool {
+    pub fn is_authoritative_v2_ingress(&self) -> bool {
         match self {
-            Self::BlockCreated(_)
-            | Self::BlockSyncUpdate(_)
-            | Self::FetchBlockBody(_)
-            | Self::BlockBodyResponse(_)
-            | Self::CertifiedBlockFetch(_)
-            | Self::VrfCommit(_)
-            | Self::VrfReveal(_)
-            | Self::RbcInitRequest(_)
-            | Self::RbcChunkRequest(_)
-            | Self::RbcInit(_)
-            | Self::RbcChunk(_)
-            | Self::RbcChunkCompact(_)
-            | Self::RbcReady(_)
-            | Self::RbcDeliver(_)
-            | Self::Proposal(_)
-            | Self::LaneBlockProposal(_)
+            Self::V2(message) => message.validate_version().is_ok(),
+            Self::LaneBlockProposal(_)
             | Self::LaneExecutablePayload(_)
             | Self::LaneExecutablePayloadHandoff(_)
             | Self::LaneBlockNewViewVote(_)
             | Self::LaneBlockNewViewCertificate(_)
-            | Self::QcVote(_)
-            | Self::Qc(_)
             | Self::LaneBlockVote(_)
-            | Self::LaneBlockQc(_) => true,
-            Self::FetchPendingBlock(request) => {
-                request.priority == Some(FetchPendingBlockPriority::Consensus)
-                    || request.commit_qc_only == Some(true)
+            | Self::LaneBlockQc(_)
+            | Self::VrfCommit(_)
+            | Self::VrfReveal(_) => true,
+            _ => false,
+        }
+    }
+
+    /// Return whether queue saturation must never drop this live v2 message.
+    ///
+    /// Callers on asynchronous network workers should offload blocking enqueue
+    /// operations only for the authoritative v2 ingress. Retired variants use
+    /// non-blocking delivery and are rejected by [`crate::sumeragi::SumeragiHandle`]
+    /// before they allocate a consensus queue slot.
+    #[must_use]
+    pub fn requires_blocking_ingress(&self) -> bool {
+        match self {
+            Self::V2(message) if message.validate_version().is_ok() => {
+                self.v2_requires_blocking_ingress()
             }
-            Self::V2(_) => self.v2_requires_blocking_ingress(),
-            Self::ConsensusParams(_)
-            | Self::ExecWitness(_)
-            | Self::KuraReplicaAdvert(_)
-            | Self::ProposalHint(_) => false,
+            Self::LaneBlockProposal(_)
+            | Self::LaneExecutablePayload(_)
+            | Self::LaneExecutablePayloadHandoff(_)
+            | Self::LaneBlockNewViewVote(_)
+            | Self::LaneBlockNewViewCertificate(_)
+            | Self::LaneBlockVote(_)
+            | Self::LaneBlockQc(_)
+            | Self::VrfCommit(_)
+            | Self::VrfReveal(_) => true,
+            _ => false,
         }
     }
 
@@ -1632,7 +1636,7 @@ mod tests {
     }
 
     #[test]
-    fn blocking_ingress_policy_handles_recovery_flags_and_malformed_v2_fail_closed() {
+    fn blocking_ingress_policy_rejects_retired_recovery_and_admits_v2() {
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x7A; 32]));
         let requester = checked_random_peer_id();
         let background = FetchPendingBlock {
@@ -1652,20 +1656,21 @@ mod tests {
         let mut consensus_priority = background.clone();
         consensus_priority.priority = Some(FetchPendingBlockPriority::Consensus);
         assert!(
-            BlockMessage::FetchPendingBlock(consensus_priority).requires_blocking_ingress(),
-            "consensus-priority repair must not be dropped under saturation"
+            !BlockMessage::FetchPendingBlock(consensus_priority).requires_blocking_ingress(),
+            "retired v1 recovery must not allocate a blocking live-v2 ingress task"
         );
 
         let mut commit_qc_only = background;
         commit_qc_only.commit_qc_only = Some(true);
         assert!(
-            BlockMessage::FetchPendingBlock(commit_qc_only).requires_blocking_ingress(),
-            "commit-QC recovery must not be dropped under saturation"
+            !BlockMessage::FetchPendingBlock(commit_qc_only).requires_blocking_ingress(),
+            "retired commit-QC recovery must not allocate a live-v2 queue slot"
         );
 
         assert!(
-            BlockMessage::RbcInitRequest(sample_rbc_init_request(0x7B)).requires_blocking_ingress(),
-            "RBC repair requests are liveness-critical"
+            !BlockMessage::RbcInitRequest(sample_rbc_init_request(0x7B))
+                .requires_blocking_ingress(),
+            "retired RBC repair must not allocate a live-v2 queue slot"
         );
 
         let malformed_v2 = BlockMessage::V2(ConsensusMessageV2::new(
@@ -1680,6 +1685,14 @@ mod tests {
         assert!(
             !malformed_v2.requires_blocking_ingress(),
             "retransmittable v2 payload chunks use bounded best-effort ingress"
+        );
+        let BlockMessage::V2(mut wrong_version) = malformed_v2 else {
+            unreachable!("fixture is a v2 envelope")
+        };
+        wrong_version.protocol_version = wrong_version.protocol_version.saturating_add(1);
+        assert!(
+            !BlockMessage::V2(wrong_version).requires_blocking_ingress(),
+            "wrong-version envelopes must be rejected before blocking relay allocation"
         );
 
         assert!(
@@ -2704,6 +2717,11 @@ mod tests {
                 },
                 phase: wire::GlobalPhase::Prepare,
                 subject,
+                execution_commitment: wire::ExecutionCommitment::without_topups(
+                    Hash::new(b"v2-ingress-parent-state"),
+                    Hash::new(b"v2-ingress-post-state"),
+                    Hash::new(b"v2-ingress-ordinary-writes"),
+                ),
                 signer: 0,
                 signature: vec![1],
             }),

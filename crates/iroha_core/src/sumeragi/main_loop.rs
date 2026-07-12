@@ -26,7 +26,11 @@ use std::{
 #[cfg(test)]
 use std::collections::HashSet;
 
-use crate::{lane_drain::LaneDrainSigningGuard, state::StateViewContextGuard};
+use crate::{
+    lane_consensus::{LaneDrainVoteState, lane_drain_vote_recipients},
+    lane_drain::LaneDrainSigningGuard,
+    state::StateViewContextGuard,
+};
 use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
 use eyre::{Result, eyre};
 use iroha_config::parameters::actual::{
@@ -54,8 +58,8 @@ use iroha_data_model::{
     events::{EventBox, pipeline::PipelineEventBox},
     isi::register::RegisterPeerWithPop,
     merge::{
-        LaneDrainCertificateBodyV1, LaneDrainCertificateV1, LaneDrainIntentV1,
-        MergeCommitteeSignature, MergeLedgerEntry, MergeQuorumCertificate, MergeSignerProof,
+        LaneDrainCertificateBodyV1, LaneDrainCertificateV1, MergeCommitteeSignature,
+        MergeLedgerEntry, MergeQuorumCertificate, MergeSignerProof,
     },
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
     peer::PeerId,
@@ -4087,7 +4091,7 @@ fn exec_roots_for_state_block(
     block_hash: HashOf<BlockHeader>,
     height: u64,
     view: u64,
-) -> Option<StateRoots> {
+) -> Result<Option<StateRoots>, BlockValidationError> {
     let exec_witness = state_block.take_exec_witness().or_else(|| {
         warn!(
             height,
@@ -4098,10 +4102,15 @@ fn exec_roots_for_state_block(
         state_block.capture_exec_witness();
         state_block.take_exec_witness()
     });
-    exec_witness.map(|witness| StateRoots {
+    let Some(witness) = exec_witness else {
+        return Ok(None);
+    };
+    let post_state_root = crate::sumeragi::exec::try_post_state_from_witness(&witness)
+        .map_err(|error| BlockValidationError::ExecutionContextInvalid(error.to_owned()))?;
+    Ok(Some(StateRoots {
         parent_state_root: parent_state_from_witness(&witness),
-        post_state_root: post_state_from_witness(&witness),
-    })
+        post_state_root,
+    }))
 }
 
 /// Run stateless and stateful validation for a block before emitting votes.
@@ -4189,7 +4198,7 @@ fn validate_block_for_voting_with_timings(
         Ok((_validated, mut state_block)) => {
             let roots = exec_roots_for_state_block(&mut state_block, block_hash, height, view);
             drop(state_block);
-            Ok(roots)
+            roots
         }
         Err((_block, err)) => Err(*err),
     };
@@ -14198,7 +14207,7 @@ impl CommittedLaneBlockQueue {
     fn unapplied_lane_ids_for_admissible_lanes_for_state(
         &self,
         state: &crate::state::State,
-        admissible_lane: impl Fn(LaneId, DataSpaceId, u64, u64) -> bool,
+        admissible_lane: impl Fn(LaneId, DataSpaceId, Hash, u64, u64) -> bool,
     ) -> BTreeSet<LaneId> {
         self.pending
             .iter()
@@ -14212,6 +14221,7 @@ impl CommittedLaneBlockQueue {
                 admissible_lane(
                     descriptor.lane_id,
                     descriptor.dataspace_id,
+                    descriptor.lane_incarnation,
                     descriptor.lane_block_height,
                     descriptor.proposal_height,
                 )
@@ -16006,154 +16016,6 @@ struct MergeCommitteeState {
     remote_signers: BTreeMap<MergeRemoteSignerContext, MergeRemoteSignerDecision>,
     remote_equivocators: BTreeMap<MergeRemoteSignerContext, Instant>,
     signing_guard: MergeSigningGuard,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct LaneDrainRemoteSignerContext {
-    intent_hash: HashOf<LaneDrainIntentV1>,
-    signer: PeerId,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct LaneDrainRemoteSignerDecision {
-    body_digest: Hash,
-    final_lane_block_height: u64,
-    last_seen: Instant,
-}
-
-#[derive(Debug)]
-struct LaneDrainVoteState {
-    active_body: Option<LaneDrainCertificateBodyV1>,
-    votes: BTreeMap<PeerId, crate::lane_consensus::LaneDrainVoteV1>,
-    remote_signers: BTreeMap<LaneDrainRemoteSignerContext, LaneDrainRemoteSignerDecision>,
-    remote_equivocators: BTreeMap<LaneDrainRemoteSignerContext, Instant>,
-    certificate: Option<LaneDrainCertificateV1>,
-    last_local_vote_broadcast: Option<Instant>,
-}
-
-fn lane_drain_vote_recipients(
-    lane_committee: &[PeerId],
-    global_committee: &[PeerId],
-    local_peer: &PeerId,
-) -> Vec<PeerId> {
-    lane_committee
-        .iter()
-        .chain(global_committee)
-        .filter(|peer| *peer != local_peer)
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-impl LaneDrainVoteState {
-    const MAX_REMOTE_SIGNERS: usize = 4_096;
-
-    fn new() -> Self {
-        Self {
-            active_body: None,
-            votes: BTreeMap::new(),
-            remote_signers: BTreeMap::new(),
-            remote_equivocators: BTreeMap::new(),
-            certificate: None,
-            last_local_vote_broadcast: None,
-        }
-    }
-
-    fn body_digest(body: &LaneDrainCertificateBodyV1) -> Hash {
-        Hash::new(body.signature_preimage())
-    }
-
-    fn retain_body(&mut self, body: Option<LaneDrainCertificateBodyV1>) {
-        if self.active_body.as_ref() == body.as_ref() {
-            return;
-        }
-        let retains_intent_decisions = self
-            .active_body
-            .as_ref()
-            .zip(body.as_ref())
-            .is_some_and(|(active, next)| active.intent == next.intent);
-        self.active_body = body;
-        self.votes.clear();
-        // A final frontier can advance while pre-close, already-certified work
-        // is globally applied. Keep signer decisions for the same immutable
-        // intent so same-height drift and frontier regression remain detectable;
-        // `insert_vote` permits only a strictly higher refreshed frontier. A
-        // different/no intent is a distinct lifecycle and drops the cache.
-        if !retains_intent_decisions {
-            self.remote_signers.clear();
-            self.remote_equivocators.clear();
-        }
-        self.certificate = None;
-        self.last_local_vote_broadcast = None;
-    }
-
-    fn insert_vote(
-        &mut self,
-        vote: crate::lane_consensus::LaneDrainVoteV1,
-        now: Instant,
-    ) -> Result<bool, &'static str> {
-        if self.active_body.as_ref() != Some(&vote.body) {
-            return Err("vote does not match the active canonical drain body");
-        }
-        let context = LaneDrainRemoteSignerContext {
-            intent_hash: vote.body.intent.canonical_hash(),
-            signer: vote.signer.clone(),
-        };
-        if self.remote_equivocators.contains_key(&context) {
-            return Err("signer already equivocated for this drain intent");
-        }
-        let body_digest = Self::body_digest(&vote.body);
-        if let Some(existing) = self.remote_signers.get(&context)
-            && existing.body_digest != body_digest
-        {
-            if vote.body.final_lane_block_height <= existing.final_lane_block_height {
-                self.remote_signers.remove(&context);
-                self.remote_equivocators.insert(context.clone(), now);
-                self.votes.remove(&context.signer);
-                self.certificate = None;
-                self.prune_remote_signers();
-                return Err("signer equivocated or regressed across drain bodies");
-            }
-        }
-        self.remote_signers.insert(
-            context,
-            LaneDrainRemoteSignerDecision {
-                body_digest,
-                final_lane_block_height: vote.body.final_lane_block_height,
-                last_seen: now,
-            },
-        );
-        let changed = self
-            .votes
-            .insert(vote.signer.clone(), vote.clone())
-            .as_ref()
-            != Some(&vote);
-        self.prune_remote_signers();
-        Ok(changed)
-    }
-
-    fn prune_remote_signers(&mut self) {
-        while self.remote_signers.len() > Self::MAX_REMOTE_SIGNERS {
-            let oldest = self
-                .remote_signers
-                .iter()
-                .min_by_key(|(context, decision)| (decision.last_seen, (*context).clone()))
-                .map(|(context, _)| context.clone());
-            let Some(oldest) = oldest else { break };
-            self.remote_signers.remove(&oldest);
-            self.votes.remove(&oldest.signer);
-        }
-        while self.remote_equivocators.len() > Self::MAX_REMOTE_SIGNERS {
-            let oldest = self
-                .remote_equivocators
-                .iter()
-                .min_by_key(|(context, observed)| (**observed, (*context).clone()))
-                .map(|(context, _)| context.clone());
-            let Some(oldest) = oldest else { break };
-            self.remote_equivocators.remove(&oldest);
-        }
-    }
 }
 
 impl MergeCommitteeState {
@@ -28473,22 +28335,22 @@ impl Actor {
     }
 
     fn aggregate_active_lane_drain_certificate(&mut self, validator_set: &[PeerId]) -> bool {
-        if self.subsystems.lane_drain_votes.certificate.is_some() {
+        if self.subsystems.lane_drain_votes.certificate().is_some() {
             return false;
         }
-        let Some(body) = self.subsystems.lane_drain_votes.active_body.clone() else {
+        let Some(body) = self.subsystems.lane_drain_votes.active_body().cloned() else {
             return false;
         };
         let Ok(required) = usize::try_from(body.intent.min_quorum) else {
             return false;
         };
-        if self.subsystems.lane_drain_votes.votes.len() < required {
+        if self.subsystems.lane_drain_votes.votes().len() < required {
             return false;
         }
         let votes = self
             .subsystems
             .lane_drain_votes
-            .votes
+            .votes()
             .values()
             .cloned()
             .collect::<Vec<_>>();
@@ -28516,7 +28378,9 @@ impl Actor {
             signers = certificate.signer_proofs.len(),
             "sealed lane-drain certificate for global merge ordering"
         );
-        self.subsystems.lane_drain_votes.certificate = Some(certificate);
+        self.subsystems
+            .lane_drain_votes
+            .set_certificate(certificate);
         true
     }
 
@@ -28565,7 +28429,7 @@ impl Actor {
             let vote_due = self
                 .subsystems
                 .lane_drain_votes
-                .last_local_vote_broadcast
+                .last_local_vote_broadcast()
                 .is_none_or(|last| now.saturating_duration_since(last) >= rebroadcast_cooldown);
             if vote_due {
                 match self
@@ -28599,7 +28463,9 @@ impl Actor {
                                 priority: Priority::High,
                             });
                         }
-                        self.subsystems.lane_drain_votes.last_local_vote_broadcast = Some(now);
+                        self.subsystems
+                            .lane_drain_votes
+                            .mark_local_vote_broadcast(now);
                         if accepted {
                             debug!(
                                 lane = body.intent.lane_id.as_u32(),
@@ -28621,7 +28487,7 @@ impl Actor {
             }
         }
         let _ = self.aggregate_active_lane_drain_certificate(&validator_set);
-        self.subsystems.lane_drain_votes.certificate.clone()
+        self.subsystems.lane_drain_votes.certificate().cloned()
     }
 
     fn post_certified_merge_sidecar(&self, post: MergeSidecarPost) {

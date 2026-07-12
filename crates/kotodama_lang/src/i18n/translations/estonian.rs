@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "funktsiooni `{func}` parameetrit `{name}` ei kasutata",
     lint_unreachable_after_return: "{context} puhul leiti kättesaamatu lause: return'i järgset koodi ei käivitata kunagi",
     lint_ok: "ok",
-    lint_usage: "Kasutamine: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Kasutamine: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Käivita Kotodama lint kontrollid antud lähtekoodidel.",
     ..english::MESSAGES
 };

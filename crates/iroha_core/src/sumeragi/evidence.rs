@@ -1507,6 +1507,21 @@ mod tests {
         test_state_for_v2_fixture_with_world(fixture, world)
     }
 
+    fn test_state_for_v2_fixture_with_slashing_delay(
+        fixture: &V2EvidenceFixture,
+        slashing_delay_blocks: u64,
+    ) -> State {
+        let mut params = Parameters::default();
+        let npos = SumeragiNposParameters {
+            slashing_delay_blocks,
+            ..SumeragiNposParameters::default()
+        };
+        params.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
+        let mut world = World::default();
+        world.parameters = Cell::new(params);
+        test_state_for_v2_fixture_with_world(fixture, world)
+    }
+
     fn test_state_for_v2_fixture_with_world(fixture: &V2EvidenceFixture, world: World) -> State {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let verified = super::super::v2::VerifiedHeightContext::genesis(
@@ -1554,6 +1569,7 @@ mod tests {
                 height: 1,
                 epoch: 7,
                 epoch_end_height: u64::MAX,
+                next_epoch_snapshot: None,
                 mode: wire_v2::ConsensusMode::Permissioned,
                 parent_commit_qc: None,
                 quorum: wire_v2::DualQuorum::from_roster(&roster).expect("dual quorum"),
@@ -1609,6 +1625,14 @@ mod tests {
             .to_vec()
         }
 
+        fn execution_commitment(&self) -> wire_v2::ExecutionCommitment {
+            wire_v2::ExecutionCommitment::without_topups(
+                Hash::new(b"v2 evidence parent state"),
+                Hash::new(b"v2 evidence post state"),
+                Hash::new(b"v2 evidence ordinary writes"),
+            )
+        }
+
         fn vote(
             &self,
             signer: wire_v2::ValidatorIndex,
@@ -1619,6 +1643,7 @@ mod tests {
                 round: self.round(0),
                 phase,
                 subject,
+                execution_commitment: self.execution_commitment(),
                 signer,
                 signature: Vec::new(),
             };
@@ -1632,6 +1657,7 @@ mod tests {
                 round: self.round(0),
                 phase: wire_v2::GlobalPhase::Prepare,
                 subject,
+                execution_commitment: self.execution_commitment(),
                 signer: 0,
                 signature: Vec::new(),
             };
@@ -1644,6 +1670,7 @@ mod tests {
                 round: unsigned.round,
                 phase: unsigned.phase,
                 subject,
+                execution_commitment: unsigned.execution_commitment,
                 signers,
                 aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
                     .expect("aggregate v2 evidence QC"),
@@ -2140,8 +2167,8 @@ mod tests {
     #[test]
     fn asymmetric_v2_observation_converges_after_committed_admission() {
         let fixture = V2EvidenceFixture::new();
-        let proposer = test_state_for_v2_fixture(&fixture);
-        let follower = test_state_for_v2_fixture(&fixture);
+        let proposer = test_state_for_v2_fixture_with_slashing_delay(&fixture, 0);
+        let follower = test_state_for_v2_fixture_with_slashing_delay(&fixture, 0);
         let offender = fixture.context.roster[1].validator.clone();
         add_v2_penalty_validator(&proposer, &offender);
         add_v2_penalty_validator(&follower, &offender);
@@ -2158,11 +2185,9 @@ mod tests {
         validate_v2_evidence_admissions(&follower, 2, &admissions)
             .expect("unaware follower revalidates the attached exact proof");
 
-        let mut config = iroha_config::parameters::actual::Sumeragi::default();
-        config.npos.reconfig.slashing_delay_blocks = 0;
-        let proposer_precommit = super::super::penalties::PenaltyApplier::new(
+        let proposer_precommit = super::super::penalties::PenaltyApplier::from_committed_state(
             &proposer,
-            &config,
+            iroha_config::parameters::actual::ConsensusMode::Permissioned,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
@@ -2170,9 +2195,9 @@ mod tests {
         )
         .derive_npos_consensus_effects(2, Vec::new())
         .expect("derive proposer pre-admission effects");
-        let follower_precommit = super::super::penalties::PenaltyApplier::new(
+        let follower_precommit = super::super::penalties::PenaltyApplier::from_committed_state(
             &follower,
-            &config,
+            iroha_config::parameters::actual::ConsensusMode::Permissioned,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
@@ -2212,9 +2237,9 @@ mod tests {
         assert_eq!(proposer_record.recorded_at_view, 3);
         assert_eq!(proposer_record.recorded_at_ms, 77);
 
-        let proposer_same_block = super::super::penalties::PenaltyApplier::new(
+        let proposer_same_block = super::super::penalties::PenaltyApplier::from_committed_state(
             &proposer,
-            &config,
+            iroha_config::parameters::actual::ConsensusMode::Permissioned,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
@@ -2224,9 +2249,9 @@ mod tests {
         .expect("derive proposer same-height effects");
         assert!(proposer_same_block.penalty_actions.is_empty());
 
-        let proposer_effects = super::super::penalties::PenaltyApplier::new(
+        let proposer_effects = super::super::penalties::PenaltyApplier::from_committed_state(
             &proposer,
-            &config,
+            iroha_config::parameters::actual::ConsensusMode::Permissioned,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
@@ -2234,9 +2259,9 @@ mod tests {
         )
         .derive_npos_consensus_effects(3, Vec::new())
         .expect("derive proposer post-admission effects");
-        let follower_effects = super::super::penalties::PenaltyApplier::new(
+        let follower_effects = super::super::penalties::PenaltyApplier::from_committed_state(
             &follower,
-            &config,
+            iroha_config::parameters::actual::ConsensusMode::Permissioned,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]

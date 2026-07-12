@@ -113,6 +113,42 @@ async fn app_api_router_smoke() {
 
     let app = torii.api_router_for_tests();
 
+    // The v1 alias VOPRF-shaped hash helper was retired before release because it was
+    // neither keyed nor verifiable. Every legacy request shape must remain unroutable,
+    // including malformed input, a replay, cross-domain material, and wrong-key/proof fields.
+    let retired_alias_voprf_attempts = [
+        ("malformed", "{"),
+        ("replay-first", r#"{"blinded_element_hex":"deadbeef"}"#),
+        ("replay-second", r#"{"blinded_element_hex":"deadbeef"}"#),
+        (
+            "cross-domain",
+            r#"{"blinded_element_hex":"deadbeef","domain":"other-ledger"}"#,
+        ),
+        (
+            "wrong-key",
+            r#"{"blinded_element_hex":"deadbeef","key_id":"wrong","proof":"00"}"#,
+        ),
+    ];
+    for (case, body) in retired_alias_voprf_attempts {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/aliases/voprf/evaluate")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from(body))
+                    .expect("legacy alias VOPRF request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "retired alias VOPRF route accepted {case} request"
+        );
+    }
+
     // 1) App API: GET /v1/accounts/{account_id}/assets — use a bogus id to avoid
     // state setup; we only care that the route exists and responds deterministically.
     assert_route_is_not_auth_denied(

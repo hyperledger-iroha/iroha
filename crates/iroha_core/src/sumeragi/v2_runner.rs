@@ -44,7 +44,10 @@ use super::{
     },
     v2_chunks::{EncodedV2Payload, encode_payload},
     v2_core::{EventTag, Generation},
-    v2_effects::{EffectExecutorStep, EffectQueueConfig, EffectTransportError, V2EffectExecutor},
+    v2_effects::{
+        EffectExecutorStep, EffectQueueConfig, EffectTransportError, PostFinalityCleanupOutcome,
+        PostFinalityCleanupTarget, V2EffectExecutor,
+    },
     v2_lane_work::{
         MergeSidecarDeferralDisposition, V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect,
         V2LaneWorkLimits, V2LaneWorkRollover,
@@ -52,7 +55,7 @@ use super::{
     v2_npos::{V2NposVrfLifecycle, V2VrfReconcileOutcome},
     v2_recovery::{build_verified_successor, recover_active_height},
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
-    v2_worker::ProductionV2Services,
+    v2_worker::{ProductionV2Services, V2CleanupSupervisor, is_v2_lane_block_message},
 };
 use crate::{
     NetworkMessage,
@@ -325,12 +328,16 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     let genesis_account = AccountId::new(genesis_public_key);
     let mut first_height_genesis = genesis_body;
     let mut lane_rollover: Option<V2LaneWorkRollover> = None;
+    let post_finality_cleanup_timeout = config.persistence.post_finality_cleanup_timeout;
+    let mut cleanup_supervisor = V2CleanupSupervisor::default();
     loop {
+        cleanup_supervisor.reap_finished();
         if shutdown_signal.is_sent() {
             return Ok(());
         }
         let context = verified_context.context().clone();
         publish_v2_tx_queue_status(queue.as_ref())?;
+        let validator_set_pops = verified_context.proofs_of_possession().to_vec();
         let block_cadence = state.sumeragi_effective_block_time();
         let shared_config = config.v2_config(block_cadence, context.mode)?;
         let fingerprints = adapter_fingerprints(&local_peer, &shared_config);
@@ -388,6 +395,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         }
         let mut services = ProductionV2Services::start(
             context.clone(),
+            validator_set_pops,
             local_peer.clone(),
             local_validator,
             common_config.key_pair.clone(),
@@ -459,6 +467,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         )> = None;
 
         let finality = loop {
+            cleanup_supervisor.reap_finished();
             if shutdown_signal.is_sent() {
                 return Ok(());
             }
@@ -635,14 +644,23 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
                 let (runtime, receipt, artifact) = executor.into_finalized_parts()?;
                 let finalized = runtime.into_driver().finish_height(&receipt, &artifact)?;
+                let mut cleanup = PostFinalityCleanupOutcome::default();
                 if let Some(warning) = finalized.wal_retirement_warning() {
-                    iroha_logger::warn!(warning, "retained finalized Sumeragi v2 WAL");
+                    cleanup.record(PostFinalityCleanupTarget::SafetyWal, warning);
                 }
-                for warning in services.finish_height(receipt.clone()) {
+                cleanup.append(services.finish_height(
+                    receipt.clone(),
+                    post_finality_cleanup_timeout,
+                    &mut cleanup_supervisor,
+                ));
+                for warning in cleanup.warnings() {
                     iroha_logger::warn!(
-                        %warning,
-                        height = context.height,
-                        "retained finalized Sumeragi v2 height-local storage"
+                        height = receipt.height(),
+                        context_id = ?receipt.context_id(),
+                        block_hash = %receipt.block_hash(),
+                        cleanup_target = warning.target().as_str(),
+                        reason = warning.reason(),
+                        "Sumeragi v2 finalized with retained local cleanup state"
                     );
                 }
                 match npos_vrf.reconcile_committed(state.as_ref()) {
@@ -658,6 +676,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 }
                 lane_work.publish_operator_status();
                 let successor_roster = artifact
+                    .height_context
                     .next_epoch_snapshot
                     .as_ref()
                     .map_or(context.roster.as_slice(), |snapshot| {
@@ -871,7 +890,7 @@ fn schedule_local_proposal(
             }
         }
         *candidate_work_wait = None;
-        if lane_work.bind_local_candidate(round_for_tag(context, tag)?, candidate.block().hash())
+        if lane_work.bind_local_candidate(round_for_tag(context, tag)?, candidate.block())
             == V2LaneIngressOutcome::Rejected
         {
             return Err(V2RunnerError::LaneCandidateBinding);
@@ -1025,12 +1044,7 @@ fn drain_v2_ingress(
             break;
         };
         let (message, sender) = inbound.into_message_and_sender();
-        if matches!(
-            message,
-            BlockMessage::LaneBlockProposal(_)
-                | BlockMessage::LaneBlockVote(_)
-                | BlockMessage::LaneBlockQc(_)
-        ) {
+        if is_v2_lane_block_message(&message) {
             let _ = lane_work.accept_lane_message(
                 InboundBlockMessage::new(message, sender),
                 executor.current_tag().view(),
@@ -1412,6 +1426,9 @@ fn dispatch_lane_work_effects(
             V2LaneWorkEffect::PostLaneBlock { peer, message } => services
                 .post_lane_block(peer, message)
                 .map_err(V2RunnerError::Service)?,
+            V2LaneWorkEffect::PostLaneDrainVote { peer, vote } => {
+                services.post_lane_drain_vote(peer, vote);
+            }
             V2LaneWorkEffect::PostNativeAmx { peer, message } => {
                 services.post_native_amx(peer, message);
             }
@@ -1420,6 +1437,9 @@ fn dispatch_lane_work_effects(
             }
             V2LaneWorkEffect::PostCertifiedMergeSidecar { peer, message } => {
                 services.post_certified_merge_sidecar(peer, message);
+            }
+            V2LaneWorkEffect::PostMergeCandidate { peer, message } => {
+                services.post_merge_candidate(peer, message);
             }
         }
     }
@@ -1620,6 +1640,7 @@ mod tests {
                 height: 1,
                 epoch: 0,
                 epoch_end_height: u64::MAX,
+                next_epoch_snapshot: None,
                 mode: wire::ConsensusMode::Permissioned,
                 parent_commit_qc: None,
                 quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),

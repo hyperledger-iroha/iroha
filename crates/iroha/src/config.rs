@@ -10,7 +10,7 @@ use std::{
 use derive_more::Display;
 use error_stack::{Report, ResultExt};
 use eyre::Result;
-use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
+use iroha_config::parameters::actual::SorafsRolloutPhase;
 use iroha_config_base::{env::ReadEnv, read::ConfigReader, toml::TomlSource};
 use iroha_primitives::small::SmallStr;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
@@ -42,17 +42,6 @@ pub const DEFAULT_TRANSACTION_STATUS_TIMEOUT: Duration = Duration::from_secs(15)
 pub const DEFAULT_TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(70);
 /// Whether to add a random transaction nonce by default.
 pub const DEFAULT_TRANSACTION_NONCE: bool = false;
-/// Default Torii API version header sent by the client.
-pub const DEFAULT_TORII_API_VERSION: &str = defaults::torii::API_DEFAULT_VERSION;
-/// Default minimum Torii API version used for proof/staking/fee endpoints.
-pub const DEFAULT_TORII_API_MIN_PROOF_VERSION: &str = defaults::torii::API_MIN_PROOF_VERSION;
-
-/// Default Torii API version as an owned string.
-#[must_use]
-pub fn default_torii_api_version() -> String {
-    DEFAULT_TORII_API_VERSION.to_string()
-}
-
 /// Default Connect queue root (`~/.iroha/connect` on Unix, `%USERPROFILE%\.iroha\connect` on Windows).
 #[must_use]
 pub fn default_connect_queue_root() -> PathBuf {
@@ -173,10 +162,6 @@ pub struct Config {
     pub basic_auth: Option<BasicAuth>,
     /// Torii API base URL.
     pub torii_api_url: Url,
-    /// Torii API version label (semantic `major.minor`) sent on every request.
-    pub torii_api_version: String,
-    /// Minimum Torii API version used for proof/staking/fee endpoints.
-    pub torii_api_min_proof_version: String,
     /// Timeout for Torii HTTP requests.
     pub torii_request_timeout: Duration,
     /// Transaction time-to-live.
@@ -253,23 +238,6 @@ impl Config {
             .change_context(LoadError)?;
         Ok(config)
     }
-}
-
-fn parse_api_version_label(raw: &str) -> Result<String, &'static str> {
-    let trimmed = raw.trim();
-    let trimmed = trimmed.strip_prefix('v').unwrap_or(trimmed);
-    let mut parts = trimmed.split('.');
-    let major = parts
-        .next()
-        .ok_or("missing major")?
-        .parse::<u16>()
-        .map_err(|_| "invalid major")?;
-    let minor = parts
-        .next()
-        .unwrap_or("0")
-        .parse::<u16>()
-        .map_err(|_| "invalid minor")?;
-    Ok(format!("{major}.{minor}"))
 }
 
 #[cfg(test)]
@@ -395,7 +363,6 @@ mod tests {
         let env = MockEnv::new()
             .set("CHAIN", "wonder")
             .set("TORII_URL", "http://localhost:8080")
-            .set("TORII_API_VERSION", DEFAULT_TORII_API_VERSION)
             .set("ACCOUNT_PROFILE", iroha_torii_shared::NETWORK_PROFILE_TAIRA)
             .set(
                 "ACCOUNT_CHAIN_DISCRIMINANT",

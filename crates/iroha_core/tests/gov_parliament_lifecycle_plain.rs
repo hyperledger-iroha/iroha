@@ -38,38 +38,27 @@ const CITIZEN_FUND: u128 = 15_000;
 const CITIZEN_BOND: u128 = 10_000;
 const BALLOT_LOCK: u128 = CITIZEN_FUND - CITIZEN_BOND;
 
-fn canonical_abi_hex() -> String {
-    hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
+fn governance_contract_artifact() -> (Vec<u8>, ContractManifest) {
+    let (artifact, _) = ivm::KotodamaCompiler::new()
+        .compile_source_with_manifest(
+            r#"
+seiyaku ParliamentPlainLifecycle {
+    hajimari() {}
+    view fn ready() -> bool { return true; }
+}
+"#,
+        )
+        .expect("compile plain-governance artifact");
+    let verified =
+        ivm::verify_contract_artifact(&artifact).expect("verify plain-governance artifact");
+    (artifact, verified.manifest)
 }
 
-fn parse_hex32(input: &str) -> [u8; 32] {
-    let bytes = hex::decode(input).expect("hex should decode");
-    let mut out = [0_u8; 32];
-    out.copy_from_slice(&bytes);
-    out
-}
-
-fn manifest_provenance(
-    code_hash_hex: &str,
-    abi_hash_hex: &str,
-    signer: &KeyPair,
-) -> ManifestProvenance {
-    let code_hash = Hash::prehashed(parse_hex32(code_hash_hex));
-    let abi_hash = Hash::prehashed(parse_hex32(abi_hash_hex));
-    ContractManifest {
-        code_hash: Some(code_hash),
-        abi_hash: Some(abi_hash),
-        compiler_fingerprint: None,
-        features_bitmap: None,
-        access_set_hints: None,
-        entrypoints: None,
-        states: None,
-        kotoba: None,
-        provenance: None,
-    }
-    .signed(signer)
-    .provenance
-    .expect("manifest should contain provenance")
+fn manifest_provenance(manifest: ContractManifest, signer: &KeyPair) -> ManifestProvenance {
+    manifest
+        .signed(signer)
+        .provenance
+        .expect("exact manifest should contain provenance")
 }
 
 fn proposal_contract_address(
@@ -158,9 +147,12 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
     gov_cfg.parliament_alternate_size = Some(1);
     state.set_gov(gov_cfg);
 
-    let code_hash_hex = "aa".repeat(32);
-    let abi_hash_hex = canonical_abi_hex();
-    let manifest_provenance = manifest_provenance(&code_hash_hex, &abi_hash_hex, &proposer_kp);
+    let (contract_artifact, contract_manifest) = governance_contract_artifact();
+    let code_hash = contract_manifest.code_hash.expect("verified code hash");
+    let abi_hash = contract_manifest.abi_hash.expect("verified ABI hash");
+    let code_hash_hex = hex::encode(<[u8; 32]>::from(code_hash));
+    let abi_hash_hex = hex::encode(<[u8; 32]>::from(abi_hash));
+    let manifest_provenance = manifest_provenance(contract_manifest, &proposer_kp);
 
     let proposal_contract_address = proposal_contract_address(&proposer_id);
 
@@ -168,6 +160,17 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
     let mut block_1 = state.block(header_1);
     let mut stx_1 = block_1.transaction();
     stx_1.tx_call_hash = Some(Hash::prehashed([0x51; Hash::LENGTH]));
+    let lifecycle_permission: Permission =
+        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+    Grant::account_permission(lifecycle_permission, proposer_id.clone())
+        .execute(&proposer_id, &mut stx_1)
+        .expect("grant contract lifecycle authority");
+    iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes {
+        code_hash,
+        code: contract_artifact,
+    }
+    .execute(&proposer_id, &mut stx_1)
+    .expect("register exact plain-governance artifact before proposal enactment");
 
     let propose_perm: Permission = CanProposeContractDeployment {
         contract_address: proposal_contract_address.clone(),
@@ -394,7 +397,6 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         iroha_core::state::GovernanceProposalStatus::Enacted
     ));
 
-    let code_hash = Hash::prehashed(parse_hex32(&code_hash_hex));
     assert!(
         state
             .view()

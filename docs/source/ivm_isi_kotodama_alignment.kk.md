@@ -49,8 +49,8 @@ translator: machine-google-reviewed
 ### Kotodama → IVM
 - Фронт бөліктері бар (lexer/parser/minimal semantics/IR/regalloc).
 - Codegen (`kotodama::compiler`) IVM операцияларының ішкі жиынын шығарады және актив операциялары үшін `SCALL` пайдаланады:
-  - `MintAsset` → орнату x10=шот, x11=актив, x12=&NoritoBytes(Сандық); `SCALL SYSCALL_MINT_ASSET`.
-  - `BurnAsset`/`TransferAsset` ұқсас (сома NoritoBytes(Numeric) көрсеткіші ретінде берілген).
+  - `MintAsset` → орнату x10=шот, x11=актив, x12=&Amount; `SCALL SYSCALL_MINT_ASSET`.
+  - `BurnAsset`/`TransferAsset` ұқсас (сома Amount көрсеткіші ретінде берілген).
 - `koto_*_demo.rs` көрсетілімдері жылдам тестілеу үшін идентификаторлармен салыстырылған бүтін индекстері бар `WsvHost` көмегімен көрсетеді.
 
 ---
@@ -130,9 +130,9 @@ translator: machine-google-reviewed
 Өкілдік жиын — түйінді іске асыру кезінде аяқтаңыз және кеңейтіңіз.- SYSCALL_REGISTER_DOMAIN(id: ptr DomainId) → ISI тіркелімі
 - SYSCALL_REGISTER_ACCOUNT(id: ptr AccountId) → ISI тіркелімі
 - SYSCALL_REGISTER_ASSET(идентификаторы: ptr AssetDefinitionId, соғуға болатын: u8) → ISI тіркелімі
-- SYSCALL_MINT_ASSET(шот: ptr AccountId, актив: ptr AssetDefinitionId, сома: ptr NoritoBytes(Numeric)) → ISI Mint
-- SYSCALL_BURN_ASSET(шот: ptr AccountId, актив: ptr AssetDefinitionId, сома: ptr NoritoBytes(Numeric)) → ISI Burn
-- SYSCALL_TRANSFER_ASSET(қайтадан: ptr AccountId, келесіге: ptr AccountId, актив: ptr AssetDefinitionId, сома: ptr NoritoBytes(Сандық)) → ISI Transfer
+- SYSCALL_MINT_ASSET(шот: ptr AccountId, актив: ptr AssetDefinitionId, сома: ptr Amount) → ISI Mint
+- SYSCALL_BURN_ASSET(шот: ptr AccountId, актив: ptr AssetDefinitionId, сома: ptr Amount) → ISI Burn
+- SYSCALL_TRANSFER_ASSET(қайтадан: ptr AccountId, келесіге: ptr AccountId, актив: ptr AssetDefinitionId, сома: ptr Amount) → ISI Transfer
 - SYSCALL_TRANSFER_V1_BATCH_BEGIN() / SYSCALL_TRANSFER_V1_BATCH_END() → ISI TransferAssetBatch (ауқымды ашу/жабу; жеке жазбалар `transfer_asset` арқылы төмендетіледі)
 - SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes) → Келісімшарттар тізбектен тыс жазбаларды сериялап қойған кезде алдын ала кодталған топтаманы жіберу
 - SYSCALL_NFT_MINT_ASSET(id: ptr NftId, иесі: ptr AccountId) → ISI тіркелімі

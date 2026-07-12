@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "Función `{func}` ukana `{name}` parámetro ukaxa janiw mayampisa apnaqatäkiti",
     lint_unreachable_after_return: "{context} ukana jan purisiri arsu uñjasiwa; return ukat qhiparu qillqatanaka janiw sarnaqkiti",
     lint_ok: "wali",
-    lint_usage: "Apnaqaña: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Apnaqaña: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Kotodama lint uka sarantayaña wakichat qhanstayat qillqatanakana.",
     ..english::MESSAGES
 };

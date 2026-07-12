@@ -1,10 +1,237 @@
 import Foundation
 
-public enum KagemushaRecursiveSpendV2Codecs {
+struct KagemushaTransferEvidenceSummary: Equatable, Sendable {
+    let chainID: String
+    let assetDefinitionID: String
+    let rootBefore: Data
+    let rootAfter: Data
+    let inputNullifiers: [Data]
+    let outputCommitments: [Data]
+    let verifierKeyID: String
+    let verifierKeyCommitment: Data
+}
+
+public enum KagemushaRecursiveSpendCodecs {
     private static let flags = NoritoHeader.compactLen
+    private static let pallasOpenEnvelopesSchemaHash: [UInt8] = [
+        0xfe, 0x38, 0x26, 0x32, 0x8f, 0x08, 0x17, 0x71,
+        0x75, 0x0f, 0x24, 0xfe, 0x11, 0x02, 0x60, 0xca,
+    ]
+
+    public static func decodeNativeCapabilities(
+        _ archive: Data
+    ) throws -> KagemushaRecursiveSpendNativeCapabilitiesV1 {
+        var reader = KagemushaV2Reader(try payload(
+            archive,
+            schema: KagemushaRecursiveSpend.nativeCapabilitiesWireName,
+            field: "nativeCapabilities"
+        ))
+        let value = try KagemushaRecursiveSpendNativeCapabilitiesV1(
+            bridgeABIVersion: scalarUInt32(
+                reader.field(),
+                field: "nativeCapabilities.bridgeABIVersion"
+            ),
+            artifactManifestSchema: decodeString(
+                reader.field(),
+                field: "nativeCapabilities.artifactManifestSchema"
+            ),
+            mode: decodeString(reader.field(), field: "nativeCapabilities.mode"),
+            proofBackend: decodeString(
+                reader.field(),
+                field: "nativeCapabilities.proofBackend"
+            ),
+            transcriptProfile: decodeString(
+                reader.field(),
+                field: "nativeCapabilities.transcriptProfile"
+            ),
+            proofEnvelopeVersion: scalarUInt16(
+                reader.field(),
+                field: "nativeCapabilities.proofEnvelopeVersion"
+            ),
+            stateBoundaryVersion: scalarUInt16(
+                reader.field(),
+                field: "nativeCapabilities.stateBoundaryVersion"
+            ),
+            transitionCircuitID: decodeString(
+                reader.field(),
+                field: "nativeCapabilities.transitionCircuitID"
+            ),
+            stateCircuitID: decodeString(
+                reader.field(),
+                field: "nativeCapabilities.stateCircuitID"
+            ),
+            maxProofBytes: scalarUInt32(
+                reader.field(),
+                field: "nativeCapabilities.maxProofBytes"
+            ),
+            proofBackendAvailable: decodeBool(
+                reader.field(),
+                field: "nativeCapabilities.proofBackendAvailable"
+            ),
+            missingGates: decodeStringVector(
+                reader.field(),
+                field: "nativeCapabilities.missingGates",
+                maximumCount: 16
+            )
+        )
+        try reader.finish("nativeCapabilities")
+        return value
+    }
+
+    /// Strictly validates the one-hop confidential-transfer evidence that
+    /// initializes a V2 top-up branch. Cryptographic verification remains in
+    /// the ABI-18 bridge; this parser rejects malformed, ambiguous, or
+    /// cross-record Swift inputs before crossing the FFI boundary.
+    static func transferEvidenceSummary(
+        recordBundle: Data,
+        pallasOpenEnvelopes: Data
+    ) throws -> KagemushaTransferEvidenceSummary {
+        var recordBundleReader = KagemushaV2Reader(try payload(
+            recordBundle,
+            schema: KagemushaRecursiveSpend.verifiedFoldRecordBundleWireName,
+            field: "transferEvidence.recordBundle"
+        ))
+        let bundlePayload = try recordBundleReader.field()
+        let recordsPayload = try recordBundleReader.field()
+        try recordBundleReader.finish("transferEvidence.recordBundle")
+
+        var bundle = KagemushaV2Reader(bundlePayload)
+        let chain = try decodeChainID(bundle.field())
+        let asset = try decodeAssetDefinitionID(bundle.field())
+        var steps = KagemushaV2Reader(try bundle.field())
+        guard try steps.uint64() == 1 else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "transferEvidence.steps"
+            )
+        }
+        var step = KagemushaV2Reader(try steps.field())
+        try steps.finish("transferEvidence.steps")
+        let rootBefore = try packedFixed(
+            step.field(), count: 32, field: "transferEvidence.rootBefore"
+        )
+        let inputNullifiers = try decodeFixed32Vector(
+            step.field(), field: "transferEvidence.inputNullifiers"
+        )
+        let outputCommitments = try decodeFixed32Vector(
+            step.field(), field: "transferEvidence.outputCommitments"
+        )
+        let rootAfter = try packedFixed(
+            step.field(), count: 32, field: "transferEvidence.rootAfter"
+        )
+        var attachment = KagemushaV2Reader(try step.field())
+        let backend = try decodeString(
+            attachment.field(), field: "transferEvidence.attachment.backend"
+        )
+        let proofBox = try attachment.field()
+        guard !proofBox.isEmpty else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "transferEvidence.attachment.proof"
+            )
+        }
+        let verifierKeyID = try decodeVerifierKeyID(attachment.field())
+        let parsedVerifierKey = verifierKeyID.split(
+            separator: ":", maxSplits: 1, omittingEmptySubsequences: false
+        )
+        guard parsedVerifierKey.count == 2,
+              String(parsedVerifierKey[0]) == backend,
+              let commitmentPayload = try decodeOption(
+                attachment.field(),
+                field: "transferEvidence.attachment.verifierKeyCommitment"
+              ) else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "transferEvidence.attachment"
+            )
+        }
+        let verifierKeyCommitment = try packedFixed(
+            commitmentPayload,
+            count: 32,
+            field: "transferEvidence.attachment.verifierKeyCommitment"
+        )
+        _ = try attachment.field()
+        _ = try attachment.field()
+        try attachment.finish("transferEvidence.attachment")
+        guard !(try step.field()).isEmpty else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "transferEvidence.verifierKey"
+            )
+        }
+        try step.finish("transferEvidence.step")
+        try bundle.finish("transferEvidence.bundle")
+
+        var records = KagemushaV2Reader(recordsPayload)
+        guard try records.uint64() == 1 else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "transferEvidence.verifierRecords"
+            )
+        }
+        var recordEntry = KagemushaV2Reader(try records.field())
+        let recordID = try decodeVerifierKeyID(recordEntry.field())
+        let recordPayload = try recordEntry.field()
+        try recordEntry.finish("transferEvidence.verifierRecord")
+        try records.finish("transferEvidence.verifierRecords")
+
+        guard recordID == verifierKeyID,
+              !recordPayload.isEmpty,
+              rootBefore.contains(where: { $0 != 0 }),
+              rootAfter.contains(where: { $0 != 0 }),
+              rootBefore != rootAfter,
+              (1...KagemushaRecursiveSpend.maximumInputNullifiers)
+                .contains(inputNullifiers.count),
+              outputCommitments.count == 1,
+              inputNullifiers.allSatisfy({ $0.contains(where: { $0 != 0 }) }),
+              outputCommitments[0].contains(where: { $0 != 0 }),
+              Set(inputNullifiers).count == inputNullifiers.count,
+              !inputNullifiers.contains(outputCommitments[0]),
+              verifierKeyCommitment.contains(where: { $0 != 0 }) else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "transferEvidence.recordBundle"
+            )
+        }
+
+        guard !pallasOpenEnvelopes.isEmpty,
+              pallasOpenEnvelopes.count
+                <= KagemushaRecursiveSpend.artifactMaximumFileBytes,
+              let frame = noritoDecodeFrame(pallasOpenEnvelopes),
+              frame.header.schema == pallasOpenEnvelopesSchemaHash,
+              frame.header.compression == .none,
+              frame.header.flags == flags,
+              frame.paddingLength == 0,
+              !frame.payload.isEmpty else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "transferEvidence.pallasOpenEnvelopes"
+            )
+        }
+        var envelopes = KagemushaV2Reader(frame.payload)
+        guard try envelopes.uint64() == 1,
+              !(try envelopes.field()).isEmpty else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "transferEvidence.pallasOpenEnvelopes"
+            )
+        }
+        try envelopes.finish("transferEvidence.pallasOpenEnvelopes")
+
+        return KagemushaTransferEvidenceSummary(
+            chainID: chain,
+            assetDefinitionID: asset,
+            rootBefore: rootBefore,
+            rootAfter: rootAfter,
+            inputNullifiers: inputNullifiers,
+            outputCommitments: outputCommitments,
+            verifierKeyID: verifierKeyID,
+            verifierKeyCommitment: verifierKeyCommitment
+        )
+    }
+
+    static func canonicalAssetID(_ value: String) throws -> String {
+        let canonical = try decodeAssetID(assetID(value))
+        guard canonical == value else {
+            throw KagemushaRecursiveSpendError.invalidField("assetID")
+        }
+        return canonical
+    }
 
     public static func encodeRecipientRequestPayload(
-        _ payload: KagemushaRecipientPaymentRequestSigningPayloadV2
+        _ payload: KagemushaRecipientPaymentRequestSigningPayload
     ) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(chainID(payload.chainID))
@@ -20,17 +247,53 @@ public enum KagemushaRecursiveSpendV2Codecs {
         writer.writeField(try note(payload.recipientOutput))
         writer.writeField(bytes(payload.recipientOutputProverMaterial))
         return frame(
-            KagemushaRecursiveSpendV2.recipientRequestPayloadWireName,
+            KagemushaRecursiveSpend.recipientRequestPayloadWireName,
             payload: writer.data
+        )
+    }
+
+    public static func encodeRecipientOutputDerivationRequest(
+        _ request: KagemushaRecipientOutputDerivationRequest
+    ) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(chainID(request.chainID))
+        writer.writeField(try assetDefinitionID(request.assetDefinitionID))
+        writer.writeField(try scaledAmount(request.amount))
+        writer.writeField(request.requestID)
+        return frame(
+            KagemushaRecursiveSpend.recipientOutputDerivationRequestWireName,
+            payload: writer.data
+        )
+    }
+
+    public static func decodeRecipientOutputDerivationResult(
+        _ archive: Data,
+        request: KagemushaRecipientOutputDerivationRequest
+    ) throws -> KagemushaRecipientOutputDerivationResult {
+        var reader = KagemushaV2Reader(try payload(
+            archive,
+            schema: KagemushaRecursiveSpend.recipientOutputDerivationResultWireName,
+            field: "recipientOutputDerivationResult"
+        ))
+        let output = try decodeNote(reader.field())
+        let proverMaterial = try decodeBytes(
+            reader.field(),
+            field: "recipientOutputProverMaterial"
+        )
+        try reader.finish("recipientOutputDerivationResult")
+        return try KagemushaRecipientOutputDerivationResult(
+            recipientOutput: output,
+            recipientOutputProverMaterial: proverMaterial,
+            request: request
         )
     }
 
     public static func decodeRecipientRequest(
         _ archive: Data
-    ) throws -> KagemushaRecipientPaymentRequestV2 {
+    ) throws -> KagemushaRecipientPaymentRequest {
         let payloadData = try payload(
             archive,
-            schema: KagemushaRecursiveSpendV2.recipientRequestWireName,
+            schema: KagemushaRecursiveSpend.recipientRequestWireName,
             field: "recipientRequest"
         )
         var reader = KagemushaV2Reader(payloadData)
@@ -39,10 +302,10 @@ public enum KagemushaRecursiveSpendV2Codecs {
         try reader.finish("recipientRequest")
         let canonical = try encodeRecipientRequest(signedPayload, signature: signature)
         guard canonical == archive,
-              archive.count <= KagemushaRecursiveSpendV2.maximumPeerArchiveBytes else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive("recipientRequest.canonical")
+              archive.count <= KagemushaRecursiveSpend.maximumPeerArchiveBytes else {
+            throw KagemushaRecursiveSpendError.invalidArchive("recipientRequest.canonical")
         }
-        return try KagemushaRecipientPaymentRequestV2(
+        return try KagemushaRecipientPaymentRequest(
             payload: signedPayload,
             signature: signature,
             archive: archive
@@ -52,65 +315,153 @@ public enum KagemushaRecursiveSpendV2Codecs {
     public static func decodeAndVerifyRecipientRequest(
         _ archive: Data,
         atMilliseconds: UInt64
-    ) throws -> KagemushaVerifiedRecipientPaymentRequestV2 {
+    ) throws -> KagemushaVerifiedRecipientPaymentRequest {
         try decodeRecipientRequest(archive).verified(atMilliseconds: atMilliseconds)
     }
 
     public static func encodeAuthorizationTemplate(
-        _ fields: KagemushaRequestAuthorizationFieldsV2
+        _ fields: KagemushaRequestAuthorizationFields
     ) throws -> Data {
         try encodeAuthorization(fields, signature: Data([1]))
     }
 
     public static func encodeArtifactReference(
-        _ reference: KagemushaRecursiveSpendArtifactReferenceV2
+        _ reference: KagemushaRecursiveSpendArtifactReference
     ) throws -> Data {
         frame(
-            KagemushaRecursiveSpendV2.artifactReferenceWireName,
+            KagemushaRecursiveSpend.artifactReferenceWireName,
             payload: artifactReference(reference)
         )
     }
 
     public static func encodeInitRequest(
-        _ request: KagemushaRecursiveSpendInitRequestV2
+        _ request: KagemushaRecursiveSpendInitRequest
     ) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(try nestedPayload(
-            KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(request.initRequest),
-            schema: KagemushaRecursiveSpendRequestCodecs.initRequestWireName,
-            field: "initRequest"
+            request.topUpAnchor.archive,
+            schema: KagemushaRecursiveSpend.topUpAnchorWireName,
+            field: "topUpAnchor"
         ))
-        writer.writeField(try scaledAmount(request.amount))
-        writer.writeField(try note(request.currentNote))
-        writer.writeField(artifactReference(request.lineageArtifact))
-        writer.writeField(request.operationID)
-        return frame(KagemushaRecursiveSpendV2.initRequestWireName, payload: writer.data)
+        writer.writeField(try nestedPayload(
+            request.recordBundle,
+            schema: KagemushaRecursiveSpend.verifiedFoldRecordBundleWireName,
+            field: "recordBundle"
+        ))
+        writer.writeField(bytes(request.pallasOpenEnvelopesArchive))
+        writer.writeField(uint32(request.lineageMode.rawValue))
+        writer.writeField(option(request.lineageArtifact.map(artifactReference)))
+        return frame(KagemushaRecursiveSpend.initRequestWireName, payload: writer.data)
     }
 
-    public static func encodeTopUpRequest(
-        _ request: KagemushaRecursiveSpendTopUpRequestV2
+    public static func decodeInitRequest(
+        _ archive: Data
+    ) throws -> KagemushaRecursiveSpendInitRequest {
+        var reader = KagemushaV2Reader(try payload(
+            archive,
+            schema: KagemushaRecursiveSpend.initRequestWireName,
+            field: "initRequest"
+        ))
+        let anchorArchive = frame(
+            KagemushaRecursiveSpend.topUpAnchorWireName,
+            payload: try reader.field()
+        )
+        let recordBundle = frame(
+            KagemushaRecursiveSpend.verifiedFoldRecordBundleWireName,
+            payload: try reader.field()
+        )
+        let pallasOpenEnvelopesArchive = try decodeBytes(
+            reader.field(),
+            field: "pallasOpenEnvelopesArchive"
+        )
+        let mode = try decodeLineageMode(reader.field())
+        let artifact = try decodeOption(reader.field(), field: "lineageArtifact")
+            .map(decodeArtifactReference)
+        try reader.finish("initRequest")
+        let request = try KagemushaRecursiveSpendInitRequest(
+            topUpAnchor: decodeTopUpAnchor(anchorArchive),
+            recordBundle: recordBundle,
+            pallasOpenEnvelopesArchive: pallasOpenEnvelopesArchive,
+            lineageMode: mode,
+            lineageArtifact: artifact
+        )
+        guard try encodeInitRequest(request) == archive else {
+            throw KagemushaRecursiveSpendError.invalidArchive("initRequest.canonical")
+        }
+        return request
+    }
+
+    public static func encodeTopUpUnsigned(
+        _ request: KagemushaRecursiveSpendTopUpUnsigned
     ) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(try assetID(request.assetID))
+        writer.writeField(try scaledAmount(request.amount))
+        writer.writeField(try note(request.currentNote))
         writer.writeField(try nestedPayload(
-            encodeInitRequest(request.initRequest),
-            schema: KagemushaRecursiveSpendV2.initRequestWireName,
-            field: "initRequest"
+            request.recordBundle,
+            schema: KagemushaRecursiveSpend.verifiedFoldRecordBundleWireName,
+            field: "recordBundle"
         ))
+        writer.writeField(bytes(request.pallasOpenEnvelopesArchive))
+        writer.writeField(string(request.artifactGeneration))
+        writer.writeField(request.operationID)
+        return frame(KagemushaRecursiveSpend.topUpUnsignedWireName, payload: writer.data)
+    }
+
+    public static func encodeTopUpRequest(
+        _ request: KagemushaRecursiveSpendTopUpRequest
+    ) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(try assetID(request.assetID))
+        writer.writeField(try scaledAmount(request.amount))
+        writer.writeField(try note(request.currentNote))
+        writer.writeField(try nestedPayload(
+            request.recordBundle,
+            schema: KagemushaRecursiveSpend.verifiedFoldRecordBundleWireName,
+            field: "recordBundle"
+        ))
+        writer.writeField(bytes(request.pallasOpenEnvelopesArchive))
+        writer.writeField(string(request.artifactGeneration))
+        writer.writeField(request.operationID)
         writer.writeField(try nestedPayload(
             request.authorization.archive,
-            schema: KagemushaRecursiveSpendV2.authorizationWireName,
+            schema: KagemushaRecursiveSpend.authorizationWireName,
             field: "authorization"
         ))
-        return frame(KagemushaRecursiveSpendV2.topUpRequestWireName, payload: writer.data)
+        return frame(KagemushaRecursiveSpend.topUpRequestWireName, payload: writer.data)
+    }
+
+    public static func encodeTopUpAnchor(
+        _ anchor: KagemushaRecursiveSpendTopUpAnchor
+    ) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(uint16(anchor.version))
+        writer.writeField(chainID(anchor.chainID))
+        writer.writeField(try accountID(anchor.payer))
+        writer.writeField(try assetID(anchor.assetID))
+        writer.writeField(uint32(anchor.assetScale))
+        writer.writeField(try scaledAmount(anchor.amount))
+        writer.writeField(anchor.initialRoot)
+        writer.writeField(anchor.finalizedRoot)
+        writer.writeField(try sequence(anchor.topUpAnchorNullifiers.map(constVec)))
+        writer.writeField(try note(anchor.currentNote))
+        writer.writeField(anchor.topUpOperationID)
+        writer.writeField(try verifierKeyID(anchor.transferVerifierID))
+        writer.writeField(anchor.transferVerifierCommitment)
+        writer.writeField(string(anchor.artifactGeneration))
+        writer.writeField(uint64(anchor.finalizedHeight))
+        writer.writeField(anchor.finalizedTransactionHash)
+        writer.writeField(anchor.anchorDigest)
+        return frame(KagemushaRecursiveSpend.topUpAnchorWireName, payload: writer.data)
     }
 
     public static func decodeTopUpAnchor(
         _ archive: Data
-    ) throws -> KagemushaRecursiveSpendTopUpAnchorV2 {
+    ) throws -> KagemushaRecursiveSpendTopUpAnchor {
         var reader = KagemushaV2Reader(try payload(
             archive,
-            schema: KagemushaRecursiveSpendV2.topUpAnchorWireName,
+            schema: KagemushaRecursiveSpend.topUpAnchorWireName,
             field: "topUpAnchor"
         ))
         let version = try scalarUInt16(reader.field(), field: "version")
@@ -135,7 +486,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
         )
         let digest = try packedFixed(reader.field(), count: 32, field: "anchorDigest")
         try reader.finish("topUpAnchor")
-        return try KagemushaRecursiveSpendTopUpAnchorV2(
+        let anchor = try KagemushaRecursiveSpendTopUpAnchor(
             version: version,
             chainID: chain,
             payer: payer,
@@ -155,47 +506,108 @@ public enum KagemushaRecursiveSpendV2Codecs {
             anchorDigest: digest,
             archive: archive
         )
+        guard try encodeTopUpAnchor(anchor) == archive else {
+            throw KagemushaRecursiveSpendError.invalidArchive("topUpAnchor.canonical")
+        }
+        return anchor
     }
 
-    public static func encodeAppendRequest(
-        _ request: KagemushaRecursiveSpendAppendRequestV2
+    public static func encodeSplitIntentBuildRequest(
+        _ request: KagemushaRecursiveSpendSplitIntentBuildRequest
+    ) throws -> Data {
+        let bundles = try request.previousBundles.map {
+            try nestedPayload(
+                $0.archive,
+                schema: KagemushaRecursiveSpend.bundleWireName,
+                field: "previousBundles"
+            )
+        }
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(try sequence(bundles))
+        writer.writeField(string(request.outputArtifactGeneration))
+        writer.writeField(try scaledAmount(request.transferAmount))
+        writer.writeField(try note(request.recipientOutput))
+        writer.writeField(option(try request.changeOutput.map(note)))
+        writer.writeField(request.recipientRequestDigest)
+        writer.writeField(request.operationID)
+        return frame(
+            KagemushaRecursiveSpend.splitIntentBuildRequestWireName,
+            payload: writer.data
+        )
+    }
+
+    public static func decodeSplitIntent(
+        _ archive: Data
+    ) throws -> KagemushaRecursiveSpendSplitIntent {
+        try decodeSplit(try payload(
+            archive,
+            schema: KagemushaRecursiveSpend.splitIntentWireName,
+            field: "splitIntent"
+        ))
+    }
+
+    public static func encodeRedemptionIntentBuildRequest(
+        _ request: KagemushaRecursiveSpendRedemptionIntentBuildRequest
     ) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(try nestedPayload(
             request.previousBundle.archive,
-            schema: KagemushaRecursiveSpendV2.bundleWireName,
+            schema: KagemushaRecursiveSpend.bundleWireName,
             field: "previousBundle"
         ))
+        writer.writeField(try accountID(request.recipient))
+        writer.writeField(try scaledAmount(request.publicAmount))
+        writer.writeField(option(try request.changeOutput.map(note)))
+        writer.writeField(option(request.changeArtifactGeneration.map(string)))
+        writer.writeField(unshieldBinding(request.unshieldPublicInputs))
+        writer.writeField(request.unshieldPublicInputsDigest)
+        writer.writeField(request.operationID)
+        return frame(
+            KagemushaRecursiveSpend.redemptionIntentBuildRequestWireName,
+            payload: writer.data
+        )
+    }
+
+    public static func decodeRedemptionIntent(
+        _ archive: Data
+    ) throws -> KagemushaRecursiveSpendRedemptionIntent {
+        try decodeRedemptionIntentPayload(try payload(
+            archive,
+            schema: KagemushaRecursiveSpend.redemptionIntentWireName,
+            field: "redemptionIntent"
+        ))
+    }
+
+    public static func encodeAppendRequest(
+        _ request: KagemushaRecursiveSpendAppendRequest
+    ) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(try sequence(request.previousInputs.map(appendInput)))
         writer.writeField(try nestedPayload(
             request.recordBundle,
-            schema: KagemushaRecursiveSpendRequestCodecs.recordBundleWireName,
+            schema: KagemushaRecursiveSpend.verifiedFoldRecordBundleWireName,
             field: "recordBundle"
         ))
         writer.writeField(bytes(request.pallasOpenEnvelopesArchive))
         writer.writeField(try split(request.split))
-        writer.writeField(artifactReference(request.lineageArtifact))
+        writer.writeField(option(request.lineageArtifact.map(artifactReference)))
         writer.writeField(string(request.outputProofCircuitID))
-        writer.writeField(try optionalVerifierRecord(request.previousLineageVerifierRecord))
-        writer.writeField(bytes(request.previousProofOpenEnvelopesArchive))
-        // Streamed V2 artifacts replace both legacy in-request key blobs.
-        writer.writeField(option(nil))
-        writer.writeField(option(nil))
-        writer.writeField(optionalUInt64(request.blockHeight))
-        return frame(KagemushaRecursiveSpendV2.appendRequestWireName, payload: writer.data)
+        writer.writeField(uint64(request.blockHeight))
+        return frame(KagemushaRecursiveSpend.appendRequestWireName, payload: writer.data)
     }
 
     public static func encodeVerifyRequest(
-        _ request: KagemushaRecursiveSpendVerifyRequestV2
+        _ request: KagemushaRecursiveSpendVerifyRequest
     ) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(try nestedPayload(
             request.bundle.archive,
-            schema: KagemushaRecursiveSpendV2.bundleWireName,
+            schema: KagemushaRecursiveSpend.bundleWireName,
             field: "bundle"
         ))
         writer.writeField(try nestedPayload(
             request.recipientRequest.archive,
-            schema: KagemushaRecursiveSpendV2.recipientRequestWireName,
+            schema: KagemushaRecursiveSpend.recipientRequestWireName,
             field: "recipientRequest"
         ))
         writer.writeField(uint32(request.maximumHops))
@@ -203,39 +615,53 @@ public enum KagemushaRecursiveSpendV2Codecs {
         writer.writeField(uint64(request.verifiedAtMilliseconds))
         writer.writeField(try optionalVerifierRecord(request.lineageVerifierRecord))
         writer.writeField(optionalUInt64(request.blockHeight))
-        return frame(KagemushaRecursiveSpendV2.verifyRequestWireName, payload: writer.data)
+        return frame(KagemushaRecursiveSpend.verifyRequestWireName, payload: writer.data)
     }
 
     public static func encodeLineageWitness(
-        _ witness: KagemushaRecursiveSpendLineageWitnessV2
+        _ witness: KagemushaRecursiveSpendLineageWitness
     ) throws -> Data {
         frame(
-            KagemushaRecursiveSpendV2.lineageWitnessWireName,
+            KagemushaRecursiveSpend.lineageWitnessWireName,
             payload: lineageWitness(witness)
         )
     }
 
+    public static func decodeLineageWitness(
+        _ archive: Data
+    ) throws -> KagemushaRecursiveSpendLineageWitness {
+        let witness = try decodeLineageWitnessPayload(payload(
+            archive,
+            schema: KagemushaRecursiveSpend.lineageWitnessWireName,
+            field: "lineageWitness"
+        ))
+        guard try encodeLineageWitness(witness) == archive else {
+            throw KagemushaRecursiveSpendError.invalidArchive("lineageWitness.canonical")
+        }
+        return witness
+    }
+
     public static func encodeRedeemRequest(
-        _ request: KagemushaRecursiveSpendRedeemRequestV2
+        _ request: KagemushaRecursiveSpendRedeemRequest
     ) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(try nestedPayload(
             request.bundle.archive,
-            schema: KagemushaRecursiveSpendV2.bundleWireName,
+            schema: KagemushaRecursiveSpend.bundleWireName,
             field: "bundle"
         ))
         writer.writeField(try accountID(request.recipient))
         writer.writeField(try scaledAmount(request.amount))
         writer.writeField(try nestedPayload(
             request.redeemProof,
-            schema: KagemushaRecursiveSpendRequestCodecs.proofAttachmentWireName,
+            schema: KagemushaRecursiveSpend.proofAttachmentWireName,
             field: "redeemProof"
         ))
         writer.writeField(try redemptionIntent(request.redemption))
         writer.writeField(option(request.lineageWitness.map(lineageWitness)))
         writer.writeField(try nestedPayload(
             request.lineageVerifierRecord.recordBytes,
-            schema: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName,
+            schema: KagemushaRecursiveSpend.verifyingKeyRecordWireName,
             field: "lineageVerifierRecord"
         ))
         writer.writeField(option(try request.offlineChange.map(redeemChangeBranch)))
@@ -243,25 +669,54 @@ public enum KagemushaRecursiveSpendV2Codecs {
         writer.writeField(request.operationID)
         writer.writeField(try nestedPayload(
             request.authorization.archive,
-            schema: KagemushaRecursiveSpendV2.authorizationWireName,
+            schema: KagemushaRecursiveSpend.authorizationWireName,
             field: "authorization"
         ))
-        return frame(KagemushaRecursiveSpendV2.redeemRequestWireName, payload: writer.data)
+        return frame(KagemushaRecursiveSpend.redeemRequestWireName, payload: writer.data)
+    }
+
+    public static func encodeRedeemUnsigned(
+        _ request: KagemushaRecursiveSpendRedeemUnsigned
+    ) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(try nestedPayload(
+            request.bundle.archive,
+            schema: KagemushaRecursiveSpend.bundleWireName,
+            field: "bundle"
+        ))
+        writer.writeField(try accountID(request.recipient))
+        writer.writeField(try scaledAmount(request.amount))
+        writer.writeField(try nestedPayload(
+            request.redeemProof,
+            schema: KagemushaRecursiveSpend.proofAttachmentWireName,
+            field: "redeemProof"
+        ))
+        writer.writeField(try redemptionIntent(request.redemption))
+        writer.writeField(option(request.lineageWitness.map(lineageWitness)))
+        writer.writeField(try nestedPayload(
+            request.lineageVerifierRecord.recordBytes,
+            schema: KagemushaRecursiveSpend.verifyingKeyRecordWireName,
+            field: "lineageVerifierRecord"
+        ))
+        writer.writeField(option(try request.offlineChange.map(redeemChangeBranch)))
+        writer.writeField(uint64(request.blockHeight))
+        writer.writeField(request.operationID)
+        return frame(KagemushaRecursiveSpend.redeemUnsignedWireName, payload: writer.data)
     }
 
     public static func encodeRedeemChangeBuildRequest(
-        _ request: KagemushaRecursiveSpendRedeemChangeBuildRequestV2
+        _ request: KagemushaRecursiveSpendRedeemChangeBuildRequest
     ) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(try nestedPayload(
             request.previousBundle.archive,
-            schema: KagemushaRecursiveSpendV2.bundleWireName,
+            schema: KagemushaRecursiveSpend.bundleWireName,
             field: "previousBundle"
         ))
         writer.writeField(bytes(request.previousRecursiveProofOpenEnvelopesArchive))
         writer.writeField(try nestedPayload(
             request.unshieldRecordBundle,
-            schema: KagemushaRecursiveSpendRequestCodecs.recordBundleWireName,
+            schema: KagemushaRecursiveSpend.verifiedFoldRecordBundleWireName,
             field: "unshieldRecordBundle"
         ))
         writer.writeField(bytes(request.pallasOpenEnvelopesArchive))
@@ -269,22 +724,22 @@ public enum KagemushaRecursiveSpendV2Codecs {
         writer.writeField(artifactReference(request.lineageArtifact))
         writer.writeField(try nestedPayload(
             request.previousLineageVerifierRecord.recordBytes,
-            schema: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName,
+            schema: KagemushaRecursiveSpend.verifyingKeyRecordWireName,
             field: "previousLineageVerifierRecord"
         ))
         writer.writeField(uint64(request.blockHeight))
         return frame(
-            KagemushaRecursiveSpendV2.redeemChangeBuildRequestWireName,
+            KagemushaRecursiveSpend.redeemChangeBuildRequestWireName,
             payload: writer.data
         )
     }
 
     public static func decodeRedeemChangeBuildResult(
         _ archive: Data
-    ) throws -> KagemushaRecursiveSpendRedeemChangeBuildResultV2 {
+    ) throws -> KagemushaRecursiveSpendRedeemChangeBuildResult {
         var reader = KagemushaV2Reader(try payload(
             archive,
-            schema: KagemushaRecursiveSpendV2.redeemChangeBuildResultWireName,
+            schema: KagemushaRecursiveSpend.redeemChangeBuildResultWireName,
             field: "redeemChangeBuildResult"
         ))
         let branch = try decodeRedeemChangeBranch(reader.field())
@@ -295,7 +750,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
             reader.field(), count: 32, field: "publicStatementDigest"
         )
         try reader.finish("redeemChangeBuildResult")
-        return KagemushaRecursiveSpendRedeemChangeBuildResultV2(
+        return KagemushaRecursiveSpendRedeemChangeBuildResult(
             changeBranch: branch,
             transitionBindingDigest: transitionDigest,
             publicStatementDigest: statementDigest
@@ -304,10 +759,10 @@ public enum KagemushaRecursiveSpendV2Codecs {
 
     public static func decodeBundleSummary(
         _ archive: Data
-    ) throws -> KagemushaRecursiveSpendBundleSummaryV2 {
+    ) throws -> KagemushaRecursiveSpendBundleSummary {
         var reader = KagemushaV2Reader(try payload(
             archive,
-            schema: KagemushaRecursiveSpendV2.bundleSummaryWireName,
+            schema: KagemushaRecursiveSpend.bundleSummaryWireName,
             field: "bundleSummary"
         ))
         let asset = try decodeAssetDefinitionID(reader.field())
@@ -315,19 +770,19 @@ public enum KagemushaRecursiveSpendV2Codecs {
         let commitment = try packedFixed(reader.field(), count: 32, field: "noteCommitment")
         let nullifier = try packedFixed(reader.field(), count: 32, field: "spendNullifier")
         let hopCount = try scalarUInt32(reader.field(), field: "hopCount")
-        let branchPath = try decodeBranchPath(reader.field())
+        let branchClaims = try decodeBranchClaims(reader.field(), field: "branchClaims")
         let generation = try decodeString(reader.field(), field: "artifactGeneration")
         let verifierKeyID = try decodeVerifierKeyID(reader.field())
         let lineageMode = try decodeLineageMode(reader.field())
         let digest = try packedFixed(reader.field(), count: 32, field: "bundleDigest")
         try reader.finish("bundleSummary")
-        return KagemushaRecursiveSpendBundleSummaryV2(
+        return KagemushaRecursiveSpendBundleSummary(
             assetDefinitionID: asset,
             amount: amount,
             noteCommitment: commitment,
             spendNullifier: nullifier,
             hopCount: hopCount,
-            branchPath: branchPath,
+            branchClaims: branchClaims,
             artifactGeneration: generation,
             verifierKeyID: verifierKeyID,
             lineageMode: lineageMode,
@@ -337,40 +792,168 @@ public enum KagemushaRecursiveSpendV2Codecs {
 
     public static func decodeSplitResult(
         _ archive: Data
-    ) throws -> KagemushaRecursiveSpendSplitResultV2 {
+    ) throws -> KagemushaRecursiveSpendSplitResult {
         var reader = KagemushaV2Reader(try payload(
             archive,
-            schema: KagemushaRecursiveSpendV2.splitResultWireName,
+            schema: KagemushaRecursiveSpend.splitResultWireName,
             field: "splitResult"
         ))
         let split = try decodeSplit(reader.field())
         let binding = try packedFixed(reader.field(), count: 32, field: "splitBindingDigest")
         let recipientArchive = frame(
-            KagemushaRecursiveSpendV2.bundleWireName,
+            KagemushaRecursiveSpend.bundleWireName,
             payload: try reader.field()
         )
         let changePayload = try decodeOption(reader.field(), field: "changeBundle")
         try reader.finish("splitResult")
-        let recipient = try KagemushaRecursiveSpendBundleV2(noritoArchive: recipientArchive)
+        let recipient = try KagemushaRecursiveSpendBundle(noritoArchive: recipientArchive)
         let change = try changePayload.map {
-            try KagemushaRecursiveSpendBundleV2(
-                noritoArchive: frame(KagemushaRecursiveSpendV2.bundleWireName, payload: $0)
+            try KagemushaRecursiveSpendBundle(
+                noritoArchive: frame(KagemushaRecursiveSpend.bundleWireName, payload: $0)
             )
         }
-        return try KagemushaRecursiveSpendSplitResultV2(
+        return try KagemushaRecursiveSpendSplitResult(
             split: split,
             splitBindingDigest: binding,
             recipientBundle: recipient,
-            changeBundle: change
+            changeBundle: change,
+            archive: archive
         )
+    }
+
+    public static func decodePeerPayment(
+        _ archive: Data
+    ) throws -> KagemushaRecursiveSpendPeerPayment {
+        guard archive.count <= KagemushaRecursiveSpend.maximumPeerArchiveBytes else {
+            throw KagemushaRecursiveSpendError.invalidArchive("peerPayment.size")
+        }
+        var reader = KagemushaV2Reader(try payload(
+            archive,
+            schema: KagemushaRecursiveSpend.peerPaymentWireName,
+            field: "peerPayment"
+        ))
+        let bundleArchive = frame(
+            KagemushaRecursiveSpend.bundleWireName,
+            payload: try reader.field()
+        )
+        try reader.finish("peerPayment")
+        return try KagemushaRecursiveSpendPeerPayment(
+            recipientBundle: KagemushaRecursiveSpendBundle(noritoArchive: bundleArchive),
+            archive: archive
+        )
+    }
+
+    public static func encodePeerPayment(
+        recipientBundle: KagemushaRecursiveSpendBundle
+    ) throws -> Data {
+        _ = try recipientPeerSplitIdentity(from: recipientBundle.archive)
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(try nestedPayload(
+            recipientBundle.archive,
+            schema: KagemushaRecursiveSpend.bundleWireName,
+            field: "recipientBundle"
+        ))
+        let archive = frame(KagemushaRecursiveSpend.peerPaymentWireName, payload: writer.data)
+        guard archive.count <= KagemushaRecursiveSpend.maximumPeerArchiveBytes else {
+            throw KagemushaRecursiveSpendError.invalidArchive("peerPayment.size")
+        }
+        return archive
+    }
+
+    /// Extract the canonical replay identity from a recipient bundle's
+    /// proof-bound peer-split transition. The transport wire never duplicates
+    /// either value beside the bundle.
+    static func recipientPeerSplitIdentity(
+        from bundleArchive: Data
+    ) throws -> (operationID: Data, recipientRequestDigest: Data) {
+        var bundleReader = KagemushaV2Reader(try payload(
+            bundleArchive,
+            schema: KagemushaRecursiveSpend.bundleWireName,
+            field: "peerPayment.recipientBundle"
+        ))
+        let statementPayload = try bundleReader.field()
+        _ = try bundleReader.field() // Recursive proof; validated by the native bridge.
+        try bundleReader.finish("peerPayment.recipientBundle")
+
+        var statementReader = KagemushaV2Reader(statementPayload)
+        // chain, asset, scale, final root, anchor refs, proof steps, peer hops,
+        // current note, and branch claims precede the producing transition.
+        for _ in 0..<9 {
+            _ = try statementReader.field()
+        }
+        guard let encodedTransition = try decodeOption(
+            statementReader.field(),
+            field: "peerPayment.transition"
+        ) else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "peerPayment.transition"
+            )
+        }
+        // Artifact generation, lineage mode, and verifier id follow it.
+        for _ in 0..<3 {
+            _ = try statementReader.field()
+        }
+        try statementReader.finish("peerPayment.statement")
+
+        var transitionReader = KagemushaV2Reader(encodedTransition)
+        guard try transitionReader.uint32() == 0 else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "peerPayment.transition"
+            )
+        }
+        let peerSplitPayload = try transitionReader.field()
+        try transitionReader.finish("peerPayment.transition")
+
+        var peerSplitReader = KagemushaV2Reader(peerSplitPayload)
+        _ = try packedFixed(
+            peerSplitReader.field(),
+            count: 32,
+            field: "peerPayment.bindingDigest"
+        )
+        guard try scalarUInt32(
+            peerSplitReader.field(),
+            field: "peerPayment.branch"
+        ) == KagemushaRecursiveSpendBranch.recipient.rawValue else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "peerPayment.branch"
+            )
+        }
+        let requestDigest = try packedFixed(
+            peerSplitReader.field(),
+            count: 32,
+            field: "peerPayment.recipientRequestDigest"
+        )
+        let operationID = try packedFixed(
+            peerSplitReader.field(),
+            count: 32,
+            field: "peerPayment.operationID"
+        )
+        _ = try scalarUInt32(
+            peerSplitReader.field(),
+            field: "peerPayment.parentMaxProofStepCount"
+        )
+        _ = try scalarUInt32(
+            peerSplitReader.field(),
+            field: "peerPayment.parentMaxPeerHopCount"
+        )
+        try peerSplitReader.finish("peerPayment.peerSplit")
+        try KagemushaRecursiveSpend.requireNonzeroFixed32(
+            operationID,
+            field: "peerPayment.operationID"
+        )
+        try KagemushaRecursiveSpend.requireNonzeroFixed32(
+            requestDigest,
+            field: "peerPayment.recipientRequestDigest"
+        )
+        return (operationID, requestDigest)
     }
 
     public static func decodeAcknowledgementPayload(
         _ archive: Data
-    ) throws -> KagemushaReceiverAcknowledgementPayloadV2 {
+    ) throws -> KagemushaReceiverAcknowledgementPayload {
         var reader = KagemushaV2Reader(try payload(
             archive,
-            schema: KagemushaRecursiveSpendV2.acknowledgementPayloadWireName,
+            schema: KagemushaRecursiveSpend.acknowledgementPayloadWireName,
             field: "acknowledgementPayload"
         ))
         let operationID = try packedFixed(reader.field(), count: 32, field: "operationID")
@@ -391,7 +974,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
         let key = try decodePublicKey(reader.field())
         try reader.finish("acknowledgementPayload")
         let canonical = frame(
-            KagemushaRecursiveSpendV2.acknowledgementPayloadWireName,
+            KagemushaRecursiveSpend.acknowledgementPayloadWireName,
             payload: acknowledgementPayload(
                 operationID: operationID,
                 requestDigest: requestDigest,
@@ -404,9 +987,9 @@ public enum KagemushaRecursiveSpendV2Codecs {
             )
         )
         guard canonical == archive else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive("acknowledgementPayload.canonical")
+            throw KagemushaRecursiveSpendError.invalidArchive("acknowledgementPayload.canonical")
         }
-        return try KagemushaReceiverAcknowledgementPayloadV2(
+        return try KagemushaReceiverAcknowledgementPayload(
             operationID: operationID,
             recipientRequestDigest: requestDigest,
             paymentBundleDigest: bundleDigest,
@@ -421,22 +1004,22 @@ public enum KagemushaRecursiveSpendV2Codecs {
 
     public static func decodeAcknowledgement(
         _ archive: Data
-    ) throws -> KagemushaReceiverAcknowledgementV2 {
+    ) throws -> KagemushaReceiverAcknowledgement {
         var reader = KagemushaV2Reader(try payload(
             archive,
-            schema: KagemushaRecursiveSpendV2.acknowledgementWireName,
+            schema: KagemushaRecursiveSpend.acknowledgementWireName,
             field: "acknowledgement"
         ))
         let payloadArchive = frame(
-            KagemushaRecursiveSpendV2.acknowledgementPayloadWireName,
+            KagemushaRecursiveSpend.acknowledgementPayloadWireName,
             payload: try reader.field()
         )
         let signature = try decodeConstVec(try reader.field(), field: "acknowledgement.signature")
         try reader.finish("acknowledgement")
-        guard archive.count <= KagemushaRecursiveSpendV2.maximumPeerArchiveBytes else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive("acknowledgement.size")
+        guard archive.count <= KagemushaRecursiveSpend.maximumPeerArchiveBytes else {
+            throw KagemushaRecursiveSpendError.invalidArchive("acknowledgement.size")
         }
-        return try KagemushaReceiverAcknowledgementV2(
+        return try KagemushaReceiverAcknowledgement(
             payload: decodeAcknowledgementPayload(payloadArchive),
             signature: signature,
             archive: archive
@@ -445,10 +1028,10 @@ public enum KagemushaRecursiveSpendV2Codecs {
 
     public static func decodeAcknowledgementVerifyResult(
         _ archive: Data
-    ) throws -> KagemushaReceiverAcknowledgementVerifyResultV2 {
+    ) throws -> KagemushaReceiverAcknowledgementVerifyResult {
         var reader = KagemushaV2Reader(try payload(
             archive,
-            schema: KagemushaRecursiveSpendV2.acknowledgementVerifyResultWireName,
+            schema: KagemushaRecursiveSpend.acknowledgementVerifyResultWireName,
             field: "acknowledgementVerifyResult"
         ))
         let valid = try decodeBool(reader.field(), field: "valid")
@@ -460,9 +1043,9 @@ public enum KagemushaRecursiveSpendV2Codecs {
         )
         try reader.finish("acknowledgementVerifyResult")
         guard valid else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive("acknowledgementVerifyResult.valid")
+            throw KagemushaRecursiveSpendError.invalidArchive("acknowledgementVerifyResult.valid")
         }
-        return KagemushaReceiverAcknowledgementVerifyResultV2(
+        return KagemushaReceiverAcknowledgementVerifyResult(
             valid: valid,
             operationID: operation,
             recipientRequestDigest: request,
@@ -473,10 +1056,10 @@ public enum KagemushaRecursiveSpendV2Codecs {
 
     public static func decodeVerifyResult(
         _ archive: Data
-    ) throws -> KagemushaRecursiveSpendVerifyResultV2 {
+    ) throws -> KagemushaRecursiveSpendVerifyResult {
         var reader = KagemushaV2Reader(try payload(
             archive,
-            schema: KagemushaRecursiveSpendV2.verifyResultWireName,
+            schema: KagemushaRecursiveSpend.verifyResultWireName,
             field: "verifyResult"
         ))
         let valid = try decodeBool(reader.field(), field: "valid")
@@ -485,7 +1068,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
         let witnessless = try decodeBool(reader.field(), field: "witnesslessRedemptionSupported")
         let lineageMode = try decodeLineageMode(reader.field())
         let summaryArchive = frame(
-            KagemushaRecursiveSpendV2.bundleSummaryWireName,
+            KagemushaRecursiveSpend.bundleSummaryWireName,
             payload: try reader.field()
         )
         let requestDigest = try packedFixed(
@@ -504,9 +1087,9 @@ public enum KagemushaRecursiveSpendV2Codecs {
             .map(decodeLineageWitnessPayload)
         try reader.finish("verifyResult")
         guard valid else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive("verifyResult.valid")
+            throw KagemushaRecursiveSpendError.invalidArchive("verifyResult.valid")
         }
-        return KagemushaRecursiveSpendVerifyResultV2(
+        return KagemushaRecursiveSpendVerifyResult(
             valid: valid,
             chainAdmissible: chainAdmissible,
             lineageRedeemable: lineageRedeemable,
@@ -527,10 +1110,10 @@ public enum KagemushaRecursiveSpendV2Codecs {
 
     public static func decodeRedeemResult(
         _ archive: Data
-    ) throws -> KagemushaRecursiveSpendRedeemResultV2 {
+    ) throws -> KagemushaRecursiveSpendRedeemResult {
         var reader = KagemushaV2Reader(try payload(
             archive,
-            schema: KagemushaRecursiveSpendV2.redeemResultWireName,
+            schema: KagemushaRecursiveSpend.redeemResultWireName,
             field: "redeemResult"
         ))
         let requestArchive = try decodeBytes(reader.field(), field: "redeemRequestArchive")
@@ -538,11 +1121,11 @@ public enum KagemushaRecursiveSpendV2Codecs {
         let operationID = try packedFixed(reader.field(), count: 32, field: "operationID")
         try reader.finish("redeemResult")
         let change = try changePayload.map {
-            try KagemushaRecursiveSpendBundleV2(
-                noritoArchive: frame(KagemushaRecursiveSpendV2.bundleWireName, payload: $0)
+            try KagemushaRecursiveSpendBundle(
+                noritoArchive: frame(KagemushaRecursiveSpend.bundleWireName, payload: $0)
             )
         }
-        return KagemushaRecursiveSpendRedeemResultV2(
+        return KagemushaRecursiveSpendRedeemResult(
             redeemRequestArchive: requestArchive,
             offlineChangeBundle: change,
             operationID: operationID
@@ -550,14 +1133,14 @@ public enum KagemushaRecursiveSpendV2Codecs {
     }
 
     private static func encodeRecipientRequest(
-        _ payload: KagemushaRecipientPaymentRequestSigningPayloadV2,
+        _ payload: KagemushaRecipientPaymentRequestSigningPayload,
         signature: Data
     ) throws -> Data {
         let payloadArchive = try encodeRecipientRequestPayload(payload)
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(try nestedPayload(
             payloadArchive,
-            schema: KagemushaRecursiveSpendV2.recipientRequestPayloadWireName,
+            schema: KagemushaRecursiveSpend.recipientRequestPayloadWireName,
             field: "recipientRequestPayload"
         ))
         // The signed request flattens payload fields rather than nesting the
@@ -567,11 +1150,11 @@ public enum KagemushaRecursiveSpendV2Codecs {
         var result = OfflineCompactNoritoWriter()
         result.writeBytes(payloadFields)
         result.writeField(constVec(signature))
-        return frame(KagemushaRecursiveSpendV2.recipientRequestWireName, payload: result.data)
+        return frame(KagemushaRecursiveSpend.recipientRequestWireName, payload: result.data)
     }
 
     private static func encodeAuthorization(
-        _ fields: KagemushaRequestAuthorizationFieldsV2,
+        _ fields: KagemushaRequestAuthorizationFields,
         signature: Data
     ) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
@@ -585,12 +1168,12 @@ public enum KagemushaRecursiveSpendV2Codecs {
         writer.writeField(option(fields.appAttestEvidenceSHA256.map(constVec)))
         writer.writeField(option(fields.appAttestEvidence.map(bytes)))
         writer.writeField(constVec(signature))
-        return frame(KagemushaRecursiveSpendV2.authorizationWireName, payload: writer.data)
+        return frame(KagemushaRecursiveSpend.authorizationWireName, payload: writer.data)
     }
 
     private static func decodeRecipientRequestPayloadFields(
         _ reader: inout KagemushaV2Reader
-    ) throws -> KagemushaRecipientPaymentRequestSigningPayloadV2 {
+    ) throws -> KagemushaRecipientPaymentRequestSigningPayload {
         let chain = try decodeChainID(reader.field())
         let asset = try decodeAssetDefinitionID(reader.field())
         let amount = try decodeScaledAmount(reader.field())
@@ -605,7 +1188,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
         let expires = try scalarUInt64(reader.field(), field: "expiresAtMilliseconds")
         let output = try decodeNote(reader.field())
         let material = try decodeBytes(reader.field(), field: "recipientOutputProverMaterial")
-        return try KagemushaRecipientPaymentRequestSigningPayloadV2(
+        return try KagemushaRecipientPaymentRequestSigningPayload(
             chainID: chain,
             assetDefinitionID: asset,
             amount: amount,
@@ -621,57 +1204,155 @@ public enum KagemushaRecursiveSpendV2Codecs {
         )
     }
 
-    private static func split(_ value: KagemushaRecursiveSpendSplitIntentV2) throws -> Data {
+    private static func topUpAnchorRef(
+        _ value: KagemushaRecursiveSpendTopUpAnchorRef
+    ) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(value.topUpOperationID)
+        writer.writeField(value.anchorDigest)
+        return writer.data
+    }
+
+    private static func decodeTopUpAnchorRef(
+        _ data: Data
+    ) throws -> KagemushaRecursiveSpendTopUpAnchorRef {
+        var reader = KagemushaV2Reader(data)
+        let operationID = try packedFixed(
+            reader.field(), count: 32, field: "topUpAnchorRef.topUpOperationID"
+        )
+        let anchorDigest = try packedFixed(
+            reader.field(), count: 32, field: "topUpAnchorRef.anchorDigest"
+        )
+        try reader.finish("topUpAnchorRef")
+        return try KagemushaRecursiveSpendTopUpAnchorRef(
+            topUpOperationID: operationID,
+            anchorDigest: anchorDigest
+        )
+    }
+
+    private static func split(_ value: KagemushaRecursiveSpendSplitIntent) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(chainID(value.chainID))
         writer.writeField(try assetDefinitionID(value.assetDefinitionID))
-        writer.writeField(try note(value.inputNote))
-        writer.writeField(branchPath(value.parentBranchPath))
+        writer.writeField(try sequence(value.inputs.map(inputBranch)))
+        writer.writeField(try sequence(value.topUpAnchorRefs.map(topUpAnchorRef)))
         writer.writeField(uint32(value.assetScale))
+        writer.writeField(uint32(value.lineageMode.rawValue))
+        writer.writeField(string(value.outputArtifactGeneration))
         writer.writeField(try scaledAmount(value.transferAmount))
         writer.writeField(try note(value.recipientOutput))
         writer.writeField(option(try value.changeOutput.map(note)))
         writer.writeField(value.recipientRequestDigest)
-        writer.writeField(value.parentLineageDigest)
         writer.writeField(value.operationID)
         return writer.data
     }
 
-    private static func decodeSplit(_ data: Data) throws -> KagemushaRecursiveSpendSplitIntentV2 {
+    private static func decodeSplit(_ data: Data) throws -> KagemushaRecursiveSpendSplitIntent {
         var reader = KagemushaV2Reader(data)
         let chain = try decodeChainID(reader.field())
         let asset = try decodeAssetDefinitionID(reader.field())
-        let input = try decodeNote(reader.field())
-        let path = try decodeBranchPath(reader.field())
+        var inputReader = KagemushaV2Reader(try reader.field())
+        let inputCount = try inputReader.uint64()
+        guard (1...2).contains(inputCount) else {
+            throw KagemushaRecursiveSpendError.invalidArchive("split.inputs")
+        }
+        var inputs: [KagemushaRecursiveSpendInputBranch] = []
+        inputs.reserveCapacity(Int(inputCount))
+        for _ in 0..<inputCount {
+            inputs.append(try decodeInputBranch(inputReader.field()))
+        }
+        try inputReader.finish("split.inputs")
+        var anchorReader = KagemushaV2Reader(try reader.field())
+        let anchorCount = try anchorReader.uint64()
+        guard (1...2).contains(anchorCount) else {
+            throw KagemushaRecursiveSpendError.invalidArchive("split.topUpAnchorRefs")
+        }
+        var anchorRefs: [KagemushaRecursiveSpendTopUpAnchorRef] = []
+        anchorRefs.reserveCapacity(Int(anchorCount))
+        for _ in 0..<anchorCount {
+            anchorRefs.append(try decodeTopUpAnchorRef(anchorReader.field()))
+        }
+        try anchorReader.finish("split.topUpAnchorRefs")
         let scale = try scalarUInt32(reader.field(), field: "assetScale")
+        let lineageMode = try decodeLineageMode(reader.field())
+        let outputGeneration = try decodeString(
+            reader.field(),
+            field: "outputArtifactGeneration"
+        )
         let amount = try decodeScaledAmount(reader.field())
         let recipient = try decodeNote(reader.field())
         let change = try decodeOption(reader.field(), field: "changeOutput").map(decodeNote)
         let requestDigest = try packedFixed(
             reader.field(), count: 32, field: "recipientRequestDigest"
         )
-        let parentDigest = try packedFixed(
-            reader.field(), count: 32, field: "parentLineageDigest"
-        )
         let operation = try packedFixed(reader.field(), count: 32, field: "operationID")
         try reader.finish("split")
-        return try KagemushaRecursiveSpendSplitIntentV2(
+        return try KagemushaRecursiveSpendSplitIntent(
             chainID: chain,
             assetDefinitionID: asset,
-            inputNote: input,
-            parentBranchPath: path,
+            inputs: inputs,
+            topUpAnchorRefs: anchorRefs,
             assetScale: scale,
+            lineageMode: lineageMode,
+            outputArtifactGeneration: outputGeneration,
             transferAmount: amount,
             recipientOutput: recipient,
             changeOutput: change,
             recipientRequestDigest: requestDigest,
-            parentLineageDigest: parentDigest,
             operationID: operation
         )
     }
 
+    private static func inputBranch(
+        _ value: KagemushaRecursiveSpendInputBranch
+    ) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(value.bundleDigest)
+        writer.writeField(try note(value.inputNote))
+        writer.writeField(try branchClaims(value.branchClaims))
+        writer.writeField(value.inputRoot)
+        writer.writeField(uint32(value.proofStepCount))
+        writer.writeField(uint32(value.peerHopCount))
+        return writer.data
+    }
+
+    private static func decodeInputBranch(
+        _ data: Data
+    ) throws -> KagemushaRecursiveSpendInputBranch {
+        var reader = KagemushaV2Reader(data)
+        let digest = try packedFixed(reader.field(), count: 32, field: "input.bundleDigest")
+        let note = try decodeNote(reader.field())
+        let claims = try decodeBranchClaims(reader.field(), field: "input.branchClaims")
+        let root = try packedFixed(reader.field(), count: 32, field: "input.inputRoot")
+        let proofSteps = try scalarUInt32(reader.field(), field: "input.proofStepCount")
+        let peerHops = try scalarUInt32(reader.field(), field: "input.peerHopCount")
+        try reader.finish("split.input")
+        return try KagemushaRecursiveSpendInputBranch(
+            bundleDigest: digest,
+            inputNote: note,
+            branchClaims: claims,
+            inputRoot: root,
+            proofStepCount: proofSteps,
+            peerHopCount: peerHops
+        )
+    }
+
+    private static func appendInput(
+        _ value: KagemushaRecursiveSpendAppendInput
+    ) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(try nestedPayload(
+            value.previousBundle.archive,
+            schema: KagemushaRecursiveSpend.bundleWireName,
+            field: "previousInput.previousBundle"
+        ))
+        writer.writeField(try optionalVerifierRecord(value.previousLineageVerifierRecord))
+        writer.writeField(bytes(value.previousRecursiveProofOpenEnvelopesArchive))
+        return writer.data
+    }
+
     private static func unshieldBinding(
-        _ value: KagemushaUnshieldPublicInputsBindingV2
+        _ value: KagemushaUnshieldPublicInputsBinding
     ) -> Data {
         func pair(_ values: [Data]) -> Data {
             var writer = OfflineCompactNoritoWriter()
@@ -691,14 +1372,14 @@ public enum KagemushaRecursiveSpendV2Codecs {
 
     private static func decodeUnshieldBinding(
         _ data: Data
-    ) throws -> KagemushaUnshieldPublicInputsBindingV2 {
+    ) throws -> KagemushaUnshieldPublicInputsBinding {
         func pair(_ data: Data, field: String) throws -> [Data] {
             var reader = KagemushaV2Reader(data)
             var values: [Data] = []
             for _ in 0..<2 {
                 let value = try decodeConstVec(try reader.field(), field: field)
                 guard value.count == 32 else {
-                    throw KagemushaRecursiveSpendV2Error.invalidArchive(field)
+                    throw KagemushaRecursiveSpendError.invalidArchive(field)
                 }
                 values.append(value)
             }
@@ -716,7 +1397,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
         let asset = try packedFixed(reader.field(), count: 32, field: "assetTag")
         let chain = try packedFixed(reader.field(), count: 32, field: "chainTag")
         try reader.finish("unshieldBinding")
-        return try KagemushaUnshieldPublicInputsBindingV2(
+        return try KagemushaUnshieldPublicInputsBinding(
             inputCommitments: commitments,
             nullifiers: nullifiers,
             changeOutputCommitment: change,
@@ -728,32 +1409,49 @@ public enum KagemushaRecursiveSpendV2Codecs {
     }
 
     private static func redemptionIntent(
-        _ value: KagemushaRecursiveSpendRedemptionIntentV2
+        _ value: KagemushaRecursiveSpendRedemptionIntent
     ) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(chainID(value.chainID))
         writer.writeField(try assetDefinitionID(value.assetDefinitionID))
         writer.writeField(try note(value.inputNote))
-        writer.writeField(branchPath(value.parentBranchPath))
+        writer.writeField(try branchClaims(value.parentBranchClaims))
+        writer.writeField(try sequence(value.parentTopUpAnchorRefs.map(topUpAnchorRef)))
+        writer.writeField(uint32(value.parentProofStepCount))
+        writer.writeField(uint32(value.parentPeerHopCount))
         writer.writeField(value.parentBundleDigest)
         writer.writeField(value.inputRoot)
         writer.writeField(try accountID(value.recipient))
         writer.writeField(try scaledAmount(value.publicAmount))
         writer.writeField(option(try value.changeOutput.map(note)))
+        writer.writeField(option(value.changeArtifactGeneration.map(string)))
         writer.writeField(unshieldBinding(value.unshieldPublicInputs))
         writer.writeField(value.unshieldPublicInputsDigest)
         writer.writeField(value.operationID)
         return writer.data
     }
 
-    private static func decodeRedemptionIntent(
+    private static func decodeRedemptionIntentPayload(
         _ data: Data
-    ) throws -> KagemushaRecursiveSpendRedemptionIntentV2 {
+    ) throws -> KagemushaRecursiveSpendRedemptionIntent {
         var reader = KagemushaV2Reader(data)
         let chain = try decodeChainID(reader.field())
         let asset = try decodeAssetDefinitionID(reader.field())
         let input = try decodeNote(reader.field())
-        let path = try decodeBranchPath(reader.field())
+        let claims = try decodeBranchClaims(reader.field(), field: "parentBranchClaims")
+        var anchorReader = KagemushaV2Reader(try reader.field())
+        let anchorCount = try anchorReader.uint64()
+        guard (1...2).contains(anchorCount) else {
+            throw KagemushaRecursiveSpendError.invalidArchive("parentTopUpAnchorRefs")
+        }
+        var anchorRefs: [KagemushaRecursiveSpendTopUpAnchorRef] = []
+        anchorRefs.reserveCapacity(Int(anchorCount))
+        for _ in 0..<anchorCount {
+            anchorRefs.append(try decodeTopUpAnchorRef(anchorReader.field()))
+        }
+        try anchorReader.finish("parentTopUpAnchorRefs")
+        let proofSteps = try scalarUInt32(reader.field(), field: "parentProofStepCount")
+        let peerHops = try scalarUInt32(reader.field(), field: "parentPeerHopCount")
         let parentDigest = try packedFixed(
             reader.field(), count: 32, field: "parentBundleDigest"
         )
@@ -761,22 +1459,30 @@ public enum KagemushaRecursiveSpendV2Codecs {
         let recipient = try decodeAccountID(reader.field())
         let amount = try decodeScaledAmount(reader.field())
         let change = try decodeOption(reader.field(), field: "changeOutput").map(decodeNote)
+        let changeGeneration = try decodeOption(
+            reader.field(),
+            field: "changeArtifactGeneration"
+        ).map { try decodeString($0, field: "changeArtifactGeneration") }
         let inputs = try decodeUnshieldBinding(reader.field())
         let inputsDigest = try packedFixed(
             reader.field(), count: 32, field: "unshieldPublicInputsDigest"
         )
         let operationID = try packedFixed(reader.field(), count: 32, field: "operationID")
         try reader.finish("redemptionIntent")
-        return KagemushaRecursiveSpendRedemptionIntentV2(
+        return try KagemushaRecursiveSpendRedemptionIntent(
             chainID: chain,
             assetDefinitionID: asset,
             inputNote: input,
-            parentBranchPath: path,
+            parentBranchClaims: claims,
+            parentTopUpAnchorRefs: anchorRefs,
+            parentProofStepCount: proofSteps,
+            parentPeerHopCount: peerHops,
             parentBundleDigest: parentDigest,
             inputRoot: root,
             recipient: recipient,
             publicAmount: amount,
             changeOutput: change,
+            changeArtifactGeneration: changeGeneration,
             unshieldPublicInputs: inputs,
             unshieldPublicInputsDigest: inputsDigest,
             operationID: operationID
@@ -784,14 +1490,14 @@ public enum KagemushaRecursiveSpendV2Codecs {
     }
 
     private static func redeemChangeBranch(
-        _ value: KagemushaRecursiveSpendRedeemChangeBranchV2
+        _ value: KagemushaRecursiveSpendRedeemChangeBranch
     ) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(try note(value.output))
-        writer.writeField(branchPath(value.branchPath))
+        writer.writeField(try branchClaims(value.branchClaims))
         writer.writeField(try nestedPayload(
             value.bundle.archive,
-            schema: KagemushaRecursiveSpendV2.bundleWireName,
+            schema: KagemushaRecursiveSpend.bundleWireName,
             field: "redeemChangeBundle"
         ))
         return writer.data
@@ -799,19 +1505,19 @@ public enum KagemushaRecursiveSpendV2Codecs {
 
     private static func decodeRedeemChangeBranch(
         _ data: Data
-    ) throws -> KagemushaRecursiveSpendRedeemChangeBranchV2 {
+    ) throws -> KagemushaRecursiveSpendRedeemChangeBranch {
         var reader = KagemushaV2Reader(data)
         let output = try decodeNote(reader.field())
-        let path = try decodeBranchPath(reader.field())
+        let claims = try decodeBranchClaims(reader.field(), field: "redeemChange.branchClaims")
         let bundleArchive = frame(
-            KagemushaRecursiveSpendV2.bundleWireName,
+            KagemushaRecursiveSpend.bundleWireName,
             payload: try reader.field()
         )
         try reader.finish("redeemChangeBranch")
-        return KagemushaRecursiveSpendRedeemChangeBranchV2(
+        return KagemushaRecursiveSpendRedeemChangeBranch(
             output: output,
-            branchPath: path,
-            bundle: try KagemushaRecursiveSpendBundleV2(noritoArchive: bundleArchive)
+            branchClaims: claims,
+            bundle: try KagemushaRecursiveSpendBundle(noritoArchive: bundleArchive)
         )
     }
 
@@ -830,7 +1536,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
         return try KagemushaScaledAmount(atomicUnits: atomic, scale: scale)
     }
 
-    private static func note(_ value: KagemushaSpendableNoteDescriptorV2) throws -> Data {
+    private static func note(_ value: KagemushaSpendableNoteDescriptor) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(chainID(value.chainID))
         writer.writeField(try assetDefinitionID(value.assetDefinitionID))
@@ -840,7 +1546,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
         return writer.data
     }
 
-    private static func decodeNote(_ data: Data) throws -> KagemushaSpendableNoteDescriptorV2 {
+    private static func decodeNote(_ data: Data) throws -> KagemushaSpendableNoteDescriptor {
         var reader = KagemushaV2Reader(data)
         let chain = try decodeChainID(reader.field())
         let asset = try decodeAssetDefinitionID(reader.field())
@@ -848,7 +1554,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
         let nullifier = try packedFixed(reader.field(), count: 32, field: "spendNullifier")
         let amount = try decodeScaledAmount(reader.field())
         try reader.finish("note")
-        return try KagemushaSpendableNoteDescriptorV2(
+        return try KagemushaSpendableNoteDescriptor(
             chainID: chain,
             assetDefinitionID: asset,
             noteCommitment: commitment,
@@ -857,7 +1563,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
         )
     }
 
-    private static func branchPath(_ value: KagemushaRecursiveSpendBranchPathV2) -> Data {
+    private static func branchPath(_ value: KagemushaRecursiveSpendBranchPath) -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(value.lineageRoot)
         writer.writeField(Data([value.depth]))
@@ -867,24 +1573,94 @@ public enum KagemushaRecursiveSpendV2Codecs {
 
     private static func decodeBranchPath(
         _ data: Data
-    ) throws -> KagemushaRecursiveSpendBranchPathV2 {
+    ) throws -> KagemushaRecursiveSpendBranchPath {
         var reader = KagemushaV2Reader(data)
         let root = try packedFixed(reader.field(), count: 32, field: "lineageRoot")
         let depthData = try reader.field()
         guard depthData.count == 1, let depth = depthData.first else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive("branchPath.depth")
+            throw KagemushaRecursiveSpendError.invalidArchive("branchPath.depth")
         }
         let path = try packedFixed(reader.field(), count: 8, field: "pathBits")
         try reader.finish("branchPath")
-        return try KagemushaRecursiveSpendBranchPathV2(
+        return try KagemushaRecursiveSpendBranchPath(
             lineageRoot: root,
             depth: depth,
             pathBits: path
         )
     }
 
+    static func encodeBranchClaim(
+        _ value: KagemushaRecursiveSpendBranchClaim
+    ) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(branchPath(value.path))
+        writer.writeField(bytes(value.transitionTags.reduce(into: Data()) { result, tag in
+            result.append(tag)
+        }))
+        return writer.data
+    }
+
+    static func decodeBranchClaim(
+        _ data: Data
+    ) throws -> KagemushaRecursiveSpendBranchClaim {
+        var reader = KagemushaV2Reader(data)
+        let path = try decodeBranchPath(reader.field())
+        let flattenedTags = try decodeBytes(
+            reader.field(),
+            field: "branchClaim.transitionTags"
+        )
+        let expectedLength = Int(path.depth) * KagemushaRecursiveSpend.transitionTagBytes
+        guard flattenedTags.count == expectedLength else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "branchClaim.transitionTags"
+            )
+        }
+        var tags: [Data] = []
+        tags.reserveCapacity(Int(path.depth))
+        for start in stride(
+            from: 0,
+            to: flattenedTags.count,
+            by: KagemushaRecursiveSpend.transitionTagBytes
+        ) {
+            let end = start + KagemushaRecursiveSpend.transitionTagBytes
+            tags.append(Data(flattenedTags[start..<end]))
+        }
+        try reader.finish("branchClaim")
+        return try KagemushaRecursiveSpendBranchClaim(
+            path: path,
+            transitionTags: tags
+        )
+    }
+
+    private static func branchClaims(
+        _ values: [KagemushaRecursiveSpendBranchClaim]
+    ) throws -> Data {
+        try KagemushaRecursiveSpend.validateBranchClaims(values)
+        return try sequence(values.map(encodeBranchClaim))
+    }
+
+    private static func decodeBranchClaims(
+        _ data: Data,
+        field: String
+    ) throws -> [KagemushaRecursiveSpendBranchClaim] {
+        var reader = KagemushaV2Reader(data)
+        let count = try reader.uint64()
+        guard count > 0,
+              count <= UInt64(KagemushaRecursiveSpend.maximumBranchClaims) else {
+            throw KagemushaRecursiveSpendError.invalidArchive(field)
+        }
+        var claims: [KagemushaRecursiveSpendBranchClaim] = []
+        claims.reserveCapacity(Int(count))
+        for _ in 0..<count {
+            claims.append(try decodeBranchClaim(reader.field()))
+        }
+        try reader.finish(field)
+        try KagemushaRecursiveSpend.validateBranchClaims(claims)
+        return claims
+    }
+
     private static func artifactReference(
-        _ value: KagemushaRecursiveSpendArtifactReferenceV2
+        _ value: KagemushaRecursiveSpendArtifactReference
     ) -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(uint32(value.role.rawValue))
@@ -896,40 +1672,136 @@ public enum KagemushaRecursiveSpendV2Codecs {
         return writer.data
     }
 
+    private static func decodeArtifactReference(
+        _ data: Data
+    ) throws -> KagemushaRecursiveSpendArtifactReference {
+        var reader = KagemushaV2Reader(data)
+        guard let role = KagemushaRecursiveSpendArtifactRole(
+            rawValue: try scalarUInt32(reader.field(), field: "lineageArtifact.role")
+        ) else {
+            throw KagemushaRecursiveSpendError.invalidArchive("lineageArtifact.role")
+        }
+        let generation = try decodeString(reader.field(), field: "lineageArtifact.generation")
+        let circuitID = try decodeString(reader.field(), field: "lineageArtifact.circuitID")
+        let artifactType = try decodeString(reader.field(), field: "lineageArtifact.artifactType")
+        let sizeBytes = try scalarUInt64(reader.field(), field: "lineageArtifact.sizeBytes")
+        let sha256 = try packedFixed(reader.field(), count: 32, field: "lineageArtifact.sha256")
+        try reader.finish("lineageArtifact")
+        return try KagemushaRecursiveSpendArtifactReference(
+            role: role,
+            generation: generation,
+            circuitID: circuitID,
+            artifactType: artifactType,
+            sizeBytes: sizeBytes,
+            sha256: sha256
+        )
+    }
+
     private static func lineageWitness(
-        _ value: KagemushaRecursiveSpendLineageWitnessV2
+        _ value: KagemushaRecursiveSpendLineageWitness
     ) -> Data {
-        var transitions = OfflineCompactNoritoWriter()
-        transitions.writeUInt64LE(UInt64(value.transitionArchives.count))
-        for transition in value.transitionArchives {
-            transitions.writeField(bytes(transition))
+        var nodes = OfflineCompactNoritoWriter()
+        nodes.writeUInt64LE(UInt64(value.nodes.count))
+        for node in value.nodes {
+            nodes.writeField(lineageNode(node))
         }
         var writer = OfflineCompactNoritoWriter()
-        writer.writeField(transitions.data)
+        writer.writeField(nodes.data)
         writer.writeField(value.finalBundleDigest)
+        return writer.data
+    }
+
+    private static func lineageNode(
+        _ value: KagemushaRecursiveSpendLineageNode
+    ) -> Data {
+        var parents = OfflineCompactNoritoWriter()
+        parents.writeUInt64LE(UInt64(value.parentBundleDigests.count))
+        for parent in value.parentBundleDigests {
+            parents.writeField(constVec(parent))
+        }
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(value.resultBundleDigest)
+        writer.writeField(parents.data)
+        writer.writeField(uint32(value.proofStepCount))
+        writer.writeField(uint64(value.verifiedAtBlockHeight))
+        writer.writeField(bytes(value.transitionArchive))
         return writer.data
     }
 
     private static func decodeLineageWitnessPayload(
         _ data: Data
-    ) throws -> KagemushaRecursiveSpendLineageWitnessV2 {
+    ) throws -> KagemushaRecursiveSpendLineageWitness {
         var reader = KagemushaV2Reader(data)
-        var transitions = KagemushaV2Reader(try reader.field())
-        let count = try transitions.uint64()
-        guard count > 0, count <= 128 else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive("lineageWitness.transitions")
+        var nodeReader = KagemushaV2Reader(try reader.field())
+        let count = try nodeReader.uint64()
+        guard count > 0,
+              count <= UInt64(KagemushaRecursiveSpend.semanticLineageMaximumNodes) else {
+            throw KagemushaRecursiveSpendError.invalidArchive("lineageWitness.nodes")
         }
-        var archives: [Data] = []
-        archives.reserveCapacity(Int(count))
+        var nodes: [KagemushaRecursiveSpendLineageNode] = []
+        nodes.reserveCapacity(Int(count))
         for _ in 0..<count {
-            archives.append(try decodeBytes(try transitions.field(), field: "transitionArchive"))
+            nodes.append(try decodeLineageNode(nodeReader.field()))
         }
-        try transitions.finish("lineageWitness.transitions")
+        try nodeReader.finish("lineageWitness.nodes")
         let digest = try packedFixed(reader.field(), count: 32, field: "finalBundleDigest")
         try reader.finish("lineageWitness")
-        return try KagemushaRecursiveSpendLineageWitnessV2(
-            transitionArchives: archives,
+        return try KagemushaRecursiveSpendLineageWitness(
+            nodes: nodes,
             finalBundleDigest: digest
+        )
+    }
+
+    private static func decodeLineageNode(
+        _ data: Data
+    ) throws -> KagemushaRecursiveSpendLineageNode {
+        var reader = KagemushaV2Reader(data)
+        let resultDigest = try packedFixed(
+            reader.field(),
+            count: 32,
+            field: "lineageNode.resultBundleDigest"
+        )
+        var parentReader = KagemushaV2Reader(try reader.field())
+        let parentCount = try parentReader.uint64()
+        guard parentCount <= 2 else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "lineageNode.parentBundleDigests"
+            )
+        }
+        var parents: [Data] = []
+        parents.reserveCapacity(Int(parentCount))
+        for _ in 0..<parentCount {
+            let parent = try decodeConstVec(
+                try parentReader.field(),
+                field: "lineageNode.parentBundleDigest"
+            )
+            guard parent.count == 32 else {
+                throw KagemushaRecursiveSpendError.invalidArchive(
+                    "lineageNode.parentBundleDigest"
+                )
+            }
+            parents.append(parent)
+        }
+        try parentReader.finish("lineageNode.parentBundleDigests")
+        let proofStepCount = try scalarUInt32(
+            reader.field(),
+            field: "lineageNode.proofStepCount"
+        )
+        let verifiedAtBlockHeight = try scalarUInt64(
+            reader.field(),
+            field: "lineageNode.verifiedAtBlockHeight"
+        )
+        let transitionArchive = try decodeBytes(
+            reader.field(),
+            field: "lineageNode.transitionArchive"
+        )
+        try reader.finish("lineageNode")
+        return try KagemushaRecursiveSpendLineageNode(
+            resultBundleDigest: resultDigest,
+            parentBundleDigests: parents,
+            proofStepCount: proofStepCount,
+            verifiedAtBlockHeight: verifiedAtBlockHeight,
+            transitionArchive: transitionArchive
         )
     }
 
@@ -941,7 +1813,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
         acceptedAt: UInt64,
         deviceID: String,
         keyReference: Data,
-        key: KagemushaPublicKeyV2
+        key: KagemushaPublicKey
     ) -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(operationID)
@@ -955,18 +1827,37 @@ public enum KagemushaRecursiveSpendV2Codecs {
         return writer.data
     }
 
-    private static func publicKey(_ value: KagemushaPublicKeyV2) -> Data {
+    private static func publicKey(_ value: KagemushaPublicKey) -> Data {
         var compact = Data([value.algorithm])
         compact.append(value.payload)
-        return constVec(compact)
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeUInt64LE(UInt64(compact.count))
+        for byte in compact {
+            writer.writeField(Data([byte]))
+        }
+        return writer.data
     }
 
-    private static func decodePublicKey(_ data: Data) throws -> KagemushaPublicKeyV2 {
-        let compact = try decodeConstVec(data, field: "publicKey")
-        guard let algorithm = compact.first else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive("publicKey")
+    private static func decodePublicKey(_ data: Data) throws -> KagemushaPublicKey {
+        var reader = KagemushaV2Reader(data)
+        let count = try reader.uint64()
+        guard count > 0, count <= 8_193 else {
+            throw KagemushaRecursiveSpendError.invalidArchive("publicKey")
         }
-        return try KagemushaPublicKeyV2(
+        var compact = Data()
+        compact.reserveCapacity(Int(count))
+        for _ in 0..<count {
+            let element = try reader.field()
+            guard element.count == 1, let byte = element.first else {
+                throw KagemushaRecursiveSpendError.invalidArchive("publicKey")
+            }
+            compact.append(byte)
+        }
+        try reader.finish("publicKey")
+        guard let algorithm = compact.first else {
+            throw KagemushaRecursiveSpendError.invalidArchive("publicKey")
+        }
+        return try KagemushaPublicKey(
             algorithm: algorithm,
             payload: Data(compact.dropFirst())
         )
@@ -987,7 +1878,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
 
     private static func assetDefinitionID(_ value: String) throws -> Data {
         guard let decoded = AssetDefinitionAddress.decode(value) else {
-            throw KagemushaRecursiveSpendV2Error.invalidField("assetDefinitionID")
+            throw KagemushaRecursiveSpendError.invalidField("assetDefinitionID")
         }
         return constVec(decoded)
     }
@@ -996,7 +1887,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
         let bytes = try decodeConstVec(data, field: "assetDefinitionID")
         guard bytes.count == 16,
               let value = AssetDefinitionAddress.encode(uuidBytes: bytes) else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive("assetDefinitionID")
+            throw KagemushaRecursiveSpendError.invalidArchive("assetDefinitionID")
         }
         return value
     }
@@ -1006,7 +1897,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
             let address = try AccountAddress.parseEncoded(value, expectedPrefix: 0x02F1)
             return try address.compactNoritoAccountControllerPayload()
         } catch {
-            throw KagemushaRecursiveSpendV2Error.invalidField("accountID")
+            throw KagemushaRecursiveSpendError.invalidField("accountID")
         }
     }
 
@@ -1014,12 +1905,12 @@ public enum KagemushaRecursiveSpendV2Codecs {
         var reader = KagemushaV2Reader(data)
         let tag = try reader.uint32()
         guard tag == 0 else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive("accountID.controller")
+            throw KagemushaRecursiveSpendError.invalidArchive("accountID.controller")
         }
         let key = try decodePublicKey(reader.field())
         try reader.finish("accountID")
         guard let algorithm = SigningAlgorithm(noritoDiscriminant: key.algorithm) else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive("accountID.algorithm")
+            throw KagemushaRecursiveSpendError.invalidArchive("accountID.algorithm")
         }
         let address = try AccountAddress.fromAccount(
             publicKey: key.payload,
@@ -1032,7 +1923,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
         let parts = value.split(separator: "#", omittingEmptySubsequences: false)
         guard parts.count == 2 || parts.count == 3,
               let definition = AssetDefinitionAddress.decode(String(parts[0])) else {
-            throw KagemushaRecursiveSpendV2Error.invalidField("assetID")
+            throw KagemushaRecursiveSpendError.invalidField("assetID")
         }
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(try accountID(String(parts[1])))
@@ -1044,7 +1935,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
             let scope = String(parts[2])
             guard scope.hasPrefix(prefix),
                   let value = UInt64(scope.dropFirst(prefix.count)) else {
-                throw KagemushaRecursiveSpendV2Error.invalidField("assetID.scope")
+                throw KagemushaRecursiveSpendError.invalidField("assetID.scope")
             }
             var tagged = OfflineCompactNoritoWriter()
             tagged.writeUInt32LE(1)
@@ -1067,7 +1958,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
         case 1:
             dataspace = try scalarUInt64(scope.field(), field: "assetID.dataspace")
         default:
-            throw KagemushaRecursiveSpendV2Error.invalidArchive("assetID.scope")
+            throw KagemushaRecursiveSpendError.invalidArchive("assetID.scope")
         }
         try scope.finish("assetID.scope")
         try reader.finish("assetID")
@@ -1079,19 +1970,31 @@ public enum KagemushaRecursiveSpendV2Codecs {
         var reader = KagemushaV2Reader(data)
         let count = try reader.uint64()
         guard count > 0, count <= 128 else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive(field)
+            throw KagemushaRecursiveSpendError.invalidArchive(field)
         }
         var values: [Data] = []
         values.reserveCapacity(Int(count))
         for _ in 0..<count {
             let value = try decodeConstVec(try reader.field(), field: field)
             guard value.count == 32 else {
-                throw KagemushaRecursiveSpendV2Error.invalidArchive(field)
+                throw KagemushaRecursiveSpendError.invalidArchive(field)
             }
             values.append(value)
         }
         try reader.finish(field)
         return values
+    }
+
+    private static func sequence(_ values: [Data]) throws -> Data {
+        guard values.count <= Int(UInt32.max) else {
+            throw KagemushaRecursiveSpendError.invalidField("sequence")
+        }
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeUInt64LE(UInt64(values.count))
+        for value in values {
+            writer.writeField(value)
+        }
+        return writer.data
     }
 
     private static func optionalVerifierRecord(
@@ -1100,7 +2003,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
         guard let value else { return option(nil) }
         return option(try nestedPayload(
             value.recordBytes,
-            schema: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName,
+            schema: KagemushaRecursiveSpend.verifyingKeyRecordWireName,
             field: "verifierRecord"
         ))
     }
@@ -1113,13 +2016,29 @@ public enum KagemushaRecursiveSpendV2Codecs {
         return "\(backend):\(name)"
     }
 
+    private static func verifierKeyID(_ value: String) throws -> Data {
+        guard let separator = value.firstIndex(of: ":"),
+              separator != value.startIndex,
+              separator != value.index(before: value.endIndex) else {
+            throw KagemushaRecursiveSpendError.invalidField("verifierKeyID")
+        }
+        let backend = String(value[..<separator])
+        let name = String(value[value.index(after: separator)...])
+        try KagemushaRecursiveSpend.requirePortableText(backend, field: "verifierKeyID.backend")
+        try KagemushaRecursiveSpend.requirePortableText(name, field: "verifierKeyID.name")
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(string(backend))
+        writer.writeField(string(name))
+        return writer.data
+    }
+
     private static func decodeLineageMode(
         _ data: Data
-    ) throws -> KagemushaRecursiveSpendLineageModeV2 {
-        guard let value = KagemushaRecursiveSpendLineageModeV2(
+    ) throws -> KagemushaRecursiveSpendLineageMode {
+        guard let value = KagemushaRecursiveSpendLineageMode(
             rawValue: try scalarUInt32(data, field: "lineageMode")
         ) else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive("lineageMode")
+            throw KagemushaRecursiveSpendError.invalidArchive("lineageMode")
         }
         return value
     }
@@ -1133,9 +2052,9 @@ public enum KagemushaRecursiveSpendV2Codecs {
         schema: String,
         field: String
     ) throws -> Data {
-        try KagemushaRecursiveSpendV2.requireArchive(archive, schema: schema, field: field)
+        try KagemushaRecursiveSpend.requireArchive(archive, schema: schema, field: field)
         guard let decoded = noritoDecodeFrame(archive), decoded.paddingLength == 0 else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive(field)
+            throw KagemushaRecursiveSpendError.invalidArchive(field)
         }
         return decoded.payload
     }
@@ -1154,16 +2073,35 @@ public enum KagemushaRecursiveSpendV2Codecs {
 
     private static func decodeString(_ data: Data, field: String) throws -> String {
         var reader = KagemushaV2Reader(data)
-        let count = try reader.uint64()
-        guard count <= UInt64(Int.max) else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive(field)
-        }
-        let bytes = try reader.bytes(Int(count))
+        let count = try reader.compactLength()
+        let bytes = try reader.bytes(count)
         try reader.finish(field)
         guard let value = String(data: bytes, encoding: .utf8) else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive(field)
+            throw KagemushaRecursiveSpendError.invalidArchive(field)
         }
         return value
+    }
+
+    private static func decodeStringVector(
+        _ data: Data,
+        field: String,
+        maximumCount: UInt64
+    ) throws -> [String] {
+        var reader = KagemushaV2Reader(data)
+        let count = try reader.uint64()
+        guard count <= maximumCount else {
+            throw KagemushaRecursiveSpendError.invalidArchive(field)
+        }
+        var values: [String] = []
+        values.reserveCapacity(Int(count))
+        for index in 0..<count {
+            values.append(try decodeString(
+                reader.field(),
+                field: "\(field)[\(index)]"
+            ))
+        }
+        try reader.finish(field)
+        return values
     }
 
     private static func bytes(_ value: Data) -> Data {
@@ -1177,7 +2115,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
         var reader = KagemushaV2Reader(data)
         let count = try reader.uint64()
         guard count <= UInt64(Int.max) else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive(field)
+            throw KagemushaRecursiveSpendError.invalidArchive(field)
         }
         let value = try reader.bytes(Int(count))
         try reader.finish(field)
@@ -1199,7 +2137,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
         while !reader.isEmpty {
             let element = try reader.field()
             guard element.count == 1, let byte = element.first else {
-                throw KagemushaRecursiveSpendV2Error.invalidArchive(field)
+                throw KagemushaRecursiveSpendError.invalidArchive(field)
             }
             value.append(byte)
         }
@@ -1228,7 +2166,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
             try reader.finish(field)
             return value
         default:
-            throw KagemushaRecursiveSpendV2Error.invalidArchive(field)
+            throw KagemushaRecursiveSpendError.invalidArchive(field)
         }
     }
 
@@ -1238,6 +2176,11 @@ public enum KagemushaRecursiveSpendV2Codecs {
 
     private static func decodeOptionalUInt64(_ data: Data, field: String) throws -> UInt64? {
         try decodeOption(data, field: field).map { try scalarUInt64($0, field: field) }
+    }
+
+    private static func uint16(_ value: UInt16) -> Data {
+        var value = value.littleEndian
+        return withUnsafeBytes(of: &value) { Data($0) }
     }
 
     private static func uint32(_ value: UInt32) -> Data {
@@ -1273,14 +2216,14 @@ public enum KagemushaRecursiveSpendV2Codecs {
 
     private static func decodeBool(_ data: Data, field: String) throws -> Bool {
         guard data.count == 1, let byte = data.first, byte <= 1 else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive(field)
+            throw KagemushaRecursiveSpendError.invalidArchive(field)
         }
         return byte == 1
     }
 
     private static func packedFixed(_ data: Data, count: Int, field: String) throws -> Data {
         guard data.count == count else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive(field)
+            throw KagemushaRecursiveSpendError.invalidArchive(field)
         }
         return data
     }
@@ -1301,7 +2244,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
             digits = quotient.isEmpty ? [0] : quotient
         }
         guard output.count <= 16 else {
-            throw KagemushaRecursiveSpendV2Error.invalidField("u128")
+            throw KagemushaRecursiveSpendError.invalidField("u128")
         }
         output.append(contentsOf: repeatElement(UInt8(0), count: 16 - output.count))
         return output
@@ -1309,7 +2252,7 @@ public enum KagemushaRecursiveSpendV2Codecs {
 
     private static func decodeU128(_ data: Data) throws -> String {
         guard data.count == 16 else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive("u128")
+            throw KagemushaRecursiveSpendError.invalidArchive("u128")
         }
         var decimal = [0]
         for byte in data.reversed() {
@@ -1340,13 +2283,13 @@ private struct KagemushaV2Reader {
 
     mutating func finish(_ field: String) throws {
         guard isEmpty else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive("\(field).trailing")
+            throw KagemushaRecursiveSpendError.invalidArchive("\(field).trailing")
         }
     }
 
     mutating func uint8() throws -> UInt8 {
         guard offset < data.count else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive("truncated")
+            throw KagemushaRecursiveSpendError.invalidArchive("truncated")
         }
         defer { offset += 1 }
         return data[data.startIndex + offset]
@@ -1381,7 +2324,7 @@ private struct KagemushaV2Reader {
 
     mutating func bytes(_ count: Int) throws -> Data {
         guard count >= 0, offset + count <= data.count else {
-            throw KagemushaRecursiveSpendV2Error.invalidArchive("truncated")
+            throw KagemushaRecursiveSpendError.invalidArchive("truncated")
         }
         let start = data.startIndex + offset
         offset += count
@@ -1392,6 +2335,10 @@ private struct KagemushaV2Reader {
         try bytes(length())
     }
 
+    mutating func compactLength() throws -> Int {
+        try length()
+    }
+
     private mutating func length() throws -> Int {
         var value: UInt64 = 0
         var shift: UInt64 = 0
@@ -1400,21 +2347,21 @@ private struct KagemushaV2Reader {
             let byte = try uint8()
             let chunk = UInt64(byte & 0x7f)
             guard shift < 64, !(shift == 63 && chunk > 1) else {
-                throw KagemushaRecursiveSpendV2Error.invalidArchive("length")
+                throw KagemushaRecursiveSpendError.invalidArchive("length")
             }
             value |= chunk << shift
             if byte & 0x80 == 0 {
                 let width = offset - start
                 if width > 1, value < UInt64(1) << UInt64(7 * (width - 1)) {
-                    throw KagemushaRecursiveSpendV2Error.invalidArchive("length.nonCanonical")
+                    throw KagemushaRecursiveSpendError.invalidArchive("length.nonCanonical")
                 }
                 guard value <= UInt64(Int.max), value <= UInt64(data.count - offset) else {
-                    throw KagemushaRecursiveSpendV2Error.invalidArchive("length")
+                    throw KagemushaRecursiveSpendError.invalidArchive("length")
                 }
                 return Int(value)
             }
             shift += 7
         }
-        throw KagemushaRecursiveSpendV2Error.invalidArchive("length")
+        throw KagemushaRecursiveSpendError.invalidArchive("length")
     }
 }

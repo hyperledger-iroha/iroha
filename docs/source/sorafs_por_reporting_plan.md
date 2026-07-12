@@ -103,14 +103,20 @@ Generated: 2025-03-24 09:30:00 UTC
 
 Markdown reports link to the JSON artefact and the corresponding CAR snapshot from the transparency plan.
 
-## Challenge Authority
+## Scheduler Challenge Authority
 
-The verified coordinator scheduler is the sole challenge authority. It binds
-authenticated drand and provider VRF evidence to each `PorChallengeV1` before
-the challenge is persisted or published. There is no first-release client,
-CLI, or HTTP surface for injecting a challenge or recording a manual outcome.
-Provider proofs and auditor verdicts remain authenticated, replay-protected, and
-auditable through the production PoR lifecycle.
+Torii exposes no client-driven challenge ingress. The verified coordinator
+scheduler derives challenges only from authenticated drand and provider-VRF
+inputs under the active governance policy, then records the resulting
+`PorChallengeV1` in the governance DAG. The CLI is read/report oriented: it can
+inspect, export, and report scheduler outcomes but cannot issue challenges.
+
+Automation must fail closed when the external randomness or VRF evidence cannot
+be verified. CI validates deterministic scheduler fixtures without introducing a
+public mutation command.
+There is likewise no first-release client, CLI, or HTTP surface for recording a
+manual outcome. Provider proofs and auditor verdicts remain authenticated,
+replay-protected, and auditable through the production PoR lifecycle.
 
 ## Repair Automation Hooks
 
@@ -135,7 +141,7 @@ PoR reporting feeds directly into the repair pipeline (`docs/source/sorafs_repai
 Completion criteria:
 
 1. JSON/Markdown templates render successfully using staging data and pass schema validation.
-2. Manual challenge CLI requires valid tokens, logs audit entries, and rejects unauthorized attempts.
+2. Scheduler challenge derivation requires authenticated drand and provider-VRF evidence and fails closed when either cannot be verified.
 3. Repair pipeline consumes the generated reports and automatically aligns tickets/status without
    manual intervention.
 4. Reporting/archive rollout evidence is payload-free and bound to the

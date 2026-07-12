@@ -8082,6 +8082,7 @@ def test_android_codegen_sorafs_fixture_replay_uses_no_follow_io() -> None:
     assert "profile_handle = require_profile_handle(" in replay
     assert "now_unix_secs = require_metadata_int(" in replay
     assert "retention_epoch = require_metadata_int(" in replay
+    assert "retention_epoch <= now_unix_secs" in replay
     assert "min_replicas = require_metadata_int(" in replay
     assert "storage_class = require_storage_class(" in replay
     assert "payload_rel = require_relative_fixture_path(" in replay
@@ -8091,6 +8092,8 @@ def test_android_codegen_sorafs_fixture_replay_uses_no_follow_io() -> None:
     assert "fixture_meta[metadata_path_field] = metadata_path.as_posix()" in replay
     assert "def main(argv: list[str] | None = None) -> int" in replay
     assert "parser.parse_args(argv)" in replay
+    assert "Path(tempfile.gettempdir()).resolve(strict=True)" in replay
+    assert 'TemporaryDirectory(dir=temporary_root)' in replay
     assert "path_diagnostic_label" in replay
     assert 'getattr(os, "O_NOFOLLOW", 0)' in replay
     assert "os.open(path, read_open_flags())" in replay
@@ -8145,6 +8148,7 @@ def test_android_codegen_sorafs_fixture_replay_uses_no_follow_io() -> None:
         in replay_test
     )
     assert "test_build_fixture_example_uses_reviewed_metadata_timestamp" in replay_test
+    assert "test_main_rejects_nonfuture_retention_before_subprocess" in replay_test
     assert (
         "test_main_rejects_absolute_payload_metadata_path_before_subprocess_without_leaking"
         in replay_test
@@ -14922,6 +14926,11 @@ def test_sorafs_node_plan_docs_track_current_storage_routes() -> None:
         "/v1/sorafs/storage/state",
         "/v1/sorafs/storage/por-sample",
     )
+    unsupported_routes = (
+        "/v1/sorafs/storage/por-challenge",
+        "/v1/sorafs/storage/por-proof",
+        "/v1/sorafs/storage/por-verdict",
+    )
     stale_fragments = (
         "`POST /sorafs/pin`",
         "`GET /sorafs/chunks/{cid}`",
@@ -14937,12 +14946,10 @@ def test_sorafs_node_plan_docs_track_current_storage_routes() -> None:
         "/v1/sorafs/storage/por-verdict",
         "--features sorafs-storage",
     )
-    docs = (
-        *sorted(SORAFS_NODE_PLAN.parent.glob("sorafs_node_plan*.md")),
-        *sorted(SORAFS_NODE_PORTAL_DIR.glob("node-plan*.md")),
-    )
+    docs = (SORAFS_NODE_PLAN, SORAFS_NODE_PORTAL_DIR / "node-plan.md")
     missing_routes: dict[str, list[str]] = {}
     stale: dict[str, list[str]] = {}
+    unsupported: dict[str, list[str]] = {}
     openapi = read(TORII_OPENAPI_RS)
     torii_sorafs_api = read(TORII_SORAFS_API_RS)
 
@@ -14950,10 +14957,13 @@ def test_sorafs_node_plan_docs_track_current_storage_routes() -> None:
         source = read(path)
         missing = [route for route in required_routes if route not in source]
         matched_stale = [fragment for fragment in stale_fragments if fragment in source]
+        matched_unsupported = [route for route in unsupported_routes if route in source]
         if missing:
             missing_routes[str(path.relative_to(REPO_ROOT))] = missing
         if matched_stale:
             stale[str(path.relative_to(REPO_ROOT))] = matched_stale
+        if matched_unsupported:
+            unsupported[str(path.relative_to(REPO_ROOT))] = matched_unsupported
 
     missing_openapi = [
         route for route in required_routes if f'"{route}".to_owned()' not in openapi
@@ -14961,6 +14971,7 @@ def test_sorafs_node_plan_docs_track_current_storage_routes() -> None:
 
     assert missing_routes == {}
     assert stale == {}
+    assert unsupported == {}
     assert missing_openapi == []
     assert (
         'const TELEMETRY_ENDPOINT_POR_SAMPLE: &str = "/v1/sorafs/storage/por-sample";'
@@ -17799,7 +17810,7 @@ def test_reputation_live_service_surface_matcher_has_negative_controls() -> None
         "/v1/sorafs/reputation/weights",
         "/v1/sorafs/reputation/events",
         "/v1/sorafs/reputation/events/stream",
-        "/ws/reputation",
+        "/v1/sorafs/reputation/events/ws",
     )
     shipped_local_route_candidates = (
         "/v1/sorafs/reputation/ingest-canary",
@@ -18735,7 +18746,6 @@ def test_por_live_deployment_surface_matcher_has_negative_controls() -> None:
         "status",
         "export",
         "report",
-        "trigger",
         "sorafs-validate",
         "sorafs_cli",
         "por-rollout",

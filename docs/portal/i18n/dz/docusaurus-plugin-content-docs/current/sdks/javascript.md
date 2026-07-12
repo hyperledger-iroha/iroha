@@ -144,23 +144,23 @@ I18NF0000022X
 
 ## Offline readiness
 
-JavaScript integrations should use `GET /v1/offline/readiness` for offline feature discovery.
+JavaScript integrations should use `GET /v1/offline/readiness?asset_definition_id=xor%23wonderland` for offline feature discovery.
 Classic Offline Note issuance, redemption, and audit transaction paths are retired;
 Kagemusha readiness fields advertise the active offline payment implementation.
 
 ```js
-const readiness = await torii.getOfflineReadiness();
-console.log("kagemusha", readiness.offline_kagemusha_recursive_compact_available);
+const readiness = await torii.getOfflineReadiness("xor#wonderland");
+console.log("offline ready", readiness.ready, readiness.blockers);
 ```
 ## Offline readiness
 
-JavaScript integrations should use `GET /v1/offline/readiness` for offline feature discovery.
+JavaScript integrations should use `GET /v1/offline/readiness?asset_definition_id=xor%23wonderland` for offline feature discovery.
 Classic Offline Note issuance, redemption, and audit transaction paths are retired;
 Kagemusha readiness fields advertise the active offline payment implementation.
 
 ```ts
-const readiness = await torii.getOfflineReadiness();
-console.log("kagemusha", readiness.offline_kagemusha_recursive_compact_available);
+const readiness = await torii.getOfflineReadiness("xor#wonderland");
+console.log("offline ready", readiness.ready, readiness.blockers);
 ```
 ## Torii འདྲི་དཔྱད་དང་རྒྱུན་སྤེལ་ (ཝེབ་སོ་ཀེཊི་ཚུ།)
 
@@ -332,23 +332,18 @@ async function dialWithTelemetry(client: ToriiClient) {
 ཚད་ལྡན་ `connect.queue_depth`, `connect.queue_overflow_total`, དང་།
 `connect.queue_expired_total` ལམ་གྱི་ས་ཁྲ་ནང་ལུ་ གཞི་བསྟུན་འབད་ཡོདཔ་ཨིན།
 
-## རྒྱུན་སྤེལ་བལྟ་མི་དང་ བྱུང་ལས་འོད་རྟགས་ཚུ།
+## Live event streams
 
-`ToriiClient.streamEvents()` རང་བཞིན་གྱིས་ `/v1/events/sse` རང་བཞིན་དང་གཅིག་ཁར་ཨ་སིན་བསྐྱར་ལོག་འབད་མི་ཅིག་སྦེ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
-retries, དེ་འབདཝ་ལས་ Node/Bun CLIs གིས་ མཇུག་མཐའི་ཆུ་གཡུར་ལས་རིམ་ཚུ་ རཱསི་ཊི་སི་ཨེལ་ཨའི་གིས་འབད་དོ་བཟུམ་སྦེ་ ཅོག་འཐདཔ་འབད་ཚུགས།
-ཁྱོད་ཀྱི་ རན་བུཀ་ ཅ་རྙིང་ཚུ་དང་གཅིག་ཁར་ `Last-Event-ID` འོད་རྟགས་འདི་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ འབད་ཚུགས།
-ལས་སྦྱོར་ཅིག་ལོག་འགོ་བཙུགས་པའི་སྐབས་ བྱུང་ལས་ཚུ་ མ་མཆོང་པར་ རྒྱུན་ལམ་ཅིག་ ལོག་འགོ་བཙུགས།
+`ToriiClient.streamEvents()` exposes `/v1/events/sse` as a live-only async
+iterator. Torii retains no replay log for this route, so the helper has no
+`lastEventId` option and reconnecting can leave a gap. A terminal
+`event: stream_error` is yielded before the iterator ends; handle it explicitly
+instead of treating closure as a lossless continuation point.
 
-```ts
-import fs from "node:fs/promises";
+```js
 import { ToriiClient, extractPipelineStatusKind } from "@iroha/iroha-js";
 
 const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080");
-const cursorFile = process.env.STREAM_CURSOR_FILE ?? ".cache/torii.cursor";
-const resumeId = await fs
-  .readFile(cursorFile, "utf8")
-  .then((value) => value.trim())
-  .catch(() => null);
 const controller = new AbortController();
 
 process.once("SIGINT", () => controller.abort());
@@ -356,28 +351,26 @@ process.once("SIGTERM", () => controller.abort());
 
 for await (const event of torii.streamEvents({
   filter: { Pipeline: { Transaction: { status: "Committed" } } },
-  lastEventId: resumeId || undefined,
   signal: controller.signal,
 })) {
-  if (event.id) {
-    await fs.writeFile(cursorFile, `${event.id}\n`, "utf8");
+  if (event.event === "stream_error") {
+    console.error("terminal stream error", event.data);
+    break;
   }
   const status = event.data ? extractPipelineStatusKind(event.data) : null;
-  console.log(`[${event.event}] id=${event.id ?? "∅"} status=${status ?? "n/a"}`);
+  console.log(`[${event.event}] status=${status ?? "n/a"}`);
 }
 ```
 
-- `PIPELINE_STATUS` (དཔེར་ན་ `Pending`, `Applied`, ཡང་ན་ I18NI000000131X) ཡང་ན་ གཞི་སྒྲིག་འབད།
-  `STREAM_FILTER_JSON` གིས་ སི་ཨེལ་ཨའི་གིས་ ངོས་ལེན་འབད་མི་ ཚགས་མ་གཅིགཔོ་འདི་ བསྐྱར་རྩེད་འབད་ནི་ལུ་ཨིན།
-- I18NI000000133X གིས་ བསྐྱར་ལོག་འབད་མི་འདི་ གསོན་པོ་སྦེ་བཞགཔ་ཨིན།
-  བརྡ་རྟགས་ཐོབ་ཡོད། ཁྱོད་ལུ་འགོ་ཐོག་བྱུང་རིམ་དག་པ་ཅིག་རྐྱངམ་ཅིག་དགོ་པའི་སྐབས་ `STREAM_MAX_EVENTS=25` བརྒྱུད་དེ་འབད།
-  དུ་ཁ་བརྟག་དཔྱད་ཀྱི་དོན་ལུ་ཨིན།
-- I18NI000000135X གིས་ ངོས་འདྲ་བ་གཅིག་པ་ལུ་ མེ་ལོང་བཟོཝ་ཨིན།
-  `/v1/sumeragi/status/sse` དེ་འབདཝ་ལས་ མོས་མཐུན་གྱི་བརྡ་འཕྲིན་འདི་ སོ་སོ་སྦེ་ མཇུག་བསྡུཝ་ཨིན།
-  iterator གིས་ I18NI000000137X ལུ་གུས་ཞབས་འབདཝ་ཨིན།
-- ལཱའིཊི་ཀི་སི་ཨེལ་ཨའི་ (ད་རེས་ ད་ལྟོའི་གནས་སྟངས་, ,
-  env-var ཚགས་མ་བརྒལ་ནི་དང་ `extractPipelineStatusKind` དྲན་ཐོ་) ཇེ་ཨེསི་༤ ནང་ལག་ལེན་འཐབ་ཡོདཔ།
-  streaming/WeSocket wave srope བཀྲམ་སྤེལ་འབད་བཏུབ།
+- Switch `PIPELINE_STATUS` (for example `Pending`, `Applied`, or `Approved`) or set
+  `STREAM_FILTER_JSON` to use the same filters the CLI accepts.
+- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` keeps the iterator alive until a
+  signal is received; pass `STREAM_MAX_EVENTS=25` when you only need the first few events
+  for a smoke test.
+- `ToriiClient.streamSumeragiStatus()` exposes the separate
+  `/v1/sumeragi/status/sse` consensus telemetry feed.
+- See `javascript/iroha_js/recipes/streaming.mjs` for a live-only turnkey CLI with
+  environment-driven filters and explicit terminal-error handling.
 
 ## UAID ཡིག་ཆའི་ཡིག་ཆའི་སྣོད་ཐོ།
 

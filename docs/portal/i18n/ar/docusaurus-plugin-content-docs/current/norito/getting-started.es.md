@@ -16,14 +16,14 @@ translation_last_reviewed: 2026-02-07
 
 1. قم بتثبيت سلسلة أدوات Rust (1.76 أو أحدث) واستنساخ هذا المستودع.
 2. إنشاء أو تنزيل ثنائيات الدعم:
-   - `koto_compile` - المترجم Kotodama الذي يصدر الرمز الثانوي IVM/Norito
+   - `koto build` - المترجم Kotodama الذي يصدر الرمز الثانوي IVM/Norito
    - `ivm_run` و `ivm_tool` - أدوات التشغيل والفحص المحلي
    - `iroha_cli` - يتم استخدامه لاستكمال العقود عبر Torii
 
    يتوقع أن يكون ملف إنشاء المستودع ثنائيًا في `PATH`. يمكنك تنزيل المصنوعات المجمعة مسبقًا أو المجمعة من الكود الناشئ. إذا قمت بتجميع سلسلة الأدوات المحلية، قم بإضافة مساعدي Makefile إلى الثنائيات:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. تأكد من أن العقدة Iroha سيتم تشغيلها عند الانتهاء منها. تفترض الأمثلة السابقة أنه يمكن الوصول إلى Torii عبر عنوان URL الذي تم تكوينه في ملف `iroha_cli` (`~/.config/iroha/cli.toml`).
@@ -34,14 +34,13 @@ translation_last_reviewed: 2026-02-07
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
-الخيارات الرئيسية:- `--abi 1` تمت الموافقة على الإصدار ABI 1 (الوحيد المعتمد في لحظة الكتابة).
-- `--max-cycles 0` طلب القذف بدون حدود؛ قم بتثبيت رقم إيجابي للحصول على حشوة الدراجات لتجربة الشعور بالصفراء.
+الخيارات الرئيسية:- `ABI V1` تمت الموافقة على الإصدار ABI 1 (الوحيد المعتمد في لحظة الكتابة).
+- `--max-cycles 1000000` طلب القذف بدون حدود؛ قم بتثبيت رقم إيجابي للحصول على حشوة الدراجات لتجربة الشعور بالصفراء.
 
 ## 2. فحص القطعة الأثرية Norito (اختياري)
 
@@ -68,7 +67,7 @@ ivm_run target/examples/hello.to --args '{}'
 عندما تكون راضيًا عن العقد، أرسله بعقدة واحدة باستخدام CLI. توفير حساب المصدر ومفتاح الشركة والملف `.to` أو الحمولة Base64:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -77,8 +76,8 @@ iroha_cli app contracts deploy \
 يرسل الأمر حزمة بيان Norito + الرمز الثانوي لـ Torii ويعرض حالة المعاملة الناتجة. تم التأكيد مرة واحدة، يمكن استخدام تجزئة الكود الذي يظهر في الرد لاستعادة البيانات أو قائمة المثيلات:
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```## 5. إخراج كونترا Torii
 
 باستخدام الرمز الثانوي المسجل، يمكنك استدعاء تعليمات تشير إلى الكود المخزن مؤقتًا (ص. على سبيل المثال، في منتصف `iroha_cli ledger transaction submit` أو عميل التطبيق الخاص بك). تأكد من أن أذونات الحساب تسمح بالمكالمات المرغوبة (`set_account_detail`، `transfer_asset`، وما إلى ذلك).
@@ -86,7 +85,7 @@ iroha_cli app contracts instances --namespace apps --table
 ## نصائح وحل المشكلات
 
 - Usa `make examples-run` لتجميع النماذج وتنفيذها بخطوة واحدة فقط. قم بكتابة متغيرات الإعداد `KOTO`/`IVM` إذا لم تكن الثنائيات موجودة في `PATH`.
-- إذا أعاد `koto_compile` إصدار ABI، تحقق من أن المترجم والعقدة يدعمان ABI v1 (أخرج `koto_compile --abi` دون وسيطات لسرد الدعم).
+- إذا أعاد `koto build` إصدار ABI، تحقق من أن المترجم والعقدة يدعمان ABI v1 (أخرج `koto build --help` دون وسيطات لسرد الدعم).
 - El CLI يقبل مفاتيح الشركة السداسية أو Base64. للاختبار، يمكنك استخدام المفاتيح الصادرة بواسطة `iroha_cli tools crypto keypair`.
 - بعد إزالة الحمولات Norito، يساعد الأمر الفرعي `ivm_tool disassemble` على التعليمات المرتبطة بالكود Kotodama.
 

@@ -23,10 +23,10 @@ slug: /norito/quickstart
 
 - [Docker](https://docs.docker.com/engine/install/) עם Compose V2 פעיל (משמש להפעלת ה-peer לדוגמה שמוגדר ב-`defaults/docker-compose.single.yml`).
 - Rust toolchain (1.76+) לבניית הבינארים המסייעים אם אינכם מורידים את המפורסמים.
-- בינארים `koto_compile`, `ivm_run` ו-`iroha`. אפשר לבנות אותם מה-checkout של ה-workspace כפי שמוצג למטה או להוריד את release artifacts המתאימים:
+- בינארים `koto build`, `ivm_run` ו-`iroha`. אפשר לבנות אותם מה-checkout של ה-workspace כפי שמוצג למטה או להוריד את release artifacts המתאימים:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -50,28 +50,22 @@ docker compose -f defaults/docker-compose.single.yml up --build
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Default raw-IVM entrypoint used by ivm_run / transaction ivm.
-  kotoage fn main() permission(Admin) {
-    info("Hello from Kotodama");
-    write_detail();
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() permission(Admin) {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -83,15 +77,14 @@ KO
 קמפלו את החוזה לבייטקוד IVM/Norito (`.to`) והריצו אותו מקומית כדי לוודא ש-syscalls של ה-host מצליחים לפני שנוגעים ברשת:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-ה-runner מדפיס את הלוג `info("Hello from Kotodama")` ומבצע את syscall `SET_ACCOUNT_DETAIL` מול host מדומה. אם הבינארי האופציונלי `ivm_tool` זמין, `ivm_tool inspect target/quickstart/hello.to` מציג את ABI header, את feature bits ואת ה-entrypoints המיוצאים.
+ה-runner מדפיס את הלוג `debug::info("Hello from Kotodama")` ומבצע את syscall `SET_ACCOUNT_DETAIL` מול host מדומה. אם הבינארי האופציונלי `ivm_tool` זמין, `ivm_tool inspect target/quickstart/hello.to` מציג את ABI header, את feature bits ואת ה-entrypoints המיוצאים.
 
 ## 4. שליחת הבייטקוד דרך Torii
 

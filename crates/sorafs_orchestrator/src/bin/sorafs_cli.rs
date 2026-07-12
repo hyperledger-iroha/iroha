@@ -57,7 +57,7 @@ use iroha_data_model::{
     },
 };
 use iroha_version::codec::EncodeVersioned;
-use ivm::kotodama::compiler::Compiler;
+use ivm::kotodama::session::{CompileRequest, CompilerSession};
 use norito::{
     decode_from_bytes,
     derive::{NoritoDeserialize, NoritoSerialize},
@@ -1035,7 +1035,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         private_key: &client_config.private_key,
         gas_asset_id: None,
         alias_inputs: None,
-        api_version_hint: None,
     };
     let registration = if errors.is_empty() {
         submit_pin_register_with_fallback(
@@ -1310,7 +1309,7 @@ fn resolve_deploy_chain_discriminant(
 
 fn known_deploy_chain_discriminant(chain: &str) -> Option<u16> {
     match chain.trim() {
-        "iroha3-taira" | "809574f5-fee7-5e69-bfcf-52451e42d50f" => Some(369),
+        "iroha3-taira" | "fc56984b-2be7-431d-840e-21514d1883f0" => Some(369),
         "iroha3-nexus" | "00000000-0000-0000-0000-000000000753" => Some(753),
         "00000000-0000-0000-0000-000000000000" => {
             Some(iroha_config::parameters::defaults::common::chain_discriminant())
@@ -1539,11 +1538,6 @@ fn submit_pin_register_with_fallback(
         .send()
         .map_err(|err| format!("failed to submit manifest to Torii: {err}"))?;
     let status = response.status();
-    let api_version_hint = response
-        .headers()
-        .get("x-iroha-api-version")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
     let response_bytes = response
         .bytes()
         .map_err(|err| format!("failed to read Torii response: {err}"))?
@@ -1572,7 +1566,6 @@ fn submit_pin_register_with_fallback(
                 private_key: request.private_key,
                 gas_asset_id: request.gas_asset_id,
                 alias_inputs: request.alias_inputs,
-                api_version_hint: api_version_hint.as_deref(),
             },
             manifest,
             submitted_epoch,
@@ -1871,7 +1864,7 @@ fn gateway_url_for_cid(gateway_base_url: &str, cid_base32: &str) -> Result<Strin
     let base = Url::parse(gateway_base_url)
         .map_err(|err| format!("invalid gateway base URL `{gateway_base_url}`: {err}"))?;
     Ok(base
-        .join(&format!("sorafs/cid/{cid_base32}/"))
+        .join(&format!("sorafs/cid/{cid_base32}"))
         .map_err(|err| format!("failed to build gateway CID URL: {err}"))?
         .to_string())
 }
@@ -3142,7 +3135,7 @@ fn format_car_error(err: CarWriteError) -> String {
 
 fn usage() -> String {
     "Usage:
-  sorafs_cli norito build --source=PATH --bytecode-out=PATH [--abi-version=N] [--summary-out=PATH]
+  sorafs_cli norito build --source=PATH --bytecode-out=PATH [--summary-out=PATH]
   sorafs_cli deploy --payload=PATH --client-config=PATH [--torii-url=URL] [--submitted-epoch=EPOCH] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--pin-torii-url=URL...] [--no-peer-discovery] [--summary-out=PATH]
   sorafs_cli car pack --input=PATH --car-out=PATH [--chunker-handle=HANDLE] [--plan-out=PATH] [--summary-out=PATH]
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
@@ -15600,9 +15593,8 @@ fn manifest_build(raw_args: Vec<String>) -> Result<(), String> {
         .get("chunk_digest_sha3_256_hex")
         .and_then(Value::as_str)
         .ok_or_else(|| "summary missing `chunk_digest_sha3_256_hex`".to_string())?;
-    let chunk_digest = parse_digest_hex(chunk_digest_hex).map_err(|err| {
-        format!("invalid `chunk_digest_sha3_256_hex` in summary: {err}")
-    })?;
+    let chunk_digest = parse_digest_hex(chunk_digest_hex)
+        .map_err(|err| format!("invalid `chunk_digest_sha3_256_hex` in summary: {err}"))?;
 
     let root_cids = summary_obj
         .get("root_cids_hex")
@@ -15705,7 +15697,6 @@ fn manifest_build(raw_args: Vec<String>) -> Result<(), String> {
 fn norito_build(raw_args: Vec<String>) -> Result<(), String> {
     let mut source_spec: Option<String> = None;
     let mut bytecode_out: Option<PathBuf> = None;
-    let mut abi_version: Option<u8> = None;
     let mut summary_out: Option<PathBuf> = None;
 
     for arg in raw_args {
@@ -15715,12 +15706,6 @@ fn norito_build(raw_args: Vec<String>) -> Result<(), String> {
         match key {
             "--source" => source_spec = Some(value.to_string()),
             "--bytecode-out" => bytecode_out = Some(PathBuf::from(value)),
-            "--abi-version" => {
-                let parsed: u8 = value
-                    .parse()
-                    .map_err(|err| format!("invalid `--abi-version` value: {err}"))?;
-                abi_version = Some(parsed);
-            }
             "--summary-out" => summary_out = Some(PathBuf::from(value)),
             _ => {
                 return Err(format!(
@@ -15736,11 +15721,6 @@ fn norito_build(raw_args: Vec<String>) -> Result<(), String> {
     let bytecode_out = bytecode_out.ok_or_else(|| {
         "missing required `--bytecode-out=PATH` for `sorafs_cli norito build`".to_string()
     })?;
-    let abi_version = abi_version.unwrap_or(1);
-    if abi_version != 1 {
-        return Err(format!("unsupported abi_version {abi_version}; expected 1"));
-    }
-
     let (source_text, source_path) = if source_spec == "-" {
         let mut buf = String::new();
         io::stdin()
@@ -15754,10 +15734,26 @@ fn norito_build(raw_args: Vec<String>) -> Result<(), String> {
         (contents, Some(path))
     };
 
-    let compiler = Compiler::new().with_abi_version(abi_version);
-    let bytecode = compiler
-        .compile_source(&source_text)
-        .map_err(|err| format!("failed to compile Kotodama source: {err}"))?;
+    let source_name = source_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "<stdin>".to_owned());
+    let bytecode = CompilerSession::default()
+        .build(CompileRequest {
+            source: &source_text,
+            source_name: Some(&source_name),
+        })
+        .map_err(|diagnostics| {
+            format!(
+                "failed to compile Kotodama source:\n{}",
+                diagnostics.render_human()
+            )
+        })?
+        .artifact;
+    let abi_version = ivm::ProgramMetadata::parse(&bytecode)
+        .map_err(|err| format!("compiler produced invalid Kotodama artifact: {err}"))?
+        .metadata
+        .abi_version;
 
     write_bytes(&bytecode_out, &bytecode)?;
 
@@ -15927,8 +15923,7 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         .map(|specs| chunk_digest_sha3_from_specs(specs));
     let explicit_chunk_digest = chunk_digest_hex_arg
         .map(|hex| {
-            parse_digest_hex(&hex)
-                .map_err(|err| format!("invalid `--chunk-digest-sha3`: {err}"))
+            parse_digest_hex(&hex).map_err(|err| format!("invalid `--chunk-digest-sha3`: {err}"))
         })
         .transpose()?;
     if let (Some(explicit), Some(from_plan)) = (explicit_chunk_digest, plan_digest)
@@ -16017,7 +16012,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
             private_key: &private_key,
             gas_asset_id: gas_asset_id.as_deref(),
             alias_inputs: alias_inputs.as_ref(),
-            api_version_hint: None,
         },
         &authority_literal,
         &manifest,
@@ -16469,7 +16463,6 @@ struct ManifestSubmitRequest<'a> {
     private_key: &'a PrivateKey,
     gas_asset_id: Option<&'a str>,
     alias_inputs: Option<&'a AliasInputs>,
-    api_version_hint: Option<&'a str>,
 }
 
 fn sign_manifest_submit_fallback_transaction(
@@ -16532,17 +16525,10 @@ fn submit_manifest_via_transaction_endpoint(
         .torii_base_url
         .join("transaction")
         .map_err(|err| format!("failed to build Torii transaction endpoint URL: {err}"))?;
-    let mut request_builder = request
+    let request_builder = request
         .client
         .post(tx_endpoint.as_str())
         .header(CONTENT_TYPE, "application/x-norito");
-    if let Some(version) = request
-        .api_version_hint
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        request_builder = request_builder.header("x-iroha-api-version", version);
-    }
     let response = request_builder
         .body(transaction.encode_versioned())
         .send()
@@ -22502,7 +22488,10 @@ fn build_pin_register_payload(
         Value::from(BASE64_STANDARD.encode(manifest_payload)),
     );
     map.insert("submitted_epoch".into(), Value::from(submitted_epoch));
-    if let Some(gas_asset_id) = gas_asset_id.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(gas_asset_id) = gas_asset_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         map.insert("gas_asset_id".into(), Value::from(gas_asset_id));
     }
 
@@ -23158,8 +23147,8 @@ mod tests {
             payload["authority"].as_str().expect("authority literal"),
             authority_literal
         );
-        let expected_manifest_payload = BASE64_STANDARD
-            .encode(manifest.encode().expect("canonical manifest payload"));
+        let expected_manifest_payload =
+            BASE64_STANDARD.encode(manifest.encode().expect("canonical manifest payload"));
         assert_eq!(
             payload["manifest_payload"]
                 .as_str()

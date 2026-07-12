@@ -120,23 +120,47 @@ export interface NexusFinalizedTransactionResult {
   hash?: string | Buffer | Uint8Array | ArrayBuffer;
 }
 
-export interface NexusFinalizeOptions {
-  wait?: boolean;
+export interface NexusFinalizeBaseOptions {
+  signingPublicKey?: Buffer | Uint8Array | ArrayBuffer | string;
+  toriiClient?: NexusToriiClient;
+}
+
+/** A non-string iterable of exact Torii pipeline status labels. */
+export type NexusStatusIterable = Iterable<string> & object;
+
+export interface NexusWaitFinalizeOptions extends NexusFinalizeBaseOptions {
+  wait?: true;
   intervalMs?: number;
   timeoutMs?: number | null;
   maxAttempts?: number | null;
   scope?: "local" | "auto" | "global";
-  successStatuses?: readonly string[];
-  failureStatuses?: readonly string[];
+  /** At most 32 raw entries are consumed before duplicate removal. */
+  successStatuses?: NexusStatusIterable;
+  /** At most 32 raw entries are consumed before duplicate removal. */
+  failureStatuses?: NexusStatusIterable;
   onStatus?: (
     status: string | null,
     payload: unknown,
     attempt: number,
   ) => void | Promise<void>;
   signal?: AbortSignal;
-  signingPublicKey?: Buffer | Uint8Array | ArrayBuffer | string;
-  toriiClient?: NexusToriiClient;
 }
+
+export interface NexusNoWaitFinalizeOptions extends NexusFinalizeBaseOptions {
+  wait: false;
+  intervalMs?: never;
+  timeoutMs?: never;
+  maxAttempts?: never;
+  scope?: never;
+  successStatuses?: never;
+  failureStatuses?: never;
+  onStatus?: never;
+  signal?: never;
+}
+
+export type NexusFinalizeOptions =
+  | NexusWaitFinalizeOptions
+  | NexusNoWaitFinalizeOptions;
 
 export interface NexusTransferReceipt {
   signedTransaction: Buffer;
@@ -176,13 +200,43 @@ export interface NexusTransactionCodec {
 
 export interface NexusToriiClient {
   submitTransaction(payload: Buffer): Promise<unknown>;
+  /** Required when finalize options omit `wait` or set it to `true`. */
   waitForTransactionStatus?(hashHex: string, options?: Record<string, unknown>): Promise<unknown>;
+}
+
+export type NexusAppErrorPhase =
+  | "validation"
+  | "finalization"
+  | "submission"
+  | "status_wait";
+
+export type NexusSubmissionState =
+  | "not_submitted"
+  | "unknown"
+  | "submitted";
+
+export interface NexusAppErrorContext {
+  phase?: NexusAppErrorPhase;
+  submissionState?: NexusSubmissionState;
+  signedTransactionHashHex?: string;
+  submission?: unknown;
+  status?: unknown;
 }
 
 export class NexusAppError extends Error {
   readonly code: string;
   readonly cause?: unknown;
-  constructor(code: string, message: string, cause?: unknown);
+  readonly phase: NexusAppErrorPhase;
+  readonly submissionState: NexusSubmissionState;
+  readonly signedTransactionHashHex?: string;
+  readonly submission?: unknown;
+  readonly status?: unknown;
+  constructor(
+    code: string,
+    message: string,
+    cause?: unknown,
+    context?: NexusAppErrorContext,
+  );
 }
 
 export class NexusAppClient {

@@ -152,8 +152,8 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
     }
 
     private static let supportedFirstReleasePlatforms: Set<String> = [
-        OfflineNoteV2Constants.iosPlatform,
-        OfflineNoteV2Constants.androidPlatform,
+        AttestedOfflineNoteConstants.iosPlatform,
+        AttestedOfflineNoteConstants.androidPlatform,
     ]
 
     private static func requireOptionalExactNonEmptyText(_ value: String?, field: String) throws {
@@ -255,9 +255,9 @@ public struct ToriiOfflineDeviceProof: Codable, Sendable, Equatable {
     }
 
     private static let supportedFirstReleasePlatforms: Set<String> = [
-        OfflineNoteV2Constants.iosPlatform,
-        OfflineNoteV2Constants.iosAppAttestPlatform,
-        OfflineNoteV2Constants.androidPlatform,
+        AttestedOfflineNoteConstants.iosPlatform,
+        AttestedOfflineNoteConstants.iosAppAttestPlatform,
+        AttestedOfflineNoteConstants.androidPlatform,
     ]
 
     private static func isExactNonEmptyText(_ value: String) -> Bool {
@@ -777,20 +777,6 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
         case deviceProof = "device_proof"
         case senderSignatureBase64 = "sender_signature_base64"
         case createdAtMs = "created_at_ms"
-    }
-}
-
-public struct ToriiOfflineCashEnvelope: Codable, Sendable, Equatable {
-    public let lineageState: ToriiOfflineCashState
-
-    public init(
-        lineageState: ToriiOfflineCashState
-    ) {
-        self.lineageState = lineageState
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case lineageState = "lineage_state"
     }
 }
 

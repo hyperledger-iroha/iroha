@@ -52,7 +52,7 @@ Content-Type: application/norito+v1
 | 500 Внутренняя ошибка | Неожиданный сбой (зарегистрированный + оповещение). |
 
 ```
-GET /v1/da/proof_policies
+GET /v1/da/proof-policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ Accept: application/json | application/x-norito
 не требуется дополнительный обход для привязки доказательства к активному набору политик.
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v1/da/proof-policies/snapshot
 Accept: application/json | application/x-norito
 ```
 

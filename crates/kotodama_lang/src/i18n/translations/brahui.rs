@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "فنکشن `{func}` ءِ `{name}` پارامیٹر ہرگیز کار نئیں بوت",
     lint_unreachable_after_return: "{context} ءِ نا رسائی دستو پابند بوت؛ return ءِ پچھوں کوڈ نہ چلے",
     lint_ok: "ٹھیک",
-    lint_usage: "کاربرد: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "کاربرد: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "دیدا سورانءَ Kotodama lint چل کن.",
     ..english::MESSAGES
 };

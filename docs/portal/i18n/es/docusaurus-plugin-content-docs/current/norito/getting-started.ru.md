@@ -16,14 +16,14 @@ Este краткое руководство показывает minимальн�
 
 1. Instale la cadena de herramientas de Rust (1.76 o más) y cierre este repositorio.
 2. Соберите или скачайте вспомогательные бинарники:
-   - `koto_compile` - compilador Kotodama, generador de batería IVM/Norito
+   - `koto build` - compilador Kotodama, generador de batería IVM/Norito
    - `ivm_run` y `ivm_tool` - Utilidades locales de captura e inspección
    - `iroha_cli` - Utilizado para implementar contratos con Torii
 
    El repositorio Makefile contiene estos archivos binarios en `PATH`. Вы moжете скачать готовые артефакты или собрать их из исходников. Si está compilando la cadena de herramientas localmente, utilice el asistente Makefile con binarios:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. Asegúrese de utilizar Iroha antes de implementarlo. Primero, no predisponga, ya que Torii inserta la URL en el perfil `iroha_cli` (`~/.config/iroha/cli.toml`).
@@ -34,14 +34,13 @@ En el repositorio hay un contrato minimo "hola mundo" en `examples/hello/hello.k
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
-Ключевые флаги:- `--abi 1` contrato físico en ABI versión 1 (versión actualizada en momento de inicio).
-- `--max-cycles 0` запрашивает неограниченное выполнение; установите положительное число, чтобы ограничить padding циклов для zero-knowledge доказательств.
+Ключевые флаги:- `ABI V1` contrato físico en ABI versión 1 (versión actualizada en momento de inicio).
+- `--max-cycles 1000000` запрашивает неограниченное выполнение; установите положительное число, чтобы ограничить padding циклов для zero-knowledge доказательств.
 
 ## 2. Проверить артефакт Norito (opcional)
 
@@ -68,7 +67,7 @@ Primero, `hello` muestra el registro y la llamada al sistema `SET_ACCOUNT_DETAIL
 Para establecer un contrato, instale el dispositivo en la CLI. Consulte el autor de la cuenta, haga clic en el archivo libre `.to`, libre de carga útil Base64:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -77,8 +76,8 @@ iroha_cli app contracts deploy \
 El comando ejecuta el paquete de manifiesto Norito + el conjunto de componentes Torii y cambia el estado de la transmisión. Después de usar este código, es posible utilizar un manifestante o una instalación específica:
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ## 5. Запуск через ToriiDespués de registrarse en el sistema, puede utilizar su propio sistema de instrucciones, cómo utilizar el código binario (por ejemplo, (por ejemplo `iroha_cli ledger transaction submit` o por una cuenta de cliente). Tenga en cuenta que esta cuenta tiene varias llamadas al sistema (`set_account_detail`, `transfer_asset` y t.d.).
@@ -86,7 +85,7 @@ iroha_cli app contracts instances --namespace apps --table
 ## Problemas relacionados con la restauración y la restauración
 
 - Utilice `make examples-run` para conectar y desconectar los primeros pulsadores. Utilice la configuración permanente `KOTO`/`IVM`, ni binarias no conectadas a `PATH`.
-- Si `koto_compile` incluye la versión ABI, compruebe qué compilador y usuario utiliza en ABI v1 (descarga `koto_compile --abi` sin аргументов, чтобы увидеть поддержку).
+- Si `koto build` incluye la versión ABI, compruebe qué compilador y usuario utiliza en ABI v1 (descarga `koto build --help` sin аргументов, чтобы увидеть поддержку).
 - CLI configura las teclas en hexadecimal o Base64. Para realizar la prueba, es posible utilizar teclas de acceso `iroha_cli tools crypto keypair`.
 - Al instalar cargas útiles Norito en el comando `ivm_tool disassemble`, el equipo puede seguir instrucciones de instalación Kotodama.
 

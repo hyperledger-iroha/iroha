@@ -71,16 +71,6 @@ val headers = CanonicalRequestSigner.signingHeaders("<i105-account-id>", "get", 
 - Owner: Torii Platform.
 - Notes: Response is a Norito JSON body with `items`/`total`, matching SDK pagination helpers.
 
-### Alias OPRF evaluate (`POST /v1/aliases/voprf/evaluate`) — Covered
-- Handler: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
-- DTOs: `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`
-  (`crates/iroha_torii/src/routing.rs:809-865`).
-- Router binding: `Torii::add_alias_routes` (`crates/iroha_torii/src/lib.rs:6357-6380`).
-- Tests: inline handler tests (`crates/iroha_torii/src/lib.rs:9945-9986`) plus SDK coverage
-  (`javascript/iroha_js/test/toriiClient.test.js:72`).
-- Owner: Torii Platform.
-- Notes: Response surface enforces deterministic hex and backend identifiers; SDKs consume the DTO.
-
 ### Proof events SSE (`GET /v1/events/sse`) — Covered
 - Handler: `handle_v1_events_sse` with filter support (`crates/iroha_torii/src/routing.rs:14008-14133`).
 - DTOs: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) plus proof filter wiring.
@@ -146,7 +136,7 @@ val headers = CanonicalRequestSigner.signingHeaders("<i105-account-id>", "get", 
   route and that OpenAPI generation stays in sync.
 - Endpoint-specific suites cover account queries, contract lifecycle, ZK verifying keys, SSE proof filters, and Nexus
   Connect behaviours.
-- SDK parity harnesses (JavaScript, Swift, Python) already consume Alias VOPRF and SSE endpoints; no additional work
+- SDK parity harnesses (JavaScript, Swift, Python) already consume the supported alias and SSE endpoints; no additional work
   required.
 
 ## Keeping this mirror up to date

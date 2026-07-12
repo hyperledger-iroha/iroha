@@ -88,6 +88,17 @@ public struct LocalZkAssetMerklePathProvider: ZkAssetMerklePathProvider {
         return out
     }
 
+    /// Derive the padded path at the current frontier. This helper is intended
+    /// for deterministic local testing; production wallets consume Torii's
+    /// independently validated `next_zero_path` instead.
+    public func nextZeroPath(asset: String) throws -> ZkAssetMerklePath {
+        try validateAsset(asset)
+        guard commitments.count < Self.confidentialTreeCapacityV2 else {
+            throw ZkAssetMerklePathError.invalidField("commitmentHistory")
+        }
+        return try computePath(leafIndex: commitments.count)
+    }
+
     private func computePath(leafIndex: Int) throws -> ZkAssetMerklePath {
         var layer = commitments.map { Data($0) }
         layer.reserveCapacity(Self.confidentialTreeCapacityV2)
@@ -213,6 +224,19 @@ public struct ZkAssetMerklePath: Equatable, Sendable {
         guard rootAtHeight == expectedRoot else {
             return false
         }
+        return try root(replacingLeafWith: commitment, hasher: hasher) == expectedRoot
+    }
+
+    /// Recompute the path root after replacing its leaf with one exact
+    /// commitment. Kagemusha uses the authoritative next-zero path to derive
+    /// the post-transfer root for a newly appended output.
+    public func root(
+        replacingLeafWith commitment: Data,
+        hasher: ZkAssetMerkleHasher = PastaPoseidonNodeHasher()
+    ) throws -> Data {
+        guard commitment.count == 32 else {
+            throw ZkAssetMerklePathError.invalidField("commitment")
+        }
         var current = Data(commitment)
         for index in siblings.indices {
             if directions[index] == 0 {
@@ -221,7 +245,7 @@ public struct ZkAssetMerklePath: Equatable, Sendable {
                 current = try hasher.hashPair(left: siblings[index], right: current)
             }
         }
-        return current == expectedRoot
+        return current
     }
 }
 
@@ -352,15 +376,25 @@ public struct ToriiZkMerklePathEntry: Decodable, Equatable, Sendable {
 }
 
 public struct ToriiZkMerklePathResponse: Decodable, Equatable, Sendable {
+    public static let confidentialTreeDepthV2 = 16
+    public static let confidentialTreeCapacityV2 = 1 << confidentialTreeDepthV2
+
     public let root: Data
     public let frontierLen: Int
     public let treeDepth: Int
+    /// Inclusion path for the padded zero leaf at `frontierLen`.
+    ///
+    /// One-input confidential proofs require this second path for their
+    /// disabled input slot. Keeping it in the typed response avoids fetching
+    /// or reconstructing the complete confidential tree on the wallet.
+    public let nextZeroPath: ToriiZkMerklePathEntry?
     public let paths: [ToriiZkMerklePathEntry]
 
     private enum CodingKeys: String, CodingKey {
         case root
         case frontierLen = "frontier_len"
         case treeDepth = "tree_depth"
+        case nextZeroPath = "next_zero_path"
         case paths
     }
 
@@ -372,6 +406,10 @@ public struct ToriiZkMerklePathResponse: Decodable, Equatable, Sendable {
         )
         frontierLen = try container.decode(Int.self, forKey: .frontierLen)
         treeDepth = try container.decode(Int.self, forKey: .treeDepth)
+        nextZeroPath = try container.decodeIfPresent(
+            ToriiZkMerklePathEntry.self,
+            forKey: .nextZeroPath
+        )
         paths = try container.decode([ToriiZkMerklePathEntry].self, forKey: .paths)
         guard frontierLen >= 0, frontierLen <= Int(Int32.max) else {
             throw DecodingError.dataCorruptedError(
@@ -380,12 +418,33 @@ public struct ToriiZkMerklePathResponse: Decodable, Equatable, Sendable {
                 debugDescription: "frontier_len must be a u32-compatible integer"
             )
         }
-        guard treeDepth >= 0, treeDepth <= Int(Int32.max) else {
+        guard treeDepth > 0, treeDepth <= Self.confidentialTreeDepthV2 else {
             throw DecodingError.dataCorruptedError(
                 forKey: .treeDepth,
                 in: container,
-                debugDescription: "tree_depth must be a u32-compatible integer"
+                debugDescription: "tree_depth must fit confidential-v2"
             )
+        }
+        let responseCapacity = 1 << treeDepth
+        guard frontierLen <= responseCapacity else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "frontier_len must fit within tree_depth"
+            ))
+        }
+        if let nextZeroPath {
+            guard frontierLen < responseCapacity,
+                  nextZeroPath.commitment == Data(repeating: 0, count: 32),
+                  nextZeroPath.leafIndex == frontierLen,
+                  nextZeroPath.root == root,
+                  nextZeroPath.siblings.count == treeDepth,
+                  nextZeroPath.directions.count == treeDepth,
+                  nextZeroPath.witnessNodes.count == treeDepth else {
+                throw DecodingError.dataCorrupted(.init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "next_zero_path must prove the padded leaf at frontier_len"
+                ))
+            }
         }
         for (index, path) in paths.enumerated() {
             guard path.root == root else {
@@ -459,9 +518,34 @@ public struct ToriiZkMerklePathResponse: Decodable, Equatable, Sendable {
         }
         return out
     }
+
+    /// Return and cryptographically verify the authoritative padded-zero path
+    /// used as the second path in one-input confidential proofs.
+    public func validatedNextZeroPath(
+        hasher: ZkAssetMerkleHasher = PastaPoseidonNodeHasher()
+    ) throws -> ZkAssetMerklePath {
+        guard let entry = nextZeroPath else {
+            throw ZkAssetMerklePathError.invalidField("next_zero_path")
+        }
+        let path = try ZkAssetMerklePath(
+            leafIndex: UInt64(entry.leafIndex),
+            siblings: entry.siblings,
+            directions: entry.directions,
+            rootAtHeight: root,
+            heightOrIndex: UInt64(frontierLen)
+        )
+        guard try path.verify(
+            commitment: Data(repeating: 0, count: 32),
+            expectedRoot: root,
+            hasher: hasher
+        ) else {
+            throw ZkAssetMerklePathError.verificationFailed("next_zero_path")
+        }
+        return path
+    }
 }
 
-private enum StrictJSONDuplicateKeyRejector {
+enum StrictJSONDuplicateKeyRejector {
     static func rejectDuplicateObjectKeys(in data: Data) throws {
         guard let text = String(data: data, encoding: .utf8) else {
             throw ZkAssetMerklePathError.invalidField("json")

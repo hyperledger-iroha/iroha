@@ -28,6 +28,8 @@ The `/v1/query` endpoint accepts optional query-string parameters (reserved for 
   current cursor value before resolving its certified merge sidecar; sorted
   queries charge their bounded global scan during `Start` and reuse the
   materialized window on continuation.
+- The normative storage, authorization, expiry, and count rules are defined in
+  [Cursor pagination](torii/cursor_pagination.md).
 
 Notes:
 - If `cursor_mode` is omitted, the server uses the default from `pipeline.query_default_cursor_mode`.
@@ -44,7 +46,10 @@ When telemetry is enabled (`telemetry_enabled=true`):
 
 ### Determinism and Snapshot Semantics
 
-- All queries execute against a captured `StateView`; live state changes made after capture do not affect an in-flight stored-cursor continuation.
+- The initial request executes against a captured `StateView`. Exact or
+  materialized stored queries retain their iterator, while bounded unsorted
+  continuations may replay against a fresh view. See
+  [Cursor pagination](torii/cursor_pagination.md) for the precise lifecycle.
 - Ephemeral mode materializes the first batch and returns it. Clients must paginate by issuing new Start requests with updated pagination.
 
 ### Examples (Conceptual)

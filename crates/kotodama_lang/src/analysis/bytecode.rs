@@ -1,7 +1,7 @@
 use std::{collections::HashSet, error::Error, fmt};
 
 use super::{AnalysisCategory, AnalysisFinding};
-use crate::{VMError, instruction::wide, metadata::ProgramMetadata};
+use crate::{VMError, encoding, instruction::wide, metadata::ProgramMetadata, syscalls};
 
 /// Result of analysing a Kotodama bytecode artifact.
 #[derive(Debug)]
@@ -56,7 +56,7 @@ pub fn analyze_bytecode(bytes: &[u8]) -> Result<BytecodeAnalysis, BytecodeAnalys
     }
     let mut findings = Vec::new();
 
-    let mut arithmetic_seen: HashSet<u8> = HashSet::new();
+    let mut arithmetic_seen: HashSet<u32> = HashSet::new();
     let mut last_store_pc: Option<u64> = None;
 
     for (idx, chunk) in code.chunks_exact(4).enumerate() {
@@ -72,7 +72,7 @@ pub fn analyze_bytecode(bytes: &[u8]) -> Result<BytecodeAnalysis, BytecodeAnalys
             | wide::arithmetic::DIVU
             | wide::arithmetic::REM
             | wide::arithmetic::REMU => {
-                if arithmetic_seen.insert(opcode) {
+                if arithmetic_seen.insert(u32::from(opcode)) {
                     findings.push(AnalysisFinding::warning(
                         AnalysisCategory::BytecodeStatic,
                         "bytecode-arithmetic",
@@ -101,6 +101,19 @@ pub fn analyze_bytecode(bytes: &[u8]) -> Result<BytecodeAnalysis, BytecodeAnalys
                     ));
                 }
             }
+            wide::system::SYSTEM => {
+                let syscall = encoding::wide::decode_syscallx(word);
+                if is_numeric_arithmetic_syscall(syscall) && arithmetic_seen.insert(syscall) {
+                    findings.push(AnalysisFinding::warning(
+                        AnalysisCategory::BytecodeStatic,
+                        "bytecode-arithmetic",
+                        format!(
+                            "Checked numeric syscall `{}` at pc=0x{pc:x} can reject an unrepresentable result; callers must preserve its deterministic failure semantics",
+                            syscalls::syscall_name(syscall).unwrap_or("UNKNOWN_NUMERIC")
+                        ),
+                    ));
+                }
+            }
             _ => {}
         }
         if let Some(store_pc) = last_store_pc
@@ -114,6 +127,33 @@ pub fn analyze_bytecode(bytes: &[u8]) -> Result<BytecodeAnalysis, BytecodeAnalys
         metadata: parsed.metadata,
         findings,
     })
+}
+
+fn is_numeric_arithmetic_syscall(number: u32) -> bool {
+    matches!(
+        number,
+        syscalls::SYSCALL_INT_NEG
+            | syscalls::SYSCALL_INT_ADD
+            | syscalls::SYSCALL_INT_SUB
+            | syscalls::SYSCALL_INT_MUL
+            | syscalls::SYSCALL_INT_DIV
+            | syscalls::SYSCALL_INT_REM
+            | syscalls::SYSCALL_INT_WRAP_NEG
+            | syscalls::SYSCALL_INT_WRAP_ADD
+            | syscalls::SYSCALL_INT_WRAP_SUB
+            | syscalls::SYSCALL_INT_WRAP_MUL
+            | syscalls::SYSCALL_DECIMAL_NEG
+            | syscalls::SYSCALL_DECIMAL_ADD
+            | syscalls::SYSCALL_DECIMAL_SUB
+            | syscalls::SYSCALL_DECIMAL_MUL
+            | syscalls::SYSCALL_DECIMAL_DIV_EXACT
+            | syscalls::SYSCALL_DECIMAL_DIV_ROUND
+            | syscalls::SYSCALL_QUANTITY_ADD
+            | syscalls::SYSCALL_QUANTITY_SUB
+            | syscalls::SYSCALL_QUANTITY_MUL_DECIMAL
+            | syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_EXACT
+            | syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_ROUND
+    )
 }
 
 /// Execute the bytecode within a runtime harness when available.
@@ -161,6 +201,9 @@ mod tests {
     use crate::compiler::Compiler as KotodamaCompiler;
     use norito::json as norito_json_mod;
 
+    const DEPLOYABLE_FUZZ_FIXTURE: &str =
+        "seiyaku BytecodeAnalysis { view fn fuzz_seed() -> int { return 0; } }";
+
     fn build_metadata_payload(
         meta: &ProgramMetadata,
         iteration: usize,
@@ -198,7 +241,9 @@ mod tests {
     #[test]
     fn analyze_detects_arithmetic_instruction() {
         let code = KotodamaCompiler::new()
-            .compile_source("fn main() { let x = 1 * 2; }")
+            .compile_source(
+                "seiyaku BytecodeAnalysis { view fn multiply(int left, int right) -> int { return left * right; } }",
+            )
             .expect("compile");
         let analysis = analyze_bytecode(&code).expect("analyze");
         assert!(
@@ -213,7 +258,7 @@ mod tests {
     #[test]
     fn fuzz_reports_disabled_runtime() {
         let code = KotodamaCompiler::new()
-            .compile_source("fn main() { return; }")
+            .compile_source(DEPLOYABLE_FUZZ_FIXTURE)
             .expect("compile");
         let report = run_bytecode_fuzz(&code, 2).expect("fuzz");
         assert_eq!(report.failures, 0);
@@ -224,6 +269,20 @@ mod tests {
                 .iter()
                 .any(|f| f.code == "bytecode-fuzz-disabled"),
             "expected disabled runtime finding"
+        );
+    }
+
+    #[test]
+    fn fuzz_fixture_is_a_deployable_v1_view_contract() {
+        let (_code, manifest) = KotodamaCompiler::new()
+            .compile_source_with_manifest(DEPLOYABLE_FUZZ_FIXTURE)
+            .expect("compile deployable fuzz fixture");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].name, "fuzz_seed");
+        assert_eq!(
+            entrypoints[0].kind,
+            iroha_data_model::smart_contract::manifest::EntryPointKind::View
         );
     }
 

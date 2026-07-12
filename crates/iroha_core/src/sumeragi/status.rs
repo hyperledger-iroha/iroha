@@ -9328,7 +9328,8 @@ mod tests {
             BlockHeader,
             consensus::{
                 CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1,
-                LaneBlockQcV1, LaneSettlementReceipt, SumeragiLanePayloadOwnership,
+                LaneBlockQcV1, LaneSettlementReceipt, SumeragiLaneBlockSessionStatus,
+                SumeragiLanePayloadOwnership,
             },
         },
         consensus::{

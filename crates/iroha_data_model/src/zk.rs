@@ -41,7 +41,7 @@ pub const ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG: &str = "iroha:zk-ace:pq-authori
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER: &str = "transparent_asset_transfer";
 
 const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
-const PUBLIC_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+const PUBLIC_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 
 /// Maximum source accounts that one ZK-ACE identity commitment may authorize.
 pub const ZK_ACE_MAX_ALLOWED_ACCOUNTS: usize = 16;
@@ -474,7 +474,16 @@ impl norito::json::JsonDeserialize for BackendTag {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
-        Ok(BackendTag::from_catalog_label(&parser.parse_string()?))
+        let label = parser.parse_string()?;
+        let backend = BackendTag::from_catalog_label(&label);
+        if backend.canonical_label() == label {
+            Ok(backend)
+        } else {
+            Err(norito::json::Error::InvalidField {
+                field: "backend".to_owned(),
+                message: format!("unknown or non-canonical backend label `{label}`"),
+            })
+        }
     }
 }
 
@@ -635,6 +644,7 @@ impl std::error::Error for OpenVerifyEnvelopeValidationError {}
 /// This structure is serialized with Norito and used as the TLV payload for
 /// `&NoritoBytes` pointer-ABI types passed to IVM verify syscalls or host vendor bridges.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[norito(decode_from_slice)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1752,6 +1762,53 @@ mod tests {
                     ..OpenVerifyEnvelopeBounds::default()
                 })
                 .expect("explicit non-admission bounds can inspect pending backend envelopes");
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn backend_tag_json_accepts_only_exact_canonical_labels() {
+        for backend in [
+            BackendTag::Halo2IpaPasta,
+            BackendTag::Halo2Bn254,
+            BackendTag::Groth16,
+            BackendTag::Stark,
+            BackendTag::Unsupported,
+            BackendTag::Halo2IpaOrchard,
+            BackendTag::Groth16Bls12377,
+            BackendTag::FcmpPlusPlusCurveTree,
+            BackendTag::LatticePcsSis,
+            BackendTag::MidenStark,
+            BackendTag::AztecPlonkishPrivateKernel,
+            BackendTag::PqMaspStarkFri,
+            BackendTag::AnonymousPgc,
+            BackendTag::VeRange,
+            BackendTag::ZkAt,
+            BackendTag::RecursiveAnonymousAdmission,
+            BackendTag::VegaExistingCredentialZk,
+            BackendTag::SilentThresholdAnoncred,
+            BackendTag::ZkX509,
+            BackendTag::SisWithHints,
+        ] {
+            let json = format!("\"{}\"", backend.canonical_label());
+            let decoded = norito::json::from_str::<BackendTag>(&json)
+                .expect("canonical backend label must decode");
+            assert_eq!(decoded, backend);
+        }
+
+        for alias in [
+            "halo2/ipa",
+            "HALO2-IPA-PASTA",
+            " halo2-ipa-pasta",
+            "halo2-ipa-pasta ",
+            "stark/fri",
+            "groth16/bn254",
+            "orchard",
+            "unknown/privacy/backend",
+        ] {
+            let json = format!("\"{alias}\"");
+            norito::json::from_str::<BackendTag>(&json)
+                .expect_err("backend aliases and unknown labels must be rejected by JSON");
         }
     }
 

@@ -1,5 +1,4 @@
 use ivm::{IVM, encoding};
-use sha2::{Digest, Sha256};
 mod common;
 use common::assemble;
 
@@ -9,9 +8,7 @@ fn test_program_code_hash() {
     let prog = assemble(&halt);
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&prog).unwrap();
-    let mut hasher = Sha256::new();
-    hasher.update(halt);
-    let expected: [u8; 32] = hasher.finalize().into();
+    let expected: [u8; 32] = ivm::contract_code_hash(&prog).into();
     assert_eq!(vm.code_hash(), expected);
     vm.run().unwrap();
     assert_eq!(vm.code_hash(), expected);

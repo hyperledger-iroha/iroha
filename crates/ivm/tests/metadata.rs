@@ -17,15 +17,18 @@ fn minimal_contract_artifact() -> Vec<u8> {
         abi_version: 1,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "metadata-tests".to_owned(),
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),
         entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
             name: "main".to_owned(),
-            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
             params: Vec::new(),
+            argument_schema: None,
             return_type: None,
+            return_schema: None,
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -34,6 +37,7 @@ fn minimal_contract_artifact() -> Vec<u8> {
             triggers: Vec::new(),
             entry_pc: 0,
         }],
+        error_codes: Vec::new(),
         states: Vec::new(),
     };
     let mut bytes = meta.encode();
@@ -52,15 +56,18 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
         abi_version: 1,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "metadata-tests".to_owned(),
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),
         entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
             name: "main".to_owned(),
-            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
             params: Vec::new(),
+            argument_schema: None,
             return_type: None,
+            return_schema: None,
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -69,6 +76,7 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
             triggers: Vec::new(),
             entry_pc: 0,
         }],
+        error_codes: Vec::new(),
         states: Vec::new(),
     };
     let debug = ivm::EmbeddedContractDebugInfoV1 {
@@ -78,6 +86,9 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
             pc_end: 4,
             source: ivm::EmbeddedSourceLocation {
                 source_path: Some("contracts/demo.ko".to_owned()),
+                source_id: 1,
+                byte_start: 10,
+                byte_end: 14,
                 line: 2,
                 column: 3,
             },
@@ -93,6 +104,9 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
             jump_range_risk: false,
             source: Some(ivm::EmbeddedSourceLocation {
                 source_path: Some("contracts/demo.ko".to_owned()),
+                source_id: 1,
+                byte_start: 10,
+                byte_end: 14,
                 line: 2,
                 column: 3,
             }),

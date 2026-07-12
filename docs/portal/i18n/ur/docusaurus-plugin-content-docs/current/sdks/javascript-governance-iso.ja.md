@@ -106,32 +106,27 @@ node javascript/iroha_js/recipes/iso_bridge.mjs
 دونوں اسکرپٹس اسٹیٹس کوڈ `1` کے ساتھ باہر نکلیں اگر Torii کبھی ٹرمینل کی اطلاع نہیں دیتا ہے
 منتقلی ، انہیں سی آئی گیٹ کی نوکریوں کے ل suitable موزوں بنا۔
 
-### ISO عرف مددگار`recipes/iso_alias.mjs` اہداف ISO عرف کے اختتامی نکات کو تاکہ ریہرسلوں کا احاطہ کیا جاسکے
-بلائنڈ عنصر ہیشنگ اور عرف کی تلاش کے بغیر بیسپوک ٹولنگ لکھے بغیر۔ یہ
-کالز `ToriiClient.evaluateAliasVoprf` پلس `resolveAlias` / `resolveAliasByIndex`
-اور پسدید ، ڈائجسٹ ، اکاؤنٹ بائنڈنگ ، ماخذ ، اور عین مطابق اشاریہ پرنٹ کرتا ہے
-Torii کے ذریعہ واپس آیا۔
+### ISO عرف مددگار
+
+`recipes/iso_alias.mjs` کسی مخصوص ٹول کی ضرورت کے بغیر ISO عرف کی تلاش کو آزماتا ہے۔
+یہ `resolveAlias` اور `resolveAliasByIndex` کو کال کرتا ہے، پھر Torii کی طرف سے واپس کردہ اکاؤنٹ بائنڈنگ، ماخذ اور متعین اشاریہ پرنٹ کرتا ہے۔
 
 ماحولیاتی متغیرات:
 
 - `TORII_URL` - Torii اختتامی نقطہ عرف مددگاروں کو بے نقاب کررہا ہے۔
-- `ISO_VOPRF_INPUT`- ہیکس انکوڈڈ بلائنڈڈ عنصر (`deadbeef` سے پہلے سے طے شدہ)۔
-- `ISO_SKIP_VOPRF=1` - جب صرف جانچ پڑتال کرنے کی جانچ پڑتال کرتے ہو تو Voprf کال کو چھوڑ دیں۔
 - `ISO_ALIAS_LABEL`- حل کرنے کے لئے لفظی عرف (جیسے ، ابن طرز کے تار)۔
 - `ISO_ALIAS_INDEX`- اعشاریہ یا `0x`-prefixed انڈیکس `resolveAliasByIndex` میں منتقل ہوا۔
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` - محفوظ Torii تعیناتیوں کے لئے اختیاری ہیڈر۔
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```

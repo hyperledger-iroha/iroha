@@ -181,13 +181,13 @@ console.log(balances.items, txs.items, holders.items);
 
 ## Offline readiness
 
-JavaScript integrations should use `GET /v1/offline/readiness` for offline feature discovery.
+JavaScript integrations should use `GET /v1/offline/readiness?asset_definition_id=xor%23wonderland` for offline feature discovery.
 Classic Offline Note issuance, redemption, and audit transaction paths are retired;
 Kagemusha readiness fields advertise the active offline payment implementation.
 
 ```ts
-const readiness = await torii.getOfflineReadiness();
-console.log("kagemusha", readiness.offline_kagemusha_recursive_compact_available);
+const readiness = await torii.getOfflineReadiness("xor#wonderland");
+console.log("offline ready", readiness.ready, readiness.blockers);
 ```
 ## Torii መጠይቆች እና ዥረት (WebSockets)
 
@@ -409,23 +409,18 @@ async function dialWithTelemetry(client: ToriiClient) {
 መደበኛ `connect.queue_depth`፣ `connect.queue_overflow_total`፣ እና
 `connect.queue_expired_total` ሜትሪክስ በፍኖተ ካርታው በሙሉ ተጠቅሷል።
 
-## የዥረት ተመልካቾች እና የክስተት ጠቋሚዎች
+## Live event streams
 
-`ToriiClient.streamEvents()` `/v1/events/sse` እንደ ያልተመሳሰለ ድግግሞሽ አውቶማቲክ ያጋልጣል
-እንደገና ይሞክራል፣ ስለዚህ Node/Bun CLIs Rust CLI በሚያደርገው መንገድ የቧንቧ መስመር እንቅስቃሴን ሊጭኑ ይችላሉ።
-ኦፕሬተሮች እንዲችሉ የ`Last-Event-ID` ጠቋሚውን ከRunbook artefactsዎ ጎን ያቆዩ
-ሂደቱ እንደገና ሲጀመር ክስተቶችን ሳይዘለሉ ዥረቱን ይቀጥሉ።
+`ToriiClient.streamEvents()` exposes `/v1/events/sse` as a live-only async
+iterator. Torii retains no replay log for this route, so the helper has no
+`lastEventId` option and reconnecting can leave a gap. A terminal
+`event: stream_error` is yielded before the iterator ends; handle it explicitly
+instead of treating closure as a lossless continuation point.
 
-```ts
-import fs from "node:fs/promises";
+```js
 import { ToriiClient, extractPipelineStatusKind } from "@iroha/iroha-js";
 
 const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080");
-const cursorFile = process.env.STREAM_CURSOR_FILE ?? ".cache/torii.cursor";
-const resumeId = await fs
-  .readFile(cursorFile, "utf8")
-  .then((value) => value.trim())
-  .catch(() => null);
 const controller = new AbortController();
 
 process.once("SIGINT", () => controller.abort());
@@ -433,28 +428,26 @@ process.once("SIGTERM", () => controller.abort());
 
 for await (const event of torii.streamEvents({
   filter: { Pipeline: { Transaction: { status: "Committed" } } },
-  lastEventId: resumeId || undefined,
   signal: controller.signal,
 })) {
-  if (event.id) {
-    await fs.writeFile(cursorFile, `${event.id}\n`, "utf8");
+  if (event.event === "stream_error") {
+    console.error("terminal stream error", event.data);
+    break;
   }
   const status = event.data ? extractPipelineStatusKind(event.data) : null;
-  console.log(`[${event.event}] id=${event.id ?? "∅"} status=${status ?? "n/a"}`);
+  console.log(`[${event.event}] status=${status ?? "n/a"}`);
 }
 ```
 
-- `PIPELINE_STATUS` ቀይር (ለምሳሌ I18NI0000129X፣ `Applied`፣ ወይም `Approved`) ወይም አዘጋጅ
-  `STREAM_FILTER_JSON` CLI የሚቀበላቸውን ተመሳሳይ ማጣሪያዎች እንደገና ለማጫወት።
-- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` ተደጋጋሚውን እስከ ሀ
-  ምልክት ተቀብሏል; የመጀመሪያዎቹን ክስተቶች ብቻ ሲፈልጉ `STREAM_MAX_EVENTS=25` ማለፍ
-  ለጭስ ምርመራ.
-- `ToriiClient.streamSumeragiStatus()` መስተዋቶች ተመሳሳይ በይነገጽ ለ
-  `/v1/sumeragi/status/sse` ስለዚህ የጋራ መግባባት ቴሌሜትሪ ለብቻው ሊደረደር ይችላል ፣ እና
-  iterator `Last-Event-ID` በተመሳሳይ መንገድ ያከብራል።
-- ለመታጠፊያ CLI (የጠቋሚ ጽናት፣) `javascript/iroha_js/recipes/streaming.mjs` ይመልከቱ።
-  env-var ማጣሪያ ይሽራል፣ እና `extractPipelineStatusKind` ሎግንግ) በJS4 ውስጥ ጥቅም ላይ ይውላል።
-  ዥረት/WebSocket የመንገድ ካርታ ሊደርስ ይችላል።
+- Switch `PIPELINE_STATUS` (for example `Pending`, `Applied`, or `Approved`) or set
+  `STREAM_FILTER_JSON` to use the same filters the CLI accepts.
+- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` keeps the iterator alive until a
+  signal is received; pass `STREAM_MAX_EVENTS=25` when you only need the first few events
+  for a smoke test.
+- `ToriiClient.streamSumeragiStatus()` exposes the separate
+  `/v1/sumeragi/status/sse` consensus telemetry feed.
+- See `javascript/iroha_js/recipes/streaming.mjs` for a live-only turnkey CLI with
+  environment-driven filters and explicit terminal-error handling.
 
 ## የ UAID ፖርትፎሊዮዎች እና የጠፈር ማውጫ
 

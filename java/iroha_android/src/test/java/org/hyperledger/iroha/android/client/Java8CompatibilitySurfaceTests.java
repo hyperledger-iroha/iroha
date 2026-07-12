@@ -204,7 +204,7 @@ public final class Java8CompatibilitySurfaceTests {
 
     final PrivacyConfidentialWitness.WitnessV1 witness =
         new PrivacyConfidentialWitness.WitnessV1(
-            "809574f5-fee7-5e69-bfcf-52451e42d50f",
+            "fc56984b-2be7-431d-840e-21514d1883f0",
             "xor#universal",
             repeatedByte(0x11),
             Collections.singletonList(repeatedByte(0x10)),

@@ -94,6 +94,8 @@ High-level smart contract language targeting IVM bytecode:
 - **Mixed Encoding:** 32-bit instructions expose full-width register fields, while
   the 16-bit variants operate on a smaller register subset. The encoding is sized to address the current 256-register file and leaves headroom for future extensions.
 - **Memory Management:** Region-based memory with permission checks. Code, heap, input, output and stack regions are predefined. Misaligned or out-of-bounds accesses cause traps.
+- **Indexed Literals:** `LDLIT` loads a validated pointer TLV and `LDI64` loads an exact signed scalar by a 16-bit table index, each in one word. Authenticated descriptor kinds, complete payload validation, and instruction-kind checks prevent aliases, malformed objects, and pointer/scalar confusion before execution.
+- **Relaxed Direct Transfers:** The compiler uses one-word `JAL` for nearby calls/jumps and automatically relaxes farther targets to signed 24-bit `JMP`/`JALS` forms. `JALS` uses `r1` as the implicit link register.
 - **Gas Accounting:** Each instruction consumes a specified amount of gas from a gas budget. Execution halts with an error if gas is exhausted before completion.
 - **GETGAS Instruction:** Programs may query the current remaining gas via opcode `0x61` which writes the value to a destination register.
 - **Extended Arithmetic:** Support for `DIVU`, `REMU`, `MULH` and `MULHU` instructions providing unsigned division, unsigned remainder and high-word multiplication.
@@ -108,7 +110,7 @@ High-level smart contract language targeting IVM bytecode:
 - **Optimised for Financial Operations:** Fast 64-bit arithmetic and register access keep asset calculations efficient, suitable for high-throughput ledgers.
 - **Bulk Memory Helpers:** `load_bytes` and `store_bytes` efficiently copy contiguous regions, speeding up cryptographic hashing and serialization.
 - **Quantum-Resistant Signatures:** Optional verification of ML‑DSA (Crystals Dilithium) signatures via the `ml-dsa` feature.
-- **SIMD Poseidon Hashing:** Automatically uses vector instructions for the `POSEIDON2` and `POSEIDON6` opcodes when supported by the host CPU.
+- **SIMD Poseidon Hashing:** `POSEIDON2` hashes two scalar registers and `POSEIDON6` hashes one six-register window, avoiding transient memory traffic. Both automatically use deterministic hardware acceleration when supported by the host CPU.
 - **SIMD Field Arithmetic:** BN254 helpers are implemented on CPU with runtime SIMD detection plumbed through vector utilities. For benchmarking or deterministic testing, thread `AccelerationPolicy::with_forced_simd(Some(SimdChoice::{Scalar|Sse2|Avx2|Avx512|Neon}))` through `IvmConfig`, or call `ivm::set_forced_simd` in tests; unsupported requests automatically fall back to the scalar implementation to preserve safety. Future work: add architecture-specific intrinsics where beneficial.
 - **Apple Metal Acceleration:** On macOS the VM accelerates vector lanes (`vadd32`/`vadd64`/`vand`/`vxor`/`vor`), SHA‑256 compression and tree reductions, Keccak‑f1600, AES rounds/batches and ed25519 batch verification (when the `ed25519` feature is enabled) via Metal when a compatible device is present. Acceleration is gated by `AccelerationPolicy::with_metal(true)`, honours developer toggles like `IVM_DISABLE_METAL`/`IVM_FORCE_METAL_ENUM`, and falls back to CPU/SIMD with identical semantics when Metal is unavailable or disabled.
 - **Optional backends remain deterministic:** Metal/CUDA are best-effort accelerators; when features are disabled or hardware is unavailable, helpers fall back to scalar/SIMD paths so results stay identical across hosts.
@@ -144,7 +146,7 @@ unchanged memory.
 IVM now standardises on the wide encoding (8-bit primary opcode + three 8-bit operand slots). The primary opcode ranges are:
 
 - **0x01-0x26:** Integer arithmetic and logical operations (`ADD`, `SUB`, `MULH`, `DIVU`, `ADDI`, …).
-- **0x30-0x33:** Memory access (`LOAD64`, `STORE64`, `LOAD128`, `STORE128`).
+- **0x30-0x35:** Memory and indexed-literal access (`LOAD64`, `STORE64`, `LOAD128`, `STORE128`, `LDLIT`, `LDI64`).
 - **0x40-0x4B:** Control flow (`BEQ`, `BNE`, `JAL`, `JR`, `HALT`, `JMP`, `JALS`).
 - **0x60-0x62:** System helpers (`SCALL`, `GETGAS`, `SYSTEM`).
 - **0x70-0x78 / 0x80-0x8E:** Vector and cryptographic primitives (`VADD32`, `SETVL`, `PARBEGIN`, `SHA256BLOCK`, `POSEIDON6`, `AESENC`, `ED25519VERIFY`, `PAIRING`, …).
@@ -160,7 +162,10 @@ for 8-bit syscall ids and `SYSTEM`/`SCALLX` (opcode `0x62`) for 24-bit syscall
 ids. The immediate operand selects an "Iroha Special Instruction" (ISI) whose
 numeric assignments are listed in
 [`syscalls.rs`](src/syscalls.rs).  The host implementation determines the exact
-semantics and gas costs of these calls.
+semantics and gas costs of these calls. Before dispatch, each host provides a
+side-effect-free upper gas quote; the VM reserves it before entering host code
+and refunds any difference from the reported actual cost. An unaffordable
+syscall therefore cannot partially apply host effects.
 
 ## Build and Usage
 
@@ -211,19 +216,23 @@ cargo run --example add       # simple ADD/HALT demo
 cargo run --example sha256    # SHA256BLOCK vector instruction
 ```
 
-### Smart-contract analysis CLI
+### Kotodama toolchain
 
-`koto_lint` now bundles static analysis and fuzzing for Kotodama contracts and can report results in JSON for editor/CI integration:
+`koto` is the single V1 frontend for checking, building, testing, formatting,
+documenting, explaining diagnostics, and language-server integration:
 
 ```bash
-# Lint + deterministic static analysis on source
-cargo run -p ivm --bin koto_lint -- --static path/to/contract.ko
+# Parse, resolve, type-check, and analyze source
+cargo run -p ivm --bin koto -- check path/to/contract.ko
 
-# Full pipeline (lint + static + fuzz) on bytecode
-cargo run -p ivm --bin koto_lint -- --all path/to/contract.to
+# Emit machine-readable diagnostics
+cargo run -p ivm --bin koto -- check --format json path/to/contract.ko
 
-# Emit machine-readable JSON report
-cargo run -p ivm --bin koto_lint -- --all --json path/to/contract.ko
+# Build a canonical deployable artifact and hash-keyed sidecars
+cargo run -p ivm --bin koto -- build path/to/contract.ko
+
+# Run contract tests
+cargo run -p ivm --bin koto -- test path/to/contract.test.ko
 ```
 
 ## Benchmarking

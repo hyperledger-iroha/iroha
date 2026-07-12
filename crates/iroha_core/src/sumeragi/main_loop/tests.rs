@@ -1036,8 +1036,8 @@ fn lane_drain_vote_cache_allows_monotonic_refresh_but_excludes_same_height_equiv
             .insert_vote(second_vote, now)
             .expect("monotonic frontier refresh is accepted")
     );
-    assert_eq!(state.votes.len(), 1);
-    assert!(state.remote_equivocators.is_empty());
+    assert_eq!(state.votes().len(), 1);
+    assert_eq!(state.quarantined_signer_count(), 0);
 
     let conflicting_body = iroha_data_model::merge::LaneDrainCertificateBodyV1 {
         final_lane_block_descriptor_hash: Some(Hash::new(b"lane-drain-cache-conflict")),
@@ -1054,8 +1054,8 @@ fn lane_drain_vote_cache_allows_monotonic_refresh_but_excludes_same_height_equiv
         state.insert_vote(conflicting_vote, now),
         Err("signer equivocated or regressed across drain bodies")
     );
-    assert!(state.votes.is_empty());
-    assert_eq!(state.remote_equivocators.len(), 1);
+    assert!(state.votes().is_empty());
+    assert_eq!(state.quarantined_signer_count(), 1);
 }
 
 #[test]
@@ -1106,7 +1106,11 @@ fn refreshed_lane_drain_frontier_can_still_reach_three_of_four_quorum() {
         .expect("stale-frontier vote is valid");
         assert!(state.insert_vote(vote, now).expect("cache first vote"));
     }
-    assert_eq!(state.votes.len(), 2, "the first body remains below quorum");
+    assert_eq!(
+        state.votes().len(),
+        2,
+        "the first body remains below quorum"
+    );
 
     let refreshed_body = iroha_data_model::merge::LaneDrainCertificateBodyV1 {
         version: 1,
@@ -1128,7 +1132,7 @@ fn refreshed_lane_drain_frontier_can_still_reach_three_of_four_quorum() {
                 .expect("monotonic refresh must not exclude an earlier signer")
         );
     }
-    let votes = state.votes.values().cloned().collect::<Vec<_>>();
+    let votes = state.votes().values().cloned().collect::<Vec<_>>();
     let certificate =
         crate::lane_consensus::aggregate_lane_drain_votes(refreshed_body, validator_set, &votes)
             .expect("the refreshed frontier still reaches its exact quorum");
@@ -4482,6 +4486,7 @@ fn test_sumeragi_config() -> SumeragiConfig {
             kura_retry_interval: Duration::from_millis(1),
             kura_retry_max_attempts: 1,
             commit_inflight_timeout: Duration::from_millis(5_000),
+            post_finality_cleanup_timeout: Duration::from_millis(5_000),
             commit_work_queue_cap:
                 iroha_config::parameters::defaults::sumeragi::COMMIT_WORK_QUEUE_CAP,
             commit_result_queue_cap:
@@ -70827,6 +70832,7 @@ async fn maybe_emit_rbc_deliver_recovers_block_created_locally() {
         let digest = crate::state::compute_confidential_feature_digest(
             view_snapshot.world(),
             &view_snapshot.zk,
+            view_snapshot.sccp_registry.as_ref(),
             height,
         );
         let confidential_features = if digest.is_empty() {
@@ -213851,8 +213857,12 @@ fn heartbeat_block_for_state(
         let view = state.view();
         let tx_params = view.world().parameters().transaction().clone();
         let policies = crate::da::proof_policy_bundle(&view.nexus.lane_config);
-        let digest =
-            crate::state::compute_confidential_feature_digest(view.world(), &view.zk, height);
+        let digest = crate::state::compute_confidential_feature_digest(
+            view.world(),
+            &view.zk,
+            view.sccp_registry.as_ref(),
+            height,
+        );
         let confidential_features = if digest.is_empty() {
             None
         } else {
@@ -214455,7 +214465,9 @@ fn sample_ivm_transaction() -> SignedTransaction {
     let mut metadata = iroha_data_model::metadata::Metadata::default();
     metadata.insert(
         "gas_limit".parse().expect("gas_limit key"),
-        iroha_primitives::json::Json::new(crate::smartcontracts::ivm::gas_limit_for_cycles(1)),
+        iroha_primitives::json::Json::new(crate::smartcontracts::ivm::gas_limit_for_cycles(
+            nonzero!(1_u64),
+        )),
     );
 
     TransactionBuilder::new(chain, authority)
@@ -215981,13 +215993,39 @@ async fn known_lane_block_tips_ignore_reset_watermark_committed_queue_before_pru
                     prepare_qc: stale_prepare_qc,
                     commit_qc: stale_commit_qc,
                 },
+            ]),
+        1
+    );
+    assert!(
+        !actor
+            .unapplied_lane_block_lanes_for_proposal(
+                actor.state.as_ref(),
+                reset_height.saturating_add(1),
+            )
+            .contains(&lane_id),
+        "a queued session from a retired lane incarnation must not block the recreated lane",
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .committed_lane_blocks
+            .hydrate_from_certified_sessions(vec![
                 crate::lane_consensus::CommittedLaneBlockSession {
                     proposal: fresh_proposal.clone(),
                     prepare_qc: fresh_prepare_qc,
                     commit_qc: fresh_commit_qc,
                 },
             ]),
-        2
+        1
+    );
+    assert!(
+        actor
+            .unapplied_lane_block_lanes_for_proposal(
+                actor.state.as_ref(),
+                reset_height.saturating_add(1),
+            )
+            .contains(&lane_id),
+        "the current lane incarnation must remain blocked while its certified session is unapplied",
     );
     assert_eq!(
         actor.subsystems.committed_lane_blocks.len(),

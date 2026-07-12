@@ -77,7 +77,7 @@ Leyenda: `◉` completamente implementado · `○` mayormente implementado · `�
 | Validación estricta de Pointer-ABI y sincronización de documentos | ◉ | Política TLV aplicada en todo el host/IVM con pruebas doradas y documentos generados. | estado.md:227; estado.md:317; estado.md:344; estado.md:366; estado.md:527 |
 | Puerta de llamada al sistema ZK a través de CoreHost | ◉ | Las colas por operación controlan los sobres verificados y aplican la coincidencia de hash antes de la ejecución de ISI. | cajas/iroha_core/src/smartcontracts/ivm/host.rs:213; cajas/iroha_core/src/smartcontracts/ivm/host.rs:279 |
 | Kotodama puntero-Documentos y gramática ABI | ◉ | Gramática/docs sincronizados con constructores en vivo y asignaciones SCALL. | estado.md:299-301 |
-| Motor basado en esquemas ISO 20022 y puente Torii | ◉ | Esquemas canónicos ISO 20022 integrados, análisis XML determinista y API `/v1/iso20022/status/{MsgId}` expuesta. | estado.md:65-70 |
+| Motor basado en esquemas ISO 20022 y puente Torii | ◉ | Esquemas canónicos ISO 20022 integrados, análisis XML determinista y API `/v1/iso20022/messages/{MsgId}` expuesta. | estado.md:65-70 |
 
 ## Aceleración de hardware
 

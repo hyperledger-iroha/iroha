@@ -19,15 +19,18 @@ fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         abi_version,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "contract-code-bytes-test".to_owned(),
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),
         entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
             name: "main".to_owned(),
-            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
             params: Vec::new(),
+            argument_schema: None,
             return_type: None,
+            return_schema: None,
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -36,6 +39,7 @@ fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
             triggers: Vec::new(),
             entry_pc: 0,
         }],
+        error_codes: Vec::new(),
         states: Vec::new(),
     };
     let mut code = Vec::new();
@@ -82,11 +86,15 @@ fn register_contract_code_bytes_stores_and_idempotent() {
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
+    let permission: Permission =
+        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+    Grant::account_permission(permission, auth.clone())
+        .execute(&auth, &mut stx)
+        .expect("grant contract lifecycle authority");
 
     // Prepare program and code hash
     let prog = minimal_ivm_program(1);
-    let parsed = ivm::ProgramMetadata::parse(&prog).expect("valid header");
-    let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+    let code_hash = ivm::contract_code_hash(&prog);
 
     // Register bytes
     RegisterSmartContractBytes {
@@ -150,6 +158,11 @@ fn register_contract_code_bytes_respects_size_cap() {
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
+    let permission: Permission =
+        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+    Grant::account_permission(permission, auth.clone())
+        .execute(&auth, &mut stx)
+        .expect("grant contract lifecycle authority");
 
     // Set cap to a tiny value (8 bytes) via custom parameter
     let id = CustomParameterId("max_contract_code_bytes".parse().unwrap());
@@ -160,8 +173,7 @@ fn register_contract_code_bytes_respects_size_cap() {
 
     // Prepare a minimal IVM program which should exceed 8 bytes overall
     let prog = minimal_ivm_program(1);
-    let parsed = ivm::ProgramMetadata::parse(&prog).expect("valid header");
-    let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+    let code_hash = ivm::contract_code_hash(&prog);
 
     // Register should fail due to cap
     let err = RegisterSmartContractBytes {

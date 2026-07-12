@@ -8,8 +8,8 @@ use iroha_data_model::{
     block::consensus_v2::{
         BlockSubject, CertifiedBodyRequest, CertifiedBodyResponse, CommitCertificateRequest,
         CommitCertificateResponse, ConsensusMessageV2, ConsensusMessageV2Payload, ConsensusMode,
-        ConsensusRound, DataAvailabilityLayout, DualQuorum, GlobalPhase, HeightContext,
-        PROTOCOL_VERSION, PayloadChunk, PayloadEncoding, PayloadManifest, Proposal,
+        ConsensusRound, DataAvailabilityLayout, DualQuorum, ExecutionCommitment, GlobalPhase,
+        HeightContext, PROTOCOL_VERSION, PayloadChunk, PayloadEncoding, PayloadManifest, Proposal,
         ProposalJustification, QuorumCertificate, SumeragiV2BodyState,
         SumeragiV2HeightContextStatus, SumeragiV2Status, SumeragiV2StatusPhase, TimeoutCertificate,
         TimeoutJustification, TimeoutVote, TimeoutVoteGroup, ValidatorPower, Vote,
@@ -42,6 +42,7 @@ fn context() -> HeightContext {
         height: 1,
         epoch: 2,
         epoch_end_height: 100,
+        next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,
         parent_commit_qc: None,
         quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
@@ -75,11 +76,25 @@ fn subject(seed: u8) -> BlockSubject {
     }
 }
 
+fn execution_commitment(seed: u8) -> ExecutionCommitment {
+    ExecutionCommitment::new(
+        Hash::new([seed, 3]),
+        Hash::new([seed, 4]),
+        Hash::new([seed, 5]),
+        None,
+        0,
+    )
+    .expect("canonical fixture execution commitment")
+}
+
 fn qc(context: &HeightContext, view: u64, phase: GlobalPhase) -> QuorumCertificate {
     QuorumCertificate {
         round: round(context, view),
         phase,
         subject: subject(u8::try_from(view + 1).expect("small fixture view")),
+        execution_commitment: execution_commitment(
+            u8::try_from(view + 1).expect("small fixture view"),
+        ),
         signers: vec![0, 1, 2],
         aggregate_signature: vec![0x5a; 48],
     }
@@ -152,6 +167,7 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
             round: manifest.round,
             phase: GlobalPhase::Prepare,
             subject: manifest.subject,
+            execution_commitment: execution_commitment(9),
             signer: 0,
             signature: vec![1],
         }),

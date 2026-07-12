@@ -2,6 +2,8 @@ First-party follow-up marker inventory refreshed on 2026-07-06.
 
 No active first-party implementation follow-up markers remain in the current
 source scan outside intentional guard-test fixtures and repository policy text.
+SCCP production diagnostic fixture surface removal was completed on 2026-07-09.
+SCCP live JSON duplicate-key exact-string hardening was completed on 2026-07-09.
 SCCP all-lanes destination-live metadata exact-key hardening was completed on
 2026-07-09.
 SCCP all-lanes evidence-loader path exact-type hardening was completed on

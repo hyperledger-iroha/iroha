@@ -48,7 +48,7 @@ translator: manual
 バックグラウンドプローバーワーカー（既定無効）は添付ファイルを検証し、`ProofAttachment`/`ProofAttachmentList` をバックエンド検証器で確認した結果をレポートします。ZK1/TLV をトップレベルペイロードとしては受け付けず、タグのみ記録して `ok=false` とします:
 
 - Norito (`application/x-norito`): `ProofAttachment` または `ProofAttachmentList` としてデコードできること。
-- JSON (`application/json`, `text/json`): `ProofAttachment` オブジェクト、`ProofAttachmentList`（base64 文字列）、または `ProofAttachment` の配列としてデコードできること。
+- JSON (`application/json`): `ProofAttachment` オブジェクト、`ProofAttachmentList`（base64 文字列）、または `ProofAttachment` の配列としてデコードできること。
 - その他: JSON → Norito の順でデコードを試み、失敗時は `ok: false` でエラーを記録。
 
 エンドポイント:

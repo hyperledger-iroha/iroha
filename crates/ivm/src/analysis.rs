@@ -30,6 +30,7 @@ use crate::{
     instruction::wide,
     ivm_cache::{DecodedOp, IvmCache},
     metadata::ProgramMetadata,
+    prepared::PreparedContract,
 };
 
 /// Aggregate register usage counters.
@@ -110,11 +111,24 @@ pub fn analyze_program(bytes: &[u8]) -> Result<ProgramAnalysis, ProgramAnalysisE
     let parsed = ProgramMetadata::parse(bytes).map_err(ProgramAnalysisError::Metadata)?;
     let code = &bytes[parsed.code_offset..];
     let decoded = IvmCache::decode_stream(code).map_err(ProgramAnalysisError::Decode)?;
-    let mut builder = ProgramAnalysisBuilder::new(parsed.metadata.clone());
-    for op in decoded.iter() {
+    Ok(analyze_decoded(parsed.metadata, decoded.as_ref()))
+}
+
+/// Return aggregate usage information from an already prepared contract.
+///
+/// This path reuses the validated metadata and decoded instruction stream, so
+/// admission caches do not parse or predecode the artifact a second time.
+#[must_use]
+pub fn analyze_prepared(contract: &PreparedContract) -> ProgramAnalysis {
+    analyze_decoded(contract.metadata().clone(), contract.decoded().as_ref())
+}
+
+fn analyze_decoded(metadata: ProgramMetadata, decoded: &[DecodedOp]) -> ProgramAnalysis {
+    let mut builder = ProgramAnalysisBuilder::new(metadata);
+    for op in decoded {
         builder.visit(op);
     }
-    Ok(builder.finish())
+    builder.finish()
 }
 
 /// Default execution budgets for atomic multi-dataspace execution (NX-17).
@@ -330,6 +344,10 @@ impl ProgramAnalysisBuilder {
                 self.read(rs_lo);
                 self.read(rs_hi);
             }
+            wide::memory::LDLIT | wide::memory::LDI64 => {
+                let rd = u8::try_from(wide::rd(op.inst)).expect("register index fits in u8");
+                self.write(rd);
+            }
             // Control flow.
             wide::control::BEQ
             | wide::control::BNE
@@ -352,10 +370,11 @@ impl ProgramAnalysisBuilder {
                 self.write(rd);
                 self.read(rs);
             }
-            wide::control::JAL | wide::control::JALS => {
+            wide::control::JAL => {
                 let rd = u8::try_from(wide::rd(op.inst)).expect("register index fits in u8");
                 self.write(rd);
             }
+            wide::control::JALS => self.write(1u8),
             wide::control::JMP | wide::control::HALT => {}
             // System helpers.
             wide::system::GETGAS => {
@@ -376,6 +395,16 @@ impl ProgramAnalysisBuilder {
                 // does not consume a vector or scalar register operand.
             }
             wide::crypto::PARBEGIN | wide::crypto::PAREND => {}
+            wide::crypto::POSEIDON2 => self.two_src_one_dst(op.inst),
+            wide::crypto::POSEIDON6 => {
+                let rd = Self::reg(wide::rd(op.inst));
+                self.write(rd);
+                if let Some((_, rs_base)) = crate::encoding::wide::decode_poseidon6(op.inst) {
+                    for offset in 0..wide::crypto::POSEIDON6_INPUTS {
+                        self.read(usize::from(rs_base) + offset);
+                    }
+                }
+            }
             // All remaining opcodes (crypto, ISO20022, ZK, vector ALU, etc.)
             // follow the canonical rd/rs1/rs2 layout.
             _ => {
@@ -510,6 +539,42 @@ mod tests {
             report.registers.reads[8], 0,
             "SETVL immediate must not be reported as a register read"
         );
+    }
+
+    #[test]
+    fn analysis_tracks_poseidon_register_inputs() {
+        let words = [
+            wide_enc::encode_poseidon2(9, 10, 11),
+            wide_enc::encode_poseidon6(8, 20),
+            wide_enc::encode_halt(),
+        ];
+        let report = analyze_program(&build_program(&words)).expect("analysis succeeds");
+
+        assert_eq!(report.registers.writes[9], 1);
+        assert_eq!(report.registers.writes[8], 1);
+        assert_eq!(report.registers.reads[10], 1);
+        assert_eq!(report.registers.reads[11], 1);
+        for register in 20..26 {
+            assert_eq!(report.registers.reads[register], 1);
+        }
+        assert_eq!(report.memory, MemoryAccesses::default());
+    }
+
+    #[test]
+    fn analysis_tracks_indexed_literal_and_implicit_far_link() {
+        let words = [
+            wide_enc::encode_literal(wide::memory::LDLIT, 42, 0x1234),
+            wide_enc::encode_literal(wide::memory::LDI64, 43, 0x5678),
+            wide_enc::encode_offset24(wide::control::JALS, 1),
+            wide_enc::encode_halt(),
+        ];
+        let program = build_program(&words);
+        let report = analyze_program(&program).expect("analysis succeeds");
+
+        assert_eq!(report.registers.writes[42], 1);
+        assert_eq!(report.registers.writes[43], 1);
+        assert_eq!(report.registers.writes[1], 1);
+        assert_eq!(report.registers.reads.iter().sum::<u64>(), 0);
     }
 
     #[test]

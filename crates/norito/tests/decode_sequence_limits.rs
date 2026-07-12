@@ -307,7 +307,11 @@ fn nesting_depth_budget_rejects_deep_values() {
     .expect_err("second nested field decode must exceed depth one");
     assert!(matches!(
         error,
-        Error::NestingDepthExceeded { depth: 2, limit: 1 }
+        Error::NestingDepthExceeded {
+            depth: 2,
+            limit: 1,
+            context: "decode budget",
+        }
     ));
 }
 

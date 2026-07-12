@@ -1,12 +1,13 @@
 //! Types representing executable parts of a transaction.
 
-use std::{fmt, iter::IntoIterator, sync::LazyLock, vec::Vec};
+use std::{fmt, iter::IntoIterator, ops::Deref, sync::LazyLock, vec::Vec};
 
 use ::base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_data_model_derive::model;
-use iroha_primitives::{const_vec::ConstVec, json::Json};
+use iroha_primitives::const_vec::ConstVec;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+use norito::{NoritoDeserialize, core as ncore};
 
 pub use self::model::*;
 #[cfg(test)]
@@ -78,6 +79,12 @@ mod model {
         pub gas_policy_commitment: Hash,
     }
 
+    /// Bounded canonical bytes for one schema-bound Kotodama argument record.
+    #[derive(derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema)]
+    #[norito(transparent, reuse_archived)]
+    #[repr(transparent)]
+    pub struct ContractArgumentRecord(pub(super) Vec<u8>);
+
     /// By-reference invocation of a deployed contract instance.
     #[derive(
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
@@ -96,9 +103,174 @@ mod model {
         pub contract_address: ContractAddress,
         /// Public or view entrypoint selector.
         pub entrypoint: String,
-        /// Optional Norito JSON payload forwarded to the contract.
-        #[norito(default)]
-        pub payload: Option<Json>,
+        /// Canonical schema-bound `EntrypointArgumentRecordV1` bytes.
+        ///
+        /// JSON is converted by Torii/CLI/SDK tooling before the invocation is
+        /// signed; validators and the VM never interpret JSON as argument transport.
+        pub arguments: Option<ContractArgumentRecord>,
+    }
+}
+
+/// Maximum signed argument-record bytes accepted by transaction decoding.
+///
+/// This wire limit is independent from compiler source-size limits. It is
+/// enforced before allocating the record payload.
+pub const MAX_CONTRACT_ARGUMENT_RECORD_BYTES: usize = 1024 * 1024;
+
+/// Error returned when a signed contract argument record exceeds its wire cap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("contract argument record is {actual} bytes; maximum is {max}")]
+pub struct ContractArgumentRecordTooLarge {
+    /// Supplied record length.
+    pub actual: usize,
+    /// Maximum accepted record length.
+    pub max: usize,
+}
+
+impl ContractArgumentRecord {
+    /// Construct a bounded signed argument record.
+    pub fn try_new(bytes: Vec<u8>) -> Result<Self, ContractArgumentRecordTooLarge> {
+        if bytes.len() > MAX_CONTRACT_ARGUMENT_RECORD_BYTES {
+            return Err(ContractArgumentRecordTooLarge {
+                actual: bytes.len(),
+                max: MAX_CONTRACT_ARGUMENT_RECORD_BYTES,
+            });
+        }
+        Ok(Self(bytes))
+    }
+
+    /// Borrow the canonical record bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Mutably borrow the fixed-length record bytes.
+    ///
+    /// This cannot violate the allocation bound because the slice length is
+    /// immutable; it is primarily useful for signature-tampering tests.
+    pub fn as_mut_bytes(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+
+    /// Consume the wrapper and return its canonical bytes.
+    #[must_use]
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+impl AsRef<[u8]> for ContractArgumentRecord {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl Deref for ContractArgumentRecord {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_bytes()
+    }
+}
+
+impl TryFrom<Vec<u8>> for ContractArgumentRecord {
+    type Error = ContractArgumentRecordTooLarge;
+
+    fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
+        Self::try_new(bytes)
+    }
+}
+
+impl<'de> NoritoDeserialize<'de> for ContractArgumentRecord {
+    fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
+        // Norito's public decode functions, Option decoder, and generated
+        // containing-struct decoder all call `try_deserialize`; hostile wire
+        // bytes therefore take the fallible path below. This infallible trait
+        // entrypoint is retained only for the trait contract.
+        Self::try_deserialize(archived)
+            .expect("ContractArgumentRecord deserialization must enforce its wire bound")
+    }
+
+    fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
+        let ptr = core::ptr::from_ref(archived).cast::<u8>();
+        let bytes = ncore::payload_slice_from_ptr(ptr)?;
+        let (value, used) = <Self as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
+        if used > bytes.len() {
+            return Err(ncore::Error::LengthMismatch);
+        }
+        Ok(value)
+    }
+}
+
+impl<'de> ncore::DecodeFromSlice<'de> for ContractArgumentRecord {
+    fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), ncore::Error> {
+        let (len, offset) = ncore::read_seq_len_slice(bytes)?;
+        if len > MAX_CONTRACT_ARGUMENT_RECORD_BYTES {
+            return Err(ncore::Error::LengthMismatch);
+        }
+        let end = offset
+            .checked_add(len)
+            .ok_or(ncore::Error::LengthMismatch)?;
+        let payload = bytes.get(offset..end).ok_or(ncore::Error::LengthMismatch)?;
+        Ok((Self(payload.to_vec()), end))
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for ContractArgumentRecord {
+    fn write_json(&self, out: &mut String) {
+        norito::json::JsonSerialize::json_serialize(&self.0, out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for ContractArgumentRecord {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let mut sequence = norito::json::SeqVisitor::new(parser)?;
+        let mut bytes = Vec::new();
+        while let Some(byte) = sequence.next_element::<u8>()? {
+            if bytes.len() == MAX_CONTRACT_ARGUMENT_RECORD_BYTES {
+                return Err(norito::json::Error::Message(format!(
+                    "contract argument record exceeds {} bytes",
+                    MAX_CONTRACT_ARGUMENT_RECORD_BYTES
+                )));
+            }
+            if bytes.len() == bytes.capacity() {
+                let additional = MAX_CONTRACT_ARGUMENT_RECORD_BYTES
+                    .saturating_sub(bytes.len())
+                    .min(4096);
+                bytes.try_reserve_exact(additional).map_err(|_| {
+                    norito::json::Error::Message(
+                        "contract argument record allocation failed".to_owned(),
+                    )
+                })?;
+            }
+            bytes.push(byte);
+        }
+        sequence.finish()?;
+        Ok(Self(bytes))
+    }
+
+    fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
+        let items = value.as_array().ok_or_else(|| {
+            norito::json::Error::Message("contract arguments must be a byte array".to_owned())
+        })?;
+        if items.len() > MAX_CONTRACT_ARGUMENT_RECORD_BYTES {
+            return Err(norito::json::Error::Message(format!(
+                "contract argument record exceeds {} bytes",
+                MAX_CONTRACT_ARGUMENT_RECORD_BYTES
+            )));
+        }
+        let mut bytes = Vec::with_capacity(items.len());
+        for item in items {
+            bytes.push(<u8 as norito::json::JsonDeserialize>::json_from_value(
+                item,
+            )?);
+        }
+        Ok(Self(bytes))
     }
 }
 
@@ -552,6 +724,8 @@ impl norito::json::FastJsonWrite for Executable {
 mod tests {
     use std::any::Any;
 
+    use norito::core::DecodeFromSlice as _;
+
     use super::*;
 
     #[derive(Debug, Clone)]
@@ -598,9 +772,74 @@ mod tests {
                     .parse()
                     .expect("contract address"),
                 entrypoint: "ping".to_owned(),
-                payload: None,
+                arguments: None,
             })
             .requires_transaction_gas_limit()
+        );
+    }
+
+    #[test]
+    fn contract_argument_record_rejects_oversized_length_before_allocation() {
+        assert!(
+            ContractArgumentRecord::try_new(vec![0; MAX_CONTRACT_ARGUMENT_RECORD_BYTES + 1])
+                .is_err()
+        );
+
+        let declared = u64::try_from(MAX_CONTRACT_ARGUMENT_RECORD_BYTES + 1)
+            .expect("argument bound fits u64")
+            .to_le_bytes();
+        assert!(ContractArgumentRecord::decode_from_slice(&declared).is_err());
+
+        let mut truncated = 4_u64.to_le_bytes().to_vec();
+        truncated.extend_from_slice(&[1, 2]);
+        assert!(ContractArgumentRecord::decode_from_slice(&truncated).is_err());
+    }
+
+    #[test]
+    fn contract_argument_record_uses_the_bounded_vec_wire_layout() {
+        let record =
+            ContractArgumentRecord::try_new(vec![1, 2, 3, 4]).expect("bounded argument record");
+        let encoded = norito::to_bytes(&record).expect("encode argument record");
+        assert_eq!(&encoded[..8], &4_u64.to_le_bytes());
+        assert_eq!(&encoded[8..], &[1, 2, 3, 4]);
+        assert_eq!(
+            norito::decode_from_bytes::<ContractArgumentRecord>(&encoded)
+                .expect("decode bounded argument record"),
+            record
+        );
+    }
+
+    #[test]
+    fn containing_contract_invocation_uses_fallible_bounded_decode() {
+        let record_bytes = [1_u8, 2, 3, 4];
+        let invocation = ContractInvocation {
+            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                .parse()
+                .expect("contract address"),
+            entrypoint: "call".to_owned(),
+            arguments: Some(
+                ContractArgumentRecord::try_new(record_bytes.to_vec())
+                    .expect("bounded argument fixture"),
+            ),
+        };
+        let mut encoded = norito::to_bytes(&invocation).expect("encode invocation");
+        let mut needle = 4_u64.to_le_bytes().to_vec();
+        needle.extend_from_slice(&record_bytes);
+        let count_offset = encoded
+            .windows(needle.len())
+            .position(|window| window == needle)
+            .expect("embedded argument sequence");
+        encoded[count_offset..count_offset + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+
+        let decoded =
+            std::panic::catch_unwind(|| norito::decode_from_bytes::<ContractInvocation>(&encoded));
+        assert!(
+            decoded.is_ok(),
+            "hostile lengths must not reach deserialize panic"
+        );
+        assert!(
+            decoded.expect("decode did not panic").is_err(),
+            "derived containing-type decode must call the bounded fallible decoder"
         );
     }
 
@@ -704,10 +943,10 @@ mod tests {
                 .parse()
                 .expect("contract address"),
             entrypoint: "contribute".to_owned(),
-            payload: Some(Json::new(norito::json!({
-                "sale": "genesis_sale",
-                "payment_amount": 1
-            }))),
+            arguments: Some(
+                ContractArgumentRecord::try_new(vec![0x4b, 0x4f, 0x54, 0x4f])
+                    .expect("bounded argument fixture"),
+            ),
         });
         let json =
             norito::json::to_json(&contract_call_executable).expect("serialize contract call");

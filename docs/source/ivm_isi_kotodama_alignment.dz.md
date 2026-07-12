@@ -49,8 +49,8 @@ translator: machine-google-reviewed
 ### Kotodama → IVM
 - མཐུད་མཚམས་ཀྱི་ཆ་ཤས་ཚུ་ ཡོདཔ་ཨིན་ (ཚིག་མཛོད་/པཱར་ཛར་/ཉུང་མཐའ་ཡིག་བརྡ་/ཨའི་ཨར་/རེག་ལཱལ་)།
 - Codegen (`kotodama::compiler`) གིས་ IVM གི་ཆ་ཚན་འོག་མ་ཅིག་ བཟོ་སྟེ་ རྒྱུ་དངོས་བཀོལ་སྤྱོད་ཀྱི་དོན་ལུ་ `SCALL` ལག་ལེན་འཐབ་ཨིན།
-  - `MintAsset` → གཞི་སྒྲིག་ x10=བསྡུ་སྒྲིག་, x11=རྒྱུ་དངོས་, x12=&NoritoBytes(ཨང་གྲངས་); `SCALL SYSCALL_MINT_ASSET`.
-  - `BurnAsset`/`TransferAsset` དང་འདྲ་བའི་ (ནོར་ཊོ་བཱའིཊིས་(ཨང་གྲངས་) དཔག་བྱེད་སྦེ་ཆ་འཇོག་འབད་ཡོདཔ་ཨིན།
+  - `MintAsset` → གཞི་སྒྲིག་ x10=བསྡུ་སྒྲིག་, x11=རྒྱུ་དངོས་, x12=&Amount; `SCALL SYSCALL_MINT_ASSET`.
+  - `BurnAsset`/`TransferAsset` དང་འདྲ་བའི་ (Amount དཔག་བྱེད་སྦེ་ཆ་འཇོག་འབད་ཡོདཔ་ཨིན།
 - ཌི་མོསི་ `koto_*_demo.rs` འགྲེམས་སྟོན་འདི་ མགྱོགས་དྲགས་སྦེ་བརྟག་དཔྱད་འབད་ནིའི་དོན་ལུ་ IDs ལུ་ IDs ལུ་ སབ་ཁྲ་བཟོ་སྟེ་ `WsvHost` ལག་ལེན་འཐབ་སྟེ་ སྟོན་ཡོདཔ།
 
 ---
@@ -129,9 +129,9 @@ translator: machine-google-reviewed
 
 ངོ་ཚབ་ཆ་ཚན་ཆུང་བ་ — གཙོ་བོ་ལག་ལེན་འཐབ་པའི་སྐབས་ མཇུག་བསྡུ།- SYSCALL_REGISTER_DOMAIN(id: ptr ཌོ་མེན་ཨའི་ཌི) → ISI ཐོ་བཀོད་
 - SYSCALL_REGISTER_ACCOUNT(id: ptr རྩིས་འཛིན་ཨང་རྟགས་) → ISI ཐོ་འགོད་
-- SYSCALL_MINT_ASSET(རྩིས་ཐོ་: ptr རྩིས་ཐོ་ཨའི་ཌི་, ptr Aset DefinitionId, pund: ptr ནོར་ཊོ་བཱའིཊིས་(ཨང་གྲངས་)) → ISI མིན་ཊི་
-- SYSCALL_BURN_ASSET(རྩིས་ཐོ་: ptr རྩིས་ཐོ་ཨའི་ཌི་, ptr Asset DefinitionId, some, ptr NoritoBytes(ཨང་གྲངས་)) → ISI Burn
-- SYSCALL_TRANSFER_ASSET(from: ptr རྩིས་ཐོ་ཨའི་ཌི་, to: ptr རྩིས་ཐོ་ཨའི་ཌི་, ptr Aset DefinitionId, བསྡོམས་: ptr NoritoBytes (Numeric) → ISI སྤོ་བཤུད་
+- SYSCALL_MINT_ASSET(རྩིས་ཐོ་: ptr རྩིས་ཐོ་ཨའི་ཌི་, ptr Aset DefinitionId, pund: ptr Amount) → ISI མིན་ཊི་
+- SYSCALL_BURN_ASSET(རྩིས་ཐོ་: ptr རྩིས་ཐོ་ཨའི་ཌི་, ptr Asset DefinitionId, some, ptr Amount) → ISI Burn
+- SYSCALL_TRANSFER_ASSET(from: ptr རྩིས་ཐོ་ཨའི་ཌི་, to: ptr རྩིས་ཐོ་ཨའི་ཌི་, ptr Aset DefinitionId, བསྡོམས་: ptr Amount → ISI སྤོ་བཤུད་
 - SYSCALL_TRANSFER_V1_BATCH_BEGIN() / SYSCALL_TRANSFER_V1_BATCH_END() → ISI TransferAssetBatchatch (གོ་སྐབས་འདི་ཁ་ཕྱེ་ཡོདཔ་ཨིན་/ཁ་བསྡམ/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམས/ཁ་བསྡམ་ནི།
 - SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes) → གན་ཡིག་ཚུ་གིས་ ཧེ་མ་ལས་ ཐོ་བཀོད་ཚུ་ རིམ་སྒྲིག་འབད་ཡོད་པའི་སྐབས་ སྔོན་སྒྲིག་ཨིན་ཀོ་ཌི་འབད་ཡོད་པའི་བེཊི་ཆ་ཅིག་ ཁྐྲིམས་བླུགས།
 - SYSCALL_NFT_MINT_ASSET(id: ptr NftId, ཇོ་བདག་: ptr རྩིས་ཐོ་ ISI ཐོ་བཀོད་

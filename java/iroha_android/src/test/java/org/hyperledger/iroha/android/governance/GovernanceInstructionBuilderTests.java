@@ -22,6 +22,7 @@ public final class GovernanceInstructionBuilderTests {
     proposeDeployContractRoundTrip();
     proposeDeployContractFromArgumentsRoundTrip();
     proposeDeployContractRejectsAmbiguousTarget();
+    votingModeParserRejectsNoncanonicalAliases();
     castZkBallotRoundTrip();
     castZkBallotRejectsUnsupportedPublicInputs();
     castZkBallotNormalizesPublicInputs();
@@ -91,6 +92,24 @@ public final class GovernanceInstructionBuilderTests {
       failed = ex.getMessage().contains("Exactly one");
     }
     assert failed : "expected ambiguous selector rejection";
+  }
+
+  private static void votingModeParserRejectsNoncanonicalAliases() {
+    assert GovernanceInstructionUtils.VotingMode.parse("Zk")
+        == GovernanceInstructionUtils.VotingMode.ZK : "canonical Zk mode mismatch";
+    assert GovernanceInstructionUtils.VotingMode.parse("Plain")
+        == GovernanceInstructionUtils.VotingMode.PLAIN : "canonical Plain mode mismatch";
+
+    for (final String alias :
+        List.of("zk", "plain", "ZK", "PLAIN", " Zk", "Plain ", "quadratic")) {
+      boolean failed = false;
+      try {
+        GovernanceInstructionUtils.VotingMode.parse(alias);
+      } catch (final IllegalArgumentException ex) {
+        failed = true;
+      }
+      assert failed : "expected noncanonical voting mode rejection: " + alias;
+    }
   }
 
   private static void castZkBallotRoundTrip() {

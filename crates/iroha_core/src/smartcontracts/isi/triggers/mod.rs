@@ -88,6 +88,28 @@ pub mod isi {
         Ok(())
     }
 
+    fn enforce_ivm_trigger_cycle_ceiling(
+        executable: &Executable,
+        upper_bound: core::num::NonZeroU64,
+    ) -> Result<(), Error> {
+        let bytecode = match executable {
+            Executable::Ivm(bytecode) => bytecode.as_ref(),
+            Executable::IvmProved(proved) => proved.bytecode.as_ref(),
+            Executable::Instructions(_) | Executable::ContractCall(_) => return Ok(()),
+        };
+        let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|error| {
+            Error::InvalidParameter(InvalidParameterError::SmartContract(format!(
+                "invalid IVM trigger metadata: {error}"
+            )))
+        })?;
+        crate::smartcontracts::ivm::validate_cycle_ceiling(&parsed.metadata, upper_bound).map_err(
+            |error| {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(error.to_string()))
+            },
+        )?;
+        Ok(())
+    }
+
     fn is_permission_trigger_associated(
         permission: &iroha_data_model::permission::Permission,
         trigger_id: &TriggerId,
@@ -208,6 +230,11 @@ pub mod isi {
         skip_permission_check: bool,
     ) -> Result<(), Error> {
         let mut new_trigger = trigger;
+
+        enforce_ivm_trigger_cycle_ceiling(
+            new_trigger.action().executable(),
+            state_transaction.pipeline.ivm_max_cycles_upper_bound,
+        )?;
 
         if !skip_permission_check {
             // Enforce minimal permission: only genesis block, the trigger owner,
@@ -1162,7 +1189,7 @@ mod tests {
         block::ValidBlock,
         kura::Kura,
         query::store::LiveQueryStore,
-        smartcontracts::{Error, Execute, ValidQuery},
+        smartcontracts::{Error, Execute, ValidQuery, isi::triggers::set::SetReadOnly},
         state::{State, World},
         sumeragi::network_topology::Topology,
     };
@@ -1237,6 +1264,79 @@ mod tests {
             !trigger_is_enabled(&metadata),
             "malformed enabled flags must fail closed"
         );
+    }
+
+    #[test]
+    fn trigger_registration_rejects_zero_and_over_ceiling_ivm_headers() {
+        use iroha_data_model::{
+            events::execute_trigger::ExecuteTriggerEventFilter,
+            transaction::{Executable, IvmBytecode},
+            trigger::action::{Action, Repeats},
+        };
+
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut state_block = state.block(BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero block height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = state_block.transaction();
+        stx._curr_block
+            .set_height(NonZeroU64::new(2).expect("non-genesis block height"));
+        stx.pipeline.ivm_max_cycles_upper_bound =
+            NonZeroU64::new(1).expect("test ceiling is non-zero");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+        Register::domain(Domain::new(domain_id))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register domain");
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register account");
+
+        for (id, max_cycles, expected) in [
+            ("zero_cycle_trigger", 0_u64, "omits a non-zero `max_cycles`"),
+            (
+                "over_cycle_trigger",
+                2_u64,
+                "`max_cycles` exceeds upper bound",
+            ),
+        ] {
+            let trigger_id: TriggerId = id.parse().expect("trigger id");
+            let metadata = ivm::ProgramMetadata {
+                max_cycles,
+                ..ivm::ProgramMetadata::default()
+            };
+            let mut bytecode = metadata.encode();
+            bytecode.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+            let action = Action::new(
+                Executable::Ivm(IvmBytecode::from_compiled(bytecode)),
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+            );
+
+            let error = Register::trigger(Trigger::new(trigger_id.clone(), action))
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("invalid cycle header must fail trigger admission");
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected trigger admission error: {error}"
+            );
+            assert!(
+                stx.world
+                    .triggers
+                    .inspect_by_id(&trigger_id, |_| ())
+                    .is_none(),
+                "rejected trigger must not enter world state"
+            );
+        }
     }
 
     #[test]

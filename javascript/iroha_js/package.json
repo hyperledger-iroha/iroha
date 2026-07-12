@@ -53,7 +53,10 @@
       "browser": "./dist/toriiBrowserClient.js",
       "types": "./index.d.ts"
     },
-    "./norito": "./dist/norito.js",
+    "./norito": {
+      "import": "./dist/norito.js",
+      "types": "./index.d.ts"
+    },
     "./offline-cash": {
       "import": "./dist/offlineCashLifecycle.js",
       "types": "./index.d.ts"
@@ -86,9 +89,9 @@
       "types": "./nexus-app.d.ts"
     },
     "./kotodama-compiler": {
-      "import": "./dist/kotodamaCompiler/index.js",
-      "browser": "./dist/kotodamaCompiler/index.js",
-      "types": "./kotodama-compiler.d.ts"
+      "types": "./kotodama-compiler.d.ts",
+      "browser": "./dist/kotodamaCompiler/browser.js",
+      "import": "./dist/kotodamaCompiler/index.js"
     }
   },
   "typesVersions": {
@@ -200,7 +203,8 @@
     "package.json",
     "native/iroha_js_host.checksums.json",
     "dist",
-    "recipes",
+    "recipes/iso_bridge_builder.mjs",
+    "recipes/nexus_app_transfer.mjs",
     "scripts",
     "src"
   ],

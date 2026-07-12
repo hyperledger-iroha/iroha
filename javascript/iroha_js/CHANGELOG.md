@@ -13,12 +13,31 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   inconsistent frozen contexts or CommitQCs, impossible queue bounds, and
   malformed canonical lane evidence; generic `/v1/status` parsing remains a
   separate operational-health surface.
+- Replaced lossy Kotodama compiler exceptions with a discriminated asynchronous
+  result. Node and browser-service compilation now preserve the canonical Rust
+  diagnostic fields and UTF-8 byte spans, validate artifact/manifest/sidecar
+  integrity on success, and bound compiler-service success and error bodies
+  while reading them.
+- Made the registry artifact independently consumable: NodeNext declaration
+  targets and public subpath type exports are verified from a clean packed
+  layout, registry recipes are restricted to clean-install portable examples,
+  and native-only workflows are explicitly source-checkout scoped. Portable
+  Node Ed25519 key generation/public-key derivation now use a native-equivalent
+  Node-crypto fallback when the host binary is absent while preserving
+  fail-closed behavior for present-but-unverified binaries. Shipped account
+  examples are curve-valid canonical I105 literals and are regression-scanned.
 - Fixed the built-in browser Connect approval handoff: browser Connect verifies
   the `{accountId, walletPublicKey, signature}` proof, while the Nexus facade
   projects the account and derives its Ed25519 controller instead of treating
-  the X25519 `walletPublicKey` as a transaction key. Submissions using
-  `{wait: true, signal}` now check cancellation before finalization and again
-  immediately before Torii submission.
+  the X25519 `walletPublicKey` as a transaction key. Verified approvals are now
+  returned as detached per-consumer snapshots, and a second approval frame
+  closes the session without replacing the first identity. Submissions using
+  `{wait: true, signal}` enforce intrinsic cancellation before dispatch and
+  around injected waiters, require a wait capability before submission, capture
+  extension callbacks with their original owners, hard-bound response bodies
+  and asynchronous callbacks, and expose immutable error classification plus
+  submission-state/hash context on failures. Status iterables are raw-entry
+  bounded and acquired once.
 - Made `build:dist` concurrency-safe and content-idempotent: explicit builds
   stage and validate the complete ESM tree under an inter-process lock, then
   replace `dist` only when its content changed, with stale-lock recovery,
@@ -90,9 +109,12 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 - `ToriiClient.callContract` now requires a `gasLimit` in the request payload so
   callers always supply the on-chain gas cap; typings, README docs, and test
   coverage reflect the stricter contract.【javascript/iroha_js/src/toriiClient.js:15360】【javascript/iroha_js/index.d.ts:4477】【javascript/iroha_js/test/toriiClient.test.js:13919】【javascript/iroha_js/test/integrationTorii.test.js:2701】【javascript/iroha_js/README.md:1909】
-- Removed JS client helpers for legacy offline HTTP routes that Torii no longer
-  mounts. `getOfflineReadiness()` is
-  the supported readiness probe for `/v1/offline/readiness`.
+- Added the complete sharp first-release Offline JSON API: asset-scoped
+  `getOfflineReadiness`, directly structured `submitOfflineTopUp` and
+  `submitOfflineRedeem` commands with signed-operation-derived idempotency, and
+  typed polling through `getOfflineOperationStatus`. Node and browser clients
+  reject malformed IDs, contradictory tagged states, mismatched `Location`
+  headers, and whole-payload wrappers before exposing results.
 - Constrained the JS SDK to the first-release surface: Connect WebSocket URLs no longer accept token
   query parameters, Torii health snapshots now only parse JSON responses, the `X-Iroha-API-Token`
   alias is no longer emitted, V1 telemetry counter aliases are dropped, and account address

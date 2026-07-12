@@ -30,14 +30,14 @@ use iroha_data_model::{
     },
     name::Name,
     offline::{
-        KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE, KagemushaRecursiveSpendBranchPathV2,
-        KagemushaRecursiveSpendTopUpAnchorV2, KagemushaRequestAuthorizationV2,
-        OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA, OFFLINE_REJECTION_REASON_PREFIX,
-        OfflineAndroidAppAttestationPolicy, OfflineDeviceAttestationPolicy,
-        OfflineDeviceAttestationRegistration, OfflineDeviceAttestationTrustedRoot,
-        OfflineIosAppAttestationPolicy, OfflineNoteAuditOutputClaim, OfflineNoteIssuedClaim,
-        OfflineNoteKeyCertificate, OfflineNoteRecursiveProof,
-        offline_note_recursive_public_inputs_schema_hash,
+        KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchPathV2,
+        KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaRecursiveSpendTopUpAnchorV2,
+        KagemushaRequestAuthorizationV2, OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA,
+        OFFLINE_REJECTION_REASON_PREFIX, OfflineAndroidAppAttestationPolicy,
+        OfflineDeviceAttestationPolicy, OfflineDeviceAttestationRegistration,
+        OfflineDeviceAttestationTrustedRoot, OfflineIosAppAttestationPolicy,
+        OfflineNoteAuditOutputClaim, OfflineNoteIssuedClaim, OfflineNoteKeyCertificate,
+        OfflineNoteRecursiveProof, offline_note_recursive_public_inputs_schema_hash,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     query::error::FindError,
@@ -385,9 +385,10 @@ pub mod isi {
     const KAGEMUSHA_V2_NONCE_DOMAIN: &str = "kagemusha-v2-authorization-nonce";
     const KAGEMUSHA_V2_PAYLOAD_DOMAIN: &str = "kagemusha-v2-payload";
     const KAGEMUSHA_V2_REQUEST_DOMAIN: &str = "kagemusha-v2-request";
-    const KAGEMUSHA_V2_REDEEMED_COMMITMENT_DOMAIN: &str = "kagemusha-v2-redeemed-commitment";
     const KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN: &str = "kagemusha-v2-redeemed-branch";
     const KAGEMUSHA_V2_BRANCH_DESCENDANT_DOMAIN: &str = "kagemusha-v2-redeemed-descendant";
+    const KAGEMUSHA_V2_TRANSITION_SELECTED_DOMAIN: &str = "kagemusha-v2-transition-selected";
+    const KAGEMUSHA_V2_TRANSITION_CHOICE_DOMAIN: &str = "kagemusha-v2-transition-choice";
     const KAGEMUSHA_V2_AUTHORIZED_CHANGE_CHILD_DOMAIN: &str =
         "kagemusha-v2-authorized-change-child";
     const OFFLINE_ATTESTATION_EVIDENCE_PREFIX: &[u8] = b"offline-device-attestation-evidence-v1";
@@ -408,24 +409,6 @@ pub mod isi {
     const OFFLINE_ATTESTATION_ANDROID_KEY_OID: &str = "1.3.6.1.4.1.11129.2.1.17";
     const OFFLINE_ATTESTATION_IOS_ENV_PRODUCTION: &str = "production";
     const OFFLINE_ATTESTATION_IOS_ENV_DEVELOPMENT: &str = "development";
-
-    fn ensure_kagemusha_v2_chain_backend_available(
-        error_label: &str,
-        operation: &str,
-    ) -> Result<(), Error> {
-        if KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE {
-            return Ok(());
-        }
-
-        // This gate is deliberately fail-closed. It may be removed only in the same
-        // release that ships both the branch-independent V2 proof backend and its
-        // chain executor, so a capability flag can never expose partial execution.
-        Err(labeled_invariant(
-            error_label,
-            format!("Kagemusha V2 recursive {operation} proof backend is unavailable"),
-        )
-        .into())
-    }
     const OFFLINE_ATTESTATION_IOS_AAGUID_PRODUCTION: &[u8; 16] = b"appattest\0\0\0\0\0\0\0";
     const OFFLINE_ATTESTATION_IOS_AAGUID_DEVELOPMENT: &[u8; 16] = b"appattestdevelop";
     const OFFLINE_ATTESTATION_ANDROID_SECURITY_LEVEL_TRUSTED_ENVIRONMENT: i64 = 1;
@@ -2837,24 +2820,6 @@ pub mod isi {
         Ok(())
     }
 
-    fn kagemusha_v2_branch_prefix(
-        path: KagemushaRecursiveSpendBranchPathV2,
-        depth: u8,
-    ) -> KagemushaRecursiveSpendBranchPathV2 {
-        debug_assert!(depth <= path.depth);
-        let mut prefix = path;
-        prefix.depth = depth;
-        let full_bytes = usize::from(depth / 8);
-        let partial_bits = depth % 8;
-        if partial_bits == 0 {
-            prefix.path_bits[full_bytes..].fill(0);
-        } else {
-            prefix.path_bits[full_bytes] &= u8::MAX << (8 - partial_bits);
-            prefix.path_bits[full_bytes + 1..].fill(0);
-        }
-        prefix
-    }
-
     fn kagemusha_v2_branch_marker(domain: &str, path: KagemushaRecursiveSpendBranchPathV2) -> Hash {
         kagemusha_v2_marker(
             domain,
@@ -2862,14 +2827,118 @@ pub mod isi {
         )
     }
 
-    fn ensure_kagemusha_v2_branch_available(
-        path: KagemushaRecursiveSpendBranchPathV2,
+    fn kagemusha_v2_branch_claim_prefix(
+        claim: &KagemushaRecursiveSpendBranchClaimV2,
+        depth: u8,
+    ) -> Result<KagemushaRecursiveSpendBranchClaimV2, Error> {
+        claim
+            .prefix(depth)
+            .map_err(|err| labeled_invariant("branch_conflict", err.to_string()).into())
+    }
+
+    fn kagemusha_v2_branch_claim_marker(
+        domain: &str,
+        claim: &KagemushaRecursiveSpendBranchClaimV2,
+    ) -> Hash {
+        kagemusha_v2_marker(
+            domain,
+            &[
+                &claim.path.lineage_root,
+                &[claim.path.depth],
+                &claim.path.path_bits,
+                &claim.transition_tags,
+            ],
+        )
+    }
+
+    fn kagemusha_v2_transition_choice_marker(
+        prefix: KagemushaRecursiveSpendBranchPathV2,
+        transition_tag: [u8; 24],
+    ) -> Hash {
+        kagemusha_v2_marker(
+            KAGEMUSHA_V2_TRANSITION_CHOICE_DOMAIN,
+            &[
+                &prefix.lineage_root,
+                &[prefix.depth],
+                &prefix.path_bits,
+                &transition_tag,
+            ],
+        )
+    }
+
+    fn validate_kagemusha_v2_branch_claim_batch(
+        claims: &[KagemushaRecursiveSpendBranchClaimV2],
+    ) -> Result<(), Error> {
+        if claims.is_empty()
+            || claims.len()
+                > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2
+        {
+            return Err(labeled_invariant(
+                "branch_conflict",
+                "Kagemusha V2 branch set must contain one or two conflict claims",
+            )
+            .into());
+        }
+        for (index, claim) in claims.iter().enumerate() {
+            claim
+                .validate()
+                .map_err(|err| labeled_invariant("branch_conflict", err.to_string()))?;
+            for previous in &claims[..index] {
+                if previous.path.conflicts_with(claim.path) {
+                    return Err(labeled_invariant(
+                        "branch_conflict",
+                        "Kagemusha V2 branch set contains duplicate or overlapping ancestor and descendant claims",
+                    )
+                    .into());
+                }
+                if previous.path.lineage_root != claim.path.lineage_root {
+                    continue;
+                }
+                let shared_depth = previous.path.depth.min(claim.path.depth);
+                for parent_depth in 0..shared_depth {
+                    let previous_prefix = previous
+                        .path
+                        .prefix(parent_depth)
+                        .map_err(|err| labeled_invariant("branch_conflict", err.to_string()))?;
+                    let claim_prefix = claim
+                        .path
+                        .prefix(parent_depth)
+                        .map_err(|err| labeled_invariant("branch_conflict", err.to_string()))?;
+                    if previous_prefix == claim_prefix
+                        && previous.transition_tag_at(parent_depth)
+                            != claim.transition_tag_at(parent_depth)
+                    {
+                        return Err(labeled_invariant(
+                            "branch_conflict",
+                            "Kagemusha V2 claims select different transitions at the same lineage prefix",
+                        )
+                        .into());
+                    }
+                }
+            }
+            if index > 0 && claims[index - 1].path >= claim.path {
+                return Err(labeled_invariant(
+                    "branch_conflict",
+                    "Kagemusha V2 branch set is not in strict canonical order",
+                )
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_kagemusha_v2_branch_claim_available(
+        claim: &KagemushaRecursiveSpendBranchClaimV2,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        path.validate()
+        claim
+            .validate()
             .map_err(|err| labeled_invariant("branch_conflict", err.to_string()))?;
-        for depth in 0..=path.depth {
-            let prefix = kagemusha_v2_branch_prefix(path, depth);
+        for depth in 0..=claim.path.depth {
+            let prefix = claim
+                .path
+                .prefix(depth)
+                .map_err(|err| labeled_invariant("branch_conflict", err.to_string()))?;
             let exact = kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN, prefix);
             if state_transaction
                 .world
@@ -2877,11 +2946,11 @@ pub mod isi {
                 .get(&exact)
                 .is_some()
             {
-                if depth < path.depth {
-                    let child = kagemusha_v2_branch_prefix(path, depth + 1);
-                    let authorized_child = kagemusha_v2_branch_marker(
+                if depth < claim.path.depth {
+                    let child = kagemusha_v2_branch_claim_prefix(claim, depth + 1)?;
+                    let authorized_child = kagemusha_v2_branch_claim_marker(
                         KAGEMUSHA_V2_AUTHORIZED_CHANGE_CHILD_DOMAIN,
-                        child,
+                        &child,
                     );
                     if state_transaction
                         .world
@@ -2900,7 +2969,7 @@ pub mod isi {
             }
         }
         let has_descendant =
-            kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_DESCENDANT_DOMAIN, path);
+            kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_DESCENDANT_DOMAIN, claim.path);
         if state_transaction
             .world
             .offline_note_replay_keys
@@ -2916,42 +2985,101 @@ pub mod isi {
         Ok(())
     }
 
-    fn commit_kagemusha_v2_branch(
-        path: KagemushaRecursiveSpendBranchPathV2,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) {
-        let exact = kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN, path);
-        state_transaction
-            .world
-            .offline_note_replay_keys
-            .insert(exact, ());
-        for depth in 0..path.depth {
-            let prefix = kagemusha_v2_branch_prefix(path, depth);
-            let descendant =
-                kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_DESCENDANT_DOMAIN, prefix);
-            state_transaction
-                .world
-                .offline_note_replay_keys
-                .insert(descendant, ());
+    fn stage_kagemusha_v2_transition_choices(
+        claims: &[KagemushaRecursiveSpendBranchClaimV2],
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<Vec<(Hash, Hash)>, Error> {
+        let mut staged = Vec::<(Hash, Hash)>::new();
+        for claim in claims {
+            for parent_depth in 0..claim.path.depth {
+                let prefix = claim
+                    .path
+                    .prefix(parent_depth)
+                    .map_err(|err| labeled_invariant("branch_conflict", err.to_string()))?;
+                let transition_tag = claim.transition_tag_at(parent_depth).ok_or_else(|| {
+                    labeled_invariant(
+                        "branch_conflict",
+                        "Kagemusha V2 branch claim is missing an active transition tag",
+                    )
+                })?;
+                let selected =
+                    kagemusha_v2_branch_marker(KAGEMUSHA_V2_TRANSITION_SELECTED_DOMAIN, prefix);
+                let choice = kagemusha_v2_transition_choice_marker(prefix, transition_tag);
+                let selected_exists = state_transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&selected)
+                    .is_some();
+                let choice_exists = state_transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&choice)
+                    .is_some();
+                match (selected_exists, choice_exists) {
+                    (true, true) => {}
+                    (true, false) => {
+                        return Err(labeled_invariant(
+                            "branch_conflict",
+                            "Kagemusha V2 lineage prefix was already bound to a different transition choice",
+                        )
+                        .into());
+                    }
+                    (false, true) => {
+                        return Err(labeled_invariant(
+                            "branch_conflict",
+                            "Kagemusha V2 transition-choice marker exists without its selection marker",
+                        )
+                        .into());
+                    }
+                    (false, false) => {
+                        if let Some((_, staged_choice)) = staged
+                            .iter()
+                            .find(|(staged_selected, _)| *staged_selected == selected)
+                        {
+                            if *staged_choice != choice {
+                                return Err(labeled_invariant(
+                                    "branch_conflict",
+                                    "Kagemusha V2 claims select different transitions at the same lineage prefix",
+                                )
+                                .into());
+                            }
+                        } else {
+                            staged.push((selected, choice));
+                        }
+                    }
+                }
+            }
         }
+        Ok(staged)
     }
 
-    fn authorize_kagemusha_v2_change_child(
-        parent: KagemushaRecursiveSpendBranchPathV2,
-        child: KagemushaRecursiveSpendBranchPathV2,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        let expected = parent
-            .child(iroha_data_model::offline::KagemushaRecursiveSpendBranchV2::Change)
+    fn validate_kagemusha_v2_change_child_authorization(
+        parent: &KagemushaRecursiveSpendBranchClaimV2,
+        child: &KagemushaRecursiveSpendBranchClaimV2,
+        redemption_binding_digest: [u8; 32],
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<Hash, Error> {
+        parent
+            .validate()
             .map_err(|err| labeled_invariant("branch_conflict", err.to_string()))?;
-        if child != expected {
+        child
+            .validate()
+            .map_err(|err| labeled_invariant("branch_conflict", err.to_string()))?;
+        let expected = parent
+            .child(
+                iroha_data_model::offline::KagemushaRecursiveSpendBranchV2::Change,
+                redemption_binding_digest,
+            )
+            .map_err(|err| labeled_invariant("branch_conflict", err.to_string()))?;
+        if *child != expected {
             return Err(labeled_invariant(
                 "branch_conflict",
-                "Kagemusha V2 partial redemption change is not the dedicated deterministic child",
+                "Kagemusha V2 partial redemption change is not the exact transition-bound child",
             )
             .into());
         }
-        let marker = kagemusha_v2_branch_marker(KAGEMUSHA_V2_AUTHORIZED_CHANGE_CHILD_DOMAIN, child);
+        let marker =
+            kagemusha_v2_branch_claim_marker(KAGEMUSHA_V2_AUTHORIZED_CHANGE_CHILD_DOMAIN, child);
         if state_transaction
             .world
             .offline_note_replay_keys
@@ -2964,11 +3092,125 @@ pub mod isi {
             )
             .into());
         }
-        state_transaction
-            .world
-            .offline_note_replay_keys
-            .insert(marker, ());
-        Ok(())
+        Ok(marker)
+    }
+
+    #[derive(Debug)]
+    struct KagemushaV2BranchCommitPlan {
+        markers: Vec<Hash>,
+    }
+
+    impl KagemushaV2BranchCommitPlan {
+        fn commit(self, state_transaction: &mut StateTransaction<'_, '_>) {
+            for marker in self.markers {
+                state_transaction
+                    .world
+                    .offline_note_replay_keys
+                    .insert(marker, ());
+            }
+        }
+    }
+
+    /// Validate and stage every marker needed to consume a set of V2 branches.
+    ///
+    /// Partial redemption may additionally authorize the deterministic change
+    /// child of a consumed parent. This function is deliberately read-only:
+    /// every path, ledger conflict, and transition choice is checked before a
+    /// caller can commit even the first marker.
+    fn plan_kagemusha_v2_consumed_branch_set(
+        consumed_claims: &[KagemushaRecursiveSpendBranchClaimV2],
+        redemption_binding_digest: Option<[u8; 32]>,
+        change_children: &[(
+            KagemushaRecursiveSpendBranchClaimV2,
+            KagemushaRecursiveSpendBranchClaimV2,
+        )],
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<KagemushaV2BranchCommitPlan, Error> {
+        // Admission first: the data model enforces one non-zero 24-byte transition tag per
+        // active path edge, with no padding, and a maximum of two claims.
+        validate_kagemusha_v2_branch_claim_batch(consumed_claims)?;
+
+        if change_children.is_empty() != redemption_binding_digest.is_none() {
+            return Err(labeled_invariant(
+                "branch_conflict",
+                "Kagemusha V2 partial redemption change claims require exactly one transition binding digest",
+            )
+            .into());
+        }
+        if !change_children.is_empty() && change_children.len() != consumed_claims.len() {
+            return Err(labeled_invariant(
+                "branch_conflict",
+                "Kagemusha V2 partial redemption must authorize exactly one change child per consumed claim",
+            )
+            .into());
+        }
+        let redemption_binding_digest = redemption_binding_digest.unwrap_or([0; 32]);
+        if !change_children.is_empty() && redemption_binding_digest == [0; 32] {
+            return Err(labeled_invariant(
+                "branch_conflict",
+                "Kagemusha V2 partial redemption binding digest must be non-zero",
+            )
+            .into());
+        }
+
+        let mut authorization_markers = Vec::with_capacity(change_children.len());
+        for (index, (parent, child)) in change_children.iter().enumerate() {
+            if consumed_claims.get(index) != Some(parent) {
+                return Err(labeled_invariant(
+                    "branch_conflict",
+                    "Kagemusha V2 partial redemption change parents do not match the canonical consumed set",
+                )
+                .into());
+            }
+            if consumed_claims.contains(child) {
+                return Err(labeled_invariant(
+                    "branch_conflict",
+                    "Kagemusha V2 partial redemption cannot consume its new change child",
+                )
+                .into());
+            }
+            authorization_markers.push(validate_kagemusha_v2_change_child_authorization(
+                parent,
+                child,
+                redemption_binding_digest,
+                state_transaction,
+            )?);
+        }
+
+        // Every state lookup and every cross-claim transition choice check is
+        // completed before the first set-only marker is written.
+        let transition_markers =
+            stage_kagemusha_v2_transition_choices(consumed_claims, state_transaction)?;
+        for claim in consumed_claims {
+            ensure_kagemusha_v2_branch_claim_available(claim, state_transaction)?;
+        }
+
+        let mut markers = BTreeSet::new();
+        for (selected, choice) in transition_markers {
+            markers.insert(selected);
+            markers.insert(choice);
+        }
+        for claim in consumed_claims {
+            markers.insert(kagemusha_v2_branch_marker(
+                KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN,
+                claim.path,
+            ));
+            for depth in 0..claim.path.depth {
+                let prefix = claim
+                    .path
+                    .prefix(depth)
+                    .map_err(|err| labeled_invariant("branch_conflict", err.to_string()))?;
+                markers.insert(kagemusha_v2_branch_marker(
+                    KAGEMUSHA_V2_BRANCH_DESCENDANT_DOMAIN,
+                    prefix,
+                ));
+            }
+        }
+        markers.extend(authorization_markers);
+
+        Ok(KagemushaV2BranchCommitPlan {
+            markers: markers.into_iter().collect(),
+        })
     }
 
     fn kagemusha_v2_topup_anchor_state_key(operation_id: [u8; 32]) -> Result<Name, Error> {
@@ -3036,6 +3278,78 @@ pub mod isi {
             .validate_public_binding()
             .map_err(|err| labeled_invariant("topup_anchor_invalid", err.to_string()))?;
         let key = kagemusha_v2_topup_anchor_state_key(anchor.topup_operation_id)?;
+        let existing = state_transaction.world.smart_contract_state.get(&key);
+        if existing.is_some() {
+            return Err(labeled_invariant(
+                "authorization_replay",
+                "Kagemusha V2 top-up operation already has a finalized anchor",
+            )
+            .into());
+        }
+        crate::sumeragi::witness::record_read_kagemusha_v2_topup_anchor(
+            anchor.topup_operation_id,
+            None,
+        );
+        let archive = norito::to_bytes(anchor).map_err(|err| {
+            labeled_invariant(
+                "topup_anchor_invalid",
+                format!("failed to encode Kagemusha V2 top-up anchor: {err}"),
+            )
+        })?;
+        crate::sumeragi::witness::record_write_kagemusha_v2_topup_anchor(
+            anchor.topup_operation_id,
+            &anchor.anchor_digest,
+        );
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(key, archive);
+        Ok(())
+    }
+
+    fn kagemusha_v2_redemption_receipt_state_key(operation_id: [u8; 32]) -> Result<Name, Error> {
+        format!("kagemusha_v2_redemption_{}", hex::encode(operation_id))
+            .parse()
+            .map_err(|err| {
+                labeled_invariant(
+                    "invalid_recursive_redeem",
+                    format!("failed to derive Kagemusha V2 redemption receipt key: {err}"),
+                )
+                .into()
+            })
+    }
+
+    fn ensure_kagemusha_v2_redemption_receipt_matches(
+        operation_id: [u8; 32],
+        payload_digest: [u8; 32],
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let key = kagemusha_v2_redemption_receipt_state_key(operation_id)?;
+        let receipt = state_transaction
+            .world
+            .smart_contract_state
+            .get(&key)
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "authorization_replay",
+                    "Kagemusha V2 redemption replay marker has no committed receipt",
+                )
+            })?;
+        if receipt.as_slice() != payload_digest.as_slice() {
+            return Err(labeled_invariant(
+                "authorization_replay",
+                "Kagemusha V2 redemption receipt does not match the retried request",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn ensure_kagemusha_v2_redemption_receipt_absent(
+        operation_id: [u8; 32],
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<Name, Error> {
+        let key = kagemusha_v2_redemption_receipt_state_key(operation_id)?;
         if state_transaction
             .world
             .smart_contract_state
@@ -3044,21 +3358,210 @@ pub mod isi {
         {
             return Err(labeled_invariant(
                 "authorization_replay",
-                "Kagemusha V2 top-up operation already has a finalized anchor",
+                "Kagemusha V2 redemption receipt exists without its complete replay-marker set",
             )
             .into());
         }
-        let archive = norito::to_bytes(anchor).map_err(|err| {
-            labeled_invariant(
-                "topup_anchor_invalid",
-                format!("failed to encode Kagemusha V2 top-up anchor: {err}"),
+        Ok(key)
+    }
+
+    struct KagemushaV2ResolvedTopUpProvenance {
+        source_asset: AssetId,
+        anchors: Vec<KagemushaRecursiveSpendTopUpAnchorV2>,
+    }
+
+    fn validate_kagemusha_v2_finalized_topup_anchors(
+        anchor_refs: &[KagemushaRecursiveSpendTopUpAnchorRefV2],
+        current_note_atomic_units: u128,
+        requested_height: u64,
+        zk_state: &crate::state::ZkAssetState,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<KagemushaV2ResolvedTopUpProvenance, Error> {
+        let mut canonical_source_asset = None;
+        let mut resolved_anchors = Vec::with_capacity(anchor_refs.len());
+        let mut seen_operations = BTreeSet::new();
+        let mut anchored_total = 0_u128;
+        for supplied_ref in anchor_refs {
+            supplied_ref
+                .validate()
+                .map_err(|err| labeled_invariant("topup_anchor_invalid", err.to_string()))?;
+            if !seen_operations.insert(supplied_ref.topup_operation_id) {
+                return Err(labeled_invariant(
+                    "topup_anchor_invalid",
+                    "Kagemusha V2 redemption repeats a top-up operation anchor",
+                )
+                .into());
+            }
+            let persisted =
+                load_kagemusha_v2_topup_anchor(supplied_ref.topup_operation_id, state_transaction)?;
+            if persisted.anchor_digest != supplied_ref.anchor_digest
+                || persisted
+                    .compact_ref()
+                    .map_err(|err| labeled_invariant("topup_anchor_invalid", err.to_string()))?
+                    != *supplied_ref
+            {
+                return Err(labeled_invariant(
+                    "topup_anchor_mismatch",
+                    "Kagemusha V2 redemption anchor differs from the finalized chain receipt",
+                )
+                .into());
+            }
+            if persisted.finalized_height > requested_height
+                || persisted.finalized_height > state_transaction.block_height()
+            {
+                return Err(labeled_invariant(
+                    "topup_anchor_invalid",
+                    "Kagemusha V2 redemption predates one of its finalized top-up anchors",
+                )
+                .into());
+            }
+            if !zk_state
+                .commitments
+                .contains(&persisted.current_note.note_commitment)
+                || persisted
+                    .topup_anchor_nullifiers
+                    .iter()
+                    .any(|nullifier| !zk_state.nullifiers.contains(nullifier))
+            {
+                return Err(labeled_invariant(
+                    "topup_anchor_mismatch",
+                    "Kagemusha V2 finalized top-up evidence is inconsistent with confidential ledger state",
+                )
+                .into());
+            }
+            anchored_total = anchored_total
+                .checked_add(persisted.amount.atomic_units)
+                .ok_or_else(|| {
+                    labeled_invariant(
+                        "amount_mismatch",
+                        "Kagemusha V2 finalized top-up amount total overflows u128",
+                    )
+                })?;
+            let canonical = canonical_offline_note_asset_id(state_transaction, &persisted.asset)?;
+            match &canonical_source_asset {
+                None => canonical_source_asset = Some(canonical),
+                Some(source) if source.scope() == canonical.scope() => {}
+                Some(_) => {
+                    return Err(labeled_invariant(
+                        "asset_mismatch",
+                        "Kagemusha V2 cannot join top-up anchors from different asset-balance scopes",
+                    )
+                    .into());
+                }
+            }
+            resolved_anchors.push(persisted);
+        }
+        if anchored_total < current_note_atomic_units {
+            return Err(labeled_invariant(
+                "amount_mismatch",
+                "Kagemusha V2 spendable note exceeds its finalized top-up provenance",
             )
+            .into());
+        }
+        let source_asset = canonical_source_asset.ok_or_else(|| {
+            Error::from(labeled_invariant(
+                "topup_anchor_missing",
+                "Kagemusha V2 redemption has no finalized top-up provenance",
+            ))
         })?;
+        Ok(KagemushaV2ResolvedTopUpProvenance {
+            source_asset,
+            anchors: resolved_anchors,
+        })
+    }
+
+    #[derive(Debug)]
+    struct KagemushaV2EscrowCreditPlan {
+        escrow_asset: AssetId,
+        recipient_asset: AssetId,
+        amount: Numeric,
+    }
+
+    impl KagemushaV2EscrowCreditPlan {
+        fn commit(self, state_transaction: &mut StateTransaction<'_, '_>) -> Result<(), Error> {
+            withdraw_numeric_asset_exact(state_transaction, &self.escrow_asset, &self.amount)?;
+            if let Err(err) =
+                deposit_numeric_asset_exact(state_transaction, &self.recipient_asset, &self.amount)
+            {
+                deposit_numeric_asset_exact(state_transaction, &self.escrow_asset, &self.amount)
+                    .expect("prevalidated Kagemusha V2 escrow refund must succeed");
+                return Err(err);
+            }
+            Ok(())
+        }
+    }
+
+    fn plan_kagemusha_v2_escrow_credit(
+        source_asset: &AssetId,
+        recipient: &AccountId,
+        amount: &Numeric,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<KagemushaV2EscrowCreditPlan, Error> {
+        let definition_id = source_asset.definition().clone();
+        let definition = state_transaction.world.asset_definition(&definition_id)?;
+        let escrow_account =
+            if crate::smartcontracts::isi::domain::isi::asset_definition_offline_enabled(
+                definition.metadata(),
+            )? {
+                crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
+                    state_transaction.chain_id(),
+                    &definition_id,
+                )
+            } else {
+                state_transaction
+                .settlement
+                .offline
+                .escrow_accounts
+                .get(&definition_id)
+                .cloned()
+                .ok_or_else(|| {
+                    labeled_invariant(
+                        "escrow_missing",
+                        format!(
+                            "offline escrow account not configured for asset definition `{definition_id}`"
+                        ),
+                    )
+                })?
+            };
+        state_transaction.world.account(recipient)?;
+        state_transaction.world.account(&escrow_account)?;
+        ensure_distinct_offline_escrow_account(
+            &escrow_account,
+            recipient,
+            "recipient",
+            &definition_id,
+        )?;
+
+        let recipient_asset = AssetId::with_scope(
+            definition_id,
+            recipient.clone(),
+            source_asset.scope().clone(),
+        );
+        let escrow_asset = offline_note_escrow_asset_id(source_asset, escrow_account);
+        let escrow_balance = state_transaction
+            .world
+            .assets
+            .get(&escrow_asset)
+            .map(|asset| asset.as_ref().clone())
+            .ok_or_else(|| FindError::Asset(escrow_asset.clone().into()))?;
+        escrow_balance
+            .checked_sub(amount.clone())
+            .filter(|remaining| !remaining.mantissa().is_negative())
+            .ok_or(MathError::NotEnoughQuantity)?;
         state_transaction
             .world
-            .smart_contract_state
-            .insert(key, archive);
-        Ok(())
+            .assets
+            .get(&recipient_asset)
+            .map(|asset| asset.as_ref().clone())
+            .unwrap_or_else(Numeric::zero)
+            .checked_add(amount.clone())
+            .ok_or(MathError::Overflow)?;
+
+        Ok(KagemushaV2EscrowCreditPlan {
+            escrow_asset,
+            recipient_asset,
+            amount: amount.clone(),
+        })
     }
 
     fn is_zero_hash(hash: &Hash) -> bool {
@@ -5700,36 +6203,48 @@ pub mod isi {
         ))
     }
 
+    fn kagemusha_transfer_from_v2_topup_request(
+        request: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV2,
+    ) -> Result<KagemushaTransfer, Error> {
+        request
+            .validate_public_binding()
+            .map_err(|err| labeled_invariant("invalid_recursive_topup", err.to_string()))?;
+        let step =
+            request.record_bundle.bundle.steps.first().ok_or_else(|| {
+                labeled_invariant("invalid_recursive_topup", "missing transfer step")
+            })?;
+        Ok(KagemushaTransfer::new(
+            request.record_bundle.bundle.asset.clone(),
+            step.input_nullifiers.clone(),
+            step.output_commitments.clone(),
+            step.attachment.clone(),
+            Some(step.root_before),
+        ))
+    }
+
     fn ensure_kagemusha_v2_anchor_matches_topup_request(
         anchor: &KagemushaRecursiveSpendTopUpAnchorV2,
         request: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV2,
     ) -> Result<(), Error> {
-        let step = request
-            .init_request
-            .init_request
-            .record_bundle
-            .bundle
-            .steps
-            .first()
-            .ok_or_else(|| {
-                labeled_invariant(
-                    "invalid_recursive_topup",
-                    "Kagemusha V2 top-up requires exactly one confidential transfer step",
-                )
-            })?;
-        if anchor.chain_id != request.init_request.current_note.chain_id
+        let step = request.record_bundle.bundle.steps.first().ok_or_else(|| {
+            labeled_invariant(
+                "invalid_recursive_topup",
+                "Kagemusha V2 top-up requires exactly one confidential transfer step",
+            )
+        })?;
+        if anchor.chain_id != request.current_note.chain_id
             || anchor.payer != request.authorization.authority
             || anchor.asset != request.asset
-            || anchor.asset_scale != request.init_request.amount.scale
-            || anchor.amount != request.init_request.amount
+            || anchor.asset_scale != request.amount.scale
+            || anchor.amount != request.amount
             || anchor.initial_root != step.root_before
             || anchor.finalized_root != step.root_after
             || anchor.topup_anchor_nullifiers != step.input_nullifiers
-            || anchor.current_note != request.init_request.current_note
-            || anchor.topup_operation_id != request.init_request.operation_id
+            || anchor.current_note != request.current_note
+            || anchor.topup_operation_id != request.operation_id
             || anchor.transfer_verifier_id != step.attachment.vk_ref
             || Some(anchor.transfer_verifier_commitment) != step.attachment.vk_commitment
-            || anchor.artifact_generation != request.init_request.lineage_artifact.generation
+            || anchor.artifact_generation != request.artifact_generation
         {
             return Err(labeled_invariant(
                 "topup_anchor_mismatch",
@@ -5744,19 +6259,12 @@ pub mod isi {
         request: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV2,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<KagemushaRecursiveSpendTopUpAnchorV2, Error> {
-        let step = request
-            .init_request
-            .init_request
-            .record_bundle
-            .bundle
-            .steps
-            .first()
-            .ok_or_else(|| {
-                labeled_invariant(
-                    "invalid_recursive_topup",
-                    "Kagemusha V2 top-up requires exactly one confidential transfer step",
-                )
-            })?;
+        let step = request.record_bundle.bundle.steps.first().ok_or_else(|| {
+            labeled_invariant(
+                "invalid_recursive_topup",
+                "Kagemusha V2 top-up requires exactly one confidential transfer step",
+            )
+        })?;
         let transfer_verifier_commitment = step.attachment.vk_commitment.ok_or_else(|| {
             labeled_invariant(
                 "verifier_key_invalid",
@@ -5775,19 +6283,19 @@ pub mod isi {
             .as_ref();
         let anchor = KagemushaRecursiveSpendTopUpAnchorV2 {
             version: 2,
-            chain_id: request.init_request.current_note.chain_id.clone(),
+            chain_id: request.current_note.chain_id.clone(),
             payer: request.authorization.authority.clone(),
             asset: request.asset.clone(),
-            asset_scale: request.init_request.amount.scale,
-            amount: request.init_request.amount,
+            asset_scale: request.amount.scale,
+            amount: request.amount,
             initial_root: step.root_before,
             finalized_root: step.root_after,
             topup_anchor_nullifiers: step.input_nullifiers.clone(),
-            current_note: request.init_request.current_note.clone(),
-            topup_operation_id: request.init_request.operation_id,
+            current_note: request.current_note.clone(),
+            topup_operation_id: request.operation_id,
             transfer_verifier_id: step.attachment.vk_ref.clone(),
             transfer_verifier_commitment,
-            artifact_generation: request.init_request.lineage_artifact.generation.clone(),
+            artifact_generation: request.artifact_generation.clone(),
             finalized_height: state_transaction.block_height(),
             finalized_tx_hash,
             anchor_digest: [0; 32],
@@ -5796,38 +6304,6 @@ pub mod isi {
         .map_err(|err| labeled_invariant("topup_anchor_invalid", err.to_string()))?;
         ensure_kagemusha_v2_anchor_matches_topup_request(&anchor, request)?;
         Ok(anchor)
-    }
-
-    fn ensure_kagemusha_v2_bundle_matches_topup_anchor(
-        bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
-        anchor: &KagemushaRecursiveSpendTopUpAnchorV2,
-    ) -> Result<(), Error> {
-        let statement = &bundle.statement;
-        if statement.chain_id != anchor.chain_id
-            || statement.asset != *anchor.asset.definition()
-            || statement.asset_scale != anchor.asset_scale
-            || statement.initial_root != anchor.initial_root
-            || statement.topup_anchor_nullifiers != anchor.topup_anchor_nullifiers
-            || statement.topup_operation_id != anchor.topup_operation_id
-            || statement.artifact_generation != anchor.artifact_generation
-        {
-            return Err(labeled_invariant(
-                "topup_anchor_mismatch",
-                "Kagemusha V2 recursive statement does not match its finalized top-up anchor",
-            )
-            .into());
-        }
-        if statement.peer_hop_count == 0
-            && (statement.final_root != anchor.finalized_root
-                || statement.current_note != anchor.current_note)
-        {
-            return Err(labeled_invariant(
-                "topup_anchor_mismatch",
-                "Kagemusha V2 initial recursive statement changed the finalized top-up note or root",
-            )
-            .into());
-        }
-        Ok(())
     }
 
     fn resolve_kagemusha_v2_recursive_verifier(
@@ -5856,22 +6332,12 @@ pub mod isi {
             .into());
         }
         let current_height = state_transaction.block_height();
-        if requested_height == 0
-            || requested_height > current_height
-            || !record.is_active_at(requested_height)
-            || !record.is_active_at(current_height)
-            || record.status != ConfidentialStatus::Active
-            || record.circuit_id != id.name
-            || record.namespace != crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE
-            || record.backend != BackendTag::Halo2IpaPasta
-            || id.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA
-            || record.commitment == [0; 32]
-            || record.max_proof_bytes == 0
-            || bundle.recursive_proof.proof.bytes.len() > record.max_proof_bytes as usize
-        {
+        ensure_kagemusha_v2_verifier_window(&record, requested_height, current_height)?;
+        ensure_kagemusha_v2_recursive_verifier_shape(bundle, &record)?;
+        if record.status != ConfidentialStatus::Active {
             return Err(labeled_invariant(
-                "verifier_key_invalid",
-                "Kagemusha V2 recursive verifier record is inactive or inconsistent with the proof",
+                "verifier_key_inactive",
+                "Kagemusha V2 recursive verifier record is not currently active",
             )
             .into());
         }
@@ -5885,6 +6351,31 @@ pub mod isi {
             return Err(labeled_invariant(
                 "verifier_key_inactive",
                 "Kagemusha V2 recursive verifier circuit/version is not active",
+            )
+            .into());
+        }
+        Ok(record)
+    }
+
+    fn ensure_kagemusha_v2_recursive_verifier_shape(
+        bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+        record: &VerifyingKeyRecord,
+    ) -> Result<(), Error> {
+        let id = &bundle.recursive_proof.verifier_key_id;
+        if record.circuit_id != id.name
+            || record.namespace != crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE
+            || record.backend != BackendTag::Halo2IpaPasta
+            || record.curve != "pallas"
+            || record.public_inputs_schema_hash
+                != crate::zk::kagemusha_v2::kagemusha_recursive_spend_v2_public_inputs_schema_hash()
+            || id.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA
+            || record.commitment == [0; 32]
+            || record.max_proof_bytes == 0
+            || bundle.recursive_proof.proof.bytes.len() > record.max_proof_bytes as usize
+        {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "Kagemusha V2 recursive verifier record is inactive or inconsistent with the proof",
             )
             .into());
         }
@@ -5905,7 +6396,523 @@ pub mod isi {
             )
             .into());
         }
+        Ok(())
+    }
+
+    fn ensure_kagemusha_v2_verifier_window(
+        record: &VerifyingKeyRecord,
+        requested_height: u64,
+        current_height: u64,
+    ) -> Result<(), Error> {
+        if requested_height == 0
+            || requested_height > current_height
+            || !record.is_active_at(requested_height)
+            || !record.is_active_at(current_height)
+        {
+            return Err(labeled_invariant(
+                "verifier_key_inactive",
+                "Kagemusha V2 verifier is outside its requested or current activation window",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn ensure_kagemusha_v2_historical_verifier_window(
+        record: &VerifyingKeyRecord,
+        verified_height: u64,
+        requested_height: u64,
+        current_height: u64,
+    ) -> Result<(), Error> {
+        let activation_height = record.activation_height.ok_or_else(|| {
+            labeled_invariant(
+                "verifier_key_inactive",
+                "historical Kagemusha V2 verifier has no activation height",
+            )
+        })?;
+        let status_window_valid = match record.status {
+            ConfidentialStatus::Proposed => false,
+            ConfidentialStatus::Active => record
+                .withdraw_height
+                .is_none_or(|withdraw| verified_height < withdraw),
+            ConfidentialStatus::Withdrawn => record
+                .withdraw_height
+                .is_some_and(|withdraw| verified_height < withdraw),
+        };
+        if verified_height == 0
+            || verified_height < activation_height
+            || verified_height > requested_height
+            || requested_height > current_height
+            || !status_window_valid
+        {
+            return Err(labeled_invariant(
+                "verifier_key_inactive",
+                "historical Kagemusha V2 proof is outside its retained verifier window",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn resolve_kagemusha_v2_historical_recursive_verifier(
+        bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+        verified_height: u64,
+        requested_height: u64,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<VerifyingKeyRecord, Error> {
+        let record = state_transaction
+            .world
+            .verifying_keys
+            .get(&bundle.recursive_proof.verifier_key_id)
+            .cloned()
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "verifier_key_invalid",
+                    "historical Kagemusha V2 verifier key is not retained",
+                )
+            })?;
+        ensure_kagemusha_v2_historical_verifier_window(
+            &record,
+            verified_height,
+            requested_height,
+            state_transaction.block_height(),
+        )?;
+        ensure_kagemusha_v2_recursive_verifier_shape(bundle, &record)?;
         Ok(record)
+    }
+
+    fn verify_kagemusha_v2_recursive_bundle_with_record(
+        bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+        record: &VerifyingKeyRecord,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        crate::zk::kagemusha_v2::ensure_kagemusha_recursive_spend_v2_proof_envelope_binding(
+            bundle, record,
+        )
+        .map_err(|err| labeled_invariant("invalid_recursive_bundle", err))?;
+        let key = record
+            .key
+            .as_ref()
+            .expect("resolver requires an inline key");
+        let report = crate::zk::verify_backend_with_timing_checked(
+            bundle.recursive_proof.proof.backend.as_str(),
+            &bundle.recursive_proof.proof,
+            Some(key),
+            &state_transaction.zk,
+        );
+        if !report.ok {
+            return Err(labeled_invariant(
+                "invalid_recursive_bundle",
+                "Kagemusha V2 recursive proof verification failed",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn verify_kagemusha_v2_recursive_bundle(
+        bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+        supplied_record: Option<&VerifyingKeyRecord>,
+        requested_height: u64,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<VerifyingKeyRecord, Error> {
+        let record = resolve_kagemusha_v2_recursive_verifier(
+            bundle,
+            supplied_record,
+            requested_height,
+            state_transaction,
+        )?;
+        verify_kagemusha_v2_recursive_bundle_with_record(bundle, &record, state_transaction)?;
+        Ok(record)
+    }
+
+    fn verify_kagemusha_v2_historical_recursive_bundle(
+        bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+        verified_height: u64,
+        requested_height: u64,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<VerifyingKeyRecord, Error> {
+        let record = resolve_kagemusha_v2_historical_recursive_verifier(
+            bundle,
+            verified_height,
+            requested_height,
+            state_transaction,
+        )?;
+        verify_kagemusha_v2_recursive_bundle_with_record(bundle, &record, state_transaction)?;
+        Ok(record)
+    }
+
+    /// Verify every proof-bearing node in a semantic-lineage DAG.
+    ///
+    /// The final node is required to contain the exact request bundle and is
+    /// already verified by the caller. Earlier nodes are decoded canonically,
+    /// checked against their declared parent/result digests by the data model,
+    /// and cryptographically verified in topological order here.
+    fn verify_kagemusha_v2_semantic_lineage_witness(
+        request: &iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV2,
+        provenance: &KagemushaV2ResolvedTopUpProvenance,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        use iroha_data_model::offline::{
+            KagemushaRecursiveSpendLineageModeV2, KagemushaRecursiveSpendLineageTransitionArchiveV2,
+        };
+
+        match (
+            request.bundle.statement.lineage_mode,
+            request.lineage_witness.as_ref(),
+        ) {
+            (KagemushaRecursiveSpendLineageModeV2::Reserved, None) => return Ok(()),
+            (KagemushaRecursiveSpendLineageModeV2::Semantic, Some(_)) => {}
+            _ => {
+                return Err(labeled_invariant(
+                    "invalid_recursive_lineage",
+                    "Kagemusha V2 lineage mode and witness package do not match",
+                )
+                .into());
+            }
+        }
+        let witness = request
+            .lineage_witness
+            .as_ref()
+            .expect("semantic mode was matched with a witness");
+        witness
+            .validate_for_bundle_at_height(&request.bundle, request.block_height)
+            .map_err(|err| labeled_invariant("invalid_recursive_lineage", err.to_string()))?;
+
+        let expected_root_anchors = provenance
+            .anchors
+            .iter()
+            .map(|anchor| anchor.anchor_digest)
+            .collect::<BTreeSet<_>>();
+        let mut verified_root_anchors = BTreeSet::new();
+        for node in &witness.nodes {
+            let archive = node
+                .decode_transition_archive()
+                .map_err(|err| labeled_invariant("invalid_recursive_lineage", err.to_string()))?;
+            let result_bundle = match &archive {
+                KagemushaRecursiveSpendLineageTransitionArchiveV2::Init(archive) => {
+                    let anchor = &archive.topup_anchor;
+                    if !provenance.anchors.iter().any(|resolved| resolved == anchor) {
+                        return Err(labeled_invariant(
+                            "topup_anchor_mismatch",
+                            "Kagemusha V2 semantic init node is not backed by its finalized chain anchor",
+                        )
+                        .into());
+                    }
+                    if !verified_root_anchors.insert(anchor.anchor_digest) {
+                        return Err(labeled_invariant(
+                            "invalid_recursive_lineage",
+                            "Kagemusha V2 semantic lineage repeats an init anchor",
+                        )
+                        .into());
+                    }
+                    &archive.result_bundle
+                }
+                KagemushaRecursiveSpendLineageTransitionArchiveV2::PeerSplit(archive) => {
+                    &archive.result_bundle
+                }
+            };
+            if node.result_bundle_digest == witness.final_bundle_digest {
+                if result_bundle != &request.bundle {
+                    return Err(labeled_invariant(
+                        "invalid_recursive_lineage",
+                        "Kagemusha V2 semantic lineage final archive differs from the redeemed bundle",
+                    )
+                    .into());
+                }
+                continue;
+            }
+            state_transaction
+                .register_confidential_proof(result_bundle.recursive_proof.proof.bytes.len())?;
+            verify_kagemusha_v2_historical_recursive_bundle(
+                result_bundle,
+                node.verified_at_block_height,
+                request.block_height,
+                state_transaction,
+            )?;
+        }
+        if verified_root_anchors != expected_root_anchors {
+            return Err(labeled_invariant(
+                "invalid_recursive_lineage",
+                "Kagemusha V2 semantic lineage does not contain the exact finalized anchor set",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    struct KagemushaV2RedemptionCommitPlan {
+        definition_id: AssetDefinitionId,
+        zk_asset_state: crate::state::ZkAssetState,
+        escrow_credit: KagemushaV2EscrowCreditPlan,
+        branch_commit: KagemushaV2BranchCommitPlan,
+        receipt_key: Name,
+        receipt_digest: [u8; 32],
+        replay_markers: [Hash; 4],
+    }
+
+    impl KagemushaV2RedemptionCommitPlan {
+        fn commit(self, state_transaction: &mut StateTransaction<'_, '_>) -> Result<(), Error> {
+            // The balance move is the only fallible ledger mutation remaining.
+            // Every proof, conflict marker, tree update, and receipt collision was
+            // validated while constructing this plan.
+            self.escrow_credit.commit(state_transaction)?;
+            state_transaction
+                .world
+                .zk_assets
+                .remove(self.definition_id.clone());
+            state_transaction
+                .world
+                .zk_assets
+                .insert(self.definition_id, self.zk_asset_state);
+            self.branch_commit.commit(state_transaction);
+            state_transaction
+                .world
+                .smart_contract_state
+                .insert(self.receipt_key, self.receipt_digest.to_vec());
+            commit_kagemusha_v2_replay_markers(self.replay_markers, state_transaction);
+            Ok(())
+        }
+    }
+
+    struct KagemushaV2RedemptionPlanInput<'a> {
+        definition_id: &'a AssetDefinitionId,
+        source_asset: &'a AssetId,
+        recipient: &'a AccountId,
+        amount: Numeric,
+        current_nullifier: [u8; 32],
+        consumed_claims: &'a [KagemushaRecursiveSpendBranchClaimV2],
+        redemption_binding: Option<[u8; 32]>,
+        change_output: Option<&'a iroha_data_model::offline::KagemushaSpendableNoteDescriptorV2>,
+        change_children: &'a [(
+            KagemushaRecursiveSpendBranchClaimV2,
+            KagemushaRecursiveSpendBranchClaimV2,
+        )],
+        operation_id: [u8; 32],
+        receipt_digest: [u8; 32],
+        replay_markers: [Hash; 4],
+    }
+
+    fn plan_kagemusha_v2_redemption_state_commit(
+        input: KagemushaV2RedemptionPlanInput<'_>,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<KagemushaV2RedemptionCommitPlan, Error> {
+        let mut zk_asset_state = state_transaction
+            .world
+            .zk_assets
+            .get(input.definition_id)
+            .cloned()
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "verifier_key_invalid",
+                    "Kagemusha V2 redemption requires configured shielded asset state",
+                )
+            })?;
+        if !zk_asset_state.allow_unshield {
+            return Err(labeled_invariant(
+                "unshield_not_permitted",
+                "Kagemusha V2 redemption is not permitted by asset policy",
+            )
+            .into());
+        }
+        if zk_asset_state.nullifiers.contains(&input.current_nullifier) {
+            return Err(labeled_invariant(
+                "duplicate_nullifier",
+                "Kagemusha V2 spendable-note nullifier is already redeemed",
+            )
+            .into());
+        }
+        if zk_asset_state
+            .commitments
+            .contains(&input.current_nullifier)
+        {
+            return Err(labeled_invariant(
+                "proof_binding",
+                "Kagemusha V2 spendable-note nullifier collides with a confidential commitment",
+            )
+            .into());
+        }
+        if let Some(change) = input.change_output {
+            if zk_asset_state.commitments.contains(&change.note_commitment) {
+                return Err(labeled_invariant(
+                    "duplicate_output",
+                    "Kagemusha V2 redemption change commitment already exists",
+                )
+                .into());
+            }
+            if zk_asset_state.nullifiers.contains(&change.spend_nullifier)
+                || change.spend_nullifier == input.current_nullifier
+            {
+                return Err(labeled_invariant(
+                    "duplicate_nullifier",
+                    "Kagemusha V2 redemption change nullifier collides with ledger state",
+                )
+                .into());
+            }
+            if change.note_commitment == input.current_nullifier
+                || zk_asset_state.nullifiers.contains(&change.note_commitment)
+                || zk_asset_state.commitments.contains(&change.spend_nullifier)
+            {
+                return Err(labeled_invariant(
+                    "proof_binding",
+                    "Kagemusha V2 redemption change material overlaps an existing commitment or nullifier",
+                )
+                .into());
+            }
+        }
+        let branch_commit = plan_kagemusha_v2_consumed_branch_set(
+            input.consumed_claims,
+            input.redemption_binding,
+            input.change_children,
+            state_transaction,
+        )?;
+
+        if !zk_asset_state.nullifiers.insert(input.current_nullifier) {
+            unreachable!("the V2 nullifier was checked before insertion into the cloned state");
+        }
+        if let Some(change) = input.change_output {
+            crate::smartcontracts::isi::world::isi::push_confidential_commitment_with_v2_root(
+                &mut zk_asset_state,
+                change.note_commitment,
+                state_transaction.zk.root_history_cap,
+            )?;
+            let _frontier_update = zk_asset_state.record_frontier_checkpoint(
+                state_transaction.block_height(),
+                state_transaction.zk.tree_frontier_checkpoint_interval,
+                state_transaction.zk.reorg_depth_bound,
+            );
+        }
+        let escrow_credit = plan_kagemusha_v2_escrow_credit(
+            input.source_asset,
+            input.recipient,
+            &input.amount,
+            state_transaction,
+        )?;
+        let receipt_key =
+            ensure_kagemusha_v2_redemption_receipt_absent(input.operation_id, state_transaction)?;
+        Ok(KagemushaV2RedemptionCommitPlan {
+            definition_id: input.definition_id.clone(),
+            zk_asset_state,
+            escrow_credit,
+            branch_commit,
+            receipt_key,
+            receipt_digest: input.receipt_digest,
+            replay_markers: input.replay_markers,
+        })
+    }
+
+    fn plan_kagemusha_v2_redemption_commit(
+        request: &iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV2,
+        source_asset: &AssetId,
+        receipt_digest: [u8; 32],
+        replay_markers: [Hash; 4],
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<KagemushaV2RedemptionCommitPlan, Error> {
+        let statement = &request.bundle.statement;
+        let amount = request.amount.public_numeric();
+        let current_nullifier = statement.current_note.spend_nullifier;
+        let (redemption_binding, change_children) =
+            if let Some(change) = request.offline_change.as_ref() {
+                let binding = request
+                    .redemption
+                    .binding_digest()
+                    .map_err(|err| labeled_invariant("proof_binding", err.to_string()))?;
+                let children = request
+                    .redemption
+                    .parent_branch_claims
+                    .iter()
+                    .cloned()
+                    .zip(change.branch_claims.iter().cloned())
+                    .collect::<Vec<_>>();
+                (Some(binding), children)
+            } else {
+                (None, Vec::new())
+            };
+        plan_kagemusha_v2_redemption_state_commit(
+            KagemushaV2RedemptionPlanInput {
+                definition_id: &statement.asset,
+                source_asset,
+                recipient: &request.recipient,
+                amount,
+                current_nullifier,
+                consumed_claims: &request.redemption.parent_branch_claims,
+                redemption_binding,
+                change_output: request.offline_change.as_ref().map(|change| &change.output),
+                change_children: &change_children,
+                operation_id: request.operation_id,
+                receipt_digest,
+                replay_markers,
+            },
+            state_transaction,
+        )
+    }
+
+    fn ensure_kagemusha_v2_redemption_policy_will_be_convertible(
+        definition_id: &AssetDefinitionId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let definition = state_transaction.world.asset_definition(definition_id)?;
+        let mut policy = *definition.confidential_policy();
+        let block_height = state_transaction.block_height();
+        if let Some(transition) = policy.pending_transition
+            && block_height >= transition.effective_height()
+            && transition.new_mode() == ConfidentialPolicyMode::ShieldedOnly
+            && state_transaction.world.asset_total_amount(definition_id)? > Numeric::zero()
+        {
+            // `apply_policy_if_due` aborts a due ShieldedOnly transition while
+            // transparent supply remains and restores the previous mode.
+            policy.pending_transition = None;
+            policy.mode = transition.previous_mode();
+        } else {
+            policy = policy.apply_if_due(block_height).0;
+        }
+        if policy.mode() != ConfidentialPolicyMode::Convertible {
+            return Err(labeled_invariant(
+                "unshield_not_permitted",
+                "Kagemusha V2 redemption is not permitted by confidential asset policy",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn ensure_kagemusha_v2_redemption_live_context(
+        bundle_chain_id: &iroha_data_model::ChainId,
+        redemption_chain_id: &iroha_data_model::ChainId,
+        live_chain_id: &iroha_data_model::ChainId,
+        amount_scale: u32,
+        statement_scale: u32,
+        live_scale: u32,
+    ) -> Result<(), Error> {
+        if bundle_chain_id != live_chain_id || redemption_chain_id != live_chain_id {
+            return Err(labeled_invariant(
+                "wrong_chain",
+                "Kagemusha V2 redemption chain id does not match this chain",
+            )
+            .into());
+        }
+        if amount_scale != live_scale || statement_scale != live_scale {
+            return Err(labeled_invariant(
+                "amount_scale_mismatch",
+                "Kagemusha V2 redemption scale does not equal the live asset scale",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn ensure_kagemusha_v2_proof_backend_available() -> Result<(), Error> {
+        if iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE {
+            return Ok(());
+        }
+        // This gate is deliberately fail-closed. Remove it only in the same
+        // release that ships the compact lineage verifier and both chain
+        // executors, so a capability flag can never expose partial execution.
+        Err(labeled_invariant(
+            "kagemusha_v2_proof_backend_unavailable",
+            "Kagemusha V2 state transitions remain disabled until the compact lineage verifier is linked",
+        )
+        .into())
     }
 
     impl Execute for KagemushaTransfer {
@@ -5983,7 +6990,9 @@ pub mod isi {
                 )
                 .into());
             }
-            ensure_kagemusha_v2_chain_backend_available("invalid_recursive_topup", "top-up")?;
+            // This guard must run before replay markers, escrow reservation,
+            // confidential-tree updates, or balance transfers.
+            ensure_kagemusha_v2_proof_backend_available()?;
             let request = self.request;
             request
                 .validate_public_binding()
@@ -6016,7 +7025,7 @@ pub mod isi {
                 request.asset.definition(),
                 state_transaction,
             )?;
-            if request.init_request.current_note.chain_id != *state_transaction.chain_id() {
+            if request.current_note.chain_id != *state_transaction.chain_id() {
                 return Err(labeled_invariant(
                     "wrong_chain",
                     "Kagemusha V2 top-up chain id does not match this chain",
@@ -6030,14 +7039,14 @@ pub mod isi {
                     "Kagemusha V2 requires an asset definition with a fixed numeric scale",
                 )
             })?;
-            if request.init_request.amount.scale != live_scale {
+            if request.amount.scale != live_scale {
                 return Err(labeled_invariant(
                     "amount_scale_mismatch",
                     "Kagemusha V2 top-up amount scale does not equal the live asset scale",
                 )
                 .into());
             }
-            let amount = request.init_request.amount.public_numeric();
+            let amount = request.amount.public_numeric();
             if amount.scale() != live_scale {
                 return Err(labeled_invariant(
                     "amount_scale_mismatch",
@@ -6046,8 +7055,7 @@ pub mod isi {
                 .into());
             }
             assert_numeric_spec_with(&amount, spec)?;
-            let transfer =
-                kagemusha_transfer_from_init_request(&request.init_request.init_request)?;
+            let transfer = kagemusha_transfer_from_v2_topup_request(&request)?;
             validate_kagemusha_transfer_instruction(&transfer, state_transaction)?;
             reserve_offline_note_escrow(state_transaction, &request.asset, &amount)?;
             execute_kagemusha_transfer_instruction(transfer, authority, state_transaction)?;
@@ -6064,8 +7072,6 @@ pub mod isi {
                     )
                 })?;
             let expected_finalized_root = request
-                .init_request
-                .init_request
                 .record_bundle
                 .bundle
                 .steps
@@ -6097,7 +7103,7 @@ pub mod isi {
     impl Execute for RedeemKagemushaRecursiveV2 {
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             if !state_transaction.settlement.offline.kagemusha_enabled {
@@ -6107,19 +7113,166 @@ pub mod isi {
                 )
                 .into());
             }
+            // First-release safety boundary: keep this guard until the recursive
+            // backend proves every transition field and lineage edge in-circuit.
+            // It is intentionally the first operation after the feature flag: no
+            // request parsing, proof metering, receipt, balance, or tree state is
+            // touched while the backend is unavailable.
+            ensure_kagemusha_v2_proof_backend_available()?;
+            let request = self.request;
+            request
+                .validate_public_binding()
+                .map_err(|err| labeled_invariant("invalid_recursive_redeem", err.to_string()))?;
+            let payload_digest = request
+                .unsigned_payload_digest()
+                .map_err(|err| labeled_invariant("invalid_recursive_redeem", err.to_string()))?;
+            let replay_markers =
+                match kagemusha_v2_replay_status(&request.authorization, state_transaction)? {
+                    KagemushaV2ReplayStatus::Committed => {
+                        ensure_kagemusha_v2_redemption_receipt_matches(
+                            request.operation_id,
+                            payload_digest,
+                            state_transaction,
+                        )?;
+                        return Ok(());
+                    }
+                    KagemushaV2ReplayStatus::Fresh(markers) => markers,
+                };
+            request
+                .validate_authorization_at(state_transaction.block_unix_timestamp_ms())
+                .map_err(|err| labeled_invariant("invalid_authorization", err.to_string()))?;
 
-            // V2 redemption is part of the public instruction contract, but the
-            // branch-independent proof backend is deliberately unavailable. Keep
-            // dispatch fail-closed before authorization markers, nullifiers,
-            // commitments, balances, or any other ledger state can be mutated.
-            self.request
-                .ensure_proof_backend_available()
-                .map_err(|err| labeled_invariant("proof_backend_unavailable", err.to_string()))?;
-            Err(labeled_invariant(
-                "invalid_recursive_redeem",
-                "Kagemusha V2 proof backend unexpectedly reported availability without a chain executor",
-            )
-            .into())
+            let statement = &request.bundle.statement;
+            ensure_can_submit_offline_note_for_account(
+                &request.recipient,
+                authority,
+                state_transaction,
+            )?;
+            ensure_registered_kagemusha_v2_device(
+                &request.authorization,
+                &statement.asset,
+                state_transaction,
+            )?;
+
+            let spec = state_transaction.numeric_spec_for(&statement.asset)?;
+            let live_scale = spec.scale().ok_or_else(|| {
+                labeled_invariant(
+                    "amount_scale_invalid",
+                    "Kagemusha V2 requires an asset definition with a fixed numeric scale",
+                )
+            })?;
+            ensure_kagemusha_v2_redemption_live_context(
+                &statement.chain_id,
+                &request.redemption.chain_id,
+                state_transaction.chain_id(),
+                request.amount.scale,
+                statement.asset_scale,
+                live_scale,
+            )?;
+            let amount = request.amount.public_numeric();
+            if amount.scale() != live_scale {
+                return Err(labeled_invariant(
+                    "amount_scale_mismatch",
+                    "Kagemusha V2 redemption Numeric encoding changed the authoritative scale",
+                )
+                .into());
+            }
+            assert_numeric_spec_with(&amount, spec)?;
+
+            let zk_state = state_transaction
+                .world
+                .zk_assets
+                .get(&statement.asset)
+                .cloned()
+                .ok_or_else(|| {
+                    labeled_invariant(
+                        "verifier_key_invalid",
+                        "Kagemusha V2 redemption requires configured shielded asset state",
+                    )
+                })?;
+            let provenance = validate_kagemusha_v2_finalized_topup_anchors(
+                &statement.topup_anchor_refs,
+                statement.current_note.amount.atomic_units,
+                request.block_height,
+                &zk_state,
+                state_transaction,
+            )?;
+
+            let (redeem_vk, redeem_record) = resolve_kagemusha_unshield_verifier(
+                &statement.asset,
+                &request.redeem_proof,
+                state_transaction,
+            )?;
+            ensure_kagemusha_v2_verifier_window(
+                &redeem_record,
+                request.block_height,
+                state_transaction.block_height(),
+            )?;
+            ensure_kagemusha_v2_redeem_public_inputs(&request, state_transaction, &redeem_record)?;
+            let commit_plan = plan_kagemusha_v2_redemption_commit(
+                &request,
+                &provenance.source_asset,
+                payload_digest,
+                replay_markers,
+                state_transaction,
+            )?;
+            ensure_kagemusha_v2_redemption_policy_will_be_convertible(
+                &statement.asset,
+                state_transaction,
+            )?;
+            state_transaction
+                .register_confidential_proof(request.bundle.recursive_proof.proof.bytes.len())?;
+            state_transaction
+                .register_confidential_proof(request.redeem_proof.proof.bytes.len())?;
+            if let Some(change) = request.offline_change.as_ref() {
+                state_transaction
+                    .register_confidential_proof(change.bundle.recursive_proof.proof.bytes.len())?;
+                state_transaction.register_commitments(1)?;
+            }
+            state_transaction.register_nullifiers(1)?;
+
+            verify_kagemusha_v2_recursive_bundle(
+                &request.bundle,
+                Some(&request.lineage_verifier_record),
+                request.block_height,
+                state_transaction,
+            )?;
+            verify_kagemusha_v2_semantic_lineage_witness(&request, &provenance, state_transaction)?;
+            let redeem_report = crate::zk::verify_backend_with_timing_checked(
+                request.redeem_proof.backend.as_str(),
+                &request.redeem_proof.proof,
+                Some(&redeem_vk),
+                &state_transaction.zk,
+            );
+            if !redeem_report.ok {
+                return Err(labeled_invariant(
+                    "invalid_proof",
+                    "Kagemusha V2 unshield-v3 proof verification failed",
+                )
+                .into());
+            }
+            if let Some(change) = request.offline_change.as_ref() {
+                verify_kagemusha_v2_recursive_bundle(
+                    &change.bundle,
+                    None,
+                    request.block_height,
+                    state_transaction,
+                )?;
+            }
+
+            let policy_mode = crate::smartcontracts::isi::world::isi::apply_policy_if_due(
+                state_transaction,
+                &statement.asset,
+            )?
+            .mode();
+            if policy_mode != ConfidentialPolicyMode::Convertible {
+                return Err(labeled_invariant(
+                    "confidential_policy_changed",
+                    "Kagemusha V2 confidential policy changed after read-only admission",
+                )
+                .into());
+            }
+            commit_plan.commit(state_transaction)
         }
     }
 
@@ -6358,20 +7511,18 @@ pub mod isi {
             block::BlockHeader,
             domain::{Domain, DomainId},
             offline::{
-                KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2, KagemushaFoldStep,
-                KagemushaRecursiveAggregationProof, KagemushaRecursiveSpendArtifactReferenceV2,
-                KagemushaRecursiveSpendArtifactRoleV2, KagemushaRecursiveSpendBranchPathV2,
-                KagemushaRecursiveSpendBundleV1, KagemushaRecursiveSpendBundleV2,
-                KagemushaRecursiveSpendInitRequestV2, KagemushaRecursiveSpendLineageModeV2,
+                KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
+                KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_BYTES_V2, KagemushaFoldStep,
+                KagemushaRecursiveAggregationProof, KagemushaRecursiveSpendBundleV1,
+                KagemushaRecursiveSpendBundleV2, KagemushaRecursiveSpendLineageModeV2,
                 KagemushaRecursiveSpendLineageWitnessV1, KagemushaRecursiveSpendProofV2,
                 KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendRedeemRequestV2,
-                KagemushaRecursiveSpendRedemptionIntentV2, KagemushaRecursiveSpendTopUpRequestV2,
-                KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
-                KagemushaSpendableNoteDescriptorV2, KagemushaUnshieldPublicInputsBindingV2,
-                KagemushaVerifiedFoldBundle, KagemushaVerifiedFoldRecordBundle,
-                KagemushaVerifiedFoldStep, KagemushaVerifiedFoldVerifierRecord,
-                OfflineNoteAuditBundle, kagemusha_confidential_amount_encoding_v2,
-                kagemusha_recursive_spend_lineage_root_v2,
+                KagemushaRecursiveSpendRedemptionIntentV2, KagemushaRequestAuthorizationV2,
+                KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
+                KagemushaUnshieldPublicInputsBindingV2, KagemushaVerifiedFoldBundle,
+                KagemushaVerifiedFoldRecordBundle, KagemushaVerifiedFoldStep,
+                KagemushaVerifiedFoldVerifierRecord, OfflineNoteAuditBundle,
+                kagemusha_confidential_amount_encoding_v2,
             },
             permission::Permission,
             proof::ProofAttachment,
@@ -6384,6 +7535,25 @@ pub mod isi {
             DistinguishedName, DnType, IsCa, KeyPair as RcgenKeyPair, KeyUsagePurpose,
             PKCS_ECDSA_P256_SHA256, date_time_ymd,
         };
+
+        fn commit_kagemusha_v2_consumed_branch_set(
+            consumed_claims: &[KagemushaRecursiveSpendBranchClaimV2],
+            redemption_binding_digest: Option<[u8; 32]>,
+            change_children: &[(
+                KagemushaRecursiveSpendBranchClaimV2,
+                KagemushaRecursiveSpendBranchClaimV2,
+            )],
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let plan = plan_kagemusha_v2_consumed_branch_set(
+                consumed_claims,
+                redemption_binding_digest,
+                change_children,
+                state_transaction,
+            )?;
+            plan.commit(state_transaction);
+            Ok(())
+        }
 
         fn fixture_key_pair(seed: u8) -> KeyPair {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -6409,6 +7579,113 @@ pub mod isi {
             }
             Signature::try_from_bytes(&payload)
                 .expect("offline note fixture signature passes admission")
+        }
+
+        #[test]
+        fn kagemusha_v2_backend_guard_fails_closed_before_state_mutation() {
+            assert!(
+                !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE
+            );
+            let error = ensure_kagemusha_v2_proof_backend_available()
+                .expect_err("unavailable V2 backend must reject before execution");
+            assert!(
+                error
+                    .to_string()
+                    .contains("kagemusha_v2_proof_backend_unavailable"),
+                "unexpected error: {error}"
+            );
+        }
+
+        #[test]
+        fn kagemusha_v2_redemption_live_context_rejects_chain_and_scale_substitution() {
+            let live_chain: iroha_data_model::ChainId =
+                "kagemusha-v2-live-chain".parse().expect("chain id");
+            let other_chain: iroha_data_model::ChainId =
+                "kagemusha-v2-other-chain".parse().expect("chain id");
+            ensure_kagemusha_v2_redemption_live_context(
+                &live_chain,
+                &live_chain,
+                &live_chain,
+                9,
+                9,
+                9,
+            )
+            .expect("exact live context is admitted");
+
+            for (bundle_chain, redemption_chain) in
+                [(&other_chain, &live_chain), (&live_chain, &other_chain)]
+            {
+                let err = ensure_kagemusha_v2_redemption_live_context(
+                    bundle_chain,
+                    redemption_chain,
+                    &live_chain,
+                    9,
+                    9,
+                    9,
+                )
+                .expect_err("either chain substitution must reject");
+                assert_offline_rejection(err, "wrong_chain", "does not match");
+            }
+            for (amount_scale, statement_scale) in [(8, 9), (9, 8), (10, 10)] {
+                let err = ensure_kagemusha_v2_redemption_live_context(
+                    &live_chain,
+                    &live_chain,
+                    &live_chain,
+                    amount_scale,
+                    statement_scale,
+                    9,
+                )
+                .expect_err("any stale or substituted scale must reject");
+                assert_offline_rejection(err, "amount_scale_mismatch", "live asset scale");
+            }
+        }
+
+        #[test]
+        fn kagemusha_v2_verifier_window_requires_request_and_current_height_activation() {
+            let mut record = VerifyingKeyRecord::new(
+                1,
+                "kagemusha-v2-window-test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                [0x31; 32],
+                [0x42; 32],
+            );
+            record.status = ConfidentialStatus::Active;
+            record.activation_height = Some(5);
+            record.withdraw_height = Some(10);
+            ensure_kagemusha_v2_verifier_window(&record, 5, 9)
+                .expect("inclusive activation and pre-withdraw current height are valid");
+
+            for (requested, current) in [(0, 9), (4, 9), (5, 10), (9, 8), (10, 10)] {
+                let err = ensure_kagemusha_v2_verifier_window(&record, requested, current)
+                    .expect_err("stale, future, or withdrawn verifier window must reject");
+                assert_offline_rejection(err, "verifier_key_inactive", "activation window");
+            }
+            record.status = ConfidentialStatus::Withdrawn;
+            let err = ensure_kagemusha_v2_verifier_window(&record, 5, 9)
+                .expect_err("withdrawn status rejects even inside numeric window");
+            assert_offline_rejection(err, "verifier_key_inactive", "activation window");
+
+            ensure_kagemusha_v2_historical_verifier_window(&record, 5, 12, 12)
+                .expect("retained withdrawn record verifies a proof created before withdrawal");
+            for verified_height in [0, 4, 10, 13] {
+                let err = ensure_kagemusha_v2_historical_verifier_window(
+                    &record,
+                    verified_height,
+                    12,
+                    12,
+                )
+                .expect_err("historical proof outside activation/withdraw/request bounds rejects");
+                assert_offline_rejection(err, "verifier_key_inactive", "retained verifier");
+            }
+            record.withdraw_height = None;
+            let err = ensure_kagemusha_v2_historical_verifier_window(&record, 5, 12, 12)
+                .expect_err("withdrawn record without an auditable withdrawal height rejects");
+            assert_offline_rejection(err, "verifier_key_inactive", "retained verifier");
+            record.status = ConfidentialStatus::Proposed;
+            let err = ensure_kagemusha_v2_historical_verifier_window(&record, 5, 12, 12)
+                .expect_err("proposed record was never active");
+            assert_offline_rejection(err, "verifier_key_inactive", "retained verifier");
         }
 
         fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
@@ -6861,17 +8138,6 @@ pub mod isi {
                 spend_nullifier: fixed_bytes(b"redeem-v2-disabled-nullifier"),
                 amount,
             };
-            let topup_operation_id = fixed_bytes(b"redeem-v2-disabled-topup-operation");
-            let topup_anchor_nullifiers = vec![fixed_bytes(b"redeem-v2-disabled-topup-nullifier")];
-            let lineage_root = kagemusha_recursive_spend_lineage_root_v2(
-                chain_id,
-                definition_id,
-                &topup_anchor_nullifiers,
-                topup_operation_id,
-            )
-            .expect("test lineage root");
-            let branch_path =
-                KagemushaRecursiveSpendBranchPathV2::root(lineage_root).expect("test root branch");
             let verifier_key_id = VerifyingKeyId::new(
                 crate::zk::ZK_BACKEND_HALO2_IPA,
                 KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
@@ -6880,24 +8146,21 @@ pub mod isi {
                 chain_id: chain_id.clone(),
                 asset: definition_id.clone(),
                 asset_scale: 0,
-                initial_root: fixed_bytes(b"redeem-v2-disabled-initial-root"),
                 final_root: fixed_bytes(b"redeem-v2-disabled-final-root"),
-                topup_anchor_nullifiers,
+                topup_anchor_refs: Vec::new(),
                 proof_step_count: 1,
                 peer_hop_count: 0,
                 current_note: current_note.clone(),
-                topup_operation_id,
-                branch_path,
+                branch_claims: Vec::new(),
                 transition: None,
                 artifact_generation: "redeem-v2-disabled-test".to_owned(),
                 lineage_mode: KagemushaRecursiveSpendLineageModeV2::Reserved,
                 verifier_key_id: verifier_key_id.clone(),
             };
-            let public_statement_digest = statement.digest().expect("valid test statement");
             let bundle = KagemushaRecursiveSpendBundleV2 {
                 recursive_proof: KagemushaRecursiveSpendProofV2 {
                     verifier_key_id: verifier_key_id.clone(),
-                    public_statement_digest,
+                    public_statement_digest: fixed_bytes(b"redeem-v2-disabled-public-statement"),
                     proof: ProofBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.into(), vec![0xA5; 32]),
                 },
                 statement,
@@ -6918,19 +8181,21 @@ pub mod isi {
                 chain_id: chain_id.clone(),
                 asset: definition_id.clone(),
                 input_note: current_note,
-                parent_branch_path: branch_path,
-                parent_bundle_digest: bundle.digest().expect("valid test bundle"),
+                parent_branch_claims: Vec::new(),
+                parent_topup_anchor_refs: Vec::new(),
+                parent_proof_step_count: 1,
+                parent_peer_hop_count: 0,
+                parent_bundle_digest: fixed_bytes(b"redeem-v2-disabled-parent-bundle"),
                 input_root: bundle.statement.final_root,
                 recipient: recipient.clone(),
                 public_amount: amount,
                 change_output: None,
+                change_artifact_generation: None,
                 unshield_public_inputs,
-                unshield_public_inputs_digest: unshield_public_inputs
-                    .digest()
-                    .expect("valid unshield input digest"),
+                unshield_public_inputs_digest: fixed_bytes(b"redeem-v2-disabled-unshield-inputs"),
                 operation_id,
             };
-            let mut authorization = KagemushaRequestAuthorizationV2 {
+            let authorization = KagemushaRequestAuthorizationV2 {
                 authority: recipient.clone(),
                 device_id: "redeem-v2-disabled-device".to_owned(),
                 operation_id,
@@ -6958,7 +8223,7 @@ pub mod isi {
                 fixed_bytes(b"redeem-v2-disabled-schema"),
                 fixed_bytes(b"redeem-v2-disabled-vk"),
             );
-            let mut request = KagemushaRecursiveSpendRedeemRequestV2 {
+            let request = KagemushaRecursiveSpendRedeemRequestV2 {
                 bundle,
                 recipient,
                 amount,
@@ -6969,22 +8234,10 @@ pub mod isi {
                 offline_change: None,
                 block_height: 1,
                 operation_id,
-                authorization: authorization.clone(),
+                authorization,
             };
-            authorization.payload_digest = request
-                .unsigned_payload_digest()
-                .expect("test unsigned redeem payload digest");
-            authorization.signature = Signature::try_new(
-                recipient_key_pair.private_key(),
-                &authorization
-                    .signing_bytes()
-                    .expect("test authorization signing bytes"),
-            )
-            .expect("test authorization signature");
-            request.authorization = authorization;
-            request
-                .validate_public_binding()
-                .expect("disabled-backend test request is otherwise valid");
+            // The backend gate is intentionally evaluated before request parsing.
+            // This fixture therefore needs the current wire shape but no valid proof.
             InstructionBox::from(RedeemKagemushaRecursiveV2::new(request))
         }
 
@@ -10125,153 +11378,53 @@ pub mod isi {
             TopUpKagemushaRecursive::new(asset, amount, init_request)
         }
 
-        fn unavailable_v2_topup_instruction(asset: AssetId, payer: &AccountId) -> InstructionBox {
-            let v1 = recursive_topup_instruction_for_authorization_test(
-                asset.clone(),
-                Numeric::new(1, 0),
-            );
-            let chain_id = v1.init_request.record_bundle.bundle.chain_id.clone();
-            let amount = KagemushaScaledAmountV2 {
-                atomic_units: 1,
+        fn unavailable_v2_topup_instruction_for_test(
+            asset: AssetId,
+        ) -> (TopUpKagemushaRecursiveV2, KagemushaRequestAuthorizationV2) {
+            let chain_id: iroha_data_model::ChainId =
+                "kagemusha-v2-unavailable-chain".parse().expect("chain id");
+            let definition_id = asset.definition().clone();
+            let amount = iroha_data_model::offline::KagemushaScaledAmountV2 {
+                atomic_units: 25,
                 scale: 0,
             };
-            let operation_id = fixed_bytes(b"unavailable-kagemusha-v2-topup-operation");
-            let current_note = KagemushaSpendableNoteDescriptorV2 {
-                chain_id,
-                asset: asset.definition().clone(),
-                note_commitment: v1.init_request.current_note.note_commitment,
-                spend_nullifier: v1.init_request.current_note.spend_nullifier,
+            let current_note = iroha_data_model::offline::KagemushaSpendableNoteDescriptorV2 {
+                chain_id: chain_id.clone(),
+                asset: definition_id.clone(),
+                note_commitment: fixed_bytes(b"kagemusha-v2-unavailable-note"),
+                spend_nullifier: fixed_bytes(b"kagemusha-v2-unavailable-nullifier"),
                 amount,
-            };
-            let init_request = KagemushaRecursiveSpendInitRequestV2 {
-                init_request: v1.init_request,
-                amount,
-                current_note,
-                lineage_artifact: KagemushaRecursiveSpendArtifactReferenceV2 {
-                    role: KagemushaRecursiveSpendArtifactRoleV2::LineageInitProver,
-                    generation: "unavailable-backend-test".to_owned(),
-                    circuit_id: "unavailable-backend-test".to_owned(),
-                    artifact_type: "unavailable-backend-test".to_owned(),
-                    size_bytes: 1,
-                    sha256: fixed_bytes(b"unavailable-kagemusha-v2-artifact"),
-                },
-                operation_id,
             };
             let authorization = KagemushaRequestAuthorizationV2 {
-                authority: payer.clone(),
-                device_id: "unavailable-backend-test".to_owned(),
-                operation_id,
-                issued_at_ms: 0,
-                expires_at_ms: u64::MAX,
-                nonce: fixed_bytes(b"unavailable-kagemusha-v2-nonce"),
-                payload_digest: fixed_bytes(b"unavailable-kagemusha-v2-payload"),
+                authority: asset.account().clone(),
+                device_id: "unavailable-device".to_owned(),
+                operation_id: fixed_bytes(b"kagemusha-v2-unavailable-operation"),
+                issued_at_ms: 1,
+                expires_at_ms: 2,
+                nonce: fixed_bytes(b"kagemusha-v2-unavailable-nonce"),
+                payload_digest: fixed_bytes(b"kagemusha-v2-unavailable-payload"),
                 app_attest_evidence_sha256: None,
                 app_attest_evidence: None,
-                signature: sample_signature(0xE2),
+                signature: sample_signature(0x91),
             };
-            TopUpKagemushaRecursiveV2::new(KagemushaRecursiveSpendTopUpRequestV2 {
+            let request = iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV2 {
                 asset,
-                init_request,
-                authorization,
-            })
-            .into()
-        }
-
-        #[test]
-        fn unavailable_kagemusha_v2_topup_dispatch_is_state_inert() {
-            let (mut state, asset_id, payer, _definition_id) =
-                distinct_escrow_test_state(Numeric::new(100, 0), 0x79);
-            state.settlement.offline.kagemusha_enabled = true;
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut transaction = block.transaction();
-
-            let assets_before = transaction
-                .world
-                .assets()
-                .iter()
-                .map(|(id, value)| (id.clone(), value.clone()))
-                .collect::<Vec<_>>();
-            let zk_before = transaction
-                .world
-                .zk_assets
-                .iter()
-                .map(|(id, value)| {
-                    (
-                        id.clone(),
-                        norito::to_bytes(value).expect("encode pre-dispatch ZK asset state"),
-                    )
-                })
-                .collect::<Vec<_>>();
-            let replay_before = transaction
-                .world
-                .offline_note_replay_keys
-                .iter()
-                .map(|(key, ())| *key)
-                .collect::<Vec<_>>();
-            let contract_state_before = transaction
-                .world
-                .smart_contract_state
-                .iter()
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect::<Vec<_>>();
-            let events_before = transaction.world.internal_event_buf.len();
-
-            let err = unavailable_v2_topup_instruction(asset_id, &payer)
-                .execute(&payer, &mut transaction)
-                .expect_err("disabled Kagemusha V2 backend must reject native dispatch");
-
-            assert_offline_rejection(
-                err,
-                "invalid_recursive_topup",
-                "proof backend is unavailable",
-            );
-            assert_eq!(
-                transaction
-                    .world
-                    .assets()
-                    .iter()
-                    .map(|(id, value)| (id.clone(), value.clone()))
-                    .collect::<Vec<_>>(),
-                assets_before,
-                "unavailable V2 top-up must not debit payer or credit escrow",
-            );
-            assert_eq!(
-                transaction
-                    .world
-                    .zk_assets
-                    .iter()
-                    .map(|(id, value)| {
-                        (
-                            id.clone(),
-                            norito::to_bytes(value).expect("encode post-dispatch ZK asset state"),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-                zk_before,
-                "unavailable V2 top-up must not change ZK roots or note material",
-            );
-            assert_eq!(
-                transaction
-                    .world
-                    .offline_note_replay_keys
-                    .iter()
-                    .map(|(key, ())| *key)
-                    .collect::<Vec<_>>(),
-                replay_before,
-                "unavailable V2 top-up must not consume replay markers",
-            );
-            assert_eq!(
-                transaction
-                    .world
-                    .smart_contract_state
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect::<Vec<_>>(),
-                contract_state_before,
-                "unavailable V2 top-up must not persist an anchor",
-            );
-            assert_eq!(transaction.world.internal_event_buf.len(), events_before);
+                amount,
+                current_note,
+                record_bundle: KagemushaVerifiedFoldRecordBundle {
+                    bundle: KagemushaVerifiedFoldBundle {
+                        chain_id,
+                        asset: definition_id,
+                        steps: Vec::new(),
+                    },
+                    verifier_records: Vec::new(),
+                },
+                pallas_open_envelopes_archive: Vec::new(),
+                artifact_generation: "unavailable-v2-artifacts".to_owned(),
+                operation_id: authorization.operation_id,
+                authorization: authorization.clone(),
+            };
+            (TopUpKagemushaRecursiveV2::new(request), authorization)
         }
 
         #[test]
@@ -10307,6 +11460,1433 @@ pub mod isi {
                     .execute(&unrelated, &mut transaction)
                     .expect_err("unrelated recursive top-up submitter must reject");
             assert_offline_rejection(unrelated_err, "unauthorized_controller", "top-up payer");
+        }
+
+        #[test]
+        fn top_up_kagemusha_recursive_v2_rejects_before_mutating_state_when_backend_unavailable() {
+            let (mut state, asset_id, payer, definition_id) =
+                distinct_escrow_test_state(Numeric::new(100, 0), 0x7A);
+            state.settlement.offline.kagemusha_enabled = true;
+            let (instruction, authorization) =
+                unavailable_v2_topup_instruction_for_test(asset_id.clone());
+            let replay_markers = kagemusha_v2_authorization_markers(&authorization);
+            let anchor_key = kagemusha_v2_topup_anchor_state_key(authorization.operation_id)
+                .expect("anchor state key");
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let assets_before = transaction
+                .world
+                .assets()
+                .iter()
+                .map(|(id, value)| (id.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            let zk_before = transaction
+                .world
+                .zk_assets
+                .iter()
+                .map(|(id, value)| {
+                    (
+                        id.clone(),
+                        norito::to_bytes(value).expect("encode pre-dispatch ZK asset state"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let replay_before = transaction
+                .world
+                .offline_note_replay_keys
+                .iter()
+                .map(|(key, ())| *key)
+                .collect::<Vec<_>>();
+            let contract_state_before = transaction
+                .world
+                .smart_contract_state
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            let events_before = transaction.world.internal_event_buf.len();
+
+            let error = instruction
+                .execute(&payer, &mut transaction)
+                .expect_err("unavailable V2 backend must reject direct top-up execution");
+            assert_offline_rejection(
+                error,
+                "kagemusha_v2_proof_backend_unavailable",
+                "compact lineage verifier",
+            );
+
+            let balance = transaction
+                .world
+                .assets
+                .get(&asset_id)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(balance, Numeric::new(100, 0));
+            assert!(
+                replay_markers.iter().all(|marker| transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(marker)
+                    .is_none()),
+                "unavailable top-up must not commit replay markers"
+            );
+            assert!(
+                transaction
+                    .world
+                    .smart_contract_state
+                    .get(&anchor_key)
+                    .is_none(),
+                "unavailable top-up must not persist an anchor"
+            );
+            assert!(
+                transaction.world.zk_assets.get(&definition_id).is_none(),
+                "unavailable top-up must not create confidential asset state"
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .assets()
+                    .iter()
+                    .map(|(id, value)| (id.clone(), value.clone()))
+                    .collect::<Vec<_>>(),
+                assets_before,
+                "unavailable V2 top-up must not mutate any asset balance",
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .zk_assets
+                    .iter()
+                    .map(|(id, value)| {
+                        (
+                            id.clone(),
+                            norito::to_bytes(value).expect("encode post-dispatch ZK asset state"),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                zk_before,
+                "unavailable V2 top-up must not mutate confidential asset state",
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .iter()
+                    .map(|(key, ())| *key)
+                    .collect::<Vec<_>>(),
+                replay_before,
+                "unavailable V2 top-up must not consume any replay marker",
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .smart_contract_state
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<Vec<_>>(),
+                contract_state_before,
+                "unavailable V2 top-up must not mutate contract state",
+            );
+            assert_eq!(transaction.world.internal_event_buf.len(), events_before);
+        }
+
+        fn kagemusha_v2_branch_claim(
+            lineage_label: &[u8],
+            edges: &[(
+                iroha_data_model::offline::KagemushaRecursiveSpendBranchV2,
+                [u8; 32],
+            )],
+        ) -> KagemushaRecursiveSpendBranchClaimV2 {
+            let mut claim = KagemushaRecursiveSpendBranchClaimV2::root(fixed_bytes(lineage_label))
+                .expect("test lineage root is canonical");
+            for (branch, transition_binding) in edges {
+                claim = claim
+                    .child(*branch, *transition_binding)
+                    .expect("test branch claim is canonical");
+            }
+            claim
+        }
+
+        fn kagemusha_v2_branch_test_state() -> State {
+            State::new(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            )
+        }
+
+        fn kagemusha_v2_redemption_plan_test_state(
+            escrow_balance: Numeric,
+        ) -> (State, AssetId, AssetId, AccountId, AssetDefinitionId) {
+            let payer = sample_account(0x41);
+            let escrow = sample_account(0x42);
+            let recipient = sample_account(0x43);
+            let domain_id: DomainId = DomainId::try_new("kagemusha", "redeem").expect("domain id");
+            let definition_id = AssetDefinitionId::new(
+                domain_id.clone(),
+                "pkr".parse().expect("asset definition name"),
+            );
+            let source_asset = AssetId::new(definition_id.clone(), payer.clone());
+            let escrow_asset = AssetId::new(definition_id.clone(), escrow.clone());
+            let domain = Domain::new(domain_id).build(&payer);
+            let accounts = [
+                Account::new(payer.clone()).build(&payer),
+                Account::new(escrow.clone()).build(&payer),
+                Account::new(recipient.clone()).build(&payer),
+            ];
+            let definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::fractional(2))
+                    .with_name("PKR".to_owned())
+                    .build(&payer);
+            let source = Asset::new(source_asset.clone(), Numeric::new(0, 2));
+            let escrow_value = Asset::new(escrow_asset.clone(), escrow_balance);
+            let world =
+                World::with_assets([domain], accounts, [definition], [source, escrow_value], []);
+            let mut state = State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), escrow);
+            (state, source_asset, escrow_asset, recipient, definition_id)
+        }
+
+        fn kagemusha_v2_test_replay_markers(label: &[u8]) -> [Hash; 4] {
+            std::array::from_fn(|index| {
+                let mut bytes = label.to_vec();
+                bytes.push(u8::try_from(index).expect("four marker indices fit u8"));
+                Hash::new(&bytes)
+            })
+        }
+
+        fn expect_kagemusha_v2_redemption_plan_error(
+            result: Result<KagemushaV2RedemptionCommitPlan, Error>,
+            message: &str,
+        ) -> Error {
+            match result {
+                Ok(_) => panic!("{message}"),
+                Err(error) => error,
+            }
+        }
+
+        fn install_kagemusha_v2_redemption_zk_state(
+            transaction: &mut StateTransaction<'_, '_>,
+            definition_id: &AssetDefinitionId,
+        ) {
+            let mut zk_state = ZkAssetState::default();
+            zk_state.allow_unshield = true;
+            zk_state.commitments = vec![fixed_bytes(b"kagemusha-v2-plan-anchor")];
+            zk_state.root_history = vec![
+                crate::zk::confidential_v2::compute_confidential_root_v2(&zk_state.commitments)
+                    .expect("test root"),
+            ];
+            transaction
+                .world
+                .zk_assets
+                .insert(definition_id.clone(), zk_state);
+        }
+
+        #[test]
+        fn kagemusha_v2_full_fractional_redemption_plan_is_validate_then_commit() {
+            let (state, source_asset, escrow_asset, recipient, definition_id) =
+                kagemusha_v2_redemption_plan_test_state(Numeric::new(1_075, 2));
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            install_kagemusha_v2_redemption_zk_state(&mut transaction, &definition_id);
+            let claim = KagemushaRecursiveSpendBranchClaimV2::root(fixed_bytes(
+                b"kagemusha-v2-full-plan-lineage",
+            ))
+            .expect("root claim");
+            let nullifier = fixed_bytes(b"kagemusha-v2-full-plan-nullifier");
+            let operation_id = fixed_bytes(b"kagemusha-v2-full-plan-operation");
+            let receipt_digest = fixed_bytes(b"kagemusha-v2-full-plan-receipt");
+            let authorization = KagemushaRequestAuthorizationV2 {
+                authority: recipient.clone(),
+                device_id: "full-plan-device".to_owned(),
+                operation_id,
+                issued_at_ms: 1,
+                expires_at_ms: 2,
+                nonce: fixed_bytes(b"kagemusha-v2-full-plan-nonce"),
+                payload_digest: receipt_digest,
+                app_attest_evidence_sha256: None,
+                app_attest_evidence: None,
+                signature: sample_signature(0x73),
+            };
+            let replay_markers = kagemusha_v2_authorization_markers(&authorization);
+            let escrow_before = transaction
+                .world
+                .assets
+                .get(&escrow_asset)
+                .expect("escrow asset")
+                .as_ref()
+                .clone();
+
+            let plan = plan_kagemusha_v2_redemption_state_commit(
+                KagemushaV2RedemptionPlanInput {
+                    definition_id: &definition_id,
+                    source_asset: &source_asset,
+                    recipient: &recipient,
+                    amount: Numeric::new(1_075, 2),
+                    current_nullifier: nullifier,
+                    consumed_claims: std::slice::from_ref(&claim),
+                    redemption_binding: None,
+                    change_output: None,
+                    change_children: &[],
+                    operation_id,
+                    receipt_digest,
+                    replay_markers,
+                },
+                &transaction,
+            )
+            .expect("full fractional redemption must plan");
+
+            assert_eq!(
+                transaction
+                    .world
+                    .assets
+                    .get(&escrow_asset)
+                    .expect("escrow remains before commit")
+                    .as_ref(),
+                &escrow_before,
+                "planning must not move escrow funds",
+            );
+            assert!(
+                !transaction
+                    .world
+                    .zk_assets
+                    .get(&definition_id)
+                    .expect("ZK state")
+                    .nullifiers
+                    .contains(&nullifier),
+                "planning must not consume the note",
+            );
+            plan.commit(&mut transaction).expect("commit succeeds");
+
+            assert!(transaction.world.assets.get(&escrow_asset).is_none());
+            let recipient_asset = AssetId::new(definition_id.clone(), recipient);
+            assert_eq!(
+                transaction
+                    .world
+                    .assets
+                    .get(&recipient_asset)
+                    .expect("recipient credit")
+                    .as_ref(),
+                &Numeric::new(1_075, 2),
+            );
+            assert!(
+                transaction
+                    .world
+                    .zk_assets
+                    .get(&definition_id)
+                    .expect("ZK state")
+                    .nullifiers
+                    .contains(&nullifier)
+            );
+            assert!(replay_markers.iter().all(|marker| {
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(marker)
+                    .is_some()
+            }));
+            ensure_kagemusha_v2_redemption_receipt_matches(
+                operation_id,
+                receipt_digest,
+                &transaction,
+            )
+            .expect("committed receipt supports an exact retry");
+            assert!(matches!(
+                kagemusha_v2_replay_status(&authorization, &transaction).expect("replay lookup"),
+                KagemushaV2ReplayStatus::Committed
+            ));
+            let mismatch = ensure_kagemusha_v2_redemption_receipt_matches(
+                operation_id,
+                fixed_bytes(b"kagemusha-v2-different-receipt"),
+                &transaction,
+            )
+            .expect_err("same operation cannot be retried with a different payload");
+            assert_offline_rejection(mismatch, "authorization_replay", "does not match");
+        }
+
+        #[test]
+        fn kagemusha_v2_partial_fractional_redemption_change_redeems_independently() {
+            use iroha_data_model::offline::KagemushaRecursiveSpendBranchV2::Change;
+
+            let (state, source_asset, escrow_asset, recipient, definition_id) =
+                kagemusha_v2_redemption_plan_test_state(Numeric::new(1_075, 2));
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            install_kagemusha_v2_redemption_zk_state(&mut transaction, &definition_id);
+            let parent = KagemushaRecursiveSpendBranchClaimV2::root(fixed_bytes(
+                b"kagemusha-v2-partial-plan-lineage",
+            ))
+            .expect("root claim");
+            let redemption_binding = fixed_bytes(b"kagemusha-v2-partial-plan-binding");
+            let child = parent
+                .child(Change, redemption_binding)
+                .expect("change child");
+            let change_output = iroha_data_model::offline::KagemushaSpendableNoteDescriptorV2 {
+                chain_id: transaction.chain_id().clone(),
+                asset: definition_id.clone(),
+                note_commitment: fixed_bytes(b"kagemusha-v2-partial-change-commitment"),
+                spend_nullifier: fixed_bytes(b"kagemusha-v2-partial-change-nullifier"),
+                amount: iroha_data_model::offline::KagemushaScaledAmountV2 {
+                    atomic_units: 450,
+                    scale: 2,
+                },
+            };
+            let first_plan = plan_kagemusha_v2_redemption_state_commit(
+                KagemushaV2RedemptionPlanInput {
+                    definition_id: &definition_id,
+                    source_asset: &source_asset,
+                    recipient: &recipient,
+                    amount: Numeric::new(625, 2),
+                    current_nullifier: fixed_bytes(b"kagemusha-v2-partial-parent-nullifier"),
+                    consumed_claims: std::slice::from_ref(&parent),
+                    redemption_binding: Some(redemption_binding),
+                    change_output: Some(&change_output),
+                    change_children: &[(parent.clone(), child.clone())],
+                    operation_id: fixed_bytes(b"kagemusha-v2-partial-plan-operation"),
+                    receipt_digest: fixed_bytes(b"kagemusha-v2-partial-plan-receipt"),
+                    replay_markers: kagemusha_v2_test_replay_markers(b"partial-plan-replay"),
+                },
+                &transaction,
+            )
+            .expect("partial redemption must plan");
+            first_plan
+                .commit(&mut transaction)
+                .expect("partial redemption commits");
+
+            assert_eq!(
+                transaction
+                    .world
+                    .assets
+                    .get(&escrow_asset)
+                    .expect("escrow remainder")
+                    .as_ref(),
+                &Numeric::new(450, 2),
+            );
+            assert!(
+                transaction
+                    .world
+                    .zk_assets
+                    .get(&definition_id)
+                    .expect("ZK state")
+                    .commitments
+                    .contains(&change_output.note_commitment)
+            );
+            assert!(
+                !transaction
+                    .world
+                    .zk_assets
+                    .get(&definition_id)
+                    .expect("ZK state")
+                    .nullifiers
+                    .contains(&change_output.spend_nullifier),
+                "change remains independently spendable",
+            );
+
+            let second_plan = plan_kagemusha_v2_redemption_state_commit(
+                KagemushaV2RedemptionPlanInput {
+                    definition_id: &definition_id,
+                    source_asset: &source_asset,
+                    recipient: &recipient,
+                    amount: Numeric::new(450, 2),
+                    current_nullifier: change_output.spend_nullifier,
+                    consumed_claims: std::slice::from_ref(&child),
+                    redemption_binding: None,
+                    change_output: None,
+                    change_children: &[],
+                    operation_id: fixed_bytes(b"kagemusha-v2-change-plan-operation"),
+                    receipt_digest: fixed_bytes(b"kagemusha-v2-change-plan-receipt"),
+                    replay_markers: kagemusha_v2_test_replay_markers(b"change-plan-replay"),
+                },
+                &transaction,
+            )
+            .expect("authorized change child must plan independently");
+            second_plan
+                .commit(&mut transaction)
+                .expect("change child redeems");
+
+            assert!(transaction.world.assets.get(&escrow_asset).is_none());
+            let recipient_asset = AssetId::new(definition_id, recipient);
+            assert_eq!(
+                transaction
+                    .world
+                    .assets
+                    .get(&recipient_asset)
+                    .expect("recipient total")
+                    .as_ref(),
+                &Numeric::new(1_075, 2),
+                "625 + 450 must conserve the exact 10.75 public value",
+            );
+        }
+
+        #[test]
+        fn kagemusha_v2_split_siblings_redeem_independently_without_double_credit() {
+            use iroha_data_model::offline::KagemushaRecursiveSpendBranchV2::{Change, Recipient};
+
+            let (state, source_asset, escrow_asset, recipient, definition_id) =
+                kagemusha_v2_redemption_plan_test_state(Numeric::new(1_075, 2));
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            install_kagemusha_v2_redemption_zk_state(&mut transaction, &definition_id);
+            let root = KagemushaRecursiveSpendBranchClaimV2::root(fixed_bytes(
+                b"kagemusha-v2-sibling-plan-lineage",
+            ))
+            .expect("root claim");
+            let split_binding = fixed_bytes(b"kagemusha-v2-sibling-plan-split");
+            let recipient_claim = root
+                .child(Recipient, split_binding)
+                .expect("recipient sibling");
+            let change_claim = root.child(Change, split_binding).expect("change sibling");
+
+            for (index, (claim, amount)) in [
+                (recipient_claim, Numeric::new(625, 2)),
+                (change_claim, Numeric::new(450, 2)),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut label = b"kagemusha-v2-sibling-plan".to_vec();
+                label.push(u8::try_from(index).expect("two siblings fit u8"));
+                let plan = plan_kagemusha_v2_redemption_state_commit(
+                    KagemushaV2RedemptionPlanInput {
+                        definition_id: &definition_id,
+                        source_asset: &source_asset,
+                        recipient: &recipient,
+                        amount,
+                        current_nullifier: fixed_bytes(&[label.as_slice(), b"-nullifier"].concat()),
+                        consumed_claims: std::slice::from_ref(&claim),
+                        redemption_binding: None,
+                        change_output: None,
+                        change_children: &[],
+                        operation_id: fixed_bytes(&[label.as_slice(), b"-operation"].concat()),
+                        receipt_digest: fixed_bytes(&[label.as_slice(), b"-receipt"].concat()),
+                        replay_markers: kagemusha_v2_test_replay_markers(&label),
+                    },
+                    &transaction,
+                )
+                .expect("same-transition sibling remains independently redeemable");
+                plan.commit(&mut transaction).expect("sibling commit");
+            }
+
+            assert!(transaction.world.assets.get(&escrow_asset).is_none());
+            let recipient_asset = AssetId::new(definition_id, recipient);
+            assert_eq!(
+                transaction
+                    .world
+                    .assets
+                    .get(&recipient_asset)
+                    .expect("recipient total")
+                    .as_ref(),
+                &Numeric::new(1_075, 2),
+            );
+        }
+
+        #[test]
+        fn kagemusha_v2_redemption_plan_rejects_replay_collisions_and_insufficient_escrow() {
+            use iroha_data_model::offline::KagemushaRecursiveSpendBranchV2::Change;
+
+            let (state, source_asset, escrow_asset, recipient, definition_id) =
+                kagemusha_v2_redemption_plan_test_state(Numeric::new(1_075, 2));
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            install_kagemusha_v2_redemption_zk_state(&mut transaction, &definition_id);
+            let claim = KagemushaRecursiveSpendBranchClaimV2::root(fixed_bytes(
+                b"kagemusha-v2-negative-plan-lineage",
+            ))
+            .expect("root claim");
+            let nullifier = fixed_bytes(b"kagemusha-v2-negative-plan-nullifier");
+            transaction
+                .world
+                .zk_assets
+                .get_mut(&definition_id)
+                .expect("ZK state")
+                .nullifiers
+                .insert(nullifier);
+            let err = expect_kagemusha_v2_redemption_plan_error(
+                plan_kagemusha_v2_redemption_state_commit(
+                    KagemushaV2RedemptionPlanInput {
+                        definition_id: &definition_id,
+                        source_asset: &source_asset,
+                        recipient: &recipient,
+                        amount: Numeric::new(100, 2),
+                        current_nullifier: nullifier,
+                        consumed_claims: std::slice::from_ref(&claim),
+                        redemption_binding: None,
+                        change_output: None,
+                        change_children: &[],
+                        operation_id: fixed_bytes(b"kagemusha-v2-negative-replay-operation"),
+                        receipt_digest: fixed_bytes(b"kagemusha-v2-negative-replay-receipt"),
+                        replay_markers: kagemusha_v2_test_replay_markers(b"negative-replay"),
+                    },
+                    &transaction,
+                ),
+                "a consumed nullifier must reject during planning",
+            );
+            assert_offline_rejection(err, "duplicate_nullifier", "already redeemed");
+            transaction
+                .world
+                .zk_assets
+                .get_mut(&definition_id)
+                .expect("ZK state")
+                .nullifiers
+                .remove(&nullifier);
+
+            let redemption_binding = fixed_bytes(b"kagemusha-v2-negative-change-binding");
+            let child = claim
+                .child(Change, redemption_binding)
+                .expect("change child");
+            let change_output = iroha_data_model::offline::KagemushaSpendableNoteDescriptorV2 {
+                chain_id: transaction.chain_id().clone(),
+                asset: definition_id.clone(),
+                note_commitment: fixed_bytes(b"kagemusha-v2-negative-change-commitment"),
+                spend_nullifier: fixed_bytes(b"kagemusha-v2-negative-change-nullifier"),
+                amount: iroha_data_model::offline::KagemushaScaledAmountV2 {
+                    atomic_units: 975,
+                    scale: 2,
+                },
+            };
+            transaction
+                .world
+                .zk_assets
+                .get_mut(&definition_id)
+                .expect("ZK state")
+                .commitments
+                .push(change_output.note_commitment);
+            let err = expect_kagemusha_v2_redemption_plan_error(
+                plan_kagemusha_v2_redemption_state_commit(
+                    KagemushaV2RedemptionPlanInput {
+                        definition_id: &definition_id,
+                        source_asset: &source_asset,
+                        recipient: &recipient,
+                        amount: Numeric::new(100, 2),
+                        current_nullifier: nullifier,
+                        consumed_claims: std::slice::from_ref(&claim),
+                        redemption_binding: Some(redemption_binding),
+                        change_output: Some(&change_output),
+                        change_children: &[(claim.clone(), child)],
+                        operation_id: fixed_bytes(b"kagemusha-v2-negative-change-operation"),
+                        receipt_digest: fixed_bytes(b"kagemusha-v2-negative-change-receipt"),
+                        replay_markers: kagemusha_v2_test_replay_markers(b"negative-change"),
+                    },
+                    &transaction,
+                ),
+                "an existing change commitment must reject",
+            );
+            assert_offline_rejection(err, "duplicate_output", "already exists");
+            transaction
+                .world
+                .zk_assets
+                .get_mut(&definition_id)
+                .expect("ZK state")
+                .commitments
+                .retain(|commitment| *commitment != change_output.note_commitment);
+
+            let branch_marker =
+                kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN, claim.path);
+            let escrow_before = transaction
+                .world
+                .assets
+                .get(&escrow_asset)
+                .expect("escrow asset")
+                .as_ref()
+                .clone();
+            let _ = expect_kagemusha_v2_redemption_plan_error(
+                plan_kagemusha_v2_redemption_state_commit(
+                    KagemushaV2RedemptionPlanInput {
+                        definition_id: &definition_id,
+                        source_asset: &source_asset,
+                        recipient: &recipient,
+                        amount: Numeric::new(1_076, 2),
+                        current_nullifier: nullifier,
+                        consumed_claims: std::slice::from_ref(&claim),
+                        redemption_binding: None,
+                        change_output: None,
+                        change_children: &[],
+                        operation_id: fixed_bytes(b"kagemusha-v2-negative-escrow-operation"),
+                        receipt_digest: fixed_bytes(b"kagemusha-v2-negative-escrow-receipt"),
+                        replay_markers: kagemusha_v2_test_replay_markers(b"negative-escrow"),
+                    },
+                    &transaction,
+                ),
+                "redemption cannot exceed escrow",
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .assets
+                    .get(&escrow_asset)
+                    .expect("escrow remains")
+                    .as_ref(),
+                &escrow_before,
+            );
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&branch_marker)
+                    .is_none(),
+                "a failed plan must not consume its branch",
+            );
+        }
+
+        #[test]
+        fn kagemusha_v2_branch_claims_reject_duplicate_overlap_and_excess_arity() {
+            use iroha_data_model::offline::KagemushaRecursiveSpendBranchV2::{Change, Recipient};
+
+            let state = kagemusha_v2_branch_test_state();
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            let split = fixed_bytes(b"v2-duplicate-split");
+            let claim = kagemusha_v2_branch_claim(b"v2-duplicate-lineage", &[(Recipient, split)]);
+            let exact = kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN, claim.path);
+
+            let err = commit_kagemusha_v2_consumed_branch_set(
+                &[claim.clone(), claim.clone()],
+                None,
+                &[],
+                &mut transaction,
+            )
+            .expect_err("duplicate branch inputs must reject");
+            assert_offline_rejection(err, "branch_conflict", "duplicate or overlapping");
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&exact)
+                    .is_none(),
+                "duplicate rejection must not consume the branch"
+            );
+
+            let ancestor = claim;
+            let descendant = ancestor
+                .child(Change, fixed_bytes(b"v2-overlap-transition"))
+                .expect("test descendant claim is canonical");
+            let err = commit_kagemusha_v2_consumed_branch_set(
+                &[ancestor.clone(), descendant.clone()],
+                None,
+                &[],
+                &mut transaction,
+            )
+            .expect_err("ancestor/descendant overlap must reject");
+            assert_offline_rejection(err, "branch_conflict", "ancestor and descendant");
+            for rejected in [ancestor, descendant] {
+                let exact =
+                    kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN, rejected.path);
+                assert!(
+                    transaction
+                        .world
+                        .offline_note_replay_keys
+                        .get(&exact)
+                        .is_none(),
+                    "overlap rejection must not consume either claim"
+                );
+            }
+
+            let mut reversed = vec![
+                kagemusha_v2_branch_claim(
+                    b"v2-order-root-a",
+                    &[(Recipient, fixed_bytes(b"v2-order-split-a"))],
+                ),
+                kagemusha_v2_branch_claim(
+                    b"v2-order-root-b",
+                    &[(Recipient, fixed_bytes(b"v2-order-split-b"))],
+                ),
+            ];
+            reversed.sort_unstable_by_key(|item| core::cmp::Reverse(item.path));
+            let err =
+                commit_kagemusha_v2_consumed_branch_set(&reversed, None, &[], &mut transaction)
+                    .expect_err("noncanonical claim order must reject");
+            assert_offline_rejection(err, "branch_conflict", "strict canonical order");
+
+            let mut three = (0..3)
+                .map(|index| {
+                    kagemusha_v2_branch_claim(
+                        format!("v2-excess-root-{index}").as_bytes(),
+                        &[(
+                            Recipient,
+                            fixed_bytes(format!("v2-excess-split-{index}").as_bytes()),
+                        )],
+                    )
+                })
+                .collect::<Vec<_>>();
+            three.sort_unstable_by_key(|item| item.path);
+            let err = commit_kagemusha_v2_consumed_branch_set(&three, None, &[], &mut transaction)
+                .expect_err("more than two claims must reject");
+            assert_offline_rejection(err, "branch_conflict", "one or two conflict claims");
+        }
+
+        #[test]
+        fn kagemusha_v2_branch_claims_reject_committed_ancestor_and_descendant() {
+            use iroha_data_model::offline::KagemushaRecursiveSpendBranchV2::{Change, Recipient};
+
+            let state = kagemusha_v2_branch_test_state();
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let ancestor = kagemusha_v2_branch_claim(
+                b"v2-descendant-first",
+                &[(Recipient, fixed_bytes(b"v2-descendant-first-split"))],
+            );
+            let descendant = ancestor
+                .child(Change, fixed_bytes(b"v2-descendant-second-split"))
+                .expect("test descendant claim is canonical");
+            commit_kagemusha_v2_consumed_branch_set(&[descendant], None, &[], &mut transaction)
+                .expect("fresh descendant branch commits");
+            let err =
+                commit_kagemusha_v2_consumed_branch_set(&[ancestor], None, &[], &mut transaction)
+                    .expect_err("ancestor of a committed branch must reject");
+            assert_offline_rejection(err, "branch_conflict", "ancestor");
+
+            let parent = kagemusha_v2_branch_claim(
+                b"v2-ancestor-first",
+                &[(Recipient, fixed_bytes(b"v2-ancestor-first-split"))],
+            );
+            let child = parent
+                .child(Change, fixed_bytes(b"v2-unauthorized-child-split"))
+                .expect("test child claim is canonical");
+            commit_kagemusha_v2_consumed_branch_set(&[parent], None, &[], &mut transaction)
+                .expect("fresh ancestor branch commits");
+            let err =
+                commit_kagemusha_v2_consumed_branch_set(&[child], None, &[], &mut transaction)
+                    .expect_err("descendant of an unauthorized committed branch must reject");
+            assert_offline_rejection(err, "branch_conflict", "descends");
+        }
+
+        #[test]
+        fn kagemusha_v2_branch_claim_validation_and_conflicts_are_atomic() {
+            use iroha_data_model::offline::KagemushaRecursiveSpendBranchV2::Recipient;
+
+            let state = kagemusha_v2_branch_test_state();
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let fresh = kagemusha_v2_branch_claim(
+                b"v2-atomic-fresh",
+                &[(Recipient, fixed_bytes(b"v2-atomic-fresh-split"))],
+            );
+            let fresh_exact =
+                kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN, fresh.path);
+            let mut malformed = kagemusha_v2_branch_claim(
+                b"v2-atomic-invalid",
+                &[(Recipient, fixed_bytes(b"v2-atomic-invalid-split"))],
+            );
+            malformed.transition_tags.pop();
+            let mut attempted = vec![fresh.clone(), malformed];
+            attempted.sort_unstable_by_key(|item| item.path);
+            let err =
+                commit_kagemusha_v2_consumed_branch_set(&attempted, None, &[], &mut transaction)
+                    .expect_err("a malformed claim must reject the complete branch set");
+            assert_offline_rejection(
+                err,
+                "branch_conflict",
+                "branch_claim.transition_tags.length",
+            );
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&fresh_exact)
+                    .is_none(),
+                "canonical input before an invalid input must remain unconsumed"
+            );
+
+            let mut missing_active = kagemusha_v2_branch_claim(
+                b"v2-atomic-missing-active",
+                &[(Recipient, fixed_bytes(b"v2-atomic-missing-active-split"))],
+            );
+            missing_active.transition_tags[..KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_BYTES_V2]
+                .fill(0);
+            let err = commit_kagemusha_v2_consumed_branch_set(
+                &[missing_active],
+                None,
+                &[],
+                &mut transaction,
+            )
+            .expect_err("an active zero transition tag must reject");
+            assert_offline_rejection(err, "branch_conflict", "branch_claim.transition_tags");
+
+            let mut surplus_tag = kagemusha_v2_branch_claim(
+                b"v2-atomic-surplus-tag",
+                &[(Recipient, fixed_bytes(b"v2-atomic-surplus-tag-split"))],
+            );
+            surplus_tag.transition_tags.extend_from_slice(&[0xA5; 24]);
+            let err = commit_kagemusha_v2_consumed_branch_set(
+                &[surplus_tag],
+                None,
+                &[],
+                &mut transaction,
+            )
+            .expect_err("a transition tag beyond the exact path depth must reject");
+            assert_offline_rejection(
+                err,
+                "branch_conflict",
+                "branch_claim.transition_tags.length",
+            );
+
+            let committed = kagemusha_v2_branch_claim(
+                b"v2-atomic-conflict",
+                &[(Recipient, fixed_bytes(b"v2-atomic-conflict-split"))],
+            );
+            commit_kagemusha_v2_consumed_branch_set(
+                &[committed.clone()],
+                None,
+                &[],
+                &mut transaction,
+            )
+            .expect("conflict fixture branch commits");
+            let mut attempted = vec![fresh.clone(), committed];
+            attempted.sort_unstable_by_key(|item| item.path);
+            let err =
+                commit_kagemusha_v2_consumed_branch_set(&attempted, None, &[], &mut transaction)
+                    .expect_err("a committed input must reject the complete branch set");
+            assert_offline_rejection(err, "branch_conflict", "already redeemed");
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&fresh_exact)
+                    .is_none(),
+                "fresh input before a ledger conflict must remain unconsumed"
+            );
+            let fresh_selection = kagemusha_v2_branch_marker(
+                KAGEMUSHA_V2_TRANSITION_SELECTED_DOMAIN,
+                fresh.path.prefix(0).expect("fresh root prefix"),
+            );
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&fresh_selection)
+                    .is_none(),
+                "fresh input transition selection must not leak from a rejected batch"
+            );
+        }
+
+        #[test]
+        fn kagemusha_v2_transition_marker_pairs_fail_closed_without_leaf_mutation() {
+            use iroha_data_model::offline::KagemushaRecursiveSpendBranchV2::Recipient;
+
+            let state = kagemusha_v2_branch_test_state();
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let selected_without_choice = kagemusha_v2_branch_claim(
+                b"v2-selected-without-choice",
+                &[(Recipient, fixed_bytes(b"v2-selected-without-choice-split"))],
+            );
+            let selected_marker = kagemusha_v2_branch_marker(
+                KAGEMUSHA_V2_TRANSITION_SELECTED_DOMAIN,
+                selected_without_choice.path.prefix(0).expect("root prefix"),
+            );
+            transaction
+                .world
+                .offline_note_replay_keys
+                .insert(selected_marker, ());
+            let err = commit_kagemusha_v2_consumed_branch_set(
+                &[selected_without_choice.clone()],
+                None,
+                &[],
+                &mut transaction,
+            )
+            .expect_err("a selection marker without the requested choice must reject");
+            assert_offline_rejection(err, "branch_conflict", "different transition choice");
+            let leaf = kagemusha_v2_branch_marker(
+                KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN,
+                selected_without_choice.path,
+            );
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&leaf)
+                    .is_none()
+            );
+
+            let choice_without_selected = kagemusha_v2_branch_claim(
+                b"v2-choice-without-selected",
+                &[(Recipient, fixed_bytes(b"v2-choice-without-selected-split"))],
+            );
+            let prefix = choice_without_selected.path.prefix(0).expect("root prefix");
+            let choice_marker = kagemusha_v2_transition_choice_marker(
+                prefix,
+                choice_without_selected
+                    .transition_tag_at(0)
+                    .expect("active first transition tag"),
+            );
+            transaction
+                .world
+                .offline_note_replay_keys
+                .insert(choice_marker, ());
+            let err = commit_kagemusha_v2_consumed_branch_set(
+                &[choice_without_selected.clone()],
+                None,
+                &[],
+                &mut transaction,
+            )
+            .expect_err("a choice marker without its selection marker must reject");
+            assert_offline_rejection(err, "branch_conflict", "without its selection marker");
+            let leaf = kagemusha_v2_branch_marker(
+                KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN,
+                choice_without_selected.path,
+            );
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&leaf)
+                    .is_none()
+            );
+        }
+
+        #[test]
+        fn kagemusha_v2_rejects_split_a_recipient_mixed_with_split_b_change() {
+            use iroha_data_model::offline::KagemushaRecursiveSpendBranchV2::{Change, Recipient};
+
+            let state = kagemusha_v2_branch_test_state();
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            let root = KagemushaRecursiveSpendBranchClaimV2::root(fixed_bytes(
+                b"v2-transition-choice-lineage",
+            ))
+            .expect("root claim");
+            let split_a = fixed_bytes(b"v2-split-a");
+            let split_b = fixed_bytes(b"v2-split-b");
+            let recipient_a = root
+                .child(Recipient, split_a)
+                .expect("split A recipient claim");
+            let change_a = root.child(Change, split_a).expect("split A change claim");
+            let change_b = root.child(Change, split_b).expect("split B change claim");
+            let mut mixed = vec![recipient_a.clone(), change_b.clone()];
+            mixed.sort_unstable_by_key(|item| item.path);
+            let root_prefix = root.path;
+            let selection =
+                kagemusha_v2_branch_marker(KAGEMUSHA_V2_TRANSITION_SELECTED_DOMAIN, root_prefix);
+            let err = commit_kagemusha_v2_consumed_branch_set(&mixed, None, &[], &mut transaction)
+                .expect_err("outputs from alternative splits must never be combinable");
+            assert_offline_rejection(err, "branch_conflict", "different transitions");
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&selection)
+                    .is_none(),
+                "rejected mixed split must not reserve the transition prefix"
+            );
+            for rejected in [&recipient_a, &change_b] {
+                let exact =
+                    kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN, rejected.path);
+                assert!(
+                    transaction
+                        .world
+                        .offline_note_replay_keys
+                        .get(&exact)
+                        .is_none(),
+                    "rejected mixed split must not consume either output"
+                );
+            }
+
+            commit_kagemusha_v2_consumed_branch_set(&[recipient_a], None, &[], &mut transaction)
+                .expect("first output selects split A");
+            let err =
+                commit_kagemusha_v2_consumed_branch_set(&[change_b], None, &[], &mut transaction)
+                    .expect_err("a later split B sibling must also reject");
+            assert_offline_rejection(err, "branch_conflict", "different transition choice");
+            commit_kagemusha_v2_consumed_branch_set(&[change_a], None, &[], &mut transaction)
+                .expect("the independently spendable split A sibling remains valid");
+        }
+
+        #[test]
+        fn kagemusha_v2_redeemed_descendant_rejects_alternate_disjoint_transition_lineage() {
+            use iroha_data_model::offline::KagemushaRecursiveSpendBranchV2::{Change, Recipient};
+
+            let state = kagemusha_v2_branch_test_state();
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            let root = KagemushaRecursiveSpendBranchClaimV2::root(fixed_bytes(
+                b"v2-two-hop-alternate-lineage",
+            ))
+            .expect("root claim");
+
+            // Redeem the T1 -> U1 descendant first.
+            let t1_u1 = root
+                .child(Recipient, fixed_bytes(b"v2-two-hop-transition-t1"))
+                .expect("T1 child")
+                .child(Recipient, fixed_bytes(b"v2-two-hop-transition-u1"))
+                .expect("U1 descendant");
+            commit_kagemusha_v2_consumed_branch_set(
+                std::slice::from_ref(&t1_u1),
+                None,
+                &[],
+                &mut transaction,
+            )
+            .expect("fresh T1 -> U1 descendant commits");
+
+            // T2 -> U2 has a disjoint final path, but it forks at the same root
+            // prefix and therefore cannot select a different historical transition.
+            let t2_u2 = root
+                .child(Change, fixed_bytes(b"v2-two-hop-transition-t2"))
+                .expect("T2 child")
+                .child(Change, fixed_bytes(b"v2-two-hop-transition-u2"))
+                .expect("U2 descendant");
+            assert!(
+                !t1_u1.path.conflicts_with(t2_u2.path),
+                "the adversarial leaves must be path-disjoint"
+            );
+            let markers_before = transaction
+                .world
+                .offline_note_replay_keys
+                .iter()
+                .map(|(marker, ())| *marker)
+                .collect::<Vec<_>>();
+            let alternate_exact =
+                kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN, t2_u2.path);
+            let alternate_depth_one_selection = kagemusha_v2_branch_marker(
+                KAGEMUSHA_V2_TRANSITION_SELECTED_DOMAIN,
+                t2_u2.path.prefix(1).expect("T2 path prefix"),
+            );
+
+            let err = commit_kagemusha_v2_consumed_branch_set(
+                std::slice::from_ref(&t2_u2),
+                None,
+                &[],
+                &mut transaction,
+            )
+            .expect_err("alternate T2 -> U2 history must reject after T1 -> U1 redemption");
+            assert_offline_rejection(err, "branch_conflict", "different transition choice");
+            assert_eq!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .iter()
+                    .map(|(marker, ())| *marker)
+                    .collect::<Vec<_>>(),
+                markers_before,
+                "rejected alternate history must not mutate any lineage marker"
+            );
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&alternate_exact)
+                    .is_none(),
+                "rejected alternate leaf must not be marked redeemed"
+            );
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&alternate_depth_one_selection)
+                    .is_none(),
+                "rejected alternate history must not stage its later transition"
+            );
+        }
+
+        #[test]
+        fn kagemusha_v2_mutated_historical_transition_tag_rejects_without_state_mutation() {
+            use iroha_data_model::offline::KagemushaRecursiveSpendBranchV2::{Change, Recipient};
+
+            let (state, _source_asset, _escrow_asset, _recipient, definition_id) =
+                kagemusha_v2_redemption_plan_test_state(Numeric::new(1_075, 2));
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            install_kagemusha_v2_redemption_zk_state(&mut transaction, &definition_id);
+            transaction
+                .world
+                .zk_assets
+                .get_mut(&definition_id)
+                .expect("ZK state")
+                .nullifiers
+                .insert(fixed_bytes(b"v2-historical-tag-existing-nullifier"));
+
+            let root = KagemushaRecursiveSpendBranchClaimV2::root(fixed_bytes(
+                b"v2-historical-tag-lineage",
+            ))
+            .expect("root claim");
+            let committed = root
+                .child(Recipient, fixed_bytes(b"v2-historical-tag-t1"))
+                .expect("T1 child")
+                .child(Recipient, fixed_bytes(b"v2-historical-tag-u1"))
+                .expect("U1 descendant");
+            commit_kagemusha_v2_consumed_branch_set(
+                std::slice::from_ref(&committed),
+                None,
+                &[],
+                &mut transaction,
+            )
+            .expect("canonical historical branch commits");
+
+            // Keep a disjoint leaf and mutate only the already-selected T1 tag.
+            // Structural validation still succeeds because the tag remains a
+            // non-zero 24-byte value; ledger history must detect the tampering.
+            let mut tampered = root
+                .child(Recipient, fixed_bytes(b"v2-historical-tag-t1"))
+                .expect("same T1 child")
+                .child(Change, fixed_bytes(b"v2-historical-tag-u2"))
+                .expect("disjoint U2 descendant");
+            assert!(
+                !committed.path.conflicts_with(tampered.path),
+                "the tampered claim must not rely on an exact-leaf collision"
+            );
+            let original_tag = tampered.transition_tag_at(0).expect("first transition tag");
+            tampered.transition_tags[0] ^= 0x80;
+            if tampered.transition_tag_at(0) == Some([0; 24]) {
+                tampered.transition_tags[1] = 1;
+            }
+            assert_ne!(tampered.transition_tag_at(0), Some(original_tag));
+            tampered
+                .validate()
+                .expect("mutated non-zero exact-depth tag remains structurally canonical");
+
+            let markers_before = transaction
+                .world
+                .offline_note_replay_keys
+                .iter()
+                .map(|(marker, ())| *marker)
+                .collect::<Vec<_>>();
+            let zk_before = transaction
+                .world
+                .zk_assets
+                .get(&definition_id)
+                .expect("ZK state before rejection")
+                .clone();
+            let tampered_exact =
+                kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN, tampered.path);
+
+            let err = commit_kagemusha_v2_consumed_branch_set(
+                std::slice::from_ref(&tampered),
+                None,
+                &[],
+                &mut transaction,
+            )
+            .expect_err("mutated historical transition tag must reject");
+            assert_offline_rejection(err, "branch_conflict", "different transition choice");
+            assert_eq!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .iter()
+                    .map(|(marker, ())| *marker)
+                    .collect::<Vec<_>>(),
+                markers_before,
+                "historical-tag rejection must precede every branch-marker write"
+            );
+            let zk_after = transaction
+                .world
+                .zk_assets
+                .get(&definition_id)
+                .expect("ZK state after rejection");
+            assert_eq!(
+                zk_after.nullifiers, zk_before.nullifiers,
+                "historical-tag rejection must not consume a nullifier"
+            );
+            assert_eq!(
+                zk_after.commitments, zk_before.commitments,
+                "historical-tag rejection must not append a commitment"
+            );
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&tampered_exact)
+                    .is_none(),
+                "tampered disjoint leaf must not be marked redeemed"
+            );
+        }
+
+        #[test]
+        fn kagemusha_v2_two_claims_from_different_lineage_roots_commit() {
+            use iroha_data_model::offline::KagemushaRecursiveSpendBranchV2::Recipient;
+
+            let state = kagemusha_v2_branch_test_state();
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            let mut claims = vec![
+                kagemusha_v2_branch_claim(
+                    b"v2-distinct-root-a",
+                    &[(Recipient, fixed_bytes(b"v2-distinct-transition-a"))],
+                ),
+                kagemusha_v2_branch_claim(
+                    b"v2-distinct-root-b",
+                    &[(Recipient, fixed_bytes(b"v2-distinct-transition-b"))],
+                ),
+            ];
+            claims.sort_unstable_by_key(|item| item.path);
+            commit_kagemusha_v2_consumed_branch_set(&claims, None, &[], &mut transaction)
+                .expect("two independently topped-up lineages may be joined");
+            for claim in claims {
+                let exact =
+                    kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN, claim.path);
+                assert!(
+                    transaction
+                        .world
+                        .offline_note_replay_keys
+                        .get(&exact)
+                        .is_some()
+                );
+            }
+        }
+
+        #[test]
+        fn kagemusha_v2_partial_redemption_authorizes_exact_transition_bound_change() {
+            use iroha_data_model::offline::KagemushaRecursiveSpendBranchV2::{Change, Recipient};
+
+            let state = kagemusha_v2_branch_test_state();
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            let parent = kagemusha_v2_branch_claim(
+                b"v2-partial-redeem",
+                &[(Recipient, fixed_bytes(b"v2-partial-parent-split"))],
+            );
+            let redemption_binding = fixed_bytes(b"v2-partial-redemption-binding");
+            let change = parent
+                .child(Change, redemption_binding)
+                .expect("deterministic change child is canonical");
+            let parent_exact =
+                kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN, parent.path);
+            let change_authorization = kagemusha_v2_branch_claim_marker(
+                KAGEMUSHA_V2_AUTHORIZED_CHANGE_CHILD_DOMAIN,
+                &change,
+            );
+            let wrong_change = parent
+                .child(Change, fixed_bytes(b"v2-wrong-redemption-binding"))
+                .expect("alternate transition-bound change remains structurally valid");
+
+            let err = commit_kagemusha_v2_consumed_branch_set(
+                &[parent.clone()],
+                Some(redemption_binding),
+                &[(parent.clone(), wrong_change)],
+                &mut transaction,
+            )
+            .expect_err("change must bind the exact redemption intent digest");
+            assert_offline_rejection(err, "branch_conflict", "exact transition-bound child");
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&parent_exact)
+                    .is_none()
+            );
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&change_authorization)
+                    .is_none()
+            );
+
+            commit_kagemusha_v2_consumed_branch_set(
+                &[parent.clone()],
+                Some(redemption_binding),
+                &[(parent, change.clone())],
+                &mut transaction,
+            )
+            .expect("partial redemption atomically consumes parent and authorizes change");
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&parent_exact)
+                    .is_some()
+            );
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&change_authorization)
+                    .is_some()
+            );
+
+            commit_kagemusha_v2_consumed_branch_set(&[change], None, &[], &mut transaction)
+                .expect("the exact authorized change child remains independently redeemable");
+
+            let other_parent = kagemusha_v2_branch_claim(
+                b"v2-partial-redeem-wrong-child",
+                &[(Recipient, fixed_bytes(b"v2-other-parent-split"))],
+            );
+            let recipient_child = other_parent
+                .child(Recipient, redemption_binding)
+                .expect("recipient child is canonical");
+            let other_parent_exact =
+                kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN, other_parent.path);
+            let err = commit_kagemusha_v2_consumed_branch_set(
+                &[other_parent.clone()],
+                Some(redemption_binding),
+                &[(other_parent, recipient_child)],
+                &mut transaction,
+            )
+            .expect_err("partial redemption must authorize only the deterministic change child");
+            assert_offline_rejection(err, "branch_conflict", "exact transition-bound child");
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&other_parent_exact)
+                    .is_none(),
+                "invalid change authorization must not consume its parent"
+            );
+        }
+
+        #[test]
+        fn kagemusha_v2_hop64_two_claim_conflict_archive_stays_within_pkk2_budget() {
+            use iroha_data_model::offline::KagemushaRecursiveSpendBranchV2::{Change, Recipient};
+
+            let mut claims = Vec::new();
+            for lineage in [
+                b"v2-hop64-lineage-a".as_slice(),
+                b"v2-hop64-lineage-b".as_slice(),
+            ] {
+                let mut claim = KagemushaRecursiveSpendBranchClaimV2::root(fixed_bytes(lineage))
+                    .expect("hop-64 root claim");
+                for depth in 0..64_u8 {
+                    let mut binding_label = Vec::from(lineage);
+                    binding_label.push(depth);
+                    claim = claim
+                        .child(
+                            if depth % 2 == 0 { Recipient } else { Change },
+                            fixed_bytes(&binding_label),
+                        )
+                        .expect("all 64 transition tags remain canonical");
+                }
+                assert_eq!(claim.path.depth, 64);
+                assert_eq!(
+                    claim.transition_tags.len(),
+                    64 * KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_BYTES_V2
+                );
+                claims.push(claim);
+            }
+            claims.sort_unstable_by_key(|item| item.path);
+            validate_kagemusha_v2_branch_claim_batch(&claims)
+                .expect("two hop-64 claims from different roots are valid");
+
+            let archive = norito::to_bytes(&claims).expect("encode conflict-claim archive");
+            let base64url_len = archive.len().saturating_mul(4).saturating_add(2) / 3;
+            let pkk2_text_len = 6_usize.saturating_add(base64url_len);
+            assert!(
+                pkk2_text_len <= 12 * 1024,
+                "two exact hop-64 claims alone require {pkk2_text_len} PKK2 text bytes"
+            );
         }
 
         #[test]
@@ -14267,8 +16847,8 @@ pub mod isi {
             .expect_err("disabled Kagemusha V2 redemption must reject through dispatch");
             assert_offline_rejection(
                 err,
-                "proof_backend_unavailable",
-                "unavailable until the proof binds independent recipient and change branches",
+                "kagemusha_v2_proof_backend_unavailable",
+                "compact lineage verifier",
             );
 
             let replay_keys_after = transaction

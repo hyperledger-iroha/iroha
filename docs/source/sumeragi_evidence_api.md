@@ -39,7 +39,7 @@ Additional consensus status and commit QC proofs
   `docs/source/sumeragi_v2.md` and the `SumeragiStatusResponse` OpenAPI schema for the exact fields.
 - GET `/v1/sumeragi/qc` — returns a Norito-encoded highest/locked QC snapshot (`SumeragiQcSnapshot`) by default. Set `Accept: application/json` to receive `{ highest_qc { height, view, subject_block_hash }, locked_qc { height, view, subject_block_hash } }`.
 - GET `/v1/sumeragi/status/sse` — SSE stream of the same payload (≈1s cadence).
-- GET `/v1/sumeragi/commit_qc/:hash` — returns a Norito-encoded `Option<Qc>` for `:hash` (block hash) by default. With `Accept: application/json` the response expands to:
+- GET `/v1/sumeragi/commit-qcs/{block_hash}` — returns a Norito-encoded `Option<Qc>` for `:hash` (block hash) by default. With `Accept: application/json` the response expands to:
   - If present, `{ subject_block_hash, commit_qc: { phase, parent_state_root, post_state_root, height, view, epoch, mode_tag, validator_set_hash, validator_set_hash_version, validator_set, signers_bitmap, bls_aggregate_signature } }`.
   - If missing, returns `{ subject_block_hash, commit_qc: null }`.
 
@@ -50,7 +50,7 @@ Example (curl)
 HASH=BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B2
 
 curl -s \
-  http://127.0.0.1:8080/v1/sumeragi/commit_qc/$HASH | jq .
+  http://127.0.0.1:8080/v1/sumeragi/commit-qcs/$HASH | jq .
 
 # Example response (when present):
 # {

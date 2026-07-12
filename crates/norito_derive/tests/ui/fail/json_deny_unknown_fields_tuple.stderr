@@ -1,0 +1,5 @@
+error: #[norito(deny_unknown_fields)] requires a struct with named fields
+ --> tests/ui/fail/json_deny_unknown_fields_tuple.rs:7:8
+  |
+7 | struct Tuple(u32);
+  |        ^^^^^

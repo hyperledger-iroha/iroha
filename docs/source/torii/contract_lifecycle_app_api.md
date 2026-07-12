@@ -19,8 +19,10 @@ Torii when the `app_api` feature is enabled.
   canonical bundle receipt shape used by `POST /v1/contracts/deploy-bundle`
   with exactly one `contracts[]` entry.
 - Runtime calls no longer resend full bytecode or manifests. Torii now builds
-  `Executable::ContractCall(ContractInvocation)` and only keeps fee/gas fields
-  in transaction metadata.
+  `Executable::ContractCall(ContractInvocation)`, converts boundary JSON into
+  one bounded, schema-hashed canonical Norito argument record before signing,
+  and only keeps fee/gas fields in transaction metadata. Validators never
+  interpret JSON as contract argument transport.
 - Contract-call and contract-view target selectors require exactly one of
   `contract_address` or `contract_alias`.
 - `POST /v1/contracts/call` supports three submission modes:
@@ -58,9 +60,11 @@ Validation and execution rules:
 - Torii derives the manifest from the verified artifact; callers do not supply
   a manifest override on this route.
 - The dataspace is derived from `contract_alias`.
+- The signing authority must already hold `CanRegisterSmartContractCode`;
+  account self-registration in the submitted transaction does not grant it.
 - `contract_address` is derived from `(chain_discriminant, authority,
   deploy_nonce, dataspace_id)`.
-- Reusing an existing `contract_alias` is the public upgrade path: Torii
+- Reusing an existing `contract_alias` is the public `kaizen`/`改善` path: Torii
   clears the prior alias binding, deactivates the retired address, binds the
   alias to the new address, and reports `previous_contract_address`.
 
@@ -76,21 +80,22 @@ Validation and execution rules:
 | `completed_stages` | `Vec<String>` | Completed pipeline stages; single deploys normally return `["plan", "deploy"]`. |
 | `failure_point` | `Option<String>` | Populated only when a persisted receipt records a failure. |
 | `contracts` | `Vec<DeployContractBundleContractReceiptDto>` | Always contains exactly one contract receipt for this route. |
-| `init_calls` | `Vec<DeployContractBundleCallReceiptDto>` | Empty on this shortcut. |
+| `hajimari_calls` | `Vec<DeployContractBundleCallReceiptDto>` | Empty on this shortcut. |
 | `assertions` | `Vec<DeployContractBundleAssertionReceiptDto>` | Empty on this shortcut. |
 
 For `POST /v1/contracts/deploy`, the sole `contracts[0]` entry carries the
 fresh immutable `contract_address`, the stable `contract_alias`, any
-`previous_contract_address` retired by an upgrade, the resolved `dataspace`,
+`previous_contract_address` retired by `kaizen`/`改善`, the `kaizen` status,
+the resolved `dataspace`,
 the consumed `deploy_nonce`, `tx_hash_hex`, `code_hash_hex`, `abi_hash_hex`,
 and the current receipt `status`. Single deploy receipts normally return
 `status = "submitted"` because the route returns after queue admission; bundle
-flows that continue into init/assertion stages may advance that status to
+flows that continue into hajimari/assertion stages may advance that status to
 `"deployed"` before returning.
 
 ## `POST /v1/contracts/call`
 
-Prepares or submits a public contract call against an active deployed contract.
+Prepares or submits a `kotoage` call against an active deployed contract.
 
 ### Request (`ContractCallDto`)
 
@@ -102,7 +107,7 @@ Prepares or submits a public contract call against an active deployed contract.
 | `signature_b64` | `Option<String>` | Detached Ed25519 signature over `signing_message_b64`. |
 | `contract_address` | `Option<ContractAddress>` | Canonical target address. |
 | `contract_alias` | `Option<ContractAlias>` | Stable alias target. |
-| `entrypoint` | `Option<String>` | Defaults to `main`. Must resolve to a public entrypoint. |
+| `entrypoint` | `String` | Required. Must resolve to a `kotoage` declaration. |
 | `payload` | `Option<IrohaJson>` | Optional Norito JSON payload normalized against the manifest schema. |
 | `creation_time_ms` | `Option<u64>` | Optional fixed timestamp for deterministic detached flows. |
 | `gas_asset_id` | `Option<String>` | Optional metadata override. |
@@ -123,7 +128,7 @@ Submission-mode fields:
 
 ## `POST /v1/contracts/call/simulate`
 
-Executes a public contract entrypoint locally without queueing a transaction.
+Executes a `kotoage` entrypoint locally without queueing a transaction.
 
 - Request type: `ContractCallSimulateDto`.
 - Uses the same address-or-alias selector, entrypoint validation, payload
@@ -159,8 +164,9 @@ Executes multiple read-only view entrypoints in one HTTP round-trip.
 - Request type: `ContractViewBatchDto`.
 - The top-level `authority` supplies the read authority and host context for
   every item in the batch.
-- The top-level `gas_limit` is optional; when present it becomes the default
-  item gas limit and must still be positive.
+- The top-level `gas_limit` is optional and defaults to `1500000`. Every item
+  that omits its own `gas_limit` inherits that effective batch default; any
+  supplied batch or per-item limit must be positive.
 - Each `ContractViewBatchItemDto` follows the same selector rules as
   `ContractViewDto`: exactly one of `contract_address` or `contract_alias`,
   `entrypoint` defaults to `main`, and the selected manifest entrypoint must be
@@ -215,7 +221,7 @@ Executes multiple read-only view entrypoints in one HTTP round-trip.
   `multisig_account_id` or `multisig_account_alias`.
 - The contract target is selected by exactly one of `contract_address` or
   `contract_alias`.
-- `gas_limit` defaults to `5000` when omitted and must be positive when
+- `gas_limit` defaults to `1500000` when omitted and must be positive when
   supplied.
 - The route validates the signer against the live multisig spec, normalizes the
   contract payload, wraps the call in `MultisigPropose`, and returns

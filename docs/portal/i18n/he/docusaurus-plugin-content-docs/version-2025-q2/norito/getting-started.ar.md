@@ -30,7 +30,7 @@ to an Iroha node.
 
 1. Install the Rust toolchain (1.76 or newer) and check out this repository.
 2. Build or download the supporting binaries:
-   - `koto_compile` – Kotodama compiler that emits IVM/Norito bytecode
+   - `koto build` – Kotodama compiler that emits IVM/Norito bytecode
    - `ivm_run` and `ivm_tool` – local execution and inspection utilities
    - `iroha_cli` – used for contract deployment via Torii
 
@@ -39,7 +39,7 @@ to an Iroha node.
    toolchain locally, point the Makefile helpers at the binaries:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. Ensure an Iroha node is running when you reach the deployment step. The
@@ -53,17 +53,16 @@ The repository ships a minimal “hello world” contract in
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 Key flags:
 
-- `--abi 1` locks the contract to ABI version 1 (the only supported version at
+- `ABI V1` locks the contract to ABI version 1 (the only supported version at
   the time of writing).
-- `--max-cycles 0` requests unbounded execution; set a positive number to bound
+- `--max-cycles 1000000` requests unbounded execution; set a positive number to bound
   cycle padding for zero-knowledge proofs.
 
 ## 2. Inspect the Norito artifact (optional)
@@ -97,7 +96,7 @@ Provide an authority account, its signing key, and either a `.to` file or
 Base64 payload:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -108,8 +107,8 @@ the resulting transaction status. Once the transaction is committed, the code
 hash shown in the response can be used to retrieve manifests or list instances:
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ## 5. Run against Torii
@@ -124,8 +123,8 @@ syscalls (`set_account_detail`, `transfer_asset`, etc.).
 - Use `make examples-run` to compile and execute the provided examples in one
   shot. Override `KOTO`/`IVM` environment variables if the binaries are not on
   `PATH`.
-- If `koto_compile` rejects the ABI version, verify that the compiler and node
-  both target ABI v1 (run `koto_compile --abi` without arguments to list
+- If `koto build` rejects the ABI version, verify that the compiler and node
+  both target ABI v1 (run `koto build --help` without arguments to list
   support).
 - The CLI accepts either hex or Base64 signing keys. For testing, you can use
   keys emitted by `iroha_cli tools crypto keypair`.

@@ -52,7 +52,7 @@ Payload འདི་ Norito-encoded `DaIngestRequest` ཨིན། ལན་འ�
 | 500 ནང་འཛོལ་བ། | རེ་བ་མེད་པའི་འཐུས་ཤོར་ (ནང་བསྐྱོད་འབད་ཡོདཔ་ + དྲན་སྐུལ་)། |
 
 ```
-GET /v1/da/proof_policies
+GET /v1/da/proof-policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ bundle hash. ཁས་བླངས་ཐོ་ཡིག་/བདེན་ཁུ
 ཤུགས་ལྡན་སྲིད་བྱུས་ཆ་ཚན་ལུ་བདེན་ཁུངས་ཅིག་བསྡམ་ནིའི་དོན་ལུ་ སྐོར་ཐེངས་ཁ་སྐོང་དགོཔ་མེད།
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v1/da/proof-policies/snapshot
 Accept: application/json | application/x-norito
 ```
 

@@ -1,21 +1,21 @@
-//! Kotodama encode_int/decode_int helpers end-to-end via CoreHost.
+//! Kotodama rejects retired source-level integer codec plumbing.
 
-use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
+use ivm::kotodama::compiler::Compiler as KotodamaCompiler;
 
 #[test]
-fn kotodama_encode_decode_int_roundtrip() {
+fn kotodama_source_rejects_retired_integer_codec_helpers() {
     let src = r#"
-        fn main() {
-            let b = encode_int(7);
-            let x = decode_int(b);
-            assert_eq(x, 7);
+        seiyaku IntegerCodecRoundtrip {
+            view fn main() {
+                let encoded = codec::encode_i64(7);
+                let decoded = codec::decode_i64(encoded);
+                let _ = decoded;
+            }
         }
     "#;
-    let code = KotodamaCompiler::new()
+    let error = KotodamaCompiler::new()
         .compile_source(src)
-        .expect("compile");
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_host(CoreHost::new());
-    vm.load_program(&code).expect("load");
-    vm.run().expect("run");
+        .expect_err("source-level integer codec helpers are compiler-internal");
+    assert!(error.contains("codec::encode_i64"), "{error}");
+    assert!(error.contains("codec::decode_i64"), "{error}");
 }

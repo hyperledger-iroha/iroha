@@ -75,8 +75,8 @@ inventory matches `provider_count`, reviewed `por-challenge-*` challenge labels
 without non-production markers whose unique inventory matches `challenge_count`,
 per-route `body_blake3_hex` response digest evidence, route, scheduler-lag, and
 report-latency threshold facts, the SQL/Parquet
-archive backend selection, governance archive handoff digest evidence, the
-automated coordinator state, config-backed governance metadata, reviewed
+archive backend selection, governance archive handoff digest evidence,
+the automated coordinator state, config-backed governance metadata, reviewed
 policy digest input for randomness and governance-approval canaries, and
 validates every generated artifact through
 `scripts/check_sorafs_por_rollout_evidence.py` before writing.
@@ -168,10 +168,11 @@ struct PorSampleProofV1 {
 All payloads carry Norito headers for canonical decoding. Torii accepts
 authenticated provider proofs at `/v1/sorafs/capacity/por-proof` and
 trusted-threshold auditor verdicts at `/v1/sorafs/capacity/por-verdict`.
-The verified coordinator scheduler is the sole challenge authority and binds
-authenticated drand and provider VRF evidence before persistence and
-publication; no public route accepts externally supplied challenges.
-Coordinator status surfaces are under `/v1/sorafs/por/*`.
+No external challenge-submission route is mounted. The verified coordinator
+scheduler is the only permitted production challenge
+authority, and PoR automation enablement fails closed until its external
+drand/VRF inputs are implemented. Coordinator status surfaces are under
+`/v1/sorafs/por/*`.
 
 ## Coordinator Workflow
 1. **Epoch bootstrap**

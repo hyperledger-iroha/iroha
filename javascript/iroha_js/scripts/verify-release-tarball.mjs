@@ -10,6 +10,7 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { verifyNativeBinding } from "../src/native.js";
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org/";
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -29,28 +30,21 @@ const collectNativeEvidence = async (repoRoot) => {
     return null;
   }
   const stat = await fs.stat(nativePath);
-  const sha256 = await hashFile(nativePath, "sha256");
+  const verification = verifyNativeBinding(nativePath, { manifestPath });
+  if (!verification.ok) {
+    throw new Error(
+      `Native release evidence failed checksum verification (${verification.status})`,
+    );
+  }
+  const sha256 = verification.sha256;
   const sha512 = await hashFile(nativePath, "sha512");
   const platformKey = `${process.platform}-${process.arch}`;
-  let expectedSha256 = null;
-  if (await exists(manifestPath)) {
-    try {
-      const raw = JSON.parse(await fs.readFile(manifestPath, "utf8"));
-      const entries = raw?.entries ?? raw;
-      expectedSha256 =
-        entries?.[platformKey]?.sha256 ??
-        entries?.[platformKey.toLowerCase()]?.sha256 ??
-        null;
-    } catch {
-      expectedSha256 = null;
-    }
-  }
   return {
     filename: path.basename(nativePath),
     size: stat.size,
     sha256,
     sha512,
-    expectedSha256,
+    expectedSha256: verification.expectedSha256,
     platform: platformKey,
     manifestPresent: await exists(manifestPath),
   };

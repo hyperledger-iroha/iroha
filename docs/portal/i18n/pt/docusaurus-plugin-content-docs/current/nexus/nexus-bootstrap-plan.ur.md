@@ -33,7 +33,7 @@ description: Nexus کے بنیادی cluster de validador کو آن لائن ل�
 ## نیٹ ورک ماحول
 - Nos ambientes Nexus کو الگ نیٹ ورک prefixos کے ساتھ چلائیں:
 - **Sora Nexus (mainnet)** - پروڈکشن نیٹ ورک prefixo `nexus` e governança canônica اور SoraFS/SoraNet piggyback services میزبان بناتا ہے (ID da cadeia `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - staging نیٹ ورک prefixo `testus` جو configuração mainnet کو teste de integração اور validação de pré-lançamento کے لئے espelho کرتا ہے (cadeia UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - staging نیٹ ورک prefixo `testus` جو configuração mainnet کو teste de integração اور validação de pré-lançamento کے لئے espelho کرتا ہے (cadeia UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - ہر ambiente کے لئے الگ arquivos genesis, chaves de governança, e pegadas de infraestrutura رکھیں۔ Testus تمام SoraFS/SoraNet rollouts کے لئے campo de provas ہے, Nexus میں promover کرنے سے پہلے۔
 - Pipelines CI/CD پہلے Testus پر implantar کریں, testes de fumaça automatizados چلائیں, e verificações پاس ہونے پر Nexus میں promoção manual درکار ہو۔
 - Pacotes de configuração de referência `configs/soranexus/nexus/` (mainnet) e `configs/soranexus/testus/` (testnet) کے تحت ہیں, ہر ایک میں نمونہ `config.toml`, `genesis.json` Diretórios de admissão Torii شامل ہیں۔

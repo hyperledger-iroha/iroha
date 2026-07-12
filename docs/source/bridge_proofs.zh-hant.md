@@ -2,59 +2,54 @@
 lang: zh-hant
 direction: ltr
 source: docs/source/bridge_proofs.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 65aff839e8970e96edb07dfb9655cb4e79f56d1d885b7782647f5dc8f328027b
-source_last_modified: "2025-12-29T18:16:35.921274+00:00"
-translation_last_reviewed: 2026-02-07
-translator: machine-google-reviewed
+source_hash: 69c9a740261d0c367d52870fc1f48775ae48307056ba9b79d2f811e0c0849f20
+source_last_modified: "2026-07-11T15:09:39+04:00"
+translation_last_reviewed: 2026-07-11
+translator: machine-assisted
 ---
 
-# 橋接證明
+> 本頁是截至 2026-07-11 的本地化簡要摘要，並非完整的規範性譯文。準確的
+> 類型、API 契約和發布要求以[英文規範頁](bridge_proofs.md)為準。
 
-橋接證明提交通過標準指令路徑 (`SubmitBridgeProof`) 並以經過驗證的狀態登陸證明註冊表。當前表面涵蓋 ICS 風格的 Merkle 證明和具有固定保留和清單綁定的透明 ZK 有效負載。
+# SCCP V1 跨鏈證明——簡要摘要
 
-## 驗收規則
+## 首發範圍
 
-- 範圍必須有序/非空並遵守 `zk.bridge_proof_max_range_len`（0 禁用上限）。
-- 可選高度窗口拒絕過時/未來的證明：`zk.bridge_proof_max_past_age_blocks` 和 `zk.bridge_proof_max_future_drift_blocks` 是根據攝取證明的塊高度進行測量的（0 禁用護欄）。
-- 橋接證明不得與同一後端的現有證明重疊（保留固定證明並塊重疊）。
-- 清單哈希值必須非零；有效負載的大小上限為 `zk.max_proof_size_bytes`。
-- ICS 有效負載遵循配置的 Merkle 深度上限並使用聲明的哈希函數驗證路徑；透明有效負載必須聲明一個非空後端標籤。
-- 固定證明免於保留修剪；未固定的校樣仍然遵循全局 `zk.proof_history_cap`/grace/batch 設置。
+- SCCP V1 是封閉介面：僅支援 Ethereum mainnet、BSC mainnet 和 TRON
+  mainnet，SORA 側唯一端點為 `sora-taira`。任何其他網路設定或 SORA
+  身分都會被拒絕。
+- `SubmitBridgeProof` 只接受與路由綁定的型別化 `NativeProtocol` 和
+  `SccpDestination` 證明。通用 `Ics` 與 `TransparentZk` payload 提交並未
+  開放，系統會以 fail-closed 方式拒絕它們。
 
-## Torii API 表面
+## 型別化註冊表與歷史
 
-- `GET /v1/zk/proofs` 和 `GET /v1/zk/proofs/count` 接受橋接感知過濾器：
-  - `bridge_only=true` 僅返回橋接證明。
-  - `bridge_pinned_only=true` 縮小為固定橋校樣。
-  - `bridge_start_from_height` / `bridge_end_until_height` 夾緊橋範圍窗口。
-- `GET /v1/zk/proof/{backend}/{hash}` 返回橋元數據（範圍、清單哈希、有效負載摘要）以及證明 id/狀態/VK 綁定。
-- 完整的 Norito 證明記錄（包括有效負載字節）仍然可以通過 `GET /v1/proofs/{proof_id}` 供離線驗證者使用。
+- `SccpRegistryV1` 是型別化、僅追加的註冊表。每條 lane 最多保留 64 個
+  路由修訂和 4,096 個 native trust anchor。記錄不會被隱式淘汰；超過上限
+  的下一次追加會被原子拒絕。
+- Anchor 區間使用已認證的共識進度座標：Ethereum 使用 finalized beacon
+  slot，BSC/TRON 使用 finalized native block height。舊 anchor 的有效期包含
+  後繼 checkpoint，但不得越過它。
+- 持久 inbound 記錄分別保存 event/finality height 和
+  `anchor_interval_height`。lane+anchor high-water 只能升高；後繼 checkpoint
+  不得低於它。Snapshot hydration 會完整重算索引，並拒絕缺失、陳舊或多餘
+  的值。重複使用 message id 或 replay 同樣會被拒絕。
 
-## 橋接接收事件
+## 單次驗證與確定性限額
 
-橋車道通過 `RecordBridgeReceipt` 指令發出打印的收據。執行該指令
-記錄 `BridgeReceipt` 有效負載並在事件上發出 `DataEvent::Bridge(BridgeEvent::Emitted)`
-流，取代了之前的僅日誌存根。 CLI `iroha bridge emit-receipt` 幫助程序提交
-鍵入指令，以便索引器可以確定地消耗收據。
+- 每份 native 或 destination 證明只做一次規範解碼和一次昂貴的密碼學驗證。
+  在密碼學運算前，共識先預留保守且與硬體無關的工作量估算。
+- `[zk.sccp]` 為證明數量/位元組、native headers、Ethereum light-client
+  updates、header bytes、secp256k1 recoveries、BLS 聚合檢查/簽名貢獻以及
+  BN254 pairing-product checks 設定強制非零的 per-proof、per-transaction
+  和 per-block 限額。這些准入限額綁定共識，所有驗證者必須一致。
 
-## 外部驗證草圖（ICS）
+## Torii 邊界
 
-```rust
-use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};
-use iroha_crypto::{Hash, HashOf, MerkleTree};
-
-fn verify_ics(record: &BridgeProofRecord) -> bool {
-    let BridgeProofPayload::Ics(ics) = &record.proof.payload else {
-        return false;
-    };
-    let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(ics.leaf_hash));
-    let root =
-        HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(ics.state_root));
-    match ics.hash_function {
-        BridgeHashFunction::Sha256 => ics.proof.clone().verify_sha256(&leaf, &root, ics.proof.audit_path().len()),
-        BridgeHashFunction::Blake2b => ics.proof.clone().verify(&leaf, &root, ics.proof.audit_path().len()),
-    }
-}
-```
+`/v1/bridge/proofs/submit` 和 `/v1/bridge/messages` 使用端點專屬的 HTTP body
+上限。系統會在讀取 body 前檢查身分驗證、rate limit 和 `Content-Length`；
+chunked body 只會讀取到硬上限。請求過大回傳 `413`，畸形 transport/JSON
+另外回傳 `400`。Detached transaction payload 上限為 16 MiB，signature
+payload 上限為 16 KiB。

@@ -923,11 +923,53 @@ pub mod telemetry {
 /// - Number parsing is conservative and aims for correctness over breadth for
 ///   benchmarking scenarios.
 pub mod json {
+    use std::cell::Cell;
+
     use url::Url;
 
     pub use super::{
         JsonDeserialize as Deserialize, JsonDeserialize, JsonSerialize as Serialize, JsonSerialize,
     };
+
+    /// Maximum structural nesting accepted while constructing a JSON [`Value`].
+    ///
+    /// A Kotodama boundary value may use the complete 256-level public type
+    /// budget beneath its required parameter object. The one extra structural
+    /// level covers that boundary envelope without relaxing the 256-level guard
+    /// used by recursively owned typed decoders.
+    pub const MAX_JSON_VALUE_NESTING_DEPTH: usize = crate::core::MAX_OWNED_VALUE_DECODE_DEPTH + 1;
+
+    thread_local! {
+        static OWNED_VALUE_DECODE_DEPTH: Cell<usize> = const { Cell::new(0) };
+    }
+
+    struct OwnedValueDecodeDepthGuard;
+
+    impl OwnedValueDecodeDepthGuard {
+        fn enter() -> Result<Self, Error> {
+            OWNED_VALUE_DECODE_DEPTH.with(|depth| {
+                let next = depth.get().saturating_add(1);
+                if next > crate::core::MAX_OWNED_VALUE_DECODE_DEPTH {
+                    return Err(Error::NestingDepthExceeded {
+                        depth: next,
+                        limit: crate::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+                        context: "owned JSON value",
+                    });
+                }
+                depth.set(next);
+                Ok(Self)
+            })
+        }
+    }
+
+    impl Drop for OwnedValueDecodeDepthGuard {
+        fn drop(&mut self) {
+            OWNED_VALUE_DECODE_DEPTH.with(|depth| {
+                debug_assert!(depth.get() > 0, "owned JSON decode depth underflow");
+                depth.set(depth.get().saturating_sub(1));
+            });
+        }
+    }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum UnexpectedToken {
@@ -1143,6 +1185,12 @@ pub mod json {
         UnknownField { field: String },
         #[error("JSON error: duplicate field `{field}`")]
         DuplicateField { field: String },
+        #[error("{context} nesting depth {depth} exceeds limit {limit}")]
+        NestingDepthExceeded {
+            depth: usize,
+            limit: usize,
+            context: &'static str,
+        },
         #[error("invalid utf8")]
         InvalidUtf8,
         #[error("{0}")]
@@ -2182,16 +2230,19 @@ pub mod json {
         Ok(to_json_pretty(value)?.into_bytes())
     }
 
-    /// serde-style API: parse from &str using Norito's native JSON stack.
+    /// Parse a typed value directly from `&str` using Norito's native JSON stack.
+    ///
+    /// This path intentionally avoids first constructing a recursive [`Value`]
+    /// tree, reducing allocations and allowing type-specific depth guards to
+    /// reject hostile input before domain objects are returned.
     pub fn from_str<T: JsonDeserialize>(s: &str) -> Result<T, Error> {
-        let v = parse_value(s)?;
-        from_value(v)
+        from_json(s)
     }
 
     /// Parse from a UTF‑8 byte slice using Norito's native parser.
     ///
-    /// Note: this variant requires `T: JsonDeserialize` because Norito's
-    /// native parser builds an owned `Value` as an intermediate.
+    /// This is the byte-slice counterpart of the direct typed [`from_str`]
+    /// path and does not build an owned [`Value`] intermediate.
     pub fn from_slice<T: JsonDeserialize>(bytes: &[u8]) -> Result<T, Error> {
         let s = std::str::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)?;
         from_str(s)
@@ -2216,7 +2267,7 @@ pub mod json {
     /// Convenience: parse a JSON `Value` from `&str` using Norito's parser.
     pub fn parse_value(s: &str) -> Result<Value, Error> {
         let mut parser = super::json::Parser::new(s);
-        let value = parse_value_internal(&mut parser)?;
+        let value = parse_value_internal(&mut parser, 1)?;
         parser.skip_ws();
         if !parser.eof() {
             let (byte, line, col) = parser.pos_meta(parser.position());
@@ -2225,7 +2276,14 @@ pub mod json {
         Ok(value)
     }
 
-    fn parse_value_internal(p: &mut super::json::Parser<'_>) -> Result<Value, Error> {
+    fn parse_value_internal(p: &mut super::json::Parser<'_>, depth: usize) -> Result<Value, Error> {
+        if depth > MAX_JSON_VALUE_NESTING_DEPTH {
+            return Err(Error::NestingDepthExceeded {
+                depth,
+                limit: MAX_JSON_VALUE_NESTING_DEPTH,
+                context: "JSON value",
+            });
+        }
         p.skip_ws();
         match p.peek() {
             Some(b'"') => Ok(Value::String(p.parse_string()?)),
@@ -2235,11 +2293,11 @@ pub mod json {
             }
             Some(b't') | Some(b'f') => Ok(Value::Bool(p.parse_bool()?)),
             Some(b'[') => {
-                let arr = parse_array_internal(p)?;
+                let arr = parse_array_internal(p, depth)?;
                 Ok(Value::Array(arr))
             }
             Some(b'{') => {
-                let map = parse_object_internal(p)?;
+                let map = parse_object_internal(p, depth)?;
                 Ok(Value::Object(map))
             }
             Some(b'-') | Some(b'0'..=b'9') => parse_number_value(p),
@@ -2251,7 +2309,10 @@ pub mod json {
         }
     }
 
-    fn parse_array_internal(p: &mut super::json::Parser<'_>) -> Result<Vec<Value>, Error> {
+    fn parse_array_internal(
+        p: &mut super::json::Parser<'_>,
+        depth: usize,
+    ) -> Result<Vec<Value>, Error> {
         if p.bump() != Some(b'[') {
             let (byte, line, col) = p.pos_meta(p.position());
             return Err(Error::ExpectedArrayStart { byte, line, col });
@@ -2263,7 +2324,7 @@ pub mod json {
             return Ok(arr);
         }
         loop {
-            let value = parse_value_internal(p)?;
+            let value = parse_value_internal(p, depth.saturating_add(1))?;
             arr.push(value);
             p.skip_ws();
             match p.peek() {
@@ -2284,7 +2345,7 @@ pub mod json {
         Ok(arr)
     }
 
-    fn parse_object_internal(p: &mut super::json::Parser<'_>) -> Result<Map, Error> {
+    fn parse_object_internal(p: &mut super::json::Parser<'_>, depth: usize) -> Result<Map, Error> {
         if p.bump() != Some(b'{') {
             let (byte, line, col) = p.pos_meta(p.position());
             return Err(Error::ExpectedObjectStart { byte, line, col });
@@ -2304,7 +2365,7 @@ pub mod json {
                 let (byte, line, col) = p.pos_meta(p.position());
                 return Err(Error::ExpectedColon { byte, line, col });
             }
-            let value = parse_value_internal(p)?;
+            let value = parse_value_internal(p, depth.saturating_add(1))?;
             if map.insert(key.clone(), value).is_some() {
                 return Err(Error::duplicate_field(key));
             }
@@ -2464,6 +2525,48 @@ pub mod json {
     mod tests {
         use super::*;
         use crate::json;
+
+        #[test]
+        fn owned_value_decode_depth_guard_is_bounded_and_restores() {
+            let guards = (0..crate::core::MAX_OWNED_VALUE_DECODE_DEPTH)
+                .map(|_| OwnedValueDecodeDepthGuard::enter().expect("depth within JSON limit"))
+                .collect::<Vec<_>>();
+            assert!(matches!(
+                OwnedValueDecodeDepthGuard::enter(),
+                Err(Error::NestingDepthExceeded {
+                    depth,
+                    limit: crate::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+                    context: "owned JSON value",
+                }) if depth == crate::core::MAX_OWNED_VALUE_DECODE_DEPTH + 1
+            ));
+
+            drop(guards);
+            OwnedValueDecodeDepthGuard::enter().expect("failed guard must restore JSON depth");
+        }
+
+        #[test]
+        fn value_parser_enforces_structural_nesting_limit() {
+            let at_limit = format!(
+                "{}null{}",
+                "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH - 1),
+                "]".repeat(MAX_JSON_VALUE_NESTING_DEPTH - 1)
+            );
+            parse_value(&at_limit).expect("JSON nesting at the limit must decode");
+
+            let over_limit = format!(
+                "{}null{}",
+                "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH),
+                "]".repeat(MAX_JSON_VALUE_NESTING_DEPTH)
+            );
+            assert!(matches!(
+                parse_value(&over_limit),
+                Err(Error::NestingDepthExceeded {
+                    depth,
+                    limit: MAX_JSON_VALUE_NESTING_DEPTH,
+                    context: "JSON value",
+                }) if depth == MAX_JSON_VALUE_NESTING_DEPTH + 1
+            ));
+        }
 
         #[test]
         fn parse_value_str_and_bytes_match() {
@@ -3148,7 +3251,13 @@ pub mod json {
 
     impl<T: JsonDeserialize> JsonDeserialize for Box<T> {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
+            let _depth_guard = OwnedValueDecodeDepthGuard::enter()?;
             T::json_deserialize(parser).map(Box::new)
+        }
+
+        fn json_from_value(value: &Value) -> Result<Self, Error> {
+            let _depth_guard = OwnedValueDecodeDepthGuard::enter()?;
+            T::json_from_value(value).map(Box::new)
         }
     }
 
@@ -4902,7 +5011,7 @@ pub mod json {
 
     impl JsonDeserialize for Value {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
-            parse_value_internal(p)
+            parse_value_internal(p, 1)
         }
 
         fn json_from_value(value: &Value) -> Result<Self, Error> {

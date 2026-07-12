@@ -2,7 +2,7 @@ import XCTest
 import CryptoKit
 @testable import IrohaSwift
 
-final class OfflineNoteV2Tests: XCTestCase {
+final class AttestedOfflineNoteTests: XCTestCase {
     private func assertRetiredOfflineNotePayment(
         _ expression: @autoclosure () throws -> SignedTransactionEnvelope,
         file: StaticString = #filePath,
@@ -29,7 +29,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         )
     }
 
-    func testOfflineNoteV2ModelsMatchRustNoritoVectors() throws {
+    func testAttestedOfflineNoteModelsMatchRustNoritoVectors() throws {
         let fixture = try Self.loadFixture()
 
         XCTAssertEqual(
@@ -46,7 +46,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         )
     }
 
-    func testOfflineNoteV2DecodersRoundTripRustNoritoVectors() throws {
+    func testAttestedOfflineNoteDecodersRoundTripRustNoritoVectors() throws {
         let fixture = try Self.loadFixture()
         let certificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
         let certificatePayload = try certificate.signingPayload()
@@ -59,71 +59,71 @@ final class OfflineNoteV2Tests: XCTestCase {
         let redeemPublicInputs = try redeem.publicInputs()
 
         XCTAssertEqual(
-            try OfflineNoteV2Decoding.decodeCertificatePayload(certificatePayload.noritoEncoded()),
+            try AttestedOfflineNoteDecoding.decodeCertificatePayload(certificatePayload.noritoEncoded()),
             certificatePayload
         )
         XCTAssertEqual(
-            try OfflineNoteV2Decoding.decodeKeyCertificatePayload(certificatePayload.noritoEncoded()),
+            try AttestedOfflineNoteDecoding.decodeKeyCertificatePayload(certificatePayload.noritoEncoded()),
             certificatePayload
         )
-        XCTAssertEqual(try OfflineNoteV2Decoding.decodeCertificate(certificate.noritoEncoded()), certificate)
-        XCTAssertEqual(try OfflineNoteV2Decoding.decodeIssue(issue.noritoEncoded()), issue)
-        XCTAssertEqual(try OfflineNoteV2Decoding.decodeIssuedClaim(issuedClaim.noritoEncoded()), issuedClaim)
+        XCTAssertEqual(try AttestedOfflineNoteDecoding.decodeCertificate(certificate.noritoEncoded()), certificate)
+        XCTAssertEqual(try AttestedOfflineNoteDecoding.decodeIssue(issue.noritoEncoded()), issue)
+        XCTAssertEqual(try AttestedOfflineNoteDecoding.decodeIssuedClaim(issuedClaim.noritoEncoded()), issuedClaim)
         XCTAssertEqual(
-            try OfflineNoteV2Decoding.decodeAuditOutputClaim(auditOutputClaim.noritoEncoded()),
+            try AttestedOfflineNoteDecoding.decodeAuditOutputClaim(auditOutputClaim.noritoEncoded()),
             auditOutputClaim
         )
         XCTAssertEqual(
-            try OfflineNoteV2Decoding.decodeRecursiveProof(audit.recursiveProof.noritoEncoded()),
+            try AttestedOfflineNoteDecoding.decodeRecursiveProof(audit.recursiveProof.noritoEncoded()),
             audit.recursiveProof
         )
-        XCTAssertEqual(try OfflineNoteV2Decoding.decodeAudit(audit.noritoEncoded()), audit)
+        XCTAssertEqual(try AttestedOfflineNoteDecoding.decodeAudit(audit.noritoEncoded()), audit)
         XCTAssertEqual(
-            try OfflineNoteV2Decoding.decodeAuditPublicInputs(auditPublicInputs.noritoEncoded()),
+            try AttestedOfflineNoteDecoding.decodeAuditPublicInputs(auditPublicInputs.noritoEncoded()),
             auditPublicInputs
         )
         XCTAssertEqual(
-            try OfflineNoteV2Decoding.decodeRecursiveProof(redeem.recursiveProof.noritoEncoded()),
+            try AttestedOfflineNoteDecoding.decodeRecursiveProof(redeem.recursiveProof.noritoEncoded()),
             redeem.recursiveProof
         )
-        XCTAssertEqual(try OfflineNoteV2Decoding.decodeRedeem(redeem.noritoEncoded()), redeem)
+        XCTAssertEqual(try AttestedOfflineNoteDecoding.decodeRedeem(redeem.noritoEncoded()), redeem)
         XCTAssertEqual(
-            try OfflineNoteV2Decoding.decodeRedeemPublicInputs(redeemPublicInputs.noritoEncoded()),
+            try AttestedOfflineNoteDecoding.decodeRedeemPublicInputs(redeemPublicInputs.noritoEncoded()),
             redeemPublicInputs
         )
 
         XCTAssertEqual(
-            try OfflineNoteV2Decoding.decodeIssue(try Self.base64(fixture.chainVectors.issue.noritoBase64)).noritoEncoded(),
+            try AttestedOfflineNoteDecoding.decodeIssue(try Self.base64(fixture.chainVectors.issue.noritoBase64)).noritoEncoded(),
             try issue.noritoEncoded()
         )
         XCTAssertEqual(
-            try OfflineNoteV2Decoding.decodeAudit(try Self.base64(fixture.chainVectors.audit.noritoBase64)).noritoEncoded(),
+            try AttestedOfflineNoteDecoding.decodeAudit(try Self.base64(fixture.chainVectors.audit.noritoBase64)).noritoEncoded(),
             try audit.noritoEncoded()
         )
         XCTAssertEqual(
-            try OfflineNoteV2Decoding.decodeRedeem(try Self.base64(fixture.chainVectors.redeem.noritoBase64)).noritoEncoded(),
+            try AttestedOfflineNoteDecoding.decodeRedeem(try Self.base64(fixture.chainVectors.redeem.noritoBase64)).noritoEncoded(),
             try redeem.noritoEncoded()
         )
     }
 
-    func testOfflineNoteV2InstructionDecodersReadExplorerEnvelopeBytes() throws {
+    func testAttestedOfflineNoteInstructionDecodersReadExplorerEnvelopeBytes() throws {
         let fixture = try Self.loadFixture()
         let issue = try Self.issue(fixture)
         let audit = try Self.audit(fixture)
         let redeem = try Self.redeem(fixture)
 
-        XCTAssertEqual(OfflineNoteV2TypeNames.issueInstruction, OfflineNoteTypeNames.issueInstruction)
-        XCTAssertEqual(OfflineNoteV2TypeNames.redeemInstruction, OfflineNoteTypeNames.redeemInstruction)
-        XCTAssertEqual(OfflineNoteV2TypeNames.auditInstruction, OfflineNoteTypeNames.auditInstruction)
-        XCTAssertFalse(OfflineNoteV2TypeNames.issueInstruction.hasSuffix("V2"))
-        XCTAssertFalse(OfflineNoteV2TypeNames.redeemInstruction.hasSuffix("V2"))
-        XCTAssertFalse(OfflineNoteV2TypeNames.auditInstruction.hasSuffix("V2"))
+        XCTAssertEqual(AttestedOfflineNoteTypeNames.issueInstruction, OfflineNoteTypeNames.issueInstruction)
+        XCTAssertEqual(AttestedOfflineNoteTypeNames.redeemInstruction, OfflineNoteTypeNames.redeemInstruction)
+        XCTAssertEqual(AttestedOfflineNoteTypeNames.auditInstruction, OfflineNoteTypeNames.auditInstruction)
+        XCTAssertFalse(AttestedOfflineNoteTypeNames.issueInstruction.hasSuffix("V2"))
+        XCTAssertFalse(AttestedOfflineNoteTypeNames.redeemInstruction.hasSuffix("V2"))
+        XCTAssertFalse(AttestedOfflineNoteTypeNames.auditInstruction.hasSuffix("V2"))
 
-        let issueInstruction = ParsedOfflineNoteV2Instruction(
-            wireName: OfflineNoteV2TypeNames.issueInstruction,
+        let issueInstruction = ParsedAttestedOfflineNoteInstruction(
+            wireName: AttestedOfflineNoteTypeNames.issueInstruction,
             archive: Self.instructionWirePayload(
-                typeName: OfflineNoteV2TypeNames.issueInstruction,
-                modelPayload: try OfflineNoteV2Encoding.encodeIssue(issue)
+                typeName: AttestedOfflineNoteTypeNames.issueInstruction,
+                modelPayload: try AttestedOfflineNoteEncoding.encodeIssue(issue)
             )
         )
         XCTAssertFalse(issueInstruction.wireName.hasSuffix("V2"))
@@ -132,19 +132,19 @@ final class OfflineNoteV2Tests: XCTestCase {
             wirePayload: issueInstruction.archive
         )
         XCTAssertEqual(
-            try OfflineNoteV2Decoding.decodeIssueInstruction(issueEnvelope).noritoEncoded().base64EncodedString(),
+            try AttestedOfflineNoteDecoding.decodeIssueInstruction(issueEnvelope).noritoEncoded().base64EncodedString(),
             try issue.noritoEncoded().base64EncodedString()
         )
         XCTAssertEqual(
-            try OfflineNoteV2Decoding.decodeIssueInstruction(issueInstruction.archive).noritoEncoded().base64EncodedString(),
+            try AttestedOfflineNoteDecoding.decodeIssueInstruction(issueInstruction.archive).noritoEncoded().base64EncodedString(),
             try issue.noritoEncoded().base64EncodedString()
         )
 
-        let auditInstruction = ParsedOfflineNoteV2Instruction(
-            wireName: OfflineNoteV2TypeNames.auditInstruction,
+        let auditInstruction = ParsedAttestedOfflineNoteInstruction(
+            wireName: AttestedOfflineNoteTypeNames.auditInstruction,
             archive: Self.instructionWirePayload(
-                typeName: OfflineNoteV2TypeNames.auditInstruction,
-                modelPayload: try OfflineNoteV2Encoding.encodeAudit(audit)
+                typeName: AttestedOfflineNoteTypeNames.auditInstruction,
+                modelPayload: try AttestedOfflineNoteEncoding.encodeAudit(audit)
             )
         )
         XCTAssertFalse(auditInstruction.wireName.hasSuffix("V2"))
@@ -154,19 +154,19 @@ final class OfflineNoteV2Tests: XCTestCase {
             compact: false
         )
         XCTAssertEqual(
-            try OfflineNoteV2Decoding.decodeAuditInstruction(auditEnvelope).noritoEncoded().base64EncodedString(),
+            try AttestedOfflineNoteDecoding.decodeAuditInstruction(auditEnvelope).noritoEncoded().base64EncodedString(),
             try audit.noritoEncoded().base64EncodedString()
         )
         XCTAssertEqual(
-            try OfflineNoteV2Decoding.decodeAuditInstruction(auditInstruction.archive).noritoEncoded().base64EncodedString(),
+            try AttestedOfflineNoteDecoding.decodeAuditInstruction(auditInstruction.archive).noritoEncoded().base64EncodedString(),
             try audit.noritoEncoded().base64EncodedString()
         )
 
-        let redeemInstruction = ParsedOfflineNoteV2Instruction(
-            wireName: OfflineNoteV2TypeNames.redeemInstruction,
+        let redeemInstruction = ParsedAttestedOfflineNoteInstruction(
+            wireName: AttestedOfflineNoteTypeNames.redeemInstruction,
             archive: Self.instructionWirePayload(
-                typeName: OfflineNoteV2TypeNames.redeemInstruction,
-                modelPayload: try OfflineNoteV2Encoding.encodeRedeem(redeem)
+                typeName: AttestedOfflineNoteTypeNames.redeemInstruction,
+                modelPayload: try AttestedOfflineNoteEncoding.encodeRedeem(redeem)
             )
         )
         XCTAssertFalse(redeemInstruction.wireName.hasSuffix("V2"))
@@ -175,16 +175,16 @@ final class OfflineNoteV2Tests: XCTestCase {
             wirePayload: redeemInstruction.archive
         )
         XCTAssertEqual(
-            try OfflineNoteV2Decoding.decodeRedeemInstruction(redeemEnvelope).noritoEncoded().base64EncodedString(),
+            try AttestedOfflineNoteDecoding.decodeRedeemInstruction(redeemEnvelope).noritoEncoded().base64EncodedString(),
             try redeem.noritoEncoded().base64EncodedString()
         )
         XCTAssertEqual(
-            try OfflineNoteV2Decoding.decodeRedeemInstruction(redeemInstruction.archive).noritoEncoded().base64EncodedString(),
+            try AttestedOfflineNoteDecoding.decodeRedeemInstruction(redeemInstruction.archive).noritoEncoded().base64EncodedString(),
             try redeem.noritoEncoded().base64EncodedString()
         )
     }
 
-    func testOfflineNoteV2InstructionDecodersRejectRetiredAliasEnvelopeBytes() throws {
+    func testAttestedOfflineNoteInstructionDecodersRejectRetiredAliasEnvelopeBytes() throws {
         let fixture = try Self.loadFixture()
         let issue = try Self.issue(fixture)
         let audit = try Self.audit(fixture)
@@ -194,121 +194,121 @@ final class OfflineNoteV2Tests: XCTestCase {
         let retiredRedeemInstructionAlias = "iroha_data_model::isi::offline::RedeemOfflineNoteV2"
         let issueAliasWirePayload = Self.instructionWirePayload(
             typeName: retiredIssueInstructionAlias,
-            modelPayload: try OfflineNoteV2Encoding.encodeIssue(issue)
+            modelPayload: try AttestedOfflineNoteEncoding.encodeIssue(issue)
         )
         let auditAliasWirePayload = Self.instructionWirePayload(
             typeName: retiredAuditInstructionAlias,
-            modelPayload: try OfflineNoteV2Encoding.encodeAudit(audit)
+            modelPayload: try AttestedOfflineNoteEncoding.encodeAudit(audit)
         )
         let redeemAliasWirePayload = Self.instructionWirePayload(
             typeName: retiredRedeemInstructionAlias,
-            modelPayload: try OfflineNoteV2Encoding.encodeRedeem(redeem)
+            modelPayload: try AttestedOfflineNoteEncoding.encodeRedeem(redeem)
         )
 
-        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeIssueInstruction(issueAliasWirePayload))
-        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeAuditInstruction(auditAliasWirePayload))
-        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeRedeemInstruction(redeemAliasWirePayload))
+        XCTAssertThrowsError(try AttestedOfflineNoteDecoding.decodeIssueInstruction(issueAliasWirePayload))
+        XCTAssertThrowsError(try AttestedOfflineNoteDecoding.decodeAuditInstruction(auditAliasWirePayload))
+        XCTAssertThrowsError(try AttestedOfflineNoteDecoding.decodeRedeemInstruction(redeemAliasWirePayload))
         XCTAssertThrowsError(
-            try OfflineNoteV2Decoding.decodeIssueInstruction(Self.rawInstructionPair(
+            try AttestedOfflineNoteDecoding.decodeIssueInstruction(Self.rawInstructionPair(
                 wireName: retiredIssueInstructionAlias,
                 wirePayload: issueAliasWirePayload
             ))
         )
         XCTAssertThrowsError(
-            try OfflineNoteV2Decoding.decodeAuditInstruction(Self.rawInstructionPair(
+            try AttestedOfflineNoteDecoding.decodeAuditInstruction(Self.rawInstructionPair(
                 wireName: retiredAuditInstructionAlias,
                 wirePayload: auditAliasWirePayload
             ))
         )
         XCTAssertThrowsError(
-            try OfflineNoteV2Decoding.decodeRedeemInstruction(Self.rawInstructionPair(
+            try AttestedOfflineNoteDecoding.decodeRedeemInstruction(Self.rawInstructionPair(
                 wireName: retiredRedeemInstructionAlias,
                 wirePayload: redeemAliasWirePayload
             ))
         )
     }
 
-    func testOfflineNoteV2InstructionDecodersRejectWrongEnvelopeShapes() throws {
+    func testAttestedOfflineNoteInstructionDecodersRejectWrongEnvelopeShapes() throws {
         let fixture = try Self.loadFixture()
         let issue = try Self.issue(fixture)
         let issueWirePayload = Self.instructionWirePayload(
-            typeName: OfflineNoteV2TypeNames.issueInstruction,
-            modelPayload: try OfflineNoteV2Encoding.encodeIssue(issue)
+            typeName: AttestedOfflineNoteTypeNames.issueInstruction,
+            modelPayload: try AttestedOfflineNoteEncoding.encodeIssue(issue)
         )
         let issueEnvelope = Self.rawInstructionPair(
-            wireName: OfflineNoteV2TypeNames.issueInstruction,
+            wireName: AttestedOfflineNoteTypeNames.issueInstruction,
             wirePayload: issueWirePayload
         )
         let wrongWireEnvelope = Self.rawInstructionPair(
-            wireName: OfflineNoteV2TypeNames.redeemInstruction,
+            wireName: AttestedOfflineNoteTypeNames.redeemInstruction,
             wirePayload: issueWirePayload
         )
         let wrongSchemaPayload = Self.instructionWirePayload(
-            typeName: OfflineNoteV2TypeNames.redeemInstruction,
-            modelPayload: try OfflineNoteV2Encoding.encodeIssue(issue)
+            typeName: AttestedOfflineNoteTypeNames.redeemInstruction,
+            modelPayload: try AttestedOfflineNoteEncoding.encodeIssue(issue)
         )
         let wrongSchemaEnvelope = Self.rawInstructionPair(
-            wireName: OfflineNoteV2TypeNames.issueInstruction,
+            wireName: AttestedOfflineNoteTypeNames.issueInstruction,
             wirePayload: wrongSchemaPayload
         )
 
-        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeRedeemInstruction(issueEnvelope))
-        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeIssueInstruction(wrongWireEnvelope))
-        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeIssueInstruction(wrongSchemaEnvelope))
-        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeIssueInstruction(Data(issueEnvelope.dropLast())))
+        XCTAssertThrowsError(try AttestedOfflineNoteDecoding.decodeRedeemInstruction(issueEnvelope))
+        XCTAssertThrowsError(try AttestedOfflineNoteDecoding.decodeIssueInstruction(wrongWireEnvelope))
+        XCTAssertThrowsError(try AttestedOfflineNoteDecoding.decodeIssueInstruction(wrongSchemaEnvelope))
+        XCTAssertThrowsError(try AttestedOfflineNoteDecoding.decodeIssueInstruction(Data(issueEnvelope.dropLast())))
     }
 
-    func testOfflineNoteV2DecodersRejectMalformedPayloads() throws {
+    func testAttestedOfflineNoteDecodersRejectMalformedPayloads() throws {
         let fixture = try Self.loadFixture()
         let certificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
         let issue = try Self.issue(fixture)
         let issueBytes = try issue.noritoEncoded()
 
-        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeIssue(Data(issueBytes.dropLast())))
-        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeIssue(try certificate.noritoEncoded()))
-        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeCertificatePayload(try certificate.noritoEncoded()))
+        XCTAssertThrowsError(try AttestedOfflineNoteDecoding.decodeIssue(Data(issueBytes.dropLast())))
+        XCTAssertThrowsError(try AttestedOfflineNoteDecoding.decodeIssue(try certificate.noritoEncoded()))
+        XCTAssertThrowsError(try AttestedOfflineNoteDecoding.decodeCertificatePayload(try certificate.noritoEncoded()))
 
         var corruptedChecksum = issueBytes
         corruptedChecksum[corruptedChecksum.count - 1] ^= 0x01
-        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeIssue(corruptedChecksum))
+        XCTAssertThrowsError(try AttestedOfflineNoteDecoding.decodeIssue(corruptedChecksum))
 
         let nonCompactIssue = noritoEncode(
-            typeName: OfflineNoteV2TypeNames.issue,
-            payload: try OfflineNoteV2Encoding.encodeIssue(issue)
+            typeName: AttestedOfflineNoteTypeNames.issue,
+            payload: try AttestedOfflineNoteEncoding.encodeIssue(issue)
         )
-        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeIssue(nonCompactIssue))
+        XCTAssertThrowsError(try AttestedOfflineNoteDecoding.decodeIssue(nonCompactIssue))
 
-        var trailingPayload = try OfflineNoteV2Encoding.encodeIssue(issue)
+        var trailingPayload = try AttestedOfflineNoteEncoding.encodeIssue(issue)
         trailingPayload.append(0)
-        let trailingIssue = OfflineNoteV2Encoding.wrap(typeName: OfflineNoteV2TypeNames.issue, payload: trailingPayload)
-        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeIssue(trailingIssue))
+        let trailingIssue = AttestedOfflineNoteEncoding.wrap(typeName: AttestedOfflineNoteTypeNames.issue, payload: trailingPayload)
+        XCTAssertThrowsError(try AttestedOfflineNoteDecoding.decodeIssue(trailingIssue))
 
-        let invalidProof = OfflineNoteV2Encoding.wrap(
-            typeName: OfflineNoteV2TypeNames.recursiveProof,
+        let invalidProof = AttestedOfflineNoteEncoding.wrap(
+            typeName: AttestedOfflineNoteTypeNames.recursiveProof,
             payload: Self.recursiveProofPayload(
                 publicInputsHash: Data(repeating: 0x02, count: 32),
-                proofBackend: OfflineNoteV2Constants.recursiveBackend,
+                proofBackend: AttestedOfflineNoteConstants.recursiveBackend,
                 proofBytes: Data([0x01])
             )
         )
-        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeRecursiveProof(invalidProof)) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .invalidHash(field: "public_inputs_hash"))
+        XCTAssertThrowsError(try AttestedOfflineNoteDecoding.decodeRecursiveProof(invalidProof)) { error in
+            XCTAssertEqual(error as? AttestedOfflineNoteError, .invalidHash(field: "public_inputs_hash"))
         }
 
-        let emptyProofBytes = OfflineNoteV2Encoding.wrap(
-            typeName: OfflineNoteV2TypeNames.recursiveProof,
+        let emptyProofBytes = AttestedOfflineNoteEncoding.wrap(
+            typeName: AttestedOfflineNoteTypeNames.recursiveProof,
             payload: Self.recursiveProofPayload(
                 publicInputsHash: try issue.issuedClaim().claimHash(),
-                proofBackend: OfflineNoteV2Constants.recursiveBackend,
+                proofBackend: AttestedOfflineNoteConstants.recursiveBackend,
                 proofBytes: Data()
             )
         )
-        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeRecursiveProof(emptyProofBytes)) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .emptyProofBytes)
+        XCTAssertThrowsError(try AttestedOfflineNoteDecoding.decodeRecursiveProof(emptyProofBytes)) { error in
+            XCTAssertEqual(error as? AttestedOfflineNoteError, .emptyProofBytes)
         }
     }
 
-    func testOfflineNoteV2PublicInputHashesMatchRustVectors() throws {
+    func testAttestedOfflineNotePublicInputHashesMatchRustVectors() throws {
         let fixture = try Self.loadFixture()
         let audit = try Self.audit(fixture)
         let redeem = try Self.redeem(fixture)
@@ -349,6 +349,28 @@ final class OfflineNoteV2Tests: XCTestCase {
     func testOfflineDeviceAttestationRegistrationDraftBuildsChallengeBeforeEvidence() throws {
         let fixture = try Self.loadFixture()
         let vector = fixture.chainVectors.attestationRegistration
+        let preAttestationChallenge = try OfflineDeviceAttestationRegistration
+            .preAttestationChallengeHash(
+                version: vector.version,
+                platform: vector.platform,
+                keyId: vector.keyId,
+                deviceId: vector.deviceId,
+                accountId: vector.accountId,
+                assetDefinitionId: vector.assetDefinitionId,
+                iosTeamId: vector.iosTeamId,
+                iosBundleId: vector.iosBundleId,
+                iosEnvironment: vector.iosEnvironment,
+                androidPackageName: vector.androidPackageName,
+                androidSigningCertificateSha256: try vector.androidSigningCertificateSha256.map(Self.hex),
+                publicKey: try Self.base64(vector.publicKey),
+                assertionScheme: vector.assertionScheme,
+                assertionKeyAlgorithm: vector.assertionKeyAlgorithm,
+                assertionUsageCountLimit: vector.assertionUsageCountLimit,
+                oneUse: vector.oneUse,
+                recentBlockHeight: vector.recentBlockHeight,
+                recentBlockHash: try Self.hex(vector.recentBlockHash),
+                expiresAtMs: vector.expiresAtMs
+            )
         let draft = try OfflineDeviceAttestationRegistration(
             version: vector.version,
             platform: vector.platform,
@@ -375,6 +397,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         let expectedEvidence = Self.attestationEvidence(attestationReportHash: emptyReportHash)
 
         XCTAssertEqual(try draft.canonicalChallengeHash().hexLowercased(), vector.challengeHash)
+        XCTAssertEqual(preAttestationChallenge, draft.challengeHash)
         XCTAssertEqual(draft.challengeHash.hexLowercased(), vector.challengeHash)
         XCTAssertEqual(draft.attestationReportHash, emptyReportHash)
         XCTAssertEqual(draft.attestationReport, Data())
@@ -382,7 +405,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertEqual(draft.evidenceHash, IrohaHash.hash(expectedEvidence))
     }
 
-    func testOfflineNoteV2PaymentTransactionBuildersAreRetiredAndRegistrationStillSigns() throws {
+    func testAttestedOfflineNotePaymentTransactionBuildersAreRetiredAndRegistrationStillSigns() throws {
         let fixture = try Self.loadFixture()
         let keypair = try Keypair(privateKeyBytes: Data(0..<32))
         let authority = AccountId.make(publicKey: keypair.publicKey)
@@ -393,8 +416,8 @@ final class OfflineNoteV2Tests: XCTestCase {
         let redeemModel = try Self.redeem(fixture)
         let registrationModel = try Self.attestationRegistration(fixture)
 
-        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
-            request: IssueOfflineNoteV2Request(
+        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeAttestedOfflineNoteIssue(
+            request: AttestedOfflineNoteIssueRequest(
                 chainId: chainId,
                 authority: authority,
                 issue: issueModel,
@@ -403,8 +426,8 @@ final class OfflineNoteV2Tests: XCTestCase {
             keypair: keypair,
             creationTimeMs: creationTimeMs
         ))
-        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeAuditOfflineNoteV2(
-            request: AuditOfflineNoteV2Request(
+        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeAttestedOfflineNoteAudit(
+            request: AttestedOfflineNoteAuditRequest(
                 chainId: chainId,
                 authority: authority,
                 audit: auditModel,
@@ -413,8 +436,8 @@ final class OfflineNoteV2Tests: XCTestCase {
             keypair: keypair,
             creationTimeMs: creationTimeMs
         ))
-        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeRedeemOfflineNoteV2(
-            request: RedeemOfflineNoteV2Request(
+        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeAttestedOfflineNoteRedeem(
+            request: AttestedOfflineNoteRedeemRequest(
                 chainId: chainId,
                 authority: authority,
                 redemption: redeemModel,
@@ -423,16 +446,27 @@ final class OfflineNoteV2Tests: XCTestCase {
             keypair: keypair,
             creationTimeMs: creationTimeMs
         ))
+        let registrationRequest = RegisterOfflineDeviceAttestationRequest(
+            chainId: chainId,
+            authority: authority,
+            registration: registrationModel,
+            ttlMs: 60_000
+        )
         let registerAttestation = try SwiftTransactionEncoder.encodeRegisterOfflineDeviceAttestation(
-            request: RegisterOfflineDeviceAttestationRequest(
-                chainId: chainId,
-                authority: authority,
-                registration: registrationModel,
-                ttlMs: 60_000
-            ),
+            request: registrationRequest,
             keypair: keypair,
             creationTimeMs: creationTimeMs
         )
+        let unsigned = try SwiftTransactionEncoder.encodeUnsignedRegisterOfflineDeviceAttestation(
+            request: registrationRequest,
+            creationTimeMs: creationTimeMs
+        )
+        let externalSignature = try SigningKey.ed25519(
+            privateKey: keypair.privateKeyBytes
+        ).sign(unsigned.signingHash)
+        let externallySigned = try unsigned.signed(signature: externalSignature)
+        XCTAssertEqual(externallySigned.norito, registerAttestation.norito)
+        XCTAssertEqual(externallySigned.transactionHash, registerAttestation.transactionHash)
 
         XCTAssertEqual(registerAttestation.norito.first, 1)
         XCTAssertEqual(Data(registerAttestation.norito.dropFirst()), registerAttestation.signedTransaction)
@@ -440,8 +474,8 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertNil(registerAttestation.payload)
         XCTAssertCanonicalExternalEntrypointHash(registerAttestation)
 
-        let registerInstruction = try Self.parseSingleOfflineNoteV2Instruction(registerAttestation)
-        XCTAssertEqual(registerInstruction.wireName, OfflineNoteV2TypeNames.registerDeviceAttestationInstruction)
+        let registerInstruction = try Self.parseSingleAttestedOfflineNoteInstruction(registerAttestation)
+        XCTAssertEqual(registerInstruction.wireName, AttestedOfflineNoteTypeNames.registerDeviceAttestationInstruction)
         XCTAssertEqual(
             registerInstruction.archive.base64EncodedString(),
             fixture.chainVectors.attestationRegistration.instructionNoritoBase64
@@ -451,11 +485,11 @@ final class OfflineNoteV2Tests: XCTestCase {
     func testRedeemBuilderRejectsMismatchedProofBinding() throws {
         let fixture = try Self.loadFixture()
         let redeem = try Self.redeem(fixture)
-        let badProof = try OfflineNoteRecursiveProofV2(
+        let badProof = try AttestedOfflineNoteRecursiveProof(
             publicInputsHash: IrohaHash.hash(Data("wrong-public-inputs".utf8)),
             proofBytes: Data("offline-v2-vector-redeem-proof".utf8)
         )
-        let forged = try OfflineNoteRedeemV2(
+        let forged = try AttestedOfflineNoteRedeem(
             sourceNoteCommitment: redeem.sourceNoteCommitment,
             inputNullifiers: redeem.inputNullifiers,
             senderKeyCertificate: redeem.senderKeyCertificate,
@@ -468,8 +502,8 @@ final class OfflineNoteV2Tests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
 
         XCTAssertThrowsError(
-            try SwiftTransactionEncoder.encodeRedeemOfflineNoteV2(
-                request: RedeemOfflineNoteV2Request(
+            try SwiftTransactionEncoder.encodeAttestedOfflineNoteRedeem(
+                request: AttestedOfflineNoteRedeemRequest(
                     chainId: "00000000-0000-0000-0000-000000000000",
                     authority: authority,
                     redemption: forged
@@ -478,70 +512,70 @@ final class OfflineNoteV2Tests: XCTestCase {
                 creationTimeMs: 1
             )
         ) { error in
-            guard case OfflineNoteV2Error.proofPublicInputsHashMismatch = error else {
+            guard case AttestedOfflineNoteError.proofPublicInputsHashMismatch = error else {
                 return XCTFail("expected proofPublicInputsHashMismatch, got \(error)")
             }
         }
     }
 
-    func testOfflineNoteV2ProofAndHashValidationRejectsMalformedValues() throws {
+    func testAttestedOfflineNoteProofAndHashValidationRejectsMalformedValues() throws {
         let fixture = try Self.loadFixture()
         let publicInputsHash = try Self.hex(fixture.chainVectors.audit.publicInputsHash)
 
-        let proof = try OfflineNoteProofBoxV2(
-            backend: OfflineNoteV2Constants.recursiveBackend,
+        let proof = try AttestedOfflineNoteProofBox(
+            backend: AttestedOfflineNoteConstants.recursiveBackend,
             bytes: Data([0x01])
         )
-        XCTAssertEqual(proof.backend, OfflineNoteV2Constants.recursiveBackend)
+        XCTAssertEqual(proof.backend, AttestedOfflineNoteConstants.recursiveBackend)
 
-        XCTAssertThrowsError(try OfflineNoteProofBoxV2(
-            backend: "  \(OfflineNoteV2Constants.recursiveBackend)  ",
+        XCTAssertThrowsError(try AttestedOfflineNoteProofBox(
+            backend: "  \(AttestedOfflineNoteConstants.recursiveBackend)  ",
             bytes: Data([0x01])
         )) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
+                error as? AttestedOfflineNoteError,
                 .unsupportedRecursiveProofBackend(
-                    expected: OfflineNoteV2Constants.recursiveBackend,
-                    actual: "  \(OfflineNoteV2Constants.recursiveBackend)  "
+                    expected: AttestedOfflineNoteConstants.recursiveBackend,
+                    actual: "  \(AttestedOfflineNoteConstants.recursiveBackend)  "
                 )
             )
         }
 
-        XCTAssertThrowsError(try OfflineNoteProofBoxV2(backend: " \n ", bytes: Data([0x01]))) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .emptyProofBackend)
+        XCTAssertThrowsError(try AttestedOfflineNoteProofBox(backend: " \n ", bytes: Data([0x01]))) { error in
+            XCTAssertEqual(error as? AttestedOfflineNoteError, .emptyProofBackend)
         }
-        XCTAssertThrowsError(try OfflineNoteProofBoxV2(backend: "halo2/ipa", bytes: Data())) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .emptyProofBytes)
+        XCTAssertThrowsError(try AttestedOfflineNoteProofBox(backend: "halo2/ipa", bytes: Data())) { error in
+            XCTAssertEqual(error as? AttestedOfflineNoteError, .emptyProofBytes)
         }
-        XCTAssertThrowsError(try OfflineNoteRecursiveProofV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteRecursiveProof(
             publicInputsHash: Data(repeating: 0x01, count: 31),
             proofBytes: Data([0x01])
         )) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
+                error as? AttestedOfflineNoteError,
                 .invalidHashLength(field: "public_inputs_hash", expected: 32, actual: 31)
             )
         }
 
         var nonCanonicalHash = publicInputsHash
         nonCanonicalHash[31] &= 0xfe
-        XCTAssertThrowsError(try OfflineNoteRecursiveProofV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteRecursiveProof(
             publicInputsHash: nonCanonicalHash,
             proofBytes: Data([0x01])
         )) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .invalidHash(field: "public_inputs_hash"))
+            XCTAssertEqual(error as? AttestedOfflineNoteError, .invalidHash(field: "public_inputs_hash"))
         }
     }
 
-    func testOfflineNoteV2CertificateValidationRejectsMalformedValues() throws {
+    func testAttestedOfflineNoteCertificateValidationRejectsMalformedValues() throws {
         let fixture = try Self.loadFixture()
         let cert = fixture.paymentToken.senderKeyCertificate
         let publicKey = try Self.base64(cert.publicKey)
         let assertionPublicKey = try Self.base64(cert.assertionPublicKey)
         let issuerSignature = try Self.base64(cert.issuerSignatureBase64)
 
-        XCTAssertThrowsError(try OfflineNoteKeyCertificateV2(
-            version: OfflineNoteV2Constants.keyCertificateVersion + 1,
+        XCTAssertThrowsError(try AttestedOfflineNoteKeyCertificate(
+            version: AttestedOfflineNoteConstants.keyCertificateVersion + 1,
             platform: cert.platform,
             keyId: cert.keyId,
             deviceId: cert.deviceId,
@@ -555,11 +589,11 @@ final class OfflineNoteV2Tests: XCTestCase {
             issuerSignature: issuerSignature
         )) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
-                .invalidCertificateVersion(OfflineNoteV2Constants.keyCertificateVersion + 1)
+                error as? AttestedOfflineNoteError,
+                .invalidCertificateVersion(AttestedOfflineNoteConstants.keyCertificateVersion + 1)
             )
         }
-        XCTAssertThrowsError(try OfflineNoteKeyCertificateV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteKeyCertificate(
             platform: cert.platform,
             keyId: cert.keyId,
             deviceId: cert.deviceId,
@@ -572,9 +606,9 @@ final class OfflineNoteV2Tests: XCTestCase {
             oneUse: false,
             issuerSignature: issuerSignature
         )) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .certificateMustBeOneUse)
+            XCTAssertEqual(error as? AttestedOfflineNoteError, .certificateMustBeOneUse)
         }
-        XCTAssertThrowsError(try OfflineNoteKeyCertificateV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteKeyCertificate(
             platform: cert.platform,
             keyId: cert.keyId,
             deviceId: cert.deviceId,
@@ -588,11 +622,11 @@ final class OfflineNoteV2Tests: XCTestCase {
             issuerSignature: issuerSignature
         )) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
+                error as? AttestedOfflineNoteError,
                 .invalidNotePublicKeyLength(expected: 32, actual: 31)
             )
         }
-        XCTAssertThrowsError(try OfflineNoteKeyCertificateV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteKeyCertificate(
             platform: cert.platform,
             keyId: cert.keyId,
             deviceId: cert.deviceId,
@@ -606,11 +640,11 @@ final class OfflineNoteV2Tests: XCTestCase {
             issuerSignature: Data(issuerSignature.dropLast())
         )) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
+                error as? AttestedOfflineNoteError,
                 .invalidIssuerSignatureLength(expected: 64, actual: 63)
             )
         }
-        XCTAssertThrowsError(try OfflineNoteKeyCertificateV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteKeyCertificate(
             platform: cert.platform,
             keyId: cert.keyId,
             deviceId: cert.deviceId,
@@ -623,11 +657,11 @@ final class OfflineNoteV2Tests: XCTestCase {
             oneUse: true,
             issuerSignature: issuerSignature
         )) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
-        XCTAssertThrowsError(try OfflineNoteKeyCertificateV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteKeyCertificate(
             platform: cert.platform,
             keyId: cert.keyId,
             deviceId: cert.deviceId,
@@ -640,7 +674,7 @@ final class OfflineNoteV2Tests: XCTestCase {
             oneUse: true,
             issuerSignature: issuerSignature
         )) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
@@ -653,7 +687,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         var badChallenge = try Self.hex(vector.challengeHash)
         badChallenge[0] ^= 0x01
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, challengeHash: badChallenge)) { error in
-            guard case OfflineNoteV2Error.deviceAttestationChallengeHashMismatch = error else {
+            guard case AttestedOfflineNoteError.deviceAttestationChallengeHashMismatch = error else {
                 return XCTFail("expected deviceAttestationChallengeHashMismatch, got \(error)")
             }
         }
@@ -661,13 +695,13 @@ final class OfflineNoteV2Tests: XCTestCase {
         var badReportHash = try Self.hex(vector.attestationReportHash)
         badReportHash[0] ^= 0x01
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, attestationReportHash: badReportHash)) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .deviceAttestationHashMismatch(field: "attestation_report_hash"))
+            XCTAssertEqual(error as? AttestedOfflineNoteError, .deviceAttestationHashMismatch(field: "attestation_report_hash"))
         }
 
         var badEvidenceHash = try Self.hex(vector.evidenceHash)
         badEvidenceHash[0] ^= 0x01
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, evidenceHash: badEvidenceHash)) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .deviceAttestationHashMismatch(field: "evidence_hash"))
+            XCTAssertEqual(error as? AttestedOfflineNoteError, .deviceAttestationHashMismatch(field: "evidence_hash"))
         }
 
         let forgedEvidence = Self.attestationEvidence(attestationReportHash: Data(repeating: 0xA5, count: 32))
@@ -676,7 +710,7 @@ final class OfflineNoteV2Tests: XCTestCase {
             evidenceHash: IrohaHash.hash(forgedEvidence),
             evidence: forgedEvidence
         )) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
@@ -686,56 +720,56 @@ final class OfflineNoteV2Tests: XCTestCase {
             androidSigningCertificateSha256: Data(repeating: 0x01, count: 31)
         )) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
+                error as? AttestedOfflineNoteError,
                 .invalidDigestLength(field: "android_signing_certificate_sha256", expected: 32, actual: 31)
             )
         }
 
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, publicKey: Data(repeating: 0x01, count: 31))) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .invalidNotePublicKeyLength(expected: 32, actual: 31))
+            XCTAssertEqual(error as? AttestedOfflineNoteError, .invalidNotePublicKeyLength(expected: 32, actual: 31))
         }
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, keyId: "not standard base64!")) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, keyId: "AB==")) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, keyId: " \(vector.keyId) ")) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, deviceId: " \(vector.deviceId) ")) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, deviceId: "\u{00A0}\u{2003}")) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, iosTeamId: " \(vector.iosTeamId ?? "") ")) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, iosBundleId: "\(vector.iosBundleId ?? "")\n")) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, iosEnvironment: "\t\(vector.iosEnvironment ?? "")")) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, androidPackageName: " jp.co.soramitsu.iroha.offline ")) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
@@ -743,55 +777,55 @@ final class OfflineNoteV2Tests: XCTestCase {
             fixture,
             assertionPublicKey: Self.offCurveP256AssertionPublicKey()
         )) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, recentBlockHash: Data(repeating: 0x01, count: 31))) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
+                error as? AttestedOfflineNoteError,
                 .invalidHashLength(field: "recent_block_hash", expected: 32, actual: 31)
             )
         }
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, oneUse: false)) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .certificateMustBeOneUse)
+            XCTAssertEqual(error as? AttestedOfflineNoteError, .certificateMustBeOneUse)
         }
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, assetDefinitionId: "cash#bad"))
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, assertionUsageCountLimit: 1)) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
         XCTAssertThrowsError(try Self.attestationRegistration(
             fixture,
-            platform: OfflineNoteV2Constants.androidKeyMintPlatform,
-            assertionScheme: OfflineNoteV2Constants.androidKeyMintAssertionScheme,
-            assertionKeyAlgorithm: OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm
+            platform: AttestedOfflineNoteConstants.androidKeyMintPlatform,
+            assertionScheme: AttestedOfflineNoteConstants.androidKeyMintAssertionScheme,
+            assertionKeyAlgorithm: AttestedOfflineNoteConstants.androidKeyMintAssertionKeyAlgorithm
         )) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
         XCTAssertThrowsError(try Self.attestationRegistration(
             fixture,
-            platform: OfflineNoteV2Constants.androidKeyMintPlatform,
+            platform: AttestedOfflineNoteConstants.androidKeyMintPlatform,
             assertionScheme: "android-keymint-ecdsa-p256-usage-limit",
-            assertionKeyAlgorithm: OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm,
+            assertionKeyAlgorithm: AttestedOfflineNoteConstants.androidKeyMintAssertionKeyAlgorithm,
             assertionUsageCountLimit: 1
         )) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
         XCTAssertThrowsError(try Self.attestationRegistration(
             fixture,
             keyId: String(repeating: "00", count: 32),
-            platform: OfflineNoteV2Constants.androidKeyMintPlatform,
-            assertionScheme: OfflineNoteV2Constants.androidKeyMintAssertionScheme,
-            assertionKeyAlgorithm: OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm,
+            platform: AttestedOfflineNoteConstants.androidKeyMintPlatform,
+            assertionScheme: AttestedOfflineNoteConstants.androidKeyMintAssertionScheme,
+            assertionKeyAlgorithm: AttestedOfflineNoteConstants.androidKeyMintAssertionKeyAlgorithm,
             assertionUsageCountLimit: 1
         )) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
@@ -801,17 +835,17 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertThrowsError(try Self.attestationRegistration(
             fixture,
             keyId: androidUppercaseKeyId,
-            platform: OfflineNoteV2Constants.androidKeyMintPlatform,
-            assertionScheme: OfflineNoteV2Constants.androidKeyMintAssertionScheme,
-            assertionKeyAlgorithm: OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm,
+            platform: AttestedOfflineNoteConstants.androidKeyMintPlatform,
+            assertionScheme: AttestedOfflineNoteConstants.androidKeyMintAssertionScheme,
+            assertionKeyAlgorithm: AttestedOfflineNoteConstants.androidKeyMintAssertionKeyAlgorithm,
             assertionUsageCountLimit: 1
         )) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
         XCTAssertThrowsError(try Self.attestationRegistration(fixture, platform: "ios-app-attest")) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
@@ -852,11 +886,11 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertEqual(try registration.noritoEncoded(), encoded)
     }
 
-    func testOfflineNoteV2AuditBundleRejectsInvalidShapes() throws {
+    func testAttestedOfflineNoteAuditBundleRejectsInvalidShapes() throws {
         let fixture = try Self.loadFixture()
         let audit = try Self.audit(fixture)
 
-        XCTAssertThrowsError(try OfflineNoteAuditBundleV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteAuditBundle(
             tokenId: audit.tokenId,
             senderKeyCertificate: audit.senderKeyCertificate,
             inputNullifiers: [],
@@ -865,9 +899,9 @@ final class OfflineNoteV2Tests: XCTestCase {
             outputClaims: audit.outputClaims,
             recursiveProof: audit.recursiveProof
         )) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .emptyInputNullifiers)
+            XCTAssertEqual(error as? AttestedOfflineNoteError, .emptyInputNullifiers)
         }
-        XCTAssertThrowsError(try OfflineNoteAuditBundleV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteAuditBundle(
             tokenId: audit.tokenId,
             senderKeyCertificate: audit.senderKeyCertificate,
             inputNullifiers: audit.inputNullifiers,
@@ -876,9 +910,9 @@ final class OfflineNoteV2Tests: XCTestCase {
             outputClaims: audit.outputClaims,
             recursiveProof: audit.recursiveProof
         )) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .emptyInputClaims)
+            XCTAssertEqual(error as? AttestedOfflineNoteError, .emptyInputClaims)
         }
-        XCTAssertThrowsError(try OfflineNoteAuditBundleV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteAuditBundle(
             tokenId: audit.tokenId,
             senderKeyCertificate: audit.senderKeyCertificate,
             inputNullifiers: audit.inputNullifiers + [audit.inputNullifiers[0]],
@@ -888,11 +922,11 @@ final class OfflineNoteV2Tests: XCTestCase {
             recursiveProof: audit.recursiveProof
         )) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
+                error as? AttestedOfflineNoteError,
                 .auditInputCountMismatch(nullifiers: audit.inputNullifiers.count + 1, claims: audit.inputClaims.count)
             )
         }
-        XCTAssertThrowsError(try OfflineNoteAuditBundleV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteAuditBundle(
             tokenId: audit.tokenId,
             senderKeyCertificate: audit.senderKeyCertificate,
             inputNullifiers: audit.inputNullifiers,
@@ -901,9 +935,9 @@ final class OfflineNoteV2Tests: XCTestCase {
             outputClaims: audit.outputClaims,
             recursiveProof: audit.recursiveProof
         )) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .emptyOutputCommitments)
+            XCTAssertEqual(error as? AttestedOfflineNoteError, .emptyOutputCommitments)
         }
-        XCTAssertThrowsError(try OfflineNoteAuditBundleV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteAuditBundle(
             tokenId: audit.tokenId,
             senderKeyCertificate: audit.senderKeyCertificate,
             inputNullifiers: audit.inputNullifiers,
@@ -912,16 +946,16 @@ final class OfflineNoteV2Tests: XCTestCase {
             outputClaims: [],
             recursiveProof: audit.recursiveProof
         )) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .emptyOutputClaims)
+            XCTAssertEqual(error as? AttestedOfflineNoteError, .emptyOutputClaims)
         }
 
-        let uncommittedClaim = try OfflineNoteAuditOutputClaimV2(
+        let uncommittedClaim = try AttestedOfflineNoteAuditOutputClaim(
             noteCommitment: Data(repeating: 0x03, count: 32),
             keyCertificate: audit.outputClaims[0].keyCertificate,
             assetId: audit.outputClaims[0].assetId,
             amount: audit.outputClaims[0].amount
         )
-        XCTAssertThrowsError(try OfflineNoteAuditBundleV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteAuditBundle(
             tokenId: audit.tokenId,
             senderKeyCertificate: audit.senderKeyCertificate,
             inputNullifiers: audit.inputNullifiers,
@@ -931,17 +965,17 @@ final class OfflineNoteV2Tests: XCTestCase {
             recursiveProof: audit.recursiveProof
         )) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
+                error as? AttestedOfflineNoteError,
                 .auditOutputClaimNotCommitted(uncommittedClaim.noteCommitment.hexLowercased())
             )
         }
     }
 
-    func testOfflineNoteV2IssueAndClaimValidationCoversDerivedClaimAndFailures() throws {
+    func testAttestedOfflineNoteIssueAndClaimValidationCoversDerivedClaimAndFailures() throws {
         let fixture = try Self.loadFixture()
         let certificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
         let noteCommitment = try Self.hex(fixture.chainVectors.issue.noteCommitment)
-        let issue = try OfflineNoteIssueV2(
+        let issue = try AttestedOfflineNoteIssue(
             noteCommitment: noteCommitment,
             keyCertificate: certificate,
             assetId: fixture.chainVectors.issue.assetId,
@@ -950,33 +984,33 @@ final class OfflineNoteV2Tests: XCTestCase {
 
         XCTAssertEqual(issue.amount, "5.5000")
         let claim = try issue.issuedClaim()
-        XCTAssertEqual(claim.domain, OfflineNoteV2Constants.issuedClaimDomain)
+        XCTAssertEqual(claim.domain, AttestedOfflineNoteConstants.issuedClaimDomain)
         XCTAssertEqual(claim.noteCommitment, issue.noteCommitment)
         XCTAssertEqual(claim.keyCertificatePayloadHash, try certificate.payloadHash())
         XCTAssertEqual(claim.assetId, issue.assetId)
         XCTAssertEqual(claim.amount, "5.5000")
         XCTAssertEqual(try claim.claimHash().count, 32)
-        XCTAssertThrowsError(try OfflineNoteIssuedClaimV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteIssuedClaim(
             noteCommitment: issue.noteCommitment,
             keyCertificatePayloadHash: try certificate.payloadHash(),
             assetId: issue.assetId,
             amount: "05.5000"
         )) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .nonCanonicalField(field: "amount"))
+            XCTAssertEqual(error as? AttestedOfflineNoteError, .nonCanonicalField(field: "amount"))
         }
 
-        XCTAssertThrowsError(try OfflineNoteIssueV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteIssue(
             noteCommitment: Data(repeating: 0x01, count: 31),
             keyCertificate: certificate,
             assetId: fixture.chainVectors.issue.assetId,
             amount: fixture.chainVectors.issue.amount
         )) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
+                error as? AttestedOfflineNoteError,
                 .invalidHashLength(field: "note_commitment", expected: 32, actual: 31)
             )
         }
-        XCTAssertThrowsError(try OfflineNoteIssueV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteIssue(
             noteCommitment: noteCommitment,
             keyCertificate: certificate,
             assetId: "cash#branch.sbp",
@@ -986,7 +1020,7 @@ final class OfflineNoteV2Tests: XCTestCase {
                 return XCTFail("expected invalidAssetId, got \(error)")
             }
         }
-        XCTAssertThrowsError(try OfflineNoteIssueV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteIssue(
             noteCommitment: noteCommitment,
             keyCertificate: certificate,
             assetId: fixture.chainVectors.issue.assetId,
@@ -998,7 +1032,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         }
     }
 
-    func testOfflineNoteV2RedeemValidationRejectsBadInputsAndDerivesIssuedClaim() throws {
+    func testAttestedOfflineNoteRedeemValidationRejectsBadInputsAndDerivesIssuedClaim() throws {
         let fixture = try Self.loadFixture()
         let redeem = try Self.redeem(fixture)
         let issuedClaim = try redeem.issuedClaim()
@@ -1008,7 +1042,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertEqual(issuedClaim.assetId, redeem.assetId)
         XCTAssertEqual(issuedClaim.amount, redeem.amount)
 
-        XCTAssertThrowsError(try OfflineNoteRedeemV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteRedeem(
             sourceNoteCommitment: redeem.sourceNoteCommitment,
             inputNullifiers: [],
             senderKeyCertificate: redeem.senderKeyCertificate,
@@ -1017,9 +1051,9 @@ final class OfflineNoteV2Tests: XCTestCase {
             amount: redeem.amount,
             recursiveProof: redeem.recursiveProof
         )) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .emptyInputNullifiers)
+            XCTAssertEqual(error as? AttestedOfflineNoteError, .emptyInputNullifiers)
         }
-        XCTAssertThrowsError(try OfflineNoteRedeemV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteRedeem(
             sourceNoteCommitment: redeem.sourceNoteCommitment,
             inputNullifiers: [Data(repeating: 0x01, count: 31)],
             senderKeyCertificate: redeem.senderKeyCertificate,
@@ -1029,11 +1063,11 @@ final class OfflineNoteV2Tests: XCTestCase {
             recursiveProof: redeem.recursiveProof
         )) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
+                error as? AttestedOfflineNoteError,
                 .invalidHashLength(field: "input_nullifiers[0]", expected: 32, actual: 31)
             )
         }
-        XCTAssertThrowsError(try OfflineNoteRedeemV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteRedeem(
             sourceNoteCommitment: redeem.sourceNoteCommitment,
             inputNullifiers: redeem.inputNullifiers,
             senderKeyCertificate: redeem.senderKeyCertificate,
@@ -1044,16 +1078,16 @@ final class OfflineNoteV2Tests: XCTestCase {
         ))
     }
 
-    func testOfflineNoteV2AuditValidateProofBindingReportsExpectedAndActualHashes() throws {
+    func testAttestedOfflineNoteAuditValidateProofBindingReportsExpectedAndActualHashes() throws {
         let fixture = try Self.loadFixture()
         let audit = try Self.audit(fixture)
         var wrongPublicInputsHash = try audit.publicInputsHash()
         wrongPublicInputsHash[0] ^= 0x01
-        let forgedProof = try OfflineNoteRecursiveProofV2(
+        let forgedProof = try AttestedOfflineNoteRecursiveProof(
             publicInputsHash: wrongPublicInputsHash,
             proofBytes: audit.recursiveProof.proof.bytes
         )
-        let forgedAudit = try OfflineNoteAuditBundleV2(
+        let forgedAudit = try AttestedOfflineNoteAuditBundle(
             tokenId: audit.tokenId,
             senderKeyCertificate: audit.senderKeyCertificate,
             inputNullifiers: audit.inputNullifiers,
@@ -1064,7 +1098,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         )
 
         XCTAssertThrowsError(try forgedAudit.validateProofBinding()) { error in
-            guard case let OfflineNoteV2Error.proofPublicInputsHashMismatch(expected, actual) = error else {
+            guard case let AttestedOfflineNoteError.proofPublicInputsHashMismatch(expected, actual) = error else {
                 return XCTFail("expected proofPublicInputsHashMismatch, got \(error)")
             }
             XCTAssertEqual(expected, try? audit.publicInputsHash().hexLowercased())
@@ -1072,20 +1106,20 @@ final class OfflineNoteV2Tests: XCTestCase {
         }
     }
 
-    func testOfflineNoteV2TransactionBuilderCoversOptionalNonceAndInputValidation() throws {
+    func testAttestedOfflineNoteTransactionBuilderCoversOptionalNonceAndInputValidation() throws {
         let fixture = try Self.loadFixture()
         let keypair = try Keypair(privateKeyBytes: Data(0..<32))
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let chainId = "00000000-0000-0000-0000-000000000000"
         let issue = try Self.issue(fixture)
 
-        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
-            request: IssueOfflineNoteV2Request(chainId: chainId, authority: authority, issue: issue),
+        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeAttestedOfflineNoteIssue(
+            request: AttestedOfflineNoteIssueRequest(chainId: chainId, authority: authority, issue: issue),
             keypair: keypair,
             creationTimeMs: 1_706_000_000_000
         ))
-        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
-            request: IssueOfflineNoteV2Request(
+        assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeAttestedOfflineNoteIssue(
+            request: AttestedOfflineNoteIssueRequest(
                 chainId: chainId,
                 authority: authority,
                 issue: issue,
@@ -1096,15 +1130,15 @@ final class OfflineNoteV2Tests: XCTestCase {
             creationTimeMs: 1_706_000_000_000
         ))
 
-        XCTAssertThrowsError(try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
-            request: IssueOfflineNoteV2Request(chainId: "  \(chainId)  ", authority: authority, issue: issue),
+        XCTAssertThrowsError(try SwiftTransactionEncoder.encodeAttestedOfflineNoteIssue(
+            request: AttestedOfflineNoteIssueRequest(chainId: "  \(chainId)  ", authority: authority, issue: issue),
             keypair: keypair,
             creationTimeMs: 1
         )) { error in
             XCTAssertEqual(error as? TransactionInputError, .invalidChainId("  \(chainId)  "))
         }
-        XCTAssertThrowsError(try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
-            request: IssueOfflineNoteV2Request(chainId: chainId, authority: "  \(authority)  ", issue: issue),
+        XCTAssertThrowsError(try SwiftTransactionEncoder.encodeAttestedOfflineNoteIssue(
+            request: AttestedOfflineNoteIssueRequest(chainId: chainId, authority: "  \(authority)  ", issue: issue),
             keypair: keypair,
             creationTimeMs: 1
         )) { error in
@@ -1113,15 +1147,15 @@ final class OfflineNoteV2Tests: XCTestCase {
                 .malformedAccountId(field: "authority", value: "  \(authority)  ")
             )
         }
-        XCTAssertThrowsError(try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
-            request: IssueOfflineNoteV2Request(chainId: " \n ", authority: authority, issue: issue),
+        XCTAssertThrowsError(try SwiftTransactionEncoder.encodeAttestedOfflineNoteIssue(
+            request: AttestedOfflineNoteIssueRequest(chainId: " \n ", authority: authority, issue: issue),
             keypair: keypair,
             creationTimeMs: 1
         )) { error in
             XCTAssertEqual(error as? TransactionInputError, .emptyChainId)
         }
-        XCTAssertThrowsError(try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
-            request: IssueOfflineNoteV2Request(chainId: chainId, authority: "\(authority)@bad", issue: issue),
+        XCTAssertThrowsError(try SwiftTransactionEncoder.encodeAttestedOfflineNoteIssue(
+            request: AttestedOfflineNoteIssueRequest(chainId: chainId, authority: "\(authority)@bad", issue: issue),
             keypair: keypair,
             creationTimeMs: 1
         )) { error in
@@ -1132,9 +1166,9 @@ final class OfflineNoteV2Tests: XCTestCase {
         }
     }
 
-    func testOfflineNoteV2RecursiveProofCoversCustomVerifierAndVerifierValidation() throws {
+    func testAttestedOfflineNoteRecursiveProofCoversCustomVerifierAndVerifierValidation() throws {
         let publicInputsHash = try Self.audit(Self.loadFixture()).publicInputsHash()
-        let proof = try OfflineNoteRecursiveProofV2(
+        let proof = try AttestedOfflineNoteRecursiveProof(
             verifierBackend: "custom_backend",
             verifierName: "custom_vk",
             publicInputsHash: publicInputsHash,
@@ -1147,7 +1181,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertEqual(proof.proof.backend, "custom_proof_backend")
         XCTAssertEqual(proof.proof.bytes, Data([0x01, 0x02, 0x03]))
 
-        XCTAssertThrowsError(try OfflineNoteRecursiveProofV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteRecursiveProof(
             verifierBackend: "custom_backend",
             verifierName: "custom_vk",
             publicInputsHash: publicInputsHash,
@@ -1155,15 +1189,15 @@ final class OfflineNoteV2Tests: XCTestCase {
             proofBackend: " custom_proof_backend "
         )) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
+                error as? AttestedOfflineNoteError,
                 .unsupportedRecursiveProofBackend(
-                    expected: OfflineNoteV2Constants.recursiveBackend,
+                    expected: AttestedOfflineNoteConstants.recursiveBackend,
                     actual: " custom_proof_backend "
                 )
             )
         }
 
-        XCTAssertThrowsError(try OfflineNoteRecursiveProofV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteRecursiveProof(
             verifierBackend: "",
             verifierName: "custom_vk",
             publicInputsHash: publicInputsHash,
@@ -1171,7 +1205,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? VerifyingKeyIdError, .emptyBackend)
         }
-        XCTAssertThrowsError(try OfflineNoteRecursiveProofV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteRecursiveProof(
             verifierBackend: "custom_backend",
             verifierName: "",
             publicInputsHash: publicInputsHash,
@@ -1179,7 +1213,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? VerifyingKeyIdError, .emptyName)
         }
-        XCTAssertThrowsError(try OfflineNoteRecursiveProofV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteRecursiveProof(
             verifierBackend: "halo2:ipa",
             verifierName: "custom_vk",
             publicInputsHash: publicInputsHash,
@@ -1187,7 +1221,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? VerifyingKeyIdError, .invalidSeparator)
         }
-        XCTAssertThrowsError(try OfflineNoteRecursiveProofV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteRecursiveProof(
             verifierBackend: " custom_backend ",
             verifierName: "custom_vk",
             publicInputsHash: publicInputsHash,
@@ -1195,7 +1229,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? VerifyingKeyIdError, .surroundingWhitespace)
         }
-        XCTAssertThrowsError(try OfflineNoteRecursiveProofV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteRecursiveProof(
             verifierBackend: "custom_backend",
             verifierName: " custom_vk ",
             publicInputsHash: publicInputsHash,
@@ -1205,18 +1239,18 @@ final class OfflineNoteV2Tests: XCTestCase {
         }
     }
 
-    func testOfflineNoteV2CertificatePayloadValidationAndEncodingBranches() throws {
+    func testAttestedOfflineNoteCertificatePayloadValidationAndEncodingBranches() throws {
         let certificate = try Self.certificate(Self.loadFixture().paymentToken.senderKeyCertificate)
         let payload = try certificate.signingPayload()
 
-        XCTAssertEqual(payload.domain, OfflineNoteV2Constants.keyCertificatePayloadDomain)
+        XCTAssertEqual(payload.domain, AttestedOfflineNoteConstants.keyCertificatePayloadDomain)
         XCTAssertEqual(payload.version, certificate.version)
         XCTAssertEqual(payload.publicKey, certificate.publicKey)
         XCTAssertEqual(payload.oneUse, true)
         XCTAssertNotEqual(try payload.noritoEncoded(), try certificate.noritoEncoded())
 
-        let noLimitPayload = try OfflineNoteKeyCertificatePayloadV2(
-            version: OfflineNoteV2Constants.keyCertificateVersion,
+        let noLimitPayload = try AttestedOfflineNoteKeyCertificatePayload(
+            version: AttestedOfflineNoteConstants.keyCertificateVersion,
             platform: certificate.platform,
             keyId: certificate.keyId,
             deviceId: certificate.deviceId,
@@ -1228,15 +1262,15 @@ final class OfflineNoteV2Tests: XCTestCase {
             assertionUsageCountLimit: nil,
             oneUse: true
         )
-        let limitedPayload = try OfflineNoteKeyCertificatePayloadV2(
-            version: OfflineNoteV2Constants.keyCertificateVersion,
-            platform: OfflineNoteV2Constants.androidKeyMintPlatform,
+        let limitedPayload = try AttestedOfflineNoteKeyCertificatePayload(
+            version: AttestedOfflineNoteConstants.keyCertificateVersion,
+            platform: AttestedOfflineNoteConstants.androidKeyMintPlatform,
             keyId: Data(SHA256.hash(data: certificate.assertionPublicKey)).hexLowercased(),
             deviceId: certificate.deviceId,
             accountId: certificate.accountId,
             publicKey: certificate.publicKey,
-            assertionScheme: OfflineNoteV2Constants.androidKeyMintAssertionScheme,
-            assertionKeyAlgorithm: OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm,
+            assertionScheme: AttestedOfflineNoteConstants.androidKeyMintAssertionScheme,
+            assertionKeyAlgorithm: AttestedOfflineNoteConstants.androidKeyMintAssertionKeyAlgorithm,
             assertionPublicKey: certificate.assertionPublicKey,
             assertionUsageCountLimit: 1,
             oneUse: true
@@ -1245,8 +1279,8 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertEqual(limitedPayload.assertionUsageCountLimit, 1)
         XCTAssertNotEqual(try noLimitPayload.noritoEncoded(), try limitedPayload.noritoEncoded())
 
-        XCTAssertThrowsError(try OfflineNoteKeyCertificatePayloadV2(
-            version: OfflineNoteV2Constants.keyCertificateVersion,
+        XCTAssertThrowsError(try AttestedOfflineNoteKeyCertificatePayload(
+            version: AttestedOfflineNoteConstants.keyCertificateVersion,
             platform: certificate.platform,
             keyId: certificate.keyId,
             deviceId: certificate.deviceId,
@@ -1258,8 +1292,8 @@ final class OfflineNoteV2Tests: XCTestCase {
             assertionUsageCountLimit: certificate.assertionUsageCountLimit,
             oneUse: true
         ))
-        XCTAssertThrowsError(try OfflineNoteKeyCertificatePayloadV2(
-            version: OfflineNoteV2Constants.keyCertificateVersion,
+        XCTAssertThrowsError(try AttestedOfflineNoteKeyCertificatePayload(
+            version: AttestedOfflineNoteConstants.keyCertificateVersion,
             platform: certificate.platform,
             keyId: certificate.keyId,
             deviceId: certificate.deviceId,
@@ -1272,12 +1306,12 @@ final class OfflineNoteV2Tests: XCTestCase {
             oneUse: true
         )) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
+                error as? AttestedOfflineNoteError,
                 .invalidNotePublicKeyLength(expected: 32, actual: 31)
             )
         }
-        XCTAssertThrowsError(try OfflineNoteKeyCertificatePayloadV2(
-            version: OfflineNoteV2Constants.keyCertificateVersion,
+        XCTAssertThrowsError(try AttestedOfflineNoteKeyCertificatePayload(
+            version: AttestedOfflineNoteConstants.keyCertificateVersion,
             platform: certificate.platform,
             keyId: certificate.keyId,
             deviceId: "\u{00A0}\u{2003}",
@@ -1289,12 +1323,12 @@ final class OfflineNoteV2Tests: XCTestCase {
             assertionUsageCountLimit: certificate.assertionUsageCountLimit,
             oneUse: true
         )) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
-        XCTAssertThrowsError(try OfflineNoteKeyCertificateV2(
-            version: OfflineNoteV2Constants.keyCertificateVersion,
+        XCTAssertThrowsError(try AttestedOfflineNoteKeyCertificate(
+            version: AttestedOfflineNoteConstants.keyCertificateVersion,
             platform: certificate.platform,
             keyId: "\u{00A0}\u{2003}",
             deviceId: certificate.deviceId,
@@ -1307,12 +1341,12 @@ final class OfflineNoteV2Tests: XCTestCase {
             oneUse: true,
             issuerSignature: certificate.issuerSignature
         )) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
-        XCTAssertThrowsError(try OfflineNoteKeyCertificatePayloadV2(
-            version: OfflineNoteV2Constants.keyCertificateVersion,
+        XCTAssertThrowsError(try AttestedOfflineNoteKeyCertificatePayload(
+            version: AttestedOfflineNoteConstants.keyCertificateVersion,
             platform: "ios-app-attest",
             keyId: certificate.keyId,
             deviceId: certificate.deviceId,
@@ -1324,12 +1358,12 @@ final class OfflineNoteV2Tests: XCTestCase {
             assertionUsageCountLimit: nil,
             oneUse: true
         )) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
-        XCTAssertThrowsError(try OfflineNoteKeyCertificateV2(
-            version: OfflineNoteV2Constants.keyCertificateVersion,
+        XCTAssertThrowsError(try AttestedOfflineNoteKeyCertificate(
+            version: AttestedOfflineNoteConstants.keyCertificateVersion,
             platform: "ios-app-attest",
             keyId: certificate.keyId,
             deviceId: certificate.deviceId,
@@ -1342,12 +1376,12 @@ final class OfflineNoteV2Tests: XCTestCase {
             oneUse: true,
             issuerSignature: certificate.issuerSignature
         )) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
-        XCTAssertThrowsError(try OfflineNoteKeyCertificatePayloadV2(
-            version: OfflineNoteV2Constants.keyCertificateVersion,
+        XCTAssertThrowsError(try AttestedOfflineNoteKeyCertificatePayload(
+            version: AttestedOfflineNoteConstants.keyCertificateVersion,
             platform: certificate.platform,
             keyId: certificate.keyId,
             deviceId: certificate.deviceId,
@@ -1359,24 +1393,24 @@ final class OfflineNoteV2Tests: XCTestCase {
             assertionUsageCountLimit: certificate.assertionUsageCountLimit,
             oneUse: true
         )) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
-        XCTAssertThrowsError(try OfflineNoteKeyCertificatePayloadV2(
-            version: OfflineNoteV2Constants.keyCertificateVersion,
-            platform: OfflineNoteV2Constants.androidKeyMintPlatform,
+        XCTAssertThrowsError(try AttestedOfflineNoteKeyCertificatePayload(
+            version: AttestedOfflineNoteConstants.keyCertificateVersion,
+            platform: AttestedOfflineNoteConstants.androidKeyMintPlatform,
             keyId: Data(SHA256.hash(data: certificate.assertionPublicKey)).hexLowercased(),
             deviceId: certificate.deviceId,
             accountId: certificate.accountId,
             publicKey: certificate.publicKey,
-            assertionScheme: OfflineNoteV2Constants.androidKeyMintAssertionScheme,
-            assertionKeyAlgorithm: OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm,
+            assertionScheme: AttestedOfflineNoteConstants.androidKeyMintAssertionScheme,
+            assertionKeyAlgorithm: AttestedOfflineNoteConstants.androidKeyMintAssertionKeyAlgorithm,
             assertionPublicKey: certificate.assertionPublicKey,
             assertionUsageCountLimit: 7,
             oneUse: true
         )) { error in
-            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+            guard case AttestedOfflineNoteError.unsupportedDeviceAttestationProfile = error else {
                 return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
             }
         }
@@ -1388,13 +1422,13 @@ final class OfflineNoteV2Tests: XCTestCase {
         return key
     }
 
-    func testOfflineNoteV2PublicInputConstructorsRejectMalformedInputs() throws {
+    func testAttestedOfflineNotePublicInputConstructorsRejectMalformedInputs() throws {
         let fixture = try Self.loadFixture()
         let audit = try Self.audit(fixture)
         let redeem = try Self.redeem(fixture)
-        let auditOutputClaims = try audit.outputClaims.map(OfflineNoteIssuedClaimV2.fromAuditOutput)
+        let auditOutputClaims = try audit.outputClaims.map(AttestedOfflineNoteIssuedClaim.fromAuditOutput)
 
-        XCTAssertThrowsError(try OfflineNoteRedeemPublicInputsV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteRedeemPublicInputs(
             sourceNoteCommitment: Data(repeating: 0x01, count: 31),
             inputNullifiers: redeem.inputNullifiers,
             keyCertificatePayloadHash: try redeem.senderKeyCertificate.payloadHash(),
@@ -1403,11 +1437,11 @@ final class OfflineNoteV2Tests: XCTestCase {
             amount: redeem.amount
         )) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
+                error as? AttestedOfflineNoteError,
                 .invalidHashLength(field: "source_note_commitment", expected: 32, actual: 31)
             )
         }
-        XCTAssertThrowsError(try OfflineNoteRedeemPublicInputsV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteRedeemPublicInputs(
             sourceNoteCommitment: redeem.sourceNoteCommitment,
             inputNullifiers: redeem.inputNullifiers,
             keyCertificatePayloadHash: Data(repeating: 0x01, count: 31),
@@ -1416,11 +1450,11 @@ final class OfflineNoteV2Tests: XCTestCase {
             amount: redeem.amount
         )) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
+                error as? AttestedOfflineNoteError,
                 .invalidHashLength(field: "key_certificate_payload_hash", expected: 32, actual: 31)
             )
         }
-        XCTAssertThrowsError(try OfflineNoteRedeemPublicInputsV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteRedeemPublicInputs(
             sourceNoteCommitment: redeem.sourceNoteCommitment,
             inputNullifiers: redeem.inputNullifiers,
             keyCertificatePayloadHash: try redeem.senderKeyCertificate.payloadHash(),
@@ -1429,7 +1463,7 @@ final class OfflineNoteV2Tests: XCTestCase {
             amount: redeem.amount
         ))
 
-        XCTAssertThrowsError(try OfflineNoteAuditPublicInputsV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteAuditPublicInputs(
             tokenId: Data(repeating: 0x01, count: 31),
             keyCertificatePayloadHash: try audit.senderKeyCertificate.payloadHash(),
             inputNullifiers: audit.inputNullifiers,
@@ -1438,11 +1472,11 @@ final class OfflineNoteV2Tests: XCTestCase {
             outputClaims: auditOutputClaims
         )) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
+                error as? AttestedOfflineNoteError,
                 .invalidHashLength(field: "token_id", expected: 32, actual: 31)
             )
         }
-        XCTAssertThrowsError(try OfflineNoteAuditPublicInputsV2(
+        XCTAssertThrowsError(try AttestedOfflineNoteAuditPublicInputs(
             tokenId: audit.tokenId,
             keyCertificatePayloadHash: try audit.senderKeyCertificate.payloadHash(),
             inputNullifiers: audit.inputNullifiers,
@@ -1450,11 +1484,11 @@ final class OfflineNoteV2Tests: XCTestCase {
             outputCommitments: audit.outputCommitments,
             outputClaims: []
         )) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .emptyOutputClaims)
+            XCTAssertEqual(error as? AttestedOfflineNoteError, .emptyOutputClaims)
         }
     }
 
-    func testOfflineNoteV2DomainsRejectSubstitutionAndPadding() throws {
+    func testAttestedOfflineNoteDomainsRejectSubstitutionAndPadding() throws {
         let fixture = try Self.loadFixture()
         let certificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
         let audit = try Self.audit(fixture)
@@ -1463,8 +1497,8 @@ final class OfflineNoteV2Tests: XCTestCase {
         let auditPublic = try audit.publicInputs()
         let redeemPublic = try redeem.publicInputs()
 
-        XCTAssertThrowsError(try OfflineNoteKeyCertificatePayloadV2(
-            domain: "\(OfflineNoteV2Constants.keyCertificatePayloadDomain) ",
+        XCTAssertThrowsError(try AttestedOfflineNoteKeyCertificatePayload(
+            domain: "\(AttestedOfflineNoteConstants.keyCertificatePayloadDomain) ",
             version: certificate.version,
             platform: certificate.platform,
             keyId: certificate.keyId,
@@ -1478,32 +1512,32 @@ final class OfflineNoteV2Tests: XCTestCase {
             oneUse: certificate.oneUse
         )) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
+                error as? AttestedOfflineNoteError,
                 .unsupportedDomain(
                     field: "domain",
-                    expected: OfflineNoteV2Constants.keyCertificatePayloadDomain,
-                    actual: "\(OfflineNoteV2Constants.keyCertificatePayloadDomain) "
+                    expected: AttestedOfflineNoteConstants.keyCertificatePayloadDomain,
+                    actual: "\(AttestedOfflineNoteConstants.keyCertificatePayloadDomain) "
                 )
             )
         }
-        XCTAssertThrowsError(try OfflineNoteIssuedClaimV2(
-            domain: "\(OfflineNoteV2Constants.issuedClaimDomain)\n",
+        XCTAssertThrowsError(try AttestedOfflineNoteIssuedClaim(
+            domain: "\(AttestedOfflineNoteConstants.issuedClaimDomain)\n",
             noteCommitment: claim.noteCommitment,
             keyCertificatePayloadHash: claim.keyCertificatePayloadHash,
             assetId: claim.assetId,
             amount: claim.amount
         )) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
+                error as? AttestedOfflineNoteError,
                 .unsupportedDomain(
                     field: "domain",
-                    expected: OfflineNoteV2Constants.issuedClaimDomain,
-                    actual: "\(OfflineNoteV2Constants.issuedClaimDomain)\n"
+                    expected: AttestedOfflineNoteConstants.issuedClaimDomain,
+                    actual: "\(AttestedOfflineNoteConstants.issuedClaimDomain)\n"
                 )
             )
         }
-        XCTAssertThrowsError(try OfflineNoteRedeemPublicInputsV2(
-            domain: "forged:\(OfflineNoteV2Constants.redeemPublicInputsDomain)",
+        XCTAssertThrowsError(try AttestedOfflineNoteRedeemPublicInputs(
+            domain: "forged:\(AttestedOfflineNoteConstants.redeemPublicInputsDomain)",
             sourceNoteCommitment: redeemPublic.sourceNoteCommitment,
             inputNullifiers: redeemPublic.inputNullifiers,
             keyCertificatePayloadHash: redeemPublic.keyCertificatePayloadHash,
@@ -1512,16 +1546,16 @@ final class OfflineNoteV2Tests: XCTestCase {
             amount: redeemPublic.amount
         )) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
+                error as? AttestedOfflineNoteError,
                 .unsupportedDomain(
                     field: "domain",
-                    expected: OfflineNoteV2Constants.redeemPublicInputsDomain,
-                    actual: "forged:\(OfflineNoteV2Constants.redeemPublicInputsDomain)"
+                    expected: AttestedOfflineNoteConstants.redeemPublicInputsDomain,
+                    actual: "forged:\(AttestedOfflineNoteConstants.redeemPublicInputsDomain)"
                 )
             )
         }
-        XCTAssertThrowsError(try OfflineNoteAuditPublicInputsV2(
-            domain: " \(OfflineNoteV2Constants.auditPublicInputsDomain)",
+        XCTAssertThrowsError(try AttestedOfflineNoteAuditPublicInputs(
+            domain: " \(AttestedOfflineNoteConstants.auditPublicInputsDomain)",
             tokenId: auditPublic.tokenId,
             keyCertificatePayloadHash: auditPublic.keyCertificatePayloadHash,
             inputNullifiers: auditPublic.inputNullifiers,
@@ -1530,18 +1564,18 @@ final class OfflineNoteV2Tests: XCTestCase {
             outputClaims: auditPublic.outputClaims
         )) { error in
             XCTAssertEqual(
-                error as? OfflineNoteV2Error,
+                error as? AttestedOfflineNoteError,
                 .unsupportedDomain(
                     field: "domain",
-                    expected: OfflineNoteV2Constants.auditPublicInputsDomain,
-                    actual: " \(OfflineNoteV2Constants.auditPublicInputsDomain)"
+                    expected: AttestedOfflineNoteConstants.auditPublicInputsDomain,
+                    actual: " \(AttestedOfflineNoteConstants.auditPublicInputsDomain)"
                 )
             )
         }
     }
 
-    private static func issue(_ fixture: OfflineInteropFixture) throws -> OfflineNoteIssueV2 {
-        try OfflineNoteIssueV2(
+    private static func issue(_ fixture: OfflineInteropFixture) throws -> AttestedOfflineNoteIssue {
+        try AttestedOfflineNoteIssue(
             noteCommitment: hex(fixture.chainVectors.issue.noteCommitment),
             keyCertificate: certificate(fixture.paymentToken.senderKeyCertificate),
             assetId: fixture.chainVectors.issue.assetId,
@@ -1549,32 +1583,32 @@ final class OfflineNoteV2Tests: XCTestCase {
         )
     }
 
-    private static func redeem(_ fixture: OfflineInteropFixture) throws -> OfflineNoteRedeemV2 {
+    private static func redeem(_ fixture: OfflineInteropFixture) throws -> AttestedOfflineNoteRedeem {
         let vector = fixture.chainVectors.redeem
-        return try OfflineNoteRedeemV2(
+        return try AttestedOfflineNoteRedeem(
             sourceNoteCommitment: hex(vector.sourceNoteCommitment),
             inputNullifiers: try vector.inputNullifiers.map(hex),
             senderKeyCertificate: certificate(fixture.paymentToken.recipientKeyCertificate),
             recipient: fixture.paymentToken.recipientAccountId,
             assetId: vector.assetId,
             amount: vector.amount,
-            recursiveProof: OfflineNoteRecursiveProofV2(
+            recursiveProof: AttestedOfflineNoteRecursiveProof(
                 publicInputsHash: hex(vector.publicInputsHash),
                 proofBytes: Data("offline-v2-vector-redeem-proof".utf8)
             )
         )
     }
 
-    private static func audit(_ fixture: OfflineInteropFixture) throws -> OfflineNoteAuditBundleV2 {
+    private static func audit(_ fixture: OfflineInteropFixture) throws -> AttestedOfflineNoteAuditBundle {
         let vector = fixture.chainVectors.audit
-        return try OfflineNoteAuditBundleV2(
+        return try AttestedOfflineNoteAuditBundle(
             tokenId: hex(vector.tokenId),
             senderKeyCertificate: certificate(fixture.paymentToken.senderKeyCertificate),
             inputNullifiers: try vector.inputNullifiers.map(hex),
             inputClaims: try fixture.paymentToken.inputClaims.map(issuedClaim),
             outputCommitments: try vector.outputCommitments.map(hex),
             outputClaims: try fixture.paymentToken.outputClaims.map(auditOutputClaim),
-            recursiveProof: OfflineNoteRecursiveProofV2(
+            recursiveProof: AttestedOfflineNoteRecursiveProof(
                 publicInputsHash: hex(vector.publicInputsHash),
                 proofBytes: Data("offline-v2-vector-audit-proof".utf8)
             )
@@ -1636,8 +1670,8 @@ final class OfflineNoteV2Tests: XCTestCase {
         )
     }
 
-    private static func certificate(_ json: OfflineCertificateJSON) throws -> OfflineNoteKeyCertificateV2 {
-        try OfflineNoteKeyCertificateV2(
+    private static func certificate(_ json: OfflineCertificateJSON) throws -> AttestedOfflineNoteKeyCertificate {
+        try AttestedOfflineNoteKeyCertificate(
             version: json.version,
             platform: json.platform,
             keyId: json.keyId,
@@ -1653,8 +1687,8 @@ final class OfflineNoteV2Tests: XCTestCase {
         )
     }
 
-    private static func issuedClaim(_ json: OfflineInputClaimJSON) throws -> OfflineNoteIssuedClaimV2 {
-        try OfflineNoteIssuedClaimV2(
+    private static func issuedClaim(_ json: OfflineInputClaimJSON) throws -> AttestedOfflineNoteIssuedClaim {
+        try AttestedOfflineNoteIssuedClaim(
             domain: json.domain,
             noteCommitment: hex(json.noteCommitment),
             keyCertificatePayloadHash: hex(json.keyCertificatePayloadHash),
@@ -1663,8 +1697,8 @@ final class OfflineNoteV2Tests: XCTestCase {
         )
     }
 
-    private static func auditOutputClaim(_ json: OfflineOutputClaimJSON) throws -> OfflineNoteAuditOutputClaimV2 {
-        try OfflineNoteAuditOutputClaimV2(
+    private static func auditOutputClaim(_ json: OfflineOutputClaimJSON) throws -> AttestedOfflineNoteAuditOutputClaim {
+        try AttestedOfflineNoteAuditOutputClaim(
             noteCommitment: hex(json.noteCommitment),
             keyCertificate: certificate(json.keyCertificate),
             assetId: "\(json.assetDefinitionId)#\(json.accountId)",
@@ -1684,20 +1718,20 @@ final class OfflineNoteV2Tests: XCTestCase {
 
     private static func hex(_ value: String) throws -> Data {
         guard let data = Data(hexString: value) else {
-            throw OfflineNoteV2FixtureError.invalidHex(value)
+            throw AttestedOfflineNoteFixtureError.invalidHex(value)
         }
         return data
     }
 
     private static func base64(_ value: String) throws -> Data {
         guard let data = Data(base64Encoded: value) else {
-            throw OfflineNoteV2FixtureError.invalidBase64
+            throw AttestedOfflineNoteFixtureError.invalidBase64
         }
         return data
     }
 
     private static func attestationEvidence(attestationReportHash: Data) -> Data {
-        var evidence = Data(OfflineNoteV2Constants.deviceAttestationEvidencePrefix.utf8)
+        var evidence = Data(AttestedOfflineNoteConstants.deviceAttestationEvidencePrefix.utf8)
         evidence.append(attestationReportHash)
         return evidence
     }
@@ -1708,8 +1742,8 @@ final class OfflineNoteV2Tests: XCTestCase {
         proofBytes: Data
     ) -> Data {
         var proofWriter = OfflineCompactNoritoWriter()
-        proofWriter.writeField(OfflineCompactNorito.encodeString(OfflineNoteV2Constants.recursiveBackend))
-        proofWriter.writeField(OfflineCompactNorito.encodeString(OfflineNoteV2Constants.recursiveVerifierName))
+        proofWriter.writeField(OfflineCompactNorito.encodeString(AttestedOfflineNoteConstants.recursiveBackend))
+        proofWriter.writeField(OfflineCompactNorito.encodeString(AttestedOfflineNoteConstants.recursiveVerifierName))
 
         var proofBoxWriter = OfflineCompactNoritoWriter()
         proofBoxWriter.writeField(OfflineCompactNorito.encodeString(proofBackend))
@@ -1769,14 +1803,14 @@ final class OfflineNoteV2Tests: XCTestCase {
         }
     }
 
-    private struct ParsedOfflineNoteV2Instruction {
+    private struct ParsedAttestedOfflineNoteInstruction {
         let wireName: String
         let archive: Data
     }
 
-    private static func parseSingleOfflineNoteV2Instruction(
+    private static func parseSingleAttestedOfflineNoteInstruction(
         _ envelope: SignedTransactionEnvelope
-    ) throws -> ParsedOfflineNoteV2Instruction {
+    ) throws -> ParsedAttestedOfflineNoteInstruction {
         var signed = OfflineNoritoReader(data: envelope.signedTransaction)
         _ = try signed.readField()
         let transactionPayload = try signed.readField()
@@ -1799,7 +1833,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         let wireName = try readFieldString(&instruction)
         let archive = try readFieldBytesVec(&instruction)
         XCTAssertEqual(instruction.remaining(), 0)
-        return ParsedOfflineNoteV2Instruction(wireName: wireName, archive: archive)
+        return ParsedAttestedOfflineNoteInstruction(wireName: wireName, archive: archive)
     }
 
     private static func singleInstructionPayload(fromExecutablePayload payload: Data) throws -> Data {
@@ -1841,7 +1875,7 @@ final class OfflineNoteV2Tests: XCTestCase {
     }
 }
 
-private enum OfflineNoteV2FixtureError: Error {
+private enum AttestedOfflineNoteFixtureError: Error {
     case invalidHex(String)
     case invalidBase64
 }

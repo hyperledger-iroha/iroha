@@ -46,3 +46,28 @@ fn tlv_wrong_type_id_is_rejected() {
         "expected NoritoInvalid for mismatched TLV type, got {err:?}"
     );
 }
+
+#[test]
+fn tlv_expected_type_rejects_high_register_bits_without_truncation() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    let inner = tlv(PointerType::Name, b"rose");
+    let outer = tlv(PointerType::NoritoBytes, &inner);
+    let ptr = vm.alloc_input_tlv(&outer).expect("allocate outer TLV");
+    vm.set_register(10, ptr);
+    vm.set_register(11, (1_u64 << 16) | u64::from(PointerType::Name as u16));
+    let prog = common::assemble(
+        &[
+            encoding::wide::encode_sys(
+                ivm::instruction::wide::system::SCALL,
+                syscalls::SYSCALL_POINTER_FROM_NORITO as u8,
+            )
+            .to_le_bytes(),
+            encoding::wide::encode_halt().to_le_bytes(),
+        ]
+        .concat(),
+    );
+    vm.load_program(&prog).expect("load program");
+
+    assert_eq!(vm.run(), Err(ivm::VMError::NoritoInvalid));
+}

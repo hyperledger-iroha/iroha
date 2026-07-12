@@ -2106,6 +2106,12 @@ impl MergeCandidateTransport {
 
     /// Retry timed-out requests and expire stale non-current transport bytes.
     pub(crate) fn tick(&mut self, now: Instant) -> Vec<MergeCandidatePost> {
+        self.tick_bounded(now, usize::MAX)
+    }
+
+    /// Retry timed-out requests and emit responses without advancing more
+    /// transport work than the caller can retain in its bounded effect queue.
+    pub(crate) fn tick_bounded(&mut self, now: Instant, limit: usize) -> Vec<MergeCandidatePost> {
         self.prune_request_gates(now);
         let timed_out: Vec<_> = self
             .inbound
@@ -2116,14 +2122,15 @@ impl MergeCandidateTransport {
                         >= retry_timeout(CANDIDATE_REQUEST_TIMEOUT, assembly.attempts)
             })
             .map(|(id, _)| *id)
+            .take(limit)
             .collect();
-        let mut posts = Vec::new();
+        let mut posts = Vec::with_capacity(limit.min(timed_out.len().saturating_add(8)));
         for id in timed_out {
             if let Some(post) = self.finish_completed(id, false, now) {
                 posts.push(post);
             }
         }
-        posts.extend(self.drain_outbound(8, now));
+        posts.extend(self.drain_outbound(limit.saturating_sub(posts.len()).min(8), now));
         posts
     }
 
@@ -3695,6 +3702,194 @@ mod tests {
             .expect("completed assembly awaits chain validation");
         assert!(assembly.accepted_request_ids.len() <= MAX_CANDIDATE_ACCEPTED_REQUEST_IDS);
         assert!(assembly.accepted_request_ids.contains(&retry.request_id));
+    }
+
+    #[test]
+    fn candidate_tick_bounded_preserves_unemitted_timeout_requests() {
+        let started_at = Instant::now();
+        let leader = peer(b"bounded-timeout-leader");
+        let follower = peer(b"bounded-timeout-follower");
+        let roster_hash = HashOf::new(&vec![leader.clone(), follower.clone()]);
+        let first_candidate = candidate(0);
+        let mut second_candidate = first_candidate.clone();
+        second_candidate.view = 1;
+        second_candidate.lane_catalog_hash = Hash::new(b"bounded-timeout-second-catalog");
+
+        let mut leader_transport = MergeCandidateTransport::new();
+        let first_advert = publish_candidate(
+            &mut leader_transport,
+            &first_candidate,
+            &leader,
+            roster_hash,
+            started_at,
+        );
+        let second_advert = publish_candidate(
+            &mut leader_transport,
+            &second_candidate,
+            &leader,
+            roster_hash,
+            started_at,
+        );
+        let mut follower_transport = MergeCandidateTransport::new();
+        for (advert, view) in [(first_advert, 0), (second_advert, 1)] {
+            follower_transport
+                .accept_advert(
+                    &leader,
+                    advert,
+                    &leader,
+                    &follower,
+                    1,
+                    view,
+                    2,
+                    first_candidate.carrier_parent_hash,
+                    roster_hash,
+                    started_at,
+                )
+                .expect("accept exact leader advert")
+                .expect("initial body request");
+        }
+        assert_eq!(follower_transport.inbound.len(), 2);
+        let initial = follower_transport
+            .inbound
+            .iter()
+            .map(|(transfer_id, assembly)| {
+                (
+                    *transfer_id,
+                    (
+                        assembly.request_id,
+                        assembly.attempts,
+                        assembly.requested_at,
+                    ),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let retry_at = started_at + CANDIDATE_REQUEST_TIMEOUT;
+
+        assert!(follower_transport.tick_bounded(retry_at, 0).is_empty());
+        for (transfer_id, (request_id, attempts, requested_at)) in &initial {
+            let unchanged = follower_transport
+                .inbound
+                .get(transfer_id)
+                .expect("zero-capacity tick retains every timed-out request");
+            assert_eq!(unchanged.request_id, *request_id);
+            assert_eq!(unchanged.attempts, *attempts);
+            assert_eq!(unchanged.requested_at, *requested_at);
+        }
+
+        let first_retry = follower_transport.tick_bounded(retry_at, 1);
+        assert_eq!(first_retry.len(), 1);
+        let MergeCandidateMessage::Request(first_retry) = &first_retry[0].message else {
+            panic!("bounded tick must emit one candidate request")
+        };
+        let first_transfer = first_retry.advert.transfer_id;
+        let retried = follower_transport
+            .inbound
+            .get(&first_transfer)
+            .expect("emitted retry remains active");
+        assert_eq!(retried.attempts, 2);
+        assert_eq!(retried.requested_at, retry_at);
+        assert_ne!(retried.request_id, initial[&first_transfer].0);
+        let untouched_transfer = *initial
+            .keys()
+            .find(|transfer_id| **transfer_id != first_transfer)
+            .expect("second timed-out request remains");
+        let untouched = follower_transport
+            .inbound
+            .get(&untouched_transfer)
+            .expect("one-capacity tick retains the unsent request");
+        assert_eq!(untouched.request_id, initial[&untouched_transfer].0);
+        assert_eq!(untouched.attempts, 1);
+        assert_eq!(untouched.requested_at, started_at);
+
+        let second_retry = follower_transport.tick_bounded(retry_at, 1);
+        assert_eq!(second_retry.len(), 1);
+        let MergeCandidateMessage::Request(second_retry) = &second_retry[0].message else {
+            panic!("later bounded tick must emit the retained request")
+        };
+        assert_eq!(second_retry.advert.transfer_id, untouched_transfer);
+        assert_ne!(second_retry.request_id, initial[&untouched_transfer].0);
+        assert!(follower_transport.tick_bounded(retry_at, 1).is_empty());
+    }
+
+    #[test]
+    fn candidate_bounded_response_drain_preserves_exact_chunk_stream() {
+        let now = Instant::now();
+        let leader = peer(b"bounded-response-leader");
+        let follower = peer(b"bounded-response-follower");
+        let roster_hash = HashOf::new(&vec![leader.clone(), follower.clone()]);
+        let candidate = candidate(3_000);
+        let (expected_bytes, _) = canonical_merge_candidate_bytes(&candidate);
+        let mut leader_transport = MergeCandidateTransport::new();
+        let advert =
+            publish_candidate(&mut leader_transport, &candidate, &leader, roster_hash, now);
+        assert!(advert.encoded_len > MAX_CERTIFIED_MERGE_CHUNK_BYTES as u64);
+        let mut follower_transport = MergeCandidateTransport::new();
+        let request = follower_transport
+            .accept_advert(
+                &leader,
+                advert,
+                &leader,
+                &follower,
+                1,
+                0,
+                2,
+                candidate.carrier_parent_hash,
+                roster_hash,
+                now,
+            )
+            .expect("accept exact leader advert")
+            .expect("request candidate body");
+        let MergeCandidateMessage::Request(request) = request.message else {
+            panic!("expected candidate request")
+        };
+        leader_transport
+            .accept_request(&follower, request, &leader, now)
+            .expect("leader accepts exact request");
+        let outbound_key = leader_transport
+            .outbound
+            .keys()
+            .next()
+            .cloned()
+            .expect("response session is retained");
+
+        assert!(leader_transport.drain_outbound(0, now).is_empty());
+        assert_eq!(leader_transport.outbound[&outbound_key].next_chunk, 0);
+        assert!(leader_transport.tick_bounded(now, 0).is_empty());
+        assert_eq!(leader_transport.outbound[&outbound_key].next_chunk, 0);
+
+        let mut completed = None;
+        let mut emitted_bytes = Vec::new();
+        let expected_chunks = expected_bytes
+            .len()
+            .div_ceil(MAX_CERTIFIED_MERGE_CHUNK_BYTES);
+        for expected_index in 0..expected_chunks {
+            let posts = leader_transport.tick_bounded(now, 1);
+            assert_eq!(posts.len(), 1);
+            let MergeCandidateMessage::Chunk(chunk) = posts[0].message.clone() else {
+                panic!("bounded response drain must emit one chunk")
+            };
+            assert_eq!(
+                usize::try_from(chunk.chunk_index).expect("chunk index fits usize"),
+                expected_index
+            );
+            emitted_bytes.extend_from_slice(&chunk.bytes);
+            let outcome = follower_transport
+                .ingest_chunk(&leader, chunk, now)
+                .expect("accept exact bounded response chunk");
+            if let CandidateChunkOutcome::Complete(body) = outcome {
+                completed = Some(body);
+            }
+        }
+        assert_eq!(emitted_bytes, expected_bytes);
+        assert!(leader_transport.outbound.is_empty());
+        assert!(leader_transport.tick_bounded(now, 1).is_empty());
+        let completed = completed.expect("one-chunk-at-a-time drain completes exact body");
+        assert_eq!(completed.bytes, expected_bytes);
+        assert_eq!(
+            decode_merge_candidate_body(&completed.advert, &completed.bytes)
+                .expect("bounded stream remains canonical"),
+            candidate
+        );
     }
 
     #[test]

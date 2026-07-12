@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "הפרמטר `{name}` בפונקציה `{func}` אינו בשימוש",
     lint_unreachable_after_return: "נמצאה פקודה שאינה נגישה ב-{context}: קוד אחרי return לעולם לא יורץ",
     lint_ok: "תקין",
-    lint_usage: "שימוש: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "שימוש: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "הפעילו את בדיקות ה-lint של Kotodama על המקורות שסופקו.",
     ..english::MESSAGES
 };

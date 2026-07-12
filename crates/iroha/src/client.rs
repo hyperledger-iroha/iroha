@@ -23,7 +23,7 @@ pub use iroha_config::client_api::{
     ConfidentialGas as ConfidentialGasDTO, ConfigGetDTO, ConfigUpdateDTO, Logger as LoggerDTO,
 };
 use iroha_config::parameters::actual::SorafsRolloutPhase;
-use iroha_crypto::{Hash, Signature, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, Signature, SignatureOf};
 use iroha_data_model::{
     DATA_MODEL_VERSION, ValidationFail,
     block::consensus::{
@@ -47,8 +47,14 @@ use iroha_data_model::{
 use iroha_logger::prelude::*;
 pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
 use iroha_torii_shared::{
-    AccountReadResponse, ErrorEnvelope, PipelineTransactionStatusResponse,
-    TriggerCompletionListResponse, uri as torii_uri,
+    AccountReadResponse, ErrorEnvelope, NORITO_V1_WEBSOCKET_SUBPROTOCOL,
+    PipelineTransactionStatusResponse, TriggerCompletionListResponse,
+    offline_api::{
+        OfflineOperationKind, OfflineOperationReference, OfflineOperationResult,
+        OfflineOperationState, OfflineOperationStatus, OfflineReadiness, OfflineRedeemRequest,
+        OfflineTopUpRequest,
+    },
+    uri as torii_uri,
 };
 use iroha_version::codec::EncodeVersioned;
 use norito::{
@@ -113,17 +119,22 @@ use crate::{
 // (No query imports needed here)
 
 const APPLICATION_JSON: &str = "application/json";
+const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 64 * 1024;
+const SCCP_RECENT_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
+const SCCP_JSON_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
+const SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES: usize =
+    iroha_sccp::SCCP_TAIRA_MAX_ENCODED_PROOF_BYTES_V1;
+const SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES: usize =
+    iroha_sccp::SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1;
 const ACCEPT_NORITO_PREFERRED: &str = "application/x-norito, application/json;q=0.8";
 const ACCEPT_JSON_PREFERRED: &str = "application/json, application/x-norito;q=0.8";
 const SORAFS_STORAGE_PIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-const HEADER_API_VERSION: &str = iroha_torii_shared::HEADER_API_VERSION;
 const HEADER_ACCOUNT: &str = "x-iroha-account";
 const HEADER_SIGNATURE: &str = "x-iroha-signature";
 const HEADER_TIMESTAMP_MS: &str = "x-iroha-timestamp-ms";
 const HEADER_NONCE: &str = "x-iroha-nonce";
 const HEADER_SORA_CLIENT: &str = "x-sorafs-client";
 const HEADER_SORA_NONCE: &str = "x-sorafs-nonce";
-const SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1: usize = 384;
 const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
 const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
@@ -161,6 +172,7 @@ impl WireFormatPreference {
 
 #[derive(
     Clone,
+    Copy,
     Debug,
     PartialEq,
     Eq,
@@ -169,14 +181,73 @@ impl WireFormatPreference {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Public SCCP codec capability advertised by the node.
-pub struct SccpCodecCapability {
-    /// Numeric SCCP codec identifier.
-    pub id: u8,
-    /// Stable logical codec key.
-    pub key: String,
-    /// Human-readable description of the codec family.
-    pub description: String,
+#[norito(deny_unknown_fields)]
+/// Fixed SCCP V1 route-registry capacity limits.
+pub struct SccpRegistryLimits {
+    /// Maximum governed lanes retained by the registry.
+    pub max_governed_lanes: u32,
+    /// Maximum nonterminal route revisions across all lanes.
+    pub max_live_governed_routes: u32,
+    /// Maximum nonterminal route revisions in one lane.
+    pub max_live_routes_per_lane: u32,
+    /// Maximum retained route revisions in one lane, including retired revisions.
+    pub max_retained_routes_per_lane: u32,
+    /// Maximum retained native trust anchors in one lane.
+    pub max_retained_native_trust_anchors_per_lane: u32,
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Consensus-critical SCCP proof and verifier-work limits.
+pub struct SccpResourceLimits {
+    /// Maximum closed SCCP proofs in one transaction.
+    pub max_proofs_per_transaction: u32,
+    /// Maximum closed SCCP proofs committed in one block.
+    pub max_proofs_per_block: u32,
+    /// Maximum canonical bytes retained for one closed SCCP proof.
+    pub max_proof_bytes_per_proof: u64,
+    /// Maximum aggregate SCCP proof bytes in one transaction.
+    pub max_proof_bytes_per_transaction: u64,
+    /// Maximum aggregate SCCP proof bytes committed in one block.
+    pub max_proof_bytes_per_block: u64,
+    /// Maximum native-finality continuation headers in one transaction.
+    pub max_native_headers_per_transaction: u32,
+    /// Maximum native-finality continuation headers committed in one block.
+    pub max_native_headers_per_block: u32,
+    /// Maximum Ethereum light-client updates in one transaction.
+    pub max_ethereum_light_client_updates_per_transaction: u32,
+    /// Maximum Ethereum light-client updates committed in one block.
+    pub max_ethereum_light_client_updates_per_block: u32,
+    /// Maximum framed native-finality header bytes in one transaction.
+    pub max_native_header_bytes_per_transaction: u64,
+    /// Maximum framed native-finality header bytes committed in one block.
+    pub max_native_header_bytes_per_block: u64,
+    /// Maximum secp256k1 recoveries in one transaction.
+    pub max_secp256k1_recoveries_per_transaction: u32,
+    /// Maximum secp256k1 recoveries committed in one block.
+    pub max_secp256k1_recoveries_per_block: u32,
+    /// Maximum BLS aggregate-signature checks in one transaction.
+    pub max_bls_aggregate_checks_per_transaction: u32,
+    /// Maximum BLS aggregate-signature checks committed in one block.
+    pub max_bls_aggregate_checks_per_block: u32,
+    /// Maximum BLS key-validation and signer-contribution work in one transaction.
+    pub max_bls_signer_contributions_per_transaction: u32,
+    /// Maximum BLS key-validation and signer-contribution work committed in one block.
+    pub max_bls_signer_contributions_per_block: u32,
+    /// Maximum BN254 pairing-product checks in one transaction.
+    pub max_bn254_pairing_checks_per_transaction: u32,
+    /// Maximum BN254 pairing-product checks committed in one block.
+    pub max_bn254_pairing_checks_per_block: u32,
 }
 
 #[derive(
@@ -189,695 +260,1525 @@ pub struct SccpCodecCapability {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Public SCCP counterparty capability advertised by the node.
-pub struct SccpCounterpartyCapability {
-    /// Numeric SCCP domain identifier for the remote chain.
-    pub domain: u32,
-    /// Stable logical key for the remote chain.
-    pub chain: String,
-    /// Target verifier backend family for the remote chain.
-    pub verifier_backend: iroha_sccp::SccpVerifierBackendV1,
-    /// Backend label used for transparent SCCP message proofs for this chain.
-    pub message_backend: String,
-    /// Backend label used for SCCP registry proofs for this chain.
-    pub registry_backend: String,
-    /// Numeric SCCP codec identifier expected for remote account payloads.
-    pub counterparty_account_codec: u8,
-    /// Stable logical codec key expected for remote account payloads.
-    pub counterparty_account_codec_key: String,
-    /// Per-family destination verifier rollout state for this lane family.
-    #[norito(default)]
-    pub destination_rollout: iroha_sccp::SccpDestinationRolloutV1,
-    /// Whether the current lane is safe to use for production proof generation and consumption.
-    pub production_ready: bool,
-    /// Explanation for why the lane is disabled when `production_ready` is false.
-    #[norito(default)]
-    pub disabled_reason: Option<String>,
-    /// Full production-readiness checklist for this lane.
-    #[norito(default)]
-    pub production_readiness: iroha_sccp::SccpLaneProductionReadinessV1,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[norito(deny_unknown_fields)]
 /// Public SCCP capability snapshot advertised by the node.
 pub struct SccpCapabilities {
-    /// Numeric SCCP domain identifier for the local Nexus chain.
-    pub local_domain: u32,
-    /// Stable logical key for the local chain.
-    pub local_chain: String,
-    /// Canonical transparent-ZK proof family for generic SCCP message proofs.
-    pub proof_family: String,
-    /// Legacy burn-bundle fetch path.
-    pub burn_bundle_path: String,
-    /// Generic SCCP message-bundle fetch path.
+    /// Capability schema version. First release is exactly `1`.
+    pub version: u8,
+    /// Hex-encoded digest of the authoritative typed route registry.
+    pub registry_revision: String,
+    /// Authoritative typed route-registry endpoint.
+    pub registry_path: String,
+    /// Finalized SORA message-bundle endpoint template.
     pub message_bundle_path: String,
-    /// Generic SCCP typed proof-artifact fetch path.
-    pub message_proof_path: String,
-    /// Generic SCCP normalized proof-job fetch path.
-    pub message_job_path: String,
-    /// SCCP proof-manifest discovery path.
-    pub proof_manifest_path: String,
-    /// Registry backend label used by burn proof submissions.
-    pub burn_registry_backend: String,
-    /// Optional Torii path for outbound proof registration.
+    /// Query-free state-derived Groth16 request endpoint template.
+    pub proof_request_path: String,
+    /// Newest-first indexed outbound-message endpoint.
+    pub recent_messages_path: String,
+    /// Fixed SCCP V1 route-registry capacity limits.
+    pub registry_limits: SccpRegistryLimits,
+    /// Consensus-critical proof and deterministic verifier-work limits.
+    pub resource_limits: SccpResourceLimits,
+    /// Closed destination-proof submission endpoint when the application API is enabled.
     #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub proof_submit_path: Option<String>,
-    /// Optional Torii path for inbound verified message submission.
+    /// Protocol-native inbound proof endpoint when the application API is enabled.
     #[norito(default)]
-    pub message_submit_path: Option<String>,
-    /// SCCP production launch policy advertised by the node.
-    #[norito(default)]
-    pub production_policy: iroha_sccp::SccpProductionPolicyV1,
-    /// Whether every advertised SCCP lane satisfies the launch gate.
-    #[norito(default)]
-    pub launch_ready: bool,
-    /// Supported generic SCCP payload kinds.
-    pub message_payload_kinds: Vec<String>,
-    /// Supported SCCP codec families.
-    pub codecs: Vec<SccpCodecCapability>,
-    /// Supported non-SORA counterparties.
-    pub counterparties: Vec<SccpCounterpartyCapability>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub native_message_submit_path: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-/// Optional query parameters for SCCP message proof artifacts and jobs.
-///
-/// Destination proof parameters describe an externally deployed Groth16
-/// destination verifier, so they must be supplied together with the matching
-/// `proof_bytes_hex` payload.
-pub struct SccpMessageProofQueryParams {
-    /// Destination network id as a 32-byte hex string.
-    pub network_id_hex: Option<String>,
-    /// EVM verifier contract address as a 20-byte hex string.
-    pub verifier_address_hex: Option<String>,
-    /// EVM bridge contract address as a 20-byte hex string.
-    pub bridge_address_hex: Option<String>,
-    /// Destination verifier contract code hash as a 32-byte hex string.
-    pub verifier_code_hash_hex: Option<String>,
-    /// Destination verifier key hash as a 32-byte hex string.
-    pub verifier_key_hash_hex: Option<String>,
-    /// Expected canonical destination binding hash as a 32-byte hex string.
-    pub expected_destination_binding_hash_hex: Option<String>,
-    /// TRON verifier contract address as a checksummed `Base58Check` address.
-    pub tron_verifier_address: Option<String>,
-    /// Externally generated Groth16 proof bytes as a 384-byte hex string.
-    pub proof_bytes_hex: Option<String>,
+fn expected_sccp_registry_limits() -> SccpRegistryLimits {
+    SccpRegistryLimits {
+        max_governed_lanes: u32::try_from(iroha_data_model::bridge::SCCP_V1_MAX_GOVERNED_LANES)
+            .expect("SCCP governed-lane limit fits u32"),
+        max_live_governed_routes: u32::try_from(
+            iroha_data_model::bridge::SCCP_V1_MAX_LIVE_GOVERNED_ROUTES,
+        )
+        .expect("SCCP global live-route limit fits u32"),
+        max_live_routes_per_lane: u32::try_from(
+            iroha_data_model::bridge::SCCP_V1_MAX_LIVE_ROUTES_PER_LANE,
+        )
+        .expect("SCCP lane live-route limit fits u32"),
+        max_retained_routes_per_lane: u32::try_from(
+            iroha_data_model::bridge::SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE,
+        )
+        .expect("SCCP retained-route limit fits u32"),
+        max_retained_native_trust_anchors_per_lane: u32::try_from(
+            iroha_data_model::bridge::SCCP_V1_MAX_RETAINED_NATIVE_TRUST_ANCHORS_PER_LANE,
+        )
+        .expect("SCCP retained-anchor limit fits u32"),
+    }
 }
 
-impl SccpMessageProofQueryParams {
-    fn apply_to_request(
-        &self,
-        request: DefaultRequestBuilder,
-        expected_message_id_hex: &str,
-    ) -> Result<DefaultRequestBuilder> {
-        let request = append_sccp_nonzero_hex_query_param(
-            request,
-            "network_id_hex",
-            self.network_id_hex.as_deref(),
-            "network_id_hex",
-            Some(32),
-        )?;
-        let request = append_sccp_nonzero_hex_query_param(
-            request,
-            "verifier_address_hex",
-            self.verifier_address_hex.as_deref(),
-            "verifier_address_hex",
-            Some(20),
-        )?;
-        let request = append_sccp_nonzero_hex_query_param(
-            request,
-            "bridge_address_hex",
-            self.bridge_address_hex.as_deref(),
-            "bridge_address_hex",
-            Some(20),
-        )?;
-        let request = append_sccp_nonzero_hex_query_param(
-            request,
-            "verifier_code_hash_hex",
-            self.verifier_code_hash_hex.as_deref(),
-            "verifier_code_hash_hex",
-            Some(32),
-        )?;
-        let request = append_sccp_nonzero_hex_query_param(
-            request,
-            "verifier_key_hash_hex",
-            self.verifier_key_hash_hex.as_deref(),
-            "verifier_key_hash_hex",
-            Some(32),
-        )?;
-        let request = append_sccp_nonzero_hex_query_param(
-            request,
-            "expected_destination_binding_hash_hex",
-            self.expected_destination_binding_hash_hex.as_deref(),
-            "expected_destination_binding_hash_hex",
-            Some(32),
-        )?;
-        let request = append_sccp_tron_base58check_query_param(
-            request,
-            "tron_verifier_address",
-            self.tron_verifier_address.as_deref(),
-            "tron_verifier_address",
-        )?;
-        let request = append_sccp_groth16_bn254_proof_query_param(
-            request,
-            "proof_bytes_hex",
-            self.proof_bytes_hex.as_deref(),
-            "proof_bytes_hex",
-            expected_message_id_hex,
-        )?;
-        let has_destination_proof_material = self.has_destination_proof_material();
-        if has_destination_proof_material && self.proof_bytes_hex.is_none() {
-            return Err(eyre!(
-                "proof_bytes_hex is required when SCCP destination proof parameters are supplied"
-            ));
-        }
-        if self.proof_bytes_hex.is_some() && !has_destination_proof_material {
-            return Err(eyre!(
-                "SCCP deployment destination fields are required when proof_bytes_hex is supplied"
-            ));
-        }
-        if has_destination_proof_material && self.proof_bytes_hex.is_some() {
-            self.validate_destination_proof_material_tuple()?;
-        }
-        Ok(request)
-    }
-
-    fn has_destination_proof_material(&self) -> bool {
-        self.network_id_hex.is_some()
-            || self.verifier_address_hex.is_some()
-            || self.bridge_address_hex.is_some()
-            || self.verifier_code_hash_hex.is_some()
-            || self.verifier_key_hash_hex.is_some()
-            || self.expected_destination_binding_hash_hex.is_some()
-            || self.tron_verifier_address.is_some()
-    }
-
-    fn validate_destination_proof_material_tuple(&self) -> Result<()> {
-        let has_evm_fields =
-            self.verifier_address_hex.is_some() || self.bridge_address_hex.is_some();
-        let has_tron_fields = self.tron_verifier_address.is_some();
-        if has_evm_fields && has_tron_fields {
-            return Err(eyre!(
-                "EVM and TRON SCCP destination fields cannot be mixed"
-            ));
-        }
-        if has_tron_fields {
-            let missing = [
-                ("network_id_hex", self.network_id_hex.is_none()),
-                (
-                    "tron_verifier_address",
-                    self.tron_verifier_address.is_none(),
-                ),
-                (
-                    "verifier_code_hash_hex",
-                    self.verifier_code_hash_hex.is_none(),
-                ),
-                (
-                    "verifier_key_hash_hex",
-                    self.verifier_key_hash_hex.is_none(),
-                ),
-                (
-                    "expected_destination_binding_hash_hex",
-                    self.expected_destination_binding_hash_hex.is_none(),
-                ),
-            ]
-            .into_iter()
-            .filter_map(|(field, missing)| missing.then_some(field))
-            .collect::<Vec<_>>();
-            if !missing.is_empty() {
+fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
+    macro_rules! require_nonzero {
+        ($($field:ident),+ $(,)?) => {
+            $(if limits.$field == 0 {
                 return Err(eyre!(
-                    "complete TRON SCCP deployment destination fields are required; missing {}",
-                    missing.join(", ")
+                    "SCCP capabilities resource_limits.{} must be nonzero",
+                    stringify!($field)
                 ));
-            }
-            return Ok(());
-        }
-        if has_evm_fields {
-            let missing = [
-                ("network_id_hex", self.network_id_hex.is_none()),
-                ("verifier_address_hex", self.verifier_address_hex.is_none()),
-                ("bridge_address_hex", self.bridge_address_hex.is_none()),
-                (
-                    "verifier_code_hash_hex",
-                    self.verifier_code_hash_hex.is_none(),
-                ),
-                (
-                    "verifier_key_hash_hex",
-                    self.verifier_key_hash_hex.is_none(),
-                ),
-                (
-                    "expected_destination_binding_hash_hex",
-                    self.expected_destination_binding_hash_hex.is_none(),
-                ),
-            ]
-            .into_iter()
-            .filter_map(|(field, missing)| missing.then_some(field))
-            .collect::<Vec<_>>();
-            if !missing.is_empty() {
-                return Err(eyre!(
-                    "complete EVM SCCP deployment destination fields are required; missing {}",
-                    missing.join(", ")
-                ));
-            }
-            return Ok(());
-        }
-        Err(eyre!(
-            "complete EVM or TRON SCCP deployment destination fields are required"
-        ))
+            })+
+        };
     }
-}
-
-fn append_sccp_nonzero_hex_query_param(
-    request: DefaultRequestBuilder,
-    key: &'static str,
-    value: Option<&str>,
-    name: &'static str,
-    expected_bytes: Option<usize>,
-) -> Result<DefaultRequestBuilder> {
-    let Some(value) = value else {
-        return Ok(request);
-    };
-    let normalized = normalize_sccp_nonzero_hex_query_param(value, name, expected_bytes)?;
-    Ok(request.param(key, &normalized))
-}
-
-fn append_sccp_tron_base58check_query_param(
-    request: DefaultRequestBuilder,
-    key: &'static str,
-    value: Option<&str>,
-    name: &'static str,
-) -> Result<DefaultRequestBuilder> {
-    let Some(value) = value else {
-        return Ok(request);
-    };
-    let normalized = normalize_sccp_tron_base58check_address(value, name)?;
-    Ok(request.param(key, &normalized))
-}
-
-fn append_sccp_groth16_bn254_proof_query_param(
-    request: DefaultRequestBuilder,
-    key: &'static str,
-    value: Option<&str>,
-    name: &'static str,
-    expected_message_id_hex: &str,
-) -> Result<DefaultRequestBuilder> {
-    let Some(value) = value else {
-        return Ok(request);
-    };
-    let normalized = normalize_sccp_nonzero_hex_query_param(
-        value,
-        name,
-        Some(SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1),
-    )?;
-    let proof_bytes = hex::decode(&normalized).map_err(|_| {
-        eyre!("{name} must be a {SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1}-byte hex string")
-    })?;
-    let expected_message_id = hex::decode(expected_message_id_hex)
-        .wrap_err("normalized SCCP message id could not be decoded")?;
-    preflight_sccp_groth16_bn254_proof_bytes(
-        &proof_bytes,
-        name,
-        Some(expected_message_id.as_slice()),
-    )?;
-    Ok(request.param(key, &normalized))
-}
-
-fn normalize_sccp_nonzero_hex_query_param(
-    value: &str,
-    name: &str,
-    expected_bytes: Option<usize>,
-) -> Result<String> {
-    let trimmed = value.trim();
-    let hex = trimmed
-        .strip_prefix("0x")
-        .or_else(|| trimmed.strip_prefix("0X"))
-        .unwrap_or(trimmed);
-    if hex.is_empty() || !hex.len().is_multiple_of(2) {
-        return Err(sccp_hex_query_param_error(name, expected_bytes));
-    }
-    let decoded = hex::decode(hex).map_err(|_| sccp_hex_query_param_error(name, expected_bytes))?;
-    if decoded.iter().all(|byte| *byte == 0) {
-        return Err(eyre!("{name} must not be all zero"));
-    }
-    if let Some(bytes) = expected_bytes
-        && decoded.len() != bytes
-    {
-        return Err(eyre!("{name} must be a {bytes}-byte hex string"));
-    }
-    Ok(hex.to_ascii_lowercase())
-}
-
-fn normalize_sccp_tron_base58check_address(value: &str, name: &str) -> Result<String> {
-    let normalized = value.trim();
-    if normalized.is_empty() {
-        return Err(eyre!("{name} must be a non-empty string"));
-    }
-    if !iroha_sccp::sccp_tron_verifier_contract_address_is_valid(normalized) {
-        return Err(eyre!("{name} must be a TRON Base58Check address"));
-    }
-    Ok(normalized.to_owned())
-}
-
-fn preflight_sccp_groth16_bn254_proof_bytes(
-    proof_bytes: &[u8],
-    name: &str,
-    expected_message_id: Option<&[u8]>,
-) -> Result<()> {
-    let Some(proof) = iroha_sccp::decode_sccp_evm_groth16_bn254_proof_bytes(proof_bytes) else {
-        return Err(eyre!("{name} must be a valid BN254 Groth16 proof tuple"));
-    };
-    if proof.version != 1 {
-        return Err(eyre!("{name}.version must be 1"));
-    }
-    if proof.message_id.iter().all(|byte| *byte == 0) {
-        return Err(eyre!("{name}.message_id must not be zero"));
-    }
-    if let Some(expected_message_id) = expected_message_id
-        && proof.message_id.as_slice() != expected_message_id
-    {
-        return Err(eyre!("{name}.message_id must match message_id"));
-    }
-    if proof.source_domain != iroha_sccp::SCCP_DOMAIN_SORA {
-        return Err(eyre!("{name}.source_domain must be SORA"));
-    }
-    if proof.commitment_root.iter().all(|byte| *byte == 0) {
-        return Err(eyre!("{name}.commitment_root must not be zero"));
-    }
-    Ok(())
-}
-
-fn normalize_sccp_hex_query_param(
-    value: &str,
-    name: &str,
-    expected_bytes: Option<usize>,
-) -> Result<String> {
-    let trimmed = value.trim();
-    let hex = trimmed
-        .strip_prefix("0x")
-        .or_else(|| trimmed.strip_prefix("0X"))
-        .unwrap_or(trimmed);
-    let valid_length = expected_bytes.map_or_else(
-        || !hex.is_empty() && hex.len().is_multiple_of(2),
-        |bytes| hex.len() == bytes * 2,
+    require_nonzero!(
+        max_proofs_per_transaction,
+        max_proofs_per_block,
+        max_proof_bytes_per_proof,
+        max_proof_bytes_per_transaction,
+        max_proof_bytes_per_block,
+        max_native_headers_per_transaction,
+        max_native_headers_per_block,
+        max_ethereum_light_client_updates_per_transaction,
+        max_ethereum_light_client_updates_per_block,
+        max_native_header_bytes_per_transaction,
+        max_native_header_bytes_per_block,
+        max_secp256k1_recoveries_per_transaction,
+        max_secp256k1_recoveries_per_block,
+        max_bls_aggregate_checks_per_transaction,
+        max_bls_aggregate_checks_per_block,
+        max_bls_signer_contributions_per_transaction,
+        max_bls_signer_contributions_per_block,
+        max_bn254_pairing_checks_per_transaction,
+        max_bn254_pairing_checks_per_block,
     );
-    if !valid_length || hex::decode(hex).is_err() {
-        return Err(sccp_hex_query_param_error(name, expected_bytes));
-    }
-    Ok(hex.to_ascii_lowercase())
-}
-
-fn sccp_hex_query_param_error(name: &str, expected_bytes: Option<usize>) -> eyre::Report {
-    expected_bytes.map_or_else(
-        || eyre!("{name} must be a non-empty byte-aligned hex string"),
-        |bytes| eyre!("{name} must be a {bytes}-byte hex string"),
-    )
-}
-
-#[derive(Clone, Copy, Debug)]
-enum BridgeSubmitJsonEndpoint {
-    Proof,
-    Message,
-}
-
-fn preflight_sccp_bridge_submit_json(
-    value: &JsonValue,
-    endpoint: BridgeSubmitJsonEndpoint,
-) -> Result<()> {
-    let JsonValue::Object(fields) = value else {
-        return Ok(());
-    };
-    let proof_bytes_present =
-        !matches!(fields.get("proof_bytes_hex"), None | Some(JsonValue::Null));
-    if let Some(proof_bytes_hex) = fields.get("proof_bytes_hex") {
-        if let JsonValue::String(value) = proof_bytes_hex {
-            let proof_bytes_hex = normalize_sccp_nonzero_hex_query_param(
-                value,
-                "proof_bytes_hex",
-                Some(SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1),
-            )?;
-            let proof_bytes = hex::decode(&proof_bytes_hex)
-                .map_err(|_| eyre!("proof_bytes_hex must be a 384-byte hex string"))?;
-            preflight_sccp_groth16_bn254_proof_bytes(&proof_bytes, "proof_bytes_hex", None)?;
-            preflight_sccp_bridge_submit_proof_context(&proof_bytes, fields)?;
-        } else if !matches!(proof_bytes_hex, JsonValue::Null) {
-            return Err(eyre!("proof_bytes_hex must be a 384-byte hex string"));
-        }
-    }
-    let destination_material_present = preflight_sccp_bridge_submit_destination_material(fields)?;
-    if destination_material_present && !proof_bytes_present {
-        return Err(eyre!(
-            "proof_bytes_hex is required when SCCP destination proof parameters are supplied"
-        ));
-    }
-    if proof_bytes_present && !destination_material_present {
-        return Err(eyre!(
-            "SCCP deployment destination fields are required when proof_bytes_hex is supplied"
-        ));
-    }
-    if destination_material_present && proof_bytes_present {
-        preflight_sccp_bridge_submit_destination_material_tuple(fields)?;
-    }
-    preflight_sccp_bridge_submit_bundle_selection(fields, endpoint)?;
-    Ok(())
-}
-
-fn preflight_sccp_bridge_submit_bundle_selection(
-    fields: &JsonMap,
-    endpoint: BridgeSubmitJsonEndpoint,
-) -> Result<()> {
-    let has_burn_bundle = sccp_bridge_submit_field_present(fields, "burn_bundle");
-    let has_message_bundle = sccp_bridge_submit_field_present(fields, "message_bundle");
-    match endpoint {
-        BridgeSubmitJsonEndpoint::Proof => {
-            if usize::from(has_burn_bundle) + usize::from(has_message_bundle) != 1 {
+    macro_rules! require_json_safe {
+        ($($field:ident),+ $(,)?) => {
+            $(if limits.$field > iroha_data_model::bridge::SCCP_V1_JSON_SAFE_INTEGER_MAX {
                 return Err(eyre!(
-                    "bridge proof submit must provide exactly one of burn_bundle or message_bundle"
+                    "SCCP capabilities resource_limits.{} exceeds the V1 JSON-safe integer maximum",
+                    stringify!($field)
+                ));
+            })+
+        };
+    }
+    require_json_safe!(
+        max_proof_bytes_per_proof,
+        max_proof_bytes_per_transaction,
+        max_proof_bytes_per_block,
+        max_native_header_bytes_per_transaction,
+        max_native_header_bytes_per_block,
+    );
+    if limits.max_proof_bytes_per_proof > limits.max_proof_bytes_per_transaction {
+        return Err(eyre!(
+            "SCCP capabilities per-proof byte limit must not exceed its transaction limit"
+        ));
+    }
+    macro_rules! require_transaction_within_block {
+        ($transaction:ident, $block:ident, $label:literal) => {
+            if limits.$transaction > limits.$block {
+                return Err(eyre!(
+                    "SCCP capabilities transaction {} limit must not exceed its block limit",
+                    $label
                 ));
             }
-            if has_burn_bundle && sccp_bridge_submit_destination_or_proof_present(fields) {
-                return Err(eyre!(
-                    "SCCP destination fields and proof_bytes_hex are only valid for message_bundle submissions"
-                ));
-            }
-        }
-        BridgeSubmitJsonEndpoint::Message => {
-            if !has_message_bundle {
-                return Err(eyre!("bridge message submit requires message_bundle"));
-            }
-            if has_burn_bundle {
-                return Err(eyre!("bridge message submit does not accept burn_bundle"));
-            }
-        }
+        };
     }
+    require_transaction_within_block!(
+        max_proofs_per_transaction,
+        max_proofs_per_block,
+        "proof count"
+    );
+    require_transaction_within_block!(
+        max_proof_bytes_per_transaction,
+        max_proof_bytes_per_block,
+        "proof bytes"
+    );
+    require_transaction_within_block!(
+        max_native_headers_per_transaction,
+        max_native_headers_per_block,
+        "native headers"
+    );
+    require_transaction_within_block!(
+        max_ethereum_light_client_updates_per_transaction,
+        max_ethereum_light_client_updates_per_block,
+        "Ethereum light-client updates"
+    );
+    require_transaction_within_block!(
+        max_native_header_bytes_per_transaction,
+        max_native_header_bytes_per_block,
+        "native header bytes"
+    );
+    require_transaction_within_block!(
+        max_secp256k1_recoveries_per_transaction,
+        max_secp256k1_recoveries_per_block,
+        "secp256k1 recoveries"
+    );
+    require_transaction_within_block!(
+        max_bls_aggregate_checks_per_transaction,
+        max_bls_aggregate_checks_per_block,
+        "BLS aggregate checks"
+    );
+    require_transaction_within_block!(
+        max_bls_signer_contributions_per_transaction,
+        max_bls_signer_contributions_per_block,
+        "BLS signer contributions"
+    );
+    require_transaction_within_block!(
+        max_bn254_pairing_checks_per_transaction,
+        max_bn254_pairing_checks_per_block,
+        "BN254 pairing checks"
+    );
     Ok(())
 }
 
-fn sccp_bridge_submit_destination_or_proof_present(fields: &JsonMap) -> bool {
-    sccp_bridge_submit_field_present(fields, "proof_bytes_hex")
-        || [
-            "network_id_hex",
-            "verifier_address_hex",
-            "bridge_address_hex",
-            "verifier_code_hash_hex",
-            "verifier_key_hash_hex",
-            "expected_destination_binding_hash_hex",
-            "tron_verifier_address",
-        ]
-        .into_iter()
-        .any(|field| sccp_bridge_submit_field_present(fields, field))
-}
-
-fn sccp_bridge_submit_field_present(fields: &JsonMap, field: &str) -> bool {
-    !matches!(fields.get(field), None | Some(JsonValue::Null))
-}
-
-fn preflight_sccp_bridge_submit_destination_material_tuple(fields: &JsonMap) -> Result<()> {
-    let has_evm_fields = sccp_bridge_submit_field_present(fields, "verifier_address_hex")
-        || sccp_bridge_submit_field_present(fields, "bridge_address_hex");
-    let has_tron_fields = sccp_bridge_submit_field_present(fields, "tron_verifier_address");
-    if has_evm_fields && has_tron_fields {
+fn validate_sccp_capabilities(capabilities: &SccpCapabilities) -> Result<()> {
+    if capabilities.version != 1 {
+        return Err(eyre!("SCCP capabilities version must be exactly 1"));
+    }
+    decode_exact_prefixed_nonzero_sccp_hex32(
+        &capabilities.registry_revision,
+        "SCCP capabilities registry revision",
+    )?;
+    if capabilities.registry_limits != expected_sccp_registry_limits() {
         return Err(eyre!(
-            "EVM and TRON SCCP destination fields cannot be mixed"
+            "SCCP capabilities registry_limits must equal the fixed V1 limits"
         ));
     }
-    if has_tron_fields {
-        let missing = [
-            "network_id_hex",
-            "tron_verifier_address",
-            "verifier_code_hash_hex",
-            "verifier_key_hash_hex",
-            "expected_destination_binding_hash_hex",
-        ]
-        .into_iter()
-        .filter(|field| !sccp_bridge_submit_field_present(fields, field))
-        .collect::<Vec<_>>();
-        if !missing.is_empty() {
-            return Err(eyre!(
-                "complete TRON SCCP deployment destination fields are required; missing {}",
-                missing.join(", ")
-            ));
-        }
-        return Ok(());
-    }
-    if has_evm_fields {
-        let missing = [
-            "network_id_hex",
-            "verifier_address_hex",
-            "bridge_address_hex",
-            "verifier_code_hash_hex",
-            "verifier_key_hash_hex",
-            "expected_destination_binding_hash_hex",
-        ]
-        .into_iter()
-        .filter(|field| !sccp_bridge_submit_field_present(fields, field))
-        .collect::<Vec<_>>();
-        if !missing.is_empty() {
-            return Err(eyre!(
-                "complete EVM SCCP deployment destination fields are required; missing {}",
-                missing.join(", ")
-            ));
-        }
-        return Ok(());
-    }
-    Err(eyre!(
-        "complete EVM or TRON SCCP deployment destination fields are required"
-    ))
-}
-
-fn preflight_sccp_bridge_submit_proof_context(proof_bytes: &[u8], fields: &JsonMap) -> Result<()> {
-    let Some((message_id, commitment_root)) = sccp_bridge_submit_message_proof_context(fields)?
-    else {
-        return Ok(());
-    };
-    if sccp_abi_word(proof_bytes, 0) != sccp_abi_word_u32(1).as_slice() {
-        return Err(eyre!("proof_bytes_hex.version must be 1"));
-    }
-    if sccp_abi_word(proof_bytes, 1) != message_id.as_slice() {
-        return Err(eyre!(
-            "proof_bytes_hex.message_id must match message_bundle.commitment.message_id"
-        ));
-    }
-    if sccp_abi_word(proof_bytes, 2) != sccp_abi_word_u32(iroha_sccp::SCCP_DOMAIN_SORA).as_slice() {
-        return Err(eyre!("proof_bytes_hex.source_domain must be SORA"));
-    }
-    if sccp_abi_word(proof_bytes, 3) != commitment_root.as_slice() {
-        return Err(eyre!(
-            "proof_bytes_hex.commitment_root must match message_bundle.commitment_root"
-        ));
-    }
-    Ok(())
-}
-
-fn preflight_sccp_bridge_submit_destination_material(fields: &JsonMap) -> Result<bool> {
-    let mut present = false;
-    for (field, expected_bytes) in [
-        ("network_id_hex", 32),
-        ("verifier_address_hex", 20),
-        ("bridge_address_hex", 20),
-        ("verifier_code_hash_hex", 32),
-        ("verifier_key_hash_hex", 32),
-        ("expected_destination_binding_hash_hex", 32),
+    validate_sccp_resource_limits(capabilities.resource_limits)?;
+    for (actual, expected, label) in [
+        (
+            capabilities.registry_path.as_str(),
+            "/v1/sccp/registry",
+            "registry_path",
+        ),
+        (
+            capabilities.message_bundle_path.as_str(),
+            "/v1/sccp/proofs/message/{message_id}",
+            "message_bundle_path",
+        ),
+        (
+            capabilities.proof_request_path.as_str(),
+            "/v1/sccp/proof-requests/{message_id}",
+            "proof_request_path",
+        ),
+        (
+            capabilities.recent_messages_path.as_str(),
+            "/v1/sccp/messages/recent",
+            "recent_messages_path",
+        ),
     ] {
-        let Some(value) = fields.get(field) else {
-            continue;
-        };
-        if matches!(value, JsonValue::Null) {
-            continue;
+        if actual != expected {
+            return Err(eyre!(
+                "SCCP capabilities {label} must be the exact first-release path `{expected}`"
+            ));
         }
-        let JsonValue::String(value) = value else {
-            return Err(eyre!("{field} must be a {expected_bytes}-byte hex string"));
-        };
-        normalize_sccp_nonzero_hex_query_param(value, field, Some(expected_bytes))?;
-        present = true;
     }
-
-    if let Some(value) = fields.get("tron_verifier_address")
-        && !matches!(value, JsonValue::Null)
-    {
-        let JsonValue::String(value) = value else {
-            return Err(eyre!("tron_verifier_address must be a non-empty string"));
-        };
-        normalize_sccp_tron_base58check_address(value, "tron_verifier_address")?;
-        present = true;
+    match (
+        capabilities.proof_submit_path.as_deref(),
+        capabilities.native_message_submit_path.as_deref(),
+    ) {
+        (None, None) => {}
+        (Some("/v1/bridge/proofs/submit"), Some("/v1/bridge/messages")) => {}
+        _ => {
+            return Err(eyre!(
+                "SCCP capabilities must advertise both exact submit paths or neither"
+            ));
+        }
     }
-
-    Ok(present)
-}
-
-fn sccp_bridge_submit_message_proof_context(
-    fields: &JsonMap,
-) -> Result<Option<([u8; 32], [u8; 32])>> {
-    let Some(JsonValue::Object(message_bundle)) = fields
-        .get("message_bundle")
-        .or_else(|| fields.get("messageBundle"))
-    else {
-        return Ok(None);
-    };
-    let Some(JsonValue::Object(commitment)) = message_bundle.get("commitment") else {
-        return Ok(None);
-    };
-    let Some(message_id) = commitment
-        .get("message_id")
-        .or_else(|| commitment.get("messageId"))
-    else {
-        return Ok(None);
-    };
-    let Some(commitment_root) = message_bundle
-        .get("commitment_root")
-        .or_else(|| message_bundle.get("commitmentRoot"))
-    else {
-        return Ok(None);
-    };
-    Ok(Some((
-        sccp_bridge_submit_json_hex32(message_id, "message_bundle.commitment.message_id")?,
-        sccp_bridge_submit_json_hex32(commitment_root, "message_bundle.commitment_root")?,
-    )))
-}
-
-fn sccp_bridge_submit_json_hex32(value: &JsonValue, name: &str) -> Result<[u8; 32]> {
-    let JsonValue::String(value) = value else {
-        return Err(eyre!("{name} must be a 32-byte hex string"));
-    };
-    let normalized = normalize_sccp_hex_query_param(value, name, Some(32))?;
-    let mut out = [0u8; 32];
-    hex::decode_to_slice(normalized, &mut out)
-        .map_err(|_| eyre!("{name} must be a 32-byte hex string"))?;
-    Ok(out)
-}
-
-fn sccp_abi_word(proof_bytes: &[u8], index: usize) -> &[u8] {
-    let start = index * 32;
-    &proof_bytes[start..start + 32]
-}
-
-fn sccp_abi_word_u32(value: u32) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    out[28..32].copy_from_slice(&value.to_be_bytes());
-    out
+    Ok(())
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
 )]
-/// Public SCCP proof-manifest snapshot advertised by the node.
-pub struct SccpProofManifestSet {
-    /// Numeric SCCP domain identifier for the local Nexus chain.
-    pub local_domain: u32,
-    /// Stable logical key for the local chain.
-    pub local_chain: String,
-    /// Canonical transparent-ZK proof family for generic SCCP message proofs.
-    pub proof_family: String,
-    /// Chain-specific proof manifests keyed by counterparty domain.
-    pub manifests: Vec<iroha_sccp::SccpProofManifestV1>,
+#[norito(deny_unknown_fields)]
+/// Exact response returned by either SCCP bridge submit endpoint.
+pub struct SccpBridgeSubmitResponse {
+    /// Whether Torii submitted the transaction to the pipeline.
+    pub submitted: bool,
+    /// Closed SCCP payload kind admitted or prepared by the request.
+    pub payload_kind: String,
+    /// Hex-encoded canonical SCCP message id.
+    pub message_id_hex: String,
+    /// Bridge proof backend label stored in the registry.
+    pub backend: String,
+    /// SCCP domain of the exact external counterparty.
+    pub counterparty_domain: u32,
+    /// Canonical exact-network profile key of the external counterparty.
+    pub counterparty_chain: String,
+    /// Hex-encoded exact historical SCCP route-configuration commitment.
+    pub route_configuration_hash_hex: String,
+    /// Inclusive first source height covered by the proof.
+    pub range_start_height: u64,
+    /// Inclusive last source height covered by the proof.
+    pub range_end_height: u64,
+    /// Transaction creation timestamp in Unix milliseconds.
+    pub creation_time_ms: u64,
+    /// Canonical submitted transaction hash, present only after submission.
+    pub tx_hash_hex: Option<String>,
+    /// Canonical Norito transaction-payload bytes, present only during preparation.
+    pub transaction_payload_b64: Option<String>,
+    /// Exact 32-byte transaction signing prehash, present only during preparation.
+    pub signing_message_b64: Option<String>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Canonical readback and proof-request links for a recent SCCP message.
+pub struct SccpRecentMessageLinks {
+    /// Canonical SCCP bundle lookup path.
+    pub bundle_path: String,
+    /// Query-free canonical Groth16 request lookup path.
+    pub proof_request_path: String,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Compact newest-first SCCP outbound message discovery record.
+pub struct SccpRecentMessage {
+    /// Height of the finalized SORA block that anchored the message.
+    pub height: u64,
+    /// Hex-encoded canonical lane-bound SCCP message id.
+    pub message_id_hex: String,
+    /// Stable logical SCCP payload kind.
+    pub kind: String,
+    /// Exact SORA source profile committed by the message.
+    pub source_profile: String,
+    /// Exact external destination profile committed by the message.
+    pub target_profile: String,
+    /// Hex-encoded destination binding committed when the message was recorded.
+    pub destination_binding_hash: String,
+    /// Hex-encoded immutable governed route configuration.
+    pub route_configuration_hash: String,
+    /// Numeric SCCP target domain.
+    pub target_domain: u32,
+    /// Decoded asset id when representable as text.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub asset_id: Option<String>,
+    /// Decoded route id when representable as text.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub route_id: Option<String>,
+    /// Decoded recipient when representable as text.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub recipient: Option<String>,
+    /// Decimal-string transfer amount.
+    pub amount: String,
+    /// Required normalized decoded payload projection.
+    pub payload_projection: iroha_sccp::SccpPayloadProjectionV1,
+    /// Canonical bundle and proof-request links.
+    pub links: SccpRecentMessageLinks,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Newest-first committed SCCP message discovery response.
+pub struct SccpRecentMessages {
+    /// Newest-first committed outbound SCCP messages.
+    pub items: Vec<SccpRecentMessage>,
+}
+
+fn sccp_recent_projection_text(value: &iroha_sccp::SccpNormalizedCodecValueV1) -> Option<&str> {
+    match value {
+        iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText { value } => Some(value.as_str()),
+        _ => None,
+    }
+}
+
+fn sccp_recent_projection_value_is_canonical(
+    value: &iroha_sccp::SccpNormalizedCodecValueV1,
+) -> bool {
+    let (codec, bytes): (u8, &[u8]) = match value {
+        iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText { value } => {
+            (iroha_sccp::SCCP_CODEC_CANONICAL_TEXT, value.as_bytes())
+        }
+        iroha_sccp::SccpNormalizedCodecValueV1::EvmAddress20 { bytes } => {
+            (iroha_sccp::SCCP_CODEC_EVM_ADDRESS20, bytes)
+        }
+        iroha_sccp::SccpNormalizedCodecValueV1::TronAddress21 { bytes } => {
+            (iroha_sccp::SCCP_CODEC_TRON_ADDRESS21, bytes)
+        }
+    };
+    iroha_sccp::decode_sccp_normalized_codec_value(codec, bytes).as_ref() == Some(value)
+}
+
+fn validate_sccp_recent_projection(
+    item: &SccpRecentMessage,
+    source: iroha_data_model::bridge::SccpNetworkV1,
+    target: iroha_data_model::bridge::SccpNetworkV1,
+    parsed_amount: u128,
+    label: &str,
+) -> Result<()> {
+    let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) = &item.payload_projection;
+    let recipient_matches_target = match (target, &transfer.recipient) {
+        (
+            iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet
+            | iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia
+            | iroha_data_model::bridge::SccpNetworkV1::BscMainnet
+            | iroha_data_model::bridge::SccpNetworkV1::BscTestnet,
+            iroha_sccp::SccpNormalizedCodecValueV1::EvmAddress20 { .. },
+        )
+        | (
+            iroha_data_model::bridge::SccpNetworkV1::TronMainnet
+            | iroha_data_model::bridge::SccpNetworkV1::TronNile
+            | iroha_data_model::bridge::SccpNetworkV1::TronShasta,
+            iroha_sccp::SccpNormalizedCodecValueV1::TronAddress21 { .. },
+        ) => true,
+        _ => false,
+    };
+    if transfer.version != 1
+        || transfer.source_domain != source.domain_id()
+        || transfer.dest_domain != target.domain_id()
+        || transfer.route_revision == 0
+        || transfer.asset_home_domain != iroha_sccp::SCCP_DOMAIN_SORA
+        || transfer.amount != parsed_amount
+        || !matches!(
+            &transfer.sender,
+            iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText { .. }
+        )
+        || !recipient_matches_target
+        || [
+            &transfer.asset_id,
+            &transfer.sender,
+            &transfer.recipient,
+            &transfer.route_id,
+        ]
+        .into_iter()
+        .any(|value| !sccp_recent_projection_value_is_canonical(value))
+        || item.asset_id.as_deref() != sccp_recent_projection_text(&transfer.asset_id)
+        || item.route_id.as_deref() != sccp_recent_projection_text(&transfer.route_id)
+        || item.recipient.as_deref() != sccp_recent_projection_text(&transfer.recipient)
+    {
+        return Err(eyre!(
+            "{label} summary does not exactly match its required payload projection"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sccp_recent_messages(messages: &SccpRecentMessages) -> Result<()> {
+    if messages.items.len() > 50 {
+        return Err(eyre!(
+            "SCCP recent response exceeds the 50-item protocol cap"
+        ));
+    }
+    let mut message_ids = std::collections::BTreeSet::new();
+    let mut previous_height = u64::MAX;
+    for (index, item) in messages.items.iter().enumerate() {
+        let label = format!("SCCP recent item {index}");
+        if item.height == 0 || item.height > previous_height {
+            return Err(eyre!(
+                "{label} must have a positive height in newest-first order"
+            ));
+        }
+        previous_height = item.height;
+        let message_id =
+            decode_exact_nonzero_sccp_hex32(&item.message_id_hex, &format!("{label} message id"))?;
+        if !message_ids.insert(message_id) {
+            return Err(eyre!("SCCP recent response contains duplicate message ids"));
+        }
+        if item.kind != "transfer" {
+            return Err(eyre!("{label} has an unsupported or retired payload kind"));
+        }
+        let source =
+            iroha_data_model::bridge::SccpNetworkV1::from_profile_key(&item.source_profile)
+                .ok_or_else(|| eyre!("{label} has an unsupported source profile"))?;
+        let target =
+            iroha_data_model::bridge::SccpNetworkV1::from_profile_key(&item.target_profile)
+                .ok_or_else(|| eyre!("{label} has an unsupported target profile"))?;
+        let lane = iroha_data_model::bridge::SccpLaneIdV1 { source, target };
+        if source != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
+            || !target.is_external()
+            || !lane.is_well_formed()
+            || item.target_domain != target.domain_id()
+        {
+            return Err(eyre!(
+                "{label} does not describe an exact Taira-to-external lane"
+            ));
+        }
+        let binding = decode_exact_prefixed_nonzero_sccp_hex32(
+            &item.destination_binding_hash,
+            &format!("{label} destination binding hash"),
+        )?;
+        let configuration = decode_exact_prefixed_nonzero_sccp_hex32(
+            &item.route_configuration_hash,
+            &format!("{label} route configuration hash"),
+        )?;
+        if binding == configuration || binding == message_id || configuration == message_id {
+            return Err(eyre!("{label} reuses a role-separated commitment"));
+        }
+        let Ok(parsed_amount) = item.amount.parse::<u128>() else {
+            return Err(eyre!(
+                "{label} amount must be a positive canonical u128 decimal"
+            ));
+        };
+        if parsed_amount == 0 || parsed_amount.to_string() != item.amount {
+            return Err(eyre!(
+                "{label} amount must be a positive canonical u128 decimal"
+            ));
+        }
+        validate_sccp_recent_projection(item, source, target, parsed_amount, &label)?;
+        let expected_bundle = format!("/v1/sccp/proofs/message/{}", item.message_id_hex);
+        let expected_request = format!("/v1/sccp/proof-requests/{}", item.message_id_hex);
+        if item.links.bundle_path != expected_bundle
+            || item.links.proof_request_path != expected_request
+        {
+            return Err(eyre!("{label} contains a mismatched SCCP readback link"));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Optional history window for recent SCCP message discovery.
+pub struct SccpRecentMessagesQuery {
+    /// Inclusive block height from which to scan backwards.
+    pub from: Option<u64>,
+    /// Maximum number of messages to return; Torii caps this at 50.
+    pub limit: Option<u64>,
+}
+
+impl SccpRecentMessagesQuery {
+    /// Validate the closed first-release history window.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for block height zero or a result limit outside `1..=50`.
+    pub fn validate(self) -> Result<()> {
+        if self.from == Some(0) {
+            return Err(eyre!(
+                "SCCP recent query `from` must be a positive block height"
+            ));
+        }
+        if self.limit.is_some_and(|limit| !(1..=50).contains(&limit)) {
+            return Err(eyre!("SCCP recent query `limit` must be between 1 and 50"));
+        }
+        Ok(())
+    }
+
+    fn apply_to_url(self, url: &mut Url) -> Result<()> {
+        self.validate()?;
+        if let Some(from) = self.from {
+            url.query_pairs_mut().append_pair("from", &from.to_string());
+        }
+        if let Some(limit) = self.limit {
+            url.query_pairs_mut()
+                .append_pair("limit", &limit.to_string());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize)]
+#[norito(deny_unknown_fields)]
+/// Exact request for a finalized SCCP destination proof.
+///
+/// The proof artifact contains the state-derived request, governed route,
+/// verification key, semantic profile, finality anchor, and proof result.
+/// Callers cannot override any route material with query parameters.
+pub struct SccpDestinationProofSubmitRequest {
+    /// Account authorizing the bridge-proof transaction.
+    pub authority: iroha_data_model::account::AccountId,
+    /// Optional canonical padded-base64 signature for the authority's key algorithm.
+    #[norito(default)]
+    pub signature_b64: Option<String>,
+    /// Exact canonical transaction payload returned by preparation.
+    ///
+    /// Direct submission requires this field together with `signature_b64`; preparation requires
+    /// both to be absent.
+    #[norito(default)]
+    pub transaction_payload_b64: Option<String>,
+    /// Canonical padded-base64 Norito SCCP Groth16 artifact.
+    pub destination_proof_b64: String,
+    /// Optional fixed creation timestamp for deterministic detached signing.
+    #[norito(default)]
+    pub creation_time_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize)]
+#[norito(deny_unknown_fields)]
+/// Exact request for protocol-native external-to-SORA admission.
+pub struct SccpNativeMessageSubmitRequest {
+    /// Account authorizing the bridge-message transaction.
+    pub authority: iroha_data_model::account::AccountId,
+    /// Optional canonical padded-base64 signature for the authority's key algorithm.
+    #[norito(default)]
+    pub signature_b64: Option<String>,
+    /// Exact canonical transaction payload returned by preparation.
+    ///
+    /// Direct submission requires this field together with `signature_b64`; preparation requires
+    /// both to be absent.
+    #[norito(default)]
+    pub transaction_payload_b64: Option<String>,
+    /// Canonical padded-base64 Norito native inbound SCCP proof.
+    pub native_proof_b64: String,
+    /// Optional fixed creation timestamp for deterministic detached signing.
+    #[norito(default)]
+    pub creation_time_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize)]
+#[norito(deny_unknown_fields)]
+/// Exact caller-side request for an SCCP route-governance proposal draft.
+pub struct SccpRouteGovernanceDraftRequest {
+    /// Atomic closed registry action proposed for enactment.
+    pub action: iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1,
+    /// Optional inclusive referendum window.
+    #[norito(default)]
+    pub window: Option<iroha_data_model::isi::governance::AtWindow>,
+    /// Optional exact voting mode (`Zk` or `Plain`).
+    #[norito(default)]
+    pub mode: Option<iroha_data_model::isi::governance::VotingMode>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+/// One canonical instruction returned by the SCCP governance draft endpoint.
+pub struct SccpRouteGovernanceInstructionDraft {
+    /// Registered instruction wire identifier.
+    pub wire_id: String,
+    /// Lowercase hexadecimal canonical framed instruction bytes.
+    pub payload_hex: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+/// Exact validated response from the SCCP route-governance draft endpoint.
+pub struct SccpRouteGovernanceDraftResponse {
+    /// Whether draft construction succeeded.
+    pub ok: bool,
+    /// Deterministic lowercase action proposal id.
+    pub proposal_id: String,
+    /// Exactly one typed `ProposeSccpRouteGovernance` instruction.
+    pub tx_instructions: Vec<SccpRouteGovernanceInstructionDraft>,
+}
+
+fn sccp_route_governance_proposal_id(
+    action: &iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1,
+) -> Result<[u8; 32]> {
+    use blake2::{Blake2b512, Digest as _};
+
+    let canonical = norito::codec::Encode::encode(action);
+    let action_len: u32 = canonical
+        .len()
+        .try_into()
+        .map_err(|_| eyre!("SCCP route governance action exceeds 2^32 bytes"))?;
+    let mut input = Vec::with_capacity(
+        b"iroha:gov:sccp-route-governance:proposal:v1|".len()
+            + core::mem::size_of::<u32>()
+            + canonical.len(),
+    );
+    input.extend_from_slice(b"iroha:gov:sccp-route-governance:proposal:v1|");
+    input.extend_from_slice(&action_len.to_le_bytes());
+    input.extend_from_slice(&canonical);
+    let digest = Blake2b512::digest(input);
+    let mut proposal_id = [0_u8; 32];
+    proposal_id.copy_from_slice(&digest[..32]);
+    Ok(proposal_id)
+}
+
+fn validate_sccp_route_governance_draft_response(
+    response: &SccpRouteGovernanceDraftResponse,
+    request: &SccpRouteGovernanceDraftRequest,
+) -> Result<()> {
+    if !response.ok {
+        return Err(eyre!(
+            "SCCP route-governance draft response is not successful"
+        ));
+    }
+    let expected_proposal_id = sccp_route_governance_proposal_id(&request.action)?;
+    if decode_exact_nonzero_sccp_hex32(&response.proposal_id, "SCCP route-governance proposal id")?
+        != expected_proposal_id
+    {
+        return Err(eyre!(
+            "SCCP route-governance proposal id does not match the requested action"
+        ));
+    }
+    let [draft] = response.tx_instructions.as_slice() else {
+        return Err(eyre!(
+            "SCCP route-governance draft must contain exactly one instruction"
+        ));
+    };
+    if draft.payload_hex.is_empty()
+        || draft.payload_hex.len() % 2 != 0
+        || !draft
+            .payload_hex
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(eyre!(
+            "SCCP route-governance instruction payload must be lowercase canonical hex"
+        ));
+    }
+    let payload = hex::decode(&draft.payload_hex)
+        .wrap_err("failed to decode SCCP route-governance instruction payload")?;
+    let instruction = iroha_data_model::isi::decode_instruction_from_pair(&draft.wire_id, &payload)
+        .wrap_err("failed to decode SCCP route-governance instruction draft")?;
+    let proposed = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>()
+        .ok_or_else(|| {
+            eyre!("SCCP route-governance draft returned a different instruction type")
+        })?;
+    if proposed.action != request.action
+        || proposed.window != request.window
+        || proposed.mode != request.mode
+    {
+        return Err(eyre!(
+            "SCCP route-governance instruction does not match the exact requested action, window, and mode"
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
+enum SccpBridgeExpectedProofPayload {
+    Destination(iroha_data_model::bridge::BridgeSccpDestinationProofV1),
+    Native {
+        encoded_envelope: Vec<u8>,
+        backend: iroha_data_model::bridge::BridgeNativeProofBackendV1,
+    },
+}
+
+#[derive(Clone, Debug)]
+enum SccpBridgeExpectedRouteBinding {
+    Exact([u8; 32]),
+    GovernedNative(Box<iroha_sccp::SccpNativeInboundMessageProofV1>),
+}
+
+#[derive(Clone, Debug)]
+struct SccpBridgeSubmitExpectation {
+    authority: iroha_data_model::account::AccountId,
+    creation_time_ms: Option<u64>,
+    payload_kind: String,
+    message_id: [u8; 32],
+    counterparty: iroha_data_model::bridge::SccpNetworkV1,
+    backend: String,
+    route_binding: SccpBridgeExpectedRouteBinding,
+    range_start_height: u64,
+    range_end_height: u64,
+    proof_payload: SccpBridgeExpectedProofPayload,
+}
+
+fn resolve_sccp_expected_route_configuration_hash(
+    expectation: &SccpBridgeSubmitExpectation,
+    registry: Option<&iroha_data_model::bridge::SccpRegistryV1>,
+) -> Result<[u8; 32]> {
+    let native = match &expectation.route_binding {
+        SccpBridgeExpectedRouteBinding::Exact(route_configuration_hash) => {
+            return Ok(*route_configuration_hash);
+        }
+        SccpBridgeExpectedRouteBinding::GovernedNative(native) => native,
+    };
+
+    let registry = registry.ok_or_else(|| {
+        eyre!("native SCCP submission requires the authoritative typed route registry")
+    })?;
+    registry
+        .validate()
+        .map_err(|error| eyre!("node returned an invalid SCCP registry: {error}"))?;
+
+    let lane_id = native.source.lane;
+    let lane = registry
+        .lanes
+        .iter()
+        .find(|candidate| candidate.lane_id == lane_id)
+        .ok_or_else(|| {
+            eyre!(
+                "native SCCP lane {}->{} is not governed by the authoritative registry",
+                lane_id.source.profile_key(),
+                lane_id.target.profile_key()
+            )
+        })?;
+    let submitted_anchor = native.source.trust_anchor;
+    let (trust_anchor, inclusive_successor_boundary) = lane
+        .native_trust_anchor_interval(submitted_anchor.anchor_hash)
+        .ok_or_else(|| eyre!("native SCCP proof names no retained governed trust anchor"))?;
+    if trust_anchor != submitted_anchor {
+        return Err(eyre!(
+            "native SCCP proof forges retained governed trust-anchor material"
+        ));
+    }
+    if trust_anchor.backend != native.source.proof.backend() {
+        return Err(eyre!(
+            "native SCCP proof backend does not match the governed lane trust anchor"
+        ));
+    }
+    let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &native.payload;
+    let route = lane
+        .routes
+        .iter()
+        .find(|route| {
+            route.route_id.as_bytes() == transfer.route_id.as_slice()
+                && route.asset_key.as_bytes() == transfer.asset_id.as_slice()
+                && route.revision == transfer.route_revision
+                && iroha_data_model::bridge::sccp_source_identity_hash_v1(
+                    &route.source_identity,
+                ) == Some(native.source.source_identity_hash)
+        })
+        .ok_or_else(|| {
+            eyre!(
+                "native SCCP payload and authenticated source identity select no retained governed route"
+            )
+        })?;
+    let validated = iroha_sccp::verify_sccp_native_inbound_message_proof_v1(
+        native,
+        &route.source_identity,
+        trust_anchor,
+    )
+    .map_err(|error| eyre!("native SCCP proof failed governed verification: {error}"))?;
+    if !trust_anchor.admits_anchor_interval_height(
+        validated.anchor_interval_height,
+        inclusive_successor_boundary,
+    ) {
+        return Err(eyre!(
+            "native SCCP proof consensus progress is outside its governed trust-anchor interval"
+        ));
+    }
+    if !route.allows_inbound_at(validated.anchor_interval_height) {
+        return Err(eyre!(
+            "native SCCP proof is above the retired route's authenticated anchor-interval cutoff"
+        ));
+    }
+    route
+        .route_configuration_hash()
+        .map_err(|error| eyre!("governed SCCP route has no exact configuration hash: {error}"))
+}
+
+fn validate_taira_only_sccp_registry(
+    registry: &iroha_data_model::bridge::SccpRegistryV1,
+) -> Result<()> {
+    registry
+        .validate()
+        .map_err(|error| eyre!("node returned an invalid SCCP registry: {error}"))?;
+    if registry.lanes.iter().any(|lane| {
+        lane.lane_id.target != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
+            || !lane.lane_id.source.is_external()
+            || lane.routes.iter().any(|route| {
+                route.lane_id.target != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
+            })
+    }) {
+        return Err(eyre!(
+            "node returned an SCCP registry outside the exact first-release Taira surface"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sccp_taira_client_chain(chain: &ChainId) -> Result<()> {
+    if chain.to_string() != iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1 {
+        return Err(eyre!(
+            "SCCP submit endpoints require the exact public Taira chain id `{}`",
+            iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sccp_creation_time(creation_time_ms: Option<u64>) -> Result<()> {
+    if creation_time_ms == Some(0) {
+        return Err(eyre!("creation_time_ms must be a positive integer"));
+    }
+    Ok(())
+}
+
+fn decode_sccp_detached_signature(signature_b64: &str) -> Result<Signature> {
+    const MAX_SIGNATURE_BYTES: usize = 16 * 1024;
+    let maximum_base64 = 4 * MAX_SIGNATURE_BYTES.div_ceil(3);
+    let bytes = decode_canonical_sccp_base64(signature_b64, "signature_b64", maximum_base64)?;
+    if bytes.len() > MAX_SIGNATURE_BYTES {
+        return Err(eyre!(
+            "signature_b64 exceeds the {MAX_SIGNATURE_BYTES}-byte protocol bound"
+        ));
+    }
+    Signature::try_from_bytes(&bytes)
+        .map_err(|error| eyre!("signature_b64 must contain one admitted signature: {error}"))
+}
+
+fn validate_sccp_submit_signing_state(
+    authority: &iroha_data_model::account::AccountId,
+    signature_b64: Option<&str>,
+    transaction_payload_b64: Option<&str>,
+    creation_time_ms: Option<u64>,
+) -> Result<bool> {
+    validate_sccp_creation_time(creation_time_ms)?;
+    match (signature_b64, transaction_payload_b64) {
+        (None, None) => Ok(false),
+        (Some(signature), Some(_)) => {
+            if creation_time_ms.is_none() {
+                return Err(eyre!(
+                    "signed SCCP submission requires an explicit positive creation_time_ms"
+                ));
+            }
+            if authority.try_signatory().is_none() {
+                return Err(eyre!(
+                    "multisig authorities cannot use the direct SCCP signature path"
+                ));
+            }
+            decode_sccp_detached_signature(signature)?;
+            Ok(true)
+        }
+        _ => Err(eyre!(
+            "SCCP signing state is invalid: preparation requires neither signature_b64 nor transaction_payload_b64, while direct submission requires both"
+        )),
+    }
+}
+
+fn validate_sccp_taira_transfer_recipient(payload: &iroha_sccp::SccpPayloadV1) -> Result<()> {
+    let iroha_sccp::SccpPayloadV1::Transfer(transfer) = payload;
+    if transfer.recipient_codec != iroha_sccp::SCCP_CODEC_CANONICAL_TEXT {
+        return Err(eyre!(
+            "native SCCP transfer recipient must use canonical-text I105 encoding"
+        ));
+    }
+    let literal = std::str::from_utf8(&transfer.recipient)
+        .map_err(|_| eyre!("native SCCP transfer recipient must be valid UTF-8 I105 text"))?;
+    let address = iroha_data_model::account::AccountAddress::parse_encoded(
+        literal,
+        Some(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1),
+    )
+    .map_err(|error| {
+        eyre!("native SCCP transfer recipient must be a canonical Taira/test I105 account: {error}")
+    })?;
+    let canonical = address
+        .to_i105_for_discriminant(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1)
+        .map_err(|error| {
+            eyre!("native SCCP transfer recipient cannot be rendered canonically: {error}")
+        })?;
+    if canonical != literal {
+        return Err(eyre!(
+            "native SCCP transfer recipient must use its exact canonical Taira I105 spelling"
+        ));
+    }
+    let account = address.to_account_id().map_err(|error| {
+        eyre!("native SCCP transfer recipient cannot be decoded as an account: {error}")
+    })?;
+    let signatory = account.try_signatory().ok_or_else(|| {
+        eyre!("native SCCP transfer recipient must be a single-key Ed25519 account")
+    })?;
+    if !matches!(signatory.try_algorithm(), Ok(Algorithm::Ed25519)) {
+        return Err(eyre!(
+            "native SCCP transfer recipient must be a single-key Ed25519 account"
+        ));
+    }
+    Ok(())
+}
+
+fn preflight_sccp_destination_submit(
+    request: &SccpDestinationProofSubmitRequest,
+) -> Result<SccpBridgeSubmitExpectation> {
+    validate_sccp_submit_signing_state(
+        &request.authority,
+        request.signature_b64.as_deref(),
+        request.transaction_payload_b64.as_deref(),
+        request.creation_time_ms,
+    )?;
+    let bytes = decode_canonical_sccp_base64(
+        &request.destination_proof_b64,
+        "destination_proof_b64",
+        iroha_sccp::SCCP_GROTH16_BN254_MAX_BASE64_ARTIFACT_BYTES_V1,
+    )?;
+    let artifact =
+        iroha_sccp::decode_canonical_sccp_groth16_bn254_proof_artifact_v1(&bytes).ok_or_else(
+            || {
+                eyre!(
+                    "destination_proof_b64 must contain one canonical, bounded, pairing-verified SCCP Groth16 artifact"
+                )
+            },
+        )?;
+    let bundle =
+        iroha_sccp::decode_canonical_taira_sccp_message_bundle_v1(&artifact.request.bundle_bytes)
+            .ok_or_else(|| {
+            eyre!("destination proof request must contain one canonical finalized SCCP bundle")
+        })?;
+    let lane = bundle.commitment.context.lane;
+    if artifact.request.version != 1
+        || artifact.version != 1
+        || artifact.request.source_network != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
+        || artifact.request.source_network != lane.source
+        || artifact.request.target_network != lane.target
+        || !lane.is_well_formed()
+        || !lane.source.is_sora()
+        || !lane.target.is_external()
+        || artifact.request.public_inputs.message_id != bundle.commitment.message_id
+        || artifact.request.destination_binding_hash
+            != bundle.commitment.context.destination_binding_hash
+        || artifact.request.route_configuration_hash
+            != bundle.commitment.context.route_configuration_hash
+    {
+        return Err(eyre!(
+            "destination proof must be bound to one exact finalized Taira-to-external message and governed route"
+        ));
+    }
+    let destination = iroha_sccp::bridge_sccp_destination_proof_v1(&artifact).ok_or_else(|| {
+        eyre!("destination proof cannot be wrapped in the closed SCCP bridge container")
+    })?;
+    let height = artifact.request.public_inputs.finality_height;
+    if height == 0 {
+        return Err(eyre!("destination proof finality height must be positive"));
+    }
+    Ok(SccpBridgeSubmitExpectation {
+        authority: request.authority.clone(),
+        creation_time_ms: request.creation_time_ms,
+        payload_kind: iroha_sccp::sccp_message_payload_kind_key(&bundle.payload).to_owned(),
+        message_id: bundle.commitment.message_id,
+        counterparty: lane.target,
+        backend: artifact.request.backend.backend_label().to_owned(),
+        route_binding: SccpBridgeExpectedRouteBinding::Exact(
+            artifact.request.route_configuration_hash,
+        ),
+        range_start_height: height,
+        range_end_height: height,
+        proof_payload: SccpBridgeExpectedProofPayload::Destination(destination),
+    })
+}
+
+fn preflight_sccp_native_submit(
+    request: &SccpNativeMessageSubmitRequest,
+) -> Result<SccpBridgeSubmitExpectation> {
+    validate_sccp_submit_signing_state(
+        &request.authority,
+        request.signature_b64.as_deref(),
+        request.transaction_payload_b64.as_deref(),
+        request.creation_time_ms,
+    )?;
+    let (native, encoded_envelope) = decode_sccp_native_proof_b64(&request.native_proof_b64)?;
+    validate_sccp_taira_transfer_recipient(&native.payload)?;
+    let lane = native.source.lane;
+    if !lane.is_well_formed()
+        || !lane.source.is_external()
+        || lane.target != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
+        || iroha_sccp::sccp_message_source_domain(&native.payload) != lane.source.domain_id()
+        || iroha_sccp::sccp_message_target_domain(&native.payload) != lane.target.domain_id()
+        || native.source.message_id == [0; 32]
+    {
+        return Err(eyre!(
+            "native proof payload must match one exact external-to-SORA lane and nonzero message id"
+        ));
+    }
+    let backend = native.source.proof.backend();
+    if !backend.supports_source_network(lane.source) {
+        return Err(eyre!(
+            "native proof backend does not support its exact source network"
+        ));
+    }
+    let height = native.source.source_finality.height;
+    if height == 0 {
+        return Err(eyre!("native proof finality height must be positive"));
+    }
+    Ok(SccpBridgeSubmitExpectation {
+        authority: request.authority.clone(),
+        creation_time_ms: request.creation_time_ms,
+        payload_kind: iroha_sccp::sccp_message_payload_kind_key(&native.payload).to_owned(),
+        message_id: native.source.message_id,
+        counterparty: lane.source,
+        backend: backend.backend_label().to_owned(),
+        route_binding: SccpBridgeExpectedRouteBinding::GovernedNative(Box::new(native)),
+        range_start_height: height,
+        range_end_height: height,
+        proof_payload: SccpBridgeExpectedProofPayload::Native {
+            encoded_envelope,
+            backend,
+        },
+    })
+}
+
+fn decode_canonical_sccp_base64(encoded: &str, field: &str, maximum: usize) -> Result<Vec<u8>> {
+    if encoded.is_empty() || encoded.len() > maximum {
+        return Err(eyre!(
+            "{field} length must be between 1 and {maximum} bytes"
+        ));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|error| eyre!("invalid {field}: {error}"))?;
+    if base64::engine::general_purpose::STANDARD.encode(&bytes) != encoded {
+        return Err(eyre!("{field} must use canonical padded base64"));
+    }
+    Ok(bytes)
+}
+
+fn decode_sccp_native_proof_b64(
+    encoded: &str,
+) -> Result<(iroha_sccp::SccpNativeInboundMessageProofV1, Vec<u8>)> {
+    let bytes = decode_canonical_sccp_base64(
+        encoded,
+        "native_proof_b64",
+        iroha_sccp::SCCP_NATIVE_ADMISSION_MAX_BASE64_BYTES_V1,
+    )?;
+    let proof = iroha_sccp::decode_sccp_native_inbound_message_proof_v1(&bytes)
+        .map_err(|error| eyre!("invalid native SCCP proof: {error}"))?;
+    Ok((proof, bytes))
+}
+
+fn decode_exact_nonzero_sccp_hex32(value: &str, field: &str) -> Result<[u8; 32]> {
+    if value.len() != 64
+        || !value
+            .as_bytes()
+            .iter()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(eyre!(
+            "{field} must be exactly 32 lowercase hexadecimal bytes"
+        ));
+    }
+    let mut decoded = [0_u8; 32];
+    hex::decode_to_slice(value, &mut decoded)
+        .map_err(|_| eyre!("{field} must be exactly 32 lowercase hexadecimal bytes"))?;
+    if decoded.iter().all(|byte| *byte == 0) {
+        return Err(eyre!("{field} must not be zero"));
+    }
+    Ok(decoded)
+}
+
+fn decode_exact_prefixed_nonzero_sccp_hex32(value: &str, field: &str) -> Result<[u8; 32]> {
+    let value = value
+        .strip_prefix("0x")
+        .ok_or_else(|| eyre!("{field} must use canonical lowercase 0x-prefixed hex"))?;
+    decode_exact_nonzero_sccp_hex32(value, field)
+}
+
+fn validate_sccp_message_bundle_for_request(
+    bundle: &iroha_sccp::TairaSccpMessageProofV1,
+    expected_message_id: [u8; 32],
+) -> Result<()> {
+    if !iroha_sccp::verify_message_bundle_structure(bundle)
+        || iroha_sccp::canonical_taira_sccp_message_bundle_bytes_checked(bundle).is_none()
+    {
+        return Err(eyre!("node returned a noncanonical SCCP message bundle"));
+    }
+    let lane = bundle.commitment.context.lane;
+    if lane.source != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
+        || !lane.target.is_external()
+        || !lane.is_well_formed()
+    {
+        return Err(eyre!(
+            "node returned an SCCP message bundle outside the exact Taira-to-external surface"
+        ));
+    }
+    if bundle.commitment.message_id != expected_message_id {
+        return Err(eyre!(
+            "node returned an SCCP message bundle for a different message id"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sccp_proof_request_for_message(
+    request: &iroha_sccp::SccpGroth16Bn254ProofRequestV1,
+    expected_message_id: [u8; 32],
+) -> Result<()> {
+    if iroha_sccp::encode_canonical_sccp_groth16_bn254_proof_request_v1(request).is_none() {
+        return Err(eyre!(
+            "node returned a noncanonical SCCP Groth16 proof request"
+        ));
+    }
+    if request.source_network != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
+        || !request.target_network.is_external()
+    {
+        return Err(eyre!(
+            "node returned an SCCP Groth16 proof request outside the exact Taira-to-external surface"
+        ));
+    }
+    if request.public_inputs.message_id != expected_message_id {
+        return Err(eyre!(
+            "node returned an SCCP Groth16 proof request for a different message id"
+        ));
+    }
+    Ok(())
+}
+
+fn decode_sccp_bridge_transaction_payload(
+    encoded: &str,
+) -> Result<(
+    iroha_data_model::transaction::signed::TransactionPayload,
+    Vec<u8>,
+)> {
+    const MAX_TRANSACTION_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
+    let maximum_base64 = 4 * MAX_TRANSACTION_PAYLOAD_BYTES.div_ceil(3);
+
+    let bytes = decode_canonical_sccp_base64(encoded, "transaction_payload_b64", maximum_base64)?;
+    if bytes.len() > MAX_TRANSACTION_PAYLOAD_BYTES {
+        return Err(eyre!(
+            "transaction_payload_b64 exceeds the {MAX_TRANSACTION_PAYLOAD_BYTES}-byte protocol bound"
+        ));
+    }
+    let _guard = norito::core::PayloadCtxGuard::enter(&bytes);
+    let mut cursor = std::io::Cursor::new(bytes.as_slice());
+    let payload =
+        <iroha_data_model::transaction::signed::TransactionPayload as norito::codec::Decode>::decode(
+            &mut cursor,
+        )
+        .map_err(|error| {
+            eyre!(
+                "transaction_payload_b64 must contain one canonical transaction payload: {error}"
+            )
+        })?;
+    if usize::try_from(cursor.position()).ok() != Some(bytes.len())
+        || norito::codec::encode_adaptive(&payload) != bytes
+    {
+        return Err(eyre!(
+            "transaction_payload_b64 must contain exactly one canonical transaction payload"
+        ));
+    }
+    Ok((payload, bytes))
+}
+
+fn validate_sccp_transaction_metadata(
+    metadata: &iroha_data_model::metadata::Metadata,
+) -> Result<()> {
+    if metadata.is_empty() {
+        return Ok(());
+    }
+    let mut entries = metadata.iter();
+    let Some((key, value)) = entries.next() else {
+        return Ok(());
+    };
+    let gas_asset_key: iroha_data_model::prelude::Name = "gas_asset_id"
+        .parse()
+        .expect("static metadata key `gas_asset_id`");
+    if entries.next().is_some() || key != &gas_asset_key {
+        return Err(eyre!(
+            "SCCP transaction metadata must be empty or contain only gas_asset_id"
+        ));
+    }
+    let gas_asset_id = value
+        .clone()
+        .try_into_any_norito::<String>()
+        .map_err(|_| eyre!("SCCP gas_asset_id metadata must be a string"))?;
+    if gas_asset_id.is_empty() || gas_asset_id.trim() != gas_asset_id {
+        return Err(eyre!(
+            "SCCP gas_asset_id metadata must be a nonblank canonical asset definition id"
+        ));
+    }
+    let parsed = iroha_data_model::asset::AssetDefinitionId::parse_address_literal(&gas_asset_id)
+        .map_err(|error| eyre!("SCCP gas_asset_id metadata is not canonical: {error}"))?;
+    if parsed.to_string() != gas_asset_id {
+        return Err(eyre!(
+            "SCCP gas_asset_id metadata must use the canonical Base58 asset definition id"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sccp_bridge_transaction_payload(
+    payload: &iroha_data_model::transaction::signed::TransactionPayload,
+    expectation: &SccpBridgeSubmitExpectation,
+    expected_route_configuration_hash: Option<[u8; 32]>,
+    expected_chain: &ChainId,
+    expected_creation_time_ms: u64,
+) -> Result<()> {
+    use iroha_data_model::{bridge::BridgeProofPayload, transaction::Executable};
+
+    if &payload.chain != expected_chain {
+        return Err(eyre!(
+            "bridge submit response transaction payload targets the wrong chain"
+        ));
+    }
+    if payload.authority != expectation.authority {
+        return Err(eyre!(
+            "bridge submit response transaction payload authority does not match the request"
+        ));
+    }
+    if payload.creation_time_ms == 0 || payload.creation_time_ms != expected_creation_time_ms {
+        return Err(eyre!(
+            "SCCP transaction payload creation time does not match the explicit request or response"
+        ));
+    }
+    if payload.time_to_live_ms.is_some() || payload.nonce.is_some() {
+        return Err(eyre!(
+            "SCCP transaction payload must not contain a TTL or nonce"
+        ));
+    }
+    validate_sccp_transaction_metadata(&payload.metadata)?;
+    let Executable::Instructions(instructions) = &payload.instructions else {
+        return Err(eyre!(
+            "bridge submit response transaction payload must contain instructions"
+        ));
+    };
+    if instructions.len() != 1 {
+        return Err(eyre!(
+            "bridge submit response transaction payload must contain exactly one instruction"
+        ));
+    }
+    let submit = instructions[0]
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::bridge::SubmitBridgeProof>()
+        .ok_or_else(|| {
+            eyre!("bridge submit response transaction payload must contain only SubmitBridgeProof")
+        })?;
+    let proof = &submit.proof;
+    let route_configuration_hash = match &proof.payload {
+        BridgeProofPayload::NativeProtocol(native) => native.route_configuration_hash,
+        BridgeProofPayload::SccpDestination(destination) => destination.route_configuration_hash,
+        BridgeProofPayload::Ics(_) | BridgeProofPayload::TransparentZk(_) => {
+            return Err(eyre!(
+                "SCCP transaction payload cannot contain a generic bridge proof"
+            ));
+        }
+    };
+    if proof.range.start_height != expectation.range_start_height
+        || proof.range.end_height != expectation.range_end_height
+        || expected_route_configuration_hash
+            .map_or(route_configuration_hash == [0; 32], |expected| {
+                route_configuration_hash != expected
+            })
+        || proof.backend_label() != expectation.backend
+    {
+        return Err(eyre!(
+            "SCCP transaction payload bridge proof does not match the requested proof"
+        ));
+    }
+    match (&expectation.proof_payload, &proof.payload) {
+        (
+            SccpBridgeExpectedProofPayload::Destination(expected),
+            BridgeProofPayload::SccpDestination(actual),
+        ) if actual == expected => Ok(()),
+        (
+            SccpBridgeExpectedProofPayload::Native {
+                encoded_envelope,
+                backend,
+            },
+            BridgeProofPayload::NativeProtocol(actual),
+        ) if actual.backend == *backend && actual.encoded_envelope == *encoded_envelope => Ok(()),
+        _ => Err(eyre!(
+            "bridge submit response transaction proof family or artifact does not match the request"
+        )),
+    }
+}
+
+fn exact_sccp_client_transaction_builder(
+    payload: &iroha_data_model::transaction::signed::TransactionPayload,
+    canonical_payload_bytes: &[u8],
+) -> Result<TransactionBuilder> {
+    let mut builder = TransactionBuilder::new(payload.chain.clone(), payload.authority.clone());
+    builder.set_creation_time(Duration::from_millis(payload.creation_time_ms));
+    let builder = builder
+        .with_executable(payload.instructions.clone())
+        .with_metadata(payload.metadata.clone());
+    if builder.encode_payload() != canonical_payload_bytes {
+        return Err(eyre!(
+            "decoded SCCP TransactionPayload could not be reconstructed byte-identically"
+        ));
+    }
+    Ok(builder)
+}
+
+fn preflight_sccp_direct_transaction(
+    transaction_payload_b64: &str,
+    signature_b64: &str,
+    expectation: &SccpBridgeSubmitExpectation,
+    expected_route_configuration_hash: Option<[u8; 32]>,
+    expected_chain: &ChainId,
+) -> Result<[u8; 32]> {
+    let expected_creation_time_ms = expectation.creation_time_ms.ok_or_else(|| {
+        eyre!("signed SCCP submission requires an explicit positive creation_time_ms")
+    })?;
+    let (payload, payload_bytes) = decode_sccp_bridge_transaction_payload(transaction_payload_b64)?;
+    validate_sccp_bridge_transaction_payload(
+        &payload,
+        expectation,
+        expected_route_configuration_hash,
+        expected_chain,
+        expected_creation_time_ms,
+    )?;
+    let signature = decode_sccp_detached_signature(signature_b64)?;
+    let transaction = exact_sccp_client_transaction_builder(&payload, &payload_bytes)?
+        .build_with_signature(signature);
+    transaction
+        .verify_signature()
+        .map_err(|error| eyre!("SCCP detached signature does not verify: {error}"))?;
+    if transaction.multisig_signatures().is_some()
+        || norito::codec::encode_adaptive(transaction.payload()) != payload_bytes
+    {
+        return Err(eyre!(
+            "direct SCCP transaction construction changed the prepared payload or added multisig data"
+        ));
+    }
+    let mut tx_hash = [0_u8; 32];
+    tx_hash.copy_from_slice(transaction.hash().as_ref());
+    Ok(tx_hash)
+}
+
+fn decode_sccp_bridge_submit_response(
+    value: JsonValue,
+    expectation: &SccpBridgeSubmitExpectation,
+    expected_route_configuration_hash: [u8; 32],
+    expected_chain: &ChainId,
+    expected_submitted_tx_hash: Option<[u8; 32]>,
+) -> Result<SccpBridgeSubmitResponse> {
+    const FIELDS: [&str; 13] = [
+        "submitted",
+        "payload_kind",
+        "message_id_hex",
+        "backend",
+        "counterparty_domain",
+        "counterparty_chain",
+        "route_configuration_hash_hex",
+        "range_start_height",
+        "range_end_height",
+        "creation_time_ms",
+        "tx_hash_hex",
+        "transaction_payload_b64",
+        "signing_message_b64",
+    ];
+
+    let JsonValue::Object(fields) = &value else {
+        return Err(eyre!("bridge submit response must be a JSON object"));
+    };
+    if let Some(field) = fields
+        .keys()
+        .find(|field| !FIELDS.contains(&field.as_str()))
+    {
+        return Err(eyre!(
+            "bridge submit response contains unknown field {field}"
+        ));
+    }
+    if let Some(field) = FIELDS.iter().find(|field| !fields.contains_key(**field)) {
+        return Err(eyre!(
+            "bridge submit response is missing required field {field}"
+        ));
+    }
+    let response: SccpBridgeSubmitResponse = norito::json::from_value(value)
+        .map_err(|error| eyre!("invalid bridge submit response: {error}"))?;
+
+    if response.payload_kind != expectation.payload_kind || response.payload_kind != "transfer" {
+        return Err(eyre!(
+            "bridge submit response.payload_kind does not match the requested transfer"
+        ));
+    }
+    if decode_exact_nonzero_sccp_hex32(
+        &response.message_id_hex,
+        "bridge submit response.message_id_hex",
+    )? != expectation.message_id
+    {
+        return Err(eyre!(
+            "bridge submit response.message_id_hex does not match the requested SCCP message"
+        ));
+    }
+    if response.backend != expectation.backend
+        || response.backend.is_empty()
+        || response.backend.len() > 128
+        || !response
+            .backend
+            .as_bytes()
+            .iter()
+            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_'))
+    {
+        return Err(eyre!(
+            "bridge submit response.backend does not match the requested closed proof backend"
+        ));
+    }
+    if response.counterparty_chain != expectation.counterparty.profile_key()
+        || response.counterparty_domain != expectation.counterparty.domain_id()
+        || !expectation.counterparty.is_external()
+    {
+        return Err(eyre!(
+            "bridge submit response counterparty does not match the request's exact external network"
+        ));
+    }
+    if decode_exact_nonzero_sccp_hex32(
+        &response.route_configuration_hash_hex,
+        "bridge submit response.route_configuration_hash_hex",
+    )? != expected_route_configuration_hash
+    {
+        return Err(eyre!(
+            "bridge submit response.route_configuration_hash_hex does not match the governed route"
+        ));
+    }
+    if response.range_start_height != expectation.range_start_height
+        || response.range_end_height != expectation.range_end_height
+    {
+        return Err(eyre!(
+            "bridge submit response proof height range does not match the requested proof"
+        ));
+    }
+    if response.creation_time_ms == 0
+        || expectation
+            .creation_time_ms
+            .is_some_and(|expected| expected != response.creation_time_ms)
+    {
+        return Err(eyre!(
+            "bridge submit response.creation_time_ms does not match the request"
+        ));
+    }
+
+    match (
+        expected_submitted_tx_hash,
+        response.submitted,
+        &response.tx_hash_hex,
+        &response.transaction_payload_b64,
+        &response.signing_message_b64,
+    ) {
+        (Some(expected_tx_hash), true, Some(tx_hash), None, None) => {
+            if decode_exact_nonzero_sccp_hex32(tx_hash, "bridge submit response.tx_hash_hex")?
+                != expected_tx_hash
+            {
+                return Err(eyre!(
+                    "bridge submit response.tx_hash_hex does not match the exact signed transaction"
+                ));
+            }
+        }
+        (None, false, None, Some(transaction_payload), Some(signing_message)) => {
+            let (payload, payload_bytes) =
+                decode_sccp_bridge_transaction_payload(transaction_payload)?;
+            let signing_message_bytes = decode_canonical_sccp_base64(
+                signing_message,
+                "bridge submit response.signing_message_b64",
+                44,
+            )?;
+            if signing_message_bytes.len() != iroha_crypto::Hash::LENGTH
+                || signing_message_bytes.as_slice()
+                    != iroha_crypto::Hash::new(&payload_bytes).as_ref()
+            {
+                return Err(eyre!(
+                    "bridge submit response.signing_message_b64 must be the exact transaction-payload prehash"
+                ));
+            }
+            validate_sccp_bridge_transaction_payload(
+                &payload,
+                expectation,
+                Some(expected_route_configuration_hash),
+                expected_chain,
+                response.creation_time_ms,
+            )?;
+        }
+        _ => {
+            return Err(eyre!(
+                "bridge submit response signing state is inconsistent with submitted"
+            ));
+        }
+    }
+    Ok(response)
 }
 
 #[derive(
@@ -2605,18 +3506,21 @@ fn normalize_block_hash_hex(value: &str) -> Result<String> {
 }
 
 fn normalize_message_id_hex(value: &str) -> Result<String> {
-    let trimmed = value
-        .trim()
-        .trim_start_matches("0x")
-        .trim_start_matches("0X");
-    if trimmed.len() != 64 {
+    let value = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .unwrap_or(value);
+    if value.len() != 64 {
         return Err(eyre!(
             "message id must contain 64 hexadecimal characters (got {})",
-            trimmed.len()
+            value.len()
         ));
     }
-    hex::decode(trimmed).map_err(|err| eyre!("invalid message id: {err}"))?;
-    Ok(trimmed.to_ascii_lowercase())
+    let decoded = hex::decode(value).map_err(|err| eyre!("invalid message id: {err}"))?;
+    if decoded.iter().all(|byte| *byte == 0) {
+        return Err(eyre!("message id must not be zero"));
+    }
+    Ok(value.to_ascii_lowercase())
 }
 
 /// Aggregated portfolio totals returned by the UAID portfolio endpoint.
@@ -5331,9 +6235,25 @@ impl Client {
             .next()
             .map(str::trim)
             .unwrap_or_default();
+        let media_type_lower = media_type.to_ascii_lowercase();
         media_type.eq_ignore_ascii_case(APPLICATION_JSON)
-            || media_type.eq_ignore_ascii_case("text/json")
-            || media_type.to_ascii_lowercase().ends_with("+json")
+            || (media_type_lower.starts_with("application/") && media_type_lower.ends_with("+json"))
+    }
+
+    fn is_sccp_json_content_type(content_type: &str) -> bool {
+        content_type
+            .split(';')
+            .next()
+            .map(str::trim)
+            .is_some_and(|media_type| media_type.eq_ignore_ascii_case(APPLICATION_JSON))
+    }
+
+    fn is_norito_content_type(content_type: &str) -> bool {
+        content_type
+            .split(';')
+            .next()
+            .map(str::trim)
+            .is_some_and(|media_type| media_type.eq_ignore_ascii_case(APPLICATION_NORITO))
     }
 
     fn parse_typed_json_ok_response<T>(
@@ -5358,6 +6278,410 @@ impl Client {
         }
         norito::json::from_slice(response.body())
             .map_err(|error| eyre!("{context}: failed to decode JSON payload: {error}"))
+    }
+
+    fn parse_negotiated_typed_response<T>(
+        response: &Response<Vec<u8>>,
+        expected_status: StatusCode,
+        context: &'static str,
+    ) -> Result<T>
+    where
+        T: norito::json::JsonDeserializeOwned,
+        for<'de> T: norito::NoritoDeserialize<'de>,
+    {
+        if response.status() != expected_status {
+            return Err(ResponseReport::with_msg(context, response)
+                .unwrap_or_else(core::convert::identity)
+                .into());
+        }
+
+        let content_type = Self::response_content_type(response);
+        let media_type = content_type
+            .split(';')
+            .next()
+            .map(str::trim)
+            .unwrap_or_default();
+        if Self::is_json_content_type(content_type) {
+            return norito::json::from_slice(response.body())
+                .map_err(|error| eyre!("{context}: failed to decode JSON payload: {error}"));
+        }
+        if media_type.eq_ignore_ascii_case(APPLICATION_NORITO) {
+            return decode_from_bytes(response.body())
+                .map_err(|error| eyre!("{context}: failed to decode Norito payload: {error}"));
+        }
+        Err(eyre!(
+            "{context}: invalid content-type `{content_type}` (expected application/json or application/x-norito)"
+        ))
+    }
+
+    fn require_lower_hex_32(value: &str, field: &'static str) -> Result<()> {
+        if value.len() == Hash::LENGTH * 2
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Ok(());
+        }
+        Err(eyre!(
+            "{field} must be exactly 64 lowercase hexadecimal characters"
+        ))
+    }
+
+    fn validate_offline_operation_reference(
+        response: &Response<Vec<u8>>,
+        reference: &OfflineOperationReference,
+        operation_id: &str,
+        expected_kind: OfflineOperationKind,
+        submitted_at_ms: u64,
+    ) -> Result<()> {
+        Self::require_lower_hex_32(&reference.operation_id, "operation_id")?;
+        if reference.operation_id != operation_id {
+            return Err(eyre!(
+                "offline operation response id does not match the signed request"
+            ));
+        }
+        if reference.kind != expected_kind || reference.state != OfflineOperationState::Pending {
+            return Err(eyre!(
+                "offline operation response kind or initial state does not match the request"
+            ));
+        }
+        Self::require_lower_hex_32(&reference.transaction_hash, "transaction_hash")?;
+        if reference.submitted_at_ms != submitted_at_ms {
+            return Err(eyre!(
+                "offline operation response submission time does not match the signed request"
+            ));
+        }
+
+        let expected_status_uri = format!("/v1/offline/operations/{operation_id}");
+        if reference.status_uri != expected_status_uri {
+            return Err(eyre!(
+                "offline operation response contains a non-canonical status URI"
+            ));
+        }
+        let location = response
+            .headers()
+            .get(http::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| eyre!("offline operation response is missing Location"))?;
+        if location != expected_status_uri {
+            return Err(eyre!(
+                "offline operation Location does not match the typed status URI"
+            ));
+        }
+        let retry_after = response
+            .headers()
+            .get(http::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|seconds| *seconds > 0)
+            .ok_or_else(|| eyre!("offline operation response has no valid Retry-After"))?;
+        let _ = retry_after;
+        Ok(())
+    }
+
+    fn validate_offline_operation_status(
+        status: &OfflineOperationStatus,
+        expected_operation_id: &str,
+    ) -> Result<()> {
+        let (operation_id, transaction_hash, applied_finality) = match status {
+            OfflineOperationStatus::Pending {
+                operation_id,
+                transaction_hash,
+                ..
+            }
+            | OfflineOperationStatus::Rejected {
+                operation_id,
+                transaction_hash,
+                ..
+            } => (operation_id, transaction_hash, None),
+            OfflineOperationStatus::Applied {
+                operation_id,
+                result,
+            } => {
+                let (transaction_hash, finalized_block_height, server_time_ms) = match result {
+                    OfflineOperationResult::TopUp(result) => (
+                        &result.transaction_hash,
+                        result.finalized_block_height,
+                        result.server_time_ms,
+                    ),
+                    OfflineOperationResult::Redeem(result) => (
+                        &result.transaction_hash,
+                        result.finalized_block_height,
+                        result.server_time_ms,
+                    ),
+                };
+                (
+                    operation_id,
+                    transaction_hash,
+                    Some((finalized_block_height, server_time_ms)),
+                )
+            }
+        };
+        Self::require_lower_hex_32(operation_id, "operation_id")?;
+        if operation_id != expected_operation_id {
+            return Err(eyre!(
+                "offline operation status id does not match the requested resource"
+            ));
+        }
+        if let Some((finalized_block_height, server_time_ms)) = applied_finality {
+            if finalized_block_height == 0 {
+                return Err(eyre!(
+                    "offline applied result finalized_block_height must be at least 1"
+                ));
+            }
+            if server_time_ms == 0 {
+                return Err(eyre!(
+                    "offline applied result server_time_ms must be at least 1"
+                ));
+            }
+        }
+        Self::require_lower_hex_32(transaction_hash, "transaction_hash")
+    }
+
+    /// Evaluate whether one asset definition is ready for offline payments.
+    ///
+    /// A normal not-ready domain state is returned as `Ok` with `ready == false`.
+    ///
+    /// # Errors
+    /// Returns an error for transport failures, non-success responses, malformed negotiated
+    /// representations, or a response that is not bound to the requested asset definition.
+    pub fn get_offline_readiness(
+        &self,
+        asset_definition_id: &AssetDefinitionId,
+    ) -> Result<OfflineReadiness> {
+        let asset_definition_id = asset_definition_id.to_string();
+        let mut url = join_torii_url(&self.torii_url, torii_uri::OFFLINE_READINESS);
+        url.query_pairs_mut()
+            .append_pair("asset_definition_id", &asset_definition_id);
+        let response = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", self.wire_format_preference.accept_header()),
+        )?;
+        let readiness: OfflineReadiness = Self::parse_negotiated_typed_response(
+            &response,
+            StatusCode::OK,
+            "Failed to evaluate offline readiness",
+        )?;
+        if readiness.asset_definition_id != asset_definition_id {
+            return Err(eyre!(
+                "offline readiness response is not bound to the requested asset definition"
+            ));
+        }
+        Self::require_lower_hex_32(&readiness.evaluated_block_hash, "evaluated_block_hash")?;
+        if readiness.ready != readiness.blockers.is_empty() {
+            return Err(eyre!(
+                "offline readiness response has an inconsistent ready/blockers state"
+            ));
+        }
+        let has_blocker = |code: &str| {
+            readiness
+                .blockers
+                .iter()
+                .any(|blocker| blocker.code == code)
+        };
+        match readiness.asset_scale {
+            None if !has_blocker("asset_scale_unavailable") => {
+                return Err(eyre!(
+                    "offline readiness response omitted the live asset scale without an asset_scale_unavailable blocker"
+                ));
+            }
+            Some(scale)
+                if scale > iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
+                    && !has_blocker("asset_scale_unsupported") =>
+            {
+                return Err(eyre!(
+                    "offline readiness response exposes an unsupported asset scale without an asset_scale_unsupported blocker"
+                ));
+            }
+            Some(scale)
+                if scale <= iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
+                    && (has_blocker("asset_scale_unavailable")
+                        || has_blocker("asset_scale_unsupported")) =>
+            {
+                return Err(eyre!(
+                    "offline readiness response has an inconsistent asset scale blocker"
+                ));
+            }
+            _ => {}
+        }
+        match readiness.active_transfer_verifier.as_ref() {
+            None if !has_blocker("transfer_verifier_unavailable") => {
+                return Err(eyre!(
+                    "offline readiness response omitted the active transfer verifier without a transfer_verifier_unavailable blocker"
+                ));
+            }
+            Some(verifier) => {
+                if has_blocker("transfer_verifier_unavailable") {
+                    return Err(eyre!(
+                        "offline readiness response contains both an active transfer verifier and an unavailable blocker"
+                    ));
+                }
+                if !iroha_data_model::proof::verifying_key_id_field_is_portable(
+                    &verifier.id.backend,
+                ) || !iroha_data_model::proof::verifying_key_id_field_is_portable(
+                    &verifier.id.name,
+                ) {
+                    return Err(eyre!(
+                        "offline readiness response contains a non-portable transfer verifier id"
+                    ));
+                }
+                if !iroha_data_model::zk::open_verify_circuit_id_is_portable(&verifier.circuit_id) {
+                    return Err(eyre!(
+                        "offline readiness response contains a non-portable confidential-transfer circuit id"
+                    ));
+                }
+                Self::require_lower_hex_32(
+                    &verifier.commitment,
+                    "active_transfer_verifier.commitment",
+                )?;
+                Self::require_lower_hex_32(
+                    &verifier.public_inputs_schema_hash,
+                    "active_transfer_verifier.public_inputs_schema_hash",
+                )?;
+                if verifier.commitment.bytes().all(|byte| byte == b'0')
+                    || verifier
+                        .public_inputs_schema_hash
+                        .bytes()
+                        .all(|byte| byte == b'0')
+                {
+                    return Err(eyre!(
+                        "offline readiness response contains zero transfer-verifier metadata"
+                    ));
+                }
+                if verifier.max_proof_bytes == 0 {
+                    return Err(eyre!(
+                        "offline readiness response selected a transfer verifier with a zero proof limit"
+                    ));
+                }
+                if verifier.activation_height > readiness.evaluated_block_height {
+                    return Err(eyre!(
+                        "offline readiness response selected a transfer verifier before activation"
+                    ));
+                }
+                if verifier.withdrawal_height.is_some_and(|withdrawal_height| {
+                    withdrawal_height <= verifier.activation_height
+                        || readiness.evaluated_block_height >= withdrawal_height
+                }) {
+                    return Err(eyre!(
+                        "offline readiness response selected a transfer verifier outside its activation window"
+                    ));
+                }
+            }
+            None => {}
+        }
+        Ok(readiness)
+    }
+
+    /// Submit a signed online-to-offline top-up operation.
+    ///
+    /// The signed operation ID is also sent as the HTTP idempotency key. Identical retries return
+    /// the original operation resource; a changed request under that key is rejected by Torii.
+    ///
+    /// # Errors
+    /// Returns an error when local request binding validation, encoding, transport, response
+    /// decoding, or response-to-request binding validation fails.
+    pub fn submit_offline_top_up(
+        &self,
+        request: &OfflineTopUpRequest,
+    ) -> Result<OfflineOperationReference> {
+        request
+            .validate_public_binding()
+            .wrap_err("invalid offline top-up request")?;
+        self.submit_offline_operation(
+            torii_uri::OFFLINE_TOP_UP,
+            request,
+            request.operation_id,
+            request.authorization.issued_at_ms,
+            OfflineOperationKind::TopUp,
+        )
+    }
+
+    /// Submit a signed offline redemption operation.
+    ///
+    /// The signed operation ID is also sent as the HTTP idempotency key. Identical retries return
+    /// the original operation resource; a changed request under that key is rejected by Torii.
+    ///
+    /// # Errors
+    /// Returns an error when local request binding validation, encoding, transport, response
+    /// decoding, or response-to-request binding validation fails.
+    pub fn submit_offline_redeem(
+        &self,
+        request: &OfflineRedeemRequest,
+    ) -> Result<OfflineOperationReference> {
+        request
+            .validate_public_binding()
+            .wrap_err("invalid offline redemption request")?;
+        self.submit_offline_operation(
+            torii_uri::OFFLINE_REDEEM,
+            request,
+            request.operation_id,
+            request.authorization.issued_at_ms,
+            OfflineOperationKind::Redeem,
+        )
+    }
+
+    fn submit_offline_operation<T>(
+        &self,
+        path: &str,
+        request: &T,
+        operation_id: [u8; 32],
+        submitted_at_ms: u64,
+        kind: OfflineOperationKind,
+    ) -> Result<OfflineOperationReference>
+    where
+        T: norito::NoritoSerialize,
+    {
+        if operation_id == [0; 32] {
+            return Err(eyre!("offline operation_id must not be zero"));
+        }
+        let operation_id = bytes_to_hex(&operation_id);
+        let body = to_bytes(request).wrap_err("failed to encode offline request as Norito")?;
+        let url = join_torii_url(&self.torii_url, path);
+        let response = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_NORITO)
+                .header("Accept", self.wire_format_preference.accept_header())
+                .header("Idempotency-Key", &operation_id)
+                .body(body),
+        )?;
+        let reference: OfflineOperationReference = Self::parse_negotiated_typed_response(
+            &response,
+            StatusCode::ACCEPTED,
+            "Failed to submit offline operation",
+        )?;
+        Self::validate_offline_operation_reference(
+            &response,
+            &reference,
+            &operation_id,
+            kind,
+            submitted_at_ms,
+        )?;
+        Ok(reference)
+    }
+
+    /// Fetch the current state of one offline operation.
+    ///
+    /// # Errors
+    /// Returns an error for a malformed operation ID, transport failure, non-success response,
+    /// malformed negotiated representation, or a response bound to another operation.
+    pub fn get_offline_operation_status(
+        &self,
+        operation_id: &str,
+    ) -> Result<OfflineOperationStatus> {
+        Self::require_lower_hex_32(operation_id, "operation_id")?;
+        let path = torii_uri::OFFLINE_OPERATION.replace("{operation_id}", operation_id);
+        let url = join_torii_url(&self.torii_url, &path);
+        let response = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", self.wire_format_preference.accept_header()),
+        )?;
+        let status: OfflineOperationStatus = Self::parse_negotiated_typed_response(
+            &response,
+            StatusCode::OK,
+            "Failed to fetch offline operation",
+        )?;
+        Self::validate_offline_operation_status(&status, operation_id)?;
+        Ok(status)
     }
 
     fn build_evidence_request_body(evidence_hex: &str) -> Result<Vec<u8>> {
@@ -5568,14 +6892,14 @@ impl Client {
             .collect())
     }
 
-    /// GET `/v1/nexus/public_lanes/{lane}/validators` — lifecycle snapshot for public-lane validators.
+    /// GET `/v1/nexus/public-lanes/{lane}/validators` — lifecycle snapshot for public-lane validators.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_public_lane_validators(&self, lane_id: LaneId) -> Result<JsonValue> {
         let url = join_torii_url(
             &self.torii_url,
-            &format!("v1/nexus/public_lanes/{}/validators", lane_id.as_u32()),
+            &format!("v1/nexus/public-lanes/{}/validators", lane_id.as_u32()),
         );
         let req = self.default_request(HttpMethod::GET, url);
         let resp = self.send_builder(req)?;
@@ -5589,7 +6913,7 @@ impl Client {
         norito::json::from_slice(resp.body()).map_err(Into::into)
     }
 
-    /// GET `/v1/nexus/public_lanes/{lane}/stake` — bonded stake per validator/staker.
+    /// GET `/v1/nexus/public-lanes/{lane}/stake` — bonded stake per validator/staker.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -5600,7 +6924,7 @@ impl Client {
     ) -> Result<JsonValue> {
         let url = join_torii_url(
             &self.torii_url,
-            &format!("v1/nexus/public_lanes/{}/stake", lane_id.as_u32()),
+            &format!("v1/nexus/public-lanes/{}/stake", lane_id.as_u32()),
         );
         let mut req = self.default_request(HttpMethod::GET, url);
         if let Some(value) = validator {
@@ -5620,7 +6944,7 @@ impl Client {
         norito::json::from_slice(resp.body()).map_err(Into::into)
     }
 
-    /// GET `/v1/nexus/public_lanes/{lane}/rewards/pending` — pending rewards for an account.
+    /// GET `/v1/nexus/public-lanes/{lane}/rewards/pending` — pending rewards for an account.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -5635,7 +6959,7 @@ impl Client {
         }
         let url = join_torii_url(
             &self.torii_url,
-            &format!("v1/nexus/public_lanes/{}/rewards/pending", lane_id.as_u32()),
+            &format!("v1/nexus/public-lanes/{}/rewards/pending", lane_id.as_u32()),
         );
         let mut req = self
             .default_request(HttpMethod::GET, url)
@@ -5654,14 +6978,14 @@ impl Client {
         norito::json::from_slice(resp.body()).map_err(Into::into)
     }
 
-    /// GET `/v1/sumeragi/commit_qc/:hash` — full commit QC record for a parent block hash.
+    /// GET `/v1/sumeragi/commit-qcs/{block_hash}` — full commit QC record for a parent block hash.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_sumeragi_commit_qc_json(&self, hash_hex: &str) -> Result<norito::json::Value> {
         let url = join_torii_url(
             &self.torii_url,
-            &format!("v1/sumeragi/commit_qc/{hash_hex}"),
+            &format!("v1/sumeragi/commit-qcs/{hash_hex}"),
         );
         let resp = self
             .default_request(HttpMethod::GET, url)
@@ -5948,6 +7272,383 @@ fn mk_response(status: StatusCode, body: Vec<u8>, content_type: Option<&str>) ->
         builder = builder.header("content-type", ct);
     }
     builder.body(body).unwrap()
+}
+
+#[cfg(test)]
+mod offline_client_tests {
+    use std::sync::{Arc, Mutex};
+
+    use norito::derive::NoritoSerialize;
+
+    use super::{evidence_http_tests::*, *};
+    use crate::http::Response as HttpResponse;
+
+    #[derive(NoritoSerialize)]
+    struct CommandFixture {
+        nonce: u64,
+    }
+
+    fn header<'a>(snapshot: &'a RequestSnapshot, name: &str) -> Option<&'a str> {
+        snapshot
+            .headers
+            .iter()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+
+    fn operation_reference(
+        operation_id: &str,
+        kind: OfflineOperationKind,
+    ) -> OfflineOperationReference {
+        OfflineOperationReference {
+            operation_id: operation_id.to_owned(),
+            kind,
+            state: OfflineOperationState::Pending,
+            transaction_hash: "22".repeat(32),
+            status_uri: format!("/v1/offline/operations/{operation_id}"),
+            submitted_at_ms: 42,
+        }
+    }
+
+    fn accepted_response(reference: &OfflineOperationReference) -> HttpResponse<Vec<u8>> {
+        HttpResponse::builder()
+            .status(StatusCode::ACCEPTED)
+            .header("content-type", APPLICATION_NORITO)
+            .header("location", &reference.status_uri)
+            .header("retry-after", "1")
+            .body(norito::to_bytes(reference).expect("encode operation reference"))
+            .expect("response")
+    }
+
+    fn active_transfer_verifier() -> iroha_torii_shared::offline_api::OfflineActiveTransferVerifier
+    {
+        iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
+            id: iroha_torii_shared::offline_api::OfflineVerifierId {
+                backend: "halo2/ipa".to_owned(),
+                name: "confidential-transfer-v2".to_owned(),
+            },
+            version: 1,
+            circuit_id: "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified"
+                .to_owned(),
+            commitment: "11".repeat(32),
+            public_inputs_schema_hash: "22".repeat(32),
+            max_proof_bytes: 65_536,
+            activation_height: 1,
+            withdrawal_height: None,
+        }
+    }
+
+    #[test]
+    fn readiness_request_is_typed_negotiated_and_asset_bound() {
+        let asset_definition_id: AssetDefinitionId =
+            "xor#wonderland".parse().expect("asset definition id");
+        let readiness = OfflineReadiness {
+            asset_definition_id: asset_definition_id.to_string(),
+            asset_scale: Some(9),
+            evaluated_block_height: 19,
+            evaluated_block_hash: "ab".repeat(32),
+            active_transfer_verifier: Some(active_transfer_verifier()),
+            ready: false,
+            blockers: vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+                code: "issuer_key_missing".to_owned(),
+                message: "issuer key is unavailable".to_owned(),
+            }],
+        };
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json; charset=utf-8")
+            .body(norito::json::to_vec(&readiness).expect("encode readiness"))
+            .expect("response");
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let result = with_mock_http(respond_with(&snapshots, response), || {
+            client_with_base_url(base_url()).get_offline_readiness(&asset_definition_id)
+        })
+        .expect("readiness response");
+
+        assert!(!result.ready);
+        let snapshots = snapshots.lock().expect("snapshots");
+        assert_eq!(snapshots.len(), 1);
+        let snapshot = &snapshots[0];
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(snapshot.url.path(), torii_uri::OFFLINE_READINESS);
+        assert_eq!(
+            snapshot
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "asset_definition_id")
+                .map(|(_, value)| value.into_owned()),
+            Some(asset_definition_id.to_string())
+        );
+        assert_single_accept_header(snapshot, ACCEPT_NORITO_PREFERRED);
+    }
+
+    #[test]
+    fn readiness_rejects_cross_asset_and_inconsistent_states() {
+        let requested: AssetDefinitionId = "xor#wonderland".parse().expect("asset definition id");
+        for readiness in [
+            OfflineReadiness {
+                asset_definition_id: "rose#wonderland".to_owned(),
+                asset_scale: Some(9),
+                evaluated_block_height: 1,
+                evaluated_block_hash: "ab".repeat(32),
+                active_transfer_verifier: Some(active_transfer_verifier()),
+                ready: true,
+                blockers: Vec::new(),
+            },
+            OfflineReadiness {
+                asset_definition_id: requested.to_string(),
+                asset_scale: Some(9),
+                evaluated_block_height: 1,
+                evaluated_block_hash: "ab".repeat(32),
+                active_transfer_verifier: Some(active_transfer_verifier()),
+                ready: true,
+                blockers: vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+                    code: "forged".to_owned(),
+                    message: "forged".to_owned(),
+                }],
+            },
+            OfflineReadiness {
+                asset_definition_id: requested.to_string(),
+                asset_scale: Some(9),
+                evaluated_block_height: 1,
+                evaluated_block_hash: "AB".repeat(32),
+                active_transfer_verifier: Some(active_transfer_verifier()),
+                ready: true,
+                blockers: Vec::new(),
+            },
+        ] {
+            let response = HttpResponse::builder()
+                .status(StatusCode::OK)
+                .header("content-type", APPLICATION_NORITO)
+                .body(norito::to_bytes(&readiness).expect("encode readiness"))
+                .expect("response");
+            let error = with_mock_http(
+                respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+                || client_with_base_url(base_url()).get_offline_readiness(&requested),
+            )
+            .expect_err("forged readiness response must fail closed");
+            assert!(
+                error.to_string().contains("offline readiness response")
+                    || error.to_string().contains("evaluated_block_hash"),
+                "unexpected error: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn readiness_rejects_unbound_scale_and_verifier_snapshots() {
+        let requested: AssetDefinitionId = "xor#wonderland".parse().expect("asset definition id");
+        let unrelated_blocker = || iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+            code: "proof_backend_unavailable".to_owned(),
+            message: "proof backend is unavailable".to_owned(),
+        };
+        let mut future_verifier = active_transfer_verifier();
+        future_verifier.activation_height = 2;
+        for readiness in [
+            OfflineReadiness {
+                asset_definition_id: requested.to_string(),
+                asset_scale: None,
+                evaluated_block_height: 1,
+                evaluated_block_hash: "ab".repeat(32),
+                active_transfer_verifier: Some(active_transfer_verifier()),
+                ready: false,
+                blockers: vec![unrelated_blocker()],
+            },
+            OfflineReadiness {
+                asset_definition_id: requested.to_string(),
+                asset_scale: Some(9),
+                evaluated_block_height: 1,
+                evaluated_block_hash: "ab".repeat(32),
+                active_transfer_verifier: None,
+                ready: false,
+                blockers: vec![unrelated_blocker()],
+            },
+            OfflineReadiness {
+                asset_definition_id: requested.to_string(),
+                asset_scale: Some(9),
+                evaluated_block_height: 1,
+                evaluated_block_hash: "ab".repeat(32),
+                active_transfer_verifier: Some(future_verifier),
+                ready: false,
+                blockers: vec![unrelated_blocker()],
+            },
+        ] {
+            let response = HttpResponse::builder()
+                .status(StatusCode::OK)
+                .header("content-type", APPLICATION_NORITO)
+                .body(norito::to_bytes(&readiness).expect("encode readiness"))
+                .expect("response");
+            let error = with_mock_http(
+                respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+                || client_with_base_url(base_url()).get_offline_readiness(&requested),
+            )
+            .expect_err("unbound readiness metadata must fail closed");
+            assert!(
+                error.to_string().contains("asset scale")
+                    || error.to_string().contains("transfer verifier"),
+                "unexpected error: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn command_submission_uses_direct_norito_and_signed_idempotency_key() {
+        let fixture = CommandFixture { nonce: 7 };
+        let operation_bytes = [0x11; 32];
+        let operation_id = bytes_to_hex(&operation_bytes);
+        for (path, kind) in [
+            (torii_uri::OFFLINE_TOP_UP, OfflineOperationKind::TopUp),
+            (torii_uri::OFFLINE_REDEEM, OfflineOperationKind::Redeem),
+        ] {
+            let reference = operation_reference(&operation_id, kind);
+            let response = accepted_response(&reference);
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let returned = with_mock_http(respond_with(&snapshots, response), || {
+                client_with_base_url(base_url()).submit_offline_operation(
+                    path,
+                    &fixture,
+                    operation_bytes,
+                    42,
+                    kind,
+                )
+            })
+            .expect("accepted operation");
+            assert_eq!(returned, reference);
+
+            let snapshots = snapshots.lock().expect("snapshots");
+            assert_eq!(snapshots.len(), 1);
+            let snapshot = &snapshots[0];
+            assert_eq!(snapshot.method, HttpMethod::POST);
+            assert_eq!(snapshot.url.path(), path);
+            assert_eq!(header(snapshot, "content-type"), Some(APPLICATION_NORITO));
+            assert_eq!(
+                header(snapshot, "idempotency-key"),
+                Some(operation_id.as_str())
+            );
+            assert_single_accept_header(snapshot, ACCEPT_NORITO_PREFERRED);
+            assert_eq!(
+                snapshot.body,
+                norito::to_bytes(&fixture).expect("encode command fixture")
+            );
+        }
+    }
+
+    #[test]
+    fn command_submission_rejects_zero_ids_and_forged_response_binding() {
+        let fixture = CommandFixture { nonce: 7 };
+        let client = client_with_base_url(base_url());
+        let zero_error = client
+            .submit_offline_operation(
+                torii_uri::OFFLINE_TOP_UP,
+                &fixture,
+                [0; 32],
+                42,
+                OfflineOperationKind::TopUp,
+            )
+            .expect_err("zero operation id must fail before transport");
+        assert!(zero_error.to_string().contains("must not be zero"));
+
+        let operation_bytes = [0x11; 32];
+        let operation_id = bytes_to_hex(&operation_bytes);
+        let mut forged = operation_reference(&operation_id, OfflineOperationKind::Redeem);
+        forged.submitted_at_ms = 43;
+        let response = accepted_response(&forged);
+        let error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || {
+                client_with_base_url(base_url()).submit_offline_operation(
+                    torii_uri::OFFLINE_TOP_UP,
+                    &fixture,
+                    operation_bytes,
+                    42,
+                    OfflineOperationKind::TopUp,
+                )
+            },
+        )
+        .expect_err("cross-kind forged response must fail closed");
+        assert!(error.to_string().contains("kind or initial state"));
+    }
+
+    #[test]
+    fn operation_status_request_validates_path_id_and_payload_binding() {
+        let operation_id = "11".repeat(32);
+        let status = OfflineOperationStatus::Pending {
+            operation_id: operation_id.clone(),
+            kind: OfflineOperationKind::TopUp,
+            transaction_hash: "22".repeat(32),
+            submitted_at_ms: 42,
+        };
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&status).expect("encode status"))
+            .expect("response");
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        with_mock_http(respond_with(&snapshots, response), || {
+            client_with_base_url(base_url()).get_offline_operation_status(&operation_id)
+        })
+        .expect("operation status");
+        let snapshots = snapshots.lock().expect("snapshots");
+        assert_eq!(
+            snapshots[0].url.path(),
+            format!("/v1/offline/operations/{operation_id}")
+        );
+        assert_single_accept_header(&snapshots[0], ACCEPT_NORITO_PREFERRED);
+
+        let malformed = client_with_base_url(base_url())
+            .get_offline_operation_status("../redeem")
+            .expect_err("path injection must fail locally");
+        assert!(malformed.to_string().contains("64 lowercase hexadecimal"));
+    }
+
+    #[test]
+    fn applied_operation_status_rejects_zero_finality_fields() {
+        let operation_id = "11".repeat(32);
+        for (finalized_block_height, server_time_ms, field) in
+            [(0, 1, "finalized_block_height"), (1, 0, "server_time_ms")]
+        {
+            let status = OfflineOperationStatus::Applied {
+                operation_id: operation_id.clone(),
+                result: OfflineOperationResult::Redeem(
+                    iroha_torii_shared::offline_api::OfflineRedeemResult {
+                        transaction_hash: "22".repeat(32),
+                        finalized_block_height,
+                        server_time_ms,
+                    },
+                ),
+            };
+            let error = Client::validate_offline_operation_status(&status, &operation_id)
+                .expect_err("zero applied finality field must fail closed");
+            assert!(
+                error.to_string().contains(field),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn negotiated_decoder_rejects_retired_and_missing_media_types() {
+        let readiness = OfflineReadiness {
+            asset_definition_id: "xor#wonderland".to_owned(),
+            asset_scale: Some(9),
+            evaluated_block_height: 1,
+            evaluated_block_hash: "ab".repeat(32),
+            active_transfer_verifier: Some(active_transfer_verifier()),
+            ready: true,
+            blockers: Vec::new(),
+        };
+        let body = norito::json::to_vec(&readiness).expect("encode readiness");
+        for content_type in [Some("text/json"), Some("application/octet-stream"), None] {
+            let response = mk_response(StatusCode::OK, body.clone(), content_type);
+            let error = Client::parse_negotiated_typed_response::<OfflineReadiness>(
+                &response,
+                StatusCode::OK,
+                "offline response",
+            )
+            .expect_err("unadvertised representation must fail closed");
+            assert!(error.to_string().contains("invalid content-type"));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -6499,9 +8200,6 @@ mod evidence_http_tests {
             account_chain_discriminant:
                 iroha_config::parameters::defaults::common::chain_discriminant(),
             torii_api_url: url,
-            torii_api_version: crate::config::default_torii_api_version(),
-            torii_api_min_proof_version: crate::config::DEFAULT_TORII_API_MIN_PROOF_VERSION
-                .to_string(),
             torii_request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             basic_auth: None,
             transaction_add_nonce: false,
@@ -6647,7 +8345,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/proposals/list"
+            "http://mock.local/v1/multisig/proposals/query"
         );
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
@@ -6905,7 +8603,7 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn post_multisig_approvals_list_for_authority_builds_signed_request() {
+    fn query_multisig_approvals_for_authority_builds_signed_request() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{\"items\":[],\"next_cursor\":null}");
@@ -6919,8 +8617,8 @@ mod evidence_http_tests {
 
         with_mock_http(respond_with(&snapshots, response), || {
             let resp = client
-                .post_multisig_approvals_list_for_authority(&request)
-                .expect("post multisig approvals list");
+                .query_multisig_approvals_for_authority(&request)
+                .expect("query multisig approvals");
             assert!(resp.items.is_empty());
             assert!(resp.next_cursor.is_none());
         });
@@ -6931,7 +8629,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/approvals/list_for_authority"
+            "http://mock.local/v1/multisig/approvals/query-for-authority"
         );
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
@@ -6957,7 +8655,7 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn post_multisig_approvals_get_for_authority_builds_signed_request() {
+    fn lookup_multisig_approval_for_authority_builds_signed_request() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
@@ -6974,8 +8672,8 @@ mod evidence_http_tests {
 
         with_mock_http(respond_with(&snapshots, response), || {
             let resp = client
-                .post_multisig_approvals_get_for_authority(&request)
-                .expect("post multisig approvals get");
+                .lookup_multisig_approval_for_authority(&request)
+                .expect("lookup multisig approval");
             assert_eq!(resp.item.multisig_account_id, account_id);
             assert_eq!(resp.item.proposal_id, "hash");
         });
@@ -6986,7 +8684,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/approvals/get_for_authority"
+            "http://mock.local/v1/multisig/approvals/lookup-for-authority"
         );
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
@@ -7807,17 +9505,15 @@ mod evidence_http_tests {
         let successor = [0x11; 32];
         let successor_hex = hex::encode(successor);
 
-        let payload = Client::build_sorafs_pin_register_payload(
-            SorafsPinRegisterArgs {
-                authority: &authority,
-                private_key: key_pair.private_key(),
-                manifest: &manifest,
-                submitted_epoch: 9,
-                gas_asset_id: None,
-                alias: Some(alias),
-                successor_of: Some(successor),
-            },
-        )
+        let payload = Client::build_sorafs_pin_register_payload(SorafsPinRegisterArgs {
+            authority: &authority,
+            private_key: key_pair.private_key(),
+            manifest: &manifest,
+            submitted_epoch: 9,
+            gas_asset_id: None,
+            alias: Some(alias),
+            successor_of: Some(successor),
+        })
         .expect("payload build succeeds");
 
         let obj = payload
@@ -7883,17 +9579,15 @@ mod evidence_http_tests {
             .build()
             .expect("manifest build");
 
-        let payload = Client::build_sorafs_pin_register_payload(
-            SorafsPinRegisterArgs {
-                authority: &authority,
-                private_key: key_pair.private_key(),
-                manifest: &manifest,
-                submitted_epoch: 10,
-                gas_asset_id: Some(" xor#universal "),
-                alias: None,
-                successor_of: None,
-            },
-        )
+        let payload = Client::build_sorafs_pin_register_payload(SorafsPinRegisterArgs {
+            authority: &authority,
+            private_key: key_pair.private_key(),
+            manifest: &manifest,
+            submitted_epoch: 10,
+            gas_asset_id: Some(" xor#universal "),
+            alias: None,
+            successor_of: None,
+        })
         .expect("payload build succeeds");
         let obj = payload.as_object().expect("payload object");
         assert_eq!(
@@ -7926,17 +9620,15 @@ mod evidence_http_tests {
             .expect("manifest build");
         manifest.chunk_digest_sha3_256 = [0; 32];
 
-        let err = Client::build_sorafs_pin_register_payload(
-            SorafsPinRegisterArgs {
-                authority: &authority,
-                private_key: key_pair.private_key(),
-                manifest: &manifest,
-                submitted_epoch: 10,
-                gas_asset_id: None,
-                alias: None,
-                successor_of: None,
-            },
-        )
+        let err = Client::build_sorafs_pin_register_payload(SorafsPinRegisterArgs {
+            authority: &authority,
+            private_key: key_pair.private_key(),
+            manifest: &manifest,
+            submitted_epoch: 10,
+            gas_asset_id: None,
+            alias: None,
+            successor_of: None,
+        })
         .expect_err("inert embedded chunk commitment should be rejected");
 
         assert!(
@@ -7968,21 +9660,20 @@ mod evidence_http_tests {
             .build()
             .expect("manifest build");
 
-        let err = Client::build_sorafs_pin_register_payload(
-            SorafsPinRegisterArgs {
-                authority: &authority,
-                private_key: key_pair.private_key(),
-                manifest: &manifest,
-                submitted_epoch: 10,
-                gas_asset_id: None,
-                alias: None,
-                successor_of: None,
-            },
-        )
+        let err = Client::build_sorafs_pin_register_payload(SorafsPinRegisterArgs {
+            authority: &authority,
+            private_key: key_pair.private_key(),
+            manifest: &manifest,
+            submitted_epoch: 10,
+            gas_asset_id: None,
+            alias: None,
+            successor_of: None,
+        })
         .expect_err("expired retention should be rejected");
 
         assert!(
-            err.to_string().contains("must be greater than submitted_epoch"),
+            err.to_string()
+                .contains("must be greater than submitted_epoch"),
             "unexpected error: {err}"
         );
     }
@@ -8532,9 +10223,9 @@ mod evidence_http_tests {
                     "/v1/pipeline/transactions/status" => Ok(empty_response(StatusCode::OK)),
                     p if p == torii_uri::QUERY => {
                         let response = QueryResponse::Iterable(QueryOutput {
-                            batch: QueryOutputBatchBoxTuple {
-                                tuple: vec![QueryOutputBatchBox::CommittedTransaction(Vec::new())],
-                            },
+                            batch: QueryOutputBatchBoxTuple::from_batch(
+                                QueryOutputBatchBox::CommittedTransaction(Vec::new()),
+                            ),
                             remaining_items: Some(0),
                             has_more: false,
                             continue_cursor: None,
@@ -8683,11 +10374,9 @@ mod evidence_http_tests {
                     }
                     p if p == torii_uri::QUERY => {
                         let response = QueryResponse::Iterable(QueryOutput {
-                            batch: QueryOutputBatchBoxTuple {
-                                tuple: vec![QueryOutputBatchBox::CommittedTransaction(vec![
-                                    committed.clone(),
-                                ])],
-                            },
+                            batch: QueryOutputBatchBoxTuple::from_batch(
+                                QueryOutputBatchBox::CommittedTransaction(vec![committed.clone()]),
+                            ),
                             remaining_items: Some(0),
                             has_more: false,
                             continue_cursor: None,
@@ -8899,11 +10588,9 @@ mod evidence_http_tests {
                     }
                     p if p == torii_uri::QUERY => {
                         let response = QueryResponse::Iterable(QueryOutput {
-                            batch: QueryOutputBatchBoxTuple {
-                                tuple: vec![QueryOutputBatchBox::CommittedTransaction(vec![
-                                    committed.clone(),
-                                ])],
-                            },
+                            batch: QueryOutputBatchBoxTuple::from_batch(
+                                QueryOutputBatchBox::CommittedTransaction(vec![committed.clone()]),
+                            ),
                             remaining_items: Some(0),
                             has_more: false,
                             continue_cursor: None,
@@ -9456,11 +11143,9 @@ mod evidence_http_tests {
                 match path.as_str() {
                     p if p == torii_uri::QUERY => {
                         let response = QueryResponse::Iterable(QueryOutput {
-                            batch: QueryOutputBatchBoxTuple {
-                                tuple: vec![QueryOutputBatchBox::CommittedTransaction(vec![
-                                    committed.clone(),
-                                ])],
-                            },
+                            batch: QueryOutputBatchBoxTuple::from_batch(
+                                QueryOutputBatchBox::CommittedTransaction(vec![committed.clone()]),
+                            ),
                             remaining_items: Some(0),
                             has_more: false,
                             continue_cursor: None,
@@ -9636,9 +11321,10 @@ fn decode_json_error_body(response: &Response<Vec<u8>>) -> Option<String> {
         .and_then(|value| value.to_str().ok())
         .is_some_and(|ct| {
             let media_type = ct.split(';').next().map(str::trim).unwrap_or_default();
+            let media_type_lower = media_type.to_ascii_lowercase();
             media_type.eq_ignore_ascii_case(APPLICATION_JSON)
-                || media_type.eq_ignore_ascii_case("text/json")
-                || media_type.to_ascii_lowercase().ends_with("+json")
+                || (media_type_lower.starts_with("application/")
+                    && media_type_lower.ends_with("+json"))
         });
     if !is_json {
         return None;
@@ -10089,8 +11775,6 @@ impl Client {
             account,
             account_chain_discriminant: _account_chain_discriminant,
             torii_api_url,
-            torii_api_version,
-            torii_api_min_proof_version: _torii_api_min_proof_version,
             torii_request_timeout,
             key_pair,
             basic_auth,
@@ -10105,9 +11789,6 @@ impl Client {
         }: Config,
         mut headers: HashMap<String, String>,
     ) -> Self {
-        headers
-            .entry(HEADER_API_VERSION.to_string())
-            .or_insert_with(|| torii_api_version.clone());
         if let Some(basic_auth) = basic_auth {
             let credentials = format!(
                 "{}:{}",
@@ -12238,22 +13919,6 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Convenience: POST `/v1/aliases/voprf/evaluate` with a hex-encoded blinded element.
-    ///
-    /// # Errors
-    /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
-    pub fn post_alias_voprf_hex(&self, blinded_hex: &str) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/aliases/voprf/evaluate");
-        let body = norito::json::to_vec(&norito::json!({
-            "blinded_element_hex": blinded_hex,
-        }))?;
-        self.default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()
-    }
-
     /// Convenience: POST `/v1/aliases/resolve` with an alias string.
     ///
     /// # Errors
@@ -12268,12 +13933,12 @@ impl Client {
             .send()
     }
 
-    /// Convenience: POST `/v1/aliases/resolve_index` with an index payload.
+    /// Convenience: POST `/v1/aliases/resolve-index` with an index payload.
     ///
     /// # Errors
     /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
     pub fn post_alias_resolve_index(&self, index: u64) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/aliases/resolve_index");
+        let url = join_torii_url(&self.torii_url, "v1/aliases/resolve-index");
         let body = norito::json::to_vec(&norito::json!({ "index": index }))?;
         self.default_request(HttpMethod::POST, url)
             .header("Content-Type", APPLICATION_JSON)
@@ -12282,7 +13947,7 @@ impl Client {
             .send()
     }
 
-    /// Convenience: POST `/v1/aliases/by_account` with a canonical account id and optional
+    /// Convenience: POST `/v1/aliases/by-account` with a canonical account id and optional
     /// alias-scope filters.
     ///
     /// # Errors
@@ -12293,7 +13958,7 @@ impl Client {
         dataspace: Option<&str>,
         domain: Option<&str>,
     ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/aliases/by_account");
+        let url = join_torii_url(&self.torii_url, "v1/aliases/by-account");
         let body = norito::json::to_vec(&norito::json!({
             "account_id": account_id,
             "dataspace": dataspace,
@@ -12334,7 +13999,7 @@ impl Client {
             .send()
     }
 
-    /// Convenience: POST `/v1/multisig/proposals/list` for a multisig account id.
+    /// Convenience: POST `/v1/multisig/proposals/query` for a multisig account id.
     ///
     /// # Errors
     /// Returns an error if request construction, JSON serialization, the HTTP call,
@@ -12344,7 +14009,7 @@ impl Client {
         multisig_account_id: &iroha_data_model::account::AccountId,
         statuses: &[&str],
     ) -> Result<MultisigProposalsListResponse> {
-        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/list");
+        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/query");
         let status = statuses
             .iter()
             .map(|value| (*value).to_owned())
@@ -12407,18 +14072,18 @@ impl Client {
         Ok(decoded)
     }
 
-    /// Convenience: signed POST `/v1/multisig/approvals/list_for_authority` for the caller authority.
+    /// Convenience: signed POST `/v1/multisig/approvals/query-for-authority` for the caller authority.
     ///
     /// # Errors
     /// Returns an error if request construction, JSON serialization, the HTTP call,
     /// or response decoding fails.
-    pub fn post_multisig_approvals_list_for_authority(
+    pub fn query_multisig_approvals_for_authority(
         &self,
         request: &MultisigApprovalsListRequest,
     ) -> Result<MultisigApprovalsListResponse> {
         let body = norito::json::to_vec(request)
-            .wrap_err("failed to encode multisig approvals list request")?;
-        let url = join_torii_url(&self.torii_url, "v1/multisig/approvals/list_for_authority");
+            .wrap_err("failed to encode multisig approvals query request")?;
+        let url = join_torii_url(&self.torii_url, "v1/multisig/approvals/query-for-authority");
         let response = self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON)
@@ -12426,27 +14091,30 @@ impl Client {
         )?;
         if response.status() != StatusCode::OK {
             return Err(
-                ResponseReport::with_msg("failed to list multisig approvals", &response)
+                ResponseReport::with_msg("failed to query multisig approvals", &response)
                     .unwrap_or_else(core::convert::identity)
                     .into(),
             );
         }
         norito::json::from_slice(response.body())
-            .wrap_err("failed to decode multisig approvals list response")
+            .wrap_err("failed to decode multisig approvals query response")
     }
 
-    /// Convenience: signed POST `/v1/multisig/approvals/get_for_authority` for the caller authority.
+    /// Convenience: signed POST `/v1/multisig/approvals/lookup-for-authority` for the caller authority.
     ///
     /// # Errors
     /// Returns an error if request construction, JSON serialization, the HTTP call,
     /// or response decoding fails.
-    pub fn post_multisig_approvals_get_for_authority(
+    pub fn lookup_multisig_approval_for_authority(
         &self,
         request: &MultisigApprovalsGetRequest,
     ) -> Result<MultisigApprovalsGetResponse> {
         let body = norito::json::to_vec(request)
-            .wrap_err("failed to encode multisig approvals get request")?;
-        let url = join_torii_url(&self.torii_url, "v1/multisig/approvals/get_for_authority");
+            .wrap_err("failed to encode multisig approval lookup request")?;
+        let url = join_torii_url(
+            &self.torii_url,
+            "v1/multisig/approvals/lookup-for-authority",
+        );
         let response = self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON)
@@ -12454,13 +14122,13 @@ impl Client {
         )?;
         if response.status() != StatusCode::OK {
             return Err(
-                ResponseReport::with_msg("failed to get multisig approval", &response)
+                ResponseReport::with_msg("failed to look up multisig approval", &response)
                     .unwrap_or_else(core::convert::identity)
                     .into(),
             );
         }
         norito::json::from_slice(response.body())
-            .wrap_err("failed to decode multisig approvals get response")
+            .wrap_err("failed to decode multisig approval lookup response")
     }
 
     /// Convenience: GET `/v1/sorafs/pin` to list manifests in the pin registry.
@@ -12830,13 +14498,13 @@ impl Client {
         DaManifestBundle::from_json(&value)
     }
 
-    /// Fetch the active DA commitment proof-policy bundle from `/v1/da/proof_policies`.
+    /// Fetch the active DA commitment proof-policy bundle from `/v1/da/proof-policies`.
     ///
     /// # Errors
     ///
     /// Returns an error if the HTTP request fails or the response cannot be decoded.
     pub fn get_da_proof_policies(&self) -> Result<DaProofPolicyBundle> {
-        let url = join_torii_url(&self.torii_url, "v1/da/proof_policies");
+        let url = join_torii_url(&self.torii_url, "v1/da/proof-policies");
         let response = self
             .default_request(HttpMethod::GET, url)
             .header("Accept", APPLICATION_JSON)
@@ -12853,13 +14521,13 @@ impl Client {
             .wrap_err("failed to decode DA proof policies response")
     }
 
-    /// Fetch a stable DA proof-policy snapshot from `/v1/da/proof_policy_snapshot`.
+    /// Fetch a stable DA proof-policy snapshot from `/v1/da/proof-policies/snapshot`.
     ///
     /// # Errors
     ///
     /// Returns an error if the HTTP request fails or the response cannot be decoded.
     pub fn get_da_proof_policy_snapshot(&self) -> Result<DaProofPolicyBundle> {
-        let url = join_torii_url(&self.torii_url, "v1/da/proof_policy_snapshot");
+        let url = join_torii_url(&self.torii_url, "v1/da/proof-policies/snapshot");
         let response = self
             .default_request(HttpMethod::GET, url)
             .header("Accept", APPLICATION_JSON)
@@ -12967,7 +14635,7 @@ impl Client {
             .wrap_err("failed to decode DA commitment verify response")
     }
 
-    /// Query pin intent records from `/v1/da/pin_intents`.
+    /// Query pin intent records from `/v1/da/pin-intents`.
     ///
     /// # Errors
     ///
@@ -12978,7 +14646,7 @@ impl Client {
     ) -> Result<Vec<DaPinIntentWithLocation>> {
         let body =
             norito::json::to_vec(request).wrap_err("failed to encode DA pin intent request")?;
-        let url = join_torii_url(&self.torii_url, "v1/da/pin_intents");
+        let url = join_torii_url(&self.torii_url, "v1/da/pin-intents");
         let response = self
             .default_request(HttpMethod::POST, url)
             .header("Content-Type", APPLICATION_JSON)
@@ -12997,7 +14665,7 @@ impl Client {
             .wrap_err("failed to decode DA pin intent list response")
     }
 
-    /// Build a pin intent proof from `/v1/da/pin_intents/prove`.
+    /// Build a pin intent proof from `/v1/da/pin-intents/prove`.
     ///
     /// # Errors
     ///
@@ -13008,7 +14676,7 @@ impl Client {
     ) -> Result<Option<DaPinIntentWithLocation>> {
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode DA pin intent proof request")?;
-        let url = join_torii_url(&self.torii_url, "v1/da/pin_intents/prove");
+        let url = join_torii_url(&self.torii_url, "v1/da/pin-intents/prove");
         let response = self
             .default_request(HttpMethod::POST, url)
             .header("Content-Type", APPLICATION_JSON)
@@ -13027,7 +14695,7 @@ impl Client {
             .wrap_err("failed to decode DA pin intent proof response")
     }
 
-    /// Verify a pin intent proof against `/v1/da/pin_intents/verify`.
+    /// Verify a pin intent proof against `/v1/da/pin-intents/verify`.
     ///
     /// # Errors
     ///
@@ -13037,7 +14705,7 @@ impl Client {
         proof: &DaPinIntentWithLocation,
     ) -> Result<DaPinIntentVerifyResponse> {
         let body = norito::json::to_vec(proof).wrap_err("failed to encode DA pin intent proof")?;
-        let url = join_torii_url(&self.torii_url, "v1/da/pin_intents/verify");
+        let url = join_torii_url(&self.torii_url, "v1/da/pin-intents/verify");
         let response = self
             .default_request(HttpMethod::POST, url)
             .header("Content-Type", APPLICATION_JSON)
@@ -13423,8 +15091,7 @@ impl Client {
                 return Err(eyre!("pin alias namespace and name must not be empty"));
             }
             if alias.proof.is_empty()
-                || alias.proof.len()
-                    > sorafs_manifest::pin_registry::MAX_ALIAS_PROOF_ENCODED_BYTES
+                || alias.proof.len() > sorafs_manifest::pin_registry::MAX_ALIAS_PROOF_ENCODED_BYTES
             {
                 return Err(eyre!(
                     "pin alias proof must contain 1..={} bytes",
@@ -15150,6 +16817,64 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
+    /// POST `/v1/gov/proposals/sccp-route-governance` with one typed action.
+    ///
+    /// The endpoint returns only an instruction draft. Signing material is
+    /// never sent to Torii; callers inspect and sign the returned instruction
+    /// locally through the normal transaction pipeline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid action/window, transport or HTTP
+    /// failure, a non-JSON response, or a response whose proposal id or framed
+    /// instruction differs from the exact request.
+    pub fn post_sccp_route_governance_draft(
+        &self,
+        request: &SccpRouteGovernanceDraftRequest,
+    ) -> Result<SccpRouteGovernanceDraftResponse> {
+        request
+            .action
+            .validate_static()
+            .map_err(|error| eyre!("invalid SCCP route-governance action: {error}"))?;
+        if request
+            .window
+            .is_some_and(|window| window.upper < window.lower)
+        {
+            return Err(eyre!(
+                "SCCP route-governance window.upper must be greater than or equal to window.lower"
+            ));
+        }
+        let url = join_torii_url(
+            &self.torii_url,
+            iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE,
+        );
+        let body = norito::json::to_vec(request)?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(SCCP_JSON_RESPONSE_MAX_BYTES)
+                .body(body),
+        )?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to draft SCCP route governance: {} {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        let content_type = Self::response_content_type(&resp);
+        if !Self::is_sccp_json_content_type(content_type) {
+            return Err(eyre!(
+                "SCCP route-governance draft response has invalid content type {content_type}"
+            ));
+        }
+        let response: SccpRouteGovernanceDraftResponse = norito::json::from_slice(resp.body())
+            .wrap_err("failed to decode typed SCCP route-governance draft response")?;
+        validate_sccp_route_governance_draft_response(&response, request)?;
+        Ok(response)
+    }
+
     /// POST `/v1/gov/ballots/zk` with a JSON DTO body.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
@@ -15679,7 +17404,7 @@ impl Client {
         private_key: Option<&iroha_crypto::PrivateKey>,
         contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
         contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
-        entrypoint: Option<&str>,
+        entrypoint: &str,
         payload: Option<&norito::json::Value>,
         creation_time_ms: Option<u64>,
         gas_asset_id: Option<&str>,
@@ -15709,9 +17434,7 @@ impl Client {
                 norito::json::to_value(contract_alias)?,
             );
         }
-        if let Some(entrypoint) = entrypoint {
-            body.insert("entrypoint".into(), entrypoint.into());
-        }
+        body.insert("entrypoint".into(), entrypoint.into());
         if let Some(payload) = payload {
             body.insert("payload".into(), payload.clone());
         }
@@ -15744,7 +17467,7 @@ impl Client {
         authority: &iroha_data_model::account::AccountId,
         contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
         contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
-        entrypoint: Option<&str>,
+        entrypoint: &str,
         payload: Option<&norito::json::Value>,
         gas_limit: u64,
     ) -> Result<norito::json::Value> {
@@ -15763,9 +17486,7 @@ impl Client {
                 norito::json::to_value(contract_alias)?,
             );
         }
-        if let Some(entrypoint) = entrypoint {
-            body.insert("entrypoint".into(), entrypoint.into());
-        }
+        body.insert("entrypoint".into(), entrypoint.into());
         if let Some(payload) = payload {
             body.insert("payload".into(), payload.clone());
         }
@@ -16054,7 +17775,7 @@ impl Client {
         authority: &iroha_data_model::account::AccountId,
         contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
         contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
-        entrypoint: Option<&str>,
+        entrypoint: &str,
         payload: Option<&norito::json::Value>,
         gas_asset_id: Option<&str>,
         fee_sponsor: Option<&iroha_data_model::account::AccountId>,
@@ -16075,9 +17796,7 @@ impl Client {
                 norito::json::to_value(contract_alias)?,
             );
         }
-        if let Some(entrypoint) = entrypoint {
-            body.insert("entrypoint".into(), entrypoint.into());
-        }
+        body.insert("entrypoint".into(), entrypoint.into());
         if let Some(payload) = payload {
             body.insert("payload".into(), payload.clone());
         }
@@ -16199,7 +17918,8 @@ impl Client {
         let url = join_torii_url(&self.torii_url, "v1/sccp/capabilities");
         let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_JSON),
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(SCCP_CAPABILITIES_RESPONSE_MAX_BYTES),
         )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
@@ -16208,7 +17928,18 @@ impl Client {
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        Ok(norito::json::from_slice(resp.body())?)
+        let content_type = Self::response_content_type(&resp);
+        if !Self::is_sccp_json_content_type(content_type) {
+            return Err(eyre!(
+                "SCCP capabilities response has invalid content type {content_type}"
+            ));
+        }
+        let capabilities: SccpCapabilities = norito::json::from_slice(resp.body())
+            .wrap_err("failed to decode typed SCCP capabilities JSON")?;
+        validate_sccp_capabilities(&capabilities)
+            .wrap_err("node returned invalid SCCP capabilities")?;
+        norito::json::to_value(&capabilities)
+            .wrap_err("failed to render validated SCCP capabilities JSON")
     }
 
     /// GET `/v1/sccp/capabilities`.
@@ -16220,7 +17951,8 @@ impl Client {
         let url = join_torii_url(&self.torii_url, "v1/sccp/capabilities");
         let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_NORITO),
+                .header("Accept", APPLICATION_NORITO)
+                .max_response_bytes(SCCP_CAPABILITIES_RESPONSE_MAX_BYTES),
         )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
@@ -16229,285 +17961,493 @@ impl Client {
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        norito::decode_from_bytes(resp.body()).wrap_err("failed to decode SCCP capabilities")
+        let content_type = Self::response_content_type(&resp);
+        if !Self::is_norito_content_type(content_type) {
+            return Err(eyre!(
+                "SCCP capabilities response has invalid content type {content_type}"
+            ));
+        }
+        let capabilities: SccpCapabilities = norito::decode_from_bytes(resp.body())
+            .wrap_err("failed to decode SCCP capabilities")?;
+        if !norito::to_bytes(&capabilities)
+            .is_ok_and(|canonical| canonical.as_slice() == resp.body().as_slice())
+        {
+            return Err(eyre!(
+                "SCCP capabilities response is not one canonical Norito payload"
+            ));
+        }
+        validate_sccp_capabilities(&capabilities)
+            .wrap_err("node returned invalid SCCP capabilities")?;
+        Ok(capabilities)
     }
 
-    /// GET `/v1/sccp/manifests`.
-    /// Returns the SCCP proof-manifest collection as JSON.
+    /// GET `/v1/sccp/registry`.
+    /// Returns the authoritative typed SCCP registry as JSON.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sccp_proof_manifests_json(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/sccp/manifests");
+    pub fn get_sccp_registry_json(&self) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/sccp/registry");
         let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_JSON),
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(SCCP_JSON_RESPONSE_MAX_BYTES),
         )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to get SCCP proof manifests: {} {}",
+                "Failed to get SCCP registry: {} {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        Ok(norito::json::from_slice(resp.body())?)
+        let content_type = Self::response_content_type(&resp);
+        if !Self::is_sccp_json_content_type(content_type) {
+            return Err(eyre!(
+                "SCCP registry response has invalid content type {content_type}"
+            ));
+        }
+        let registry: iroha_data_model::bridge::SccpRegistryV1 =
+            norito::json::from_slice(resp.body())
+                .wrap_err("failed to decode typed SCCP registry JSON")?;
+        registry
+            .validate()
+            .map_err(|error| eyre!("node returned an invalid SCCP registry: {error}"))?;
+        validate_taira_only_sccp_registry(&registry)?;
+        norito::json::to_value(&registry).wrap_err("failed to render validated SCCP registry JSON")
     }
 
-    /// GET `/v1/sccp/manifests`.
-    /// Returns the SCCP proof-manifest collection as a typed Norito payload.
+    /// GET `/v1/sccp/registry`.
+    /// Returns the authoritative typed SCCP registry as a Norito payload.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or the Norito payload
-    /// cannot be decoded into the typed SCCP proof-manifest set.
-    pub fn get_sccp_proof_manifests(&self) -> Result<SccpProofManifestSet> {
-        let url = join_torii_url(&self.torii_url, "v1/sccp/manifests");
+    /// cannot be decoded and validated as the closed first-release registry.
+    pub fn get_sccp_registry(&self) -> Result<iroha_data_model::bridge::SccpRegistryV1> {
+        let url = join_torii_url(&self.torii_url, "v1/sccp/registry");
         let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_NORITO),
+                .header("Accept", APPLICATION_NORITO)
+                .max_response_bytes(SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES),
         )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to get SCCP proof manifests: {} {}",
+                "Failed to get SCCP registry: {} {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        norito::decode_from_bytes(resp.body()).wrap_err("failed to decode SCCP proof manifests")
+        let content_type = Self::response_content_type(&resp);
+        if !Self::is_norito_content_type(content_type) {
+            return Err(eyre!(
+                "SCCP registry response has invalid content type {content_type}"
+            ));
+        }
+        let registry: iroha_data_model::bridge::SccpRegistryV1 =
+            norito::decode_from_bytes(resp.body()).wrap_err("failed to decode SCCP registry")?;
+        if !norito::to_bytes(&registry)
+            .is_ok_and(|canonical| canonical.as_slice() == resp.body().as_slice())
+        {
+            return Err(eyre!(
+                "SCCP registry response is not one canonical Norito payload"
+            ));
+        }
+        registry
+            .validate()
+            .map_err(|error| eyre!("node returned an invalid SCCP registry: {error}"))?;
+        validate_taira_only_sccp_registry(&registry)?;
+        Ok(registry)
     }
 
-    /// GET `/v1/sccp/artifacts/message/{message_id}`.
-    /// Returns the typed transparent SCCP message-proof artifact as JSON.
+    /// GET `/v1/sccp/messages/recent` using Torii's default history window.
+    /// Returns exact outbound message contexts as JSON.
     /// # Errors
-    /// Returns an error if the message id is malformed, the HTTP request fails, the response is
-    /// non-OK, or JSON deserialization fails.
-    pub fn get_sccp_message_proof_artifact_json(
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn get_sccp_recent_messages_json(&self) -> Result<norito::json::Value> {
+        self.get_sccp_recent_messages_json_with_query(SccpRecentMessagesQuery::default())
+    }
+
+    /// GET `/v1/sccp/messages/recent` with an explicit history window.
+    /// Returns exact outbound message contexts as JSON.
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn get_sccp_recent_messages_json_with_query(
         &self,
-        message_id_hex: &str,
+        query: SccpRecentMessagesQuery,
     ) -> Result<norito::json::Value> {
-        self.get_sccp_message_proof_artifact_json_with_params(
-            message_id_hex,
-            &SccpMessageProofQueryParams::default(),
-        )
+        let mut url = join_torii_url(&self.torii_url, "v1/sccp/messages/recent");
+        query.apply_to_url(&mut url)?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(SCCP_RECENT_RESPONSE_MAX_BYTES),
+        )?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get recent SCCP messages: {} {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        let content_type = Self::response_content_type(&resp);
+        if !Self::is_sccp_json_content_type(content_type) {
+            return Err(eyre!(
+                "recent SCCP messages response has invalid content type {content_type}"
+            ));
+        }
+        let messages: SccpRecentMessages = norito::json::from_slice(resp.body())
+            .wrap_err("failed to decode typed recent SCCP messages JSON")?;
+        validate_sccp_recent_messages(&messages)
+            .wrap_err("node returned an invalid recent SCCP message snapshot")?;
+        norito::json::to_value(&messages)
+            .wrap_err("failed to render validated recent SCCP messages JSON")
     }
 
-    /// GET `/v1/sccp/artifacts/message/{message_id}` with destination/proof query parameters.
-    /// Returns the typed transparent SCCP message-proof artifact as JSON.
+    /// GET `/v1/sccp/messages/recent` using Torii's default history window.
+    /// Returns a typed exact-context snapshot.
     /// # Errors
-    /// Returns an error if the message id or query parameters are malformed, the HTTP request
-    /// fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sccp_message_proof_artifact_json_with_params(
+    /// Returns an error if the HTTP request fails, the response is non-OK, or Norito decoding fails.
+    pub fn get_sccp_recent_messages(&self) -> Result<SccpRecentMessages> {
+        self.get_sccp_recent_messages_with_query(SccpRecentMessagesQuery::default())
+    }
+
+    /// GET `/v1/sccp/messages/recent` with an explicit history window.
+    /// Returns a typed exact-context snapshot.
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or Norito decoding fails.
+    pub fn get_sccp_recent_messages_with_query(
+        &self,
+        query: SccpRecentMessagesQuery,
+    ) -> Result<SccpRecentMessages> {
+        let mut url = join_torii_url(&self.torii_url, "v1/sccp/messages/recent");
+        query.apply_to_url(&mut url)?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_NORITO)
+                .max_response_bytes(SCCP_RECENT_RESPONSE_MAX_BYTES),
+        )?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get recent SCCP messages: {} {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        let content_type = Self::response_content_type(&resp);
+        if !Self::is_norito_content_type(content_type) {
+            return Err(eyre!(
+                "recent SCCP messages response has invalid content type {content_type}"
+            ));
+        }
+        let messages: SccpRecentMessages = norito::decode_from_bytes(resp.body())
+            .wrap_err("failed to decode recent SCCP message snapshot")?;
+        if !norito::to_bytes(&messages)
+            .is_ok_and(|canonical| canonical.as_slice() == resp.body().as_slice())
+        {
+            return Err(eyre!(
+                "recent SCCP messages response is not one canonical Norito payload"
+            ));
+        }
+        validate_sccp_recent_messages(&messages)
+            .wrap_err("node returned an invalid recent SCCP message snapshot")?;
+        Ok(messages)
+    }
+
+    /// GET /v1/sccp/proofs/message/{message_id}.
+    /// Returns one finalized SCCP message bundle as JSON.
+    ///
+    /// # Errors
+    /// Returns an error for a malformed or zero message id, transport failure,
+    /// non-OK response, or malformed JSON.
+    pub fn get_sccp_message_bundle_json(
         &self,
         message_id_hex: &str,
-        params: &SccpMessageProofQueryParams,
     ) -> Result<norito::json::Value> {
         let message_id_hex = normalize_message_id_hex(message_id_hex)?;
-        let path = format!("v1/sccp/artifacts/message/{message_id_hex}");
+        let expected = decode_exact_nonzero_sccp_hex32(&message_id_hex, "message id")?;
+        let path = format!("v1/sccp/proofs/message/{message_id_hex}");
         let url = join_torii_url(&self.torii_url, &path);
-        let request = params.apply_to_request(
+        let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_JSON),
-            &message_id_hex,
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(SCCP_JSON_RESPONSE_MAX_BYTES),
         )?;
-        let resp = self.send_builder(request)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to get SCCP message proof artifact: {} {}",
+                "Failed to get SCCP message bundle: {} {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        Ok(norito::json::from_slice(resp.body())?)
+        let content_type = Self::response_content_type(&resp);
+        if !Self::is_sccp_json_content_type(content_type) {
+            return Err(eyre!(
+                "SCCP message bundle response has invalid content type {content_type}"
+            ));
+        }
+        let bundle: iroha_sccp::TairaSccpMessageProofV1 = norito::json::from_slice(resp.body())
+            .wrap_err("failed to decode typed SCCP message bundle JSON")?;
+        validate_sccp_message_bundle_for_request(&bundle, expected)?;
+        norito::json::to_value(&bundle)
+            .wrap_err("failed to render validated SCCP message bundle JSON")
     }
 
-    /// GET `/v1/sccp/artifacts/message/{message_id}`.
-    /// Returns the typed transparent SCCP message-proof artifact.
+    /// GET /v1/sccp/proofs/message/{message_id}.
+    /// Returns one canonical finalized SCCP message bundle.
+    ///
     /// # Errors
-    /// Returns an error if the message id is malformed, the HTTP request fails, the response is
-    /// non-OK, or the Norito artifact cannot be decoded into the typed SCCP structure.
-    pub fn get_sccp_message_proof_artifact(
+    /// Returns an error for a malformed or zero message id, transport failure,
+    /// non-OK response, or a noncanonical/mismatched bundle.
+    pub fn get_sccp_message_bundle(
         &self,
         message_id_hex: &str,
-    ) -> Result<iroha_sccp::NexusSccpMessageTransparentProofV1> {
-        self.get_sccp_message_proof_artifact_with_params(
-            message_id_hex,
-            &SccpMessageProofQueryParams::default(),
-        )
-    }
-
-    /// GET `/v1/sccp/artifacts/message/{message_id}` with destination/proof query parameters.
-    /// Returns the typed transparent SCCP message-proof artifact.
-    /// # Errors
-    /// Returns an error if the message id or query parameters are malformed, the HTTP request
-    /// fails, the response is non-OK, or the Norito artifact cannot be decoded into the typed SCCP
-    /// structure.
-    pub fn get_sccp_message_proof_artifact_with_params(
-        &self,
-        message_id_hex: &str,
-        params: &SccpMessageProofQueryParams,
-    ) -> Result<iroha_sccp::NexusSccpMessageTransparentProofV1> {
+    ) -> Result<iroha_sccp::TairaSccpMessageProofV1> {
         let message_id_hex = normalize_message_id_hex(message_id_hex)?;
-        let path = format!("v1/sccp/artifacts/message/{message_id_hex}");
+        let expected = decode_exact_nonzero_sccp_hex32(&message_id_hex, "message id")?;
+        let path = format!("v1/sccp/proofs/message/{message_id_hex}");
         let url = join_torii_url(&self.torii_url, &path);
-        let request = params.apply_to_request(
+        let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_NORITO),
-            &message_id_hex,
+                .header("Accept", APPLICATION_NORITO)
+                .max_response_bytes(SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES),
         )?;
-        let resp = self.send_builder(request)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to get SCCP message proof artifact: {} {}",
+                "Failed to get SCCP message bundle: {} {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        norito::decode_from_bytes(resp.body())
-            .wrap_err("failed to decode SCCP message proof artifact")
+        let content_type = Self::response_content_type(&resp);
+        if !Self::is_norito_content_type(content_type) {
+            return Err(eyre!(
+                "SCCP message bundle response has invalid content type {content_type}"
+            ));
+        }
+        let bundle = iroha_sccp::decode_taira_sccp_message_proof(resp.body())
+            .ok_or_else(|| eyre!("node returned a noncanonical SCCP message bundle"))?;
+        validate_sccp_message_bundle_for_request(&bundle, expected)?;
+        Ok(bundle)
     }
 
-    /// GET `/v1/sccp/jobs/message/{message_id}`.
-    /// Returns the normalized SCCP counterparty proof job as JSON.
+    /// GET /v1/sccp/proof-requests/{message_id}.
+    /// Returns the state-derived Groth16 prover request as JSON.
+    ///
     /// # Errors
-    /// Returns an error if the message id is malformed, the HTTP request fails, the response is
-    /// non-OK, or JSON deserialization fails.
-    pub fn get_sccp_message_proof_job_json(
+    /// Returns an error for a malformed or zero message id, transport failure,
+    /// non-OK response, or malformed JSON.
+    pub fn get_sccp_groth16_proof_request_json(
         &self,
         message_id_hex: &str,
     ) -> Result<norito::json::Value> {
-        self.get_sccp_message_proof_job_json_with_params(
-            message_id_hex,
-            &SccpMessageProofQueryParams::default(),
-        )
-    }
-
-    /// GET `/v1/sccp/jobs/message/{message_id}` with destination/proof query parameters.
-    /// Returns the normalized SCCP counterparty proof job as JSON.
-    /// # Errors
-    /// Returns an error if the message id or query parameters are malformed, the HTTP request
-    /// fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sccp_message_proof_job_json_with_params(
-        &self,
-        message_id_hex: &str,
-        params: &SccpMessageProofQueryParams,
-    ) -> Result<norito::json::Value> {
         let message_id_hex = normalize_message_id_hex(message_id_hex)?;
-        let path = format!("v1/sccp/jobs/message/{message_id_hex}");
+        let expected = decode_exact_nonzero_sccp_hex32(&message_id_hex, "message id")?;
+        let path = format!("v1/sccp/proof-requests/{message_id_hex}");
         let url = join_torii_url(&self.torii_url, &path);
-        let request = params.apply_to_request(
+        let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_JSON),
-            &message_id_hex,
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(SCCP_JSON_RESPONSE_MAX_BYTES),
         )?;
-        let resp = self.send_builder(request)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to get SCCP message proof job: {} {}",
+                "Failed to get SCCP Groth16 proof request: {} {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        Ok(norito::json::from_slice(resp.body())?)
+        let content_type = Self::response_content_type(&resp);
+        if !Self::is_sccp_json_content_type(content_type) {
+            return Err(eyre!(
+                "SCCP Groth16 proof request response has invalid content type {content_type}"
+            ));
+        }
+        let request: iroha_sccp::SccpGroth16Bn254ProofRequestV1 =
+            norito::json::from_slice(resp.body())
+                .wrap_err("failed to decode typed SCCP Groth16 proof request JSON")?;
+        validate_sccp_proof_request_for_message(&request, expected)?;
+        norito::json::to_value(&request)
+            .wrap_err("failed to render validated SCCP Groth16 proof request JSON")
     }
 
-    /// GET `/v1/sccp/jobs/message/{message_id}`.
-    /// Returns the normalized SCCP counterparty proof job.
+    /// GET /v1/sccp/proof-requests/{message_id}.
+    /// Returns the canonical, self-consistent, state-derived Groth16 request.
+    ///
     /// # Errors
-    /// Returns an error if the message id is malformed, the HTTP request fails, the response is
-    /// non-OK, or the Norito job cannot be decoded into the typed SCCP structure.
-    pub fn get_sccp_message_proof_job(
+    /// Returns an error for a malformed or zero message id, transport failure,
+    /// non-OK response, or a noncanonical/mismatched request.
+    pub fn get_sccp_groth16_proof_request(
         &self,
         message_id_hex: &str,
-    ) -> Result<iroha_sccp::SccpCounterpartyProofJobV1> {
-        self.get_sccp_message_proof_job_with_params(
-            message_id_hex,
-            &SccpMessageProofQueryParams::default(),
-        )
-    }
-
-    /// GET `/v1/sccp/jobs/message/{message_id}` with destination/proof query parameters.
-    /// Returns the normalized SCCP counterparty proof job.
-    /// # Errors
-    /// Returns an error if the message id or query parameters are malformed, the HTTP request
-    /// fails, the response is non-OK, or the Norito job cannot be decoded into the typed SCCP
-    /// structure.
-    pub fn get_sccp_message_proof_job_with_params(
-        &self,
-        message_id_hex: &str,
-        params: &SccpMessageProofQueryParams,
-    ) -> Result<iroha_sccp::SccpCounterpartyProofJobV1> {
+    ) -> Result<iroha_sccp::SccpGroth16Bn254ProofRequestV1> {
         let message_id_hex = normalize_message_id_hex(message_id_hex)?;
-        let path = format!("v1/sccp/jobs/message/{message_id_hex}");
+        let expected = decode_exact_nonzero_sccp_hex32(&message_id_hex, "message id")?;
+        let path = format!("v1/sccp/proof-requests/{message_id_hex}");
         let url = join_torii_url(&self.torii_url, &path);
-        let request = params.apply_to_request(
+        let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_NORITO),
-            &message_id_hex,
+                .header("Accept", APPLICATION_NORITO)
+                .max_response_bytes(SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES),
         )?;
-        let resp = self.send_builder(request)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to get SCCP message proof job: {} {}",
+                "Failed to get SCCP Groth16 proof request: {} {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        norito::decode_from_bytes(resp.body()).wrap_err("failed to decode SCCP message proof job")
+        let content_type = Self::response_content_type(&resp);
+        if !Self::is_norito_content_type(content_type) {
+            return Err(eyre!(
+                "SCCP Groth16 proof request response has invalid content type {content_type}"
+            ));
+        }
+        let request = iroha_sccp::decode_canonical_sccp_groth16_bn254_proof_request_v1(resp.body())
+            .ok_or_else(|| eyre!("node returned a noncanonical SCCP Groth16 proof request"))?;
+        validate_sccp_proof_request_for_message(&request, expected)?;
+        Ok(request)
     }
 
-    /// POST `/v1/bridge/proofs/submit`.
-    /// Submits a bridge-proof DTO as JSON and returns the JSON response.
+    /// POST /v1/bridge/proofs/submit.
+    /// Preflights and submits one canonical, pairing-verified destination artifact.
+    ///
     /// # Errors
-    /// Returns an error if the request cannot be encoded, the HTTP request fails, the response is
-    /// non-OK, or the response body is not valid JSON.
-    pub fn post_bridge_proof_submit_json(
+    /// Returns an error if the artifact or detached signature is noncanonical,
+    /// the HTTP request fails, the response is non-OK, or the response and
+    /// signable transaction payload do not match the requested proof.
+    pub fn post_sccp_destination_proof(
         &self,
-        value: &norito::json::Value,
-    ) -> Result<norito::json::Value> {
-        preflight_sccp_bridge_submit_json(value, BridgeSubmitJsonEndpoint::Proof)?;
+        request: &SccpDestinationProofSubmitRequest,
+    ) -> Result<SccpBridgeSubmitResponse> {
+        validate_sccp_taira_client_chain(&self.chain)?;
+        let expectation = preflight_sccp_destination_submit(request)?;
+        let expected_route_configuration_hash =
+            resolve_sccp_expected_route_configuration_hash(&expectation, None)?;
+        let expected_submitted_tx_hash = match (
+            request.transaction_payload_b64.as_deref(),
+            request.signature_b64.as_deref(),
+        ) {
+            (Some(payload), Some(signature)) => Some(preflight_sccp_direct_transaction(
+                payload,
+                signature,
+                &expectation,
+                Some(expected_route_configuration_hash),
+                &self.chain,
+            )?),
+            (None, None) => None,
+            _ => unreachable!("preflight rejected a mixed SCCP signing state"),
+        };
         let url = join_torii_url(&self.torii_url, "v1/bridge/proofs/submit");
-        let body = norito::json::to_vec(value)?;
+        let body = norito::json::to_vec(request)?;
         let resp = self.send_builder(
             self.default_request(HttpMethod::POST, url)
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(SCCP_JSON_RESPONSE_MAX_BYTES)
                 .body(body),
         )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to submit bridge proof: {} {}",
+                "Failed to submit SCCP destination proof: {} {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        Ok(norito::json::from_slice(resp.body())?)
+        let content_type = Self::response_content_type(&resp);
+        if !Self::is_sccp_json_content_type(content_type) {
+            return Err(eyre!(
+                "SCCP destination-proof response has invalid content type {content_type}"
+            ));
+        }
+        let response = norito::json::from_slice(resp.body())
+            .map_err(|error| eyre!("failed to decode SCCP destination-proof response: {error}"))?;
+        decode_sccp_bridge_submit_response(
+            response,
+            &expectation,
+            expected_route_configuration_hash,
+            &self.chain,
+            expected_submitted_tx_hash,
+        )
     }
 
-    /// POST `/v1/bridge/messages`.
-    /// Submits a bridge-message DTO as JSON and returns the JSON response.
+    /// POST /v1/bridge/messages.
+    /// Preflights and submits one canonical protocol-native inbound proof.
+    ///
     /// # Errors
-    /// Returns an error if the request cannot be encoded, the HTTP request fails, the response is
-    /// non-OK, or the response body is not valid JSON.
-    pub fn post_bridge_message_submit_json(
+    /// Returns an error if the proof or detached signature is noncanonical,
+    /// the HTTP request fails, the response is non-OK, or the response and
+    /// signable transaction payload do not match the requested proof.
+    pub fn post_sccp_native_message(
         &self,
-        value: &norito::json::Value,
-    ) -> Result<norito::json::Value> {
-        preflight_sccp_bridge_submit_json(value, BridgeSubmitJsonEndpoint::Message)?;
+        request: &SccpNativeMessageSubmitRequest,
+    ) -> Result<SccpBridgeSubmitResponse> {
+        validate_sccp_taira_client_chain(&self.chain)?;
+        let expectation = preflight_sccp_native_submit(request)?;
+        let direct_submit = match (
+            request.transaction_payload_b64.as_deref(),
+            request.signature_b64.as_deref(),
+        ) {
+            (Some(payload), Some(signature)) => {
+                // Reject every payload/signature error that does not depend on governance before
+                // issuing the registry request.
+                preflight_sccp_direct_transaction(
+                    payload,
+                    signature,
+                    &expectation,
+                    None,
+                    &self.chain,
+                )?;
+                Some((payload, signature))
+            }
+            (None, None) => None,
+            _ => unreachable!("preflight rejected a mixed SCCP signing state"),
+        };
+        // The native proof authenticates an emitter and exact governed route.
+        // Resolve and fully verify it against the authoritative typed
+        // registry before asking Torii to construct a value-moving transaction.
+        let registry = self.get_sccp_registry()?;
+        let expected_route_configuration_hash =
+            resolve_sccp_expected_route_configuration_hash(&expectation, Some(&registry))?;
+        let expected_submitted_tx_hash = direct_submit
+            .map(|(payload, signature)| {
+                preflight_sccp_direct_transaction(
+                    payload,
+                    signature,
+                    &expectation,
+                    Some(expected_route_configuration_hash),
+                    &self.chain,
+                )
+            })
+            .transpose()?;
         let url = join_torii_url(&self.torii_url, "v1/bridge/messages");
-        let body = norito::json::to_vec(value)?;
+        let body = norito::json::to_vec(request)?;
         let resp = self.send_builder(
             self.default_request(HttpMethod::POST, url)
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(SCCP_JSON_RESPONSE_MAX_BYTES)
                 .body(body),
         )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to submit bridge message: {} {}",
+                "Failed to submit SCCP native message: {} {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        Ok(norito::json::from_slice(resp.body())?)
+        let content_type = Self::response_content_type(&resp);
+        if !Self::is_sccp_json_content_type(content_type) {
+            return Err(eyre!(
+                "SCCP native-message response has invalid content type {content_type}"
+            ));
+        }
+        let response = norito::json::from_slice(resp.body())
+            .map_err(|error| eyre!("failed to decode SCCP native-message response: {error}"))?;
+        decode_sccp_bridge_submit_response(
+            response,
+            &expectation,
+            expected_route_configuration_hash,
+            &self.chain,
+            expected_submitted_tx_hash,
+        )
     }
-
     /// GET `/v1/runtime/metrics`
     /// Returns a JSON summary of runtime metrics (ABI count and upgrade events counters).
     /// # Errors
@@ -19267,10 +21207,25 @@ pub mod stream_api {
         http_default::DefaultWebSocketRequestBuilder,
     };
 
+    fn validate_selected_subprotocol(response: &http_default::WebSocketResponse) -> Result<()> {
+        let selected = response
+            .headers()
+            .get(::http::header::SEC_WEBSOCKET_PROTOCOL)
+            .and_then(|value| value.to_str().ok());
+        if selected == Some(NORITO_V1_WEBSOCKET_SUBPROTOCOL) {
+            Ok(())
+        } else {
+            Err(eyre!(
+                "Torii WebSocket did not select required subprotocol `{NORITO_V1_WEBSOCKET_SUBPROTOCOL}`"
+            ))
+        }
+    }
+
     /// Iterator for getting messages from the `WebSocket` stream.
     pub(super) struct SyncIterator<E> {
         stream: WebSocketStream,
         handler: E,
+        terminated: bool,
     }
 
     impl<E> SyncIterator<E> {
@@ -19292,13 +21247,15 @@ pub mod stream_api {
                 next: next_handler,
             } = Init::<http_default::DefaultWebSocketRequestBuilder>::init(handler);
 
-            let mut stream = req.build()?.connect()?;
+            let (mut stream, response) = req.build()?.connect_with_response()?;
+            validate_selected_subprotocol(&response)?;
             stream.send(WebSocketMessage::Binary(first_message.into()))?;
 
             trace!("`SyncIterator` created successfully");
             Ok(SyncIterator {
                 stream,
                 handler: next_handler,
+                terminated: false,
             })
         }
     }
@@ -19307,30 +21264,57 @@ pub mod stream_api {
         type Item = Result<E::Event>;
 
         fn next(&mut self) -> Option<Self::Item> {
+            if self.terminated {
+                return None;
+            }
             loop {
                 match self.stream.read() {
                     Ok(WebSocketMessage::Binary(message)) => {
                         match self.handler.message(message.to_vec()) {
                             Ok(event) => return Some(Ok(event)),
                             Err(err) => {
-                                let preview_len = message.len().min(32);
-                                let preview = hex::encode(&message[..preview_len]);
-                                let full_hex = hex::encode(&message);
-                                tracing::warn!(
-                                        ?err,
-                                    frame_len = message.len(),
-                                    frame_head_hex = %preview,
-                                    frame_hex = %full_hex,
-                                    "dropping malformed event frame"
-                                );
+                                self.terminated = true;
+                                return Some(Err(eyre!(
+                                    "failed to decode Torii WebSocket binary message: {err}"
+                                )));
                             }
                         }
                     }
-                    Ok(_) => (),
+                    Ok(WebSocketMessage::Close(frame)) => {
+                        self.terminated = true;
+                        return match frame {
+                            Some(frame) if u16::from(frame.code) == 1000 => None,
+                            Some(frame) => Some(Err(eyre!(
+                                "Torii WebSocket stream closed with code {}: {}",
+                                u16::from(frame.code),
+                                frame.reason
+                            ))),
+                            None => Some(Err(eyre!(
+                                "Torii WebSocket stream closed without a status code"
+                            ))),
+                        };
+                    }
+                    Ok(WebSocketMessage::Ping(_) | WebSocketMessage::Pong(_)) => (),
+                    Ok(WebSocketMessage::Text(_)) => {
+                        self.terminated = true;
+                        return Some(Err(eyre!(
+                            "Torii WebSocket sent an unexpected text data frame"
+                        )));
+                    }
+                    Ok(WebSocketMessage::Frame(_)) => {
+                        self.terminated = true;
+                        return Some(Err(eyre!(
+                            "Torii WebSocket exposed an unexpected raw frame"
+                        )));
+                    }
                     Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed) => {
+                        self.terminated = true;
                         return None;
                     }
-                    Err(err) => return Some(Err(err.into())),
+                    Err(err) => {
+                        self.terminated = true;
+                        return Some(Err(err.into()));
+                    }
                 }
             }
         }
@@ -19368,6 +21352,7 @@ pub mod stream_api {
     pub struct AsyncStream<E> {
         stream: AsyncWebSocketStream,
         handler: E,
+        terminated: bool,
     }
 
     impl<E> AsyncStream<E> {
@@ -19390,7 +21375,8 @@ pub mod stream_api {
                 next: next_handler,
             } = Init::<http_default::DefaultWebSocketRequestBuilder>::init(handler);
 
-            let mut stream = req.build()?.connect_async().await?;
+            let (mut stream, response) = req.build()?.connect_async_with_response().await?;
+            validate_selected_subprotocol(&response)?;
             stream
                 .send(WebSocketMessage::Binary(first_message.into()))
                 .await?;
@@ -19399,6 +21385,7 @@ pub mod stream_api {
             Ok(AsyncStream {
                 stream,
                 handler: next_handler,
+                terminated: false,
             })
         }
     }
@@ -19427,33 +21414,116 @@ pub mod stream_api {
             mut self: std::pin::Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<Option<Self::Item>> {
+            if self.terminated {
+                return std::task::Poll::Ready(None);
+            }
             loop {
                 break match futures_util::ready!(self.stream.poll_next_unpin(cx)) {
                     Some(Ok(WebSocketMessage::Binary(message))) => {
                         match self.handler.message(message.to_vec()) {
                             Ok(event) => std::task::Poll::Ready(Some(Ok(event))),
                             Err(err) => {
-                                let preview_len = message.len().min(32);
-                                let preview = hex::encode(&message[..preview_len]);
-                                let full_hex = hex::encode(&message);
-                                tracing::warn!(
-                                    ?err,
-                                    frame_len = message.len(),
-                                    frame_head_hex = %preview,
-                                    frame_hex = %full_hex,
-                                    "dropping malformed event frame"
-                                );
-                                continue;
+                                self.terminated = true;
+                                std::task::Poll::Ready(Some(Err(eyre!(
+                                    "failed to decode Torii WebSocket binary message: {err}"
+                                ))))
                             }
                         }
                     }
-                    Some(Ok(_)) => continue,
-                    Some(Err(err)) => std::task::Poll::Ready(Some(Err(err.into()))),
-                    None => std::task::Poll::Ready(None),
+                    Some(Ok(WebSocketMessage::Close(frame))) => {
+                        self.terminated = true;
+                        let error = match frame {
+                            Some(frame) if u16::from(frame.code) == 1000 => None,
+                            Some(frame) => Some(eyre!(
+                                "Torii WebSocket stream closed with code {}: {}",
+                                u16::from(frame.code),
+                                frame.reason
+                            )),
+                            None => {
+                                Some(eyre!("Torii WebSocket stream closed without a status code"))
+                            }
+                        };
+                        std::task::Poll::Ready(error.map(Err))
+                    }
+                    Some(Ok(WebSocketMessage::Ping(_) | WebSocketMessage::Pong(_))) => continue,
+                    Some(Ok(WebSocketMessage::Text(_))) => {
+                        self.terminated = true;
+                        std::task::Poll::Ready(Some(Err(eyre!(
+                            "Torii WebSocket sent an unexpected text data frame"
+                        ))))
+                    }
+                    Some(Ok(WebSocketMessage::Frame(_))) => {
+                        self.terminated = true;
+                        std::task::Poll::Ready(Some(Err(eyre!(
+                            "Torii WebSocket exposed an unexpected raw frame"
+                        ))))
+                    }
+                    Some(Err(err)) => {
+                        self.terminated = true;
+                        std::task::Poll::Ready(Some(Err(err.into())))
+                    }
+                    None => {
+                        self.terminated = true;
+                        std::task::Poll::Ready(None)
+                    }
                 };
             }
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn upgrade_response(protocol: Option<&str>) -> http_default::WebSocketResponse {
+            let mut builder = ::http::Response::builder().status(101);
+            if let Some(protocol) = protocol {
+                builder = builder.header(::http::header::SEC_WEBSOCKET_PROTOCOL, protocol);
+            }
+            builder.body(None).expect("upgrade response")
+        }
+
+        #[test]
+        fn selected_subprotocol_must_match_exactly() {
+            validate_selected_subprotocol(&upgrade_response(Some(NORITO_V1_WEBSOCKET_SUBPROTOCOL)))
+                .expect("canonical protocol");
+
+            for protocol in [None, Some("IROHA-NORITO-V1"), Some("other-protocol")] {
+                let error = validate_selected_subprotocol(&upgrade_response(protocol))
+                    .expect_err("missing or different protocol must fail");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("did not select required subprotocol")
+                );
+            }
+        }
+    }
+}
+
+fn canonical_norito_websocket_headers(
+    mut headers: HashMap<String, String>,
+) -> Result<HashMap<String, String>> {
+    for (name, value) in &headers {
+        if name.eq_ignore_ascii_case("last-event-id") {
+            return Err(eyre!(
+                "Last-Event-ID is unsupported on canonical Norito WebSocket streams"
+            ));
+        }
+        if name.eq_ignore_ascii_case("sec-websocket-protocol")
+            && value != NORITO_V1_WEBSOCKET_SUBPROTOCOL
+        {
+            return Err(eyre!(
+                "conflicting Sec-WebSocket-Protocol `{value}`; expected `{NORITO_V1_WEBSOCKET_SUBPROTOCOL}`"
+            ));
+        }
+    }
+    headers.retain(|name, _| !name.eq_ignore_ascii_case("sec-websocket-protocol"));
+    headers.insert(
+        "Sec-WebSocket-Protocol".to_owned(),
+        NORITO_V1_WEBSOCKET_SUBPROTOCOL.to_owned(),
+    );
+    Ok(headers)
 }
 
 /// Logic related to Events API client implementation.
@@ -19490,9 +21560,12 @@ pub mod events_api {
                 headers: HashMap<String, String>,
                 url: Url,
             ) -> Result<Self> {
+                if filters.is_empty() {
+                    return Err(eyre!("event WebSocket requires at least one filter"));
+                }
                 Ok(Self {
                     url: transform_ws_url(url)?,
-                    headers,
+                    headers: canonical_norito_websocket_headers(headers)?,
                     filters,
                 })
             }
@@ -19572,7 +21645,7 @@ mod blocks_api {
             ) -> Result<Self> {
                 Ok(Self {
                     height,
-                    headers,
+                    headers: canonical_norito_websocket_headers(headers)?,
                     url: transform_ws_url(url)?,
                 })
             }
@@ -20217,9 +22290,6 @@ mod tests {
             account_chain_discriminant:
                 iroha_config::parameters::defaults::common::chain_discriminant(),
             torii_api_url: "http://127.0.0.1:8080".parse().unwrap(),
-            torii_api_version: crate::config::default_torii_api_version(),
-            torii_api_min_proof_version: crate::config::DEFAULT_TORII_API_MIN_PROOF_VERSION
-                .to_string(),
             torii_request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             basic_auth: None,
             transaction_add_nonce: false,
@@ -20276,6 +22346,66 @@ mod tests {
             .message(bytes)
             .expect("decode event message");
         assert_eq!(decoded_event, event);
+    }
+
+    #[test]
+    fn canonical_websocket_headers_bind_the_norito_subprotocol() {
+        let mut headers = HashMap::from([("X-API-Token".to_owned(), "secret".to_owned())]);
+        headers.insert(
+            "sec-websocket-protocol".to_owned(),
+            NORITO_V1_WEBSOCKET_SUBPROTOCOL.to_owned(),
+        );
+        let headers = canonical_norito_websocket_headers(headers).expect("canonical headers");
+        assert_eq!(
+            headers.get("Sec-WebSocket-Protocol").map(String::as_str),
+            Some(NORITO_V1_WEBSOCKET_SUBPROTOCOL)
+        );
+        assert_eq!(
+            headers.get("X-API-Token").map(String::as_str),
+            Some("secret")
+        );
+        assert_eq!(
+            headers
+                .keys()
+                .filter(|name| name.eq_ignore_ascii_case("sec-websocket-protocol"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn canonical_websocket_headers_reject_conflicts_and_resume_headers() {
+        let conflicting = HashMap::from([(
+            "Sec-WebSocket-Protocol".to_owned(),
+            "other-protocol".to_owned(),
+        )]);
+        let error = canonical_norito_websocket_headers(conflicting)
+            .expect_err("conflicting protocol must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("conflicting Sec-WebSocket-Protocol")
+        );
+
+        let resume = HashMap::from([("LAST-EVENT-ID".to_owned(), "cursor".to_owned())]);
+        let error = canonical_norito_websocket_headers(resume)
+            .expect_err("SSE resume header must fail on WebSocket");
+        assert!(error.to_string().contains("Last-Event-ID is unsupported"));
+    }
+
+    #[test]
+    fn events_websocket_rejects_empty_filter_set_before_connecting() {
+        let error = match events_api::flow::Init::new(
+            Vec::new(),
+            HashMap::new(),
+            "http://127.0.0.1:8080/v1/events/ws"
+                .parse()
+                .expect("valid URL"),
+        ) {
+            Ok(_) => panic!("empty filter set must fail"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("at least one filter"));
     }
 
     #[test]
@@ -21105,7 +23235,7 @@ mod tests {
         let store = snapshots.lock().expect("lock snapshots");
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::GET);
-        assert_eq!(store[0].url.path(), "/v1/da/proof_policies");
+        assert_eq!(store[0].url.path(), "/v1/da/proof-policies");
     }
 
     #[test]
@@ -21129,7 +23259,7 @@ mod tests {
         let store = snapshots.lock().expect("lock snapshots");
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::GET);
-        assert_eq!(store[0].url.path(), "/v1/da/proof_policy_snapshot");
+        assert_eq!(store[0].url.path(), "/v1/da/proof-policies/snapshot");
     }
 
     #[test]
@@ -21268,7 +23398,7 @@ mod tests {
         let store = snapshots.lock().expect("lock snapshots");
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::POST);
-        assert_eq!(store[0].url.path(), "/v1/da/pin_intents");
+        assert_eq!(store[0].url.path(), "/v1/da/pin-intents");
         let posted: DaPinIntentQueryRequest =
             norito::json::from_slice(&store[0].body).expect("decode posted pin query");
         assert_eq!(posted.storage_ticket, request.storage_ticket);
@@ -21305,7 +23435,7 @@ mod tests {
         let store = snapshots.lock().expect("lock snapshots");
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::POST);
-        assert_eq!(store[0].url.path(), "/v1/da/pin_intents/prove");
+        assert_eq!(store[0].url.path(), "/v1/da/pin-intents/prove");
     }
 
     #[test]
@@ -21330,7 +23460,7 @@ mod tests {
         let store = snapshots.lock().expect("lock snapshots");
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::POST);
-        assert_eq!(store[0].url.path(), "/v1/da/pin_intents/verify");
+        assert_eq!(store[0].url.path(), "/v1/da/pin-intents/verify");
         let posted: DaPinIntentWithLocation =
             norito::json::from_slice(&store[0].body).expect("decode posted pin proof");
         assert_eq!(posted, proof);
@@ -21874,7 +24004,7 @@ mod tests {
             .first()
             .cloned()
             .expect("snapshot captured");
-        assert_eq!(snapshot.url.path(), "/v1/nexus/public_lanes/7/validators");
+        assert_eq!(snapshot.url.path(), "/v1/nexus/public-lanes/7/validators");
         assert_eq!(snapshot.url.query(), None);
     }
 
@@ -21941,7 +24071,7 @@ mod tests {
             .first()
             .cloned()
             .expect("snapshot captured");
-        assert_eq!(snapshot.url.path(), "/v1/nexus/public_lanes/1/stake");
+        assert_eq!(snapshot.url.path(), "/v1/nexus/public-lanes/1/stake");
         assert!(snapshot.url.query_pairs().any(|pair| pair
             == (
                 "validator".into(),
@@ -21972,7 +24102,7 @@ mod tests {
             .expect("snapshot captured");
         assert_eq!(
             snapshot.url.path(),
-            "/v1/nexus/public_lanes/0/rewards/pending"
+            "/v1/nexus/public-lanes/0/rewards/pending"
         );
         let pairs: Vec<_> = snapshot.url.query_pairs().collect();
         assert!(pairs.contains(&(
@@ -22631,9 +24761,9 @@ mod tests {
                     ),
                     p if p == torii_uri::QUERY => {
                         let response = QueryResponse::Iterable(QueryOutput {
-                            batch: QueryOutputBatchBoxTuple {
-                                tuple: vec![QueryOutputBatchBox::CommittedTransaction(Vec::new())],
-                            },
+                            batch: QueryOutputBatchBoxTuple::from_batch(
+                                QueryOutputBatchBox::CommittedTransaction(Vec::new()),
+                            ),
                             remaining_items: Some(0),
                             has_more: false,
                             continue_cursor: None,
@@ -28321,2262 +30451,1814 @@ mod tests {
         (bundle, payload)
     }
 
+    fn sccp_client_with_base_url(url: Url) -> Client {
+        let mut client = client_with_base_url(url);
+        client.chain = ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+        client
+    }
+
     #[allow(clippy::too_many_lines)]
-    fn sample_sccp_message_proof_artifact() -> iroha_sccp::NexusSccpMessageTransparentProofV1 {
-        use iroha_sccp::{
-            NexusBridgeFinalityProofV1, NexusCommitQcV1, NexusConsensusPhaseV1,
-            NexusSccpMessageProofV1, NexusSccpMessageTransparentProofV1,
-            SccpCounterpartySubmissionPackageV1, SccpHubCommitmentV1, SccpHubMessageKind,
-            SccpMerkleProofV1, SccpPayloadV1, SccpPlatformSubmissionPayloadV1, TransferPayloadV1,
-            build_sccp_message_transparent_inner_proof,
-            build_sccp_ton_internal_message_submission_payload, canonical_sccp_payload_bytes,
-            merkle_root_from_commitment, payload_hash, sccp_message_id,
-            sccp_message_transparent_public_inputs, sccp_proof_manifest_for_domain,
-        };
-
-        let payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
-            version: 1,
-            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_TON,
-            nonce: 21,
-            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
-            amount: 77,
-            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            sender: b"nexus:soraswap".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_TON_RAW,
-            recipient: b"0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                .to_vec(),
-            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            route_id: b"nexus:ton:xor".to_vec(),
-        });
-        let commitment = SccpHubCommitmentV1 {
-            version: 1,
-            kind: SccpHubMessageKind::Transfer,
-            target_domain: iroha_sccp::SCCP_DOMAIN_TON,
-            message_id: sccp_message_id(&payload),
-            payload_hash: payload_hash(&canonical_sccp_payload_bytes(&payload)),
-        };
-        let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
-        let commitment_root = merkle_root_from_commitment(&commitment, &merkle_proof);
-        let validator_keypair = KeyPair::try_from_seed(vec![0x40; 32], Algorithm::Ed25519)
-            .expect("derive client SCCP transparent-proof validator fixture key");
-        let validator_set = vec![PeerId::from(validator_keypair.public_key().clone())];
-        let validator_set_hash = HashOf::<Vec<PeerId>>::new(&validator_set);
-        let mut validator_set_hash_bytes = [0u8; 32];
-        validator_set_hash_bytes.copy_from_slice(validator_set_hash.as_ref().as_ref());
-        let validator_public_keys = vec![validator_keypair.public_key().to_string()];
-        let mut block_header = BlockHeader::new(
-            core::num::NonZeroU64::new(19).expect("non-zero finality height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        block_header.set_sccp_commitment_root(Some(commitment_root));
-        let mut block_hash = [0u8; 32];
-        block_hash.copy_from_slice(block_header.hash().as_ref().as_ref());
-        let finality_proof = NexusBridgeFinalityProofV1 {
-            version: 1,
-            chain_id: iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned(),
-            height: 19,
-            block_hash,
-            commitment_root,
-            block_header_bytes: norito::to_bytes(&block_header)
-                .expect("encode sample Nexus block header"),
-            commit_qc: NexusCommitQcV1 {
-                version: 1,
-                phase: NexusConsensusPhaseV1::Commit,
-                height: 19,
-                view: 1,
-                epoch: 1,
-                mode_tag: "normal".to_owned(),
-                subject_block_hash: block_hash,
-                parent_state_root: [0u8; 32],
-                post_state_root: [0u8; 32],
-                chain_order_hash: [0u8; 32],
-                rechain_seq: 0,
-                highest_qc: None,
-                validator_set_hash: validator_set_hash_bytes,
-                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-                validator_public_keys,
-                validator_set_pops: vec![vec![0xAA]],
-                signers_bitmap: vec![0x01],
-                bls_aggregate_signature: vec![0xBB],
-            },
-        };
-        let bundle = NexusSccpMessageProofV1 {
-            version: 1,
-            commitment_root,
-            commitment,
-            merkle_proof,
-            payload,
-            finality_proof: norito::to_bytes(&finality_proof).expect("encode finality proof"),
-        };
-        let manifest =
-            sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_TON).expect("ton manifest");
-        let public_inputs =
-            sccp_message_transparent_public_inputs(&bundle).expect("message public inputs");
-        let proof_bytes = vec![0xAA, 0xBB];
-        let inner =
-            build_sccp_message_transparent_inner_proof(&bundle, &manifest).expect("inner proof");
-        let platform_payload = SccpPlatformSubmissionPayloadV1::TonInternalMessage(
-            build_sccp_ton_internal_message_submission_payload(
-                &manifest,
-                &proof_bytes,
-                &public_inputs,
-                &bundle,
-                inner.statement_hash,
-                &manifest.destination_binding,
-            )
-            .expect("ton payload"),
-        );
-        NexusSccpMessageTransparentProofV1 {
-            version: 1,
-            local_domain: manifest.local_domain,
-            counterparty_domain: manifest.counterparty_domain,
-            security_model: manifest.security_model,
-            anchor_governance: manifest.anchor_governance,
-            destination_binding: manifest.destination_binding.clone(),
-            proof_family: manifest.proof_family.clone(),
-            verifier_backend: manifest.verifier_backend.clone(),
-            message_backend: manifest.message_backend.clone(),
-            registry_backend: manifest.registry_backend.clone(),
-            manifest_seed: manifest.manifest_seed.clone(),
-            finality_model: manifest.finality_model,
-            verifier_target: manifest.verifier_target,
-            public_inputs,
-            proof_bytes,
-            submission_package: SccpCounterpartySubmissionPackageV1 {
-                version: 1,
-                proof_family: manifest.proof_family.clone(),
-                verifier_backend: manifest.verifier_backend.clone(),
-                envelope_encoding: "ton_message_body_boc_v1".to_owned(),
-                submission_kind: manifest.submission_template.submission_kind.clone(),
-                verifier_entrypoint: manifest.submission_template.verifier_entrypoint.clone(),
-                platform_payload,
-                arguments: Vec::new(),
-                envelope_bytes: vec![0xCC],
-            },
-            bundle,
-        }
-    }
-
-    fn sample_sccp_message_proof_job() -> iroha_sccp::SccpCounterpartyProofJobV1 {
-        let artifact = sample_sccp_message_proof_artifact();
-        let manifest = iroha_sccp::sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_TON)
-            .expect("ton manifest");
-        iroha_sccp::SccpCounterpartyProofJobV1 {
-            version: 1,
-            chain_family: iroha_sccp::SccpTransparentChainFamilyV1::Ton,
-            chain: "ton".to_owned(),
-            local_domain: artifact.local_domain,
-            counterparty_domain: artifact.counterparty_domain,
-            security_model: artifact.security_model,
-            anchor_governance: artifact.anchor_governance,
-            destination_binding: artifact.destination_binding.clone(),
-            proof_family: artifact.proof_family.clone(),
-            verifier_backend: artifact.verifier_backend.clone(),
-            message_backend: artifact.message_backend.clone(),
-            registry_backend: artifact.registry_backend.clone(),
-            manifest_seed: artifact.manifest_seed.clone(),
-            finality_model: artifact.finality_model,
-            verifier_target: artifact.verifier_target,
-            public_inputs: artifact.public_inputs.clone(),
-            payload_kind: "transfer".to_owned(),
-            payload_projection: iroha_sccp::sccp_payload_projection(&artifact.bundle.payload)
-                .expect("payload projection"),
-            submission_template: manifest.submission_template,
-            submission_package: artifact.submission_package.clone(),
-            bundle: artifact.bundle,
-        }
-    }
-
     fn sample_sccp_capabilities() -> SccpCapabilities {
         SccpCapabilities {
-            local_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            local_chain: "sora".to_owned(),
-            proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
-            burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}".to_owned(),
+            version: 1,
+            registry_revision: format!("0x{}", "12".repeat(32)),
+            registry_path: "/v1/sccp/registry".to_owned(),
             message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
-            message_proof_path: "/v1/sccp/artifacts/message/{message_id}".to_owned(),
-            message_job_path: "/v1/sccp/jobs/message/{message_id}".to_owned(),
-            proof_manifest_path: "/v1/sccp/manifests".to_owned(),
-            burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
+            proof_request_path: "/v1/sccp/proof-requests/{message_id}".to_owned(),
+            recent_messages_path: "/v1/sccp/messages/recent".to_owned(),
+            registry_limits: SccpRegistryLimits {
+                max_governed_lanes: 16,
+                max_live_governed_routes: 64,
+                max_live_routes_per_lane: 8,
+                max_retained_routes_per_lane: 64,
+                max_retained_native_trust_anchors_per_lane: 4_096,
+            },
+            resource_limits: SccpResourceLimits {
+                max_proofs_per_transaction: 1,
+                max_proofs_per_block: 4,
+                max_proof_bytes_per_proof: 8 * 1024 * 1024,
+                max_proof_bytes_per_transaction: 8 * 1024 * 1024,
+                max_proof_bytes_per_block: 32 * 1024 * 1024,
+                max_native_headers_per_transaction: 1_004,
+                max_native_headers_per_block: 4_016,
+                max_ethereum_light_client_updates_per_transaction: 128,
+                max_ethereum_light_client_updates_per_block: 512,
+                max_native_header_bytes_per_transaction: 8 * 1024 * 1024,
+                max_native_header_bytes_per_block: 32 * 1024 * 1024,
+                max_secp256k1_recoveries_per_transaction: 1_005,
+                max_secp256k1_recoveries_per_block: 4_020,
+                max_bls_aggregate_checks_per_transaction: 1_004,
+                max_bls_aggregate_checks_per_block: 4_016,
+                max_bls_signer_contributions_per_transaction: 131_713,
+                max_bls_signer_contributions_per_block: 526_852,
+                max_bn254_pairing_checks_per_transaction: 1,
+                max_bn254_pairing_checks_per_block: 4,
+            },
             proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
-            message_submit_path: Some("/v1/bridge/messages".to_owned()),
-            production_policy: iroha_sccp::sccp_production_policy_v1(),
-            launch_ready: false,
-            message_payload_kinds: vec![
-                "asset_register".to_owned(),
-                "route_activate".to_owned(),
-                "transfer".to_owned(),
-            ],
-            codecs: vec![
-                SccpCodecCapability {
-                    id: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                    key: "text_utf8".to_owned(),
-                    description: "Logical UTF-8 identifiers for SORA and route-local names."
-                        .to_owned(),
-                },
-                SccpCodecCapability {
-                    id: iroha_sccp::SCCP_CODEC_TON_RAW,
-                    key: "ton_raw".to_owned(),
-                    description: "Canonical TON raw addresses in workchain:account_hex form."
-                        .to_owned(),
-                },
-            ],
-            counterparties: vec![
-                SccpCounterpartyCapability {
-                    domain: iroha_sccp::SCCP_DOMAIN_TON,
-                    chain: "ton".to_owned(),
-                    verifier_backend: iroha_sccp::sccp_verifier_backend_for_domain(
-                        iroha_sccp::SCCP_DOMAIN_TON,
-                    )
-                    .expect("ton verifier backend"),
-                    message_backend: "bridge/sccp/stark-fri-v1/ton".to_owned(),
-                    registry_backend: "bridge/sccp/registry-v1/ton".to_owned(),
-                    counterparty_account_codec: iroha_sccp::SCCP_CODEC_TON_RAW,
-                    counterparty_account_codec_key: "ton_raw".to_owned(),
-                    destination_rollout: iroha_sccp::sccp_destination_rollout_for_domain(
-                        iroha_sccp::SCCP_DOMAIN_TON,
-                    )
-                    .expect("ton destination rollout"),
-                    production_ready: false,
-                    disabled_reason: Some(
-                        iroha_sccp::sccp_lane_disabled_reason_for_domain(
-                            iroha_sccp::SCCP_DOMAIN_TON,
-                        )
-                        .expect("ton disabled reason")
-                        .to_owned(),
-                    ),
-                    production_readiness: iroha_sccp::sccp_lane_production_readiness_for_domain(
-                        iroha_sccp::SCCP_DOMAIN_TON,
-                    )
-                    .expect("ton production readiness"),
-                },
-                SccpCounterpartyCapability {
-                    domain: iroha_sccp::SCCP_DOMAIN_ETH,
-                    chain: "eth".to_owned(),
-                    verifier_backend: iroha_sccp::sccp_verifier_backend_for_domain(
-                        iroha_sccp::SCCP_DOMAIN_ETH,
-                    )
-                    .expect("eth verifier backend"),
-                    message_backend: "bridge/sccp/stark-fri-v1/eth".to_owned(),
-                    registry_backend: "bridge/sccp/registry-v1/eth".to_owned(),
-                    counterparty_account_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-                    counterparty_account_codec_key: "evm_hex".to_owned(),
-                    destination_rollout: iroha_sccp::sccp_destination_rollout_for_domain(
-                        iroha_sccp::SCCP_DOMAIN_ETH,
-                    )
-                    .expect("eth destination rollout"),
-                    production_ready: false,
-                    disabled_reason: Some(
-                        iroha_sccp::sccp_lane_disabled_reason_for_domain(
-                            iroha_sccp::SCCP_DOMAIN_ETH,
-                        )
-                        .expect("eth disabled reason")
-                        .to_owned(),
-                    ),
-                    production_readiness: iroha_sccp::sccp_lane_production_readiness_for_domain(
-                        iroha_sccp::SCCP_DOMAIN_ETH,
-                    )
-                    .expect("eth production readiness"),
-                },
-            ],
+            native_message_submit_path: Some("/v1/bridge/messages".to_owned()),
         }
     }
 
-    fn sample_sccp_proof_manifests() -> SccpProofManifestSet {
-        SccpProofManifestSet {
-            local_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            local_chain: "sora".to_owned(),
-            proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
-            manifests: vec![
-                iroha_sccp::sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_TON)
-                    .expect("ton manifest"),
-                iroha_sccp::sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_SOL)
-                    .expect("solana manifest"),
-            ],
+    fn sample_sccp_recent_messages() -> SccpRecentMessages {
+        SccpRecentMessages {
+            items: vec![SccpRecentMessage {
+                height: 42,
+                message_id_hex: "67".repeat(32),
+                kind: "transfer".to_owned(),
+                source_profile: "sora-taira".to_owned(),
+                target_profile: "tron-nile".to_owned(),
+                destination_binding_hash: format!("0x{}", "56".repeat(32)),
+                route_configuration_hash: format!("0x{}", "57".repeat(32)),
+                target_domain: iroha_sccp::SCCP_DOMAIN_TRON,
+                asset_id: Some("xor".to_owned()),
+                route_id: Some(iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.to_owned()),
+                recipient: None,
+                amount: "77".to_owned(),
+                payload_projection: iroha_sccp::SccpPayloadProjectionV1::Transfer(
+                    iroha_sccp::SccpTransferProjectionV1 {
+                        version: 1,
+                        source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                        dest_domain: iroha_sccp::SCCP_DOMAIN_TRON,
+                        nonce: 7,
+                        route_revision: 1,
+                        asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                        asset_id: iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText {
+                            value: "xor".to_owned(),
+                        },
+                        amount: 77,
+                        sender: iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText {
+                            value: "alice".to_owned(),
+                        },
+                        recipient: iroha_sccp::SccpNormalizedCodecValueV1::TronAddress21 {
+                            bytes: {
+                                let mut bytes = [0x91; 21];
+                                bytes[0] = 0x41;
+                                bytes
+                            },
+                        },
+                        route_id: iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText {
+                            value: iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.to_owned(),
+                        },
+                    },
+                ),
+                links: SccpRecentMessageLinks {
+                    bundle_path: format!("/v1/sccp/proofs/message/{}", "67".repeat(32)),
+                    proof_request_path: format!("/v1/sccp/proof-requests/{}", "67".repeat(32)),
+                },
+            }],
+        }
+    }
+
+    fn sample_sccp_governance_draft_request() -> SccpRouteGovernanceDraftRequest {
+        SccpRouteGovernanceDraftRequest {
+            action: iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1::Remove(
+                iroha_data_model::bridge::SccpRouteKeyV1 {
+                    lane_id: iroha_data_model::bridge::SccpLaneIdV1 {
+                        source: iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+                        target: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+                    },
+                    route_id: iroha_sccp::SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1.to_owned(),
+                    asset_key: iroha_sccp::SCCP_TAIRA_XOR_ASSET_KEY_V1.to_owned(),
+                    revision: 1,
+                },
+            ),
+            window: Some(iroha_data_model::isi::governance::AtWindow {
+                lower: 10,
+                upper: 20,
+            }),
+            mode: Some(iroha_data_model::isi::governance::VotingMode::Zk),
+        }
+    }
+
+    fn sccp_governance_draft_response(
+        request: &SccpRouteGovernanceDraftRequest,
+    ) -> SccpRouteGovernanceDraftResponse {
+        use iroha_data_model::isi::Instruction;
+
+        let instruction = iroha_data_model::isi::governance::ProposeSccpRouteGovernance {
+            action: request.action.clone(),
+            window: request.window,
+            mode: request.mode,
+        };
+        let boxed: iroha_data_model::isi::InstructionBox = instruction.into();
+        let wire_id = Instruction::id(&*boxed).to_string();
+        let payload = Instruction::dyn_encode(&*boxed);
+        let framed = iroha_data_model::isi::frame_instruction_payload(&wire_id, &payload)
+            .expect("frame SCCP governance instruction");
+        SccpRouteGovernanceDraftResponse {
+            ok: true,
+            proposal_id: hex::encode(
+                sccp_route_governance_proposal_id(&request.action).expect("proposal id"),
+            ),
+            tx_instructions: vec![SccpRouteGovernanceInstructionDraft {
+                wire_id,
+                payload_hex: hex::encode(framed),
+            }],
         }
     }
 
     #[test]
-    fn get_sccp_capabilities_requests_norito_and_decodes_typed_payload() {
+    fn get_sccp_capabilities_decodes_the_closed_surface() {
         let payload = sample_sccp_capabilities();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
             .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
+            .body(norito::to_bytes(&payload).expect("encode capabilities"))
             .expect("response build");
 
         let decoded = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.get_sccp_capabilities()
+            client_with_base_url(base_url()).get_sccp_capabilities()
         })
-        .expect("sccp capabilities");
+        .expect("SCCP capabilities");
 
         assert_eq!(decoded, payload);
-        let snapshot = store
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("capabilities snapshot");
+        let snapshot = store.lock().expect("snapshot lock")[0].clone();
         assert_eq!(snapshot.url.path(), "/v1/sccp/capabilities");
-        assert!(
-            snapshot.headers.iter().any(|(name, value)| {
-                name.eq_ignore_ascii_case("accept") && value == APPLICATION_NORITO
-            }),
-            "request should set Accept: {APPLICATION_NORITO}"
-        );
-    }
-
-    #[test]
-    fn get_sccp_proof_manifests_requests_norito_and_decodes_typed_payload() {
-        let payload = sample_sccp_proof_manifests();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
-            .expect("response build");
-
-        let decoded = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.get_sccp_proof_manifests()
-        })
-        .expect("sccp proof manifests");
-
-        assert_eq!(decoded, payload);
-        let snapshot = store
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("manifests snapshot");
-        assert_eq!(snapshot.url.path(), "/v1/sccp/manifests");
-        assert!(
-            snapshot.headers.iter().any(|(name, value)| {
-                name.eq_ignore_ascii_case("accept") && value == APPLICATION_NORITO
-            }),
-            "request should set Accept: {APPLICATION_NORITO}"
-        );
-    }
-
-    #[test]
-    fn get_sccp_message_proof_artifact_requests_norito_and_decodes_typed_payload() {
-        let payload = sample_sccp_message_proof_artifact();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
-            .expect("response build");
-        let message_id_hex = hex::encode(payload.public_inputs.message_id);
-
-        let decoded = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.get_sccp_message_proof_artifact(&format!("0x{message_id_hex}"))
-        })
-        .expect("sccp message proof artifact");
-
-        assert_eq!(decoded, payload);
-        let snapshot = store
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("artifact snapshot");
         assert_eq!(
-            snapshot.url.path(),
-            format!("/v1/sccp/artifacts/message/{message_id_hex}")
+            snapshot.max_response_bytes,
+            SCCP_CAPABILITIES_RESPONSE_MAX_BYTES
         );
-        assert!(
-            snapshot.headers.iter().any(|(name, value)| {
-                name.eq_ignore_ascii_case("accept") && value == APPLICATION_NORITO
-            }),
-            "request should set Accept: {APPLICATION_NORITO}"
-        );
-    }
-
-    #[test]
-    fn get_sccp_message_proof_artifact_rejects_invalid_message_id_hex() {
-        let client = client_with_base_url(base_url());
-        let err = client
-            .get_sccp_message_proof_artifact("xyz")
-            .expect_err("invalid message id must fail");
-        assert!(
-            err.to_string().contains("message id"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn get_sccp_message_proof_artifact_with_params_appends_tron_material() {
-        let payload = sample_sccp_message_proof_artifact();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
-            .expect("response build");
-        let message_id_hex = hex::encode(payload.public_inputs.message_id);
-        let network_id_hex = "11".repeat(32);
-        let verifier_code_hash_hex = "ab".repeat(32);
-        let verifier_key_hash_hex = "cd".repeat(32);
-        let expected_destination_binding_hash_hex = "ef".repeat(32);
-        let proof_bytes_hex = sccp_submit_test_groth16_proof_hex(
-            &message_id_hex,
-            iroha_sccp::SCCP_DOMAIN_SORA,
-            &"33".repeat(32),
-        );
-
-        let decoded = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.get_sccp_message_proof_artifact_with_params(
-                &format!("0x{message_id_hex}"),
-                &SccpMessageProofQueryParams {
-                    network_id_hex: Some(format!("0X{}", network_id_hex.to_uppercase())),
-                    verifier_code_hash_hex: Some(format!(
-                        "0x{}",
-                        verifier_code_hash_hex.to_uppercase()
-                    )),
-                    verifier_key_hash_hex: Some(format!(
-                        "0x{}",
-                        verifier_key_hash_hex.to_uppercase()
-                    )),
-                    expected_destination_binding_hash_hex: Some(format!(
-                        "0x{}",
-                        expected_destination_binding_hash_hex.to_uppercase()
-                    )),
-                    tron_verifier_address: Some(
-                        "  TJRabPrwbZy45sbavfcjinPJC18kjpRTv8  ".to_owned(),
-                    ),
-                    proof_bytes_hex: Some(format!("0x{}", proof_bytes_hex.to_uppercase())),
-                    ..SccpMessageProofQueryParams::default()
-                },
-            )
-        })
-        .expect("sccp message proof artifact");
-
-        assert_eq!(decoded, payload);
-        let snapshot = store
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("artifact snapshot");
-        assert_eq!(
-            snapshot.url.path(),
-            format!("/v1/sccp/artifacts/message/{message_id_hex}")
-        );
-        let pairs: HashMap<String, String> = snapshot
-            .url
-            .query_pairs()
-            .map(|(key, value)| (key.into_owned(), value.into_owned()))
-            .collect();
-        assert_eq!(pairs.len(), 6);
-        assert_eq!(pairs.get("network_id_hex"), Some(&network_id_hex));
-        assert_eq!(
-            pairs.get("verifier_code_hash_hex"),
-            Some(&verifier_code_hash_hex)
-        );
-        assert_eq!(
-            pairs.get("verifier_key_hash_hex"),
-            Some(&verifier_key_hash_hex)
-        );
-        assert_eq!(
-            pairs.get("expected_destination_binding_hash_hex"),
-            Some(&expected_destination_binding_hash_hex)
-        );
-        assert_eq!(
-            pairs.get("tron_verifier_address").map(String::as_str),
-            Some("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8")
-        );
-        assert_eq!(
-            pairs.get("proof_bytes_hex").map(String::as_str),
-            Some(proof_bytes_hex.as_str())
-        );
-    }
-
-    #[test]
-    fn get_sccp_message_proof_artifact_with_params_rejects_off_curve_proof_before_request() {
-        let payload = sample_sccp_message_proof_artifact();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
-            .expect("response build");
-        let message_id_hex = hex::encode(payload.public_inputs.message_id);
-        let mut proof_bytes =
-            hex::decode(sccp_submit_test_default_groth16_proof_hex()).expect("proof hex");
-        proof_bytes[11 * 32 + 31] = 3;
-
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.get_sccp_message_proof_artifact_with_params(
-                &message_id_hex,
-                &SccpMessageProofQueryParams {
-                    network_id_hex: Some("11".repeat(32)),
-                    proof_bytes_hex: Some(hex::encode(proof_bytes)),
-                    ..SccpMessageProofQueryParams::default()
-                },
-            )
-        })
-        .expect_err("off-curve proof bytes must fail before request");
-
-        assert!(
-            err.to_string().contains("valid BN254 Groth16 proof tuple"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid query params must not send an HTTP request"
-        );
-    }
-
-    #[test]
-    fn get_sccp_message_proof_artifact_with_params_rejects_message_id_mismatch_before_request() {
-        let payload = sample_sccp_message_proof_artifact();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
-            .expect("response build");
-        let message_id_hex = hex::encode(payload.public_inputs.message_id);
-
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.get_sccp_message_proof_artifact_with_params(
-                &message_id_hex,
-                &SccpMessageProofQueryParams {
-                    network_id_hex: Some("11".repeat(32)),
-                    verifier_code_hash_hex: Some("ab".repeat(32)),
-                    verifier_key_hash_hex: Some("cd".repeat(32)),
-                    expected_destination_binding_hash_hex: Some("ef".repeat(32)),
-                    tron_verifier_address: Some("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_owned()),
-                    proof_bytes_hex: Some(sccp_submit_test_groth16_proof_hex(
-                        &"22".repeat(32),
-                        iroha_sccp::SCCP_DOMAIN_SORA,
-                        &"33".repeat(32),
-                    )),
-                    ..SccpMessageProofQueryParams::default()
-                },
-            )
-        })
-        .expect_err("wrong message-id proof bytes must fail before request");
-
-        assert!(
-            err.to_string().contains("proof_bytes_hex.message_id"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid query params must not send an HTTP request"
-        );
-    }
-
-    #[test]
-    fn get_sccp_message_proof_job_requests_norito_and_decodes_typed_payload() {
-        let payload = sample_sccp_message_proof_job();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
-            .expect("response build");
-        let message_id_hex = hex::encode(payload.public_inputs.message_id);
-
-        let decoded = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.get_sccp_message_proof_job(&format!("0x{message_id_hex}"))
-        })
-        .expect("sccp message proof job");
-
-        assert_eq!(decoded, payload);
-        let snapshot = store
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("job snapshot");
-        assert_eq!(
-            snapshot.url.path(),
-            format!("/v1/sccp/jobs/message/{message_id_hex}")
-        );
-        assert!(
-            snapshot.headers.iter().any(|(name, value)| {
-                name.eq_ignore_ascii_case("accept") && value == APPLICATION_NORITO
-            }),
-            "request should set Accept: {APPLICATION_NORITO}"
-        );
-    }
-
-    #[test]
-    fn get_sccp_message_proof_job_with_params_appends_tron_material() {
-        let payload = sample_sccp_message_proof_job();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
-            .expect("response build");
-        let message_id_hex = hex::encode(payload.public_inputs.message_id);
-        let network_id_hex = "11".repeat(32);
-        let verifier_code_hash_hex = "ab".repeat(32);
-        let verifier_key_hash_hex = "cd".repeat(32);
-        let expected_destination_binding_hash_hex = "ef".repeat(32);
-        let proof_bytes_hex = sccp_submit_test_groth16_proof_hex(
-            &message_id_hex,
-            iroha_sccp::SCCP_DOMAIN_SORA,
-            &"33".repeat(32),
-        );
-
-        let decoded = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.get_sccp_message_proof_job_with_params(
-                &format!("0x{message_id_hex}"),
-                &SccpMessageProofQueryParams {
-                    network_id_hex: Some(format!("0X{}", network_id_hex.to_uppercase())),
-                    verifier_code_hash_hex: Some(format!(
-                        "0x{}",
-                        verifier_code_hash_hex.to_uppercase()
-                    )),
-                    verifier_key_hash_hex: Some(format!(
-                        "0x{}",
-                        verifier_key_hash_hex.to_uppercase()
-                    )),
-                    expected_destination_binding_hash_hex: Some(format!(
-                        "0x{}",
-                        expected_destination_binding_hash_hex.to_uppercase()
-                    )),
-                    tron_verifier_address: Some(
-                        "  TJRabPrwbZy45sbavfcjinPJC18kjpRTv8  ".to_owned(),
-                    ),
-                    proof_bytes_hex: Some(format!("0x{}", proof_bytes_hex.to_uppercase())),
-                    ..SccpMessageProofQueryParams::default()
-                },
-            )
-        })
-        .expect("sccp message proof job");
-
-        assert_eq!(decoded, payload);
-        let snapshot = store
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("job snapshot");
-        assert_eq!(
-            snapshot.url.path(),
-            format!("/v1/sccp/jobs/message/{message_id_hex}")
-        );
-        let pairs: HashMap<String, String> = snapshot
-            .url
-            .query_pairs()
-            .map(|(key, value)| (key.into_owned(), value.into_owned()))
-            .collect();
-        assert_eq!(pairs.len(), 6);
-        assert_eq!(pairs.get("network_id_hex"), Some(&network_id_hex));
-        assert_eq!(
-            pairs.get("verifier_code_hash_hex"),
-            Some(&verifier_code_hash_hex)
-        );
-        assert_eq!(
-            pairs.get("verifier_key_hash_hex"),
-            Some(&verifier_key_hash_hex)
-        );
-        assert_eq!(
-            pairs.get("expected_destination_binding_hash_hex"),
-            Some(&expected_destination_binding_hash_hex)
-        );
-        assert_eq!(
-            pairs.get("tron_verifier_address").map(String::as_str),
-            Some("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8")
-        );
-        assert_eq!(
-            pairs.get("proof_bytes_hex").map(String::as_str),
-            Some(proof_bytes_hex.as_str())
-        );
-    }
-
-    #[test]
-    fn get_sccp_message_proof_job_with_params_rejects_invalid_expected_binding_hash() {
-        let payload = sample_sccp_message_proof_job();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
-            .expect("response build");
-        let message_id_hex = hex::encode(payload.public_inputs.message_id);
-
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.get_sccp_message_proof_job_with_params(
-                &message_id_hex,
-                &SccpMessageProofQueryParams {
-                    expected_destination_binding_hash_hex: Some("0x11".to_owned()),
-                    ..SccpMessageProofQueryParams::default()
-                },
-            )
-        })
-        .expect_err("invalid expected binding hash must fail before request");
-
-        assert!(
-            err.to_string()
-                .contains("expected_destination_binding_hash_hex"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid query params must not send an HTTP request"
-        );
-    }
-
-    #[test]
-    fn get_sccp_message_proof_job_with_params_rejects_all_zero_evm_destination_material() {
-        let payload = sample_sccp_message_proof_job();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
-            .expect("response build");
-        let message_id_hex = hex::encode(payload.public_inputs.message_id);
-        let proof_bytes_hex = sccp_submit_test_default_groth16_proof_hex();
-        let zero32 = format!("0x{}", "00".repeat(32));
-        let zero20 = format!("0x{}", "00".repeat(20));
-        let cases = [
-            (
-                "network_id_hex",
-                SccpMessageProofQueryParams {
-                    network_id_hex: Some(zero32.clone()),
-                    proof_bytes_hex: Some(proof_bytes_hex.clone()),
-                    ..SccpMessageProofQueryParams::default()
-                },
-            ),
-            (
-                "verifier_address_hex",
-                SccpMessageProofQueryParams {
-                    verifier_address_hex: Some(zero20.clone()),
-                    proof_bytes_hex: Some(proof_bytes_hex.clone()),
-                    ..SccpMessageProofQueryParams::default()
-                },
-            ),
-            (
-                "bridge_address_hex",
-                SccpMessageProofQueryParams {
-                    bridge_address_hex: Some(zero20),
-                    proof_bytes_hex: Some(proof_bytes_hex.clone()),
-                    ..SccpMessageProofQueryParams::default()
-                },
-            ),
-            (
-                "verifier_code_hash_hex",
-                SccpMessageProofQueryParams {
-                    verifier_code_hash_hex: Some(zero32.clone()),
-                    proof_bytes_hex: Some(proof_bytes_hex.clone()),
-                    ..SccpMessageProofQueryParams::default()
-                },
-            ),
-            (
-                "verifier_key_hash_hex",
-                SccpMessageProofQueryParams {
-                    verifier_key_hash_hex: Some(zero32.clone()),
-                    proof_bytes_hex: Some(proof_bytes_hex.clone()),
-                    ..SccpMessageProofQueryParams::default()
-                },
-            ),
-            (
-                "expected_destination_binding_hash_hex",
-                SccpMessageProofQueryParams {
-                    expected_destination_binding_hash_hex: Some(zero32),
-                    proof_bytes_hex: Some(proof_bytes_hex),
-                    ..SccpMessageProofQueryParams::default()
-                },
-            ),
-        ];
-
-        for (field, params) in cases {
-            let err = with_mock_http(respond_with(&store, response.clone()), || {
-                let client = client_with_base_url(base_url());
-                client.get_sccp_message_proof_job_with_params(&message_id_hex, &params)
-            })
-            .expect_err("all-zero EVM destination material must fail before request");
-
+        assert_single_accept_header(&snapshot, APPLICATION_NORITO);
+        let encoded = norito::json::to_json(&decoded).expect("capabilities JSON");
+        for retired in ["manifests", "artifacts", "jobs", "solana", "ton_"] {
             assert!(
-                err.to_string().contains(field),
-                "unexpected error for {field}: {err:?}"
-            );
-            assert!(
-                err.to_string().contains("all zero"),
-                "unexpected error for {field}: {err:?}"
-            );
-            assert!(
-                store.lock().expect("snapshot lock").is_empty(),
-                "invalid query params must not send an HTTP request"
+                !encoded.contains(retired),
+                "retired surface leaked: {retired}"
             );
         }
     }
 
     #[test]
-    fn get_sccp_message_proof_job_with_params_rejects_invalid_tron_verifier_address() {
-        let payload = sample_sccp_message_proof_job();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
-            .expect("response build");
-        let message_id_hex = hex::encode(payload.public_inputs.message_id);
-
-        for invalid_address in [
-            "TJRabPrwbZy45sbavfcjinPJC18kjpRTv9",
-            "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+    fn sccp_json_media_type_is_exact_and_parameter_tolerant() {
+        assert!(Client::is_sccp_json_content_type("application/json"));
+        assert!(Client::is_sccp_json_content_type(
+            "Application/JSON; charset=utf-8"
+        ));
+        for hostile in [
+            "",
+            "text/json",
+            "application/problem+json",
+            "application/x-norito",
         ] {
-            let err = with_mock_http(respond_with(&store, response.clone()), || {
-                let client = client_with_base_url(base_url());
-                client.get_sccp_message_proof_job_with_params(
-                    &message_id_hex,
-                    &SccpMessageProofQueryParams {
-                        tron_verifier_address: Some(invalid_address.to_owned()),
-                        proof_bytes_hex: Some(sccp_submit_test_default_groth16_proof_hex()),
-                        ..SccpMessageProofQueryParams::default()
-                    },
-                )
-            })
-            .expect_err("invalid TRON verifier address must fail before request");
-
             assert!(
-                err.to_string().contains("tron_verifier_address"),
-                "unexpected error: {err:?}"
-            );
-            assert!(
-                store.lock().expect("snapshot lock").is_empty(),
-                "invalid query params must not send an HTTP request"
+                !Client::is_sccp_json_content_type(hostile),
+                "noncanonical SCCP JSON media type must reject: {hostile}"
             );
         }
     }
 
     #[test]
-    fn get_sccp_message_proof_job_with_params_rejects_destination_material_without_proof() {
-        let payload = sample_sccp_message_proof_job();
+    fn sccp_json_discovery_applies_endpoint_specific_response_limits() {
+        let capabilities = norito::json::to_vec(&sample_sccp_capabilities())
+            .expect("encode SCCP capabilities JSON");
+        let registry = norito::json::to_vec(&iroha_data_model::bridge::SccpRegistryV1::default())
+            .expect("encode SCCP registry JSON");
+        let recent = norito::json::to_vec(&sample_sccp_recent_messages())
+            .expect("encode recent SCCP messages JSON");
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
-            .expect("response build");
-        let message_id_hex = hex::encode(payload.public_inputs.message_id);
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let body = match snapshot.url.path() {
+                    "/v1/sccp/capabilities" => capabilities.clone(),
+                    "/v1/sccp/registry" => registry.clone(),
+                    "/v1/sccp/messages/recent" => recent.clone(),
+                    path => panic!("unexpected SCCP JSON discovery path: {path}"),
+                };
+                store.lock().expect("snapshot lock").push(snapshot);
+                Ok(HttpResponse::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", APPLICATION_JSON)
+                    .body(body)
+                    .expect("JSON response build"))
+            }
+        };
 
-        let err = with_mock_http(respond_with(&store, response), || {
+        with_mock_http(responder, || {
             let client = client_with_base_url(base_url());
-            client.get_sccp_message_proof_job_with_params(
-                &message_id_hex,
-                &SccpMessageProofQueryParams {
-                    network_id_hex: Some("11".repeat(32)),
-                    verifier_code_hash_hex: Some("ab".repeat(32)),
-                    verifier_key_hash_hex: Some("cd".repeat(32)),
-                    expected_destination_binding_hash_hex: Some("ef".repeat(32)),
-                    tron_verifier_address: Some("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_owned()),
-                    ..SccpMessageProofQueryParams::default()
-                },
-            )
-        })
-        .expect_err("destination proof material without proof bytes must fail before request");
+            client
+                .get_sccp_capabilities_json()
+                .expect("SCCP capabilities JSON");
+            client.get_sccp_registry_json().expect("SCCP registry JSON");
+            client
+                .get_sccp_recent_messages_json()
+                .expect("recent SCCP messages JSON");
+        });
 
-        assert!(
-            err.to_string().contains("proof_bytes_hex is required"),
-            "unexpected error: {err:?}"
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 3);
+        assert_eq!(
+            snapshots[0].max_response_bytes,
+            SCCP_CAPABILITIES_RESPONSE_MAX_BYTES
         );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "incomplete destination proof params must not send an HTTP request"
+        assert_eq!(
+            snapshots[1].max_response_bytes,
+            SCCP_JSON_RESPONSE_MAX_BYTES
+        );
+        assert_eq!(
+            snapshots[2].max_response_bytes,
+            SCCP_RECENT_RESPONSE_MAX_BYTES
         );
     }
 
     #[test]
-    fn get_sccp_message_proof_job_with_params_rejects_proof_without_destination_material() {
-        let payload = sample_sccp_message_proof_job();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
-            .expect("response build");
-        let message_id_hex = hex::encode(payload.public_inputs.message_id);
+    fn sccp_capability_resource_limits_fail_closed() {
+        let valid = sample_sccp_capabilities();
+        validate_sccp_capabilities(&valid).expect("valid SCCP capability limits");
 
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.get_sccp_message_proof_job_with_params(
-                &message_id_hex,
-                &SccpMessageProofQueryParams {
-                    proof_bytes_hex: Some(format!(
-                        "0x{}",
-                        sccp_submit_test_groth16_proof_hex(
-                            &message_id_hex,
-                            iroha_sccp::SCCP_DOMAIN_SORA,
-                            &"33".repeat(32),
-                        )
-                    )),
-                    ..SccpMessageProofQueryParams::default()
-                },
-            )
-        })
-        .expect_err("proof bytes without destination material must fail before request");
-
-        assert!(
-            err.to_string()
-                .contains("deployment destination fields are required"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "incomplete destination proof params must not send an HTTP request"
-        );
-    }
-
-    #[test]
-    fn get_sccp_message_proof_job_with_params_rejects_partial_or_mixed_destination_tuple() {
-        let payload = sample_sccp_message_proof_job();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
-            .expect("response build");
-        let message_id_hex = hex::encode(payload.public_inputs.message_id);
-        let proof_bytes_hex = sccp_submit_test_groth16_proof_hex(
-            &message_id_hex,
-            iroha_sccp::SCCP_DOMAIN_SORA,
-            &"33".repeat(32),
-        );
-        let cases = [
-            (
-                SccpMessageProofQueryParams {
-                    network_id_hex: Some("11".repeat(32)),
-                    verifier_code_hash_hex: Some("ab".repeat(32)),
-                    verifier_key_hash_hex: Some("cd".repeat(32)),
-                    tron_verifier_address: Some("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_owned()),
-                    proof_bytes_hex: Some(proof_bytes_hex.clone()),
-                    ..SccpMessageProofQueryParams::default()
-                },
-                "complete TRON SCCP deployment destination fields are required",
-            ),
-            (
-                SccpMessageProofQueryParams {
-                    network_id_hex: Some("11".repeat(32)),
-                    verifier_address_hex: Some("22".repeat(20)),
-                    bridge_address_hex: Some("33".repeat(20)),
-                    verifier_code_hash_hex: Some("ab".repeat(32)),
-                    verifier_key_hash_hex: Some("cd".repeat(32)),
-                    expected_destination_binding_hash_hex: Some("ef".repeat(32)),
-                    tron_verifier_address: Some("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_owned()),
-                    proof_bytes_hex: Some(proof_bytes_hex.clone()),
-                },
-                "EVM and TRON SCCP destination fields cannot be mixed",
-            ),
+        let registry_mutations: [fn(&mut SccpCapabilities); 5] = [
+            |value: &mut SccpCapabilities| value.registry_limits.max_governed_lanes = 15,
+            |value: &mut SccpCapabilities| {
+                value.registry_limits.max_live_governed_routes = 63;
+            },
+            |value: &mut SccpCapabilities| {
+                value.registry_limits.max_live_routes_per_lane = 7;
+            },
+            |value: &mut SccpCapabilities| {
+                value.registry_limits.max_retained_routes_per_lane = 63;
+            },
+            |value: &mut SccpCapabilities| {
+                value
+                    .registry_limits
+                    .max_retained_native_trust_anchors_per_lane = 4_095;
+            },
         ];
+        for mutate in registry_mutations {
+            let mut hostile = valid.clone();
+            mutate(&mut hostile);
+            validate_sccp_capabilities(&hostile)
+                .expect_err("drifted fixed SCCP registry limit must reject");
+        }
 
-        for (params, expected_error) in cases {
-            let err = with_mock_http(respond_with(&store, response.clone()), || {
-                let client = client_with_base_url(base_url());
-                client.get_sccp_message_proof_job_with_params(&message_id_hex, &params)
-            })
-            .expect_err("partial or mixed destination tuple must fail before request");
+        macro_rules! assert_zero_resource_limit_rejects {
+            ($($field:ident),+ $(,)?) => {
+                $({
+                    let mut hostile = valid.clone();
+                    hostile.resource_limits.$field = 0;
+                    validate_sccp_capabilities(&hostile).expect_err(concat!(
+                        "zero SCCP resource limit must reject: ",
+                        stringify!($field),
+                    ));
+                })+
+            };
+        }
+        assert_zero_resource_limit_rejects!(
+            max_proofs_per_transaction,
+            max_proofs_per_block,
+            max_proof_bytes_per_proof,
+            max_proof_bytes_per_transaction,
+            max_proof_bytes_per_block,
+            max_native_headers_per_transaction,
+            max_native_headers_per_block,
+            max_ethereum_light_client_updates_per_transaction,
+            max_ethereum_light_client_updates_per_block,
+            max_native_header_bytes_per_transaction,
+            max_native_header_bytes_per_block,
+            max_secp256k1_recoveries_per_transaction,
+            max_secp256k1_recoveries_per_block,
+            max_bls_aggregate_checks_per_transaction,
+            max_bls_aggregate_checks_per_block,
+            max_bls_signer_contributions_per_transaction,
+            max_bls_signer_contributions_per_block,
+            max_bn254_pairing_checks_per_transaction,
+            max_bn254_pairing_checks_per_block,
+        );
 
-            assert!(
-                err.to_string().contains(expected_error),
-                "unexpected error: {err:?}"
-            );
-            assert!(
-                store.lock().expect("snapshot lock").is_empty(),
-                "invalid query params must not send an HTTP request"
-            );
+        macro_rules! assert_unsafe_json_resource_limit_rejects {
+            ($($field:ident),+ $(,)?) => {
+                $({
+                    let mut hostile = valid.clone();
+                    hostile.resource_limits.$field =
+                        iroha_data_model::bridge::SCCP_V1_JSON_SAFE_INTEGER_MAX + 1;
+                    let error = validate_sccp_capabilities(&hostile).expect_err(concat!(
+                        "non-portable SCCP JSON resource limit must reject: ",
+                        stringify!($field),
+                    ));
+                    assert!(error.to_string().contains("JSON-safe integer maximum"));
+                })+
+            };
+        }
+        assert_unsafe_json_resource_limit_rejects!(
+            max_proof_bytes_per_proof,
+            max_proof_bytes_per_transaction,
+            max_proof_bytes_per_block,
+            max_native_header_bytes_per_transaction,
+            max_native_header_bytes_per_block,
+        );
+
+        let mut per_proof_over_transaction = valid.clone();
+        per_proof_over_transaction
+            .resource_limits
+            .max_proof_bytes_per_proof = per_proof_over_transaction
+            .resource_limits
+            .max_proof_bytes_per_transaction
+            + 1;
+        validate_sccp_capabilities(&per_proof_over_transaction)
+            .expect_err("per-proof bytes above transaction bytes must reject");
+
+        macro_rules! assert_transaction_over_block_rejects {
+            ($(($transaction:ident, $block:ident)),+ $(,)?) => {
+                $({
+                    let mut hostile = valid.clone();
+                    hostile.resource_limits.$transaction =
+                        hostile.resource_limits.$block + 1;
+                    validate_sccp_capabilities(&hostile).expect_err(concat!(
+                        "transaction SCCP resource limit above block limit must reject: ",
+                        stringify!($transaction),
+                    ));
+                })+
+            };
+        }
+        assert_transaction_over_block_rejects!(
+            (max_proofs_per_transaction, max_proofs_per_block),
+            (max_proof_bytes_per_transaction, max_proof_bytes_per_block),
+            (
+                max_native_headers_per_transaction,
+                max_native_headers_per_block
+            ),
+            (
+                max_ethereum_light_client_updates_per_transaction,
+                max_ethereum_light_client_updates_per_block
+            ),
+            (
+                max_native_header_bytes_per_transaction,
+                max_native_header_bytes_per_block
+            ),
+            (
+                max_secp256k1_recoveries_per_transaction,
+                max_secp256k1_recoveries_per_block
+            ),
+            (
+                max_bls_aggregate_checks_per_transaction,
+                max_bls_aggregate_checks_per_block
+            ),
+            (
+                max_bls_signer_contributions_per_transaction,
+                max_bls_signer_contributions_per_block
+            ),
+            (
+                max_bn254_pairing_checks_per_transaction,
+                max_bn254_pairing_checks_per_block
+            ),
+        );
+    }
+
+    #[test]
+    fn get_sccp_capabilities_json_requires_typed_semantics_and_content_type() {
+        let payload = sample_sccp_capabilities();
+        let payload_json = norito::json::to_json(&payload).expect("encode capabilities JSON");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, &payload_json);
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            client_with_base_url(base_url()).get_sccp_capabilities_json()
+        })
+        .expect("typed SCCP capabilities JSON");
+        assert_eq!(
+            decoded,
+            norito::json::to_value(&payload).expect("canonical capability JSON value")
+        );
+        assert_single_accept_header(&store.lock().expect("snapshot lock")[0], APPLICATION_JSON);
+
+        let mut invalid = payload.clone();
+        invalid.version = 2;
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&invalid).expect("encode invalid capabilities"),
+        );
+        let error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).get_sccp_capabilities_json(),
+        )
+        .expect_err("unsupported capability version must reject");
+        assert!(error.to_string().contains("invalid SCCP capabilities"));
+
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/octet-stream")
+            .body(payload_json.into_bytes())
+            .expect("response build");
+        let error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).get_sccp_capabilities_json(),
+        )
+        .expect_err("wrong capabilities content type must reject");
+        assert!(error.to_string().contains("invalid content type"));
+    }
+
+    #[test]
+    fn sccp_json_responses_reject_unknown_top_level_and_nested_fields() {
+        let mut capability =
+            norito::json::to_value(&sample_sccp_capabilities()).expect("capability JSON value");
+        capability
+            .as_object_mut()
+            .expect("capability object")
+            .insert("future_surface".into(), JsonValue::from(true));
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&capability).expect("hostile capability JSON"),
+        );
+        with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).get_sccp_capabilities_json(),
+        )
+        .expect_err("unknown capability fields must reject");
+
+        let mut recent =
+            norito::json::to_value(&sample_sccp_recent_messages()).expect("recent JSON value");
+        recent
+            .as_object_mut()
+            .and_then(|root| root.get_mut("items"))
+            .and_then(JsonValue::as_array_mut)
+            .and_then(|items| items.first_mut())
+            .and_then(JsonValue::as_object_mut)
+            .and_then(|item| item.get_mut("links"))
+            .and_then(JsonValue::as_object_mut)
+            .expect("nested SCCP recent links")
+            .insert("artifact_path".into(), JsonValue::from("/retired"));
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&recent).expect("hostile recent JSON"),
+        );
+        with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).get_sccp_recent_messages_json(),
+        )
+        .expect_err("unknown nested recent-message fields must reject");
+
+        let request = sample_sccp_governance_draft_request();
+        let mut governance = norito::json::to_value(&sccp_governance_draft_response(&request))
+            .expect("governance response JSON value");
+        governance
+            .as_object_mut()
+            .and_then(|root| root.get_mut("tx_instructions"))
+            .and_then(JsonValue::as_array_mut)
+            .and_then(|instructions| instructions.first_mut())
+            .and_then(JsonValue::as_object_mut)
+            .expect("nested governance instruction")
+            .insert("signer".into(), JsonValue::from("hostile"));
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&governance).expect("hostile governance JSON"),
+        );
+        with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).post_sccp_route_governance_draft(&request),
+        )
+        .expect_err("unknown nested governance response fields must reject");
+    }
+
+    #[test]
+    fn sccp_governance_draft_is_typed_locally_signed_and_response_bound() {
+        let request = sample_sccp_governance_draft_request();
+        let response_payload = sccp_governance_draft_response(&request);
+        let response_json =
+            norito::json::to_json(&response_payload).expect("encode SCCP governance response");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, &response_json);
+
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            client_with_base_url(base_url()).post_sccp_route_governance_draft(&request)
+        })
+        .expect("valid SCCP governance draft");
+        assert_eq!(decoded, response_payload);
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(
+            snapshots[0].url.path(),
+            iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE
+        );
+        assert_eq!(snapshots[0].method, HttpMethod::POST);
+        let body: JsonValue =
+            norito::json::from_slice(&snapshots[0].body).expect("typed draft request JSON");
+        let fields = body.as_object().expect("draft request object");
+        assert_eq!(
+            fields
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from(["action", "window", "mode"])
+        );
+        assert_eq!(fields.get("mode").and_then(JsonValue::as_str), Some("Zk"));
+        for forbidden in ["authority", "private_key", "signer", "manifest"] {
+            assert!(!fields.contains_key(forbidden));
         }
     }
 
     #[test]
-    fn get_sccp_message_proof_job_with_params_rejects_invalid_proof_hex_before_request() {
-        let payload = sample_sccp_message_proof_job();
+    fn sccp_governance_draft_rejects_local_and_server_malleability() {
+        let mut invalid_window = sample_sccp_governance_draft_request();
+        invalid_window.window = Some(iroha_data_model::isi::governance::AtWindow {
+            lower: 21,
+            upper: 20,
+        });
+        with_mock_http(
+            |_| panic!("invalid governance window must fail before HTTP"),
+            || client_with_base_url(base_url()).post_sccp_route_governance_draft(&invalid_window),
+        )
+        .expect_err("reversed governance window must reject");
+
+        let request = sample_sccp_governance_draft_request();
+        let mut wrong = request.clone();
+        wrong.mode = Some(iroha_data_model::isi::governance::VotingMode::Plain);
+        let mut hostile = sccp_governance_draft_response(&wrong);
+        hostile.proposal_id = hex::encode(
+            sccp_route_governance_proposal_id(&request.action).expect("same action proposal id"),
+        );
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&hostile).expect("hostile draft response"),
+        );
+        let error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).post_sccp_route_governance_draft(&request),
+        )
+        .expect_err("cross-mode instruction response must reject");
+        assert!(error.to_string().contains("does not match"));
+
+        let mut wrong_id = sccp_governance_draft_response(&request);
+        wrong_id.proposal_id = "11".repeat(32);
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&wrong_id).expect("wrong-id response"),
+        );
+        with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).post_sccp_route_governance_draft(&request),
+        )
+        .expect_err("wrong proposal id must reject");
+    }
+
+    #[test]
+    fn get_sccp_registry_decodes_and_validates_the_typed_registry() {
+        let registry = iroha_data_model::bridge::SccpRegistryV1::default();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
             .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
+            .body(norito::to_bytes(&registry).expect("encode registry"))
             .expect("response build");
-        let message_id_hex = hex::encode(payload.public_inputs.message_id);
 
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.get_sccp_message_proof_job_with_params(
-                &message_id_hex,
-                &SccpMessageProofQueryParams {
-                    proof_bytes_hex: Some("0x0".to_owned()),
-                    ..SccpMessageProofQueryParams::default()
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            client_with_base_url(base_url()).get_sccp_registry()
+        })
+        .expect("SCCP registry");
+
+        assert_eq!(decoded, registry);
+        let snapshot = store.lock().expect("snapshot lock")[0].clone();
+        assert_eq!(snapshot.url.path(), "/v1/sccp/registry");
+        assert_eq!(
+            snapshot.max_response_bytes,
+            SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES
+        );
+        assert_single_accept_header(&snapshot, APPLICATION_NORITO);
+    }
+
+    #[test]
+    fn get_sccp_registry_rejects_semantically_invalid_norito() {
+        let invalid = iroha_data_model::bridge::SccpRegistryV1 {
+            version: 2,
+            lanes: Vec::new(),
+        };
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&invalid).expect("encode invalid registry"))
+            .expect("response build");
+
+        let error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).get_sccp_registry(),
+        )
+        .expect_err("invalid registry must fail");
+        assert!(error.to_string().contains("invalid SCCP registry"));
+    }
+
+    #[test]
+    fn get_sccp_recent_messages_uses_only_canonical_window_fields() {
+        let payload = sample_sccp_recent_messages();
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&payload).expect("encode recent messages"))
+            .expect("response build");
+
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            client_with_base_url(base_url()).get_sccp_recent_messages_with_query(
+                SccpRecentMessagesQuery {
+                    from: Some(42),
+                    limit: Some(7),
                 },
             )
         })
-        .expect_err("invalid proof bytes must fail before request");
+        .expect("recent SCCP messages");
 
+        assert_eq!(decoded, payload);
+        let snapshot = store.lock().expect("snapshot lock")[0].clone();
+        assert_eq!(snapshot.url.path(), "/v1/sccp/messages/recent");
+        assert_eq!(snapshot.url.query(), Some("from=42&limit=7"));
+        assert_eq!(snapshot.max_response_bytes, SCCP_RECENT_RESPONSE_MAX_BYTES);
+        assert_single_accept_header(&snapshot, APPLICATION_NORITO);
+
+        for query in [
+            SccpRecentMessagesQuery {
+                from: Some(0),
+                limit: Some(1),
+            },
+            SccpRecentMessagesQuery {
+                from: Some(1),
+                limit: Some(0),
+            },
+            SccpRecentMessagesQuery {
+                from: Some(1),
+                limit: Some(51),
+            },
+            SccpRecentMessagesQuery {
+                from: Some(1),
+                limit: Some(u64::MAX),
+            },
+        ] {
+            assert!(query.validate().is_err());
+            let error = with_mock_http(
+                |_| panic!("invalid SCCP history window must fail before HTTP"),
+                || client_with_base_url(base_url()).get_sccp_recent_messages_with_query(query),
+            )
+            .expect_err("invalid SCCP history window must reject");
+            assert!(error.to_string().contains("SCCP recent query"));
+        }
+    }
+
+    #[test]
+    fn sccp_recent_messages_reject_bounds_duplicates_aliases_and_malformed_items() {
+        let valid = sample_sccp_recent_messages();
+        validate_sccp_recent_messages(&valid).expect("valid recent response");
+
+        let mut duplicate = valid.clone();
+        duplicate.items.push(duplicate.items[0].clone());
+        assert!(validate_sccp_recent_messages(&duplicate).is_err());
+
+        let mut aliased = valid.clone();
+        aliased.items[0].route_configuration_hash =
+            format!("0x{}", aliased.items[0].message_id_hex);
+        assert!(validate_sccp_recent_messages(&aliased).is_err());
+
+        let mut overflow = valid.clone();
+        overflow.items[0].amount = u128::MAX.to_string() + "0";
+        assert!(validate_sccp_recent_messages(&overflow).is_err());
+
+        let mut retired = valid.clone();
+        retired.items[0].target_profile = "solana-mainnet-beta".to_owned();
+        assert!(validate_sccp_recent_messages(&retired).is_err());
+
+        let mut wrong_link = valid.clone();
+        wrong_link.items[0].links.proof_request_path = "/v1/sccp/jobs/retired".to_owned();
+        assert!(validate_sccp_recent_messages(&wrong_link).is_err());
+
+        let mut wrong_projection_amount = valid.clone();
+        let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) =
+            &mut wrong_projection_amount.items[0].payload_projection;
+        transfer.amount += 1;
+        assert!(validate_sccp_recent_messages(&wrong_projection_amount).is_err());
+
+        let mut wrong_asset = valid.clone();
+        wrong_asset.items[0].asset_id = Some("other-asset".to_owned());
+        assert!(validate_sccp_recent_messages(&wrong_asset).is_err());
+
+        let mut wrong_route = valid.clone();
+        wrong_route.items[0].route_id = Some("other-route".to_owned());
+        assert!(validate_sccp_recent_messages(&wrong_route).is_err());
+
+        let mut impossible_recipient_summary = valid.clone();
+        impossible_recipient_summary.items[0].recipient = Some("text-recipient".to_owned());
+        assert!(validate_sccp_recent_messages(&impossible_recipient_summary).is_err());
+
+        let mut impossible_recipient_projection = valid.clone();
+        let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) =
+            &mut impossible_recipient_projection.items[0].payload_projection;
+        transfer.recipient = iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText {
+            value: "text-recipient".to_owned(),
+        };
+        impossible_recipient_projection.items[0].recipient = Some("text-recipient".to_owned());
+        assert!(validate_sccp_recent_messages(&impossible_recipient_projection).is_err());
+
+        let mut wrong_projection_domain = valid.clone();
+        let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) =
+            &mut wrong_projection_domain.items[0].payload_projection;
+        transfer.dest_domain = iroha_sccp::SCCP_DOMAIN_ETH;
+        assert!(validate_sccp_recent_messages(&wrong_projection_domain).is_err());
+
+        let mut noncanonical_projection_text = valid.clone();
+        let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) =
+            &mut noncanonical_projection_text.items[0].payload_projection;
+        transfer.asset_id = iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText {
+            value: String::new(),
+        };
+        noncanonical_projection_text.items[0].asset_id = Some(String::new());
+        assert!(validate_sccp_recent_messages(&noncanonical_projection_text).is_err());
+
+        let mut noncanonical_tron_recipient = valid.clone();
+        let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) =
+            &mut noncanonical_tron_recipient.items[0].payload_projection;
+        transfer.recipient =
+            iroha_sccp::SccpNormalizedCodecValueV1::TronAddress21 { bytes: [0x91; 21] };
+        assert!(validate_sccp_recent_messages(&noncanonical_tron_recipient).is_err());
+
+        let mut missing_projection =
+            norito::json::to_value(&valid).expect("recent response JSON value");
+        let first_item = missing_projection
+            .as_object_mut()
+            .and_then(|root| root.get_mut("items"))
+            .and_then(norito::json::Value::as_array_mut)
+            .and_then(|items| items.first_mut())
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("first recent response item");
+        assert!(first_item.remove("payload_projection").is_some());
         assert!(
-            err.to_string().contains("proof_bytes_hex"),
-            "unexpected error: {err:?}"
+            norito::json::from_value::<SccpRecentMessages>(missing_projection).is_err(),
+            "required payload projection must not default during JSON decoding"
         );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid query params must not send an HTTP request"
+
+        let template = valid.items[0].clone();
+        let mut oversized = SccpRecentMessages { items: Vec::new() };
+        for index in 0_u8..51 {
+            let mut item = template.clone();
+            item.height = u64::from(51 - index);
+            item.message_id_hex = format!("{:02x}", index + 1).repeat(32);
+            item.links.bundle_path = format!("/v1/sccp/proofs/message/{}", item.message_id_hex);
+            item.links.proof_request_path =
+                format!("/v1/sccp/proof-requests/{}", item.message_id_hex);
+            oversized.items.push(item);
+        }
+        assert!(validate_sccp_recent_messages(&oversized).is_err());
+    }
+
+    #[test]
+    fn sccp_bundle_and_proof_request_json_reads_are_query_free() {
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let message_id = hex::encode(fixture.bundle.commitment.message_id);
+        for (is_bundle, expected_path, body) in [
+            (
+                true,
+                format!("/v1/sccp/proofs/message/{message_id}"),
+                norito::json::to_json(&fixture.bundle).expect("bundle JSON"),
+            ),
+            (
+                false,
+                format!("/v1/sccp/proof-requests/{message_id}"),
+                norito::json::to_json(&fixture.request).expect("request JSON"),
+            ),
+        ] {
+            let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let response = json_response(StatusCode::OK, &body);
+            let value = with_mock_http(respond_with(&store, response), || {
+                let client = client_with_base_url(base_url());
+                if is_bundle {
+                    client.get_sccp_message_bundle_json(&format!("0x{}", message_id.to_uppercase()))
+                } else {
+                    client.get_sccp_groth16_proof_request_json(&message_id)
+                }
+            })
+            .expect("SCCP JSON read");
+            assert_eq!(value.get("version").and_then(JsonValue::as_u64), Some(1));
+            let snapshot = store.lock().expect("snapshot lock")[0].clone();
+            assert_eq!(snapshot.url.path(), expected_path);
+            assert_eq!(snapshot.url.query(), None);
+            assert_eq!(snapshot.max_response_bytes, SCCP_JSON_RESPONSE_MAX_BYTES);
+            assert_single_accept_header(&snapshot, APPLICATION_JSON);
+        }
+    }
+
+    #[test]
+    fn sccp_typed_readbacks_accept_the_shared_exact_fixture() {
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let message_id = hex::encode(fixture.bundle.commitment.message_id);
+        let bundle_bytes =
+            iroha_sccp::canonical_taira_sccp_message_bundle_bytes_checked(&fixture.bundle)
+                .expect("canonical shared SCCP bundle");
+        let request_bytes =
+            iroha_sccp::encode_canonical_sccp_groth16_bn254_proof_request_v1(&fixture.request)
+                .expect("canonical shared SCCP proof request");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let store = Arc::clone(&store);
+            let bundle_path = format!("/v1/sccp/proofs/message/{message_id}");
+            let request_path = format!("/v1/sccp/proof-requests/{message_id}");
+            move |snapshot: RequestSnapshot| {
+                let body = match snapshot.url.path() {
+                    path if path == bundle_path => bundle_bytes.clone(),
+                    path if path == request_path => request_bytes.clone(),
+                    path => panic!("unexpected SCCP readback path: {path}"),
+                };
+                store.lock().expect("snapshot lock").push(snapshot);
+                Ok(HttpResponse::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", APPLICATION_NORITO)
+                    .body(body)
+                    .expect("response build"))
+            }
+        };
+
+        let (bundle, request) = with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            (
+                client.get_sccp_message_bundle(&message_id),
+                client.get_sccp_groth16_proof_request(&format!("0X{}", message_id.to_uppercase())),
+            )
+        });
+
+        assert_eq!(bundle.expect("typed SCCP bundle"), fixture.bundle);
+        assert_eq!(request.expect("typed SCCP proof request"), fixture.request);
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 2);
+        for snapshot in snapshots.iter() {
+            assert_eq!(snapshot.url.query(), None);
+            assert_single_accept_header(snapshot, APPLICATION_NORITO);
+            let expected_limit = if snapshot.url.path().contains("proof-requests") {
+                SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES
+            } else {
+                SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES
+            };
+            assert_eq!(snapshot.max_response_bytes, expected_limit);
+        }
+    }
+
+    #[test]
+    fn sccp_typed_readbacks_reject_cross_message_and_trailing_data() {
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let different_message_id = "ab".repeat(32);
+        assert_ne!(
+            different_message_id,
+            hex::encode(fixture.bundle.commitment.message_id)
+        );
+
+        let bundle_bytes =
+            iroha_sccp::canonical_taira_sccp_message_bundle_bytes_checked(&fixture.bundle)
+                .expect("canonical shared SCCP bundle");
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(bundle_bytes)
+            .expect("response build");
+        let error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).get_sccp_message_bundle(&different_message_id),
+        )
+        .expect_err("cross-message bundle must fail");
+        assert!(error.to_string().contains("different message id"));
+
+        let mut request_bytes =
+            iroha_sccp::encode_canonical_sccp_groth16_bn254_proof_request_v1(&fixture.request)
+                .expect("canonical shared SCCP proof request");
+        request_bytes.push(0);
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(request_bytes)
+            .expect("response build");
+        let error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || {
+                client_with_base_url(base_url()).get_sccp_groth16_proof_request(&hex::encode(
+                    fixture.request.public_inputs.message_id,
+                ))
+            },
+        )
+        .expect_err("trailing proof-request bytes must fail");
+        assert!(error.to_string().contains("noncanonical"));
+    }
+
+    #[test]
+    fn sccp_bundle_readback_rejects_adversarial_structure_mutations() {
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let message_id = hex::encode(fixture.bundle.commitment.message_id);
+        let mut candidates = Vec::new();
+
+        let mut aliased_context = fixture.bundle.clone();
+        aliased_context.commitment.context.route_configuration_hash =
+            aliased_context.commitment.context.destination_binding_hash;
+        candidates.push(aliased_context);
+
+        let mut invalid_lane = fixture.bundle.clone();
+        invalid_lane.commitment.context.lane.target =
+            iroha_data_model::bridge::SccpNetworkV1::SoraTaira;
+        candidates.push(invalid_lane);
+
+        let mut zero_amount = fixture.bundle.clone();
+        let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut zero_amount.payload;
+        transfer.amount = 0;
+        candidates.push(zero_amount);
+
+        let mut wrong_codec = fixture.bundle.clone();
+        let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut wrong_codec.payload;
+        transfer.recipient_codec = iroha_sccp::SCCP_CODEC_TRON_ADDRESS21;
+        candidates.push(wrong_codec);
+
+        let mut oversized_merkle = fixture.bundle.clone();
+        oversized_merkle.merkle_proof.steps = vec![
+            iroha_sccp::SccpMerkleStepV1 {
+                sibling_hash: [0x71; 32],
+                sibling_is_left: false,
+            };
+            iroha_sccp::SCCP_TAIRA_MAX_MERKLE_PROOF_STEPS_V1
+                + 1
+        ];
+        candidates.push(oversized_merkle);
+
+        for candidate in candidates {
+            let response = HttpResponse::builder()
+                .status(StatusCode::OK)
+                .header("content-type", APPLICATION_NORITO)
+                .body(norito::to_bytes(&candidate).expect("encode adversarial SCCP bundle"))
+                .expect("response build");
+            with_mock_http(
+                respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+                || client_with_base_url(base_url()).get_sccp_message_bundle(&message_id),
+            )
+            .expect_err("adversarial SCCP bundle must fail closed");
+        }
+
+        let mut trailing =
+            iroha_sccp::canonical_taira_sccp_message_bundle_bytes_checked(&fixture.bundle)
+                .expect("canonical shared SCCP bundle");
+        trailing.push(0);
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(trailing)
+            .expect("response build");
+        with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).get_sccp_message_bundle(&message_id),
+        )
+        .expect_err("trailing SCCP bundle bytes must fail closed");
+    }
+
+    #[test]
+    fn sccp_message_id_normalization_rejects_ambiguous_and_zero_forms() {
+        for hostile in [
+            "",
+            "ab",
+            &"00".repeat(32),
+            &format!(" {}", "ab".repeat(32)),
+            &format!("{} ", "ab".repeat(32)),
+            &format!("0x0X{}", "ab".repeat(32)),
+            &format!("0x{}", "gg".repeat(32)),
+        ] {
+            assert!(
+                normalize_message_id_hex(hostile).is_err(),
+                "hostile message id accepted: {hostile:?}"
+            );
+        }
+        assert_eq!(
+            normalize_message_id_hex(&format!("0X{}", "AB".repeat(32))).expect("normalized id"),
+            "ab".repeat(32)
         );
     }
 
     #[test]
-    fn get_sccp_message_proof_job_with_params_rejects_all_zero_proof_hex_before_request() {
-        let payload = sample_sccp_message_proof_job();
+    fn exact_submit_request_json_exposes_no_route_override_fields() {
+        let request = SccpDestinationProofSubmitRequest {
+            authority: ALICE_ID.clone(),
+            signature_b64: None,
+            transaction_payload_b64: None,
+            destination_proof_b64: "AQ==".to_owned(),
+            creation_time_ms: Some(1),
+        };
+        let value: JsonValue = norito::json::from_slice(
+            &norito::json::to_vec(&request).expect("encode destination request"),
+        )
+        .expect("decode destination request");
+        let fields = value.as_object().expect("request object");
+        assert_eq!(
+            fields
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([
+                "authority",
+                "signature_b64",
+                "transaction_payload_b64",
+                "destination_proof_b64",
+                "creation_time_ms",
+            ])
+        );
+        for retired in [
+            "message_bundle_b64",
+            "proof_bytes_hex",
+            "network_id_hex",
+            "verifier_address_hex",
+            "bridge_address_hex",
+            "tron_verifier_address",
+            "private_key",
+        ] {
+            assert!(!fields.contains_key(retired));
+        }
+    }
+
+    fn destination_direct_submit_fixture() -> (
+        Client,
+        KeyPair,
+        SccpDestinationProofSubmitRequest,
+        TransactionBuilder,
+        [u8; 32],
+    ) {
+        use base64::Engine as _;
+        use iroha_data_model::{
+            bridge::{BridgeProof, BridgeProofPayload, BridgeProofRange},
+            isi::bridge::SubmitBridgeProof,
+        };
+
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let artifact_bytes =
+            iroha_sccp::encode_canonical_sccp_groth16_bn254_proof_artifact_v1(&fixture.artifact)
+                .expect("canonical shared SCCP destination artifact");
+        let key_pair = KeyPair::try_from_seed(
+            b"iroha:client:sccp:detached-submit".to_vec(),
+            Algorithm::Secp256k1,
+        )
+        .expect("derive generic SCCP detached-sign fixture");
+        let authority = iroha_data_model::account::AccountId::new(key_pair.public_key().clone());
+        let creation_time_ms = 1_700_000_099_001_u64;
+        let bridge_proof = BridgeProof {
+            range: BridgeProofRange {
+                start_height: fixture.request.public_inputs.finality_height,
+                end_height: fixture.request.public_inputs.finality_height,
+            },
+            payload: BridgeProofPayload::SccpDestination(fixture.bridge_proof.clone()),
+        };
+        let client = sccp_client_with_base_url(base_url());
+        let mut builder = TransactionBuilder::new(client.chain.clone(), authority.clone());
+        builder.set_creation_time(Duration::from_millis(creation_time_ms));
+        let builder = builder.with_instructions([SubmitBridgeProof::new(bridge_proof)]);
+        let signature = Signature::try_new(key_pair.private_key(), &builder.payload_hash_bytes())
+            .expect("sign exact SCCP transaction payload with generic authority algorithm");
+        let transaction = builder.clone().build_with_signature(signature.clone());
+        transaction
+            .verify_signature()
+            .expect("generic SCCP detached signature verifies");
+        let mut tx_hash = [0_u8; 32];
+        tx_hash.copy_from_slice(transaction.hash().as_ref());
+        let request = SccpDestinationProofSubmitRequest {
+            authority,
+            signature_b64: Some(
+                base64::engine::general_purpose::STANDARD.encode(signature.payload()),
+            ),
+            transaction_payload_b64: Some(
+                base64::engine::general_purpose::STANDARD.encode(builder.encode_payload()),
+            ),
+            destination_proof_b64: base64::engine::general_purpose::STANDARD.encode(artifact_bytes),
+            creation_time_ms: Some(creation_time_ms),
+        };
+        (client, key_pair, request, builder, tx_hash)
+    }
+
+    fn resign_destination_request(
+        request: &mut SccpDestinationProofSubmitRequest,
+        builder: &TransactionBuilder,
+        key_pair: &KeyPair,
+    ) {
+        use base64::Engine as _;
+
+        let signature = Signature::try_new(key_pair.private_key(), &builder.payload_hash_bytes())
+            .expect("re-sign adversarial SCCP payload");
+        request.signature_b64 =
+            Some(base64::engine::general_purpose::STANDARD.encode(signature.payload()));
+        request.transaction_payload_b64 =
+            Some(base64::engine::general_purpose::STANDARD.encode(builder.encode_payload()));
+    }
+
+    #[test]
+    fn destination_direct_submit_reuses_exact_payload_and_binds_response_hash() {
+        use base64::Engine as _;
+
+        let (client, _key_pair, request, builder, tx_hash) = destination_direct_submit_fixture();
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let response_payload = SccpBridgeSubmitResponse {
+            submitted: true,
+            payload_kind: "transfer".to_owned(),
+            message_id_hex: hex::encode(fixture.bundle.commitment.message_id),
+            backend: fixture.request.backend.backend_label().to_owned(),
+            counterparty_domain: fixture.request.target_network.domain_id(),
+            counterparty_chain: fixture.request.target_network.profile_key().to_owned(),
+            route_configuration_hash_hex: hex::encode(fixture.request.route_configuration_hash),
+            range_start_height: fixture.request.public_inputs.finality_height,
+            range_end_height: fixture.request.public_inputs.finality_height,
+            creation_time_ms: request.creation_time_ms.expect("explicit creation time"),
+            tx_hash_hex: Some(hex::encode(tx_hash)),
+            transaction_payload_b64: None,
+            signing_message_b64: None,
+        };
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&response_payload).expect("encode submit response"),
+        );
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
-            .expect("response build");
-        let message_id_hex = hex::encode(payload.public_inputs.message_id);
-
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.get_sccp_message_proof_job_with_params(
-                &message_id_hex,
-                &SccpMessageProofQueryParams {
-                    proof_bytes_hex: Some("0x0000".to_owned()),
-                    ..SccpMessageProofQueryParams::default()
-                },
-            )
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            client.post_sccp_destination_proof(&request)
         })
-        .expect_err("all-zero proof bytes must fail before request");
+        .expect("exact signed SCCP payload submits");
+        assert_eq!(decoded, response_payload);
+        let snapshot = store.lock().expect("snapshot lock")[0].clone();
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode direct submit request");
+        let expected_payload_b64 =
+            base64::engine::general_purpose::STANDARD.encode(builder.encode_payload());
+        assert_eq!(
+            body.get("transaction_payload_b64")
+                .and_then(JsonValue::as_str),
+            Some(expected_payload_b64.as_str())
+        );
 
-        assert!(
-            err.to_string().contains("proof_bytes_hex"),
-            "unexpected error: {err:?}"
+        let mut wrong_hash = response_payload;
+        wrong_hash.tx_hash_hex = Some(hex::encode([0xA5; 32]));
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&wrong_hash).expect("encode hostile hash response"),
         );
-        assert!(
-            err.to_string().contains("all zero"),
-            "unexpected error: {err:?}"
+        with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client.post_sccp_destination_proof(&request),
+        )
+        .expect_err("server cannot substitute a transaction hash");
+    }
+
+    #[test]
+    fn destination_direct_submit_rejects_payload_mutations_before_http() {
+        use base64::Engine as _;
+        use iroha_data_model::{
+            bridge::{BridgeProof, BridgeProofPayload, BridgeProofRange},
+            isi::bridge::SubmitBridgeProof,
+        };
+
+        let (client, key_pair, request, builder, _tx_hash) = destination_direct_submit_fixture();
+        let (canonical_payload, _) = decode_sccp_bridge_transaction_payload(
+            request
+                .transaction_payload_b64
+                .as_deref()
+                .expect("fixture transaction payload"),
+        )
+        .expect("decode fixture transaction payload");
+        let reject_without_http = |candidate: &SccpDestinationProofSubmitRequest, label: &str| {
+            with_mock_http(
+                |_| panic!("{label} must reject before HTTP"),
+                || client.post_sccp_destination_proof(candidate),
+            )
+            .expect_err(label);
+        };
+
+        let mut candidate = request.clone();
+        let mut wrong_chain = TransactionBuilder::new(
+            ChainId::from("00000000-0000-0000-0000-000000000000"),
+            canonical_payload.authority.clone(),
         );
+        wrong_chain.set_creation_time(Duration::from_millis(canonical_payload.creation_time_ms));
+        let wrong_chain = wrong_chain.with_executable(canonical_payload.instructions.clone());
+        resign_destination_request(&mut candidate, &wrong_chain, &key_pair);
+        reject_without_http(&candidate, "wrong payload chain");
+
+        let attacker = KeyPair::try_from_seed(
+            b"iroha:client:sccp:wrong-authority".to_vec(),
+            Algorithm::Secp256k1,
+        )
+        .expect("derive attacker key");
+        let mut wrong_authority = TransactionBuilder::new(
+            client.chain.clone(),
+            iroha_data_model::account::AccountId::new(attacker.public_key().clone()),
+        );
+        wrong_authority
+            .set_creation_time(Duration::from_millis(canonical_payload.creation_time_ms));
+        let wrong_authority =
+            wrong_authority.with_executable(canonical_payload.instructions.clone());
+        candidate = request.clone();
+        resign_destination_request(&mut candidate, &wrong_authority, &attacker);
+        reject_without_http(&candidate, "wrong payload authority");
+
+        let mut wrong_time =
+            TransactionBuilder::new(client.chain.clone(), canonical_payload.authority.clone());
+        wrong_time.set_creation_time(Duration::from_millis(
+            canonical_payload.creation_time_ms + 1,
+        ));
+        let wrong_time = wrong_time.with_executable(canonical_payload.instructions.clone());
+        candidate = request.clone();
+        resign_destination_request(&mut candidate, &wrong_time, &key_pair);
+        reject_without_http(&candidate, "mismatched payload creation time");
+
+        let mut ttl = builder.clone();
+        ttl.set_ttl(Duration::from_secs(1));
+        candidate = request.clone();
+        resign_destination_request(&mut candidate, &ttl, &key_pair);
+        reject_without_http(&candidate, "payload TTL");
+
+        let mut nonce = builder.clone();
+        nonce.set_nonce(NonZeroU32::new(1).expect("nonzero nonce"));
+        candidate = request.clone();
+        resign_destination_request(&mut candidate, &nonce, &key_pair);
+        reject_without_http(&candidate, "payload nonce");
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "gas_asset_id".parse().expect("metadata key"),
+            iroha_primitives::json::Json::new("xor#taira".to_owned()),
+        );
+        let hostile_metadata = builder.clone().with_metadata(metadata);
+        candidate = request.clone();
+        resign_destination_request(&mut candidate, &hostile_metadata, &key_pair);
+        reject_without_http(&candidate, "noncanonical gas asset metadata");
+
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let mut wrong_hash = fixture.request.route_configuration_hash;
+        wrong_hash[0] ^= 1;
+        let mut wrong_destination = fixture.bridge_proof.clone();
+        wrong_destination.route_configuration_hash = wrong_hash;
+        let wrong_proof = BridgeProof {
+            range: BridgeProofRange {
+                start_height: fixture.request.public_inputs.finality_height,
+                end_height: fixture.request.public_inputs.finality_height,
+            },
+            payload: BridgeProofPayload::SccpDestination(wrong_destination),
+        };
+        let mut wrong_proof_builder =
+            TransactionBuilder::new(client.chain.clone(), canonical_payload.authority.clone());
+        wrong_proof_builder
+            .set_creation_time(Duration::from_millis(canonical_payload.creation_time_ms));
+        let wrong_proof_builder =
+            wrong_proof_builder.with_instructions([SubmitBridgeProof::new(wrong_proof)]);
+        candidate = request.clone();
+        resign_destination_request(&mut candidate, &wrong_proof_builder, &key_pair);
+        reject_without_http(&candidate, "different bridge proof");
+
+        let attacker_signature =
+            Signature::try_new(attacker.private_key(), &builder.payload_hash_bytes())
+                .expect("attacker signs exact payload hash");
+        candidate = request.clone();
+        candidate.signature_b64 =
+            Some(base64::engine::general_purpose::STANDARD.encode(attacker_signature.payload()));
+        reject_without_http(&candidate, "signature from another authority");
+
+        let mut payload_bytes = base64::engine::general_purpose::STANDARD
+            .decode(
+                request
+                    .transaction_payload_b64
+                    .as_deref()
+                    .expect("fixture transaction payload"),
+            )
+            .expect("decode canonical payload base64");
+        payload_bytes.push(0);
+        candidate = request.clone();
+        candidate.transaction_payload_b64 =
+            Some(base64::engine::general_purpose::STANDARD.encode(payload_bytes));
+        reject_without_http(&candidate, "trailing transaction payload bytes");
+    }
+
+    #[test]
+    fn destination_submit_rejects_wrong_client_chain_and_mixed_state_before_http() {
+        let (mut client, _key_pair, mut request, _builder, _tx_hash) =
+            destination_direct_submit_fixture();
+        client.chain = ChainId::from("00000000-0000-0000-0000-000000000000");
+        with_mock_http(
+            |_| panic!("wrong configured chain must reject before HTTP"),
+            || client.post_sccp_destination_proof(&request),
+        )
+        .expect_err("non-Taira client chain must reject");
+
+        let client = sccp_client_with_base_url(base_url());
+        request.transaction_payload_b64 = None;
+        with_mock_http(
+            |_| panic!("mixed signing state must reject before HTTP"),
+            || client.post_sccp_destination_proof(&request),
+        )
+        .expect_err("signature without payload must reject");
+    }
+
+    #[test]
+    fn destination_submit_preflight_rejects_malformed_artifacts_before_http() {
+        use base64::Engine as _;
+
+        let mut request = SccpDestinationProofSubmitRequest {
+            authority: ALICE_ID.clone(),
+            signature_b64: None,
+            transaction_payload_b64: None,
+            destination_proof_b64: String::new(),
+            creation_time_ms: Some(1),
+        };
+        for hostile in [
+            String::new(),
+            "AQ".to_owned(),
+            base64::engine::general_purpose::STANDARD.encode([0_u8]),
+            base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3]),
+        ] {
+            request.destination_proof_b64 = hostile;
+            let error = sccp_client_with_base_url(base_url())
+                .post_sccp_destination_proof(&request)
+                .expect_err("malformed artifact must fail before HTTP");
+            assert!(
+                error.to_string().contains("destination_proof_b64")
+                    || error.to_string().contains("invalid destination")
+            );
+        }
+
+        request.destination_proof_b64 = "AQ==".to_owned();
+        request.creation_time_ms = Some(0);
         assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid query params must not send an HTTP request"
+            sccp_client_with_base_url(base_url())
+                .post_sccp_destination_proof(&request)
+                .expect_err("zero time")
+                .to_string()
+                .contains("positive")
+        );
+        request.creation_time_ms = Some(1);
+        request.signature_b64 = Some("AQ==".to_owned());
+        assert!(
+            sccp_client_with_base_url(base_url())
+                .post_sccp_destination_proof(&request)
+                .expect_err("signature without its prepared payload")
+                .to_string()
+                .contains("signing state")
+        );
+        request.signature_b64 = None;
+        request.transaction_payload_b64 = Some("AQ==".to_owned());
+        assert!(
+            sccp_client_with_base_url(base_url())
+                .post_sccp_destination_proof(&request)
+                .expect_err("prepared payload without its signature")
+                .to_string()
+                .contains("signing state")
+        );
+        request.signature_b64 = Some(base64::engine::general_purpose::STANDARD.encode([0_u8; 64]));
+        assert!(
+            sccp_client_with_base_url(base_url())
+                .post_sccp_destination_proof(&request)
+                .expect_err("all-zero generic signature")
+                .to_string()
+                .contains("admitted signature")
         );
     }
 
     #[test]
-    fn get_sccp_message_proof_job_with_params_rejects_short_proof_hex_before_request() {
-        let payload = sample_sccp_message_proof_job();
+    fn destination_submit_uses_the_shared_artifact_and_binds_the_prepared_transaction() {
+        use base64::Engine as _;
+        use iroha_data_model::bridge::{BridgeProof, BridgeProofPayload, BridgeProofRange};
+        use iroha_data_model::isi::bridge::SubmitBridgeProof;
+
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let artifact_bytes =
+            iroha_sccp::encode_canonical_sccp_groth16_bn254_proof_artifact_v1(&fixture.artifact)
+                .expect("canonical shared SCCP destination artifact");
+        let creation_time_ms = 1_700_000_000_123_u64;
+        let request = SccpDestinationProofSubmitRequest {
+            authority: ALICE_ID.clone(),
+            signature_b64: None,
+            transaction_payload_b64: None,
+            destination_proof_b64: base64::engine::general_purpose::STANDARD
+                .encode(&artifact_bytes),
+            creation_time_ms: Some(creation_time_ms),
+        };
+        let client = sccp_client_with_base_url(base_url());
+        let height = fixture.request.public_inputs.finality_height;
+        let bridge_proof = BridgeProof {
+            range: BridgeProofRange {
+                start_height: height,
+                end_height: height,
+            },
+            payload: BridgeProofPayload::SccpDestination(fixture.bridge_proof.clone()),
+        };
+        let mut builder = TransactionBuilder::new(client.chain.clone(), ALICE_ID.clone());
+        builder.set_creation_time(Duration::from_millis(creation_time_ms));
+        let builder = builder.with_instructions([SubmitBridgeProof::new(bridge_proof)]);
+        let response_payload = SccpBridgeSubmitResponse {
+            submitted: false,
+            payload_kind: "transfer".to_owned(),
+            message_id_hex: hex::encode(fixture.bundle.commitment.message_id),
+            backend: fixture.request.backend.backend_label().to_owned(),
+            counterparty_domain: fixture.request.target_network.domain_id(),
+            counterparty_chain: fixture.request.target_network.profile_key().to_owned(),
+            route_configuration_hash_hex: hex::encode(fixture.request.route_configuration_hash),
+            range_start_height: height,
+            range_end_height: height,
+            creation_time_ms,
+            tx_hash_hex: None,
+            transaction_payload_b64: Some(
+                base64::engine::general_purpose::STANDARD.encode(builder.encode_payload()),
+            ),
+            signing_message_b64: Some(
+                base64::engine::general_purpose::STANDARD.encode(builder.payload_hash_bytes()),
+            ),
+        };
+        let response_json =
+            norito::json::to_json(&response_payload).expect("encode prepared response");
+        let response = json_response(StatusCode::OK, &response_json);
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
-            .expect("response build");
-        let message_id_hex = hex::encode(payload.public_inputs.message_id);
 
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.get_sccp_message_proof_job_with_params(
-                &message_id_hex,
-                &SccpMessageProofQueryParams {
-                    proof_bytes_hex: Some("0x0102ab".to_owned()),
-                    ..SccpMessageProofQueryParams::default()
-                },
-            )
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            client.post_sccp_destination_proof(&request)
         })
-        .expect_err("short proof bytes must fail before request");
+        .expect("exact destination proof preparation");
 
-        assert!(
-            err.to_string().contains("proof_bytes_hex"),
-            "unexpected error: {err:?}"
+        assert_eq!(decoded, response_payload);
+        let snapshot = store.lock().expect("snapshot lock")[0].clone();
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/bridge/proofs/submit");
+        assert_eq!(snapshot.url.query(), None);
+        assert_eq!(snapshot.max_response_bytes, SCCP_JSON_RESPONSE_MAX_BYTES);
+        assert_single_accept_header(&snapshot, APPLICATION_JSON);
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode exact destination request");
+        let fields = body.as_object().expect("destination request object");
+        assert_eq!(fields.len(), 5);
+        assert_eq!(
+            fields
+                .get("destination_proof_b64")
+                .and_then(JsonValue::as_str),
+            Some(request.destination_proof_b64.as_str())
         );
-        assert!(
-            err.to_string().contains("384-byte"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid query params must not send an HTTP request"
+        let submitted_artifact = base64::engine::general_purpose::STANDARD
+            .decode(request.destination_proof_b64.as_bytes())
+            .expect("decode captured artifact");
+        assert_eq!(submitted_artifact, artifact_bytes);
+        assert_eq!(
+            iroha_sccp::decode_canonical_sccp_groth16_bn254_proof_artifact_v1(&submitted_artifact)
+                .expect("decode captured exact artifact"),
+            fixture.artifact
         );
     }
 
     #[test]
-    fn get_sccp_message_proof_job_with_params_rejects_off_curve_proof_before_request() {
-        let payload = sample_sccp_message_proof_job();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
-            .expect("response build");
-        let message_id_hex = hex::encode(payload.public_inputs.message_id);
-        let mut proof_bytes =
-            hex::decode(sccp_submit_test_default_groth16_proof_hex()).expect("proof hex");
-        proof_bytes[11 * 32 + 31] = 3;
+    fn native_submit_preflight_rejects_malformed_envelopes_before_http() {
+        let mut request = SccpNativeMessageSubmitRequest {
+            authority: ALICE_ID.clone(),
+            signature_b64: None,
+            transaction_payload_b64: None,
+            native_proof_b64: "AQ==".to_owned(),
+            creation_time_ms: Some(1),
+        };
+        let error = sccp_client_with_base_url(base_url())
+            .post_sccp_native_message(&request)
+            .expect_err("malformed native proof must fail");
+        assert!(error.to_string().contains("native SCCP proof"));
 
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.get_sccp_message_proof_job_with_params(
-                &message_id_hex,
-                &SccpMessageProofQueryParams {
-                    network_id_hex: Some("11".repeat(32)),
-                    proof_bytes_hex: Some(hex::encode(proof_bytes)),
-                    ..SccpMessageProofQueryParams::default()
-                },
-            )
-        })
-        .expect_err("off-curve proof bytes must fail before request");
-
+        request.native_proof_b64 = "AQ".to_owned();
         assert!(
-            err.to_string().contains("valid BN254 Groth16 proof tuple"),
-            "unexpected error: {err:?}"
+            sccp_client_with_base_url(base_url())
+                .post_sccp_native_message(&request)
+                .expect_err("noncanonical base64")
+                .to_string()
+                .contains("canonical padded base64")
         );
+        request.native_proof_b64 = "AQ==".to_owned();
+        request.creation_time_ms = Some(0);
         assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid query params must not send an HTTP request"
+            sccp_client_with_base_url(base_url())
+                .post_sccp_native_message(&request)
+                .expect_err("zero creation time")
+                .to_string()
+                .contains("positive")
         );
     }
 
-    #[test]
-    fn get_sccp_message_proof_job_with_params_rejects_wrong_source_domain_before_request() {
-        let payload = sample_sccp_message_proof_job();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
-            .expect("response build");
-        let message_id_hex = hex::encode(payload.public_inputs.message_id);
+    fn native_submit_fixture(
+        activation: iroha_data_model::bridge::SccpRouteActivationV1,
+    ) -> (
+        SccpNativeMessageSubmitRequest,
+        iroha_data_model::bridge::SccpRegistryV1,
+        iroha_sccp::SccpNativeInboundMessageProofV1,
+        Vec<u8>,
+        [u8; 32],
+    ) {
+        use base64::Engine as _;
 
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.get_sccp_message_proof_job_with_params(
-                &message_id_hex,
-                &SccpMessageProofQueryParams {
-                    network_id_hex: Some("11".repeat(32)),
-                    verifier_code_hash_hex: Some("ab".repeat(32)),
-                    verifier_key_hash_hex: Some("cd".repeat(32)),
-                    expected_destination_binding_hash_hex: Some("ef".repeat(32)),
-                    tron_verifier_address: Some("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_owned()),
-                    proof_bytes_hex: Some(sccp_submit_test_groth16_proof_hex(
-                        &message_id_hex,
-                        iroha_sccp::SCCP_DOMAIN_TRON,
-                        &"33".repeat(32),
-                    )),
-                    ..SccpMessageProofQueryParams::default()
-                },
-            )
-        })
-        .expect_err("wrong source-domain proof bytes must fail before request");
-
-        assert!(
-            err.to_string().contains("proof_bytes_hex.source_domain"),
-            "unexpected error: {err:?}"
+        let (proof, source_identity, trust_anchor) =
+            iroha_sccp::sccp_native_ethereum_transfer_inbound_test_fixture_v1();
+        let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+            iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+            activation,
         );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid query params must not send an HTTP request"
-        );
-    }
-
-    #[test]
-    fn get_sccp_message_proof_job_with_params_rejects_message_id_mismatch_before_request() {
-        let payload = sample_sccp_message_proof_job();
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&payload).expect("encode norito response"))
-            .expect("response build");
-        let message_id_hex = hex::encode(payload.public_inputs.message_id);
-
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.get_sccp_message_proof_job_with_params(
-                &message_id_hex,
-                &SccpMessageProofQueryParams {
-                    network_id_hex: Some("11".repeat(32)),
-                    verifier_code_hash_hex: Some("ab".repeat(32)),
-                    verifier_key_hash_hex: Some("cd".repeat(32)),
-                    expected_destination_binding_hash_hex: Some("ef".repeat(32)),
-                    tron_verifier_address: Some("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_owned()),
-                    proof_bytes_hex: Some(sccp_submit_test_groth16_proof_hex(
-                        &"22".repeat(32),
-                        iroha_sccp::SCCP_DOMAIN_SORA,
-                        &"33".repeat(32),
-                    )),
-                    ..SccpMessageProofQueryParams::default()
-                },
-            )
-        })
-        .expect_err("wrong message-id proof bytes must fail before request");
-
-        assert!(
-            err.to_string().contains("proof_bytes_hex.message_id"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid query params must not send an HTTP request"
-        );
-    }
-
-    fn sccp_submit_test_abi_word_u32(value: u32) -> [u8; 32] {
-        let mut out = [0u8; 32];
-        out[28..32].copy_from_slice(&value.to_be_bytes());
-        out
-    }
-
-    fn sccp_submit_test_hex32(value: &str) -> [u8; 32] {
-        let value = value
-            .trim()
-            .strip_prefix("0x")
-            .or_else(|| value.trim().strip_prefix("0X"))
-            .unwrap_or_else(|| value.trim());
-        let mut out = [0u8; 32];
-        hex::decode_to_slice(value, &mut out).expect("hex32");
-        out
-    }
-
-    fn sccp_submit_test_default_groth16_proof_hex() -> String {
-        sccp_submit_test_groth16_proof_hex(&"11".repeat(32), 0, &"33".repeat(32))
-    }
-
-    fn sccp_submit_test_groth16_proof_hex(
-        message_id: &str,
-        source_domain: u32,
-        commitment_root: &str,
-    ) -> String {
-        sccp_submit_test_groth16_proof_hex_with_version(
-            1,
-            message_id,
-            source_domain,
-            commitment_root,
+        assert_eq!(route.source_identity, source_identity);
+        let route_configuration_hash = route
+            .route_configuration_hash()
+            .expect("fixture route configuration");
+        let lane_id = route.lane_id;
+        let registry = iroha_data_model::bridge::SccpRegistryV1 {
+            version: 1,
+            lanes: vec![iroha_data_model::bridge::SccpGovernedLaneV1 {
+                lane_id,
+                native_trust_anchors: vec![trust_anchor],
+                current_native_trust_anchor_hash: Some(trust_anchor.anchor_hash),
+                routes: vec![route],
+            }],
+        };
+        registry.validate().expect("valid native registry fixture");
+        let proof_bytes = iroha_sccp::encode_sccp_native_inbound_message_proof_v1(&proof)
+            .expect("canonical native proof fixture");
+        let request = SccpNativeMessageSubmitRequest {
+            authority: ALICE_ID.clone(),
+            signature_b64: None,
+            transaction_payload_b64: None,
+            native_proof_b64: base64::engine::general_purpose::STANDARD.encode(&proof_bytes),
+            creation_time_ms: Some(1_700_000_000_321),
+        };
+        (
+            request,
+            registry,
+            proof,
+            proof_bytes,
+            route_configuration_hash,
         )
     }
 
-    fn sccp_submit_test_groth16_proof_hex_with_version(
-        version: u32,
-        message_id: &str,
-        source_domain: u32,
-        commitment_root: &str,
-    ) -> String {
-        let mut bytes = Vec::with_capacity(SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1);
-        bytes.extend_from_slice(&sccp_submit_test_abi_word_u32(version));
-        bytes.extend_from_slice(&sccp_submit_test_hex32(message_id));
-        bytes.extend_from_slice(&sccp_submit_test_abi_word_u32(source_domain));
-        bytes.extend_from_slice(&sccp_submit_test_hex32(commitment_root));
-        bytes.extend_from_slice(&sccp_submit_test_abi_word_u32(1));
-        bytes.extend_from_slice(&sccp_submit_test_abi_word_u32(2));
-        for word in [
-            "1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed",
-            "198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2",
-            "12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa",
-            "090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b",
-        ] {
-            bytes.extend_from_slice(&sccp_submit_test_hex32(word));
-        }
-        bytes.extend_from_slice(&sccp_submit_test_abi_word_u32(1));
-        bytes.extend_from_slice(&sccp_submit_test_abi_word_u32(2));
-        hex::encode(bytes)
-    }
-
-    fn sccp_submit_test_message_bundle(message_id: &str, commitment_root: &str) -> JsonValue {
-        JsonValue::Object(JsonMap::from_iter([
-            ("version".into(), JsonValue::Number(1_u64.into())),
-            (
-                "commitment_root".into(),
-                JsonValue::String(commitment_root.to_owned()),
-            ),
-            (
-                "commitment".into(),
-                JsonValue::Object(JsonMap::from_iter([
-                    ("version".into(), JsonValue::Number(1_u64.into())),
-                    ("kind".into(), JsonValue::String("Transfer".into())),
-                    ("target_domain".into(), JsonValue::Number(5_u64.into())),
-                    (
-                        "message_id".into(),
-                        JsonValue::String(message_id.to_owned()),
-                    ),
-                    ("payload_hash".into(), JsonValue::String("22".repeat(32))),
-                ])),
-            ),
-        ]))
-    }
-
     #[test]
-    fn post_bridge_proof_submit_json_posts_tron_material() {
+    fn native_submit_binds_governed_route_before_building_the_post() {
+        use base64::Engine as _;
+        use iroha_data_model::bridge::{BridgeProof, BridgeProofPayload, BridgeProofRange};
+        use iroha_data_model::isi::bridge::SubmitBridgeProof;
+
+        let (request, registry, proof, proof_bytes, route_configuration_hash) =
+            native_submit_fixture(iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional);
+        let client = sccp_client_with_base_url(base_url());
+        let source_height = proof.source.source_finality.height;
+        let bridge_proof = BridgeProof {
+            range: BridgeProofRange {
+                start_height: source_height,
+                end_height: source_height,
+            },
+            payload: BridgeProofPayload::NativeProtocol(
+                iroha_data_model::bridge::BridgeNativeProtocolProofV1 {
+                    backend: proof.source.proof.backend(),
+                    route_configuration_hash,
+                    encoded_envelope: proof_bytes,
+                },
+            ),
+        };
+        let mut builder = TransactionBuilder::new(client.chain.clone(), ALICE_ID.clone());
+        builder.set_creation_time(Duration::from_millis(
+            request.creation_time_ms.expect("fixed creation time"),
+        ));
+        let builder = builder.with_instructions([SubmitBridgeProof::new(bridge_proof)]);
+        let response_payload = SccpBridgeSubmitResponse {
+            submitted: false,
+            payload_kind: "transfer".to_owned(),
+            message_id_hex: hex::encode(proof.source.message_id),
+            backend: proof.source.proof.backend().backend_label().to_owned(),
+            counterparty_domain: proof.source.lane.source.domain_id(),
+            counterparty_chain: proof.source.lane.source.profile_key().to_owned(),
+            route_configuration_hash_hex: hex::encode(route_configuration_hash),
+            range_start_height: source_height,
+            range_end_height: source_height,
+            creation_time_ms: request.creation_time_ms.expect("fixed creation time"),
+            tx_hash_hex: None,
+            transaction_payload_b64: Some(
+                base64::engine::general_purpose::STANDARD.encode(builder.encode_payload()),
+            ),
+            signing_message_b64: Some(
+                base64::engine::general_purpose::STANDARD.encode(builder.payload_hash_bytes()),
+            ),
+        };
+        let registry_bytes = norito::to_bytes(&registry).expect("encode registry response");
+        let response_json =
+            norito::json::to_vec(&response_payload).expect("encode native response");
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response_body = JsonValue::Object(JsonMap::from_iter([
-            ("ok".into(), JsonValue::Bool(true)),
-            ("submitted".into(), JsonValue::Bool(false)),
-            ("proof_kind".into(), JsonValue::String("message".into())),
-            (
-                "counterparty_chain".into(),
-                JsonValue::String("tron".into()),
-            ),
-        ]));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(norito::json::to_vec(&response_body).expect("encode json response"))
-            .expect("response build");
-        let payload = JsonValue::Object(JsonMap::from_iter([
-            ("authority".into(), JsonValue::String("alice".into())),
-            (
-                "message_bundle".into(),
-                JsonValue::Object(JsonMap::from_iter([(
-                    "version".into(),
-                    JsonValue::Number(1_u64.into()),
-                )])),
-            ),
-            ("network_id_hex".into(), JsonValue::String("71".repeat(32))),
-            (
-                "verifier_code_hash_hex".into(),
-                JsonValue::String("72".repeat(32)),
-            ),
-            (
-                "verifier_key_hash_hex".into(),
-                JsonValue::String("73".repeat(32)),
-            ),
-            (
-                "expected_destination_binding_hash_hex".into(),
-                JsonValue::String("74".repeat(32)),
-            ),
-            (
-                "tron_verifier_address".into(),
-                JsonValue::String("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".into()),
-            ),
-            (
-                "proof_bytes_hex".into(),
-                JsonValue::String(sccp_submit_test_default_groth16_proof_hex()),
-            ),
-        ]));
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let response = match snapshot.url.path() {
+                    "/v1/sccp/registry" => HttpResponse::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", APPLICATION_NORITO)
+                        .body(registry_bytes.clone())
+                        .expect("registry response"),
+                    "/v1/bridge/messages" => HttpResponse::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", APPLICATION_JSON)
+                        .body(response_json.clone())
+                        .expect("native response"),
+                    path => panic!("unexpected native SCCP request path: {path}"),
+                };
+                store.lock().expect("snapshot lock").push(snapshot);
+                Ok(response)
+            }
+        };
 
-        let decoded = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.post_bridge_proof_submit_json(&payload)
-        })
-        .expect("bridge proof submit");
-
-        assert_eq!(decoded, response_body);
-        let snapshot = store
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("bridge proof submit snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/bridge/proofs/submit");
-        assert!(
-            snapshot.headers.iter().any(|(name, value)| {
-                name.eq_ignore_ascii_case("content-type") && value == APPLICATION_JSON
-            }),
-            "request should set Content-Type: {APPLICATION_JSON}"
-        );
-        assert!(
-            snapshot.headers.iter().any(|(name, value)| {
-                name.eq_ignore_ascii_case("accept") && value == APPLICATION_JSON
-            }),
-            "request should set Accept: {APPLICATION_JSON}"
-        );
+        let decoded = with_mock_http(responder, || client.post_sccp_native_message(&request))
+            .expect("exact governed native preparation");
+        assert_eq!(decoded, response_payload);
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].url.path(), "/v1/sccp/registry");
+        assert_eq!(snapshots[0].method, HttpMethod::GET);
         assert_eq!(
-            norito::json::from_slice::<JsonValue>(&snapshot.body).expect("decode request body"),
-            payload
+            snapshots[0].max_response_bytes,
+            SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES
         );
-    }
-
-    #[test]
-    fn post_bridge_proof_submit_json_rejects_ambiguous_bundle_selection() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(b"{\"ok\":true}".to_vec())
-            .expect("response build");
-        let payload = JsonValue::Object(JsonMap::from_iter([
-            ("authority".into(), JsonValue::String("alice".into())),
-            ("network_id_hex".into(), JsonValue::String("71".repeat(32))),
-            (
-                "verifier_code_hash_hex".into(),
-                JsonValue::String("72".repeat(32)),
-            ),
-            (
-                "verifier_key_hash_hex".into(),
-                JsonValue::String("73".repeat(32)),
-            ),
-            (
-                "expected_destination_binding_hash_hex".into(),
-                JsonValue::String("74".repeat(32)),
-            ),
-            (
-                "tron_verifier_address".into(),
-                JsonValue::String("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".into()),
-            ),
-            (
-                "proof_bytes_hex".into(),
-                JsonValue::String(sccp_submit_test_default_groth16_proof_hex()),
-            ),
-        ]));
-
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.post_bridge_proof_submit_json(&payload)
-        })
-        .expect_err("bridge proof submit must reject missing bundle selection before request");
-
-        assert!(
-            err.to_string()
-                .contains("exactly one of burn_bundle or message_bundle"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid bridge proof submit payload must not send an HTTP request"
-        );
-    }
-
-    #[test]
-    fn post_bridge_proof_submit_json_rejects_destination_tuple_on_burn_bundle() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(b"{\"ok\":true}".to_vec())
-            .expect("response build");
-        let payload = JsonValue::Object(JsonMap::from_iter([
-            ("authority".into(), JsonValue::String("alice".into())),
-            (
-                "burn_bundle".into(),
-                JsonValue::Object(JsonMap::from_iter([(
-                    "version".into(),
-                    JsonValue::Number(1_u64.into()),
-                )])),
-            ),
-            ("network_id_hex".into(), JsonValue::String("71".repeat(32))),
-            (
-                "verifier_code_hash_hex".into(),
-                JsonValue::String("72".repeat(32)),
-            ),
-            (
-                "verifier_key_hash_hex".into(),
-                JsonValue::String("73".repeat(32)),
-            ),
-            (
-                "expected_destination_binding_hash_hex".into(),
-                JsonValue::String("74".repeat(32)),
-            ),
-            (
-                "tron_verifier_address".into(),
-                JsonValue::String("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".into()),
-            ),
-            (
-                "proof_bytes_hex".into(),
-                JsonValue::String(sccp_submit_test_default_groth16_proof_hex()),
-            ),
-        ]));
-
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.post_bridge_proof_submit_json(&payload)
-        })
-        .expect_err("bridge proof submit must reject destination tuple on burn bundle");
-
-        assert!(
-            err.to_string()
-                .contains("only valid for message_bundle submissions"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid bridge proof submit payload must not send an HTTP request"
-        );
-    }
-
-    #[test]
-    fn post_bridge_proof_submit_json_rejects_wrong_source_domain_for_message_bundle() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(b"{\"ok\":true}".to_vec())
-            .expect("response build");
-        let message_id = "11".repeat(32);
-        let commitment_root = "33".repeat(32);
-        let payload = JsonValue::Object(JsonMap::from_iter([
-            (
-                "message_bundle".into(),
-                sccp_submit_test_message_bundle(&message_id, &commitment_root),
-            ),
-            (
-                "proof_bytes_hex".into(),
-                JsonValue::String(sccp_submit_test_groth16_proof_hex(
-                    &message_id,
-                    iroha_sccp::SCCP_DOMAIN_TRON,
-                    &commitment_root,
-                )),
-            ),
-        ]));
-
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.post_bridge_proof_submit_json(&payload)
-        })
-        .expect_err("wrong source-domain proof bytes must fail before request");
-
-        assert!(
-            err.to_string().contains("proof_bytes_hex.source_domain"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid bridge proof submit payload must not send an HTTP request"
-        );
-    }
-
-    #[test]
-    fn post_bridge_proof_submit_json_rejects_message_id_mismatch_for_message_bundle() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(b"{\"ok\":true}".to_vec())
-            .expect("response build");
-        let message_id = "11".repeat(32);
-        let commitment_root = "33".repeat(32);
-        let payload = JsonValue::Object(JsonMap::from_iter([
-            (
-                "message_bundle".into(),
-                sccp_submit_test_message_bundle(&message_id, &commitment_root),
-            ),
-            (
-                "proof_bytes_hex".into(),
-                JsonValue::String(sccp_submit_test_groth16_proof_hex(
-                    &"22".repeat(32),
-                    iroha_sccp::SCCP_DOMAIN_SORA,
-                    &commitment_root,
-                )),
-            ),
-        ]));
-
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.post_bridge_proof_submit_json(&payload)
-        })
-        .expect_err("wrong message-id proof bytes must fail before request");
-
-        assert!(
-            err.to_string().contains("proof_bytes_hex.message_id"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid bridge proof submit payload must not send an HTTP request"
-        );
-    }
-
-    #[test]
-    fn post_bridge_proof_submit_json_rejects_all_zero_proof_hex_before_request() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(b"{\"ok\":true}".to_vec())
-            .expect("response build");
-        let payload = JsonValue::Object(JsonMap::from_iter([(
-            "proof_bytes_hex".into(),
-            JsonValue::String("0x0000".into()),
-        )]));
-
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.post_bridge_proof_submit_json(&payload)
-        })
-        .expect_err("all-zero bridge proof bytes must fail before request");
-
-        assert!(
-            err.to_string().contains("proof_bytes_hex"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            err.to_string().contains("all zero"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid bridge proof submit payload must not send an HTTP request"
-        );
-    }
-
-    #[test]
-    fn post_bridge_proof_submit_json_rejects_short_proof_hex_before_request() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(b"{\"ok\":true}".to_vec())
-            .expect("response build");
-        let payload = JsonValue::Object(JsonMap::from_iter([(
-            "proof_bytes_hex".into(),
-            JsonValue::String("0x0102ab".into()),
-        )]));
-
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.post_bridge_proof_submit_json(&payload)
-        })
-        .expect_err("short bridge proof bytes must fail before request");
-
-        assert!(
-            err.to_string().contains("proof_bytes_hex"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            err.to_string().contains("384-byte"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid bridge proof submit payload must not send an HTTP request"
-        );
-    }
-
-    #[test]
-    fn post_bridge_message_submit_json_posts_tron_proof_material() {
-        let store = Arc::new(Mutex::new(Vec::new()));
-        let response_body = JsonValue::Object(JsonMap::from_iter([
-            ("ok".into(), JsonValue::Bool(true)),
-            ("submitted".into(), JsonValue::Bool(false)),
-            ("message_kind".into(), JsonValue::String("transfer".into())),
-            (
-                "counterparty_chain".into(),
-                JsonValue::String("tron".into()),
-            ),
-        ]));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(norito::json::to_vec(&response_body).expect("encode json response"))
-            .expect("response build");
-        let payload = JsonValue::Object(JsonMap::from_iter([
-            ("authority".into(), JsonValue::String("alice".into())),
-            (
-                "message_bundle".into(),
-                JsonValue::Object(JsonMap::from_iter([(
-                    "version".into(),
-                    JsonValue::Number(1_u64.into()),
-                )])),
-            ),
-            ("network_id_hex".into(), JsonValue::String("71".repeat(32))),
-            (
-                "verifier_code_hash_hex".into(),
-                JsonValue::String("72".repeat(32)),
-            ),
-            (
-                "verifier_key_hash_hex".into(),
-                JsonValue::String("73".repeat(32)),
-            ),
-            (
-                "expected_destination_binding_hash_hex".into(),
-                JsonValue::String("74".repeat(32)),
-            ),
-            (
-                "tron_verifier_address".into(),
-                JsonValue::String("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".into()),
-            ),
-            (
-                "proof_bytes_hex".into(),
-                JsonValue::String(sccp_submit_test_default_groth16_proof_hex()),
-            ),
-            ("receipt_lane".into(), JsonValue::Number(7_u64.into())),
-        ]));
-
-        let decoded = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.post_bridge_message_submit_json(&payload)
-        })
-        .expect("bridge message submit");
-
-        assert_eq!(decoded, response_body);
-        let snapshot = store
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("bridge message submit snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/bridge/messages");
-        assert!(
-            snapshot.headers.iter().any(|(name, value)| {
-                name.eq_ignore_ascii_case("content-type") && value == APPLICATION_JSON
-            }),
-            "request should set Content-Type: {APPLICATION_JSON}"
-        );
-        assert!(
-            snapshot.headers.iter().any(|(name, value)| {
-                name.eq_ignore_ascii_case("accept") && value == APPLICATION_JSON
-            }),
-            "request should set Accept: {APPLICATION_JSON}"
-        );
+        assert_eq!(snapshots[1].url.path(), "/v1/bridge/messages");
+        assert_eq!(snapshots[1].method, HttpMethod::POST);
         assert_eq!(
-            norito::json::from_slice::<JsonValue>(&snapshot.body).expect("decode request body"),
-            payload
+            snapshots[1].max_response_bytes,
+            SCCP_JSON_RESPONSE_MAX_BYTES
         );
     }
 
     #[test]
-    fn post_bridge_message_submit_json_posts_context_bound_proof_material() {
-        let store = Arc::new(Mutex::new(Vec::new()));
-        let response_body =
-            JsonValue::Object(JsonMap::from_iter([("ok".into(), JsonValue::Bool(true))]));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(norito::json::to_vec(&response_body).expect("encode json response"))
-            .expect("response build");
-        let message_id = "11".repeat(32);
-        let commitment_root = "33".repeat(32);
-        let payload = JsonValue::Object(JsonMap::from_iter([
-            ("authority".into(), JsonValue::String("alice".into())),
+    fn native_submit_rejects_inactive_or_stale_governance_before_post() {
+        let (request, mut registry, _proof, _proof_bytes, _route_configuration_hash) =
+            native_submit_fixture(iroha_data_model::bridge::SccpRouteActivationV1::Staged);
+        let registry_bytes = norito::to_bytes(&registry).expect("encode inactive registry");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                assert_eq!(snapshot.url.path(), "/v1/sccp/registry");
+                store.lock().expect("snapshot lock").push(snapshot);
+                Ok(HttpResponse::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", APPLICATION_NORITO)
+                    .body(registry_bytes.clone())
+                    .expect("inactive registry response"))
+            }
+        };
+        let error = with_mock_http(responder, || {
+            sccp_client_with_base_url(base_url()).post_sccp_native_message(&request)
+        })
+        .expect_err("inactive governed route must reject before POST");
+        assert!(
+            error
+                .to_string()
+                .contains("no inbound-active governed route")
+        );
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].method, HttpMethod::GET);
+
+        let (request, exact_registry, _proof, _proof_bytes, _route_configuration_hash) =
+            native_submit_fixture(iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional);
+        registry = exact_registry;
+        registry.lanes[0]
+            .native_trust_anchors
+            .last_mut()
+            .expect("fixture trust anchor")
+            .anchor_hash[0] ^= 1;
+        registry.lanes[0].current_native_trust_anchor_hash = Some(
+            registry.lanes[0]
+                .native_trust_anchors
+                .last()
+                .expect("fixture trust anchor")
+                .anchor_hash,
+        );
+        registry
+            .validate()
+            .expect("stale but structurally valid registry");
+        let expectation = preflight_sccp_native_submit(&request).expect("local native preflight");
+        assert!(
+            resolve_sccp_expected_route_configuration_hash(&expectation, Some(&registry))
+                .expect_err("stale governed anchor must reject")
+                .to_string()
+                .contains("failed governed verification")
+        );
+    }
+
+    #[test]
+    fn bridge_submit_response_rejects_unknown_missing_and_aliased_roles() {
+        let expectation = SccpBridgeSubmitExpectation {
+            authority: ALICE_ID.clone(),
+            creation_time_ms: Some(9),
+            payload_kind: "transfer".to_owned(),
+            message_id: [1; 32],
+            counterparty: iroha_data_model::bridge::SccpNetworkV1::TronNile,
+            backend: "bridge/sccp/native/tron-dpos-v1".to_owned(),
+            route_binding: SccpBridgeExpectedRouteBinding::Exact([2; 32]),
+            range_start_height: 7,
+            range_end_height: 7,
+            proof_payload: SccpBridgeExpectedProofPayload::Native {
+                encoded_envelope: vec![1],
+                backend: iroha_data_model::bridge::BridgeNativeProofBackendV1::TronDpos,
+            },
+        };
+        let valid = JsonValue::Object(JsonMap::from_iter([
+            ("submitted".into(), JsonValue::from(true)),
+            ("payload_kind".into(), JsonValue::from("transfer")),
             (
-                "message_bundle".into(),
-                sccp_submit_test_message_bundle(&message_id, &commitment_root),
-            ),
-            ("network_id_hex".into(), JsonValue::String("71".repeat(32))),
-            (
-                "expected_destination_binding_hash_hex".into(),
-                JsonValue::String("74".repeat(32)),
+                "message_id_hex".into(),
+                JsonValue::from(hex::encode([1; 32])),
             ),
             (
-                "verifier_code_hash_hex".into(),
-                JsonValue::String("72".repeat(32)),
+                "backend".into(),
+                JsonValue::from("bridge/sccp/native/tron-dpos-v1"),
             ),
+            ("counterparty_domain".into(), JsonValue::from(5_u64)),
+            ("counterparty_chain".into(), JsonValue::from("tron-nile")),
             (
-                "verifier_key_hash_hex".into(),
-                JsonValue::String("73".repeat(32)),
+                "route_configuration_hash_hex".into(),
+                JsonValue::from(hex::encode([2; 32])),
             ),
-            (
-                "tron_verifier_address".into(),
-                JsonValue::String("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".into()),
-            ),
-            (
-                "proof_bytes_hex".into(),
-                JsonValue::String(format!(
-                    "0x{}",
-                    sccp_submit_test_groth16_proof_hex(
-                        &message_id,
-                        iroha_sccp::SCCP_DOMAIN_SORA,
-                        &commitment_root
-                    )
-                )),
-            ),
+            ("range_start_height".into(), JsonValue::from(7_u64)),
+            ("range_end_height".into(), JsonValue::from(7_u64)),
+            ("creation_time_ms".into(), JsonValue::from(9_u64)),
+            ("tx_hash_hex".into(), JsonValue::from(hex::encode([3; 32]))),
+            ("transaction_payload_b64".into(), JsonValue::Null),
+            ("signing_message_b64".into(), JsonValue::Null),
         ]));
+        assert!(
+            decode_sccp_bridge_submit_response(
+                valid.clone(),
+                &expectation,
+                [2; 32],
+                &ChainId::from("00000000-0000-0000-0000-000000000000"),
+                Some([3; 32]),
+            )
+            .is_ok()
+        );
 
-        let decoded = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.post_bridge_message_submit_json(&payload)
-        })
-        .expect("context-bound bridge message submit");
+        let mut unknown = valid.clone();
+        unknown
+            .as_object_mut()
+            .expect("object")
+            .insert("route_override".into(), JsonValue::from("hostile"));
+        assert!(
+            decode_sccp_bridge_submit_response(
+                unknown,
+                &expectation,
+                [2; 32],
+                &ChainId::from("00000000-0000-0000-0000-000000000000"),
+                Some([3; 32]),
+            )
+            .expect_err("unknown response field")
+            .to_string()
+            .contains("unknown field")
+        );
 
-        assert_eq!(decoded, response_body);
-        assert_eq!(
-            store
-                .lock()
-                .expect("snapshot lock")
-                .first()
-                .expect("bridge message submit snapshot")
-                .url
-                .path(),
-            "/v1/bridge/messages"
+        let mut missing = valid.clone();
+        missing
+            .as_object_mut()
+            .expect("object")
+            .remove("route_configuration_hash_hex");
+        assert!(
+            decode_sccp_bridge_submit_response(
+                missing,
+                &expectation,
+                [2; 32],
+                &ChainId::from("00000000-0000-0000-0000-000000000000"),
+                Some([3; 32]),
+            )
+            .expect_err("missing response field")
+            .to_string()
+            .contains("missing required field")
+        );
+
+        let mut alias = valid;
+        alias.as_object_mut().expect("object").insert(
+            "route_configuration_hash_hex".into(),
+            JsonValue::from(hex::encode([1; 32])),
+        );
+        assert!(
+            decode_sccp_bridge_submit_response(
+                alias,
+                &expectation,
+                [2; 32],
+                &ChainId::from("00000000-0000-0000-0000-000000000000"),
+                Some([3; 32]),
+            )
+            .is_err()
         );
     }
-
-    #[test]
-    fn post_bridge_message_submit_json_rejects_partial_or_mixed_destination_tuple() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(b"{\"ok\":true}".to_vec())
-            .expect("response build");
-        let proof_bytes_hex = sccp_submit_test_default_groth16_proof_hex();
-        let cases = [
-            (
-                JsonValue::Object(JsonMap::from_iter([
-                    (
-                        "message_bundle".into(),
-                        JsonValue::Object(JsonMap::from_iter([(
-                            "version".into(),
-                            JsonValue::Number(1_u64.into()),
-                        )])),
-                    ),
-                    ("network_id_hex".into(), JsonValue::String("71".repeat(32))),
-                    (
-                        "verifier_code_hash_hex".into(),
-                        JsonValue::String("72".repeat(32)),
-                    ),
-                    (
-                        "verifier_key_hash_hex".into(),
-                        JsonValue::String("73".repeat(32)),
-                    ),
-                    (
-                        "tron_verifier_address".into(),
-                        JsonValue::String("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".into()),
-                    ),
-                    (
-                        "proof_bytes_hex".into(),
-                        JsonValue::String(proof_bytes_hex.clone()),
-                    ),
-                ])),
-                "complete TRON SCCP deployment destination fields are required",
-            ),
-            (
-                JsonValue::Object(JsonMap::from_iter([
-                    (
-                        "message_bundle".into(),
-                        JsonValue::Object(JsonMap::from_iter([(
-                            "version".into(),
-                            JsonValue::Number(1_u64.into()),
-                        )])),
-                    ),
-                    ("network_id_hex".into(), JsonValue::String("71".repeat(32))),
-                    (
-                        "verifier_address_hex".into(),
-                        JsonValue::String("75".repeat(20)),
-                    ),
-                    (
-                        "bridge_address_hex".into(),
-                        JsonValue::String("76".repeat(20)),
-                    ),
-                    (
-                        "verifier_code_hash_hex".into(),
-                        JsonValue::String("72".repeat(32)),
-                    ),
-                    (
-                        "verifier_key_hash_hex".into(),
-                        JsonValue::String("73".repeat(32)),
-                    ),
-                    (
-                        "expected_destination_binding_hash_hex".into(),
-                        JsonValue::String("74".repeat(32)),
-                    ),
-                    (
-                        "tron_verifier_address".into(),
-                        JsonValue::String("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".into()),
-                    ),
-                    (
-                        "proof_bytes_hex".into(),
-                        JsonValue::String(proof_bytes_hex.clone()),
-                    ),
-                ])),
-                "EVM and TRON SCCP destination fields cannot be mixed",
-            ),
-        ];
-
-        for (payload, expected_error) in cases {
-            let err = with_mock_http(respond_with(&store, response.clone()), || {
-                let client = client_with_base_url(base_url());
-                client.post_bridge_message_submit_json(&payload)
-            })
-            .expect_err("partial or mixed destination tuple must fail before request");
-
-            assert!(
-                err.to_string().contains(expected_error),
-                "unexpected error: {err:?}"
-            );
-            assert!(
-                store.lock().expect("snapshot lock").is_empty(),
-                "invalid bridge message submit payload must not send an HTTP request"
-            );
-        }
-    }
-
-    #[test]
-    fn post_bridge_proof_submit_json_rejects_destination_material_without_proof_bytes() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(b"{\"ok\":true}".to_vec())
-            .expect("response build");
-        let payload = JsonValue::Object(JsonMap::from_iter([
-            ("network_id_hex".into(), JsonValue::String("71".repeat(32))),
-            (
-                "expected_destination_binding_hash_hex".into(),
-                JsonValue::String("74".repeat(32)),
-            ),
-        ]));
-
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.post_bridge_proof_submit_json(&payload)
-        })
-        .expect_err("destination material without proof bytes must fail before request");
-
-        assert!(
-            err.to_string().contains("proof_bytes_hex is required"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid bridge proof submit payload must not send an HTTP request"
-        );
-    }
-
-    #[test]
-    fn post_bridge_proof_submit_json_rejects_invalid_destination_hex_before_request() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(b"{\"ok\":true}".to_vec())
-            .expect("response build");
-        let payload = JsonValue::Object(JsonMap::from_iter([
-            ("network_id_hex".into(), JsonValue::String("0x1234".into())),
-            (
-                "proof_bytes_hex".into(),
-                JsonValue::String(sccp_submit_test_default_groth16_proof_hex()),
-            ),
-        ]));
-
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.post_bridge_proof_submit_json(&payload)
-        })
-        .expect_err("invalid destination hex must fail before request");
-
-        assert!(
-            err.to_string().contains("network_id_hex"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            err.to_string().contains("32-byte"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid bridge proof submit payload must not send an HTTP request"
-        );
-    }
-
-    #[test]
-    fn post_bridge_proof_submit_json_rejects_off_curve_proof_before_request() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(b"{\"ok\":true}".to_vec())
-            .expect("response build");
-        let mut proof_bytes =
-            hex::decode(sccp_submit_test_default_groth16_proof_hex()).expect("proof hex");
-        proof_bytes[6 * 32 + 31] ^= 0x01;
-        let payload = JsonValue::Object(JsonMap::from_iter([
-            ("network_id_hex".into(), JsonValue::String("71".repeat(32))),
-            (
-                "proof_bytes_hex".into(),
-                JsonValue::String(hex::encode(proof_bytes)),
-            ),
-        ]));
-
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.post_bridge_proof_submit_json(&payload)
-        })
-        .expect_err("off-curve proof bytes must fail before request");
-
-        assert!(
-            err.to_string().contains("valid BN254 Groth16 proof tuple"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid bridge proof submit payload must not send an HTTP request"
-        );
-    }
-
-    #[test]
-    fn post_bridge_message_submit_json_rejects_proof_bytes_without_destination_material() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(b"{\"ok\":true}".to_vec())
-            .expect("response build");
-        let payload = JsonValue::Object(JsonMap::from_iter([(
-            "proof_bytes_hex".into(),
-            JsonValue::String(sccp_submit_test_default_groth16_proof_hex()),
-        )]));
-
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.post_bridge_message_submit_json(&payload)
-        })
-        .expect_err("proof bytes without destination material must fail before request");
-
-        assert!(
-            err.to_string()
-                .contains("deployment destination fields are required"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid bridge message submit payload must not send an HTTP request"
-        );
-    }
-
-    #[test]
-    fn post_bridge_message_submit_json_rejects_blank_tron_verifier_before_request() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(b"{\"ok\":true}".to_vec())
-            .expect("response build");
-        let payload = JsonValue::Object(JsonMap::from_iter([
-            (
-                "tron_verifier_address".into(),
-                JsonValue::String("   ".into()),
-            ),
-            (
-                "proof_bytes_hex".into(),
-                JsonValue::String(sccp_submit_test_default_groth16_proof_hex()),
-            ),
-        ]));
-
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.post_bridge_message_submit_json(&payload)
-        })
-        .expect_err("blank TRON verifier must fail before request");
-
-        assert!(
-            err.to_string().contains("tron_verifier_address"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid bridge message submit payload must not send an HTTP request"
-        );
-    }
-
-    #[test]
-    fn post_bridge_message_submit_json_rejects_invalid_tron_verifier_before_request() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(b"{\"ok\":true}".to_vec())
-            .expect("response build");
-
-        for invalid_address in [
-            "TJRabPrwbZy45sbavfcjinPJC18kjpRTv9",
-            "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
-        ] {
-            let payload = JsonValue::Object(JsonMap::from_iter([
-                (
-                    "tron_verifier_address".into(),
-                    JsonValue::String(invalid_address.into()),
-                ),
-                (
-                    "proof_bytes_hex".into(),
-                    JsonValue::String(sccp_submit_test_default_groth16_proof_hex()),
-                ),
-            ]));
-
-            let err = with_mock_http(respond_with(&store, response.clone()), || {
-                let client = client_with_base_url(base_url());
-                client.post_bridge_message_submit_json(&payload)
-            })
-            .expect_err("invalid TRON verifier must fail before request");
-
-            assert!(
-                err.to_string().contains("tron_verifier_address"),
-                "unexpected error: {err:?}"
-            );
-            assert!(
-                store.lock().expect("snapshot lock").is_empty(),
-                "invalid bridge message submit payload must not send an HTTP request"
-            );
-        }
-    }
-
-    #[test]
-    fn post_bridge_message_submit_json_rejects_all_zero_evm_destination_material_before_request() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(b"{\"ok\":true}".to_vec())
-            .expect("response build");
-        let proof_bytes_hex = sccp_submit_test_default_groth16_proof_hex();
-        let cases = [
-            ("network_id_hex", 32usize),
-            ("verifier_address_hex", 20),
-            ("bridge_address_hex", 20),
-            ("verifier_code_hash_hex", 32),
-            ("verifier_key_hash_hex", 32),
-            ("expected_destination_binding_hash_hex", 32),
-        ];
-
-        for (field, bytes) in cases {
-            let payload = JsonValue::Object(JsonMap::from_iter([
-                (
-                    field.into(),
-                    JsonValue::String(format!("0x{}", "00".repeat(bytes))),
-                ),
-                (
-                    "proof_bytes_hex".into(),
-                    JsonValue::String(proof_bytes_hex.clone()),
-                ),
-            ]));
-
-            let err = with_mock_http(respond_with(&store, response.clone()), || {
-                let client = client_with_base_url(base_url());
-                client.post_bridge_message_submit_json(&payload)
-            })
-            .expect_err("all-zero EVM destination material must fail before request");
-
-            assert!(
-                err.to_string().contains(field),
-                "unexpected error for {field}: {err:?}"
-            );
-            assert!(
-                err.to_string().contains("all zero"),
-                "unexpected error for {field}: {err:?}"
-            );
-            assert!(
-                store.lock().expect("snapshot lock").is_empty(),
-                "invalid bridge message submit payload must not send an HTTP request"
-            );
-        }
-    }
-
-    #[test]
-    fn post_bridge_message_submit_json_rejects_commitment_root_mismatch_for_message_bundle() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(b"{\"ok\":true}".to_vec())
-            .expect("response build");
-        let message_id = "11".repeat(32);
-        let commitment_root = "33".repeat(32);
-        let payload = JsonValue::Object(JsonMap::from_iter([
-            (
-                "message_bundle".into(),
-                sccp_submit_test_message_bundle(&message_id, &commitment_root),
-            ),
-            (
-                "proof_bytes_hex".into(),
-                JsonValue::String(sccp_submit_test_groth16_proof_hex(
-                    &message_id,
-                    iroha_sccp::SCCP_DOMAIN_SORA,
-                    &"44".repeat(32),
-                )),
-            ),
-        ]));
-
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.post_bridge_message_submit_json(&payload)
-        })
-        .expect_err("wrong commitment-root proof bytes must fail before request");
-
-        assert!(
-            err.to_string().contains("proof_bytes_hex.commitment_root"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid bridge message submit payload must not send an HTTP request"
-        );
-    }
-
-    #[test]
-    fn post_bridge_message_submit_json_rejects_wrong_proof_version_for_message_bundle() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(b"{\"ok\":true}".to_vec())
-            .expect("response build");
-        let message_id = "11".repeat(32);
-        let commitment_root = "33".repeat(32);
-        let payload = JsonValue::Object(JsonMap::from_iter([
-            (
-                "message_bundle".into(),
-                sccp_submit_test_message_bundle(&message_id, &commitment_root),
-            ),
-            (
-                "proof_bytes_hex".into(),
-                JsonValue::String(sccp_submit_test_groth16_proof_hex_with_version(
-                    2,
-                    &message_id,
-                    iroha_sccp::SCCP_DOMAIN_SORA,
-                    &commitment_root,
-                )),
-            ),
-        ]));
-
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.post_bridge_message_submit_json(&payload)
-        })
-        .expect_err("wrong proof version must fail before request");
-
-        assert!(
-            err.to_string().contains("proof_bytes_hex.version"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid bridge message submit payload must not send an HTTP request"
-        );
-    }
-
-    #[test]
-    fn post_bridge_message_submit_json_rejects_all_zero_proof_hex_before_request() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_JSON)
-            .body(b"{\"ok\":true}".to_vec())
-            .expect("response build");
-        let payload = JsonValue::Object(JsonMap::from_iter([(
-            "proof_bytes_hex".into(),
-            JsonValue::String("0x0000".into()),
-        )]));
-
-        let err = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
-            client.post_bridge_message_submit_json(&payload)
-        })
-        .expect_err("all-zero bridge message proof bytes must fail before request");
-
-        assert!(
-            err.to_string().contains("proof_bytes_hex"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            err.to_string().contains("all zero"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            store.lock().expect("snapshot lock").is_empty(),
-            "invalid bridge message submit payload must not send an HTTP request"
-        );
-    }
-
     fn manifest_bundle_response(bundle: &mut DaManifestBundle) -> HttpResponse<Vec<u8>> {
         let manifest: DaManifestV1 =
             norito::decode_from_bytes(&bundle.manifest_bytes).expect("decode manifest");
@@ -30787,6 +32469,35 @@ mod tests {
 #[cfg(test)]
 mod response_report {
     use super::*;
+
+    #[test]
+    fn json_media_types_are_limited_to_application_types() {
+        assert!(Client::is_json_content_type("application/json"));
+        assert!(Client::is_json_content_type(
+            "application/problem+json; charset=utf-8"
+        ));
+        assert!(!Client::is_json_content_type("text/json"));
+        assert!(!Client::is_json_content_type("text/problem+json"));
+    }
+
+    #[test]
+    fn json_error_decoder_rejects_retired_text_json_alias() {
+        let envelope = ErrorEnvelope::new("request_invalid", "invalid request");
+        let body = norito::json::to_vec(&envelope).expect("encode JSON error envelope");
+        let supported = Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(http::header::CONTENT_TYPE, "application/problem+json")
+            .body(body.clone())
+            .expect("supported response");
+        let retired = Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(http::header::CONTENT_TYPE, "text/json")
+            .body(body)
+            .expect("retired response");
+
+        assert!(decode_json_error_body(&supported).is_some());
+        assert!(decode_json_error_body(&retired).is_none());
+    }
 
     #[test]
     fn with_msg_returns_err_on_non_utf8_body() {

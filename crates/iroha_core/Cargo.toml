@@ -100,14 +100,13 @@ dev-tests = []
 # Enable internal test helpers (e.g., Topology fixtures) when building core tests.
 iroha-core-tests = []
 
-# Enable TAIRA diagnostic SCCP local admission for testnet release smokes.
-sccp-test-fixtures = ["iroha_sccp/test-fixtures"]
-
 # Allow offline balance proof verification bypass + dummy backend in dev builds.
 
 # Enable BLS admission-time micro-batching (deterministic grouping + bisection path in block validation).
-# This forwards to `iroha_crypto/bls` and compiles the BLS path in `block.rs` guarded by `#[cfg(feature = "bls")]`.
-bls = ["iroha_crypto/bls", "iroha_data_model/bls", "iroha_sccp/bls"]
+# This forwards to `iroha_crypto/bls` and compiles the non-SCCP BLS paths in
+# `block.rs` guarded by `#[cfg(feature = "bls")]`. SCCP verification itself is
+# mandatory in every `iroha_sccp` build and is deliberately not feature-gated.
+bls = ["iroha_crypto/bls", "iroha_data_model/bls"]
 bls-multi-pairing = ["iroha_crypto/bls-multi-pairing"]
 # Compatibility flag kept for downstream feature sets. `halo2-ecc` is no
 # longer linked by `iroha_core`.
@@ -126,7 +125,7 @@ maintenance = { status = "actively-developed" }
 
 [dependencies]
 norito = {workspace = true}
-iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "tx_predicates", "json", "bridge", "governance"] }
+iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "json", "bridge", "governance"] }
 iroha_macro = { workspace = true }
 iroha_p2p = { workspace = true }
 iroha_logger = { workspace = true }
@@ -191,11 +190,21 @@ yasna = "0.5.2"
 indexmap = "2.12.0"
 arc-swap = "1.7.1"
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["fs", "process"] }
+
 [dev-dependencies]
 criterion = { workspace = true }
 iroha_test_samples = { workspace = true }
 iroha_config_base = { workspace = true }
 iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }
+# The KZG/Poseidon recursion compatibility gate is test-only until it is wired
+# into a production adapter. The manifest selects halo2-lib's audited v0.5.3
+# tag and Cargo.lock pins it to c54cbac60da598e8e484b8aea858e0bf3c51a857;
+# snark-verifier is pinned directly to its reviewed commit.
+halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.5.3", default-features = false, features = ["halo2-axiom"] }
+halo2-ecc = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.5.3", default-features = false, features = ["halo2-axiom"] }
+snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", rev = "bbfcc721d714bea0d44a27c8fc6c4736e73ca853", default-features = false, features = ["loader_halo2", "halo2-axiom"] }
 
 hex = { workspace = true }
 expect-test = { workspace = true }
@@ -244,6 +253,10 @@ harness = false
 
 [[bench]]
 name = "queries_client"
+harness = false
+
+[[bench]]
+name = "kotodama_runtime_cache"
 harness = false
 
 [[example]]

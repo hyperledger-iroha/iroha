@@ -24,6 +24,7 @@ import {
   toHex,
 } from "../src/connect.browser.js";
 import { AccountAddress } from "../src/address.js";
+import { NexusAppClient } from "../src/nexusApp.js";
 
 const connectVectors = JSON.parse(
   readFileSync(new URL("../../../fixtures/connect/session_vectors.json", import.meta.url), "utf8"),
@@ -631,6 +632,34 @@ test("createConnectAppSession handles approval and sign success", async () => {
   assert.equal(approval.accountId, account.accountId);
   assert.deepEqual(Buffer.from(approval.walletPublicKey), Buffer.from(walletPublicKey));
   assert.deepEqual(Buffer.from(approval.signature), Buffer.from(approvalSignature));
+  assert.equal(Object.isFrozen(approval), true);
+
+  approval.walletPublicKey.fill(0);
+  approval.signature.fill(0);
+  assert.throws(() => {
+    approval.accountId = "mutated-account";
+  }, TypeError);
+  const secondApproval = await session.waitForApproval();
+  assert.notStrictEqual(secondApproval, approval);
+  assert.notStrictEqual(secondApproval.walletPublicKey, approval.walletPublicKey);
+  assert.notStrictEqual(secondApproval.signature, approval.signature);
+  assert.equal(secondApproval.accountId, account.accountId);
+  assert.deepEqual(
+    Buffer.from(secondApproval.walletPublicKey),
+    Buffer.from(walletPublicKey),
+  );
+  assert.deepEqual(
+    Buffer.from(secondApproval.signature),
+    Buffer.from(approvalSignature),
+  );
+  assert.equal(session.approvedAccountId, account.accountId);
+
+  const nexusApproval = await new NexusAppClient().awaitApproval({
+    sid: preview.sidBase64Url,
+    appSession: session,
+  });
+  assert.equal(nexusApproval.accountId, account.accountId);
+  assert.deepEqual(nexusApproval.signingPublicKey, Buffer.from(account.publicKey));
 
   const signPromise = session.signTransaction(Buffer.from([0xaa, 0xbb, 0xcc]));
   await Promise.resolve();
@@ -642,6 +671,78 @@ test("createConnectAppSession handles approval and sign success", async () => {
   socket.receive(encodeSignResultOk(preview, keys, signRequest.seq, signature));
   const detached = await signPromise;
   assert.deepEqual(Buffer.from(detached), signature);
+});
+
+test("createConnectAppSession rejects duplicate approvals without replacing identity", async () => {
+  RecordingWebSocket.instances.length = 0;
+  const preview = makePreview();
+  const account = makeAccount();
+  const relayToken = "relay-token";
+  const walletPrivateKey = new Uint8Array(32).fill(0x55);
+  const walletPublicKey = x25519.getPublicKey(walletPrivateKey);
+  const session = createConnectAppSession({
+    baseUrl: "https://taira.sora.org",
+    preview,
+    session: {
+      sid: preview.sidBase64Url,
+      token_app: "token-app",
+      token_relay: relayToken,
+    },
+    webSocketImpl: RecordingWebSocket,
+  });
+  const socket = RecordingWebSocket.instances[0];
+  socket.open();
+  socket.receive(
+    encodeControlFrame({
+      sidBytes: preview.sidBytes,
+      dir: 1,
+      seq: 1,
+      control: encodeApproveControl(
+        preview,
+        walletPublicKey,
+        account.accountId,
+        account.privateKey,
+        relayToken,
+      ),
+    }),
+  );
+  const first = await session.waitForApproval();
+
+  const replacementPrivateKey = new Uint8Array(32).fill(0x66);
+  const replacementPublicKey = ed25519.getPublicKey(replacementPrivateKey);
+  const replacementAccountId = AccountAddress.fromAccount({
+    publicKey: replacementPublicKey,
+    algorithm: "ed25519",
+  }).toI105();
+  const replacementWalletPrivateKey = new Uint8Array(32).fill(0x44);
+  socket.receive(
+    encodeControlFrame({
+      sidBytes: preview.sidBytes,
+      dir: 1,
+      seq: 2,
+      control: encodeApproveControl(
+        preview,
+        x25519.getPublicKey(replacementWalletPrivateKey),
+        replacementAccountId,
+        replacementPrivateKey,
+        relayToken,
+      ),
+    }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(first.accountId, account.accountId);
+  assert.equal(session.approvedAccountId, account.accountId);
+  assert.equal(socket.readyState, 3);
+  await assert.rejects(session.waitForApproval(), (error) => {
+    assert.ok(error instanceof ConnectSessionClosedError);
+    assert.match(error.message, /more than one wallet approval/u);
+    return true;
+  });
+  await assert.rejects(
+    session.signTransaction(Buffer.from([0xaa])),
+    /more than one wallet approval/u,
+  );
 });
 
 test("createConnectAppSession rejects unsupported wallet signature algorithm tags", async () => {

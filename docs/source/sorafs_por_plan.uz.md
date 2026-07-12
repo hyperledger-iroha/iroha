@@ -9,6 +9,7 @@ source_last_modified: "2026-07-10T10:31:46+00:00"
 translation_last_reviewed: 2026-07-05
 source_mtime: "2026-07-06T19:43:41.006556+00:00"
 ---
+
 # SoraFS PoR Challenge Scheduler & Randomness Integration
 
 ## Goals & Scope
@@ -18,16 +19,19 @@ source_mtime: "2026-07-06T19:43:41.006556+00:00"
 - Align PoR results with repair automation (SF-8b) and future proof initiatives (SF-9, SF-13, SF-14).
 
 ## Status
-The local SF-9a scheduler and reporting foundations are implemented. Torii builds
-`PorCoordinatorRuntime` from `torii.sorafs_por`, persists coordinator state to a
-Norito snapshot when configured, starts the runtime when both PoR and embedded
-SoraFS storage are enabled, exposes status/export/report and ingestion endpoints,
-records scheduler/ingestion telemetry, and ships dashboard panels plus alert
-fixtures. The reference validator also provides
+The local SF-9a state machine and reporting foundations are implemented. Torii
+persists coordinator state to a Norito snapshot, exposes status/export/report
+and ingestion endpoints, records ingestion telemetry, and ships dashboard
+panels plus alert fixtures. The reference validator also provides
 `sorafs-validate por --challenge <path> --proof <path>`.
 
-Remaining SF-9a rollout work is live deployment evidence for external drand,
-VRF, and auditor feeds, plus any production governance archive handoff required
+The former deterministic randomness adapter fabricated bytes labelled as a
+drand signature and paired them with an empty VRF source. It has been removed
+from production wiring. `torii.sorafs_por.enabled = true` now fails startup
+closed until a configured external drand verifier and provider-VRF feed are
+implemented; `randomness_seed_hex` is never accepted as authenticated drand.
+Consequently, remaining SF-9a work includes that implementation and live
+deployment evidence, plus any production governance archive handoff required
 by the operator; each deployment's SQL/Parquet archive backend decision is now
 part of the checked reporting/archive evidence, and operator-required
 governance archive handoff evidence must carry a fingerprinted digest.
@@ -155,10 +159,11 @@ struct PorSampleProofV1 {
 All payloads carry Norito headers for canonical decoding. Torii accepts
 authenticated provider proofs at `/v1/sorafs/capacity/por-proof` and
 trusted-threshold auditor verdicts at `/v1/sorafs/capacity/por-verdict`.
-The verified coordinator scheduler is the sole challenge authority and binds
-authenticated drand and provider VRF evidence before persistence and
-publication; no public route accepts externally supplied challenges.
-Coordinator status surfaces are under `/v1/sorafs/por/*`.
+No external challenge-submission route is mounted. The verified coordinator
+scheduler is the only permitted production challenge
+authority, and PoR automation enablement fails closed until its external
+drand/VRF inputs are implemented. Coordinator status surfaces are under
+`/v1/sorafs/por/*`.
 
 ## Coordinator Workflow
 1. **Epoch bootstrap**
@@ -170,7 +175,7 @@ Coordinator status surfaces are under `/v1/sorafs/por/*`.
    - Seed RNG and produce `samples`.
    - Persist pending challenge (see Persistence).
 3. **Challenge dispatch**
-   - Publish `PorChallengeV1` via Torii (REST + WebSocket).
+   - Publish scheduler-originated `PorChallengeV1` to providers; public REST mutation is not an authority boundary.
    - Write event to Governance DAG (`governance/sorafs/por/challenges/<epoch_id>/<manifest_...>.json`).
    - Response deadline = `epoch_start + 15 minutes`.
 4. **Proof handling**
@@ -255,14 +260,15 @@ CREATE TABLE sorafs_vrf_history (
 - `proof_digest` stores SHA-256 of `PorProofV1` saved in object storage for later audits.
 - `gov_event_cid` references the DAG entry containing the public verdict.
 
-## Operational integration (runtime wired)
+## Operational integration (runtime readiness)
 
 - **Coordinator runtime wiring:** `PorCoordinatorRuntime` (see
   `crates/iroha_torii/src/sorafs/por.rs`) exposes `run_once_at`, `run_once`, and
-  `spawn`. Torii builds it from `Config::sorafs_por` and starts it during Torii
-  startup when `torii.sorafs_por.enabled` is true and embedded SoraFS storage is enabled.
-  The config supplies `epoch_interval_secs`, `response_window_secs`, `governance_dag_dir`,
-  and optional `randomness_seed`; defaults keep the runtime disabled until operators opt in.
+  `spawn`, but Torii does not construct it from unauthenticated entropy.
+  `torii.sorafs_por.enabled = true` is rejected at startup until verified
+  external drand and provider-VRF adapters are configured. The legacy optional
+  `randomness_seed_hex` is deterministic test material and cannot satisfy this
+  readiness gate; defaults keep automation disabled.
 - **Storage hooks:** The runtime uses `sorafs_node::NodeHandle` as its `PorStorage`, plans
   challenges from the local manifest/capacity state, records accepted challenges, and leaves
   proof/verdict persistence to the existing Torii PoR submission routes. The ingestion status
@@ -284,9 +290,10 @@ collects `por_ingestion_overview` snapshots every 30 seconds and drives the
 alerts stay fresh even when providers are idle; stale providers are zeroed out whenever they drop
 from the snapshot.【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/lib.rs:7859】【crates/iroha_telemetry/src/metrics.rs:10452】
 
-The local SF-9 runtime integration is implemented. Remaining rollout work is live
-deployment evidence for external drand/VRF/auditor feeds and any production governance
-archive handoff required by the deployment operator.
+The local SF-9 state/report integration is implemented. Challenge generation
+remains release-blocked until verified external drand/VRF feeds are implemented
+and configured; live deployment evidence and any production governance archive
+handoff remain required.
 
 ## Integration with Repair Automation
 - On `failed` status, coordinator emits:

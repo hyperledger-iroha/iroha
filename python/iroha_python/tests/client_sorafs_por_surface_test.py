@@ -1,7 +1,10 @@
-"""Regression tests for the first-release SoraFS PoR client surface."""
+"""First-release SoraFS PoR client-surface regressions."""
 
 import ast
 from pathlib import Path
+
+import iroha_python
+from iroha_python import ToriiClient
 
 
 CLIENT_SOURCE = Path(__file__).resolve().parents[1] / "src" / "iroha_python" / "client.py"
@@ -32,6 +35,8 @@ def test_retired_por_mutation_methods_are_absent() -> None:
         "submit_sorafs_por_observation",
     ):
         assert method_name not in methods
+        assert not hasattr(ToriiClient, method_name)
+    assert not hasattr(iroha_python, "SorafsPorObservationResponse")
 
 
 def test_live_por_methods_remain_available() -> None:
@@ -47,3 +52,4 @@ def test_live_por_methods_remain_available() -> None:
         "get_sorafs_por_ingestion_status",
     ):
         assert method_name in methods
+        assert hasattr(ToriiClient, method_name)

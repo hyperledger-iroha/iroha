@@ -84,9 +84,9 @@ export interface BrowserConnectAppMeta {
 }
 
 export interface BrowserConnectApproval {
-  accountId: string;
-  walletPublicKey: Uint8Array;
-  signature: Uint8Array;
+  readonly accountId: string;
+  readonly walletPublicKey: Uint8Array;
+  readonly signature: Uint8Array;
 }
 
 export interface BrowserConnectAppSessionOptions extends BrowserConnectSocketOptions {

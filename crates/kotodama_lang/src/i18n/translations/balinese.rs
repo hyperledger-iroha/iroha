@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "Parameter `{name}` ring fungsi `{func}` tan dados kaanggén wenten pisan",
     lint_unreachable_after_return: "Wangsalan tan kasapuk kapanggih ring {context}; kode sasampun return tan kalaksanayang",
     lint_ok: "becik",
-    lint_usage: "Panganggé: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Panganggé: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Laksanayang Kotodama lint ring sumber sane kapidabdabang.",
     ..english::MESSAGES
 };

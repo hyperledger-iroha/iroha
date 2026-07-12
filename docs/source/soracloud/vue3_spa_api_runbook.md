@@ -346,7 +346,7 @@ Torii and use it as:
 - the legacy SoraDNS compatibility gateway:
   `https://taira.sora.org/soradns/<alias>/...`
 - the SoraFS CID gateway for intentionally CID-only frontends:
-  `https://taira.sora.org/sorafs/cid/<cid>/`
+  `https://taira.sora.org/sorafs/cid/<cid>`
 
 Use `https://<alias>.mon.taira.sora.net/...` as the Taira public browser URL
 for Soracloud apps that already have a vanity alias host. Do not treat
@@ -470,7 +470,7 @@ Expected checks for a split app:
 - `iroha soracloud app status` keeps both manifest services visible even if
   only one of them currently appears in the Torii control-plane payload
 - `iroha soracloud app status` also reports the expected frontend
-  `/sorafs/cid/<cid>/` URL template for CID-only apps or the root-binding URL
+  `/sorafs/cid/<cid>` URL template for CID-only apps or the root-binding URL
   for root-bound frontend apps
 - the live service reports lease-backed volume mounts
 - the frontend loads from a SoraFS CID URL and still targets `/api`

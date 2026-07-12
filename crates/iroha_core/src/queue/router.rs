@@ -28,7 +28,10 @@ use iroha_data_model::{
             KagemushaTransfer, RedeemKagemushaRecursiveV2, TopUpKagemushaRecursive,
             TopUpKagemushaRecursiveV2,
         },
-        settlement::{DvpIsi, PvpIsi, SettlementInstructionBox},
+        settlement::{
+            DvpIsi, FxCorridorPolicy, FxCorridorPolicyRegistry, PvpIsi, SetFxCorridorPolicy,
+            SettleFxCorridor, SettlementInstructionBox,
+        },
         smart_contract_code::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
             RegisterSmartContractCode,
@@ -939,6 +942,28 @@ fn settlement_pair_dataspace_target(
     }
 }
 
+fn fx_corridor_policy_with_world<W: WorldReadOnly>(
+    world: &W,
+    policy_id: &Name,
+) -> Option<FxCorridorPolicy> {
+    let custom = world
+        .parameters()
+        .custom()
+        .get(&FxCorridorPolicyRegistry::parameter_id())?;
+    FxCorridorPolicyRegistry::from_custom_parameter(custom)
+        .ok()
+        .flatten()?
+        .get(policy_id)
+        .cloned()
+}
+
+fn fx_corridor_policy_with_state(
+    state_view: Option<&StateView<'_>>,
+    policy_id: &Name,
+) -> Option<FxCorridorPolicy> {
+    fx_corridor_policy_with_world(state_view?.world(), policy_id)
+}
+
 fn asset_id_explicit_dataspace_target(
     asset_id: &iroha_data_model::asset::AssetId,
 ) -> Option<DataSpaceId> {
@@ -1219,6 +1244,18 @@ fn instruction_settlement_dataspace_target(
         );
     }
 
+    if any.downcast_ref::<SetFxCorridorPolicy>().is_some() {
+        return Some(DataSpaceId::UNIVERSAL);
+    }
+
+    if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
+        let policy = fx_corridor_policy_with_state(state_view, &fx.policy_id)?;
+        return settlement_pair_dataspace_target(
+            Some(policy.source_dataspace),
+            Some(policy.destination_dataspace),
+        );
+    }
+
     if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>() {
         return match settlement {
             SettlementInstructionBox::Dvp(dvp) => settlement_pair_dataspace_target(
@@ -1245,6 +1282,14 @@ fn instruction_settlement_dataspace_target(
                     state_view,
                 ),
             ),
+            SettlementInstructionBox::SetFxCorridorPolicy(_) => Some(DataSpaceId::UNIVERSAL),
+            SettlementInstructionBox::SettleFxCorridor(fx) => {
+                let policy = fx_corridor_policy_with_state(state_view, &fx.policy_id)?;
+                settlement_pair_dataspace_target(
+                    Some(policy.source_dataspace),
+                    Some(policy.destination_dataspace),
+                )
+            }
         };
     }
 
@@ -1293,6 +1338,18 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
         );
     }
 
+    if any.downcast_ref::<SetFxCorridorPolicy>().is_some() {
+        return Some(DataSpaceId::UNIVERSAL);
+    }
+
+    if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
+        let policy = fx_corridor_policy_with_world(world, &fx.policy_id)?;
+        return settlement_pair_dataspace_target(
+            Some(policy.source_dataspace),
+            Some(policy.destination_dataspace),
+        );
+    }
+
     if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>() {
         return match settlement {
             SettlementInstructionBox::Dvp(dvp) => settlement_pair_dataspace_target(
@@ -1323,6 +1380,14 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
                     ledger_time_ms,
                 ),
             ),
+            SettlementInstructionBox::SetFxCorridorPolicy(_) => Some(DataSpaceId::UNIVERSAL),
+            SettlementInstructionBox::SettleFxCorridor(fx) => {
+                let policy = fx_corridor_policy_with_world(world, &fx.policy_id)?;
+                settlement_pair_dataspace_target(
+                    Some(policy.source_dataspace),
+                    Some(policy.destination_dataspace),
+                )
+            }
         };
     }
 
@@ -1772,6 +1837,23 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
     );
 
     let any = instruction.as_any();
+    let fx_instruction = any.downcast_ref::<SettleFxCorridor>().or_else(|| {
+        any.downcast_ref::<SettlementInstructionBox>()
+            .and_then(|settlement| match settlement {
+                SettlementInstructionBox::SettleFxCorridor(fx) => Some(fx),
+                SettlementInstructionBox::Dvp(_)
+                | SettlementInstructionBox::Pvp(_)
+                | SettlementInstructionBox::SetFxCorridorPolicy(_) => None,
+            })
+    });
+    if let Some(fx) = fx_instruction {
+        if let Some(policy) = fx_corridor_policy_with_world(world, &fx.policy_id) {
+            insert_native_amx_participant(dataspaces, Some(policy.source_dataspace));
+            insert_native_amx_participant(dataspaces, Some(policy.destination_dataspace));
+        }
+        return;
+    }
+
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
         if let TransferBox::Asset(transfer) = transfer {
             collect_asset_balance_native_amx_participants(
@@ -3106,6 +3188,17 @@ fn instruction_transaction_target_requires_universal_coordinator(
 ) -> bool {
     let any = instruction.as_any();
 
+    if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
+        return fx_corridor_policy_with_state(state_view, &fx.policy_id)
+            .is_some_and(|policy| policy.source_dataspace != policy.destination_dataspace);
+    }
+    if let Some(SettlementInstructionBox::SettleFxCorridor(fx)) =
+        any.downcast_ref::<SettlementInstructionBox>()
+    {
+        return fx_corridor_policy_with_state(state_view, &fx.policy_id)
+            .is_some_and(|policy| policy.source_dataspace != policy.destination_dataspace);
+    }
+
     if let Some(transfer) = any.downcast_ref::<TransferBox>()
         && let TransferBox::Asset(transfer) = transfer
     {
@@ -3254,6 +3347,17 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
     ledger_time_ms: Option<u64>,
 ) -> bool {
     let any = instruction.as_any();
+
+    if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
+        return fx_corridor_policy_with_world(world, &fx.policy_id)
+            .is_some_and(|policy| policy.source_dataspace != policy.destination_dataspace);
+    }
+    if let Some(SettlementInstructionBox::SettleFxCorridor(fx)) =
+        any.downcast_ref::<SettlementInstructionBox>()
+    {
+        return fx_corridor_policy_with_world(world, &fx.policy_id)
+            .is_some_and(|policy| policy.source_dataspace != policy.destination_dataspace);
+    }
 
     if let Some(transfer) = any.downcast_ref::<TransferBox>()
         && let TransferBox::Asset(transfer) = transfer
@@ -3612,6 +3716,16 @@ fn asset_definition_target_from_parts_with_world<W: WorldReadOnly>(
 fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instruction) -> bool {
     let any = instruction.as_any();
 
+    if any.downcast_ref::<SettleFxCorridor>().is_some() {
+        return true;
+    }
+
+    if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>()
+        && matches!(settlement, SettlementInstructionBox::SettleFxCorridor(_))
+    {
+        return true;
+    }
+
     if let Some(multisig) = multisig_instruction(instruction) {
         return match multisig {
             MultisigInstructionBox::Propose(_) | MultisigInstructionBox::Approve(_) => true,
@@ -3687,6 +3801,8 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
                         .asset_definition_id()
                         .is_opaque_canonical()
             }
+            SettlementInstructionBox::SetFxCorridorPolicy(_) => false,
+            SettlementInstructionBox::SettleFxCorridor(_) => true,
         };
     }
 
@@ -9630,7 +9746,7 @@ mod tests {
         let invocation = iroha_data_model::transaction::executable::ContractInvocation {
             contract_address,
             entrypoint: "transfer".to_owned(),
-            payload: None,
+            arguments: None,
         };
         let tx = sample_executable_transaction(
             &alice_id,

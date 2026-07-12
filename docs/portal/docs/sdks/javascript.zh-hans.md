@@ -181,13 +181,13 @@ console.log(balances.items, txs.items, holders.items);
 
 ## Offline readiness
 
-JavaScript integrations should use `GET /v1/offline/readiness` for offline feature discovery.
+JavaScript integrations should use `GET /v1/offline/readiness?asset_definition_id=xor%23wonderland` for offline feature discovery.
 Classic Offline Note issuance, redemption, and audit transaction paths are retired;
 Kagemusha readiness fields advertise the active offline payment implementation.
 
 ```ts
-const readiness = await torii.getOfflineReadiness();
-console.log("kagemusha", readiness.offline_kagemusha_recursive_compact_available);
+const readiness = await torii.getOfflineReadiness("xor#wonderland");
+console.log("offline ready", readiness.ready, readiness.blockers);
 ```
 ## Torii 查询和流式传输（WebSockets）
 
@@ -409,23 +409,18 @@ async function dialWithTelemetry(client: ToriiClient) {
 标准 `connect.queue_depth`、`connect.queue_overflow_total` 和
 整个路线图中引用的 `connect.queue_expired_total` 指标。
 
-## 流式观察者和事件光标
+## Live event streams
 
-`ToriiClient.streamEvents()` 将 `/v1/events/sse` 公开为具有自动功能的异步迭代器
-重试，因此 Node/Bun CLI 可以像 Rust CLI 一样跟踪管道活动。
-将 `Last-Event-ID` 光标保留在操作手册工件旁边，以便操作员可以
-当进程重新启动时，恢复流而不跳过事件。
+`ToriiClient.streamEvents()` exposes `/v1/events/sse` as a live-only async
+iterator. Torii retains no replay log for this route, so the helper has no
+`lastEventId` option and reconnecting can leave a gap. A terminal
+`event: stream_error` is yielded before the iterator ends; handle it explicitly
+instead of treating closure as a lossless continuation point.
 
-```ts
-import fs from "node:fs/promises";
+```js
 import { ToriiClient, extractPipelineStatusKind } from "@iroha/iroha-js";
 
 const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080");
-const cursorFile = process.env.STREAM_CURSOR_FILE ?? ".cache/torii.cursor";
-const resumeId = await fs
-  .readFile(cursorFile, "utf8")
-  .then((value) => value.trim())
-  .catch(() => null);
 const controller = new AbortController();
 
 process.once("SIGINT", () => controller.abort());
@@ -433,28 +428,26 @@ process.once("SIGTERM", () => controller.abort());
 
 for await (const event of torii.streamEvents({
   filter: { Pipeline: { Transaction: { status: "Committed" } } },
-  lastEventId: resumeId || undefined,
   signal: controller.signal,
 })) {
-  if (event.id) {
-    await fs.writeFile(cursorFile, `${event.id}\n`, "utf8");
+  if (event.event === "stream_error") {
+    console.error("terminal stream error", event.data);
+    break;
   }
   const status = event.data ? extractPipelineStatusKind(event.data) : null;
-  console.log(`[${event.event}] id=${event.id ?? "∅"} status=${status ?? "n/a"}`);
+  console.log(`[${event.event}] status=${status ?? "n/a"}`);
 }
 ```
 
-- 切换 `PIPELINE_STATUS`（例如 `Pending`、`Applied` 或 `Approved`）或设置
-  `STREAM_FILTER_JSON` 重播 CLI 接受的相同过滤器。
-- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` 使迭代器保持活动状态，直到
-  收到信号；当您只需要前几个事件时，通过 `STREAM_MAX_EVENTS=25`
-  进行冒烟测试。
-- `ToriiClient.streamSumeragiStatus()` 镜像相同的接口
-  `/v1/sumeragi/status/sse` 因此共识遥测可以单独进行尾部，并且
-  迭代器以同样的方式尊重 `Last-Event-ID`。
-- 请参阅 `javascript/iroha_js/recipes/streaming.mjs` 以了解交钥匙 CLI（光标持久性、
-  JS4 中使用的 env-var 过滤器覆盖和 `extractPipelineStatusKind` 日志记录）
-  流/WebSocket 路线图可交付成果。
+- Switch `PIPELINE_STATUS` (for example `Pending`, `Applied`, or `Approved`) or set
+  `STREAM_FILTER_JSON` to use the same filters the CLI accepts.
+- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` keeps the iterator alive until a
+  signal is received; pass `STREAM_MAX_EVENTS=25` when you only need the first few events
+  for a smoke test.
+- `ToriiClient.streamSumeragiStatus()` exposes the separate
+  `/v1/sumeragi/status/sse` consensus telemetry feed.
+- See `javascript/iroha_js/recipes/streaming.mjs` for a live-only turnkey CLI with
+  environment-driven filters and explicit terminal-error handling.
 
 ## UAID 组合和空间目录
 

@@ -97,10 +97,10 @@ rollout checks required before hosted production settlement.
   alongside the scheduler so operators (or background workers) can derive canonical
   `CapacityTelemetryV1` payloads capturing GiB·hour, uptime, and PoR success metrics before posting
   through Torii.【crates/iroha_torii/src/routing.rs:4806】【crates/sorafs_node/src/lib.rs:110】【crates/sorafs_node/src/telemetry.rs:1】
-- Local metering accepts dedicated uptime and replication-failure observations. The former
-  manual PoR observation surface is absent; PoR counters derive only from authenticated proof
-  and trusted-threshold verdict lifecycle transitions, preventing callers from forging provider
-  success rates.【crates/iroha_torii/src/routing.rs:5023】【crates/iroha_torii/src/lib.rs:5301】
+- Local metering accepts dedicated uptime and replication-failure observations. No manual PoR
+  success/failure observation route is mounted; PoR counters derive only from authenticated proof
+  and trusted-threshold verdict lifecycle
+  transitions, preventing callers from forging provider success rates.【crates/iroha_torii/src/routing.rs:5023】【crates/iroha_torii/src/lib.rs:5301】
 - The trustless gateway profile enumerates the HTTP request/response matrix, proof formats, and
   telemetry expectations that gateways must satisfy before joining the SF-5 conformance suite. See
   `docs/source/sorafs_gateway_profile.md` for the normative specification.

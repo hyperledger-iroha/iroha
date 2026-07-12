@@ -1293,9 +1293,7 @@ mod tests {
             [0x53; 32],
         ));
         assert_slice_roundtrip(SetSorafsModerationPolicy::new(moderation_policy()));
-        assert_slice_roundtrip(SubmitSorafsModerationAppeal::new(
-            moderation_appeal_intake(),
-        ));
+        assert_slice_roundtrip(SubmitSorafsModerationAppeal::new(moderation_appeal_intake()));
         assert_slice_roundtrip(RegisterSorafsModerationJurorEligibility::new(
             "appeal-1".to_owned(),
             "round-1".to_owned(),

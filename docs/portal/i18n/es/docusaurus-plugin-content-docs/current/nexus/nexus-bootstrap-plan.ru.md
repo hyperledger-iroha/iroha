@@ -31,7 +31,7 @@ Esta página está escrita `docs/source/soranexus_bootstrap_plan.md`. Deje copia
 - Configuración de arranque predeterminada (`configs/nexus/bootstrap/*.toml`), configuración de parámetros reales consensuada.## Сетевые окружения
 - Utilice la configuración Nexus según las siguientes preferencias:
 - **Sora Nexus (mainnet)** - Ajustes de configuración del producto `nexus`, actualización de software y servicios a cuestas SoraFS/SoraNet (ID de cadena `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - Configuraciones de puesta en escena precisas `testus`, configuraciones de mainnet personalizadas para pruebas integradas y validaciones previas al lanzamiento (UUID de cadena) `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - Configuraciones de puesta en escena precisas `testus`, configuraciones de mainnet personalizadas para pruebas integradas y validaciones previas al lanzamiento (UUID de cadena) `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Держите отдельные genesis файлы, claves de gobernanza y huellas de infraestructura para каждого окружения. Testus se adapta a sus implementaciones SoraFS/SoraNet antes de su implementación en Nexus.
 - Tuberías de CI/CD que se implementarán en Testus, realizarán pruebas de humo automáticas y se promocionarán mucho en Nexus después прохождения проверок.
 - Los paquetes de configuración de referencia se conectan a `configs/soranexus/nexus/` (mainnet) y `configs/soranexus/testus/` (testnet), como base de operaciones `config.toml`, `genesis.json` y admisión de catálogos Torii.## Capítulo 1 - Configuración reciente

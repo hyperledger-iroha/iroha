@@ -11,19 +11,18 @@ use iroha_data_model::{
             FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition,
             RaiseSorafsModerationChallenge, RegisterSorafsModerationJurorEligibility,
             ResolveSorafsModerationChallenge, SetSorafsModerationPolicy,
-            SubmitSorafsModerationAppeal,
-            SubmitSorafsModerationCommit, SubmitSorafsModerationReveal,
+            SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
+            SubmitSorafsModerationReveal,
         },
     },
     name::Name,
     query::{
         error::{FindError, QueryExecutionFail},
         sorafs::prelude::{
-            FindSorafsModerationAppeal, FindSorafsModerationCase,
-            FindSorafsModerationChallenge, FindSorafsModerationCommit,
-            FindSorafsModerationJurorEligibility, FindSorafsModerationNoShow,
-            FindSorafsModerationOutcome, FindSorafsModerationPolicy, FindSorafsModerationReveal,
-            FindSorafsModerationStatus,
+            FindSorafsModerationAppeal, FindSorafsModerationCase, FindSorafsModerationChallenge,
+            FindSorafsModerationCommit, FindSorafsModerationJurorEligibility,
+            FindSorafsModerationNoShow, FindSorafsModerationOutcome, FindSorafsModerationPolicy,
+            FindSorafsModerationReveal, FindSorafsModerationStatus,
         },
     },
     sorafs::{
@@ -42,8 +41,8 @@ use iroha_data_model::{
             ModerationJurorEligibilityRecordV1, ModerationJurorReplacementV1,
             ModerationLedgerPolicyRecord, ModerationLedgerStatusV1, ModerationNoShowKindV1,
             ModerationNoShowRecordV1, ModerationOutcomeKindV1, ModerationOutcomeRecordV1,
-            ModerationPanelSelectionV1, ModerationPoPRegistrySnapshotV1,
-            ModerationRevealRecordV1, ModerationSortitionError, ModerationVoteCountsV1,
+            ModerationPanelSelectionV1, ModerationPoPRegistrySnapshotV1, ModerationRevealRecordV1,
+            ModerationSortitionError, ModerationVoteCountsV1,
             sorafs_moderation_panel_roster_hash_v1, sorafs_moderation_pop_challenge_v1,
             sorafs_moderation_pop_verifier_context_v1, sorafs_moderation_select_panel_v1,
             sorafs_moderation_sortition_digest_v1, sorafs_moderation_sortition_seed_v1,
@@ -68,8 +67,7 @@ const POLICY_STATE_KEY: &str = "sorafs_moderation_policy_v1";
 const STATUS_STATE_KEY: &str = "sorafs_moderation_status_v1";
 const APPEAL_STATE_KEY_PREFIX: &str = "sorafs_moderation_appeal_v1_";
 const APPEAL_DEPOSIT_STATE_KEY_PREFIX: &str = "sorafs_moderation_appeal_deposit_v1_";
-const APPEAL_PROOF_TOKEN_STATE_KEY_PREFIX: &str =
-    "sorafs_moderation_appeal_proof_token_v1_";
+const APPEAL_PROOF_TOKEN_STATE_KEY_PREFIX: &str = "sorafs_moderation_appeal_proof_token_v1_";
 const ELIGIBILITY_STATE_KEY_PREFIX: &str = "sorafs_moderation_eligibility_v1_";
 const NULLIFIER_STATE_KEY_PREFIX: &str = "sorafs_moderation_pop_nullifier_v1_";
 const CASE_STATE_KEY_PREFIX: &str = "sorafs_moderation_case_v1_";
@@ -188,9 +186,7 @@ fn active_pop_snapshot(
         .last()
         .map(|hash| *hash.as_ref())
         .ok_or_else(|| {
-            invalid_parameter(
-                "moderation appeal intake requires an already committed parent block",
-            )
+            invalid_parameter("moderation appeal intake requires an already committed parent block")
         })?;
     let registry_audit_head = active.status.audit_head.ok_or_else(|| {
         corrupt_state("active PoP registry status is missing its audit-chain head")
@@ -585,10 +581,14 @@ fn read_appeal(
         corrupt_state(format!("invalid stored moderation PoP snapshot: {error}"))
     })?;
     let intake_digest = record.intake.digest().map_err(|error| {
-        corrupt_state(format!("failed to digest stored moderation appeal: {error}"))
+        corrupt_state(format!(
+            "failed to digest stored moderation appeal: {error}"
+        ))
     })?;
     let snapshot_digest = record.pop_snapshot.digest().map_err(|error| {
-        corrupt_state(format!("failed to digest stored moderation PoP snapshot: {error}"))
+        corrupt_state(format!(
+            "failed to digest stored moderation PoP snapshot: {error}"
+        ))
     })?;
     if record.intake.case_id != case_id
         || record.intake.round_id != round_id
@@ -596,22 +596,22 @@ fn read_appeal(
         || record.intake_digest != intake_digest
         || record.pop_snapshot_digest != snapshot_digest
         || record.intake.policy_digest
-            != record
-                .policy
-                .digest()
-                .map_err(|error| corrupt_state(format!("failed to digest appeal policy: {error}")))?
+            != record.policy.digest().map_err(|error| {
+                corrupt_state(format!("failed to digest appeal policy: {error}"))
+            })?
         || record.submitted_at_unix_ms == 0
         || record.submitted_at_unix_ms != record.pop_snapshot.captured_at_unix_ms
         || record.submitted_at_unix_ms >= record.intake.registration_deadline_unix_ms
         || record.eligible_jurors.len() > usize::from(record.policy.max_candidate_pool_size)
         || !canonical_account_list(&record.eligible_jurors)
         || !canonical_account_list(&record.accepted_jurors)
-        || record
-            .eligible_jurors
-            .iter()
-            .any(|juror| record.intake.exclusions.binary_search_by(|candidate| {
-                candidate.to_string().cmp(&juror.to_string())
-            }).is_ok())
+        || record.eligible_jurors.iter().any(|juror| {
+            record
+                .intake
+                .exclusions
+                .binary_search_by(|candidate| candidate.to_string().cmp(&juror.to_string()))
+                .is_ok()
+        })
         || record
             .accepted_jurors
             .iter()
@@ -672,13 +672,10 @@ fn read_appeal(
         replacement.absent_juror == replacement.replacement_juror
             || !absent.insert(replacement.absent_juror.to_string())
             || !replacements.insert(replacement.replacement_juror.to_string())
-            || record
-                .selection
-                .as_ref()
-                .is_none_or(|selection| {
-                    !selection.jurors.contains(&replacement.absent_juror)
-                        || !selection.waitlist.contains(&replacement.replacement_juror)
-                })
+            || record.selection.as_ref().is_none_or(|selection| {
+                !selection.jurors.contains(&replacement.absent_juror)
+                    || !selection.waitlist.contains(&replacement.replacement_juror)
+            })
     }) {
         return Err(corrupt_state(
             "stored moderation failover replacements are inconsistent",
@@ -700,7 +697,10 @@ fn read_appeal(
                     replacement_juror: replacement.clone(),
                 })
                 .collect::<Vec<_>>();
-            (replacements, missing_primaries.len() > selection.waitlist.len())
+            (
+                replacements,
+                missing_primaries.len() > selection.waitlist.len(),
+            )
         },
     );
     let lifecycle_valid = match record.status {
@@ -746,7 +746,9 @@ fn read_appeal(
                 && record.activated_at_unix_ms.is_some()
                 && record.finalized_at_unix_ms.is_some_and(|time| {
                     time > record.intake.reveal_deadline_unix_ms
-                        && record.activated_at_unix_ms.is_some_and(|opened| time > opened)
+                        && record
+                            .activated_at_unix_ms
+                            .is_some_and(|opened| time > opened)
                 })
         }
     };
@@ -1396,8 +1398,7 @@ impl Execute for SubmitSorafsModerationAppeal {
         }
         if self.intake.panel_size > policy.policy.max_panel_size
             || self.intake.waitlist_size > policy.policy.max_waitlist_size
-            || self.intake.exclusions.len()
-                > usize::from(policy.policy.max_exclusions_per_case)
+            || self.intake.exclusions.len() > usize::from(policy.policy.max_exclusions_per_case)
         {
             return Err(invalid_parameter(
                 "moderation appeal panel, waitlist, or exclusion bounds exceed active policy",
@@ -1468,7 +1469,9 @@ impl Execute for SubmitSorafsModerationAppeal {
             invalid_parameter(format!("failed to digest active PoP snapshot: {error}"))
         })?;
         let intake_digest = self.intake.digest().map_err(|error| {
-            invalid_parameter(format!("failed to digest moderation appeal intake: {error}"))
+            invalid_parameter(format!(
+                "failed to digest moderation appeal intake: {error}"
+            ))
         })?;
         let record = ModerationAppealRecordV1 {
             intake: self.intake,
@@ -1544,11 +1547,7 @@ impl Execute for RegisterSorafsModerationJurorEligibility {
             ));
         }
         let now = block_time_ms(state_transaction)?;
-        let mut appeal = required_appeal(
-            state_transaction.world(),
-            &self.case_id,
-            &self.round_id,
-        )?;
+        let mut appeal = required_appeal(state_transaction.world(), &self.case_id, &self.round_id)?;
         if appeal.status != ModerationAppealStatusV1::RegisteringJurors {
             return Err(invalid_parameter(
                 "moderation juror eligibility registration is not in the registration phase",
@@ -1564,9 +1563,12 @@ impl Execute for RegisterSorafsModerationJurorEligibility {
                 "moderation juror candidate pool reached the active policy bound",
             ));
         }
-        if appeal.intake.exclusions.binary_search_by(|candidate| {
-            candidate.to_string().cmp(&authority.to_string())
-        }).is_ok() {
+        if appeal
+            .intake
+            .exclusions
+            .binary_search_by(|candidate| candidate.to_string().cmp(&authority.to_string()))
+            .is_ok()
+        {
             return Err(invalid_parameter(
                 "moderation juror is excluded by the immutable conflict list",
             ));
@@ -1614,11 +1616,8 @@ impl Execute for RegisterSorafsModerationJurorEligibility {
                 "observer-only PoP credentials cannot enter a moderation voting panel",
             ));
         }
-        let reveal_deadline_epoch = appeal
-            .intake
-            .reveal_deadline_unix_ms
-            .saturating_add(999)
-            / 1_000;
+        let reveal_deadline_epoch =
+            appeal.intake.reveal_deadline_unix_ms.saturating_add(999) / 1_000;
         if proof.expires_at_epoch <= reveal_deadline_epoch {
             return Err(invalid_parameter(
                 "moderation juror PoP credential expires before the reveal deadline",
@@ -1645,8 +1644,7 @@ impl Execute for RegisterSorafsModerationJurorEligibility {
             .unwrap_or_else(|position| position);
         appeal.eligible_jurors.insert(position, authority.clone());
         let mut status = status_for_mutation(state_transaction.world(), now)?;
-        status.eligibility_proofs =
-            checked_inc(status.eligibility_proofs, "eligibility-proof")?;
+        status.eligibility_proofs = checked_inc(status.eligibility_proofs, "eligibility-proof")?;
         status.updated_at_unix_ms = now;
         let encoded_record = encode_state(&record, "moderation juror eligibility")?;
         let encoded_appeal = encode_state(&appeal, "moderation appeal")?;
@@ -1681,19 +1679,14 @@ impl Execute for FinalizeSorafsModerationSortition {
         require_manage_permission(state_transaction, authority)?;
         validate_lookup_identifiers(&self.case_id, &self.round_id)?;
         if self.proposed_jurors.len() > usize::from(MODERATION_LEDGER_MAX_PANEL_SIZE_V1)
-            || self.proposed_waitlist.len()
-                > usize::from(MODERATION_LEDGER_MAX_WAITLIST_SIZE_V1)
+            || self.proposed_waitlist.len() > usize::from(MODERATION_LEDGER_MAX_WAITLIST_SIZE_V1)
         {
             return Err(invalid_parameter(
                 "proposed moderation roster or waitlist exceeds hard bounds",
             ));
         }
         let now = block_time_ms(state_transaction)?;
-        let mut appeal = required_appeal(
-            state_transaction.world(),
-            &self.case_id,
-            &self.round_id,
-        )?;
+        let mut appeal = required_appeal(state_transaction.world(), &self.case_id, &self.round_id)?;
         if appeal.status != ModerationAppealStatusV1::RegisteringJurors {
             return Err(invalid_parameter(
                 "moderation appeal sortition is not in the registration phase",
@@ -1748,17 +1741,15 @@ impl Execute for FinalizeSorafsModerationSortition {
                 }
                 appeal.status = ModerationAppealStatusV1::InsufficientEligiblePool;
                 let mut status = status_for_mutation(state_transaction.world(), now)?;
-                status.failed_panel_formations = checked_inc(
-                    status.failed_panel_formations,
-                    "failed-panel-formation",
-                )?;
+                status.failed_panel_formations =
+                    checked_inc(status.failed_panel_formations, "failed-panel-formation")?;
                 status.updated_at_unix_ms = now;
                 let encoded_appeal = encode_state(&appeal, "moderation appeal")?;
                 let encoded_status = encode_status(&status)?;
-                state_transaction.world.smart_contract_state.insert(
-                    appeal_key(&self.case_id, &self.round_id),
-                    encoded_appeal,
-                );
+                state_transaction
+                    .world
+                    .smart_contract_state
+                    .insert(appeal_key(&self.case_id, &self.round_id), encoded_appeal);
                 state_transaction
                     .world
                     .smart_contract_state
@@ -1798,10 +1789,10 @@ impl Execute for FinalizeSorafsModerationSortition {
         status.updated_at_unix_ms = now;
         let encoded_appeal = encode_state(&appeal, "moderation appeal")?;
         let encoded_status = encode_status(&status)?;
-        state_transaction.world.smart_contract_state.insert(
-            appeal_key(&self.case_id, &self.round_id),
-            encoded_appeal,
-        );
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(appeal_key(&self.case_id, &self.round_id), encoded_appeal);
         state_transaction
             .world
             .smart_contract_state
@@ -1818,11 +1809,7 @@ impl Execute for AcceptSorafsModerationJurorAssignment {
     ) -> Result<(), InstructionExecutionError> {
         validate_lookup_identifiers(&self.case_id, &self.round_id)?;
         let now = block_time_ms(state_transaction)?;
-        let mut appeal = required_appeal(
-            state_transaction.world(),
-            &self.case_id,
-            &self.round_id,
-        )?;
+        let mut appeal = required_appeal(state_transaction.world(), &self.case_id, &self.round_id)?;
         if appeal.status != ModerationAppealStatusV1::AwaitingAcceptance {
             return Err(invalid_parameter(
                 "moderation juror assignment is not in the acceptance phase",
@@ -1862,17 +1849,15 @@ impl Execute for AcceptSorafsModerationJurorAssignment {
         };
         appeal.accepted_jurors.insert(position, authority.clone());
         let mut status = status_for_mutation(state_transaction.world(), now)?;
-        status.assignment_acceptances = checked_inc(
-            status.assignment_acceptances,
-            "assignment-acceptance",
-        )?;
+        status.assignment_acceptances =
+            checked_inc(status.assignment_acceptances, "assignment-acceptance")?;
         status.updated_at_unix_ms = now;
         let encoded_appeal = encode_state(&appeal, "moderation appeal")?;
         let encoded_status = encode_status(&status)?;
-        state_transaction.world.smart_contract_state.insert(
-            appeal_key(&self.case_id, &self.round_id),
-            encoded_appeal,
-        );
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(appeal_key(&self.case_id, &self.round_id), encoded_appeal);
         state_transaction
             .world
             .smart_contract_state
@@ -1891,11 +1876,7 @@ impl Execute for ActivateSorafsModerationCase {
         require_manage_permission(state_transaction, authority)?;
         validate_lookup_identifiers(&self.case_id, &self.round_id)?;
         let now = block_time_ms(state_transaction)?;
-        let mut appeal = required_appeal(
-            state_transaction.world(),
-            &self.case_id,
-            &self.round_id,
-        )?;
+        let mut appeal = required_appeal(state_transaction.world(), &self.case_id, &self.round_id)?;
         if appeal.status != ModerationAppealStatusV1::AwaitingAcceptance {
             return Err(invalid_parameter(
                 "moderation case activation is not in the acceptance phase",
@@ -1938,17 +1919,15 @@ impl Execute for ActivateSorafsModerationCase {
                 appeal.status = ModerationAppealStatusV1::FailoverExhausted;
                 appeal.replacements = replacements;
                 let mut status = status_for_mutation(state_transaction.world(), now)?;
-                status.failed_panel_formations = checked_inc(
-                    status.failed_panel_formations,
-                    "failed-panel-formation",
-                )?;
+                status.failed_panel_formations =
+                    checked_inc(status.failed_panel_formations, "failed-panel-formation")?;
                 status.updated_at_unix_ms = now;
                 let encoded_appeal = encode_state(&appeal, "moderation appeal")?;
                 let encoded_status = encode_status(&status)?;
-                state_transaction.world.smart_contract_state.insert(
-                    appeal_key(&self.case_id, &self.round_id),
-                    encoded_appeal,
-                );
+                state_transaction
+                    .world
+                    .smart_contract_state
+                    .insert(appeal_key(&self.case_id, &self.round_id), encoded_appeal);
                 state_transaction
                     .world
                     .smart_contract_state
@@ -1970,10 +1949,7 @@ impl Execute for ActivateSorafsModerationCase {
             version: SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
             case_id: appeal.intake.case_id.clone(),
             evidence_bundle_digest: appeal.intake.evidence_bundle_digest,
-            appeal_finance_config_version: appeal
-                .intake
-                .appeal_finance_config_version
-                .clone(),
+            appeal_finance_config_version: appeal.intake.appeal_finance_config_version.clone(),
             panel_roster_hash: sorafs_moderation_panel_roster_hash_v1(
                 &jurors,
                 appeal.intake.quorum,
@@ -2021,14 +1997,14 @@ impl Execute for ActivateSorafsModerationCase {
         let encoded_case = encode_state(&case, "moderation case")?;
         let encoded_appeal = encode_state(&appeal, "moderation appeal")?;
         let encoded_status = encode_status(&status)?;
-        state_transaction.world.smart_contract_state.insert(
-            case_key(&self.case_id, &self.round_id),
-            encoded_case,
-        );
-        state_transaction.world.smart_contract_state.insert(
-            appeal_key(&self.case_id, &self.round_id),
-            encoded_appeal,
-        );
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(case_key(&self.case_id, &self.round_id), encoded_case);
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(appeal_key(&self.case_id, &self.round_id), encoded_appeal);
         state_transaction
             .world
             .smart_contract_state
@@ -2267,11 +2243,7 @@ impl Execute for ResolveSorafsModerationChallenge {
     ) -> Result<(), InstructionExecutionError> {
         require_manage_permission(state_transaction, authority)?;
         let now = block_time_ms(state_transaction)?;
-        let appeal = required_appeal(
-            state_transaction.world(),
-            &self.case_id,
-            &self.round_id,
-        )?;
+        let appeal = required_appeal(state_transaction.world(), &self.case_id, &self.round_id)?;
         if appeal.status != ModerationAppealStatusV1::BallotOpen {
             return Err(invalid_parameter(
                 "moderation appeal is not in the open-ballot phase",
@@ -2480,11 +2452,7 @@ impl Execute for FinalizeSorafsModerationCase {
     ) -> Result<(), InstructionExecutionError> {
         require_manage_permission(state_transaction, authority)?;
         let now = block_time_ms(state_transaction)?;
-        let mut appeal = required_appeal(
-            state_transaction.world(),
-            &self.case_id,
-            &self.round_id,
-        )?;
+        let mut appeal = required_appeal(state_transaction.world(), &self.case_id, &self.round_id)?;
         if appeal.status != ModerationAppealStatusV1::BallotOpen {
             return Err(invalid_parameter(
                 "moderation appeal is not in the open-ballot phase",
@@ -2636,10 +2604,10 @@ impl Execute for FinalizeSorafsModerationCase {
             .world
             .smart_contract_state
             .insert(case_key(&self.case_id, &self.round_id), encoded_case);
-        state_transaction.world.smart_contract_state.insert(
-            appeal_key(&self.case_id, &self.round_id),
-            encoded_appeal,
-        );
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(appeal_key(&self.case_id, &self.round_id), encoded_appeal);
         for (key, encoded) in encoded_no_shows {
             state_transaction
                 .world
@@ -2844,9 +2812,9 @@ mod tests {
             moderation_ledger::{
                 MODERATION_APPEAL_INTAKE_VERSION_V1, MODERATION_LEDGER_CASE_VERSION_V1,
                 MODERATION_LEDGER_POLICY_VERSION_V1, ModerationAppealIntakeV1,
-                ModerationCaseSpecV1, ModerationChallengeDecisionV1,
-                ModerationChallengeKindV1, ModerationLedgerPolicyV1, ModerationNoShowKindV1,
-                ModerationOutcomeKindV1, sorafs_moderation_panel_roster_hash_v1,
+                ModerationCaseSpecV1, ModerationChallengeDecisionV1, ModerationChallengeKindV1,
+                ModerationLedgerPolicyV1, ModerationNoShowKindV1, ModerationOutcomeKindV1,
+                sorafs_moderation_panel_roster_hash_v1,
             },
             pop_registry::{
                 POP_CREDENTIAL_COMMITMENT_BATCH_VERSION_V1, POP_ISSUER_POLICY_VERSION_V1,
@@ -2857,18 +2825,16 @@ mod tests {
     };
     use iroha_primitives::json::Json;
     use sorafs_manifest::pop_credentials::{
-        POP_COMMITMENT_ROOT_VERSION_V1, POP_CREDENTIAL_TREE_DEPTH_V1,
-        POP_CREDENTIAL_VERSION_V1, POP_REVOCATION_LIST_VERSION_V1,
-        POP_REVOCATION_TREE_DEPTH_V1, PopCommitmentRootV1, PopCredentialAttributeV1,
-        PopCredentialMerklePathV1, PopCredentialV1, PopMembershipProofV1,
+        POP_COMMITMENT_ROOT_VERSION_V1, POP_CREDENTIAL_TREE_DEPTH_V1, POP_CREDENTIAL_VERSION_V1,
+        POP_REVOCATION_LIST_VERSION_V1, POP_REVOCATION_TREE_DEPTH_V1, PopCommitmentRootV1,
+        PopCredentialAttributeV1, PopCredentialMerklePathV1, PopCredentialV1, PopMembershipProofV1,
         PopMembershipWitnessV1, PopRevocationEntryV1, PopRevocationListV1,
         PopRevocationNonMembershipPathV1, PopRevocationReasonV1, PopSignatureAlgorithmV1,
-        PopSignatureV1,
-        build_pop_revocation_non_membership_path_v1, derive_pop_holder_commitment_v1,
-        pop_commitment_root_signature_digest_v1, pop_credential_leaf_v1,
-        pop_credential_root_from_path_v1, pop_credential_signature_digest_v1,
-        pop_revocation_list_signature_digest_v1, pop_revocation_root_v1,
-        prove_pop_membership_v1, verify_pop_commitment_root_signature_v1,
+        PopSignatureV1, build_pop_revocation_non_membership_path_v1,
+        derive_pop_holder_commitment_v1, pop_commitment_root_signature_digest_v1,
+        pop_credential_leaf_v1, pop_credential_root_from_path_v1,
+        pop_credential_signature_digest_v1, pop_revocation_list_signature_digest_v1,
+        pop_revocation_root_v1, prove_pop_membership_v1, verify_pop_commitment_root_signature_v1,
         verify_pop_credential_signature_v1, verify_pop_revocation_list_signature_v1,
     };
 
@@ -3053,25 +3019,18 @@ mod tests {
             .to_vec()
     }
 
-    fn sign_pop_credential(
-        mut credential: PopCredentialV1,
-        keypair: &KeyPair,
-    ) -> PopCredentialV1 {
+    fn sign_pop_credential(mut credential: PopCredentialV1, keypair: &KeyPair) -> PopCredentialV1 {
         credential.issuer_signature = empty_pop_signature(keypair);
-        let digest = pop_credential_signature_digest_v1(&credential)
-            .expect("credential signature digest");
+        let digest =
+            pop_credential_signature_digest_v1(&credential).expect("credential signature digest");
         credential.issuer_signature.signature = sign_pop_digest(keypair, digest);
         verify_pop_credential_signature_v1(&credential).expect("credential signature verifies");
         credential
     }
 
-    fn sign_pop_root(
-        mut root: PopCommitmentRootV1,
-        keypair: &KeyPair,
-    ) -> PopCommitmentRootV1 {
+    fn sign_pop_root(mut root: PopCommitmentRootV1, keypair: &KeyPair) -> PopCommitmentRootV1 {
         root.publisher_signature = empty_pop_signature(keypair);
-        let digest =
-            pop_commitment_root_signature_digest_v1(&root).expect("root signature digest");
+        let digest = pop_commitment_root_signature_digest_v1(&root).expect("root signature digest");
         root.publisher_signature.signature = sign_pop_digest(keypair, digest);
         verify_pop_commitment_root_signature_v1(&root).expect("root signature verifies");
         root
@@ -3157,8 +3116,8 @@ mod tests {
                 .collect(),
         };
         let leaf = pop_credential_leaf_v1(&credential).expect("credential leaf");
-        let root_digest = pop_credential_root_from_path_v1(leaf, &credential_path)
-            .expect("credential root");
+        let root_digest =
+            pop_credential_root_from_path_v1(leaf, &credential_path).expect("credential root");
         credential.commitment_root = root_digest;
         credential = sign_pop_credential(credential, issuer);
         let root = sign_pop_root(
@@ -3249,9 +3208,7 @@ mod tests {
             commitment_root_payload: encode(&material.root),
             revocation_list_payload: encode(&material.revocations),
             commitments: vec![PopCredentialCommitmentV1 {
-                credential_commitment: pop_credential_payload_commitment_v1(
-                    &canonical_credential,
-                ),
+                credential_commitment: pop_credential_payload_commitment_v1(&canonical_credential),
                 revocation_nonce_commitment: pop_revocation_nonce_commitment_v1(
                     material.credential.revocation_nonce,
                 ),
@@ -3264,15 +3221,10 @@ mod tests {
         }
     }
 
-    fn setup_panel_foundations(
-        state: &mut State,
-        manager: &KeyPair,
-        material: &PopMaterial,
-    ) {
+    fn setup_panel_foundations(state: &mut State, manager: &KeyPair, material: &PopMaterial) {
         let manager_id = account(manager);
         transact(state, 1, 1_000_000, |transaction| {
-            SetSorafsPopIssuerPolicy::new(pop_policy(manager))
-                .execute(&manager_id, transaction)?;
+            SetSorafsPopIssuerPolicy::new(pop_policy(manager)).execute(&manager_id, transaction)?;
             CommitSorafsPopCredentialBatch::new(encode(&pop_batch(manager, material)))
                 .execute(&manager_id, transaction)?;
             SetSorafsModerationPolicy::new(policy()).execute(&manager_id, transaction)
@@ -3329,10 +3281,7 @@ mod tests {
             let juror = keypair(0x61);
             let outsider = keypair(0x71);
             let manager_id = account(&manager);
-            let mut state = state(
-                &[&manager, &juror, &outsider],
-                &manager_id,
-            );
+            let mut state = state(&[&manager, &juror, &outsider], &manager_id);
             setup_panel_foundations(&mut state, &manager, shared_pop_material());
             Self {
                 manager,
@@ -3446,7 +3395,8 @@ mod tests {
             randomness_anchor: [0x85; 32],
         };
         let intake = iroha_data_model::sorafs::moderation_ledger::ModerationAppealIntakeV1 {
-            version: iroha_data_model::sorafs::moderation_ledger::MODERATION_APPEAL_INTAKE_VERSION_V1,
+            version:
+                iroha_data_model::sorafs::moderation_ledger::MODERATION_APPEAL_INTAKE_VERSION_V1,
             case_id: spec.context.case_id.clone(),
             round_id: spec.round_id.clone(),
             appellant: manager.clone(),
@@ -4150,8 +4100,7 @@ mod tests {
         assert!(
             fixture
                 .run(1_001_000, |transaction| {
-                    SubmitSorafsModerationAppeal::new(malformed)
-                        .execute(&manager, transaction)
+                    SubmitSorafsModerationAppeal::new(malformed).execute(&manager, transaction)
                 })
                 .is_err()
         );
@@ -4196,13 +4145,11 @@ mod tests {
         assert!(
             fixture
                 .run(1_001_001, |transaction| {
-                    SubmitSorafsModerationAppeal::new(intake.clone())
-                        .execute(&manager, transaction)
+                    SubmitSorafsModerationAppeal::new(intake.clone()).execute(&manager, transaction)
                 })
                 .is_err()
         );
-        let replayed_deposit =
-            panel_intake(&fixture.manager, "different-case", 1, 0, 1, 0x91);
+        let replayed_deposit = panel_intake(&fixture.manager, "different-case", 1, 0, 1, 0x91);
         assert!(
             fixture
                 .run(1_001_001, |transaction| {
@@ -4230,8 +4177,7 @@ mod tests {
         let mut excluded = PanelFixture::new();
         let excluded_manager = excluded.manager_id();
         let excluded_juror = excluded.juror_id();
-        let mut excluded_intake =
-            panel_intake(&excluded.manager, "panel-case", 1, 0, 1, 0x91);
+        let mut excluded_intake = panel_intake(&excluded.manager, "panel-case", 1, 0, 1, 0x91);
         excluded_intake.exclusions.push(excluded_juror.clone());
         excluded_intake.exclusions.sort_by_key(ToString::to_string);
         excluded
@@ -4462,8 +4408,7 @@ mod tests {
         assert!(
             fixture
                 .run(1_006_000, |transaction| {
-                    let mut status =
-                        status_for_mutation(transaction.world(), 1_006_000)?;
+                    let mut status = status_for_mutation(transaction.world(), 1_006_000)?;
                     status.open_cases = u64::MAX;
                     transaction
                         .world
@@ -4500,14 +4445,14 @@ mod tests {
         let appeal = fixture.appeal();
         assert_eq!(appeal.status, ModerationAppealStatusV1::BallotOpen);
         assert!(appeal.replacements.is_empty());
-        let case = FindSorafsModerationCase::new(
-            "panel-case".to_owned(),
-            "round-1".to_owned(),
-        )
-        .execute(&fixture.state.view())
-        .unwrap();
+        let case = FindSorafsModerationCase::new("panel-case".to_owned(), "round-1".to_owned())
+            .execute(&fixture.state.view())
+            .unwrap();
         assert_eq!(case.spec.jurors, vec![juror]);
-        assert_eq!(case.spec.context.panel_roster_hash, sorafs_moderation_panel_roster_hash_v1(&case.spec.jurors, 1));
+        assert_eq!(
+            case.spec.context.panel_roster_hash,
+            sorafs_moderation_panel_roster_hash_v1(&case.spec.jurors, 1)
+        );
     }
 
     #[test]
@@ -4707,12 +4652,9 @@ mod tests {
             appeal.replacements[0].replacement_juror,
             expected_waitlist[0]
         );
-        let case = FindSorafsModerationCase::new(
-            "panel-case".to_owned(),
-            "round-1".to_owned(),
-        )
-        .execute(&fixture.state.view())
-        .unwrap();
+        let case = FindSorafsModerationCase::new("panel-case".to_owned(), "round-1".to_owned())
+            .execute(&fixture.state.view())
+            .unwrap();
         assert_eq!(case.spec.jurors, expected_waitlist);
         assert_eq!(
             FindSorafsModerationStatus
@@ -4754,11 +4696,8 @@ mod tests {
             .expect("policy digest");
         fixture
             .run(1_001_500, |transaction| {
-                PublishSorafsPopRevocationList::new(
-                    encode(&publication),
-                    issuer_policy_digest,
-                )
-                .execute(&manager, transaction)
+                PublishSorafsPopRevocationList::new(encode(&publication), issuer_policy_digest)
+                    .execute(&manager, transaction)
             })
             .unwrap();
         let proof = proof_for_appeal(&fixture.appeal());

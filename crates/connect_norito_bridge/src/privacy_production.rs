@@ -15,10 +15,12 @@ use iroha_core::zk::{
     ZK_BACKEND_HALO2_IPA,
     confidential_v2::{
         CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID, CONFIDENTIAL_TREE_CAPACITY_V2,
-        CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID, ConfidentialTransferInputV2,
-        ConfidentialTransferOutputV2, ConfidentialUnshieldInputV2, ConfidentialUnshieldOutputV3,
-        build_confidential_transfer_proof_v2, build_confidential_unshield_proof_v3,
-        confidential_transfer_v2_vk_box, confidential_unshield_v3_vk_box,
+        CONFIDENTIAL_TREE_DEPTH_V2, CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID, ConfidentialMerklePathV2,
+        ConfidentialTransferInputV2, ConfidentialTransferOutputV2, ConfidentialUnshieldInputV2,
+        ConfidentialUnshieldOutputV3, build_confidential_transfer_proof_v2,
+        build_confidential_transfer_proof_v2_with_paths, build_confidential_unshield_proof_v3,
+        build_confidential_unshield_proof_v3_with_paths, confidential_transfer_v2_vk_box,
+        confidential_unshield_v3_vk_box,
     },
     verify_backend,
 };
@@ -73,6 +75,30 @@ struct PrivacyConfidentialWitnessV1 {
     root_hint: Vec<u8>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+struct PrivacyConfidentialMerklePathWitnessV2 {
+    siblings: Vec<Vec<u8>>,
+    directions: Vec<u8>,
+    witness_nodes: Vec<Vec<u8>>,
+    root: Vec<u8>,
+}
+
+/// Path-based witness used by Kagemusha with Torii's authoritative
+/// `/v1/zk/merkle-path` response. It replaces the O(frontier) commitment list
+/// with exactly two O(tree-depth) paths without altering the V1 contract.
+#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+struct PrivacyConfidentialWitnessV2 {
+    chain_id: String,
+    asset_definition_id: String,
+    spend_key: Vec<u8>,
+    input_paths: Vec<PrivacyConfidentialMerklePathWitnessV2>,
+    inputs: Vec<PrivacyConfidentialNoteWitnessV1>,
+    transfer_outputs: Vec<PrivacyConfidentialTransferOutputWitnessV1>,
+    unshield_change: Vec<PrivacyConfidentialUnshieldChangeWitnessV1>,
+    public_amount: u128,
+    root_hint: Vec<u8>,
+}
+
 impl Zeroize for PrivacyConfidentialNoteWitnessV1 {
     fn zeroize(&mut self) {
         self.amount.zeroize();
@@ -104,6 +130,41 @@ impl Zeroize for PrivacyConfidentialWitnessV1 {
         self.spend_key.zeroize();
         for commitment in &mut self.tree_commitments {
             commitment.zeroize();
+        }
+        for input in &mut self.inputs {
+            input.zeroize();
+        }
+        for output in &mut self.transfer_outputs {
+            output.zeroize();
+        }
+        for change in &mut self.unshield_change {
+            change.zeroize();
+        }
+        self.public_amount.zeroize();
+        self.root_hint.zeroize();
+    }
+}
+
+impl Zeroize for PrivacyConfidentialMerklePathWitnessV2 {
+    fn zeroize(&mut self) {
+        for sibling in &mut self.siblings {
+            sibling.zeroize();
+        }
+        self.directions.zeroize();
+        for node in &mut self.witness_nodes {
+            node.zeroize();
+        }
+        self.root.zeroize();
+    }
+}
+
+impl Zeroize for PrivacyConfidentialWitnessV2 {
+    fn zeroize(&mut self) {
+        self.chain_id.zeroize();
+        self.asset_definition_id.zeroize();
+        self.spend_key.zeroize();
+        for path in &mut self.input_paths {
+            path.zeroize();
         }
         for input in &mut self.inputs {
             input.zeroize();
@@ -155,6 +216,46 @@ fn privacy_validate_tree_commitments(raw: &[Vec<u8>]) -> Result<(), String> {
         .try_for_each(|commitment| privacy_require_32("tree commitment", commitment))
 }
 
+fn privacy_validate_merkle_paths_v2(
+    raw: &[PrivacyConfidentialMerklePathWitnessV2],
+    root_hint: &[u8],
+) -> Result<(), String> {
+    if raw.len() != 2 {
+        return Err(
+            "path-based confidential witness must include exactly two input paths".to_owned(),
+        );
+    }
+    for (path_index, path) in raw.iter().enumerate() {
+        if path.siblings.len() != CONFIDENTIAL_TREE_DEPTH_V2
+            || path.directions.len() != CONFIDENTIAL_TREE_DEPTH_V2
+            || (!path.witness_nodes.is_empty()
+                && path.witness_nodes.len() != CONFIDENTIAL_TREE_DEPTH_V2)
+        {
+            return Err(format!(
+                "input_paths[{path_index}] must match confidential-v2 tree depth"
+            ));
+        }
+        for sibling in &path.siblings {
+            privacy_require_32("path sibling", sibling)?;
+        }
+        if path.directions.iter().any(|direction| *direction > 1) {
+            return Err(format!(
+                "input_paths[{path_index}] directions must contain only 0 or 1"
+            ));
+        }
+        for node in &path.witness_nodes {
+            privacy_require_32("path witness node", node)?;
+        }
+        privacy_require_32("path root", &path.root)?;
+        if path.root != root_hint {
+            return Err(format!(
+                "input_paths[{path_index}] root must match root_hint"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn privacy_validate_note_witnesses(
     raw: &[PrivacyConfidentialNoteWitnessV1],
     tree_len: usize,
@@ -170,6 +271,38 @@ fn privacy_validate_note_witnesses(
         if leaf_index >= tree_len {
             return Err(format!(
                 "inputs[{index}].leaf_index must reference tree_commitments"
+            ));
+        }
+        for (previous_index, previous) in raw[..index].iter().enumerate() {
+            if previous.leaf_index == note.leaf_index {
+                return Err(format!(
+                    "inputs[{index}].leaf_index duplicates inputs[{previous_index}]"
+                ));
+            }
+            if previous.rho == note.rho {
+                return Err(format!(
+                    "inputs[{index}].rho duplicates inputs[{previous_index}]"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn privacy_validate_path_note_witnesses(
+    raw: &[PrivacyConfidentialNoteWitnessV1],
+) -> Result<(), String> {
+    if raw.is_empty() || raw.len() > PRIVACY_CONFIDENTIAL_MAX_INPUTS_V2 {
+        return Err("confidential witness must include one or two inputs".to_owned());
+    }
+    for (index, note) in raw.iter().enumerate() {
+        privacy_require_32("input rho", &note.rho)?;
+        privacy_require_32("input diversifier", &note.diversifier)?;
+        let leaf_index = usize::try_from(note.leaf_index)
+            .map_err(|_| "input leaf_index exceeds usize".to_owned())?;
+        if leaf_index >= CONFIDENTIAL_TREE_CAPACITY_V2 {
+            return Err(format!(
+                "inputs[{index}].leaf_index exceeds confidential-v2 capacity"
             ));
         }
         for (previous_index, previous) in raw[..index].iter().enumerate() {
@@ -217,6 +350,27 @@ fn privacy_validate_unshield_change(
 fn privacy_tree_commitments(raw: &[Vec<u8>]) -> Vec<[u8; PRIVACY_CONFIDENTIAL_BYTES_32]> {
     raw.iter()
         .map(|commitment| privacy_array_32(commitment))
+        .collect()
+}
+
+fn privacy_merkle_paths_v2(
+    raw: &[PrivacyConfidentialMerklePathWitnessV2],
+) -> Vec<ConfidentialMerklePathV2> {
+    raw.iter()
+        .map(|path| ConfidentialMerklePathV2 {
+            siblings: path
+                .siblings
+                .iter()
+                .map(|sibling| privacy_array_32(sibling))
+                .collect(),
+            directions: path.directions.clone(),
+            witness_nodes: path
+                .witness_nodes
+                .iter()
+                .map(|node| privacy_array_32(node))
+                .collect(),
+            root: privacy_array_32(&path.root),
+        })
         .collect()
 }
 
@@ -274,6 +428,11 @@ fn privacy_decode_witness(witness: &[u8]) -> Result<PrivacyConfidentialWitnessV1
         .map_err(|err| format!("privacy witness is not a valid v1 archive: {err}"))
 }
 
+fn privacy_decode_witness_v2(witness: &[u8]) -> Result<PrivacyConfidentialWitnessV2, String> {
+    norito::decode_from_bytes(witness)
+        .map_err(|err| format!("privacy witness is not a valid v2 archive: {err}"))
+}
+
 fn privacy_common_witness_checks(witness: &PrivacyConfidentialWitnessV1) -> Result<(), String> {
     if witness.spend_key.len() != PRIVACY_CONFIDENTIAL_SPEND_KEY_BYTES {
         return Err(format!(
@@ -316,7 +475,50 @@ fn privacy_validate_unshield_witness_shape(
     Ok(())
 }
 
+fn privacy_common_witness_v2_checks(witness: &PrivacyConfidentialWitnessV2) -> Result<(), String> {
+    if witness.spend_key.len() != PRIVACY_CONFIDENTIAL_SPEND_KEY_BYTES {
+        return Err(format!(
+            "confidential spend key must be {PRIVACY_CONFIDENTIAL_SPEND_KEY_BYTES} bytes"
+        ));
+    }
+    privacy_fixed_32("root_hint", &witness.root_hint)?;
+    privacy_validate_merkle_paths_v2(&witness.input_paths, &witness.root_hint)?;
+    privacy_validate_path_note_witnesses(&witness.inputs)
+}
+
+fn privacy_validate_transfer_witness_v2_shape(
+    witness: &PrivacyConfidentialWitnessV2,
+) -> Result<(), String> {
+    privacy_common_witness_v2_checks(witness)?;
+    if witness.public_amount != 0 {
+        return Err("confidential transfer witness must not include public_amount".to_owned());
+    }
+    if !witness.unshield_change.is_empty() {
+        return Err(
+            "confidential transfer witness must not include unshield change outputs".to_owned(),
+        );
+    }
+    privacy_validate_transfer_outputs(&witness.transfer_outputs)
+}
+
+fn privacy_validate_unshield_witness_v2_shape(
+    witness: &PrivacyConfidentialWitnessV2,
+) -> Result<(), String> {
+    privacy_common_witness_v2_checks(witness)?;
+    if !witness.transfer_outputs.is_empty() {
+        return Err("confidential unshield witness must not include transfer outputs".to_owned());
+    }
+    privacy_validate_unshield_change(&witness.unshield_change)
+}
+
 fn privacy_parse_chain_id(witness: &PrivacyConfidentialWitnessV1) -> Result<ChainId, String> {
+    witness
+        .chain_id
+        .parse()
+        .map_err(|err| format!("invalid chain id: {err}"))
+}
+
+fn privacy_parse_chain_id_v2(witness: &PrivacyConfidentialWitnessV2) -> Result<ChainId, String> {
     witness
         .chain_id
         .parse()
@@ -353,6 +555,15 @@ fn privacy_zeroize_unshield_change(change: &mut [ConfidentialUnshieldOutputV3]) 
     for output in change {
         output.amount.zeroize();
         output.rho.zeroize();
+    }
+}
+
+fn privacy_zeroize_merkle_paths(paths: &mut [ConfidentialMerklePathV2]) {
+    for path in paths {
+        path.siblings.zeroize();
+        path.directions.zeroize();
+        path.witness_nodes.zeroize();
+        path.root.zeroize();
     }
 }
 
@@ -411,6 +622,61 @@ fn privacy_build_unshield_proof(witness: &PrivacyConfidentialWitnessV1) -> Resul
     Ok(outcome?.proof.bytes)
 }
 
+fn privacy_build_transfer_proof_v2(
+    witness: &PrivacyConfidentialWitnessV2,
+) -> Result<Vec<u8>, String> {
+    privacy_validate_transfer_witness_v2_shape(witness)?;
+    let chain_id = privacy_parse_chain_id_v2(witness)?;
+    let root_hint = privacy_fixed_32("root_hint", &witness.root_hint)?;
+    let vk_box = confidential_transfer_v2_vk_box()?;
+    let mut input_paths = privacy_merkle_paths_v2(&witness.input_paths);
+    let mut inputs = privacy_transfer_inputs(&witness.inputs);
+    let mut outputs = privacy_transfer_outputs(&witness.transfer_outputs);
+    let outcome = build_confidential_transfer_proof_v2_with_paths(
+        &chain_id,
+        &witness.asset_definition_id,
+        &witness.spend_key,
+        &input_paths,
+        &inputs,
+        &outputs,
+        root_hint,
+        CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+        &vk_box,
+    );
+    privacy_zeroize_transfer_inputs(&mut inputs);
+    privacy_zeroize_transfer_outputs(&mut outputs);
+    privacy_zeroize_merkle_paths(&mut input_paths);
+    Ok(outcome?.proof.bytes)
+}
+
+fn privacy_build_unshield_proof_v2(
+    witness: &PrivacyConfidentialWitnessV2,
+) -> Result<Vec<u8>, String> {
+    privacy_validate_unshield_witness_v2_shape(witness)?;
+    let chain_id = privacy_parse_chain_id_v2(witness)?;
+    let root_hint = privacy_fixed_32("root_hint", &witness.root_hint)?;
+    let vk_box = confidential_unshield_v3_vk_box()?;
+    let mut input_paths = privacy_merkle_paths_v2(&witness.input_paths);
+    let mut inputs = privacy_unshield_inputs(&witness.inputs);
+    let mut change = privacy_unshield_change(&witness.unshield_change);
+    let outcome = build_confidential_unshield_proof_v3_with_paths(
+        &chain_id,
+        &witness.asset_definition_id,
+        &witness.spend_key,
+        &input_paths,
+        &inputs,
+        &change,
+        witness.public_amount,
+        root_hint,
+        CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+        &vk_box,
+    );
+    privacy_zeroize_unshield_inputs(&mut inputs);
+    privacy_zeroize_unshield_change(&mut change);
+    privacy_zeroize_merkle_paths(&mut input_paths);
+    Ok(outcome?.proof.bytes)
+}
+
 fn privacy_success_result(
     request: &PrivacyProofRequestV1,
     proof: Vec<u8>,
@@ -444,9 +710,30 @@ fn privacy_success_result_invariants_hold(result: &PrivacyProofResultV1) -> bool
 
 fn privacy_dispatch_build(
     request: &PrivacyProofRequestV1,
-    validator: fn(&PrivacyConfidentialWitnessV1) -> Result<(), String>,
-    builder: fn(&PrivacyConfidentialWitnessV1) -> Result<Vec<u8>, String>,
+    v1_validator: fn(&PrivacyConfidentialWitnessV1) -> Result<(), String>,
+    v1_builder: fn(&PrivacyConfidentialWitnessV1) -> Result<Vec<u8>, String>,
+    v2_validator: fn(&PrivacyConfidentialWitnessV2) -> Result<(), String>,
+    v2_builder: fn(&PrivacyConfidentialWitnessV2) -> Result<Vec<u8>, String>,
 ) -> PrivacyProofResultV1 {
+    if let Ok(mut witness) = privacy_decode_witness_v2(&request.witness) {
+        if let Err(message) = v2_validator(&witness) {
+            witness.zeroize();
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                &message,
+                Some(request),
+            );
+        }
+        let outcome = v2_builder(&witness);
+        witness.zeroize();
+        return match outcome {
+            Ok(proof) => privacy_success_result(request, proof, false),
+            Err(message) => {
+                privacy_failure_result(PRIVACY_FFI_ERROR_PROVING_FAILED, &message, Some(request))
+            }
+        };
+    }
+
     let mut witness = match privacy_decode_witness(&request.witness) {
         Ok(witness) => witness,
         Err(message) => {
@@ -457,11 +744,11 @@ fn privacy_dispatch_build(
             );
         }
     };
-    if let Err(message) = validator(&witness) {
+    if let Err(message) = v1_validator(&witness) {
         witness.zeroize();
         return privacy_failure_result(PRIVACY_FFI_ERROR_INVALID_REQUEST, &message, Some(request));
     }
-    let outcome = builder(&witness);
+    let outcome = v1_builder(&witness);
     witness.zeroize();
     match outcome {
         // Build does not assert chain admission, so it does not claim `verified`.
@@ -513,6 +800,8 @@ pub(crate) fn privacy_production_dispatch(
                 request,
                 privacy_validate_transfer_witness_shape,
                 privacy_build_transfer_proof,
+                privacy_validate_transfer_witness_v2_shape,
+                privacy_build_transfer_proof_v2,
             )
         }
         (PRIVACY_CONFIDENTIAL_UNSHIELD_ALGORITHM_ID, PrivacyProofOperationV1::Build) => {
@@ -520,6 +809,8 @@ pub(crate) fn privacy_production_dispatch(
                 request,
                 privacy_validate_unshield_witness_shape,
                 privacy_build_unshield_proof,
+                privacy_validate_unshield_witness_v2_shape,
+                privacy_build_unshield_proof_v2,
             )
         }
         (PRIVACY_CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID, PrivacyProofOperationV1::Verify) => {
@@ -539,14 +830,25 @@ pub(crate) fn privacy_production_dispatch(
 #[cfg(test)]
 pub(crate) mod test_fixtures {
     use iroha_core::zk::confidential_v2::{
-        compute_confidential_root_v2, derive_confidential_diversifier_v2,
-        derive_confidential_note_v2, derive_confidential_owner_tag_v2_with_diversifier,
+        compute_confidential_merkle_path_v2, compute_confidential_root_v2,
+        derive_confidential_diversifier_v2, derive_confidential_note_v2,
+        derive_confidential_owner_tag_v2_with_diversifier,
     };
 
     use super::*;
 
-    const TEST_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+    const TEST_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
     const TEST_ASSET_ID: &str = "xor#universal";
+
+    fn path_witness(path: ConfidentialMerklePathV2) -> PrivacyConfidentialMerklePathWitnessV2 {
+        PrivacyConfidentialMerklePathWitnessV2 {
+            siblings: path.siblings.into_iter().map(Vec::from).collect(),
+            directions: path.directions,
+            // Match the compact SDK V2 wire: native recomputes these nodes.
+            witness_nodes: Vec::new(),
+            root: path.root.to_vec(),
+        }
+    }
 
     pub(super) fn valid_transfer_witness() -> PrivacyConfidentialWitnessV1 {
         let spend_key = [0x11_u8; 32];
@@ -626,6 +928,48 @@ pub(crate) mod test_fixtures {
         }
     }
 
+    pub(super) fn valid_transfer_witness_v2() -> PrivacyConfidentialWitnessV2 {
+        let legacy = valid_transfer_witness();
+        let tree = privacy_tree_commitments(&legacy.tree_commitments);
+        PrivacyConfidentialWitnessV2 {
+            chain_id: legacy.chain_id,
+            asset_definition_id: legacy.asset_definition_id,
+            spend_key: legacy.spend_key,
+            input_paths: vec![
+                path_witness(compute_confidential_merkle_path_v2(&tree, 0).expect("input path")),
+                path_witness(
+                    compute_confidential_merkle_path_v2(&tree, tree.len()).expect("next-zero path"),
+                ),
+            ],
+            inputs: legacy.inputs,
+            transfer_outputs: legacy.transfer_outputs,
+            unshield_change: legacy.unshield_change,
+            public_amount: legacy.public_amount,
+            root_hint: legacy.root_hint,
+        }
+    }
+
+    pub(super) fn valid_unshield_witness_v2() -> PrivacyConfidentialWitnessV2 {
+        let legacy = valid_unshield_witness();
+        let tree = privacy_tree_commitments(&legacy.tree_commitments);
+        PrivacyConfidentialWitnessV2 {
+            chain_id: legacy.chain_id,
+            asset_definition_id: legacy.asset_definition_id,
+            spend_key: legacy.spend_key,
+            input_paths: vec![
+                path_witness(compute_confidential_merkle_path_v2(&tree, 0).expect("input path")),
+                path_witness(
+                    compute_confidential_merkle_path_v2(&tree, tree.len()).expect("next-zero path"),
+                ),
+            ],
+            inputs: legacy.inputs,
+            transfer_outputs: legacy.transfer_outputs,
+            unshield_change: legacy.unshield_change,
+            public_amount: legacy.public_amount,
+            root_hint: legacy.root_hint,
+        }
+    }
+
     pub(super) fn overflowing_unshield_witness() -> PrivacyConfidentialWitnessV1 {
         let spend_key = [0xA1_u8; 32];
         let input_0_rho = [0xB1_u8; 32];
@@ -678,12 +1022,20 @@ pub(crate) mod test_fixtures {
         norito::to_bytes(witness).expect("encode confidential witness")
     }
 
+    pub(super) fn encode_witness_v2(witness: &PrivacyConfidentialWitnessV2) -> Vec<u8> {
+        norito::to_bytes(witness).expect("encode path-based confidential witness")
+    }
+
     pub(crate) fn valid_transfer_witness_bytes() -> Vec<u8> {
         encode_witness(&valid_transfer_witness())
     }
 
     pub(crate) fn valid_unshield_witness_bytes() -> Vec<u8> {
         encode_witness(&valid_unshield_witness())
+    }
+
+    pub(crate) fn valid_transfer_witness_v2_bytes() -> Vec<u8> {
+        encode_witness_v2(&valid_transfer_witness_v2())
     }
 }
 
@@ -692,8 +1044,8 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
     use super::test_fixtures::{
-        encode_witness, overflowing_unshield_witness, valid_transfer_witness,
-        valid_unshield_witness,
+        encode_witness, encode_witness_v2, overflowing_unshield_witness, valid_transfer_witness,
+        valid_transfer_witness_v2, valid_unshield_witness, valid_unshield_witness_v2,
     };
     use super::*;
     use crate::{
@@ -745,7 +1097,7 @@ mod tests {
 
     fn sdk_transfer_witness_contract_fixture() -> PrivacyConfidentialWitnessV1 {
         PrivacyConfidentialWitnessV1 {
-            chain_id: "809574f5-fee7-5e69-bfcf-52451e42d50f".to_owned(),
+            chain_id: "fc56984b-2be7-431d-840e-21514d1883f0".to_owned(),
             asset_definition_id: "xor#universal".to_owned(),
             spend_key: vec![0x11; 32],
             tree_commitments: vec![vec![0x10; 32]],
@@ -767,7 +1119,7 @@ mod tests {
     }
 
     fn sdk_transfer_witness_contract_archive() -> Vec<u8> {
-        let sdk_archive_base64 = "TlJUMAAAfsqLqoiuWPS/Oqqw1+q/rAC2AQAAAAAAAB8kbLx8YYiUAgAAAAAAAAAAJSQ4MDk1NzRmNS1mZWU3LTVlNjktYmZjZi01MjQ1MWU0MmQ1MGYODXhvciN1bml2ZXJzYWwoIAAAAAAAAAARERERERERERERERERERERERERERERERERERERERERETEBAAAAAAAAACggAAAAAAAAABAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQdQEAAAAAAAAAbBAHAAAAAAAAAAAAAAAAAAAAKCAAAAAAAAAAIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIoIAAAAAAAAAAzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMwgAAAAAAAAAAGwBAAAAAAAAAGMQBwAAAAAAAAAAAAAAAAAAACggAAAAAAAAAEREREREREREREREREREREREREREREREREREREREREREKCAAAAAAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVUIAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAACggAAAAAAAAAGZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZm";
+        let sdk_archive_base64 = "TlJUMAAAfsqLqoiuWPS/Oqqw1+q/rAC2AQAAAAAAAB8kbLx8YYiUAgAAAAAAAAAAJSRmYzU2OTg0Yi0yYmU3LTQzMWQtODQwZS0yMTUxNGQxODgzZjAODXhvciN1bml2ZXJzYWwoIAAAAAAAAAARERERERERERERERERERERERERERERERERERERERERETEBAAAAAAAAACggAAAAAAAAABAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQdQEAAAAAAAAAbBAHAAAAAAAAAAAAAAAAAAAAKCAAAAAAAAAAIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIoIAAAAAAAAAAzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMwgAAAAAAAAAAGwBAAAAAAAAAGMQBwAAAAAAAAAAAAAAAAAAACggAAAAAAAAAEREREREREREREREREREREREREREREREREREREREREREKCAAAAAAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVUIAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAACggAAAAAAAAAGZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZm";
         BASE64_STANDARD
             .decode(sdk_archive_base64)
             .expect("SDK golden witness archive base64 decodes")
@@ -784,6 +1136,20 @@ mod tests {
     }
 
     #[test]
+    fn path_witness_schema_path_is_versioned_without_mutating_v1() {
+        assert_eq!(
+            <PrivacyConfidentialWitnessV2 as norito::NoritoSerialize>::schema_hash(),
+            norito::core::schema_hash_for_name(
+                "connect_norito_bridge::privacy_production::PrivacyConfidentialWitnessV2",
+            ),
+        );
+        assert_ne!(
+            <PrivacyConfidentialWitnessV1 as norito::NoritoSerialize>::schema_hash(),
+            <PrivacyConfidentialWitnessV2 as norito::NoritoSerialize>::schema_hash(),
+        );
+    }
+
+    #[test]
     fn sdk_confidential_witness_archive_decodes_to_native_contract() {
         let sdk_archive = sdk_transfer_witness_contract_archive();
         let native_archive = encode_witness(&sdk_transfer_witness_contract_fixture());
@@ -791,7 +1157,7 @@ mod tests {
 
         let witness = privacy_decode_witness(&sdk_archive).expect("SDK witness decodes natively");
 
-        assert_eq!(witness.chain_id, "809574f5-fee7-5e69-bfcf-52451e42d50f");
+        assert_eq!(witness.chain_id, "fc56984b-2be7-431d-840e-21514d1883f0");
         assert_eq!(witness.asset_definition_id, "xor#universal");
         assert_eq!(witness.spend_key, vec![0x11; 32]);
         assert_eq!(witness.tree_commitments, vec![vec![0x10; 32]]);
@@ -838,6 +1204,27 @@ mod tests {
     }
 
     #[test]
+    fn path_based_transfer_build_then_verify_round_trips() {
+        let witness = encode_witness_v2(&valid_transfer_witness_v2());
+        let build = privacy_production_dispatch(
+            &build_request(PRIVACY_CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID, witness),
+            PrivacyProofOperationV1::Build,
+        );
+        assert_eq!(build.status, PRIVACY_FFI_STATUS_OK, "{}", build.message);
+        assert_eq!(build.error_code, 0);
+        assert!(!build.proof.is_empty());
+        let verify = privacy_production_dispatch(
+            &verify_request(
+                PRIVACY_CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID,
+                build.proof.clone(),
+            ),
+            PrivacyProofOperationV1::Verify,
+        );
+        assert_eq!(verify.status, PRIVACY_FFI_STATUS_OK, "{}", verify.message);
+        assert!(verify.verified);
+    }
+
+    #[test]
     fn unshield_build_then_verify_round_trips() {
         let witness = encode_witness(&valid_unshield_witness());
         let build = privacy_production_dispatch(
@@ -860,6 +1247,54 @@ mod tests {
         assert_eq!(verify.status, PRIVACY_FFI_STATUS_OK);
         assert!(verify.verified);
         assert!(verify.public_inputs.is_empty());
+    }
+
+    #[test]
+    fn path_based_unshield_build_then_verify_round_trips() {
+        let witness = encode_witness_v2(&valid_unshield_witness_v2());
+        let build = privacy_production_dispatch(
+            &build_request(PRIVACY_CONFIDENTIAL_UNSHIELD_ALGORITHM_ID, witness),
+            PrivacyProofOperationV1::Build,
+        );
+        assert_eq!(build.status, PRIVACY_FFI_STATUS_OK, "{}", build.message);
+        assert_eq!(build.error_code, 0);
+        assert!(!build.proof.is_empty());
+        let verify = privacy_production_dispatch(
+            &verify_request(
+                PRIVACY_CONFIDENTIAL_UNSHIELD_ALGORITHM_ID,
+                build.proof.clone(),
+            ),
+            PrivacyProofOperationV1::Verify,
+        );
+        assert_eq!(verify.status, PRIVACY_FFI_STATUS_OK, "{}", verify.message);
+        assert!(verify.verified);
+    }
+
+    #[test]
+    fn path_based_witness_rejects_root_and_direction_tampering() {
+        let mut root_tampered = valid_transfer_witness_v2();
+        root_tampered.input_paths[0].root[0] ^= 1;
+        let rejected = privacy_production_dispatch(
+            &build_request(
+                PRIVACY_CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID,
+                encode_witness_v2(&root_tampered),
+            ),
+            PrivacyProofOperationV1::Build,
+        );
+        assert_eq!(rejected.status, PRIVACY_FFI_STATUS_ERROR);
+        assert_eq!(rejected.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
+
+        let mut direction_tampered = valid_transfer_witness_v2();
+        direction_tampered.input_paths[0].directions[0] ^= 1;
+        let rejected = privacy_production_dispatch(
+            &build_request(
+                PRIVACY_CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID,
+                encode_witness_v2(&direction_tampered),
+            ),
+            PrivacyProofOperationV1::Build,
+        );
+        assert_eq!(rejected.status, PRIVACY_FFI_STATUS_ERROR);
+        assert_eq!(rejected.error_code, PRIVACY_FFI_ERROR_PROVING_FAILED);
     }
 
     #[test]

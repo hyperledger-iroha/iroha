@@ -79,16 +79,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<nexus::RegisterVerifiedNexusFeeBudget>,
     InstructionRegistry::register_slice::<nexus::UpsertFeeSponsorPolicy>,
     InstructionRegistry::register_slice::<nexus::RemoveFeeSponsorPolicy>,
-    |registry| {
-        registry.register_with_id_slice::<bridge::UpsertSccpRouteManifest>(
-            "iroha_data_model::isi::bridge::UpsertSccpRouteManifest",
-        )
-    },
-    |registry| {
-        registry.register_with_id_slice::<bridge::RemoveSccpRouteManifest>(
-            "iroha_data_model::isi::bridge::RemoveSccpRouteManifest",
-        )
-    },
+    InstructionRegistry::register_slice::<bridge::ApplySccpRouteGovernance>,
     InstructionRegistry::register_slice::<oracle::RegisterOracleFeed>,
     InstructionRegistry::register_slice::<oracle::SubmitOracleObservation>,
     InstructionRegistry::register_slice::<oracle::AggregateOracleFeed>,
@@ -305,7 +296,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     #[cfg(feature = "governance")]
     InstructionRegistry::register_slice::<governance::ProposeRuntimeUpgradeProposal>,
     #[cfg(feature = "governance")]
-    InstructionRegistry::register_slice::<governance::ProposeSccpRouteManifest>,
+    InstructionRegistry::register_slice::<governance::ProposeSccpRouteGovernance>,
     #[cfg(feature = "governance")]
     InstructionRegistry::register_slice::<governance::CastZkBallot>,
     #[cfg(feature = "governance")]
@@ -1476,20 +1467,8 @@ mod tests {
         assert!(registry.contains(repo::RepoInstructionBox::WIRE_ID));
         assert!(registry.contains(settlement::SettlementInstructionBox::WIRE_ID));
         assert!(
-            registry.contains(std::any::type_name::<bridge::UpsertSccpRouteManifest>()),
-            "SCCP route manifest upsert Rust type path missing from default registry"
-        );
-        assert!(
-            registry.contains("iroha_data_model::isi::bridge::UpsertSccpRouteManifest"),
-            "SCCP route manifest upsert stable wire id missing from default registry"
-        );
-        assert!(
-            registry.contains(std::any::type_name::<bridge::RemoveSccpRouteManifest>()),
-            "SCCP route manifest removal Rust type path missing from default registry"
-        );
-        assert!(
-            registry.contains("iroha_data_model::isi::bridge::RemoveSccpRouteManifest"),
-            "SCCP route manifest removal stable wire id missing from default registry"
+            registry.contains(std::any::type_name::<bridge::ApplySccpRouteGovernance>()),
+            "atomic SCCP route-governance type path missing from default registry"
         );
     }
 

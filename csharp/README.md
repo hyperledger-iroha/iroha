@@ -50,10 +50,16 @@ This initial slice provides the foundation needed for a usable managed SDK:
 - direct contract instance and instance-inventory response DTO construction
   rejects malformed contract ids, code hashes, and namespace text before
   callers can serialize or trust manually constructed instance listings
-- direct contract manifest/code-record and verified-source reference/job DTO
-  construction rejects malformed manifest hashes, source provenance text,
-  verified-source job ids/status/timestamps/messages, and actual-code hashes
-  before callers can serialize or trust manually constructed metadata records
+- contract manifest/code-record DTOs preserve the complete Kotodama V1 shape:
+  `seiyaku_name`, branded entrypoints, exact flat-preorder argument/return schemas,
+  dynamic access hints and completeness, triggers, state, error codes, `kotoba`,
+  and typed provenance; parsing rejects unknown fields, malformed checksummed
+  Norito hashes, wrapper/manifest hash mismatches, and inconsistent schemas
+  before callers trust metadata records; aggregate types use one flat preorder
+  tape where a `List` node carries only `capacity` and its element subtree
+  immediately follows, while retired nested `element` payloads, truncated or
+  overlong tapes, and forged core-query `View`/`QueryPage<View>` shapes are
+  rejected
 - direct contract code-view DTO construction rejects malformed access-hint
   keys, entrypoint params, entrypoint metadata, syscall names, analysis memory
   and syscall lists, top-level code/ABI hashes, permissions, warnings, and
@@ -246,7 +252,13 @@ This initial slice provides the foundation needed for a usable managed SDK:
   `JsonData`; direct `ToriiServerSentEvent` metadata rejects empty,
   surrounding-whitespace, or control-character `Event`/`Id` values plus
   negative retry milliseconds, with inbound parser guard failures reported as
-  `JsonException` stream errors; typed pipeline/proof SSE payloads reject
+  `JsonException` stream errors; the canonical `/v1/events/sse` helpers expose
+  no resume argument and never emit `Last-Event-ID`, because that live feed has
+  no replay log; typed pipeline/proof streams surface a terminal
+  `event: stream_error` as `ToriiStreamException` with its stable code, message,
+  dropped-message count, and replay flag before ordinary category filtering;
+  malformed terminal envelopes fail closed as `JsonException`; typed
+  pipeline/proof SSE payloads reject
   malformed, JSON-null, or duplicate-key raw data frames plus missing
   proof-event selector text before projection, and raw
   `ToriiPipelineEvent`/`ToriiProofEvent` DTO deserialization
@@ -295,7 +307,8 @@ This initial slice provides the foundation needed for a usable managed SDK:
   relative, absolute, scheme-relative, raw-colon, raw-backslash, malformed
   percent-escape, percent-decoded control-byte, and raw/percent-encoded
   dot-segment paths before dispatch or canonical signing, and validates
-  optional query, single-media-range `Accept`, and `Last-Event-ID` text, with
+  optional query and single-media-range `Accept` text; the replay-capable
+  explorer stream helpers separately validate `Last-Event-ID` text, with
   optional query text
   rejecting raw whitespace, ambiguous empty segments, empty/blank decoded
   parameter names, malformed percent escapes, invalid percent-encoded UTF-8,
@@ -400,6 +413,67 @@ returned byte array is snapshotted on assignment and access. Optional content
 relative paths must already be exact relative paths: padded values, empty
 segments, `.`/`..` traversal components, backslash separators, and control
 characters fail before the gateway request is sent.
+
+## Torii Offline API
+
+The C# SDK exposes only the canonical first-release Offline lifecycle:
+
+- `GET /v1/offline/readiness`
+- `POST /v1/offline/top-up`
+- `POST /v1/offline/redeem`
+- `GET /v1/offline/operations/{operation_id}`
+
+There is no nested `/offline/v2`, note-issuer route, whole-payload base64
+wrapper, or caller-supplied operation-id argument. `OfflineTopUpRequest` and
+`OfflineRedeemRequest` accept the direct canonical Norito archive, require the
+stable public request schema, uncompressed compact field framing, an exact
+8/11-field root, no padding or trailing data, and derive `Idempotency-Key` from
+the embedded nonzero 32-byte operation id.
+
+```csharp
+using Hyperledger.Iroha.Offline;
+using Hyperledger.Iroha.Torii;
+
+using var torii = new ToriiClient(new Uri("https://torii.example"));
+
+var readiness = await torii.GetOfflineReadinessAsync("xor#wonderland");
+Console.WriteLine($"evaluated at {readiness.EvaluatedBlockHeight}: {readiness.EvaluatedBlockHash}");
+if (!readiness.Ready)
+{
+    foreach (var blocker in readiness.Blockers)
+    {
+        Console.WriteLine($"{blocker.Code}: {blocker.Message}");
+    }
+}
+
+// Produced by the typed wallet/prover path; this is the request itself, not a wrapper.
+byte[] canonicalTopUpArchive = GetCanonicalTopUpArchive();
+var accepted = await torii.SubmitOfflineTopUpAsync(
+    new OfflineTopUpRequest(canonicalTopUpArchive));
+
+OfflineOperationStatus status =
+    await torii.GetOfflineOperationStatusAsync(accepted.OperationId);
+switch (status)
+{
+    case OfflineOperationStatus.Pending pending:
+        Console.WriteLine($"pending: {pending.TransactionHash}");
+        break;
+    case OfflineOperationStatus.Applied applied:
+        Console.WriteLine($"applied: {applied.Result.GetType().Name}");
+        break;
+    case OfflineOperationStatus.Rejected rejected:
+        Console.WriteLine($"{rejected.Error.Code}: {rejected.Error.Message}");
+        break;
+}
+```
+
+Operation references and statuses are negotiated as
+`application/x-norito`. The decoder returns closed pending/applied/rejected
+models, distinct top-up/redemption results, a schema-bound top-up anchor for
+the wallet prover, and closed queue/AXT error details. It rejects checksum,
+schema, padding, non-minimal length, unknown variant, trailing-data, response
+route/id, media-type, status-code, and `Location` inconsistencies before the
+result reaches application code.
 
 ## Offline Cash Lifecycle
 
@@ -821,11 +895,13 @@ an alternate decode route.
 `RequiresPreviousLineageVerifierRecordForAppend(...)` tell app code when to
 reject an unknown previous proof circuit and when to include
 `previous_lineage_verifier_record`. `RecursiveSpendLineageWitnesslessMaxHopsV1`
-is `64`, and `RecursiveSpendLineageTransitionCircuitWiredV1` is `true`:
-witnessless Reserved-lineage online redemption is available for lineage bundles
-inside the 64-hop cap. `CanAppendWitnesslessLineage(...)` returns `true` for
-previous hop counts `1..63`, and `PreferredAppendOutputCircuitId(...)` selects
-Reserved-lineage append inside that range.
+is `64`, but it is only the protocol bound.
+`RecursiveSpendLineageTransitionCircuitWiredV1` is `false`, so witnessless
+Reserved-lineage redeem and append fail closed for every circuit and hop count,
+and redeem requires a record-backed lineage witness.
+`CanAppendWitnesslessLineage(...)` returns `false` for every input, and
+`PreferredAppendOutputCircuitId(...)` selects semantic recursive aggregation
+while transition verification is unavailable.
 `previous_recursive_proof_open_envelopes_archive` is opaque native prover
 material: C# wallet code must pass it through Norito unchanged and must not
 construct, rewrite, or mutate it. The native bridge validates `vk_commitment`,
@@ -862,10 +938,9 @@ requests must still include the append lineage key artifacts in the raw Norito
 request. Use `LineageKeyArtifactsForInit(...)` and
 `LineageKeyArtifactsForAppend(...)` to package and validate these
 verifier/proving key artifacts before building a witnessless Reserved-lineage
-request.
-Semantic append is bounded by the separate `CompactTokenMaxHops` constant;
-witnessless Reserved-lineage append and redeem use
-`RecursiveSpendLineageWitnesslessMaxHopsV1`.
+request once transition verification is wired. Semantic append is bounded by
+the separate `CompactTokenMaxHops` constant; the witnessless max-hop constant
+does not enable witnessless admission.
 Reserved-lineage append output is valid only when the previous bundle is
 already Reserved-lineage; semantic previous bundles keep using semantic append
 plus a record-backed lineage witness.
@@ -939,7 +1014,7 @@ The live smoke currently probes unauthenticated read endpoints:
 - `/v1/vpn/profile`
 - `/v1/sorafs/denylist/catalog` when the deployment exposes the denylist surface
 - `/v1/sorafs/denylist/packs/{pack_id}` when the catalog is available and non-empty
-- `/v1/aliases/by_account`
+- `/v1/aliases/by-account`
 - `/v1/accounts/faucet/puzzle`
 - `/v1/space-directory/uaids/{uaid}`
 - `/v1/space-directory/uaids/{uaid}/manifests`

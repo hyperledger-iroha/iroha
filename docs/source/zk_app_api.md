@@ -145,7 +145,7 @@ Metrics:
 The background prover worker (disabled by default) scans attachments and produces a JSON report per attachment. It verifies `ProofAttachment` payloads (single or list) using the core ZK backend verifiers:
 
 - Norito (`application/x-norito`): the body must decode as `ProofAttachment` or `ProofAttachmentList`.
-- JSON (`application/json`, `text/json`): the body must decode as a `ProofAttachment` object, a `ProofAttachmentList` (base64 string), or a JSON array of `ProofAttachment`.
+- JSON (`application/json`): the body must decode as a `ProofAttachment` object, a `ProofAttachmentList` (base64 string), or a JSON array of `ProofAttachment`.
 - ZK1/TLV envelopes are not accepted as top‑level attachment payloads; they are tagged (`zk1_tags`) but reported as `ok=false`.
 
 Verification rules:
@@ -213,7 +213,7 @@ attachments_ttl_secs = 604800         # 7 days
 attachments_max_bytes = 4_194_304     # 4 MiB
 attachments_per_tenant_max_count = 128
 attachments_per_tenant_max_bytes = 8_388_608   # 8 MiB aggregate per tenant
-attachments_allowed_mime_types = ["application/x-norito", "application/json", "text/json", "application/x-zk1"]
+attachments_allowed_mime_types = ["application/x-norito", "application/json", "application/x-zk1"]
 attachments_max_expanded_bytes = 16_777_216    # 16 MiB expanded payload cap
 attachments_max_archive_depth = 2              # max nested gzip/zstd layers
 attachments_sanitize_timeout_ms = 1000         # sanitizer timeout (ms)
@@ -246,6 +246,7 @@ proof_rate_per_minute = 120           # steady-state tokens/min (None to disable
 proof_burst = 60                      # burst tokens per endpoint key
 proof_max_body_bytes = 8_388_608      # maximum submission payload size (bytes)
 proof_body_max_inflight = 8           # aggregate pre-parse body admission
+proof_body_read_timeout_ms = 15000    # absolute deadline for each admitted body
 proof_max_list_limit = 200            # maximum allowed `limit` for proofs list
 proof_request_timeout_ms = 1000       # wall-clock timeout for list/count
 proof_cache_max_age_secs = 30         # Cache-Control max-age for proof fetches

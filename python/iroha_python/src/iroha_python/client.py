@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import copy
 import hashlib
 import json
 import logging
@@ -47,6 +48,33 @@ from iroha_torii_client.client import (
     NetworkTimeSnapshot,
     NetworkTimeStatus,
     MultisigResponse,
+    OfflineAppliedOperation,
+    OfflineAppliedResult,
+    OfflineAxtErrorDetails,
+    OfflineAuthorizationJson,
+    OfflineAssetScale,
+    OfflineBranchClaimJson,
+    OfflineBranchPathJson,
+    OfflineLanePrivacyMerkleVariantJson,
+    OfflineLanePrivacyMerkleWitnessJson,
+    OfflineLanePrivacyProofJson,
+    OfflineLanePrivacySnarkVariantJson,
+    OfflineLanePrivacySnarkWitnessJson,
+    OfflineLanePrivacyWitnessJson,
+    OfflineLineageModeJson,
+    OfflineLineageNodeJson,
+    OfflineLineageWitnessJson,
+    OfflineMerkleProofJson,
+    OfflineOperationKind,
+    OfflineOperationReference,
+    OfflineOperationStatus,
+    OfflinePendingState,
+    OfflinePendingOperation,
+    OfflineProofAttachmentJson,
+    OfflineProofBoxJson,
+    OfflineProofBackend,
+    OfflinePeerSplitTransitionJson,
+    OfflinePeerSplitTransitionVariantJson,
     OfflineReadiness,
     SumeragiV2AdapterQueueStatus,
     SumeragiV2BlockSubject,
@@ -58,6 +86,42 @@ from iroha_torii_client.client import (
     SumeragiV2Status as _SumeragiV2Status,
     SumeragiV2TimeoutReference,
     SumeragiV2TxQueueStatus,
+    OfflineReadinessBlocker,
+    OfflineRedeemChangeJson,
+    OfflineRedeemOperationResult,
+    OfflineRedeemRequest,
+    OfflineRedeemResult,
+    OfflineRecursiveSpendBundleJson,
+    OfflineRecursiveSpendProofJson,
+    OfflineRecursiveSpendStatementJson,
+    OfflineRecursiveSpendTransitionJson,
+    OfflineRedemptionChangeTransitionJson,
+    OfflineRedemptionChangeTransitionVariantJson,
+    OfflineRedemptionIntentJson,
+    OfflineRejectedOperation,
+    OfflineQueueErrorDetails,
+    OfflineErrorDetails,
+    OfflineErrorEnvelope,
+    OfflineScaledAmount,
+    OfflineScaledAmountJson,
+    OfflineSpendableNote,
+    OfflineSpendableNoteJson,
+    OfflineSpendBranchJson,
+    OfflineTopUpAnchor,
+    OfflineTopUpAnchorReferenceJson,
+    OfflineTopUpOperationResult,
+    OfflineTopUpRequest,
+    OfflineTopUpResult,
+    OfflineVerifierKeyId,
+    OfflineVerifierKeyIdJson,
+    OfflineVerifierStatus,
+    OfflineUnshieldPublicInputsJson,
+    OfflineVerifyingKeyJson,
+    OfflineVerifyingKeyRecordJson,
+    OfflineVerifiedFoldBundleJson,
+    OfflineVerifiedFoldRecordBundleJson,
+    OfflineVerifiedFoldStepJson,
+    OfflineVerifiedFoldVerifierRecordJson,
     SubscriptionActionResult,
     SubscriptionCreateResult,
     SubscriptionListItem,
@@ -2788,7 +2852,7 @@ _DEFAULT_RESOLVED_CONFIG = ResolvedToriiClientConfig(
 
 @dataclass(frozen=True)
 class SorafsPorSubmissionResponse:
-    """Response wrapper for PoR challenge/proof submissions."""
+    """Response wrapper for PoR proof submissions."""
 
     status: str
 
@@ -4117,41 +4181,1166 @@ class GovernanceUnlockStats:
         )
 
 
+_KOTODAMA_RESERVED_IDENTIFIERS = frozenset(
+    {
+        "authorize",
+        "break",
+        "const",
+        "continue",
+        "else",
+        "enum",
+        "error",
+        "false",
+        "fn",
+        "for",
+        "hajimari",
+        "始まり",
+        "if",
+        "in",
+        "kaizen",
+        "改善",
+        "kotoage",
+        "言挙げ",
+        "let",
+        "match",
+        "module",
+        "return",
+        "seiyaku",
+        "誓約",
+        "state",
+        "struct",
+        "trigger",
+        "true",
+        "var",
+        "view",
+    }
+)
+_KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS = frozenset(
+    {
+        "i64",
+        "u128",
+        "bool",
+        "string",
+        "bytes",
+        "Amount",
+        "Json",
+        "AccountId",
+        "AssetDefinitionId",
+        "AssetId",
+        "DomainId",
+        "Name",
+        "NftId",
+        "DataSpaceId",
+        "Option",
+        "Result",
+        "List",
+        "StateMap",
+        "Secret",
+        "AccountView",
+        "AssetView",
+        "AssetDefinitionView",
+        "DomainView",
+        "NftView",
+        "QueryPage",
+        "AxtDescriptor",
+        "AssetHandle",
+        "ProofBlob",
+        "SoracloudRequest",
+        "SoracloudResponse",
+        "state_map_get",
+    }
+)
+_KOTODAMA_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _contract_object(value: Any, path: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{path} must be an object")
+    return value
+
+
+def _contract_array(value: Any, path: str) -> Sequence[Any]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise TypeError(f"{path} must be an array")
+    return value
+
+
+def _contract_required_string(value: Any, path: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or not value.strip()
+        or value.strip() != value
+    ):
+        raise TypeError(f"{path} must be an exact non-empty string")
+    return value
+
+
+def _contract_optional_string(value: Any, path: str) -> Optional[str]:
+    if value is None:
+        return None
+    return _contract_required_string(value, path)
+
+
+def _contract_string_tuple(value: Any, path: str) -> Tuple[str, ...]:
+    return tuple(
+        _contract_required_string(item, f"{path}[{index}]")
+        for index, item in enumerate(_contract_array(value, path))
+    )
+
+
+def _canonical_kotodama_identifier(value: str, *, declaration: bool = False) -> bool:
+    return (
+        _KOTODAMA_IDENTIFIER_RE.fullmatch(value) is not None
+        and value not in _KOTODAMA_RESERVED_IDENTIFIERS
+        and not value.startswith("__kotodama_link_")
+        and (
+            not declaration
+            or value not in _KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS
+        )
+    )
+
+
+def _canonical_kotodama_entrypoint(value: str) -> bool:
+    return value in {"hajimari", "始まり", "kaizen", "改善"} or (
+        _canonical_kotodama_identifier(value, declaration=True)
+    )
+
+
+def _contract_hash_crc16(body: str) -> int:
+    crc = 0xFFFF
+    for byte in f"hash:{body}".encode("ascii"):
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = (
+                ((crc << 1) ^ 0x1021) & 0xFFFF
+                if crc & 0x8000
+                else (crc << 1) & 0xFFFF
+            )
+    return crc
+
+
+def _contract_canonical_hash_hex(value: Any, path: str) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"{path} must be a canonical checksummed Norito Hash literal")
+    matched = re.fullmatch(r"hash:([0-9A-F]{64})#([0-9A-F]{4})", value)
+    if matched is None:
+        raise TypeError(f"{path} must be a canonical checksummed Norito Hash literal")
+    body, checksum = matched.groups()
+    expected = _contract_hash_crc16(body)
+    if int(checksum, 16) != expected:
+        raise TypeError(f"{path} has an invalid Norito literal checksum")
+    raw = bytes.fromhex(body)
+    if raw[-1] & 1 != 1:
+        raise TypeError(f"{path} must set the Iroha Hash marker bit")
+    return body.lower()
+
+
+def _contract_hash_convenience_hex(value: Any, path: str) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise TypeError(f"{path} must be canonical lowercase 64-hex")
+    if bytes.fromhex(value)[-1] & 1 != 1:
+        raise TypeError(f"{path} must set the Iroha Hash marker bit")
+    return value
+
+
+class ContractEntrypointKind(str, Enum):
+    """Canonical V1 category encoded in an entrypoint descriptor."""
+
+    KOTOAGE = "Kotoage"
+    VIEW = "View"
+    HAJIMARI = "Hajimari"
+    KAIZEN = "Kaizen"
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ContractEntrypointKind":
+        tagged = _contract_object(payload, "entrypoint kind")
+        if "value" not in tagged or tagged["value"] is not None:
+            raise TypeError("entrypoint kind `value` must be null")
+        label = _contract_required_string(tagged.get("kind"), "entrypoint kind.kind")
+        try:
+            return cls(label)
+        except ValueError as exc:
+            raise TypeError(f"unsupported Kotodama entrypoint kind `{label}`") from exc
+
+
+class EntrypointValueKindV1(str, Enum):
+    """Leaf representation used by the exact V1 public boundary schema."""
+
+    INT = "Int"
+    U128 = "U128"
+    BOOL = "Bool"
+    STRING = "String"
+    AMOUNT = "Amount"
+    JSON = "Json"
+    NAME = "Name"
+    ACCOUNT_ID = "AccountId"
+    ASSET_DEFINITION_ID = "AssetDefinitionId"
+    ASSET_ID = "AssetId"
+    DOMAIN_ID = "DomainId"
+    NFT_ID = "NftId"
+    DATA_SPACE_ID = "DataSpaceId"
+    BLOB = "Blob"
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "EntrypointValueKindV1":
+        tagged = _contract_object(payload, "entrypoint value kind")
+        if "value" not in tagged or tagged["value"] is not None:
+            raise TypeError("entrypoint value kind `value` must be null")
+        label = _contract_required_string(tagged.get("kind"), "entrypoint value kind.kind")
+        try:
+            return cls(label)
+        except ValueError as exc:
+            raise TypeError(f"unsupported Kotodama boundary value kind `{label}`") from exc
+
+
+class EntrypointValueTypeNodeKindV1(str, Enum):
+    """One exact V1 recursive boundary-schema node category."""
+
+    STRUCT = "Struct"
+    TUPLE = "Tuple"
+    OPTION = "Option"
+    RESULT = "Result"
+    LIST = "List"
+    LEAF = "Leaf"
+
+
+@dataclass(frozen=True)
+class EntrypointStructTypeNodeV1:
+    """Named product metadata in an exact V1 boundary schema."""
+
+    name: str
+    fields: Tuple[str, ...]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "EntrypointStructTypeNodeV1":
+        value = _contract_object(payload, "entrypoint struct node")
+        return cls(
+            name=_contract_required_string(value.get("name"), "entrypoint struct node.name"),
+            fields=_contract_string_tuple(
+                value.get("fields"), "entrypoint struct node.fields"
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class EntrypointListTypeNodeV1:
+    """Bounded-list metadata in the flat V1 boundary-schema tape."""
+
+    capacity: int
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "EntrypointListTypeNodeV1":
+        value = _contract_object(payload, "entrypoint list node")
+        if set(value) != {"capacity"}:
+            raise TypeError(
+                "entrypoint list node must contain only `capacity`; "
+                "its element subtree follows in the enclosing node tape"
+            )
+        capacity = value.get("capacity")
+        if isinstance(capacity, bool) or not isinstance(capacity, int):
+            raise TypeError("entrypoint list node.capacity must be an integer")
+        if not 1 <= capacity <= 64:
+            raise TypeError("entrypoint list node.capacity must be in 1..64")
+        return cls(capacity=capacity)
+
+
+@dataclass(frozen=True)
+class EntrypointValueTypeNodeV1:
+    """One typed preorder node in an exact V1 public boundary schema."""
+
+    kind: EntrypointValueTypeNodeKindV1
+    value: Any
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "EntrypointValueTypeNodeV1":
+        tagged = _contract_object(payload, "entrypoint value type node")
+        label = _contract_required_string(
+            tagged.get("kind"), "entrypoint value type node.kind"
+        )
+        try:
+            kind = EntrypointValueTypeNodeKindV1(label)
+        except ValueError as exc:
+            raise TypeError(f"unsupported Kotodama boundary type node `{label}`") from exc
+        if "value" not in tagged:
+            raise TypeError("entrypoint value type node is missing `value`")
+        raw_value = tagged["value"]
+        if kind is EntrypointValueTypeNodeKindV1.STRUCT:
+            value: Any = EntrypointStructTypeNodeV1.from_payload(raw_value)
+        elif kind is EntrypointValueTypeNodeKindV1.TUPLE:
+            if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+                raise TypeError("entrypoint tuple arity must be an integer")
+            if not 2 <= raw_value <= 0xFFFF:
+                raise TypeError("entrypoint tuple arity must be in 2..65535")
+            value = raw_value
+        elif kind in (
+            EntrypointValueTypeNodeKindV1.OPTION,
+            EntrypointValueTypeNodeKindV1.RESULT,
+        ):
+            if raw_value is not None:
+                raise TypeError(f"entrypoint {kind.value} node `value` must be null")
+            value = None
+        elif kind is EntrypointValueTypeNodeKindV1.LIST:
+            value = EntrypointListTypeNodeV1.from_payload(raw_value)
+        else:
+            value = EntrypointValueKindV1.from_payload(raw_value)
+        return cls(kind=kind, value=value)
+
+
+@dataclass(frozen=True)
+class EntrypointValueTypeV1:
+    """Validated preorder representation of one exact V1 boundary type."""
+
+    nodes: Tuple[EntrypointValueTypeNodeV1, ...]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "EntrypointValueTypeV1":
+        value = _contract_object(payload, "entrypoint value type")
+        nodes = tuple(
+            EntrypointValueTypeNodeV1.from_payload(node)
+            for node in _contract_array(value.get("nodes"), "entrypoint value type.nodes")
+        )
+        result = cls(nodes=nodes)
+        analysis = result._analyze(1)
+        if analysis is None:
+            raise TypeError("entrypoint value type is not a valid canonical V1 schema")
+        try:
+            result.canonical_type_name
+        except ValueError as exc:
+            raise TypeError("entrypoint value type contains a forged reserved V1 schema") from exc
+        return result
+
+    def _analyze(self, root_depth: int) -> Optional[Tuple[int, int, int]]:
+        """Return `(node_count, word_count, max_depth)` for a canonical schema."""
+
+        if not self.nodes or len(self.nodes) > 256 or root_depth != 1:
+            return None
+
+        def child_count(node: EntrypointValueTypeNodeV1) -> Optional[int]:
+            if node.kind is EntrypointValueTypeNodeKindV1.STRUCT:
+                if not isinstance(node.value, EntrypointStructTypeNodeV1):
+                    return None
+                return len(node.value.fields)
+            if node.kind is EntrypointValueTypeNodeKindV1.TUPLE:
+                return node.value if isinstance(node.value, int) else None
+            if node.kind in (
+                EntrypointValueTypeNodeKindV1.OPTION,
+                EntrypointValueTypeNodeKindV1.LIST,
+            ):
+                return 1
+            if node.kind is EntrypointValueTypeNodeKindV1.RESULT:
+                return 2
+            if node.kind is EntrypointValueTypeNodeKindV1.LEAF:
+                return 0
+            return None
+
+        frames: list[dict[str, Any]] = []
+        word_count = 0
+        max_depth = 0
+        for index, node in enumerate(self.nodes):
+            while frames and frames[-1]["remaining"] == 0:
+                frames.pop()
+            suppress_words = False
+            if index != 0:
+                if not frames or frames[-1]["remaining"] == 0:
+                    return None
+                frames[-1]["remaining"] -= 1
+                suppress_words = bool(frames[-1]["suppress_words"])
+            depth = len(frames) + 1
+            if depth > 256:
+                return None
+            max_depth = max(max_depth, depth)
+
+            if node.kind is EntrypointValueTypeNodeKindV1.STRUCT:
+                descriptor = node.value
+                if (
+                    not isinstance(descriptor, EntrypointStructTypeNodeV1)
+                    or not descriptor.fields
+                    or not _canonical_kotodama_identifier(descriptor.name)
+                    or any(
+                        not _canonical_kotodama_identifier(field)
+                        for field in descriptor.fields
+                    )
+                    or len(set(descriptor.fields)) != len(descriptor.fields)
+                ):
+                    return None
+            elif node.kind is EntrypointValueTypeNodeKindV1.TUPLE:
+                if not isinstance(node.value, int) or not 2 <= node.value <= 0xFFFF:
+                    return None
+            elif node.kind is EntrypointValueTypeNodeKindV1.LIST:
+                if not isinstance(node.value, EntrypointListTypeNodeV1):
+                    return None
+            elif node.kind is EntrypointValueTypeNodeKindV1.LEAF:
+                if not isinstance(node.value, EntrypointValueKindV1):
+                    return None
+
+            handle = node.kind in (
+                EntrypointValueTypeNodeKindV1.OPTION,
+                EntrypointValueTypeNodeKindV1.RESULT,
+                EntrypointValueTypeNodeKindV1.LIST,
+            )
+            if not suppress_words and (
+                handle or node.kind is EntrypointValueTypeNodeKindV1.LEAF
+            ):
+                word_count += 1
+            children = child_count(node)
+            if children is None:
+                return None
+            if children:
+                frames.append(
+                    {
+                        "remaining": children,
+                        "suppress_words": suppress_words or handle,
+                    }
+                )
+        while frames and frames[-1]["remaining"] == 0:
+            frames.pop()
+        if frames:
+            return None
+        return len(self.nodes), word_count, max_depth
+
+    @property
+    def word_count(self) -> int:
+        """Return the fixed V1 ABI word count after schema validation."""
+
+        analysis = self._analyze(1)
+        if analysis is None:
+            raise ValueError("invalid entrypoint value type")
+        return analysis[1]
+
+    @property
+    def canonical_type_name(self) -> str:
+        """Render the exact canonical Kotodama V1 type name."""
+
+        leaf_names = {
+            EntrypointValueKindV1.INT: "i64",
+            EntrypointValueKindV1.U128: "u128",
+            EntrypointValueKindV1.BOOL: "bool",
+            EntrypointValueKindV1.STRING: "string",
+            EntrypointValueKindV1.AMOUNT: "Amount",
+            EntrypointValueKindV1.JSON: "Json",
+            EntrypointValueKindV1.NAME: "Name",
+            EntrypointValueKindV1.ACCOUNT_ID: "AccountId",
+            EntrypointValueKindV1.ASSET_DEFINITION_ID: "AssetDefinitionId",
+            EntrypointValueKindV1.ASSET_ID: "AssetId",
+            EntrypointValueKindV1.DOMAIN_ID: "DomainId",
+            EntrypointValueKindV1.NFT_ID: "NftId",
+            EntrypointValueKindV1.DATA_SPACE_ID: "DataSpaceId",
+            EntrypointValueKindV1.BLOB: "bytes",
+        }
+
+        core_views = {
+            "AccountView": (["id", "metadata"], ["AccountId", "Json"]),
+            "AssetView": (["id", "amount"], ["AssetId", "Amount"]),
+            "AssetDefinitionView": (
+                [
+                    "id",
+                    "name",
+                    "description",
+                    "owned_by",
+                    "total_quantity",
+                    "metadata",
+                ],
+                [
+                    "AssetDefinitionId",
+                    "string",
+                    "Option<string>",
+                    "AccountId",
+                    "Amount",
+                    "Json",
+                ],
+            ),
+            "DomainView": (
+                ["id", "owned_by", "metadata"],
+                ["DomainId", "AccountId", "Json"],
+            ),
+            "NftView": (
+                ["id", "owned_by", "content"],
+                ["NftId", "AccountId", "Json"],
+            ),
+        }
+
+        def child_count(node: EntrypointValueTypeNodeV1) -> int:
+            if node.kind is EntrypointValueTypeNodeKindV1.STRUCT:
+                return len(node.value.fields)
+            if node.kind is EntrypointValueTypeNodeKindV1.TUPLE:
+                return int(node.value)
+            if node.kind in (
+                EntrypointValueTypeNodeKindV1.OPTION,
+                EntrypointValueTypeNodeKindV1.LIST,
+            ):
+                return 1
+            if node.kind is EntrypointValueTypeNodeKindV1.RESULT:
+                return 2
+            return 0
+
+        rendered: list[Dict[str, Any]] = []
+        for node in reversed(self.nodes):
+            count = child_count(node)
+            if len(rendered) < count:
+                raise ValueError("invalid entrypoint value type")
+            children = rendered[len(rendered) - count :] if count else []
+            if count:
+                del rendered[len(rendered) - count :]
+                children.reverse()
+
+            if node.kind is EntrypointValueTypeNodeKindV1.STRUCT:
+                descriptor = node.value
+                if not isinstance(descriptor, EntrypointStructTypeNodeV1):
+                    raise ValueError("invalid struct node")
+                child_names = [child["text"] for child in children]
+                if descriptor.name in core_views:
+                    expected_fields, expected_children = core_views[descriptor.name]
+                    if list(descriptor.fields) != expected_fields or child_names != expected_children:
+                        raise ValueError("forged reserved query view")
+                    result = {"text": descriptor.name, "core_view": descriptor.name}
+                elif descriptor.name == "QueryPage":
+                    if (
+                        list(descriptor.fields) != ["items", "next_offset"]
+                        or len(children) != 2
+                        or children[0].get("kind") != "List"
+                        or children[0].get("capacity") != 64
+                        or children[0].get("list_element_core_view") is None
+                        or children[1]["text"] != "Option<i64>"
+                    ):
+                        raise ValueError("forged QueryPage schema")
+                    result = {
+                        "text": f"QueryPage<{children[0]['list_element_core_view']}>"
+                    }
+                else:
+                    result = {"text": f"struct {descriptor.name}"}
+            elif node.kind is EntrypointValueTypeNodeKindV1.TUPLE:
+                result = {"text": f"({', '.join(child['text'] for child in children)})"}
+            elif node.kind is EntrypointValueTypeNodeKindV1.OPTION:
+                result = {"text": f"Option<{children[0]['text']}>"}
+            elif node.kind is EntrypointValueTypeNodeKindV1.RESULT:
+                result = {"text": f"Result<{children[0]['text']}, {children[1]['text']}>"}
+            elif node.kind is EntrypointValueTypeNodeKindV1.LIST:
+                descriptor = node.value
+                if not isinstance(descriptor, EntrypointListTypeNodeV1):
+                    raise ValueError("invalid list node")
+                result = {
+                    "text": f"List<{children[0]['text']}, {descriptor.capacity}>",
+                    "kind": "List",
+                    "capacity": descriptor.capacity,
+                    "list_element_core_view": children[0].get("core_view"),
+                }
+            elif node.kind is EntrypointValueTypeNodeKindV1.LEAF:
+                if not isinstance(node.value, EntrypointValueKindV1):
+                    raise ValueError("invalid leaf node")
+                result = {"text": leaf_names[node.value]}
+            else:
+                raise ValueError("invalid entrypoint value type")
+            rendered.append(result)
+
+        if len(rendered) != 1:
+            raise ValueError("invalid entrypoint value type")
+        return str(rendered[0]["text"])
+
+
+@dataclass(frozen=True)
+class EntrypointArgumentFieldV1:
+    """One named field in a canonical V1 argument record."""
+
+    name: str
+    type: EntrypointValueTypeV1
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "EntrypointArgumentFieldV1":
+        value = _contract_object(payload, "entrypoint argument field")
+        return cls(
+            name=_contract_required_string(
+                value.get("name"), "entrypoint argument field.name"
+            ),
+            type=EntrypointValueTypeV1.from_payload(
+                _contract_object(value.get("ty"), "entrypoint argument field.ty")
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class EntrypointArgumentSchemaV1:
+    """Exact canonical V1 schema for one public argument record."""
+
+    fields: Tuple[EntrypointArgumentFieldV1, ...]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "EntrypointArgumentSchemaV1":
+        value = _contract_object(payload, "entrypoint argument schema")
+        fields = tuple(
+            EntrypointArgumentFieldV1.from_payload(field)
+            for field in _contract_array(
+                value.get("fields"), "entrypoint argument schema.fields"
+            )
+        )
+        names = [field.name for field in fields]
+        if (
+            not 1 <= len(fields) <= 13
+            or any(not _canonical_kotodama_identifier(name) for name in names)
+            or len(set(names)) != len(names)
+            or sum(field.type.word_count for field in fields) > 13
+        ):
+            raise TypeError("entrypoint argument schema violates canonical V1 bounds")
+        return cls(fields=fields)
+
+
+@dataclass(frozen=True)
+class ContractEntrypointParameter:
+    """One declared public Kotodama parameter."""
+
+    name: str
+    type_name: str
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ContractEntrypointParameter":
+        value = _contract_object(payload, "entrypoint parameter")
+        return cls(
+            name=_contract_required_string(value.get("name"), "entrypoint parameter.name"),
+            type_name=_contract_required_string(
+                value.get("type_name"), "entrypoint parameter.type_name"
+            ),
+        )
+
+
+def _contract_trigger_descriptor(
+    payload: Mapping[str, Any], path: str
+) -> Mapping[str, Any]:
+    value = _contract_object(payload, path)
+    trigger_id = _contract_required_string(value.get("id"), f"{path}.id")
+    repeats = _contract_object(value.get("repeats"), f"{path}.repeats")
+    if len(repeats) != 1 or next(iter(repeats)) not in {"Indefinitely", "Exactly"}:
+        raise TypeError(f"{path}.repeats must contain exactly one canonical variant")
+    repeat_kind, repeat_value = next(iter(repeats.items()))
+    if repeat_kind == "Indefinitely":
+        if repeat_value is not None:
+            raise TypeError(f"{path}.repeats.Indefinitely must be null")
+    elif (
+        isinstance(repeat_value, bool)
+        or not isinstance(repeat_value, int)
+        or not 0 <= repeat_value <= 0xFFFFFFFF
+    ):
+        raise TypeError(f"{path}.repeats.Exactly must be a u32")
+
+    encoded_filter = value.get("filter")
+    if not isinstance(encoded_filter, str) or not encoded_filter:
+        raise TypeError(f"{path}.filter must be non-empty exact standard-base64")
+    try:
+        decoded_filter = base64.b64decode(encoded_filter, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise TypeError(f"{path}.filter must be exact standard-base64") from exc
+    if not decoded_filter or base64.b64encode(decoded_filter).decode("ascii") != encoded_filter:
+        raise TypeError(f"{path}.filter must be non-empty exact standard-base64")
+
+    authority = value.get("authority")
+    if authority is not None:
+        _contract_required_string(authority, f"{path}.authority")
+    metadata = _contract_object(value.get("metadata", {}), f"{path}.metadata")
+    callback = _contract_object(value.get("callback"), f"{path}.callback")
+    namespace = callback.get("namespace")
+    if namespace is not None:
+        _contract_required_string(namespace, f"{path}.callback.namespace")
+    callback_entrypoint = _contract_required_string(
+        callback.get("entrypoint"), f"{path}.callback.entrypoint"
+    )
+    if not _canonical_kotodama_entrypoint(callback_entrypoint):
+        raise TypeError(f"{path}.callback.entrypoint is not canonical")
+    return copy.deepcopy(
+        {
+            "id": trigger_id,
+            "repeats": dict(repeats),
+            "filter": encoded_filter,
+            "authority": authority,
+            "metadata": dict(metadata),
+            "callback": {
+                "namespace": namespace,
+                "entrypoint": callback_entrypoint,
+            },
+        }
+    )
+
+
+@dataclass(frozen=True)
+class ContractEntrypointDescriptor:
+    """Exact public interface metadata for one Kotodama entrypoint."""
+
+    name: str
+    kind: ContractEntrypointKind
+    params: Tuple[ContractEntrypointParameter, ...]
+    argument_schema: Optional[EntrypointArgumentSchemaV1]
+    return_type: Optional[str]
+    return_schema: Optional[EntrypointValueTypeV1]
+    permission: Optional[str]
+    read_keys: Tuple[str, ...]
+    write_keys: Tuple[str, ...]
+    access_hints_complete: Optional[bool]
+    access_hints_skipped: Tuple[str, ...]
+    triggers: Tuple[Mapping[str, Any], ...]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ContractEntrypointDescriptor":
+        value = _contract_object(payload, "entrypoint descriptor")
+        params_raw = value.get("params", ())
+        params = tuple(
+            ContractEntrypointParameter.from_payload(param)
+            for param in _contract_array(params_raw, "entrypoint descriptor.params")
+        )
+        argument_schema_raw = value.get("argument_schema")
+        argument_schema = (
+            None
+            if argument_schema_raw is None
+            else EntrypointArgumentSchemaV1.from_payload(argument_schema_raw)
+        )
+        return_schema_raw = value.get("return_schema")
+        return_schema = (
+            None
+            if return_schema_raw is None
+            else EntrypointValueTypeV1.from_payload(return_schema_raw)
+        )
+        access_hints_complete = value.get("access_hints_complete")
+        if access_hints_complete is not None and not isinstance(access_hints_complete, bool):
+            raise TypeError("entrypoint descriptor.access_hints_complete must be a boolean")
+        trigger_values = []
+        for index, trigger in enumerate(
+            _contract_array(value.get("triggers", ()), "entrypoint descriptor.triggers")
+        ):
+            trigger_values.append(
+                _contract_trigger_descriptor(
+                    _contract_object(
+                        trigger, f"entrypoint descriptor.triggers[{index}]"
+                    ),
+                    f"entrypoint descriptor.triggers[{index}]",
+                )
+            )
+        name = _contract_required_string(value.get("name"), "entrypoint descriptor.name")
+        if not _canonical_kotodama_entrypoint(name):
+            raise TypeError("entrypoint descriptor.name is not canonical")
+        descriptor = cls(
+            name=name,
+            kind=ContractEntrypointKind.from_payload(
+                _contract_object(value.get("kind"), "entrypoint descriptor.kind")
+            ),
+            params=params,
+            argument_schema=argument_schema,
+            return_type=_contract_optional_string(
+                value.get("return_type"), "entrypoint descriptor.return_type"
+            ),
+            return_schema=return_schema,
+            permission=_contract_optional_string(
+                value.get("permission"), "entrypoint descriptor.permission"
+            ),
+            read_keys=_contract_string_tuple(
+                value.get("read_keys", ()), "entrypoint descriptor.read_keys"
+            ),
+            write_keys=_contract_string_tuple(
+                value.get("write_keys", ()), "entrypoint descriptor.write_keys"
+            ),
+            access_hints_complete=access_hints_complete,
+            access_hints_skipped=_contract_string_tuple(
+                value.get("access_hints_skipped", ()),
+                "entrypoint descriptor.access_hints_skipped",
+            ),
+            triggers=tuple(trigger_values),
+        )
+        parameter_names = [parameter.name for parameter in descriptor.params]
+        schema_names = (
+            None
+            if descriptor.argument_schema is None
+            else [field.name for field in descriptor.argument_schema.fields]
+        )
+        exact_arguments = (
+            descriptor.argument_schema is None
+            if not descriptor.params
+            else schema_names == parameter_names
+            and all(
+                field.type.canonical_type_name == parameter.type_name
+                for field, parameter in zip(
+                    descriptor.argument_schema.fields, descriptor.params
+                )
+            )
+        )
+        exact_return = (descriptor.return_type is None) == (
+            descriptor.return_schema is None
+        ) and (
+            descriptor.return_schema is None
+            or (
+                descriptor.return_schema.word_count <= 13
+                and descriptor.return_schema.canonical_type_name
+                == descriptor.return_type
+            )
+        )
+        lifecycle_kind = (
+            ContractEntrypointKind.HAJIMARI
+            if descriptor.name in {"hajimari", "始まり"}
+            else ContractEntrypointKind.KAIZEN
+            if descriptor.name in {"kaizen", "改善"}
+            else None
+        )
+        exact_lifecycle = (
+            descriptor.kind is lifecycle_kind
+            if lifecycle_kind is not None
+            else descriptor.kind
+            not in {ContractEntrypointKind.HAJIMARI, ContractEntrypointKind.KAIZEN}
+        )
+        exact_authorization = (
+            descriptor.permission is not None
+            if descriptor.kind is ContractEntrypointKind.KOTOAGE
+            else descriptor.permission is None
+            if descriptor.kind
+            in {ContractEntrypointKind.HAJIMARI, ContractEntrypointKind.KAIZEN}
+            else True
+        )
+        exact_access_hints = not (
+            descriptor.access_hints_complete is True
+            and descriptor.access_hints_skipped
+        ) and not (
+            descriptor.access_hints_complete is False
+            and not descriptor.access_hints_skipped
+        )
+        if (
+            len(descriptor.params) > 13
+            or len(set(parameter_names)) != len(parameter_names)
+            or any(
+                not _canonical_kotodama_identifier(parameter.name)
+                for parameter in descriptor.params
+            )
+            or not exact_arguments
+            or not exact_return
+            or not exact_lifecycle
+            or not exact_authorization
+            or not exact_access_hints
+        ):
+            raise TypeError("entrypoint descriptor is not a canonical exact V1 interface")
+        return descriptor
+
+
+@dataclass(frozen=True)
+class ContractStateDescriptor:
+    """One durable state slot advertised by a Kotodama seiyaku."""
+
+    name: str
+    type_name: str
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ContractStateDescriptor":
+        value = _contract_object(payload, "state descriptor")
+        name = _contract_required_string(value.get("name"), "state descriptor.name")
+        if not _canonical_kotodama_identifier(name, declaration=True):
+            raise TypeError("state descriptor.name must be a canonical Kotodama identifier")
+        return cls(
+            name=name,
+            type_name=_contract_required_string(
+                value.get("type_name"), "state descriptor.type_name"
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class ContractErrorCodeDescriptor:
+    """One stable declared Kotodama application error code."""
+
+    namespace: str
+    name: str
+    code: int
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ContractErrorCodeDescriptor":
+        value = _contract_object(payload, "error code descriptor")
+        code = value.get("code")
+        if isinstance(code, bool) or not isinstance(code, int) or not 1 <= code <= 0xFFFFFFFF:
+            raise TypeError("error code descriptor.code must be a non-zero u32")
+        namespace = _contract_required_string(
+            value.get("namespace"), "error code descriptor.namespace"
+        )
+        name = _contract_required_string(value.get("name"), "error code descriptor.name")
+        if not _canonical_kotodama_identifier(
+            namespace, declaration=True
+        ) or not _canonical_kotodama_identifier(name):
+            raise TypeError("error code names must be canonical Kotodama identifiers")
+        return cls(namespace=namespace, name=name, code=code)
+
+
+@dataclass(frozen=True)
+class ContractDynamicAccessHint:
+    """One bounded dynamic access-set hint from the compiler."""
+
+    base_key: str
+    key_type: str
+    bound_kind: str
+    max_keys: int
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ContractDynamicAccessHint":
+        value = _contract_object(payload, "dynamic access hint")
+        max_keys = value.get("max_keys")
+        if isinstance(max_keys, bool) or not isinstance(max_keys, int):
+            raise TypeError("dynamic access hint.max_keys must be an integer")
+        if not 0 <= max_keys <= 0xFFFFFFFF:
+            raise TypeError("dynamic access hint.max_keys must be a u32")
+        return cls(
+            base_key=_contract_required_string(
+                value.get("base_key"), "dynamic access hint.base_key"
+            ),
+            key_type=_contract_required_string(
+                value.get("key_type"), "dynamic access hint.key_type"
+            ),
+            bound_kind=_contract_required_string(
+                value.get("bound_kind"), "dynamic access hint.bound_kind"
+            ),
+            max_keys=max_keys,
+        )
+
+
+@dataclass(frozen=True)
+class ContractAccessSetHints:
+    """Exact static and bounded-dynamic scheduler hints in a manifest."""
+
+    read_keys: Tuple[str, ...]
+    write_keys: Tuple[str, ...]
+    dynamic_reads: Tuple[ContractDynamicAccessHint, ...]
+    dynamic_writes: Tuple[ContractDynamicAccessHint, ...]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ContractAccessSetHints":
+        value = _contract_object(payload, "access set hints")
+
+        def dynamic(name: str) -> Tuple[ContractDynamicAccessHint, ...]:
+            return tuple(
+                ContractDynamicAccessHint.from_payload(item)
+                for item in _contract_array(value.get(name, ()), f"access set hints.{name}")
+            )
+
+        return cls(
+            read_keys=_contract_string_tuple(value.get("read_keys"), "access set hints.read_keys"),
+            write_keys=_contract_string_tuple(
+                value.get("write_keys"), "access set hints.write_keys"
+            ),
+            dynamic_reads=dynamic("dynamic_reads"),
+            dynamic_writes=dynamic("dynamic_writes"),
+        )
+
+
+@dataclass(frozen=True)
+class ContractKotobaTranslation:
+    """One localized message text in a Kotodama manifest."""
+
+    language: str
+    text: str
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ContractKotobaTranslation":
+        value = _contract_object(payload, "kotoba translation")
+        text = value.get("text")
+        if not isinstance(text, str):
+            raise TypeError("kotoba translation.text must be a string")
+        return cls(
+            language=_contract_required_string(value.get("lang"), "kotoba translation.lang"),
+            text=text,
+        )
+
+
+@dataclass(frozen=True)
+class ContractKotobaTranslationEntry:
+    """One stable message id and its localized Kotodama texts."""
+
+    message_id: str
+    translations: Tuple[ContractKotobaTranslation, ...]
+
+    @classmethod
+    def from_payload(
+        cls, payload: Mapping[str, Any]
+    ) -> "ContractKotobaTranslationEntry":
+        value = _contract_object(payload, "kotoba translation entry")
+        translations = tuple(
+            ContractKotobaTranslation.from_payload(item)
+            for item in _contract_array(
+                value.get("translations"), "kotoba translation entry.translations"
+            )
+        )
+        return cls(
+            message_id=_contract_required_string(
+                value.get("msg_id"), "kotoba translation entry.msg_id"
+            ),
+            translations=translations,
+        )
+
+
 @dataclass(frozen=True)
 class ContractManifest:
-    """On-chain contract manifest metadata."""
+    """On-chain contract manifest metadata with its exact V1 public interface."""
 
+    seiyaku_name: Optional[str]
     code_hash: Optional[str]
     abi_hash: Optional[str]
     compiler_fingerprint: Optional[str]
     features_bitmap: Optional[int]
+    access_set_hints: Optional[ContractAccessSetHints]
+    entrypoints: Optional[Tuple[ContractEntrypointDescriptor, ...]]
+    states: Optional[Tuple[ContractStateDescriptor, ...]]
+    error_codes: Optional[Tuple[ContractErrorCodeDescriptor, ...]]
+    kotoba: Optional[Tuple[ContractKotobaTranslationEntry, ...]]
+    provenance: Optional[Mapping[str, Any]]
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "ContractManifest":
         if not isinstance(payload, Mapping):
             raise TypeError("manifest payload must be an object")
-        code_hash = payload.get("code_hash")
-        if code_hash is not None and not isinstance(code_hash, str):
-            raise TypeError("manifest `code_hash` must be a string when provided")
-        abi_hash = payload.get("abi_hash")
-        if abi_hash is not None and not isinstance(abi_hash, str):
-            raise TypeError("manifest `abi_hash` must be a string when provided")
+        allowed_fields = {
+            "seiyaku_name",
+            "code_hash",
+            "abi_hash",
+            "compiler_fingerprint",
+            "features_bitmap",
+            "access_set_hints",
+            "entrypoints",
+            "states",
+            "error_codes",
+            "kotoba",
+            "provenance",
+        }
+        unknown_fields = sorted(set(payload) - allowed_fields)
+        if unknown_fields:
+            raise TypeError(
+                "manifest payload contains unsupported fields: "
+                + ", ".join(unknown_fields)
+            )
+        seiyaku_name = payload.get("seiyaku_name")
+        if seiyaku_name is not None and (
+            not isinstance(seiyaku_name, str) or not seiyaku_name
+        ):
+            raise TypeError("manifest `seiyaku_name` must be a non-empty string when provided")
+        if seiyaku_name is not None and not _canonical_kotodama_identifier(
+            seiyaku_name, declaration=True
+        ):
+            raise TypeError("manifest `seiyaku_name` must be a canonical Kotodama identifier")
+        code_hash = _contract_canonical_hash_hex(
+            payload.get("code_hash"), "manifest `code_hash`"
+        )
+        abi_hash = _contract_canonical_hash_hex(
+            payload.get("abi_hash"), "manifest `abi_hash`"
+        )
         compiler_fingerprint = payload.get("compiler_fingerprint")
-        if compiler_fingerprint is not None and not isinstance(compiler_fingerprint, str):
-            raise TypeError("manifest `compiler_fingerprint` must be a string when provided")
+        if compiler_fingerprint is not None and (
+            not isinstance(compiler_fingerprint, str)
+            or not compiler_fingerprint.strip()
+            or compiler_fingerprint.strip() != compiler_fingerprint
+        ):
+            raise TypeError(
+                "manifest `compiler_fingerprint` must be a non-empty string when provided"
+            )
         features_raw = payload.get("features_bitmap")
         if features_raw is None:
             features_bitmap: Optional[int] = None
+        elif isinstance(features_raw, bool) or not isinstance(features_raw, int):
+            raise TypeError("manifest `features_bitmap` must be an unsigned integer")
+        elif not 0 <= features_raw <= 0xFFFFFFFFFFFFFFFF:
+            raise TypeError("manifest `features_bitmap` must be a u64")
         else:
-            try:
-                features_bitmap = int(features_raw)
-            except (TypeError, ValueError) as exc:
-                raise TypeError("manifest `features_bitmap` must be numeric") from exc
+            features_bitmap = features_raw
+
+        access_set_hints_raw = payload.get("access_set_hints")
+        access_set_hints = (
+            None
+            if access_set_hints_raw is None
+            else ContractAccessSetHints.from_payload(access_set_hints_raw)
+        )
+
+        def optional_descriptors(
+            name: str, parser: Callable[[Mapping[str, Any]], Any]
+        ) -> Optional[Tuple[Any, ...]]:
+            raw = payload.get(name)
+            if raw is None:
+                return None
+            return tuple(
+                parser(_contract_object(item, f"manifest.{name}[{index}]"))
+                for index, item in enumerate(_contract_array(raw, f"manifest.{name}"))
+            )
+
+        provenance_raw = payload.get("provenance")
+        provenance = (
+            None
+            if provenance_raw is None
+            else copy.deepcopy(
+                dict(_contract_object(provenance_raw, "manifest.provenance"))
+            )
+        )
+
+        entrypoints = optional_descriptors(
+            "entrypoints", ContractEntrypointDescriptor.from_payload
+        )
+        states = optional_descriptors("states", ContractStateDescriptor.from_payload)
+        error_codes = optional_descriptors(
+            "error_codes", ContractErrorCodeDescriptor.from_payload
+        )
+        kotoba = optional_descriptors(
+            "kotoba", ContractKotobaTranslationEntry.from_payload
+        )
+
+        if entrypoints is not None:
+            entrypoint_names = [entrypoint.name for entrypoint in entrypoints]
+            lifecycle_kinds = [
+                entrypoint.kind
+                for entrypoint in entrypoints
+                if entrypoint.kind
+                in {ContractEntrypointKind.HAJIMARI, ContractEntrypointKind.KAIZEN}
+            ]
+            if len(set(entrypoint_names)) != len(entrypoint_names) or len(
+                set(lifecycle_kinds)
+            ) != len(lifecycle_kinds):
+                raise TypeError("manifest contains duplicate entrypoint declarations")
+            entrypoint_kinds = {
+                entrypoint.name: entrypoint.kind for entrypoint in entrypoints
+            }
+            trigger_ids = set()
+            for entrypoint in entrypoints:
+                for trigger in entrypoint.triggers:
+                    trigger_id = trigger["id"]
+                    if trigger_id in trigger_ids:
+                        raise TypeError("manifest contains duplicate trigger ids")
+                    trigger_ids.add(trigger_id)
+                    callback = trigger["callback"]
+                    if callback["namespace"] is None:
+                        target_kind = entrypoint_kinds.get(callback["entrypoint"])
+                        if target_kind is None:
+                            raise TypeError(
+                                "manifest trigger targets an undeclared local entrypoint"
+                            )
+                        if target_kind is not ContractEntrypointKind.KOTOAGE:
+                            raise TypeError(
+                                "manifest local trigger callback must target kotoage/言挙げ"
+                            )
+
+        if states is not None and len({state.name for state in states}) != len(states):
+            raise TypeError("manifest contains duplicate state descriptors")
+        if error_codes is not None:
+            paths = {(error.namespace, error.name) for error in error_codes}
+            codes = {error.code for error in error_codes}
+            if len(paths) != len(error_codes) or len(codes) != len(error_codes):
+                raise TypeError("manifest contains duplicate error paths or numeric codes")
+        if kotoba is not None:
+            message_ids = [entry.message_id for entry in kotoba]
+            if len(set(message_ids)) != len(message_ids):
+                raise TypeError("manifest contains duplicate kotoba message ids")
+            for entry in kotoba:
+                languages = [translation.language for translation in entry.translations]
+                if len(set(languages)) != len(languages):
+                    raise TypeError("manifest contains duplicate kotoba languages")
+
         return cls(
+            seiyaku_name=seiyaku_name,
             code_hash=code_hash,
             abi_hash=abi_hash,
             compiler_fingerprint=compiler_fingerprint,
             features_bitmap=features_bitmap,
+            access_set_hints=access_set_hints,
+            entrypoints=entrypoints,
+            states=states,
+            error_codes=error_codes,
+            kotoba=kotoba,
+            provenance=provenance,
         )
 
 
@@ -4160,7 +5349,8 @@ class ContractManifestRecord:
     """Contract manifest record returned by Torii (`/v1/contracts/code/{hash}`)."""
 
     manifest: ContractManifest
-    code_bytes: Optional[str]
+    code_hash: Optional[str]
+    abi_hash: Optional[str]
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "ContractManifestRecord":
@@ -4169,11 +5359,21 @@ class ContractManifestRecord:
         manifest_payload = payload.get("manifest")
         if not isinstance(manifest_payload, Mapping):
             raise TypeError("manifest response missing object `manifest` field")
+        if "code_bytes" in payload:
+            raise TypeError("manifest response must not inline `code_bytes`")
         manifest = ContractManifest.from_payload(manifest_payload)
-        code_bytes = payload.get("code_bytes")
-        if code_bytes is not None and not isinstance(code_bytes, str):
-            raise TypeError("manifest response `code_bytes` must be a string when provided")
-        return cls(manifest=manifest, code_bytes=code_bytes)
+        code_hash = _contract_hash_convenience_hex(
+            payload.get("code_hash"), "manifest response `code_hash`"
+        )
+        abi_hash = _contract_hash_convenience_hex(
+            payload.get("abi_hash"), "manifest response `abi_hash`"
+        )
+        if code_hash != manifest.code_hash or abi_hash != manifest.abi_hash:
+            raise TypeError(
+                "top-level contract hash conveniences must exactly match "
+                "the canonical manifest hashes"
+            )
+        return cls(manifest=manifest, code_hash=code_hash, abi_hash=abi_hash)
 
 
 @dataclass(frozen=True)
@@ -4345,9 +5545,101 @@ class WebSocketEvent:
     raw: str
 
 
+class SseStreamError(RuntimeError):
+    """Terminal error reported after an SSE response has been established.
+
+    Canonical Torii live streams cannot change their HTTP status after sending
+    the response headers, so they report a terminal ``event: stream_error``
+    frame instead.  The exception keeps the stable server error code and the
+    loss/replay metadata available to callers.
+    """
+
+    MALFORMED_CODE = "malformed_stream_error"
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        dropped_messages: Optional[int],
+        replay_available: Optional[bool],
+        payload: Any,
+        raw: str,
+        malformed_reason: Optional[str] = None,
+    ) -> None:
+        self.code = code
+        self.message = message
+        self.dropped_messages = dropped_messages
+        self.replay_available = replay_available
+        self.payload = payload
+        self.raw = raw
+        self.malformed_reason = malformed_reason
+        detail = f"{code}: {message}"
+        if dropped_messages is not None:
+            detail = f"{detail} (dropped_messages={dropped_messages})"
+        super().__init__(detail)
+
+    @classmethod
+    def from_event(cls, event: SseEvent) -> "SseStreamError":
+        """Validate and convert a terminal ``stream_error`` SSE frame."""
+
+        payload = event.data
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                return cls._malformed(event, "data must be a JSON object")
+        if not isinstance(payload, Mapping):
+            return cls._malformed(event, "data must be a JSON object")
+
+        code = payload.get("code")
+        if not isinstance(code, str) or not code.strip():
+            return cls._malformed(event, "code must be a non-empty string")
+        message = payload.get("message")
+        if not isinstance(message, str) or not message.strip():
+            return cls._malformed(event, "message must be a non-empty string")
+        if "dropped_messages" not in payload:
+            return cls._malformed(event, "dropped_messages is required")
+        dropped_messages = payload["dropped_messages"]
+        if dropped_messages is not None and (
+            isinstance(dropped_messages, bool)
+            or not isinstance(dropped_messages, int)
+            or dropped_messages < 0
+        ):
+            return cls._malformed(
+                event,
+                "dropped_messages must be a non-negative integer or null",
+            )
+        if "replay_available" not in payload:
+            return cls._malformed(event, "replay_available is required")
+        replay_available = payload["replay_available"]
+        if not isinstance(replay_available, bool):
+            return cls._malformed(event, "replay_available must be a boolean")
+        return cls(
+            code,
+            message,
+            dropped_messages=dropped_messages,
+            replay_available=replay_available,
+            payload=dict(payload),
+            raw=event.raw,
+        )
+
+    @classmethod
+    def _malformed(cls, event: SseEvent, reason: str) -> "SseStreamError":
+        return cls(
+            cls.MALFORMED_CODE,
+            f"Torii emitted a malformed stream_error event: {reason}",
+            dropped_messages=None,
+            replay_available=None,
+            payload=event.data,
+            raw=event.raw,
+            malformed_reason=reason,
+        )
+
+
 @dataclass
 class EventCursor:
-    """Track the last observed SSE event id so streams can resume after reconnects."""
+    """Track the last event id for an SSE endpoint with a replay log."""
 
     last_event_id: Optional[str] = None
 
@@ -5765,7 +7057,7 @@ class SumeragiQcSummary:
 
 @dataclass(frozen=True)
 class SumeragiCommitQc:
-    """Commit QC record returned by `/v1/sumeragi/commit_qc/{hash}`."""
+    """Commit QC record returned by `/v1/sumeragi/commit-qcs/{block_hash}`."""
 
     phase: str
     parent_state_root: str
@@ -5846,7 +7138,7 @@ class SumeragiCommitQc:
 
 @dataclass(frozen=True)
 class SumeragiCommitQcRecord:
-    """Commit QC response wrapper returned by `/v1/sumeragi/commit_qc/{hash}`."""
+    """Commit QC response wrapper returned by `/v1/sumeragi/commit-qcs/{block_hash}`."""
 
     subject_block_hash: str
     commit_qc: Optional[SumeragiCommitQc]
@@ -5922,6 +7214,18 @@ def _required_field(payload: Mapping[str, Any], field_name: str, context: str) -
     return payload[field_name]
 
 
+def _strict_exact_fields(
+    payload: Mapping[str, Any], fields: Iterable[str], context: str
+) -> None:
+    expected = set(fields)
+    unknown = sorted(set(payload).difference(expected))
+    if unknown:
+        raise ValueError(f"{context} contains unknown field `{unknown[0]}`")
+    missing = sorted(expected.difference(payload))
+    if missing:
+        raise TypeError(f"{context} is missing required `{missing[0]}` field")
+
+
 def _strict_uint(
     payload: Mapping[str, Any], field_name: str, bits: int, context: str
 ) -> int:
@@ -5938,16 +7242,11 @@ def _strict_uint(
 
 def _strict_decimal_uint(payload: Mapping[str, Any], field_name: str, context: str) -> int:
     value = _required_field(payload, field_name, context)
-    if isinstance(value, bool):
-        raise TypeError(f"{context} `{field_name}` must be an unsigned 128-bit integer")
-    if isinstance(value, int):
-        number = value
-    elif isinstance(value, str) and re.fullmatch(r"(?:0|[1-9][0-9]*)", value):
-        number = int(value)
-    else:
+    if not isinstance(value, str) or re.fullmatch(r"(?:0|[1-9][0-9]*)", value) is None:
         raise TypeError(
-            f"{context} `{field_name}` must be an unsigned 128-bit integer"
+            f"{context} `{field_name}` must be a canonical unsigned decimal string"
         )
+    number = int(value)
     if number < 0 or number > (1 << 128) - 1:
         raise ValueError(f"{context} `{field_name}` exceeds the unsigned 128-bit range")
     return number
@@ -6006,10 +7305,10 @@ def _strict_hex_string(
     if (
         not isinstance(value, str)
         or len(value) != byte_length * 2
-        or re.fullmatch(r"[0-9a-fA-F]+", value) is None
+        or re.fullmatch(r"[0-9A-F]+", value) is None
     ):
         raise TypeError(
-            f"{context} `{field_name}` must be exactly {byte_length} bytes of hex"
+            f"{context} `{field_name}` must be exactly {byte_length} bytes of uppercase hex"
         )
     return value
 
@@ -6108,8 +7407,7 @@ class SumeragiNativeAmxAttestationBody:
             "coordinator_lane_block_view",
             "coordinator_proposal_hash",
         }
-        if set(payload) != expected_fields:
-            raise ValueError(f"{context} fields do not match the v2 wire schema")
+        _strict_exact_fields(payload, expected_fields, context)
 
         round_payload = _required_field(payload, "round", context)
         if not isinstance(round_payload, Mapping) or set(round_payload) != {
@@ -6162,7 +7460,7 @@ class SumeragiNativeAmxAttestationBody:
             or authority_context_height != round_value.height
             or coordinator_view != round_value.view
             or planned_height == 0
-            or entrypoint_hash[5:69].lower() != source_id.lower()
+            or entrypoint_hash[5:69] != source_id
             or validator_count == 0
             or validator_count > 128
             or min_quorum != expected_quorum
@@ -6214,7 +7512,7 @@ class SumeragiNativeAmxAttestationBody:
             self.round,
             self.epoch,
             self.chain_id_hash,
-            self.source_id.lower(),
+            self.source_id,
             self.tx_entrypoint_hash,
             self.plan_digest,
             self.coordinator_lane_id,
@@ -6252,16 +7550,19 @@ class SumeragiNativeAmxAttestationQc:
         context = "native AMX v2 attestation QC"
         if not isinstance(payload, Mapping):
             raise TypeError(f"{context} must be an object")
-        if set(payload) != {
-            "body",
-            "validator_set_hash_version",
-            "validator_set_hash",
-            "validator_set",
-            "validator_set_pops",
-            "signers_bitmap",
-            "bls_aggregate_signature",
-        }:
-            raise ValueError(f"{context} fields do not match the v2 wire schema")
+        _strict_exact_fields(
+            payload,
+            {
+                "body",
+                "validator_set_hash_version",
+                "validator_set_hash",
+                "validator_set",
+                "validator_set_pops",
+                "signers_bitmap",
+                "bls_aggregate_signature",
+            },
+            context,
+        )
         body_payload = _required_field(payload, "body", context)
         if not isinstance(body_payload, Mapping):
             raise TypeError(f"{context} `body` must be an object")
@@ -6354,8 +7655,11 @@ class SumeragiNativeAmxLeg:
         context = "native AMX v2 leg"
         if not isinstance(payload, Mapping):
             raise TypeError(f"{context} must be an object")
-        if set(payload) != {"lane_id", "dataspace_id", "prepare_qc", "commit_qc"}:
-            raise ValueError(f"{context} fields do not match the v2 wire schema")
+        _strict_exact_fields(
+            payload,
+            {"lane_id", "dataspace_id", "prepare_qc", "commit_qc"},
+            context,
+        )
         prepare_payload = _required_field(payload, "prepare_qc", context)
         commit_payload = _required_field(payload, "commit_qc", context)
         if not isinstance(prepare_payload, Mapping) or not isinstance(commit_payload, Mapping):
@@ -6413,21 +7717,24 @@ class SumeragiNativeAmxReceipt:
         context = "native AMX v2 receipt"
         if not isinstance(payload, Mapping):
             raise TypeError(f"{context} must be an object")
-        if set(payload) != {
-            "version",
-            "source_id",
-            "chain_id_hash",
-            "plan_digest",
-            "lane_id",
-            "dataspace_id",
-            "lane_incarnation",
-            "authority_context_height",
-            "lane_block_height",
-            "lane_block_view",
-            "coordinator_proposal_hash",
-            "legs",
-        }:
-            raise ValueError(f"{context} fields do not match the v2 wire schema")
+        _strict_exact_fields(
+            payload,
+            {
+                "version",
+                "source_id",
+                "chain_id_hash",
+                "plan_digest",
+                "lane_id",
+                "dataspace_id",
+                "lane_incarnation",
+                "authority_context_height",
+                "lane_block_height",
+                "lane_block_view",
+                "coordinator_proposal_hash",
+                "legs",
+            },
+            context,
+        )
         version = _strict_uint(payload, "version", 16, context)
         if version != 2:
             raise ValueError(f"{context} uses unsupported version {version}")
@@ -6471,7 +7778,7 @@ class SumeragiNativeAmxReceipt:
                 raise ValueError(f"{context} legs carry mismatched frozen round context")
             if body.chain_id_hash != chain_id_hash:
                 raise ValueError(f"{context} chain identity differs from a QC body")
-            if body.source_id.lower() != source_id.lower():
+            if body.source_id != source_id:
                 raise ValueError(f"{context} source identity differs from a QC body")
             if body.plan_digest != plan_digest:
                 raise ValueError(f"{context} plan digest differs from a QC body")
@@ -6527,6 +7834,19 @@ class SumeragiNexusFeeScheduleInputs:
         context = "Nexus fee schedule"
         if not isinstance(payload, Mapping):
             raise TypeError(f"{context} must be an object")
+        _strict_exact_fields(
+            payload,
+            {
+                "tx_bytes_len",
+                "instruction_count",
+                "gas_used",
+                "base_fee",
+                "per_byte_fee",
+                "per_instruction_fee",
+                "per_gas_unit_fee",
+            },
+            context,
+        )
         return cls(
             tx_bytes_len=_strict_uint(payload, "tx_bytes_len", 64, context),
             instruction_count=_strict_uint(payload, "instruction_count", 64, context),
@@ -6561,6 +7881,21 @@ class SumeragiNexusFeeReceipt:
         context = "Nexus fee receipt"
         if not isinstance(payload, Mapping):
             raise TypeError(f"{context} must be an object")
+        _strict_exact_fields(
+            payload,
+            {
+                "version",
+                "source_id",
+                "dataspace_id",
+                "lane_id",
+                "block_height",
+                "payer_account_id",
+                "fee_asset_id",
+                "fee_amount",
+                "schedule",
+            },
+            context,
+        )
         version = _strict_uint(payload, "version", 16, context)
         if version != 1:
             raise ValueError(f"{context} uses unsupported version {version}")
@@ -6616,6 +7951,25 @@ class SumeragiLaneSettlementCommitment:
         if not isinstance(payload, Mapping):
             raise TypeError("lane settlement commitment must be an object")
         context = "lane settlement commitment"
+        _strict_exact_fields(
+            payload,
+            {
+                "block_height",
+                "lane_id",
+                "lane_incarnation",
+                "dataspace_id",
+                "tx_count",
+                "total_local_micro",
+                "total_xor_due_micro",
+                "total_xor_after_haircut_micro",
+                "total_xor_variance_micro",
+                "swap_metadata",
+                "receipts",
+                "nexus_fee_receipts",
+                "native_amx_receipts",
+            },
+            context,
+        )
         block_height = _strict_uint(payload, "block_height", 64, context)
         lane_id = _strict_uint(payload, "lane_id", 32, context)
         lane_incarnation = _strict_hash_literal(payload, "lane_incarnation", context)
@@ -6637,6 +7991,18 @@ class SumeragiLaneSettlementCommitment:
             if not isinstance(receipt, Mapping):
                 raise TypeError("lane settlement receipts must be objects")
             receipt_context = f"lane settlement receipt at index {index}"
+            _strict_exact_fields(
+                receipt,
+                {
+                    "source_id",
+                    "local_amount_micro",
+                    "xor_due_micro",
+                    "xor_after_haircut_micro",
+                    "xor_variance_micro",
+                    "timestamp_ms",
+                },
+                receipt_context,
+            )
             source_id = _strict_hex_string(receipt, "source_id", 32, receipt_context)
             receipt_local = _strict_decimal_uint(
                 receipt, "local_amount_micro", receipt_context
@@ -6691,11 +8057,11 @@ class SumeragiLaneSettlementCommitment:
                 raise ValueError(
                     "lane settlement receipt coordinates differ from the containing commitment"
                 )
-        if len({receipt.source_id.lower() for receipt in nexus_fee_receipts}) != len(
+        if len({receipt.source_id for receipt in nexus_fee_receipts}) != len(
             nexus_fee_receipts
         ):
             raise ValueError("lane settlement contains duplicate Nexus fee receipt sources")
-        if len({receipt.source_id.lower() for receipt in native_amx_receipts}) != len(
+        if len({receipt.source_id for receipt in native_amx_receipts}) != len(
             native_amx_receipts
         ):
             raise ValueError("lane settlement contains duplicate native AMX receipt sources")
@@ -6705,6 +8071,17 @@ class SumeragiLaneSettlementCommitment:
         if swap_metadata_payload is None:
             swap_metadata = None
         elif isinstance(swap_metadata_payload, Mapping):
+            _strict_exact_fields(
+                swap_metadata_payload,
+                {
+                    "epsilon_bps",
+                    "twap_window_seconds",
+                    "liquidity_profile",
+                    "twap_local_per_xor",
+                    "volatility_class",
+                },
+                "lane swap metadata",
+            )
             swap_metadata = SumeragiLaneSwapMetadata(
                 epsilon_bps=_strict_uint(
                     swap_metadata_payload, "epsilon_bps", 16, "lane swap metadata"
@@ -6777,6 +8154,25 @@ class SumeragiLaneRelayEnvelope:
         if not isinstance(payload, Mapping):
             raise TypeError("lane relay envelope must be an object")
         context = "lane relay envelope"
+        _strict_exact_fields(
+            payload,
+            {
+                "lane_id",
+                "lane_incarnation",
+                "dataspace_id",
+                "block_height",
+                "block_header",
+                "qc",
+                "da_commitment_hash",
+                "lane_block_descriptor_hash",
+                "settlement_commitment",
+                "settlement_hash",
+                "rbc_bytes_total",
+                "manifest_root",
+                "fastpq_proof",
+            },
+            context,
+        )
         lane_id = _strict_uint(payload, "lane_id", 32, context)
         dataspace_id = _strict_uint(payload, "dataspace_id", 64, context)
         block_height = _strict_uint(payload, "block_height", 64, context)
@@ -6898,7 +8294,7 @@ class SumeragiNewViewReceipt:
 
 @dataclass(frozen=True)
 class SumeragiNewViewSnapshot:
-    """Snapshot returned by `/v1/sumeragi/new_view`."""
+    """Snapshot returned by `/v1/sumeragi/new-view`."""
 
     ts_ms: int
     items: List[SumeragiNewViewReceipt]
@@ -9072,6 +10468,7 @@ __all__ = [
     "resolve_torii_client_config",
     "ResolvedToriiClientConfig",
     "SseEvent",
+    "SseStreamError",
     "EventCursor",
     "NetworkTimeSnapshot",
     "NetworkTimeStatus",
@@ -9107,7 +10504,70 @@ __all__ = [
     "AssetHolderListPage",
     "AccountPermissionRecord",
     "AccountPermissionListPage",
+    "OfflineAppliedOperation",
+    "OfflineAppliedResult",
+    "OfflineAxtErrorDetails",
+    "OfflineAuthorizationJson",
+    "OfflineAssetScale",
+    "OfflineBranchClaimJson",
+    "OfflineBranchPathJson",
+    "OfflineLanePrivacyMerkleVariantJson",
+    "OfflineLanePrivacyMerkleWitnessJson",
+    "OfflineLanePrivacyProofJson",
+    "OfflineLanePrivacySnarkVariantJson",
+    "OfflineLanePrivacySnarkWitnessJson",
+    "OfflineLanePrivacyWitnessJson",
+    "OfflineLineageModeJson",
+    "OfflineLineageNodeJson",
+    "OfflineLineageWitnessJson",
+    "OfflineMerkleProofJson",
+    "OfflineOperationKind",
+    "OfflineOperationReference",
+    "OfflineOperationStatus",
+    "OfflinePendingState",
+    "OfflinePendingOperation",
+    "OfflineProofAttachmentJson",
+    "OfflineProofBoxJson",
+    "OfflineProofBackend",
+    "OfflinePeerSplitTransitionJson",
+    "OfflinePeerSplitTransitionVariantJson",
     "OfflineReadiness",
+    "OfflineReadinessBlocker",
+    "OfflineRedeemChangeJson",
+    "OfflineRedeemOperationResult",
+    "OfflineRedeemRequest",
+    "OfflineRedeemResult",
+    "OfflineRecursiveSpendBundleJson",
+    "OfflineRecursiveSpendProofJson",
+    "OfflineRecursiveSpendStatementJson",
+    "OfflineRecursiveSpendTransitionJson",
+    "OfflineRedemptionChangeTransitionJson",
+    "OfflineRedemptionChangeTransitionVariantJson",
+    "OfflineRedemptionIntentJson",
+    "OfflineRejectedOperation",
+    "OfflineQueueErrorDetails",
+    "OfflineErrorDetails",
+    "OfflineErrorEnvelope",
+    "OfflineScaledAmount",
+    "OfflineScaledAmountJson",
+    "OfflineSpendableNote",
+    "OfflineSpendableNoteJson",
+    "OfflineSpendBranchJson",
+    "OfflineTopUpAnchor",
+    "OfflineTopUpAnchorReferenceJson",
+    "OfflineTopUpOperationResult",
+    "OfflineTopUpRequest",
+    "OfflineTopUpResult",
+    "OfflineVerifierKeyId",
+    "OfflineVerifierKeyIdJson",
+    "OfflineVerifierStatus",
+    "OfflineUnshieldPublicInputsJson",
+    "OfflineVerifyingKeyJson",
+    "OfflineVerifyingKeyRecordJson",
+    "OfflineVerifiedFoldBundleJson",
+    "OfflineVerifiedFoldRecordBundleJson",
+    "OfflineVerifiedFoldStepJson",
+    "OfflineVerifiedFoldVerifierRecordJson",
     "SubscriptionPlanCreateResult",
     "SubscriptionPlanListItem",
     "SubscriptionPlanListPage",
@@ -10025,13 +11485,13 @@ class ToriiClient(_BaseToriiClient):
         *,
         timeout: Optional[float] = None,
     ) -> Optional[Any]:
-        """Fetch ISO bridge status via `GET /v1/iso20022/status/{message_id}`."""
+        """Fetch ISO bridge status via `GET /v1/iso20022/messages/{message_id}`."""
 
         normalized_id = _require_non_empty_string(message_id, "message_id")
         encoded_id = quote(normalized_id, safe="")
         response = self._request(
             "GET",
-            f"/v1/iso20022/status/{encoded_id}",
+            f"/v1/iso20022/messages/{encoded_id}",
             headers={"Accept": "application/json"},
             timeout=timeout,
         )
@@ -10530,6 +11990,7 @@ class ToriiClient(_BaseToriiClient):
             resume=should_resume,
             decode_json=decode_json,
             cursor=cursor,
+            allow_resume=True,
             on_event=_handle if on_event is not None else None,
         )
 
@@ -10865,6 +12326,7 @@ class ToriiClient(_BaseToriiClient):
             resume=should_resume,
             decode_json=decode_json,
             cursor=cursor,
+            allow_resume=True,
             on_event=_handle if on_event is not None else None,
         )
         if with_metadata:
@@ -15522,9 +16984,9 @@ class ToriiClient(_BaseToriiClient):
         authority: str,
         private_key: str,
         gas_limit: Any,
+        entrypoint: str,
         contract_address: Optional[str] = None,
         contract_alias: Optional[str] = None,
-        entrypoint: Optional[str] = None,
         payload: Any = None,
         gas_asset_id: Optional[str] = None,
         fee_sponsor: Optional[str] = None,
@@ -15937,14 +17399,14 @@ class ToriiClient(_BaseToriiClient):
         return SumeragiStatusSnapshot.from_payload(payload)
 
     def get_sumeragi_new_view(self) -> Optional[Any]:
-        """Fetch NEW_VIEW receipt counts (`GET /v1/sumeragi/new_view/json`)."""
+        """Fetch NEW_VIEW receipt counts (`GET /v1/sumeragi/new-view`)."""
 
-        return self.request_json("GET", "/v1/sumeragi/new_view/json", expected_status=(200,))
+        return self.request_json("GET", "/v1/sumeragi/new-view", expected_status=(200,))
 
     def get_sumeragi_new_view_typed(self) -> SumeragiNewViewSnapshot:
         """Typed wrapper for :meth:`get_sumeragi_new_view`."""
 
-        payload = self.request_json("GET", "/v1/sumeragi/new_view/json", expected_status=(200,))
+        payload = self.request_json("GET", "/v1/sumeragi/new-view", expected_status=(200,))
         if not isinstance(payload, Mapping):
             raise TypeError("new_view response must be a JSON object")
         return SumeragiNewViewSnapshot.from_payload(payload)
@@ -16104,12 +17566,12 @@ class ToriiClient(_BaseToriiClient):
         return SumeragiQcSnapshot.from_payload(payload)
 
     def get_sumeragi_commit_qc(self, block_hash_hex: str) -> Optional[Any]:
-        """Fetch commit QC details for a block hash (`GET /v1/sumeragi/commit_qc/{hash}`)."""
+        """Fetch commit QC details for a block hash (`GET /v1/sumeragi/commit-qcs/{block_hash}`)."""
 
         normalized = _normalize_hash_hex(block_hash_hex, "block_hash_hex")
         return self.request_json(
             "GET",
-            f"/v1/sumeragi/commit_qc/{normalized}",
+            f"/v1/sumeragi/commit-qcs/{normalized}",
             expected_status=(200,),
         )
 
@@ -16515,25 +17977,22 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
-        """Stream JSON events from `/v1/events/sse`. Automatically retries on transient errors.
+        """Stream live JSON events from `/v1/events/sse`.
 
         The `filter` parameter accepts a JSON string, mapping, or an
         :class:`iroha_python.event_filter.EventFilter` instance.
+
+        Torii does not retain a replay log for this route. A reconnect starts a
+        new live subscription and can have a gap; use the committed block
+        stream when complete ledger history is required.
         """
 
         filter_payload = ensure_event_filter(filter)
         params = {"filter": filter_payload} if filter_payload else None
-        initial_event_id = last_event_id if last_event_id is not None else (
-            cursor.last_event_id if cursor is not None else None
-        )
-        should_resume = resume or cursor is not None or last_event_id is not None
 
         def _handle(event: SseEvent) -> None:
             if on_event is None:
@@ -16549,10 +18008,7 @@ class ToriiClient(_BaseToriiClient):
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=initial_event_id,
-            resume=should_resume,
             decode_json=decode_json,
-            cursor=cursor,
             on_event=_handle if on_event is not None else None,
         )
         if with_metadata:
@@ -16565,19 +18021,11 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
-        """Stream `/v1/sumeragi/status/sse` for live consensus metrics."""
-
-        initial_event_id = last_event_id if last_event_id is not None else (
-            cursor.last_event_id if cursor is not None else None
-        )
-        should_resume = resume or cursor is not None or last_event_id is not None
+        """Stream `/v1/sumeragi/status/sse` live consensus metrics."""
 
         def _handle(event: SseEvent) -> None:
             if on_event is None:
@@ -16592,10 +18040,7 @@ class ToriiClient(_BaseToriiClient):
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=initial_event_id,
-            resume=should_resume,
             decode_json=decode_json,
-            cursor=cursor,
             on_event=_handle if on_event is not None else None,
         )
         if with_metadata:
@@ -16608,19 +18053,11 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
-        """Stream `/v1/sumeragi/new_view/sse` for live NEW_VIEW receipt counts."""
-
-        initial_event_id = last_event_id if last_event_id is not None else (
-            cursor.last_event_id if cursor is not None else None
-        )
-        should_resume = resume or cursor is not None or last_event_id is not None
+        """Stream `/v1/sumeragi/new-view/sse` live NEW_VIEW receipt counts."""
 
         def _handle(event: SseEvent) -> None:
             if on_event is None:
@@ -16631,14 +18068,11 @@ class ToriiClient(_BaseToriiClient):
                 on_event(event.data, event.id)
 
         iterator = self._stream_sse(
-            "/v1/sumeragi/new_view/sse",
+            "/v1/sumeragi/new-view/sse",
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=initial_event_id,
-            resume=should_resume,
             decode_json=decode_json,
-            cursor=cursor,
             on_event=_handle if on_event is not None else None,
         )
         if with_metadata:
@@ -16655,10 +18089,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
@@ -16675,10 +18106,7 @@ class ToriiClient(_BaseToriiClient):
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=last_event_id,
-            resume=resume,
             on_event=on_event,
-            cursor=cursor,
             with_metadata=with_metadata,
             decode_json=decode_json,
         )
@@ -16693,10 +18121,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
@@ -16713,10 +18138,7 @@ class ToriiClient(_BaseToriiClient):
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=last_event_id,
-            resume=resume,
             on_event=on_event,
-            cursor=cursor,
             with_metadata=with_metadata,
             decode_json=decode_json,
         )
@@ -16734,10 +18156,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
@@ -16757,10 +18176,7 @@ class ToriiClient(_BaseToriiClient):
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=last_event_id,
-            resume=resume,
             on_event=on_event,
-            cursor=cursor,
             with_metadata=with_metadata,
             decode_json=decode_json,
         )
@@ -16774,10 +18190,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
@@ -16793,10 +18206,7 @@ class ToriiClient(_BaseToriiClient):
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=last_event_id,
-            resume=resume,
             on_event=on_event,
-            cursor=cursor,
             with_metadata=with_metadata,
             decode_json=decode_json,
         )
@@ -16809,10 +18219,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
@@ -16827,10 +18234,7 @@ class ToriiClient(_BaseToriiClient):
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=last_event_id,
-            resume=resume,
             on_event=on_event,
-            cursor=cursor,
             with_metadata=with_metadata,
             decode_json=decode_json,
         )
@@ -16844,10 +18248,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
@@ -16863,10 +18264,7 @@ class ToriiClient(_BaseToriiClient):
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=last_event_id,
-            resume=resume,
             on_event=on_event,
-            cursor=cursor,
             with_metadata=with_metadata,
             decode_json=decode_json,
         )
@@ -16878,10 +18276,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
@@ -16893,10 +18288,7 @@ class ToriiClient(_BaseToriiClient):
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            last_event_id=last_event_id,
-            resume=resume,
             on_event=on_event,
-            cursor=cursor,
             with_metadata=with_metadata,
             decode_json=decode_json,
         )
@@ -17188,16 +18580,36 @@ class ToriiClient(_BaseToriiClient):
         resume: bool = False,
         decode_json: bool = True,
         cursor: Optional[EventCursor] = None,
+        allow_resume: bool = False,
         on_event: Optional[Callable[[SseEvent], None]] = None,
     ):
         url = f"{self._base_url}{path}"
-        active_last_id = last_event_id if last_event_id is not None else (
-            cursor.last_event_id if cursor is not None else None
+        if not allow_resume and (last_event_id is not None or resume or cursor is not None):
+            raise ValueError(f"{path} does not support SSE replay")
+        active_last_id = (
+            last_event_id
+            if last_event_id is not None
+            else (cursor.last_event_id if cursor is not None else None)
         )
-        should_resume = resume or last_event_id is not None or cursor is not None
+        should_resume = allow_resume and (
+            resume or last_event_id is not None or cursor is not None
+        )
 
         def iterator():
             nonlocal active_last_id
+
+            def process_event(event: SseEvent) -> SseEvent:
+                nonlocal active_last_id
+                if event.event == "stream_error":
+                    raise SseStreamError.from_event(event)
+                if event.id is not None and allow_resume:
+                    active_last_id = event.id
+                    if cursor is not None:
+                        cursor.advance(event)
+                if on_event is not None:
+                    on_event(event)
+                return event
+
             attempt = 0
             backoff = max(backoff_base, 0.0)
             while True:
@@ -17206,6 +18618,10 @@ class ToriiClient(_BaseToriiClient):
                     final_headers.pop("Accept", None)
                     if headers:
                         final_headers.update(headers)
+                    if not allow_resume:
+                        for name in tuple(final_headers):
+                            if name.lower() == "last-event-id":
+                                final_headers.pop(name)
                     final_headers.setdefault("Accept", "text/event-stream")
                     if should_resume and active_last_id:
                         final_headers["Last-Event-ID"] = active_last_id
@@ -17230,26 +18646,14 @@ class ToriiClient(_BaseToriiClient):
                                     buffer.clear()
                                     if event is None:
                                         continue
-                                    if event.id is not None:
-                                        active_last_id = event.id
-                                        if cursor is not None:
-                                            cursor.advance(event)
-                                    if on_event is not None:
-                                        on_event(event)
-                                    yield event
+                                    yield process_event(event)
                                 continue
                             buffer.append(line)
                         if buffer:
                             event = self._parse_sse_event(buffer, decode_json=decode_json)
                             buffer.clear()
                             if event is not None:
-                                if event.id is not None:
-                                    active_last_id = event.id
-                                    if cursor is not None:
-                                        cursor.advance(event)
-                                if on_event is not None:
-                                    on_event(event)
-                                yield event
+                                yield process_event(event)
                         break
                 except requests.RequestException:
                     attempt += 1

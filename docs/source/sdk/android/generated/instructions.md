@@ -863,7 +863,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 **Smart-contract notes:**
 
-- `code_hash` must equal the Blake2b-32 digest of the program body (bytes after the IVM header); duplicate uploads re-use the stored bytes.
+- `code_hash` must equal the domain-separated canonical hash of the complete deployable `.to` artifact; duplicate uploads re-use the stored bytes.
 - Use the hashes in `docs/source/sdk/android/generated/fixtures/smart_contract_code_executor_hashes.json` to verify `.to` parsing logic in automation.
 
 ## `iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode`
@@ -887,10 +887,10 @@ Optional metadata attached to smart-contract deployments; hash fields must match
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `code_hash` | `Option<Hash>` | Blake2b-32 digest of the `.to` program body (bytes after the IVM header). |
+| `code_hash` | `Option<Hash>` | Domain-separated canonical hash of the complete deployable `.to` artifact, including its execution header, `CNTR`, literals, and code. |
 | `abi_hash` | `Option<Hash>` | Hash of the syscall/pointer ABI surface for the supplied `abi_version` (see `docs/source/ivm_header.md`). |
 | `compiler_fingerprint` | `Option<String>` | Compiler + toolchain note recorded for provenance. |
-| `features_bitmap` | `Option<u64>` | Bitmask of build features (SIMD, CUDA, etc.). |
+| `features_bitmap` | `Option<u64>` | Compiler-derived, hash-covered V1 execution capabilities (ZK and VECTOR); never host SIMD, Metal, or CUDA availability.. |
 | `access_set_hints` | `Option<AccessSetHints>` | Advisory read/write key hints for the scheduler. |
 | `entrypoints` | `Option<Vec<EntrypointDescriptor>>` | Optional entrypoint descriptors advertised by the compiler. |
 
@@ -910,7 +910,7 @@ Metadata emitted per Kotodama entrypoint.
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | `String` | Symbol name declared in Kotodama source. |
-| `kind` | `EntryPointKind` | Role of the entrypoint (`Public`, `Hajimari`, or `Kaizen`). |
+| `kind` | `EntryPointKind` | Role of the entrypoint (`Kotoage`, `View`, `Hajimari`, or `Kaizen`). |
 | `permission` | `Option<String>` | Optional dispatcher permission required before invocation. |
 | `read_keys` | `Vec<String>` | Advisory read set scoped to the entrypoint. |
 | `write_keys` | `Vec<String>` | Advisory write set scoped to the entrypoint. |

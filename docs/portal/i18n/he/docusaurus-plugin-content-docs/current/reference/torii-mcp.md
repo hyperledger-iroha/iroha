@@ -95,7 +95,6 @@ Torii מעביר כותרות נכנסות הקשורות לאישור עבור 
 - `x-api-token`
 - `x-iroha-account`
 - `x-iroha-signature`
-- `x-iroha-api-version`
 
 לקוחות יכולים גם לספק כותרות נוספות לכל שיחה באמצעות `arguments.headers`.
 מתעלמים מ-`content-length`, `host` ו-`connection` מ-`arguments.headers`.

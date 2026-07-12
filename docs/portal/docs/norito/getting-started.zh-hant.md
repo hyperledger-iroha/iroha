@@ -20,7 +20,7 @@ translator: machine-google-reviewed
 
 1. 安裝 Rust 工具鏈（1.76 或更高版本）並查看此存儲庫。
 2. 構建或下載支持的二進製文件：
-   - `koto_compile` – 發出 IVM/Norito 字節碼的 Kotodama 編譯器
+   - `koto build` – 發出 IVM/Norito 字節碼的 Kotodama 編譯器
    - `ivm_run` 和 `ivm_tool` – 本地執行和檢查實用程序
    - `iroha` – 用於通過 Torii 進行合約部署
 
@@ -29,7 +29,7 @@ translator: machine-google-reviewed
    本地工具鏈，將 Makefile 助手指向二進製文件：
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. 確保到達部署步驟時 Iroha 節點正在運行。的
@@ -43,17 +43,16 @@ translator: machine-google-reviewed
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 關鍵標誌：
 
-- `--abi 1` 將合約鎖定為 ABI 版本 1（唯一受支持的版本）
+- `ABI V1` 將合約鎖定為 ABI 版本 1（唯一受支持的版本）
   寫作時）。
-- `--max-cycles 0` 請求無限執行；設置一個正數來綁定
+- `--max-cycles 1000000` 請求無限執行；設置一個正數來綁定
   零知識證明的循環填充。
 
 ## 2. 檢查 Norito 工件（可選）
@@ -87,7 +86,7 @@ ivm_run target/examples/hello.to --args '{}'
 Base64 有效負載：
 
 ```sh
-iroha app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -98,13 +97,13 @@ iroha app contracts deploy \
 響應中顯示的哈希可用於檢索清單或列出實例：
 
 ```sh
-iroha app contracts manifest get --code-hash 0x<hash>
+iroha contract manifest get --code-hash 0x<hash>
 ```
 
 ## 5. 運行 Torii
 
 註冊字節碼後，您可以通過提交指令來調用它
-引用存儲的代碼（例如，通過 `iroha app contracts call --contract-address <contract-address> --entrypoint main --wait`
+引用存儲的代碼（例如，通過 `iroha contract call --contract-address <contract-address> --entrypoint main --wait`
 或您的應用程序客戶端）。確保帳戶權限允許所需的
 系統調用（`set_account_detail`、`transfer_asset` 等）。
 
@@ -113,8 +112,8 @@ iroha app contracts manifest get --code-hash 0x<hash>
 - 使用 `make examples-run` 編譯並執行所提供的示例
   射擊。如果二進製文件未打開，則覆蓋 `KOTO`/`IVM` 環境變量
   `PATH`。
-- 如果 `koto_compile` 拒絕 ABI 版本，請驗證編譯器和節點
-  兩者都以 ABI v1 為目標（運行 `koto_compile --abi`，不帶參數列出
+- 如果 `koto build` 拒絕 ABI 版本，請驗證編譯器和節點
+  兩者都以 ABI v1 為目標（運行 `koto build --help`，不帶參數列出
   支持）。
 - CLI 接受十六進製或 Base64 簽名密鑰。為了進行測試，您可以使用
   由 `kagami keys --json` 發出的密鑰。

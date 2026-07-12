@@ -48,8 +48,8 @@ Endpoints
 Contracts API (deploy)
 - POST `/v1/contracts/deploy`
   - Request: { "authority": "<i105-account-id>", "private_key": "…", "code_b64": "…", "contract_alias": "router::universal", "lease_expiry_ms": 1735689600000? }
-  - Behavior: Verifies the embedded `CNTR` contract interface, derives the canonical manifest from the artifact, computes `code_hash` from the full artifact body after the fixed IVM header and `abi_hash` from the enforced ABI policy, derives a fresh immutable `contract_address` from `(chain_discriminant, authority, deploy_nonce, dataspace(contract_alias))`, then submits `RegisterSmartContractBytes`, `RegisterSmartContractCode`, `ActivateContractInstance`, `SetContractAlias::bind`, and the deploy-nonce bump on behalf of `authority`.
-  - Redeploying the same `contract_alias` is the public upgrade path: Torii clears the old alias binding, deactivates the retired address, binds the alias to the new address, and reports `previous_contract_address` plus `upgraded = true`.
+  - Behavior: Verifies the embedded `CNTR` contract interface, derives the canonical manifest from the artifact, computes the domain-separated `code_hash` over the complete artifact including the fixed IVM execution header and `abi_hash` from the enforced ABI policy, derives a fresh immutable `contract_address` from `(chain_discriminant, authority, deploy_nonce, dataspace(contract_alias))`, then submits `RegisterSmartContractBytes`, `RegisterSmartContractCode`, `ActivateContractInstance`, `SetContractAlias::bind`, and the deploy-nonce bump on behalf of `authority`.
+  - Redeploying the same `contract_alias` is the public `kaizen`/`改善` path: Torii clears the old alias binding, deactivates the retired address, binds the alias to the new address, and reports `previous_contract_address` plus `kaizen = true`.
   - Response: `DeployContractBundleReceiptDto`; the single-contract shortcut returns the canonical bundle receipt with one entry in `contracts[]`.
   - Related:
     - GET `/v1/contracts/code/{code_hash}` → returns stored manifest
@@ -59,21 +59,15 @@ Contracts API (deploy)
     - runtime calls no longer resend bytecode or manifests on each invocation; once deployed, `/v1/contracts/call` references the active contract by address; and
     - protected-namespace deployment remains governed by the proposal/metadata flow (`gov_contract_address`, enacted proposal tuple, quorum metadata) rather than by a separate public `/v1/contracts/instance*` shortcut.
 Alias Service
-- POST `/v1/aliases/voprf/evaluate`
-  - Request: { "blinded_element_hex": "…" }
-  - Response: { "evaluated_element_hex": "…128hex", "backend": "blake2b512-mock" }
-    - `backend` reflects the evaluator implementation. Current value: `blake2b512-mock`.
-  - Notes: Deterministic mock evaluator that applies Blake2b512 with domain separation `iroha.alias.voprf.mock.v1`. Meant for test tooling until the production VOPRF pipeline is wired through Iroha.
-  - Errors: HTTP `400` on malformed hex input. Torii returns a Norito `ValidationFail::QueryFailed::Conversion` envelope with the decoder error message.
 - POST `/v1/aliases/resolve`
   - Request: { "alias": "merchant@paynet" }
   - Response: { "alias": "merchant@paynet", "account_id": "<i105-account-id>", "index": 12, "source": "on_chain" }
   - Notes: Torii routes the lookup through the Nexus read proxy using the alias dataspace encoded in the literal, so `merchant@paynet` can be resolved through any configured Nexus ingress instead of only the PAYNET-local Torii surface. Public/unsigned requests remain allowed for ordinary public alias resolution. Returns HTTP `403` with `ErrorEnvelope.code = "permission_denied"` only when the routed dataspace blocks the lookup and no allowed route can resolve it; returns `404` when reachable routes miss and `503` when no route can be reached.
-- POST `/v1/aliases/resolve_index`
+- POST `/v1/aliases/resolve-index`
   - Request: { "index": 0 }
   - Response: { "index": 0, "alias": "merchant@paynet", "account_id": "<i105-account-id>", "source": "fanout" }
   - Notes: Because the index alone does not encode a dataspace, Torii fans this lookup out across every configured dataspace route, dedupes identical results, and returns `source = "fanout"` when the response comes from multi-route merging. Returns `409 route_conflict` if multiple dataspaces return incompatible bindings for the same index, `403 permission_denied` if only blocked routes could resolve it, `404` when all reachable routes miss, and `503` when no route can be reached.
-- POST `/v1/aliases/by_account`
+- POST `/v1/aliases/by-account`
   - Request: { "account_id": "<i105-account-id>", "dataspace": "paynet"?, "domain": "merchant"?" }
   - Response: { "account_id": "<i105-account-id>", "total": 2, "items": [{ "alias": "merchant@paynet", "dataspace": "paynet", "domain": null, "is_primary": false }], "source": "fanout" }
   - Notes: Torii routes the lookup through the target-account dataspace set, merges deduplicated alias rows across reachable dataspaces, and recomputes `total` after merging. If one or more routes are denied but another route succeeds, Torii still returns `200` and includes the usual routing diagnostics headers plus an HTTP `Warning` header. Returns `403 permission_denied` only when no allowed route can return aliases, `404` when reachable routes miss, and `503` when no route can be reached.

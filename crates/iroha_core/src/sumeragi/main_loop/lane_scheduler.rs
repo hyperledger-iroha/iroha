@@ -2088,9 +2088,10 @@ impl V2LanePayloadPlanError {
 ///
 /// The frozen context roster is used only for the single-lane/shared-domain
 /// profile. Enabled multi-lane Nexus routes must have an authoritative lane
-/// committee in committed state. A global leader which is not the rotating
-/// author for a selected lane, or whose lane predecessor is not durably
-/// applied, receives unavailable indices so those transactions remain queued.
+/// committee in committed state. A global leader need not also be the rotating
+/// author for every selected lane: it commits the exact ownership and hands
+/// executable bytes to the independently selected lane author. A lane whose
+/// predecessor is not durably applied remains unavailable.
 ///
 /// # Errors
 ///
@@ -2100,7 +2101,7 @@ pub(crate) fn prepare_v2_lane_payload_plan(
     state: &State,
     context: &wire::HeightContext,
     view: wire::View,
-    local_peer: &PeerId,
+    _local_peer: &PeerId,
     routing_decisions: &[RoutingDecision],
     candidate_hashes: &[Hash],
 ) -> Result<V2LanePayloadPlan, V2LanePayloadPlanError> {
@@ -2202,6 +2203,11 @@ pub(crate) fn prepare_v2_lane_payload_plan(
         .collect::<Result<BTreeMap<_, _>, _>>()?;
     let tips = v2_known_lane_tips(state, context.height);
     let reset_heights = state.da_shard_canonical_reset_heights_snapshot_cached();
+    // A fresh lane height always originates at lane view zero. The global
+    // proposal view is carried separately in the ownership/hint below; binding
+    // it into the lane view would make every global reproposal look like an
+    // unauthenticated lane NewView jump and would make the executable payload
+    // impossible to persist.
     let plan = plan_lane_payload_with_incarnations(
         &domains,
         &tips,
@@ -2210,27 +2216,11 @@ pub(crate) fn prepare_v2_lane_payload_plan(
         &reset_heights,
         &lane_incarnations,
         context.height,
-        view,
+        0,
     )
     .map_err(|error| {
         V2LanePayloadPlanError::new(format!("lane payload planning failed: {error:?}"))
     })?;
-
-    let unavailable_indices = if shared_committee {
-        BTreeSet::new()
-    } else {
-        plan.entries
-            .iter()
-            .filter(|entry| lane_payload_author(entry) != Some(local_peer))
-            .flat_map(|entry| entry.domain.accepted_candidate_indices.iter().copied())
-            .collect::<BTreeSet<_>>()
-    };
-    if !unavailable_indices.is_empty() {
-        return Ok(V2LanePayloadPlan {
-            unavailable_indices,
-            ..V2LanePayloadPlan::default()
-        });
-    }
 
     let ownerships = plan
         .entries
@@ -2272,6 +2262,7 @@ fn v2_known_lane_tips(state: &State, proposal_height: u64) -> Vec<LaneBlockTip> 
             .filter(|relay| {
                 let relay_proposal_height = relay.block_header.height().get();
                 relay.is_merge_admissible()
+                    && relay.block_header.height().get() <= proposal_height
                     && relay.lane_block_descriptor_hash.is_some()
                     && state.da_lane_visible_after_reset(relay_proposal_height, relay.lane_id)
                     && crate::state::consensus_lane_dataspace_at_height(
@@ -2313,15 +2304,6 @@ fn v2_known_lane_tips(state: &State, proposal_height: u64) -> Vec<LaneBlockTip> 
             ),
     );
     tips
-}
-
-fn lane_payload_author(entry: &LanePayloadPlanEntry) -> Option<&PeerId> {
-    let validator_count = u64::try_from(entry.domain.validator_set.len()).ok()?;
-    if validator_count == 0 {
-        return None;
-    }
-    let index = entry.slot.lane_block_height.saturating_sub(1) % validator_count;
-    entry.domain.validator_set.get(usize::try_from(index).ok()?)
 }
 
 fn v2_lane_payload_ownership(
@@ -2427,6 +2409,10 @@ fn build_lane_payload_plan_entries(
             })
             .collect::<Result<Vec<_>, _>>()?;
         let is_consistent = tip.dataspace_id == domain.dataspace_id
+            && ((tip.latest_lane_block_height == 0
+                && tip.latest_lane_block_descriptor_hash.is_none())
+                || (tip.latest_lane_block_height > 0
+                    && tip.latest_lane_block_descriptor_hash.is_some()))
             && slot.dataspace_id == domain.dataspace_id
             && slot.lane_block_height == expected_next_height
             && subject.dataspace_id == domain.dataspace_id
@@ -4761,10 +4747,45 @@ mod tests {
     }
 
     #[test]
+    fn lane_payload_plan_rejects_non_genesis_tip_without_descriptor_hash() {
+        let routing = routing_for_lane_dataspaces(&[(1, 11)]);
+        let domains = plan_lane_consensus_domains(
+            &routing,
+            &accepted_schedule(&[0]),
+            &[committee(
+                1,
+                11,
+                vec![test_peer(1), test_peer(2), test_peer(3)],
+                None,
+            )],
+            "permissioned",
+        )
+        .expect("lane consensus domain");
+
+        let err = plan_lane_payload(
+            &domains,
+            &[lane_tip(1, 11, 3)],
+            &[tx_hash(0xA9)],
+            99,
+            &BTreeMap::new(),
+            100,
+            2,
+        )
+        .expect_err("a non-genesis tip without its descriptor hash must fail closed");
+
+        assert_eq!(
+            err,
+            LanePayloadPlanError::InconsistentEntry {
+                lane_id: LaneId::new(1),
+            }
+        );
+    }
+
+    #[test]
     fn lane_block_descriptor_binds_committee_without_changing_payload_identity() {
         let routing = routing_for_lane_dataspaces(&[(1, 11)]);
         let candidate_hashes = vec![tx_hash(0xA9)];
-        let known_tips = vec![lane_tip(1, 11, 3)];
+        let known_tips = vec![lane_tip_with_descriptor(1, 11, 3, 0xA0)];
         let domains_a = plan_lane_consensus_domains(
             &routing,
             &accepted_schedule(&[0]),

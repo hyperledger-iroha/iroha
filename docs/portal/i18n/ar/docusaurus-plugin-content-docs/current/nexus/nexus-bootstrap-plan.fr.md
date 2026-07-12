@@ -33,7 +33,7 @@ translation_last_reviewed: 2026-02-07
 ## إعادة نشر البيئات
 - عامل التشغيل في بيئتين Nexus مع البادئات المميزة:
 - ** Sora Nexus (mainnet)** - بادئة reseau de production `nexus`، hebergeant la gouvernance canonique et les Services piggyback SoraFS/SoraNet (معرف السلسلة `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - بادئة شبكة التدريج `testus`، تعكس تكوين الشبكة الرئيسية لاختبارات التكامل والتحقق من صحة الإصدار المسبق (سلسلة UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - بادئة شبكة التدريج `testus`، تعكس تكوين الشبكة الرئيسية لاختبارات التكامل والتحقق من صحة الإصدار المسبق (سلسلة UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - صيانة ملفات التكوين وقواعد الحوكمة وإدارة البنية التحتية المنفصلة لكل بيئة. يقدم الاختبار مساحة تمهيدية لجميع عمليات النشر SoraFS/SoraNet الترويج المسبق مقابل Nexus.
 - تعمل خطوط الأنابيب CI/CD على نشر اللوحة على الاختبار، وتنفيذ اختبارات الدخان تلقائيًا، والمطالبة بتعزيز يدوي مقابل Nexus مرة واحدة بعد مرور عمليات التحقق.
 - تم العثور على حزم التكوين المرجعية في `configs/soranexus/nexus/` (mainnet) و`configs/soranexus/testus/` (testnet)، وقد تحتوي على مثال `config.toml` و`genesis.json` ومرجع القبول Torii.

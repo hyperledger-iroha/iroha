@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "iphapharamitha `{name}` kumsebenzi `{func}` ayisetshenziswa nhlobo",
     lint_unreachable_after_return: "kutholwe isitatimende esingafinyeleleki ku {context}: ikhodi elandela return ayisoze isebenze",
     lint_ok: "kulungile",
-    lint_usage: "Ukusetshenziswa: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Ukusetshenziswa: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Sebenzisa ukuhlola kwe-lint ye-Kotodama kuma-source anikeziwe.",
     ..english::MESSAGES
 };

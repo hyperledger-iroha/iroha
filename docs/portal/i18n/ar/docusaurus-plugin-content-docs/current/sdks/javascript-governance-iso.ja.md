@@ -102,32 +102,27 @@ node javascript/iroha_js/recipes/iso_bridge.mjs
 يتم إنهاء كلا البرنامجين النصيين برمز الحالة `1` إذا لم يبلغ Torii عن أي محطة طرفية مطلقًا
 الانتقال، مما يجعلها مناسبة لوظائف بوابة CI.
 
-### مساعد الاسم المستعار ISOيستهدف `recipes/iso_alias.mjs` نقاط نهاية الاسم المستعار ISO حتى يمكن تغطية التدريبات
-تجزئة العناصر العمياء وعمليات البحث عن الأسماء المستعارة دون كتابة أدوات مخصصة. ذلك
-يستدعي `ToriiClient.evaluateAliasVoprf` بالإضافة إلى `resolveAlias` / `resolveAliasByIndex`
-ويطبع الواجهة الخلفية والملخص وربط الحساب والمصدر والفهرس الحتمي
-تم إرجاعها بواسطة Torii.
+### مساعد الاسم المستعار ISO
+
+يختبر `recipes/iso_alias.mjs` عمليات البحث عن الأسماء المستعارة ISO من دون الحاجة إلى أدوات مخصصة.
+ويستدعي `resolveAlias` و`resolveAliasByIndex`، ثم يطبع ربط الحساب والمصدر والفهرس الحتمي الذي يعيده Torii.
 
 متغيرات البيئة:
 
 - `TORII_URL` — نقطة النهاية Torii تكشف عن الأسماء المستعارة للمساعدين.
-- `ISO_VOPRF_INPUT` - عنصر أعمى بتشفير سداسي عشري (الإعداد الافتراضي هو `deadbeef`).
-- `ISO_SKIP_VOPRF=1` - تخطي استدعاء VOPRF عند اختبار عمليات البحث فقط.
 - `ISO_ALIAS_LABEL` - الاسم المستعار الحرفي المطلوب حله (على سبيل المثال، سلاسل بنمط IBAN).
 - `ISO_ALIAS_INDEX` - تم تمرير الفهرس العشري أو البادئة `0x` إلى `resolveAliasByIndex`.
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — رؤوس اختيارية لعمليات نشر Torii الآمنة.
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```
