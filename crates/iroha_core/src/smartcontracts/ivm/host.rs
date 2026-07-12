@@ -21073,18 +21073,8 @@ seiyaku EffectfulView {
 "#,
             1,
         );
-        grant_named_permission_to_account(
-            &state,
-            &authority,
-            authority.clone(),
-            "NestedView",
-        );
-        grant_named_permission_to_account(
-            &state,
-            &authority,
-            caller.subject_id(),
-            "NestedView",
-        );
+        grant_named_permission_to_account(&state, &authority, authority.clone(), "NestedView");
+        grant_named_permission_to_account(&state, &authority, caller.subject_id(), "NestedView");
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         execute_contract_call_transaction(
             &state,

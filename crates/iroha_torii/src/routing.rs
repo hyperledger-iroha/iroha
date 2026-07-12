@@ -188,7 +188,7 @@ use iroha_data_model::{
     account,
     block::consensus::{
         SumeragiCommittedLaneBlock, SumeragiProposalGateStatus, SumeragiQcEntry,
-        SumeragiQcSnapshot, SumeragiV1StatusWire,
+        SumeragiQcSnapshot, SumeragiSafetyHaltStatus, SumeragiV1StatusWire,
     },
     domain::DomainId,
     events::{
@@ -53720,7 +53720,75 @@ fn sumeragi_v1_status_wire(snap: &sumeragi::StatusSnapshot) -> SumeragiV1StatusW
         quorum_policy: sumeragi_v1_quorum_policy(snap),
         payload_status: sumeragi_v1_payload_status(snap).to_owned(),
         rbc_status: sumeragi_v1_rbc_status(snap).to_owned(),
+        safety_halt: consensus_safety_halt_status(&snap.safety_halt),
     }
+}
+
+fn consensus_safety_halt_status(
+    halt: &sumeragi::status::ConsensusSafetyHaltSnapshot,
+) -> SumeragiSafetyHaltStatus {
+    SumeragiSafetyHaltStatus {
+        active: halt.active,
+        reason: halt.reason.clone(),
+        height: halt.height,
+        epoch: halt.epoch,
+        first_block_hash: halt.first_block_hash,
+        conflicting_block_hash: halt.conflicting_block_hash,
+        first_parent_state_root: halt.first_parent_state_root,
+        first_post_state_root: halt.first_post_state_root,
+        conflicting_parent_state_root: halt.conflicting_parent_state_root,
+        conflicting_post_state_root: halt.conflicting_post_state_root,
+    }
+}
+
+fn consensus_safety_halt_json(
+    halt: &sumeragi::status::ConsensusSafetyHaltSnapshot,
+) -> norito::json::Value {
+    json_object(vec![
+        json_entry("active", halt.active),
+        json_entry(
+            "reason",
+            halt.reason.clone().map(Value::from).unwrap_or(Value::Null),
+        ),
+        json_entry("height", halt.height),
+        json_entry("epoch", halt.epoch),
+        json_entry(
+            "first_block_hash",
+            halt.first_block_hash
+                .map(|hash| Value::from(hash_with_prefix(hash)))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "conflicting_block_hash",
+            halt.conflicting_block_hash
+                .map(|hash| Value::from(hash_with_prefix(hash)))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "first_parent_state_root",
+            halt.first_parent_state_root
+                .map(|hash| Value::from(hash_with_prefix(hash)))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "first_post_state_root",
+            halt.first_post_state_root
+                .map(|hash| Value::from(hash_with_prefix(hash)))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "conflicting_parent_state_root",
+            halt.conflicting_parent_state_root
+                .map(|hash| Value::from(hash_with_prefix(hash)))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "conflicting_post_state_root",
+            halt.conflicting_post_state_root
+                .map(|hash| Value::from(hash_with_prefix(hash)))
+                .unwrap_or(Value::Null),
+        ),
+    ])
 }
 
 fn sumeragi_v1_status_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value {
@@ -53791,6 +53859,7 @@ fn sumeragi_v1_status_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Val
         ),
         json_entry("payload_status", wire.payload_status),
         json_entry("rbc_status", wire.rbc_status),
+        json_entry("safety_halt", consensus_safety_halt_json(&snap.safety_halt)),
     ])
 }
 
@@ -55245,6 +55314,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         .unwrap_or(Value::Null);
     crate::json_object(vec![
         json_entry("canonical", sumeragi_v1_status_json(snap)),
+        json_entry("safety_halt", consensus_safety_halt_json(&snap.safety_halt)),
         json_entry("mode_tag", &snap.mode_tag),
         json_entry(
             "staged_mode_tag",
@@ -56066,6 +56136,91 @@ mod status_tests {
             commit_quorum.get("last_updated_ms").and_then(Value::as_u64),
             Some(123)
         );
+    }
+
+    #[test]
+    fn status_snapshot_json_exposes_consensus_safety_halt() {
+        let first =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x71; Hash::LENGTH]));
+        let conflicting =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x72; Hash::LENGTH]));
+        let snap = sumeragi::StatusSnapshot {
+            safety_halt: sumeragi::status::ConsensusSafetyHaltSnapshot {
+                active: true,
+                reason: Some("conflicting_commit_qc".to_owned()),
+                height: 42,
+                epoch: 3,
+                first_block_hash: Some(first),
+                conflicting_block_hash: Some(conflicting),
+                first_parent_state_root: Some(Hash::prehashed([0x73; 32])),
+                first_post_state_root: Some(Hash::prehashed([0x74; 32])),
+                conflicting_parent_state_root: Some(Hash::prehashed([0x75; 32])),
+                conflicting_post_state_root: Some(Hash::prehashed([0x76; 32])),
+            },
+            ..Default::default()
+        };
+
+        let payload = status_snapshot_json(&snap);
+        for halt in [
+            payload
+                .get("safety_halt")
+                .and_then(Value::as_object)
+                .expect("detailed safety halt"),
+            payload
+                .get("canonical")
+                .and_then(Value::as_object)
+                .and_then(|canonical| canonical.get("safety_halt"))
+                .and_then(Value::as_object)
+                .expect("canonical safety halt"),
+        ] {
+            assert_eq!(halt.get("active").and_then(Value::as_bool), Some(true));
+            assert_eq!(
+                halt.get("reason").and_then(Value::as_str),
+                Some("conflicting_commit_qc")
+            );
+            assert_eq!(halt.get("height").and_then(Value::as_u64), Some(42));
+            assert_eq!(halt.get("epoch").and_then(Value::as_u64), Some(3));
+            assert_eq!(
+                halt.get("first_block_hash").and_then(Value::as_str),
+                Some(hash_with_prefix(first).as_str())
+            );
+            assert_eq!(
+                halt.get("conflicting_block_hash").and_then(Value::as_str),
+                Some(hash_with_prefix(conflicting).as_str())
+            );
+            assert_eq!(
+                halt.get("first_parent_state_root").and_then(Value::as_str),
+                Some(hash_with_prefix(Hash::prehashed([0x73; 32])).as_str())
+            );
+            assert_eq!(
+                halt.get("first_post_state_root").and_then(Value::as_str),
+                Some(hash_with_prefix(Hash::prehashed([0x74; 32])).as_str())
+            );
+            assert_eq!(
+                halt.get("conflicting_parent_state_root")
+                    .and_then(Value::as_str),
+                Some(hash_with_prefix(Hash::prehashed([0x75; 32])).as_str())
+            );
+            assert_eq!(
+                halt.get("conflicting_post_state_root")
+                    .and_then(Value::as_str),
+                Some(hash_with_prefix(Hash::prehashed([0x76; 32])).as_str())
+            );
+        }
+
+        let expected = consensus_safety_halt_status(&snap.safety_halt);
+        let canonical = sumeragi_v1_status_wire(&snap);
+        assert_eq!(canonical.safety_halt, expected);
+        let wire = iroha_data_model::block::consensus::SumeragiStatusWire {
+            canonical,
+            safety_halt: expected.clone(),
+            ..Default::default()
+        };
+        let encoded = norito::to_bytes(&wire).expect("encode Norito Sumeragi status");
+        let decoded: iroha_data_model::block::consensus::SumeragiStatusWire =
+            norito::decode_from_bytes(&encoded).expect("decode Norito Sumeragi status");
+        assert_eq!(decoded.safety_halt, expected);
+        assert_eq!(decoded.canonical.safety_halt, expected);
     }
 
     #[test]
@@ -58305,6 +58460,7 @@ fn reconcile_sumeragi_status_snapshot_with_world(
 struct SumeragiV2StatusJson {
     #[norito(flatten)]
     authoritative: iroha_data_model::block::consensus_v2::SumeragiV2Status,
+    safety_halt: SumeragiSafetyHaltStatus,
     lane_settlement_commitments: Vec<LaneBlockCommitment>,
     lane_relay_envelopes: Vec<LaneRelayEnvelope>,
 }
@@ -58323,6 +58479,7 @@ fn sumeragi_v2_status_json(
     };
     SumeragiV2StatusJson {
         authoritative,
+        safety_halt: consensus_safety_halt_status(&snapshot.safety_halt),
         lane_settlement_commitments: snapshot.lane_settlement_commitments,
         lane_relay_envelopes: snapshot.lane_relay_envelopes,
     }

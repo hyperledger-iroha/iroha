@@ -131,6 +131,9 @@ pub(super) fn spawn_qc_verify_workers(
 
 impl Actor {
     pub(in crate::sumeragi) fn poll_qc_verify_results(&mut self) -> bool {
+        if self.consensus_participation_halted() {
+            return false;
+        }
         let Some(result_rx) = self.subsystems.qc_verify.result_rx.take() else {
             return false;
         };
@@ -176,6 +179,9 @@ impl Actor {
                         }
                     }
                     progress = true;
+                    if self.consensus_participation_halted() {
+                        break;
+                    }
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {

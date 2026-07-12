@@ -27,8 +27,9 @@ use iroha_crypto::{Algorithm, Hash, Signature, SignatureOf};
 use iroha_data_model::{
     DATA_MODEL_VERSION, ValidationFail,
     block::consensus::{
-        EvidenceRecord, SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiQcEntry,
-        SumeragiQcSnapshot, SumeragiStatusWire,
+        EvidenceRecord, QuorumPolicy, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
+        SumeragiQcEntry, SumeragiQcSnapshot, SumeragiSafetyHaltStatus, SumeragiStatusWire,
+        SumeragiV1StatusWire,
     },
     da::{
         commitment::{DaCommitmentProof, DaProofPolicyBundle},
@@ -4736,6 +4737,152 @@ fn commit_qc_json_payload(hash_hex: &str, qc_opt: Option<Qc>) -> norito::json::V
     Value::Object(map)
 }
 
+fn canonical_hash_string<H: norito::json::JsonSerialize>(hash: H) -> String {
+    norito::json::to_value(&hash)
+        .expect("serialize Sumeragi status hash")
+        .as_str()
+        .expect("serialized Sumeragi status hash must be a JSON string")
+        .to_owned()
+}
+
+#[allow(clippy::too_many_lines)]
+fn sumeragi_safety_halt_json_payload(halt: &SumeragiSafetyHaltStatus) -> norito::json::Value {
+    use norito::json::{Map, Value};
+
+    let optional_display = |value: Option<String>| value.map_or(Value::Null, Value::from);
+    let mut map = Map::new();
+    map.insert("active".into(), Value::from(halt.active));
+    map.insert(
+        "reason".into(),
+        halt.reason
+            .as_ref()
+            .map_or(Value::Null, |reason| Value::from(reason.clone())),
+    );
+    map.insert("height".into(), Value::from(halt.height));
+    map.insert("epoch".into(), Value::from(halt.epoch));
+    map.insert(
+        "first_block_hash".into(),
+        optional_display(
+            halt.first_block_hash
+                .as_ref()
+                .map(|hash| canonical_hash_string(*hash)),
+        ),
+    );
+    map.insert(
+        "conflicting_block_hash".into(),
+        optional_display(
+            halt.conflicting_block_hash
+                .as_ref()
+                .map(|hash| canonical_hash_string(*hash)),
+        ),
+    );
+    map.insert(
+        "first_parent_state_root".into(),
+        optional_display(
+            halt.first_parent_state_root
+                .as_ref()
+                .map(|hash| canonical_hash_string(*hash)),
+        ),
+    );
+    map.insert(
+        "first_post_state_root".into(),
+        optional_display(
+            halt.first_post_state_root
+                .as_ref()
+                .map(|hash| canonical_hash_string(*hash)),
+        ),
+    );
+    map.insert(
+        "conflicting_parent_state_root".into(),
+        optional_display(
+            halt.conflicting_parent_state_root
+                .as_ref()
+                .map(|hash| canonical_hash_string(*hash)),
+        ),
+    );
+    map.insert(
+        "conflicting_post_state_root".into(),
+        optional_display(
+            halt.conflicting_post_state_root
+                .as_ref()
+                .map(|hash| canonical_hash_string(*hash)),
+        ),
+    );
+    Value::Object(map)
+}
+
+fn sumeragi_qc_entry_json_payload(entry: &SumeragiQcEntry) -> norito::json::Value {
+    use norito::json::{Map, Value};
+
+    let mut map = Map::new();
+    map.insert("height".into(), Value::from(entry.height));
+    map.insert("view".into(), Value::from(entry.view));
+    map.insert(
+        "subject_block_hash".into(),
+        entry
+            .subject_block_hash
+            .as_ref()
+            .map_or(Value::Null, |hash| Value::from(format!("{hash}"))),
+    );
+    Value::Object(map)
+}
+
+fn sumeragi_v1_status_json_payload(wire: &SumeragiV1StatusWire) -> norito::json::Value {
+    use norito::json::{Map, Value};
+
+    let quorum_policy = wire.quorum_policy.as_ref().map_or(Value::Null, |policy| {
+        let mut map = Map::new();
+        match policy {
+            QuorumPolicy::PermissionedCount(validators) => {
+                map.insert("kind".into(), Value::from("permissioned_count"));
+                map.insert("validators".into(), Value::from(u64::from(*validators)));
+            }
+            QuorumPolicy::NposStake(total_stake) => {
+                map.insert("kind".into(), Value::from("npos_stake"));
+                map.insert("total_stake".into(), Value::from(total_stake.to_string()));
+            }
+        }
+        Value::Object(map)
+    });
+
+    let mut map = Map::new();
+    map.insert("height".into(), Value::from(wire.height));
+    map.insert("view".into(), Value::from(wire.view));
+    map.insert("phase".into(), Value::from(wire.phase.clone()));
+    map.insert("leader_index".into(), Value::from(wire.leader_index));
+    map.insert(
+        "highest_qc".into(),
+        sumeragi_qc_entry_json_payload(&wire.highest_qc),
+    );
+    map.insert(
+        "locked_qc".into(),
+        sumeragi_qc_entry_json_payload(&wire.locked_qc),
+    );
+    map.insert(
+        "pending_finality".into(),
+        wire.pending_finality
+            .as_ref()
+            .map_or(Value::Null, |hash| Value::from(format!("{hash}"))),
+    );
+    map.insert(
+        "validator_set_id".into(),
+        wire.validator_set_id
+            .as_ref()
+            .map_or(Value::Null, |id| Value::from(format!("{}", id.hash))),
+    );
+    map.insert("quorum_policy".into(), quorum_policy);
+    map.insert(
+        "payload_status".into(),
+        Value::from(wire.payload_status.clone()),
+    );
+    map.insert("rbc_status".into(), Value::from(wire.rbc_status.clone()));
+    map.insert(
+        "safety_halt".into(),
+        sumeragi_safety_halt_json_payload(&wire.safety_halt),
+    );
+    Value::Object(map)
+}
+
 #[allow(clippy::too_many_lines)]
 fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Value {
     use iroha_data_model::block::consensus::{
@@ -5671,6 +5818,14 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
         })
         .collect();
     let mut root = Map::new();
+    root.insert(
+        "canonical".into(),
+        sumeragi_v1_status_json_payload(&wire.canonical),
+    );
+    root.insert(
+        "safety_halt".into(),
+        sumeragi_safety_halt_json_payload(&wire.safety_halt),
+    );
     root.insert("leader_index".into(), Value::from(wire.leader_index));
     root.insert(
         "effective_min_finality_ms".into(),
@@ -21420,8 +21575,8 @@ mod tests {
                 SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus,
                 SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcStatus, SumeragiProposalGateStatus,
                 SumeragiQcEntry, SumeragiQcSnapshot, SumeragiRbcMismatchEntry,
-                SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus, SumeragiStatusWire,
-                SumeragiV1StatusWire, SumeragiValidationRejectStatus,
+                SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus, SumeragiSafetyHaltStatus,
+                SumeragiStatusWire, SumeragiV1StatusWire, SumeragiValidationRejectStatus,
                 SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropStatus,
             },
         },
@@ -21707,6 +21862,7 @@ mod tests {
         };
         let status = SumeragiStatusWire {
             canonical: SumeragiV1StatusWire::default(),
+            safety_halt: Default::default(),
             mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
             staged_mode_tag: None,
             staged_mode_activation_height: None,
@@ -25428,6 +25584,7 @@ mod tests {
         let block_hash = block_header.hash();
         SumeragiStatusWire {
             canonical: SumeragiV1StatusWire::default(),
+            safety_halt: Default::default(),
             mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
             staged_mode_tag: None,
             staged_mode_activation_height: None,
@@ -25658,6 +25815,107 @@ mod tests {
         base_sumeragi_status(&block_header, settlement, relay)
     }
 
+    fn sample_sumeragi_safety_halt(
+        seed: u8,
+        reason: &str,
+        height: u64,
+        epoch: u64,
+    ) -> SumeragiSafetyHaltStatus {
+        SumeragiSafetyHaltStatus {
+            active: true,
+            reason: Some(reason.to_owned()),
+            height,
+            epoch,
+            first_block_hash: Some(HashOf::from_untyped_unchecked(Hash::prehashed(
+                [seed; Hash::LENGTH],
+            ))),
+            conflicting_block_hash: Some(HashOf::from_untyped_unchecked(Hash::prehashed(
+                [seed.wrapping_add(1); Hash::LENGTH],
+            ))),
+            first_parent_state_root: Some(Hash::prehashed([seed.wrapping_add(2); Hash::LENGTH])),
+            first_post_state_root: Some(Hash::prehashed([seed.wrapping_add(3); Hash::LENGTH])),
+            conflicting_parent_state_root: Some(Hash::prehashed(
+                [seed.wrapping_add(4); Hash::LENGTH],
+            )),
+            conflicting_post_state_root: Some(Hash::prehashed(
+                [seed.wrapping_add(5); Hash::LENGTH],
+            )),
+        }
+    }
+
+    fn assert_sumeragi_safety_halt_json(
+        value: &norito::json::Value,
+        expected: &SumeragiSafetyHaltStatus,
+    ) {
+        let halt = value.as_object().expect("safety halt must be an object");
+        assert_eq!(
+            halt.get("active").and_then(norito::json::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            halt.get("reason").and_then(norito::json::Value::as_str),
+            expected.reason.as_deref()
+        );
+        assert_eq!(
+            halt.get("height").and_then(norito::json::Value::as_u64),
+            Some(expected.height)
+        );
+        assert_eq!(
+            halt.get("epoch").and_then(norito::json::Value::as_u64),
+            Some(expected.epoch)
+        );
+        for (field, expected) in [
+            (
+                "first_block_hash",
+                expected
+                    .first_block_hash
+                    .as_ref()
+                    .map(|hash| canonical_hash_string(*hash)),
+            ),
+            (
+                "conflicting_block_hash",
+                expected
+                    .conflicting_block_hash
+                    .as_ref()
+                    .map(|hash| canonical_hash_string(*hash)),
+            ),
+            (
+                "first_parent_state_root",
+                expected
+                    .first_parent_state_root
+                    .as_ref()
+                    .map(|hash| canonical_hash_string(*hash)),
+            ),
+            (
+                "first_post_state_root",
+                expected
+                    .first_post_state_root
+                    .as_ref()
+                    .map(|hash| canonical_hash_string(*hash)),
+            ),
+            (
+                "conflicting_parent_state_root",
+                expected
+                    .conflicting_parent_state_root
+                    .as_ref()
+                    .map(|hash| canonical_hash_string(*hash)),
+            ),
+            (
+                "conflicting_post_state_root",
+                expected
+                    .conflicting_post_state_root
+                    .as_ref()
+                    .map(|hash| canonical_hash_string(*hash)),
+            ),
+        ] {
+            assert_eq!(
+                halt.get(field).and_then(norito::json::Value::as_str),
+                expected.as_deref(),
+                "unexpected {field}"
+            );
+        }
+    }
+
     #[test]
     fn get_sumeragi_status_prefers_norito_and_handles_json() {
         let status = sample_sumeragi_status();
@@ -25711,7 +25969,31 @@ mod tests {
 
     #[test]
     fn get_sumeragi_status_json_requests_json_and_falls_back_to_norito() {
-        let status = sample_sumeragi_status();
+        let mut status = sample_sumeragi_status();
+        status.safety_halt =
+            sample_sumeragi_safety_halt(0x71, "conflicting_authenticated_finality_subject", 42, 3);
+        status.canonical = SumeragiV1StatusWire {
+            height: 43,
+            view: 7,
+            phase: "commit".to_owned(),
+            leader_index: 2,
+            highest_qc: SumeragiQcEntry {
+                height: 42,
+                view: 6,
+                subject_block_hash: status.safety_halt.first_block_hash,
+            },
+            locked_qc: SumeragiQcEntry {
+                height: 42,
+                view: 5,
+                subject_block_hash: status.safety_halt.conflicting_block_hash,
+            },
+            pending_finality: status.safety_halt.conflicting_block_hash,
+            validator_set_id: None,
+            quorum_policy: Some(QuorumPolicy::PermissionedCount(4)),
+            payload_status: "available".to_owned(),
+            rbc_status: "ready".to_owned(),
+            safety_halt: sample_sumeragi_safety_halt(0x81, "conflicting_commit_qc", 41, 2),
+        };
         let expected_json = sumeragi_status_json_payload(&status);
 
         let json_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -25757,6 +26039,34 @@ mod tests {
             })
             .expect("norito fallback succeeds");
         assert_eq!(decoded_norito, expected_json);
+        assert_sumeragi_safety_halt_json(
+            decoded_norito
+                .get("safety_halt")
+                .expect("top-level safety halt"),
+            &status.safety_halt,
+        );
+        let canonical = decoded_norito
+            .get("canonical")
+            .and_then(norito::json::Value::as_object)
+            .expect("canonical status object");
+        assert_eq!(
+            canonical
+                .get("height")
+                .and_then(norito::json::Value::as_u64),
+            Some(status.canonical.height)
+        );
+        assert_eq!(
+            canonical
+                .get("quorum_policy")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|policy| policy.get("kind"))
+                .and_then(norito::json::Value::as_str),
+            Some("permissioned_count")
+        );
+        assert_sumeragi_safety_halt_json(
+            canonical.get("safety_halt").expect("canonical safety halt"),
+            &status.canonical.safety_halt,
+        );
 
         let mislabeled_json_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let mislabeled_json_response = Response::builder()
@@ -25867,6 +26177,7 @@ mod tests {
         };
         let status = SumeragiStatusWire {
             canonical: SumeragiV1StatusWire::default(),
+            safety_halt: Default::default(),
             mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
             staged_mode_tag: None,
             staged_mode_activation_height: None,

@@ -5557,7 +5557,9 @@ pub struct Kura {
     pub max_disk_usage_bytes: Bytes<u64>,
     /// Number of recent blocks kept in memory.
     pub blocks_in_memory: NonZeroUsize,
-    /// Number of recent roster records retained for block-sync validation.
+    /// Number of recent committed non-genesis roster records retained for block-sync validation.
+    /// Genesis is pinned separately, and one additional row is reserved for an authenticated
+    /// pre-Kura successor.
     pub block_sync_roster_retention: NonZeroUsize,
     /// Number of recent roster sidecars retained alongside the block store.
     pub roster_sidecar_retention: NonZeroUsize,

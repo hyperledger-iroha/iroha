@@ -222,6 +222,9 @@ impl Actor {
         epoch: u64,
         signer: ValidatorIndex,
     ) -> Result<([u8; 32], [u8; 32])> {
+        if self.consensus_participation_halted_now() {
+            return Err(eyre!("consensus safety halt active"));
+        }
         derive_vrf_material_from_key(
             &self.chain_hash,
             self.common_config.key_pair.private_key(),
@@ -235,6 +238,9 @@ impl Actor {
         commit: &mut crate::sumeragi::consensus::VrfCommit,
         mode_tag: &str,
     ) -> Result<()> {
+        if self.consensus_participation_halted_now() {
+            return Err(eyre!("consensus safety halt active"));
+        }
         commit.bls_sig.clear();
         let preimage = vrf_commit_preimage(&self.common_config.chain, mode_tag, commit);
         let signature = Signature::try_new(self.common_config.key_pair.private_key(), &preimage)
@@ -248,6 +254,9 @@ impl Actor {
         reveal: &mut crate::sumeragi::consensus::VrfReveal,
         mode_tag: &str,
     ) -> Result<()> {
+        if self.consensus_participation_halted_now() {
+            return Err(eyre!("consensus safety halt active"));
+        }
         reveal.bls_sig.clear();
         let preimage = vrf_reveal_preimage(&self.common_config.chain, mode_tag, reveal);
         let signature = Signature::try_new(self.common_config.key_pair.private_key(), &preimage)

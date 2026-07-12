@@ -5732,7 +5732,17 @@ impl Iroha {
                 std::thread::Builder::new()
                     .name("sumeragi-post".to_string())
                     .spawn(move || {
+                        let mut safety_halt_logged = false;
                         while let Ok(task) = bg_rx.recv() {
+                            if iroha_core::sumeragi::consensus_safety_halt_active() {
+                                if !safety_halt_logged {
+                                    iroha_logger::error!(
+                                        "consensus safety halt active; dropping queued background consensus transmissions"
+                                    );
+                                    safety_halt_logged = true;
+                                }
+                                continue;
+                            }
                             match task {
                                 iroha_core::sumeragi::BackgroundPost::Post {
                                     peer,

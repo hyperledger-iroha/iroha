@@ -65,6 +65,15 @@ outstanding items tracked in the engineering backlog.
 sheet and Phoenix series, followed by the smallest useful producer-credit pilot
 and adversarial simulation harness.
 
+Sumeragi restart safety now keeps authenticated local Prepare/Commit vote locks
+in a durable Kura-adjacent journal before any vote can be broadcast. Conflicting
+authenticated commit certificates for the same height and epoch activate a
+process-wide fail-closed halt that is exposed through the detailed consensus
+status endpoint and observed by actor, block-sync, and worker-result paths.
+Rollout remains gated on a coordinated four-validator restart exercise that
+demonstrates recovered same-height locks, consistent frontier continuation, and
+operator alerting for the safety-halt payload before these changes reach Taira.
+
 SoraNet handshake admission for the first release now has a single production
 policy: PoW is mandatory, the Argon2 puzzle gate stays enabled, and SM helper /
 OpenSSL-preview matching stays strict. Startup configuration no longer exposes

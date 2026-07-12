@@ -10,6 +10,10 @@ pub(super) fn dispatch_background_request(
     request: BackgroundRequest,
     telemetry: &Telemetry,
 ) -> Result<(), Box<BackgroundRequest>> {
+    if super::status::consensus_safety_halt_active() {
+        trace!("dropping background request: consensus safety halt active");
+        return Ok(());
+    }
     let allow_blocking = background_request_allows_blocking(&request);
     let (kind, peer_for_metrics, post) = match request {
         BackgroundRequest::Post { peer, msg } => (
@@ -122,6 +126,10 @@ pub(super) fn dispatch_background_request(
     tx_opt: Option<&mpsc::SyncSender<BackgroundPost>>,
     request: BackgroundRequest,
 ) -> Result<(), Box<BackgroundRequest>> {
+    if super::status::consensus_safety_halt_active() {
+        trace!("dropping background request: consensus safety halt active");
+        return Ok(());
+    }
     let allow_blocking = background_request_allows_blocking(&request);
     let (kind, post) = match request {
         BackgroundRequest::Post { peer, msg } => (

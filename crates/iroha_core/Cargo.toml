@@ -99,6 +99,9 @@ dev-tests = []
 
 # Enable internal test helpers (e.g., Topology fixtures) when building core tests.
 iroha-core-tests = []
+# Permit dependent-crate finality-ledger fixtures. Requiring this in addition to
+# `iroha-core-tests` keeps raw finality mutation out of broad tooling builds.
+finality-test-fixtures = []
 
 # Allow offline balance proof verification bypass + dummy backend in dev builds.
 

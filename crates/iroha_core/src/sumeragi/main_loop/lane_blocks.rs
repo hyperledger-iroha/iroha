@@ -2266,6 +2266,9 @@ impl Actor {
         &self,
         proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
     ) -> Option<crate::lane_consensus::LaneBlockVoteV1> {
+        if self.consensus_participation_halted_now() {
+            return None;
+        }
         let local_peer = self.common_config.peer.id();
         if !proposal.descriptor.validator_set.contains(local_peer) {
             return None;
@@ -3416,6 +3419,9 @@ impl Actor {
         &self,
         proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
     ) -> Option<crate::lane_consensus::LaneBlockVoteV1> {
+        if self.consensus_participation_halted_now() {
+            return None;
+        }
         let local_peer = self.common_config.peer.id();
         if !proposal.descriptor.validator_set.contains(local_peer) {
             return None;

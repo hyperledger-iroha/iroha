@@ -47,12 +47,25 @@ struct EndpointFixture {
     kura: Arc<Kura>,
 }
 
+fn checked_bls_validator_fixture() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+        .expect("generate checked bridge finality BLS validator fixture keypair")
+}
+
+#[test]
+fn bridge_finality_validator_fixture_uses_checked_bls_key_generation() {
+    let key_pair = checked_bls_validator_fixture();
+    let algorithm = key_pair
+        .public_key()
+        .try_algorithm()
+        .expect("fixture validator public key has a valid algorithm");
+
+    assert_eq!(algorithm, Algorithm::BlsNormal);
+}
+
 fn exact_v2_fixture(chain_id: ChainId) -> (Arc<SignedBlock>, V2FinalityArtifact) {
     let mut keys = (0..4)
-        .map(|_| {
-            KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
-                .expect("generate bridge finality BLS fixture key")
-        })
+        .map(|_| checked_bls_validator_fixture())
         .collect::<Vec<_>>();
     keys.sort_by(|left, right| {
         PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))

@@ -2777,6 +2777,9 @@ impl Actor {
         plan: &super::lane_scheduler::LaneBlockVotePlan,
         proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
     ) -> Option<crate::lane_consensus::LaneBlockVoteV1> {
+        if self.consensus_participation_halted_now() {
+            return None;
+        }
         if plan.phase != crate::sumeragi::consensus::Phase::Prepare {
             return None;
         }
@@ -4713,6 +4716,9 @@ impl Actor {
         now: Instant,
         allow_recovery_heartbeat: bool,
     ) -> Result<bool> {
+        if self.consensus_participation_halted() {
+            return Ok(false);
+        }
         if !self.retry_quarantined_proposal_guards() {
             return Ok(false);
         }
@@ -5595,7 +5601,7 @@ impl Actor {
         let mut last_payload_encode_ms = 0_u128;
         let mut last_frontier_wire_ms = 0_u128;
         let block_loop_started_at = Instant::now();
-        let assembly_result: Result<()> = (|| {
+        let assembly_result: Result<bool> = (|| {
             if tx_sizes.len() < tx_batch.len() {
                 for tx in tx_batch.iter().skip(tx_sizes.len()) {
                     tx_sizes.push(tx.encoded_len());
@@ -5901,7 +5907,7 @@ impl Actor {
                         view,
                         "deferring proposal after DA spool filtering removed all effective work"
                     );
-                    return Ok(());
+                    return Ok(false);
                 }
 
                 let proof_policy_bundle =
@@ -5971,7 +5977,7 @@ impl Actor {
                     );
                     if tx_batch.is_empty() {
                         lane_readiness_deferred = true;
-                        return Ok(());
+                        return Ok(false);
                     }
                     continue;
                 }
@@ -6011,7 +6017,7 @@ impl Actor {
                         );
                         if tx_batch.is_empty() {
                             lane_authority_deferred = true;
-                            return Ok(());
+                            return Ok(false);
                         }
                         continue;
                     }
@@ -6066,6 +6072,9 @@ impl Actor {
                     .is_empty()
                 };
                 let sccp_commitment_root = if proposal_may_record_sccp_messages {
+                    if self.consensus_participation_halted() {
+                        return Ok(false);
+                    }
                     let private_key = self.common_config.key_pair.private_key();
                     let initial_root = proposal_sccp_commitment_root_after_execution(
                         self.state.as_ref(),
@@ -6096,6 +6105,9 @@ impl Actor {
                 last_sidecar_ms = sidecar_started_at.elapsed().as_millis();
 
                 let block_build_started_at = Instant::now();
+                if self.consensus_participation_halted() {
+                    return Ok(false);
+                }
                 let new_block = builder
                     .try_sign_with_index(
                         self.common_config.key_pair.private_key(),
@@ -6527,10 +6539,11 @@ impl Actor {
                 "assembled proposal"
             );
 
-            Ok(())
+            Ok(true)
         })();
 
-        if let Err(err) = assembly_result {
+        if !matches!(&assembly_result, Ok(true)) {
+            let assembly_error = assembly_result.as_ref().err();
             let concrete_owner = proposal_block_hash_for_cleanup.is_some_and(|block_hash| {
                 self.proposal_has_exact_primary_block_owner(block_hash, proposal_height, view)
             });
@@ -6575,7 +6588,7 @@ impl Actor {
                     height = proposal_height,
                     view,
                     block = ?proposal_block_hash_for_cleanup,
-                    error = %err,
+                    error = ?assembly_error,
                     "proposal processing failed after exact local ownership; retaining included transactions and signed DA sidecars"
                 );
                 return Ok(true);
@@ -6589,12 +6602,16 @@ impl Actor {
                     height = proposal_height,
                     view,
                     block = ?proposal_block_hash_for_cleanup,
-                    error = %err,
+                    error = ?assembly_error,
                     "proposal body was exposed without a local owner; returned all transaction guards and retained the occupied slot"
                 );
                 return Ok(true);
             }
-            return Err(err);
+            return match assembly_result {
+                Ok(false) => Ok(false),
+                Err(err) => Err(err),
+                Ok(true) => unreachable!("successful proposal assembly handled below"),
+            };
         }
         if lane_readiness_deferred {
             let _ = self.return_proposal_guards_or_quarantine(

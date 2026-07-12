@@ -3319,6 +3319,52 @@ pub struct SumeragiNposRepairCoverageStatus {
     pub reached_stake_quorum_coverage: bool,
 }
 
+/// Fail-closed consensus safety halt exposed via `/v1/sumeragi/status`.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiSafetyHaltStatus {
+    /// Whether this process has halted consensus participation.
+    #[norito(default)]
+    pub active: bool,
+    /// Stable machine-readable halt reason.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub reason: Option<String>,
+    /// Height at which the unsafe condition was detected.
+    #[norito(default)]
+    pub height: u64,
+    /// Epoch at which the unsafe condition was detected.
+    #[norito(default)]
+    pub epoch: u64,
+    /// First authenticated block subject involved in the halt.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub first_block_hash: Option<HashOf<BlockHeader>>,
+    /// Conflicting authenticated block subject, when applicable.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub conflicting_block_hash: Option<HashOf<BlockHeader>>,
+    /// Parent state root authenticated by the first certificate.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub first_parent_state_root: Option<Hash>,
+    /// Post-state root authenticated by the first certificate.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub first_post_state_root: Option<Hash>,
+    /// Parent state root authenticated by the conflicting certificate.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub conflicting_parent_state_root: Option<Hash>,
+    /// Post-state root authenticated by the conflicting certificate.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub conflicting_post_state_root: Option<Hash>,
+}
+
 /// Canonical Sumeragi V1 status surface exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3362,6 +3408,9 @@ pub struct SumeragiV1StatusWire {
     /// RBC/payload transport status label.
     #[norito(default)]
     pub rbc_status: String,
+    /// Fail-closed consensus safety state.
+    #[norito(default)]
+    pub safety_halt: SumeragiSafetyHaltStatus,
 }
 
 /// Cached standalone lane-block consensus session status.
@@ -3509,6 +3558,9 @@ pub struct SumeragiStatusWire {
     /// Canonical first-release consensus state.
     #[norito(default)]
     pub canonical: SumeragiV1StatusWire,
+    /// Fail-closed consensus safety state.
+    #[norito(default)]
+    pub safety_halt: SumeragiSafetyHaltStatus,
     /// Current runtime mode tag.
     #[norito(default)]
     pub mode_tag: String,
@@ -5544,6 +5596,18 @@ mod tests {
             quorum_policy: Some(QuorumPolicy::PermissionedCount(4)),
             payload_status: "waiting_for_local_payload".to_owned(),
             rbc_status: "pending".to_owned(),
+            safety_halt: SumeragiSafetyHaltStatus {
+                active: true,
+                reason: Some("conflicting_commit_qc".to_owned()),
+                height: 12,
+                epoch: 2,
+                first_block_hash: Some(dummy_hash()),
+                conflicting_block_hash: Some(dummy_hash()),
+                first_parent_state_root: Some(Hash::new(b"first-parent")),
+                first_post_state_root: Some(Hash::new(b"first-post")),
+                conflicting_parent_state_root: Some(Hash::new(b"conflicting-parent")),
+                conflicting_post_state_root: Some(Hash::new(b"conflicting-post")),
+            },
         };
         let encoded = status.encode();
         let decoded = SumeragiV1StatusWire::decode(&mut &encoded[..]).expect("status decodes");

@@ -49055,7 +49055,7 @@ pub(crate) mod tests_runtime_handlers {
         state::{State as IrohaState, World},
         sumeragi::{
             consensus::{PERMISSIONED_TAG, Phase, Vote, vote_preimage},
-            status::record_commit_qc,
+            status::record_commit_qc_for_tests,
         },
         tx::AcceptedTransaction,
     };
@@ -57837,7 +57837,7 @@ pub(crate) mod tests_runtime_handlers {
                 bls_aggregate_signature: signature.payload().to_vec(),
             },
         };
-        record_commit_qc(cert.clone());
+        record_commit_qc_for_tests(cert.clone());
         cert
     }
 

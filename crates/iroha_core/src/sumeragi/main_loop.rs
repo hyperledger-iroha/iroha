@@ -485,7 +485,7 @@ mod pending_rbc;
 mod proposal_handlers;
 mod proposals;
 mod propose;
-mod qc;
+pub(crate) mod qc;
 mod qc_verify;
 mod rbc;
 mod reschedule;
@@ -1687,6 +1687,11 @@ struct QcVerifyKey {
     chain_order_hash: Hash,
     rechain_seq: u64,
     block_hash: HashOf<BlockHeader>,
+    parent_state_root: Hash,
+    post_state_root: Hash,
+    /// Full certificate fingerprint. The explicit fields above keep diagnostics readable, while
+    /// this binds in-flight identity to every signed subject field and aggregate byte.
+    qc_hash: HashOf<Qc>,
 }
 
 impl QcVerifyKey {
@@ -1699,6 +1704,9 @@ impl QcVerifyKey {
             chain_order_hash: qc.chain_order_hash,
             rechain_seq: qc.rechain_seq,
             block_hash: qc.subject_block_hash.clone(),
+            parent_state_root: qc.parent_state_root,
+            post_state_root: qc.post_state_root,
+            qc_hash: HashOf::new(qc),
         }
     }
 }
@@ -2795,14 +2803,13 @@ impl RosterValidationInputs {
         }
     }
 
-    #[cfg(test)]
     fn from_world(
         world: &impl WorldReadOnly,
         roster: &[PeerId],
         consensus_mode: ConsensusMode,
         stake_snapshot: Option<&CommitStakeSnapshot>,
     ) -> Self {
-        let stake_map = super::stake_snapshot::stake_map_from_world(world);
+        let stake_map = super::stake_snapshot::stake_map_from_world_with_active_lanes(world, None);
         let fallback_stake = fallback_stake_for_world(world);
         let stake_snapshot = match consensus_mode {
             ConsensusMode::Permissioned => None,
@@ -4883,6 +4890,14 @@ fn block_sync_commit_cert_present(
     commit_cert_hint_present && incoming_qc_validated && !conflicts_locked
 }
 
+fn block_sync_authenticated_checkpoint_present(
+    checkpoint_hint_present: bool,
+    commit_cert_present: bool,
+    incoming_qc_usable: bool,
+) -> bool {
+    checkpoint_hint_present && commit_cert_present && incoming_qc_usable
+}
+
 fn build_fetch_pending_block_request(
     requester: PeerId,
     block_hash: HashOf<BlockHeader>,
@@ -4964,6 +4979,9 @@ fn send_certified_block_fetch_request(
     view: u64,
     targets: &[PeerId],
 ) -> usize {
+    if super::status::consensus_safety_halt_active() {
+        return 0;
+    }
     if targets.is_empty() {
         return 0;
     }
@@ -5003,6 +5021,9 @@ fn send_missing_block_request(
     requester_roster_proof_known: bool,
     targets: &[PeerId],
 ) {
+    if super::status::consensus_safety_halt_active() {
+        return;
+    }
     if targets.is_empty() {
         return;
     }
@@ -5071,6 +5092,9 @@ fn send_missing_block_request_with_mode(
     commit_qc_only: bool,
     targets: &[PeerId],
 ) {
+    if super::status::consensus_safety_halt_active() {
+        return;
+    }
     if targets.is_empty() {
         return;
     }
@@ -5540,7 +5564,7 @@ impl Actor {
 
         let known_work_before = self.known_block_qc_work.len();
         self.known_block_qc_work
-            .retain(|(_, hash, entry_height, _, _, _, _), _| {
+            .retain(|((_, hash, entry_height, _, _, _, _), _), _| {
                 *entry_height != height || *hash != block_hash
             });
         let known_work_removed = known_work_before.saturating_sub(self.known_block_qc_work.len());
@@ -5880,6 +5904,9 @@ impl Actor {
                 &self.chain_id,
                 &self.roster_validation_cache,
             )
+        })
+        .filter(|selection| {
+            non_block_sync_roster_selection_is_authenticated(selection, consensus_mode)
         }) {
             (selection.roster, selection.source.as_str())
         } else if let Some(hint) = roster_hint.filter(|hint| !hint.is_empty()) {
@@ -7039,57 +7066,6 @@ impl Actor {
         )
     }
 
-    fn new_view_qc_supersedes_stale_uncommitted_same_height_precommit_conflict(
-        &self,
-        proposal_height: u64,
-        proposal_view: u64,
-        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
-        conflicting_vote: &crate::sumeragi::consensus::Vote,
-        now: Instant,
-    ) -> bool {
-        if !self.config.resilience.enabled
-            || !matches!(
-                conflicting_vote.phase,
-                crate::sumeragi::consensus::Phase::Commit
-            )
-            || conflicting_vote.height != proposal_height
-            || proposal_height != self.committed_height_snapshot().saturating_add(1)
-            || proposal_view <= conflicting_vote.view
-        {
-            return false;
-        }
-        if self.same_height_block_has_recoverable_qc(
-            conflicting_vote.block_hash,
-            proposal_height,
-            conflicting_vote.view,
-        ) || self.same_height_has_recoverable_qc(proposal_height)
-        {
-            return false;
-        }
-
-        let hard_stale_age = self
-            .quorum_timeout(self.runtime_da_enabled())
-            .max(self.frontier_slot_lag_window())
-            .max(Duration::from_millis(1))
-            .saturating_mul(3);
-        let recovery_exhausted = self
-            .stale_same_height_recovery_age(proposal_height, conflicting_vote.view, now)
-            .is_some_and(|age| age >= hard_stale_age)
-            || self.same_height_vote_recovery_view_gap_exhausted(
-                conflicting_vote.view,
-                proposal_view,
-                self.effective_commit_topology().len(),
-            );
-        recovery_exhausted
-            && self.new_view_qc_supersedes_same_height_vote_conflict(
-                proposal_height,
-                proposal_view,
-                highest_qc,
-                conflicting_vote.block_hash,
-                conflicting_vote.view,
-            )
-    }
-
     fn new_view_qc_supersedes_noncommit_same_height_vote_lock(
         &self,
         proposal_height: u64,
@@ -7747,12 +7723,6 @@ impl Actor {
                     vote.block_hash,
                     vote.view,
                     vote.phase,
-                ) || self.new_view_qc_supersedes_stale_uncommitted_same_height_precommit_conflict(
-                    height,
-                    view,
-                    highest_qc,
-                    vote,
-                    Instant::now(),
                 )
             })
         };
@@ -7815,6 +7785,19 @@ impl Actor {
             return false;
         }
         let now = Instant::now();
+        // A locally signed Commit vote is a height-wide finality lock. A NEW_VIEW quorum over the
+        // committed parent, a timeout, or a large view gap cannot prove that a QC containing the
+        // first signature was not formed and withheld.
+        if self
+            .local_same_height_vote(height, epoch)
+            .is_some_and(|vote| {
+                vote.phase == crate::sumeragi::consensus::Phase::Commit
+                    && vote.block_hash != block_hash
+                    && vote.view <= view
+            })
+        {
+            return true;
+        }
         if let Some(existing_vote) = self
             .local_same_height_vote(height, epoch)
             .filter(|vote| vote.block_hash != block_hash && vote.view <= view)
@@ -7828,14 +7811,7 @@ impl Actor {
                         existing_vote.block_hash,
                         existing_vote.view,
                         existing_vote.phase,
-                    ) || self
-                        .new_view_qc_supersedes_stale_uncommitted_same_height_precommit_conflict(
-                            height,
-                            view,
-                            highest_qc,
-                            &existing_vote,
-                            now,
-                        )
+                    )
                 })
         {
             return false;
@@ -8879,7 +8855,7 @@ impl Actor {
             || self
                 .known_block_qc_work
                 .keys()
-                .any(|(phase, _, height, view, epoch, _, _)| {
+                .any(|((phase, _, height, view, epoch, _, _), _)| {
                     matches!(
                         phase,
                         crate::sumeragi::consensus::Phase::Prepare
@@ -11005,7 +10981,9 @@ impl Actor {
     }
 
     pub(in crate::sumeragi) fn commit_pipeline_wakeup_pending(&self) -> bool {
-        self.pending.commit_pipeline_wakeup
+        !self.safety_halted
+            && !super::status::consensus_safety_halt_active()
+            && self.pending.commit_pipeline_wakeup
     }
 
     fn rbc_rebroadcast_active_with_tip_and_session(
@@ -12177,6 +12155,17 @@ type QcVoteKey = (
     u64,
 );
 
+/// Full identity for deferred known-block QC verification.
+///
+/// `QcVoteKey` intentionally groups votes by consensus slot and therefore omits roots and
+/// aggregate bytes. Deferred work must not use that grouping key for deduplication: a second
+/// certificate for the same slot may be the root-divergent finality conflict we need to validate.
+type KnownBlockQcKey = (QcVoteKey, HashOf<Qc>);
+
+fn known_block_qc_key(qc: &crate::sumeragi::consensus::Qc) -> KnownBlockQcKey {
+    (qc_vote_key_from_qc(qc), HashOf::new(qc))
+}
+
 fn qc_vote_key_from_qc(qc: &crate::sumeragi::consensus::Qc) -> QcVoteKey {
     (
         qc.phase,
@@ -12224,6 +12213,13 @@ enum BoundedQcInsertDecision {
     Evict(QcVoteKey),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundedKnownBlockQcInsertDecision {
+    Insert,
+    DropIncoming,
+    Evict(KnownBlockQcKey),
+}
+
 fn qc_key_retention_rank(
     key: QcVoteKey,
 ) -> (
@@ -12259,6 +12255,30 @@ fn bounded_qc_insert_decision<V>(
         BoundedQcInsertDecision::DropIncoming
     } else {
         BoundedQcInsertDecision::Evict(eviction)
+    }
+}
+
+fn bounded_known_block_qc_insert_decision<V>(
+    entries: &BTreeMap<KnownBlockQcKey, V>,
+    incoming: KnownBlockQcKey,
+    cap: usize,
+) -> BoundedKnownBlockQcInsertDecision {
+    let cap = cap.max(1);
+    if entries.len() < cap {
+        return BoundedKnownBlockQcInsertDecision::Insert;
+    }
+    let Some(eviction) = entries
+        .keys()
+        .copied()
+        .chain(std::iter::once(incoming))
+        .min_by_key(|(slot, fingerprint)| (qc_key_retention_rank(*slot), *fingerprint))
+    else {
+        return BoundedKnownBlockQcInsertDecision::Insert;
+    };
+    if eviction == incoming {
+        BoundedKnownBlockQcInsertDecision::DropIncoming
+    } else {
+        BoundedKnownBlockQcInsertDecision::Evict(eviction)
     }
 }
 
@@ -12376,7 +12396,6 @@ struct KnownBlockQcWork {
     consensus_mode: ConsensusMode,
     mode_tag: &'static str,
     prf_seed: Option<[u8; 32]>,
-    commit_qc_match: bool,
     aggregate_ok: Option<bool>,
 }
 
@@ -13461,10 +13480,22 @@ pub(super) struct Actor {
     rbc_mismatch_log: RbcMismatchThrottle,
     invalid_sig_penalty: InvalidSigPenalty,
     genesis_account: AccountId,
+    /// Durable local Prepare/Commit votes that must survive view changes and restarts.
+    local_vote_lock_journal: super::vote_lock::LocalVoteLockJournal,
+    /// Fail-closed local safety state. Once set, this actor never signs or advances consensus.
+    safety_halted: bool,
     vote_log: BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
     /// Keeps every validated vote keyed by signer identity so stale-roster collisions do not
     /// alias distinct validators that reuse the same raw signer slot.
     vote_log_identities: BTreeMap<votes::VoteIdentityKey, crate::sumeragi::consensus::Vote>,
+    /// First authenticated Commit subject per epoch/height/signer. Unlike liveness vote caches,
+    /// these height-wide equivocation locks survive view churn and rejected-payload cleanup until
+    /// the canonical height commits.
+    commit_vote_locks: BTreeMap<votes::CommitVoteLockKey, crate::sumeragi::consensus::Vote>,
+    /// Subject-only locks proven by authenticated Commit-QC signer bitmaps. These prevent a later
+    /// individual equivocation from making an already accepted aggregate unusable.
+    authenticated_commit_signer_locks:
+        BTreeMap<votes::CommitVoteLockKey, votes::AuthenticatedCommitSignerLock>,
     /// Records the roster hash used to validate each stored vote to skip redundant rechecks.
     vote_validation_cache: BTreeMap<votes::VoteLogKey, VoteValidationCacheEntry>,
     /// Authoritative validation metadata for `vote_log_identities`.
@@ -13511,7 +13542,7 @@ pub(super) struct Actor {
     deferred_qc_roster_state: BTreeMap<QcVoteKey, DeferredRosterQcEntry>,
     deferred_missing_payload_qcs: BTreeMap<QcVoteKey, DeferredQcEntry>,
     quarantined_block_sync_qcs: BTreeMap<QcVoteKey, QuarantinedQcCandidate>,
-    known_block_qc_work: BTreeMap<QcVoteKey, KnownBlockQcWork>,
+    known_block_qc_work: BTreeMap<KnownBlockQcKey, KnownBlockQcWork>,
     deferred_block_sync_updates: BTreeMap<DeferredBlockSyncKey, DeferredBlockSyncUpdate>,
     vote_roster_cache: BTreeMap<HashOf<BlockHeader>, VoteRosterCacheEntry>,
     block_sync_roster_cache: BlockSyncRosterSelectionCache,
@@ -16095,7 +16126,7 @@ struct CommitInFlight {
     commit_topology: Vec<PeerId>,
     signature_topology: Vec<PeerId>,
     qc_signers: Option<BTreeSet<ValidatorIndex>>,
-    commit_qc: Option<crate::sumeragi::consensus::Qc>,
+    authority: commit::CommitAuthority,
     post_commit_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     enqueue_time: Instant,
     timeout_reported: bool,
@@ -16434,6 +16465,7 @@ impl Actor {
             Arc::clone(&self.kura),
             self.common_config.chain.clone(),
             self.genesis_account.clone(),
+            self.local_vote_lock_journal.safety_halt_sink(),
             self.wake_tx.clone(),
             self.config.persistence.commit_work_queue_cap,
             self.config.persistence.commit_result_queue_cap,
@@ -17042,38 +17074,16 @@ fn selection_from_roster_artifacts(
             })
     };
     match (validated_cert, validated_checkpoint) {
-        (Some((roster, cert)), Some((checkpoint_roster, chk))) => {
-            if roster != checkpoint_roster {
-                warn!(
-                    cert_roster = roster.len(),
-                    checkpoint_roster = checkpoint_roster.len(),
-                    "commit certificate and checkpoint rosters differ; preferring commit certificate"
-                );
-            }
-            if chk.view != cert.view {
+        (Some((roster, cert)), Some((_checkpoint_roster, chk))) => {
+            if !validator_checkpoint_matches_commit_qc(chk, cert) {
                 warn!(
                     height = block_height,
                     block = %block_hash,
                     cert_view = cert.view,
                     checkpoint_view = chk.view,
-                    "commit certificate and checkpoint views differ; preferring commit certificate"
-                );
-                let stake_snapshot = resolved_stake_snapshot_for(&roster);
-                return Some(BlockSyncRosterSelection {
-                    roster,
-                    source,
-                    commit_qc: Some(cert.clone()),
-                    checkpoint: None,
-                    stake_snapshot,
-                });
-            }
-            if chk.parent_state_root != cert.parent_state_root
-                || chk.post_state_root != cert.post_state_root
-            {
-                warn!(
-                    height = block_height,
-                    block = %block_hash,
-                    "commit certificate and checkpoint roots differ; preferring commit certificate"
+                    cert_roster = cert.validator_set.len(),
+                    checkpoint_roster = chk.validator_set.len(),
+                    "commit certificate and checkpoint signed subjects differ; dropping checkpoint"
                 );
                 let stake_snapshot = resolved_stake_snapshot_for(&roster);
                 return Some(BlockSyncRosterSelection {
@@ -17115,6 +17125,21 @@ fn selection_from_roster_artifacts(
         }
         (None, None) => None,
     }
+}
+
+fn validator_checkpoint_matches_commit_qc(checkpoint: &ValidatorSetCheckpoint, cert: &Qc) -> bool {
+    checkpoint.height == cert.height
+        && checkpoint.view == cert.view
+        && checkpoint.block_hash == cert.subject_block_hash
+        && checkpoint.parent_state_root == cert.parent_state_root
+        && checkpoint.post_state_root == cert.post_state_root
+        && checkpoint.chain_order_hash == cert.chain_order_hash
+        && checkpoint.rechain_seq == cert.rechain_seq
+        && checkpoint.validator_set_hash == cert.validator_set_hash
+        && checkpoint.validator_set_hash_version == cert.validator_set_hash_version
+        && checkpoint.validator_set == cert.validator_set
+        && checkpoint.signers_bitmap == cert.aggregate.signers_bitmap
+        && checkpoint.bls_aggregate_signature == cert.aggregate.bls_aggregate_signature
 }
 
 fn roster_artifact_selection_view(
@@ -17350,6 +17375,31 @@ fn block_sync_history_roster_for_block(
     })
 }
 
+fn publish_authenticated_roster_selection(selection: &BlockSyncRosterSelection) -> bool {
+    // Roster selection authenticates artifacts for this one lookup, but this free helper has no
+    // Actor and therefore cannot compare the QC against canonical Kura/WSV finality or durably
+    // latch a safety halt. Keep it read-only; Actor paths publish through
+    // `register_authenticated_commit_qc` after the canonical comparison.
+    let _ = selection;
+    !status::consensus_safety_halt_active()
+}
+
+/// Require Actor-independent roster consumers to use only locally authenticated finality.
+///
+/// Block sync is the sole exception: its Actor path converts checkpoint-only selections into a
+/// Commit QC and revalidates that QC against locally authoritative topology and stake before use.
+/// Other consumers cannot perform that transition safely, so checkpoint-only artifacts fail closed
+/// and the exact certificate must already be present in the authenticated finality ledger.
+fn non_block_sync_roster_selection_is_authenticated(
+    selection: &BlockSyncRosterSelection,
+    _consensus_mode: ConsensusMode,
+) -> bool {
+    selection
+        .commit_qc
+        .as_ref()
+        .is_some_and(status::commit_qc_is_recorded)
+}
+
 fn persisted_roster_for_block(
     state: &State,
     kura: &Kura,
@@ -17380,6 +17430,10 @@ fn persisted_roster_for_block(
         }
     }
 
+    if status::consensus_safety_halt_active() {
+        return None;
+    }
+
     let mode_tag = match consensus_mode {
         ConsensusMode::Permissioned => PERMISSIONED_TAG,
         ConsensusMode::Npos => NPOS_TAG,
@@ -17403,7 +17457,7 @@ fn persisted_roster_for_block(
         );
         if let (Some(cache), Some(key)) = (selection_cache.as_mut(), cache_key.as_ref()) {
             if let Some(selection) = cache.get(key) {
-                return Some(selection);
+                return publish_authenticated_roster_selection(&selection).then_some(selection);
             }
         }
         if let Some(selection) = selection_from_roster_artifacts(
@@ -17419,16 +17473,13 @@ fn persisted_roster_for_block(
             mode_tag,
             roster_cache,
         ) {
+            if !publish_authenticated_roster_selection(&selection) {
+                return None;
+            }
             if let (Some(cache), Some(key)) = (selection_cache.as_mut(), cache_key) {
-                if selection.commit_qc.is_some() || selection.checkpoint.is_some() {
+                if selection.commit_qc.is_some() {
                     cache.insert(key, selection.clone());
                 }
-            }
-            if let Some(cert) = selection.commit_qc.as_ref() {
-                status::record_commit_qc(cert.clone());
-            }
-            if let Some(checkpoint) = selection.checkpoint.as_ref() {
-                status::record_validator_checkpoint(checkpoint.clone());
             }
             return Some(selection);
         }
@@ -17476,7 +17527,7 @@ fn persisted_roster_for_block(
             );
             if let (Some(cache), Some(key)) = (selection_cache.as_mut(), cache_key.as_ref()) {
                 if let Some(selection) = cache.get(key) {
-                    return Some(selection);
+                    return publish_authenticated_roster_selection(&selection).then_some(selection);
                 }
             }
             if let Some(selection) = selection_from_roster_artifacts(
@@ -17492,16 +17543,13 @@ fn persisted_roster_for_block(
                 mode_tag,
                 roster_cache,
             ) {
+                if !publish_authenticated_roster_selection(&selection) {
+                    return None;
+                }
                 if let (Some(cache), Some(key)) = (selection_cache.as_mut(), cache_key) {
-                    if selection.commit_qc.is_some() || selection.checkpoint.is_some() {
+                    if selection.commit_qc.is_some() {
                         cache.insert(key, selection.clone());
                     }
-                }
-                if let Some(cert) = selection.commit_qc.as_ref() {
-                    status::record_commit_qc(cert.clone());
-                }
-                if let Some(checkpoint) = selection.checkpoint.as_ref() {
-                    status::record_validator_checkpoint(checkpoint.clone());
                 }
                 return Some(selection);
             }
@@ -17561,7 +17609,8 @@ fn persisted_roster_for_block(
                 );
                 if let (Some(cache), Some(key)) = (selection_cache.as_mut(), cache_key.as_ref()) {
                     if let Some(selection) = cache.get(key) {
-                        return Some(selection);
+                        return publish_authenticated_roster_selection(&selection)
+                            .then_some(selection);
                     }
                 }
                 if let Some(selection) = selection_from_roster_artifacts(
@@ -17577,13 +17626,13 @@ fn persisted_roster_for_block(
                     mode_tag,
                     roster_cache,
                 ) {
+                    if !publish_authenticated_roster_selection(&selection) {
+                        return None;
+                    }
                     if let (Some(cache), Some(key)) = (selection_cache.as_mut(), cache_key) {
-                        if selection.commit_qc.is_some() || selection.checkpoint.is_some() {
+                        if selection.commit_qc.is_some() {
                             cache.insert(key, selection.clone());
                         }
-                    }
-                    if let Some(checkpoint) = selection.checkpoint.as_ref() {
-                        status::record_validator_checkpoint(checkpoint.clone());
                     }
                     return Some(selection);
                 }
@@ -18209,6 +18258,101 @@ fn validate_commit_qc_roster(
     Ok(cert.validator_set.clone())
 }
 
+/// Reconstruct one durable Commit authority while replay still owns the exact parent WSV.
+///
+/// The journal is only a candidate carrier. Roster, stake, epoch, mode, PoPs, and the aggregate
+/// signature are all revalidated from the local parent state before the block is applied. This is
+/// what makes retained historical finality restart-equivalent without allowing persisted or wire
+/// weights to authenticate themselves.
+#[allow(clippy::too_many_arguments)]
+fn authenticate_replay_commit_roster_snapshot(
+    snapshot: &crate::commit_roster_journal::CommitRosterSnapshot,
+    block_hash: HashOf<BlockHeader>,
+    block_height: u64,
+    block_view: u64,
+    consensus_mode: ConsensusMode,
+    expected_epoch: u64,
+    expected_roster: &[PeerId],
+    chain_id: &ChainId,
+    world: &impl WorldReadOnly,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
+) -> Option<(Qc, Option<CommitStakeSnapshot>)> {
+    let qc = &snapshot.commit_qc;
+    let canonical_roster =
+        roster::canonicalize_roster_for_mode(expected_roster.to_vec(), consensus_mode);
+    if canonical_roster.is_empty()
+        || qc.validator_set != canonical_roster
+        || qc.validator_set_hash != HashOf::new(&canonical_roster)
+        || qc.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
+    {
+        return None;
+    }
+    let derived_stake = match consensus_mode {
+        ConsensusMode::Permissioned => {
+            if snapshot.stake_snapshot.is_some() {
+                return None;
+            }
+            None
+        }
+        ConsensusMode::Npos if block_height == 1 => {
+            if snapshot.stake_snapshot.is_some() {
+                return None;
+            }
+            None
+        }
+        ConsensusMode::Npos => {
+            let derived = CommitStakeSnapshot::from_roster_with_active_lanes(
+                world,
+                &canonical_roster,
+                active_lane_ids,
+            )?;
+            if snapshot.stake_snapshot.as_ref() != Some(&derived) {
+                return None;
+            }
+            Some(derived)
+        }
+    };
+    let mode_tag = match consensus_mode {
+        ConsensusMode::Permissioned => PERMISSIONED_TAG,
+        ConsensusMode::Npos => NPOS_TAG,
+    };
+    let allow_genesis_stub = block_height == 1 && block_view == 0;
+    let inputs = RosterValidationInputs::from_world(
+        world,
+        &canonical_roster,
+        consensus_mode,
+        derived_stake.as_ref(),
+    );
+    validate_commit_qc_roster(
+        qc,
+        block_hash,
+        block_height,
+        Some(block_view),
+        consensus_mode,
+        expected_epoch,
+        chain_id,
+        mode_tag,
+        allow_genesis_stub,
+        &inputs,
+    )
+    .ok()?;
+    validate_checkpoint_roster(
+        &snapshot.validator_checkpoint,
+        block_hash,
+        block_height,
+        Some(block_view),
+        consensus_mode,
+        chain_id,
+        mode_tag,
+        expected_epoch,
+        Some((qc.parent_state_root, qc.post_state_root)),
+        allow_genesis_stub,
+        &inputs,
+    )
+    .ok()?;
+    Some((qc.clone(), derived_stake))
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn validate_checkpoint_roster(
     checkpoint: &ValidatorSetCheckpoint,
@@ -18488,9 +18632,12 @@ fn select_block_sync_roster(
         roster::canonicalize_roster_for_mode(base_roster, consensus_mode)
     }
 
+    if status::consensus_safety_halt_active() {
+        return None;
+    }
     let block_view = block.header().view_change_index();
     if let Some(selection) = persisted {
-        return Some(selection);
+        return publish_authenticated_roster_selection(&selection).then_some(selection);
     }
 
     if let Some(snapshot) = state.commit_roster_snapshot_for_block(block_height, block_hash) {
@@ -18507,7 +18654,7 @@ fn select_block_sync_roster(
             mode_tag,
             roster_cache,
         ) {
-            return Some(selection);
+            return publish_authenticated_roster_selection(&selection).then_some(selection);
         }
         warn!(
             height = block_height,
@@ -18530,7 +18677,7 @@ fn select_block_sync_roster(
             mode_tag,
             roster_cache,
         ) {
-            return Some(selection);
+            return publish_authenticated_roster_selection(&selection).then_some(selection);
         }
     }
 
@@ -18548,7 +18695,7 @@ fn select_block_sync_roster(
             mode_tag,
             roster_cache,
         ) {
-            return Some(selection);
+            return publish_authenticated_roster_selection(&selection).then_some(selection);
         }
     } else if let Some(checkpoint_hint) = checkpoint_hint {
         if let Some(selection) = selection_from_roster_artifacts(
@@ -18564,7 +18711,7 @@ fn select_block_sync_roster(
             mode_tag,
             roster_cache,
         ) {
-            return Some(selection);
+            return publish_authenticated_roster_selection(&selection).then_some(selection);
         }
     }
 
@@ -18576,7 +18723,7 @@ fn select_block_sync_roster(
         &state.chain_id,
         roster_cache,
     ) {
-        return Some(history);
+        return publish_authenticated_roster_selection(&history).then_some(history);
     }
 
     if allow_uncertified {
@@ -18588,7 +18735,7 @@ fn select_block_sync_roster(
             ConsensusMode::Permissioned => None,
         };
 
-        if !roster.is_empty() {
+        if !roster.is_empty() && !status::consensus_safety_halt_active() {
             return Some(BlockSyncRosterSelection {
                 roster,
                 source,
@@ -18877,38 +19024,6 @@ impl Actor {
         Some((cert, stake_snapshot))
     }
 
-    fn persist_roster_sidecar_for_commit(&self, block: &SignedBlock, roster: &[PeerId]) {
-        let height = block.header().height().get();
-        let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(height);
-        if let Some((cert, stake_snapshot)) = Self::synthesize_commit_qc(
-            self.state.as_ref(),
-            block,
-            roster,
-            mode_tag,
-            self.epoch_for_height(height),
-            consensus_mode,
-            Some(&self.common_config.trusted_peers.value().pops),
-            self.config.npos.epoch_length_blocks,
-        ) {
-            let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
-                cert.height,
-                cert.view,
-                cert.subject_block_hash,
-                cert.chain_order_hash,
-                cert.rechain_seq,
-                cert.parent_state_root,
-                cert.post_state_root,
-                cert.validator_set.clone(),
-                cert.aggregate.signers_bitmap.clone(),
-                cert.aggregate.bls_aggregate_signature.clone(),
-                cert.validator_set_hash_version,
-                None,
-            );
-            self.state
-                .record_commit_roster_with_sidecar(&cert, &checkpoint, stake_snapshot);
-        }
-    }
-
     fn active_topology_with_genesis_fallback_from_world(
         &self,
         world: &impl WorldReadOnly,
@@ -19012,6 +19127,57 @@ impl Actor {
         self.last_committed_height.max(state_height)
     }
 
+    /// Return whether this actor must avoid signing or transmitting consensus material now.
+    pub(super) fn consensus_participation_halted_now(&self) -> bool {
+        self.safety_halted || super::status::consensus_safety_halt_active()
+    }
+
+    /// Latch the process-wide safety halt into this actor before doing consensus work.
+    ///
+    /// The operator status slot can be activated by code paths that do not hold a mutable actor
+    /// reference (for example, commit-certificate history validation). Every participation path
+    /// therefore funnels through this check so a process-wide halt cannot leave one actor running.
+    pub(super) fn consensus_participation_halted(&mut self) -> bool {
+        if super::status::consensus_safety_halt_active() {
+            let halt = super::status::consensus_safety_halt_snapshot();
+            if self.local_vote_lock_journal.safety_halt().is_none() {
+                match self.local_vote_lock_journal.record_safety_halt(&halt) {
+                    Ok(()) => error!(
+                        reason = ?halt.reason,
+                        height = halt.height,
+                        epoch = halt.epoch,
+                        "persisted process consensus safety halt for restart recovery"
+                    ),
+                    Err(err) => error!(
+                        reason = ?halt.reason,
+                        height = halt.height,
+                        epoch = halt.epoch,
+                        error = %err,
+                        "failed to persist process consensus safety halt; terminating before restart can resume participation"
+                    ),
+                }
+                if self.local_vote_lock_journal.safety_halt().is_none() {
+                    #[cfg(not(test))]
+                    std::process::abort();
+                    #[cfg(test)]
+                    panic!("failed to persist process consensus safety halt");
+                }
+            }
+            if !self.safety_halted {
+                self.safety_halted = true;
+                error!(
+                    reason = ?halt.reason,
+                    height = halt.height,
+                    epoch = halt.epoch,
+                    first_block_hash = ?halt.first_block_hash,
+                    conflicting_block_hash = ?halt.conflicting_block_hash,
+                    "observed process consensus safety halt; disabling actor participation"
+                );
+            }
+        }
+        self.safety_halted
+    }
+
     fn unprocessed_committed_height(&self) -> Option<(u64, u64)> {
         let state_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         (self.last_committed_height < state_height)
@@ -19019,6 +19185,9 @@ impl Actor {
     }
 
     fn process_committed_blocks_before_consensus(&mut self, context: &'static str) -> bool {
+        if self.consensus_participation_halted() {
+            return false;
+        }
         let Some((last_processed, state_height)) = self.unprocessed_committed_height() else {
             return self.retire_committed_commit_inflight(context);
         };
@@ -19751,7 +19920,12 @@ impl Actor {
     ) -> Option<QcSignerTally> {
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
         let key = Self::qc_tally_key(qc);
-        if let Some(tally) = self.qc_signer_tally.get(&key) {
+        if self
+            .qc_cache
+            .get(&key)
+            .is_some_and(|cached| HashOf::new(cached) == HashOf::new(qc))
+            && let Some(tally) = self.qc_signer_tally.get(&key)
+        {
             return Some(tally.clone());
         }
 
@@ -20059,6 +20233,7 @@ impl Actor {
         qc.aggregate.bls_aggregate_signature.is_empty()
     }
 
+    #[cfg(test)]
     fn ensure_genesis_commit_roster(&mut self) {
         const GENESIS_HEIGHT: u64 = 1;
         let Some(genesis_hash) = self.genesis_block_hash() else {
@@ -22408,6 +22583,37 @@ impl Actor {
 
         let chain_id = common_config.chain.clone();
         let chain_hash = Self::derive_chain_hash(&chain_id);
+        let local_vote_lock_path =
+            super::vote_lock::LocalVoteLockJournal::journal_path(&kura.store_root());
+        let mut local_vote_lock_journal = super::vote_lock::LocalVoteLockJournal::load(
+            local_vote_lock_path,
+            &chain_id,
+            common_config.peer.id().public_key(),
+        )
+        .map_err(|err| eyre!("failed to recover local consensus vote locks: {err}"))?;
+        super::status::install_consensus_transition_halt_sink(
+            local_vote_lock_journal.safety_halt_sink(),
+        )
+        .map_err(|err| eyre!("failed to install consensus transition halt sink: {err}"))?;
+        local_vote_lock_journal
+            .prune_committed(block_count.0 as u64)
+            .map_err(|err| eyre!("failed to prune committed local consensus vote locks: {err}"))?;
+        if let Some(recovered_halt) = local_vote_lock_journal.safety_halt().cloned() {
+            super::status::activate_consensus_safety_halt_snapshot(recovered_halt.clone());
+            error!(
+                reason = ?recovered_halt.reason,
+                height = recovered_halt.height,
+                epoch = recovered_halt.epoch,
+                "recovered durable consensus safety halt; actor participation remains disabled"
+            );
+        }
+        let safety_halted = super::status::consensus_safety_halt_active();
+        if safety_halted && local_vote_lock_journal.safety_halt().is_none() {
+            let halt = super::status::consensus_safety_halt_snapshot();
+            local_vote_lock_journal
+                .record_safety_halt(&halt)
+                .map_err(|err| eyre!("failed to persist active consensus safety halt: {err}"))?;
+        }
         let rbc_manifest = super::rbc_store::SoftwareManifest::current();
         let backpressure_gate = BackpressureGate::new(queue.backpressure_handle().subscribe());
         let now = Instant::now();
@@ -23189,8 +23395,12 @@ impl Actor {
             rbc_mismatch_log: RbcMismatchThrottle::default(),
             invalid_sig_penalty,
             genesis_account,
+            local_vote_lock_journal,
+            safety_halted,
             vote_log: BTreeMap::new(),
             vote_log_identities: BTreeMap::new(),
+            commit_vote_locks: BTreeMap::new(),
+            authenticated_commit_signer_locks: BTreeMap::new(),
             vote_validation_cache: BTreeMap::new(),
             vote_validation_cache_identities: BTreeMap::new(),
             deferred_votes: BTreeMap::new(),
@@ -23307,6 +23517,10 @@ impl Actor {
             "sumeragi.actor_init.struct_built",
             startup_trace_started_at,
         );
+        // Recover the durable anti-equivocation state before any startup reconciliation can make
+        // consensus work eligible again. Queue ownership reconciliation is local bookkeeping, but
+        // it must not precede restoration of a persisted safety halt.
+        actor.restore_local_vote_locks();
         let recovered_lane_reservations = actor.queue.live_lane_reservations();
         let (finalized_committed_reservations, released_orphans) = actor
             .reconcile_lane_reservation_ownership()
@@ -23336,11 +23550,6 @@ impl Actor {
             }
         }
         actor.refresh_commit_topology_state(&actor.effective_commit_topology());
-        actor.ensure_genesis_commit_roster();
-        super::log_sumeragi_startup_trace(
-            "sumeragi.actor_init.genesis_roster.ready",
-            startup_trace_started_at,
-        );
         if let Some(committed_qc) = actor.latest_committed_qc() {
             actor.highest_qc = Some(committed_qc);
             actor.locked_qc = Some(committed_qc);
@@ -23370,6 +23579,7 @@ impl Actor {
                 actor.telemetry.set_locked_qc_view(0);
             }
         }
+        actor.restore_persisted_finality_anchors();
         super::log_sumeragi_startup_trace(
             "sumeragi.actor_init.qc_state.ready",
             startup_trace_started_at,
@@ -24486,6 +24696,9 @@ impl Actor {
     }
 
     pub(super) fn next_tick_deadline(&self, now: Instant) -> Option<Instant> {
+        if self.safety_halted || super::status::consensus_safety_halt_active() {
+            return None;
+        }
         if !self.proposal_guard_return_quarantine.guards.is_empty() {
             return Some(now);
         }
@@ -24805,6 +25018,9 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     pub(super) fn tick(&mut self) -> bool {
+        if self.consensus_participation_halted() {
+            return false;
+        }
         if self.tick_in_progress {
             warn!(
                 height = self.state.committed_height(),
@@ -25891,6 +26107,9 @@ impl Actor {
         &mut self,
         msg: &super::InboundBlockMessage,
     ) -> bool {
+        if self.consensus_participation_halted() {
+            return true;
+        }
         if matches!(msg.message, BlockMessage::Qc(_) | BlockMessage::V2(_)) {
             return false;
         }
@@ -25922,6 +26141,9 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     pub(super) fn on_block_message(&mut self, msg: super::InboundBlockMessage) -> Result<()> {
+        if self.consensus_participation_halted() {
+            return Ok(());
+        }
         let queue_latency = msg.queue_latency_ms();
         let super::InboundBlockMessage {
             message: msg,
@@ -27720,6 +27942,9 @@ impl Actor {
     }
 
     fn broadcast_vnext_rechain_vote(&mut self, certificate: super::vnext::RechainCertificate) {
+        if self.consensus_participation_halted() {
+            return;
+        }
         let local_peer = self.common_config.peer.id().clone();
         if !certificate
             .new_order
@@ -27751,6 +27976,9 @@ impl Actor {
         slot: super::vnext::SlotId,
         new_view: u64,
     ) {
+        if self.consensus_participation_halted() {
+            return;
+        }
         let Some((chain_order, _)) =
             self.active_vnext_chain_order_and_quorum_for(slot.height, new_view)
         else {
@@ -27836,6 +28064,9 @@ impl Actor {
     }
 
     pub(super) fn on_lane_relay_message(&mut self, message: super::LaneRelayMessage) -> Result<()> {
+        if self.consensus_participation_halted() {
+            return Ok(());
+        }
         match message {
             super::LaneRelayMessage::Envelope(envelope) => {
                 let changed = self.on_lane_relay(envelope)?;
@@ -28867,6 +29098,9 @@ impl Actor {
         candidate: &crate::merge::MergeLedgerCandidate,
         message_digest: Hash,
     ) -> Option<MergeCommitteeSignature> {
+        if self.consensus_participation_halted_now() {
+            return None;
+        }
         let bls_sig = match try_sign_consensus_preimage(
             self.common_config.key_pair.private_key(),
             message_digest.as_ref(),
@@ -29063,6 +29297,9 @@ impl Actor {
     }
 
     fn handle_merge_entry_candidates(&mut self, force_execution_refresh: bool) -> Result<bool> {
+        if self.consensus_participation_halted() {
+            return Ok(false);
+        }
         let commit_topology = self.state.commit_topology.view();
         if commit_topology.is_empty() {
             return Ok(false);
@@ -29396,6 +29633,9 @@ impl Actor {
             }
 
             if let Some(signature) = broadcast_signature {
+                if self.consensus_participation_halted() {
+                    return Ok(false);
+                }
                 self.network.broadcast(Broadcast {
                     data: NetworkMessage::MergeCommitteeSignature(Box::new(signature)),
                     priority: Priority::High,
@@ -29570,6 +29810,9 @@ impl Actor {
     }
 
     pub(super) fn on_consensus_control(&mut self, msg: ControlFlow) -> Result<()> {
+        if self.consensus_participation_halted() {
+            return Ok(());
+        }
         debug!(message=%Self::consensus_control_kind(&msg), "received consensus control-frame");
         match msg {
             ControlFlow::Evidence(ev) => self.handle_evidence(ev),
@@ -29578,6 +29821,9 @@ impl Actor {
 
     #[allow(clippy::unnecessary_wraps)]
     pub(super) fn on_background_request(&mut self, request: BackgroundRequest) -> Result<()> {
+        if self.consensus_participation_halted() {
+            return Ok(());
+        }
         self.schedule_background(request);
         Ok(())
     }
@@ -29781,9 +30027,38 @@ impl Actor {
         }
     }
 
-    fn prepare_background_block_message(&self, msg: &mut BlockMessageWire) -> bool {
-        let origin = self.common_config.peer.id();
-        let mut wire_len = consensus_block_wire_len_wire(origin, msg);
+    fn embedded_commit_qc(msg: &BlockMessage) -> Option<crate::sumeragi::consensus::Qc> {
+        match msg {
+            BlockMessage::Qc(qc)
+                if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) =>
+            {
+                Some(qc.clone())
+            }
+            BlockMessage::BlockSyncUpdate(update) => update.commit_qc.clone(),
+            BlockMessage::BlockBodyResponse(response) => match &response.body {
+                super::message::BlockBodyData::BlockSyncUpdate(update) => update.commit_qc.clone(),
+                super::message::BlockBodyData::BlockCreated(_) => None,
+            },
+            BlockMessage::CertifiedBlockFetch(message) => match message {
+                super::message::CertifiedBlockFetch::Response(response) => {
+                    Some(response.commit_qc.clone())
+                }
+                super::message::CertifiedBlockFetch::Proof(proof) => Some(proof.commit_qc.clone()),
+                super::message::CertifiedBlockFetch::Request(_)
+                | super::message::CertifiedBlockFetch::Body(_) => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn prepare_background_block_message(&mut self, msg: &mut BlockMessageWire) -> bool {
+        if let Some(qc) = Self::embedded_commit_qc(msg.as_ref())
+            && !self.register_authenticated_commit_qc(&qc)
+        {
+            return false;
+        }
+        let origin = self.common_config.peer.id().clone();
+        let mut wire_len = consensus_block_wire_len_wire(&origin, msg);
         let cap = self.block_message_frame_cap(msg.as_ref());
         if wire_len > cap {
             match msg.make_mut() {
@@ -29795,7 +30070,7 @@ impl Actor {
                         );
                         return false;
                     }
-                    wire_len = consensus_block_wire_len_wire(origin, msg);
+                    wire_len = consensus_block_wire_len_wire(&origin, msg);
                 }
                 BlockMessage::BlockBodyResponse(response) => {
                     let direct_update_fallback =
@@ -29807,7 +30082,7 @@ impl Actor {
                         );
                         return false;
                     }
-                    wire_len = consensus_block_wire_len_wire(origin, msg);
+                    wire_len = consensus_block_wire_len_wire(&origin, msg);
                     if matches!(
                         msg.as_ref(),
                         BlockMessage::BlockBodyResponse(super::message::BlockBodyResponse {
@@ -29817,7 +30092,7 @@ impl Actor {
                     ) && let Some(fallback) = direct_update_fallback
                     {
                         *msg = BlockMessageWire::new(fallback);
-                        wire_len = consensus_block_wire_len_wire(origin, msg);
+                        wire_len = consensus_block_wire_len_wire(&origin, msg);
                     }
                 }
                 _ => {}
@@ -29828,6 +30103,11 @@ impl Actor {
                 kind = Self::block_message_kind(msg.as_ref()),
                 wire_len, cap, "dropping consensus message over frame cap"
             );
+            return false;
+        }
+        if let Some(qc) = Self::embedded_commit_qc(msg.as_ref())
+            && !self.register_authenticated_commit_qc(&qc)
+        {
             return false;
         }
         true
@@ -29901,6 +30181,9 @@ impl Actor {
     }
 
     fn schedule_background(&mut self, request: BackgroundRequest) {
+        if self.consensus_participation_halted() {
+            return;
+        }
         let request = match request {
             BackgroundRequest::Post { peer, mut msg } => {
                 if !self.prepare_background_block_message(&mut msg) {
@@ -29953,6 +30236,9 @@ impl Actor {
     }
 
     fn schedule_background_via_queue(&mut self, request: BackgroundRequest) {
+        if self.consensus_participation_halted() {
+            return;
+        }
         let request = match request {
             BackgroundRequest::Post { peer, mut msg } => {
                 if !self.prepare_background_block_message(&mut msg) {
@@ -30100,6 +30386,9 @@ impl Actor {
     }
 
     fn dispatch_background_fallback(&mut self, request: BackgroundRequest) {
+        if self.consensus_participation_halted() {
+            return;
+        }
         match Self::background_fallback_network_dispatch(request) {
             BackgroundFallbackNetworkDispatch::Post(post) => self.network.post(post),
             BackgroundFallbackNetworkDispatch::Broadcast(broadcast) => {
@@ -30462,6 +30751,9 @@ impl Actor {
         key: super::rbc_store::SessionKey,
         session: &RbcSession,
     ) -> Option<RbcReady> {
+        if self.consensus_participation_halted_now() {
+            return None;
+        }
         if session.is_invalid() || rbc_session_has_invalid_chunk_shape(session) {
             return None;
         }
@@ -30527,6 +30819,9 @@ impl Actor {
         key: super::rbc_store::SessionKey,
         session: &RbcSession,
     ) -> Option<RbcDeliver> {
+        if self.consensus_participation_halted_now() {
+            return None;
+        }
         if session.is_invalid() || rbc_session_has_invalid_chunk_shape(session) {
             return None;
         }
@@ -35720,6 +36015,13 @@ impl Actor {
     }
 
     pub(super) fn sync_external_hints(&self) {
+        if self.safety_halted || super::status::consensus_safety_halt_active() {
+            self.frontier_block_sync_hint
+                .set_contiguous_frontier_pressure_active(false);
+            self.frontier_block_sync_hint
+                .set_frontier_lane_active(false);
+            return;
+        }
         self.frontier_block_sync_hint
             .set_contiguous_frontier_pressure_active(self.contiguous_frontier_pressure_active());
         self.frontier_block_sync_hint
@@ -38381,6 +38683,9 @@ impl Actor {
         let expires = now.checked_add(cooldown).unwrap_or(now);
         let mut sent = 0usize;
         for peer in targets {
+            if self.consensus_participation_halted() {
+                return false;
+            }
             let dedup_key = (peer.clone(), local_height, canonical_height, reason);
             if self
                 .range_pull_escalation_cooldowns
@@ -39339,7 +39644,7 @@ impl Actor {
             .known_block_qc_work
             .keys()
             .copied()
-            .filter(|(_, _, entry_height, _, _, _, _)| *entry_height == height)
+            .filter(|((_, _, entry_height, _, _, _, _), _)| *entry_height == height)
             .collect();
         for key in stale_known_block_qc_work {
             if self.known_block_qc_work.remove(&key).is_some() {
@@ -39576,12 +39881,12 @@ impl Actor {
             .known_block_qc_work
             .keys()
             .copied()
-            .filter(|(_, _, height, _, _, _, _)| *height > keep_through_height)
+            .filter(|((_, _, height, _, _, _, _), _)| *height > keep_through_height)
             .collect();
         for key in stale_known_block_qc_work {
             if self.known_block_qc_work.remove(&key).is_some() {
                 deferred_qcs_removed = deferred_qcs_removed.saturating_add(1);
-                cleared_heights.insert(key.2);
+                cleared_heights.insert(key.0.2);
             }
         }
 
@@ -40204,6 +40509,28 @@ impl Actor {
         if height > self.committed_height_snapshot() {
             return None;
         }
+        let height_idx = height.checked_sub(1)?;
+        let idx = usize::try_from(height_idx).ok()?;
+        self.state
+            .block_hashes
+            .view()
+            .get(idx)
+            .copied()
+            .or_else(|| {
+                let block_height = NonZeroUsize::new(idx.saturating_add(1))?;
+                self.kura
+                    .get_block_hash(block_height)
+                    .or_else(|| self.kura.get_durable_block_hash(block_height))
+            })
+    }
+
+    /// Resolve the canonical durable hash used for finality-safety comparisons.
+    ///
+    /// Unlike the liveness-oriented committed-height lookup, this includes a Kura block written
+    /// immediately before WSV commit. Authenticated finality registration holds the consensus
+    /// transition gate while using this resolver, so a Kura-first commit cannot expose a window in
+    /// which a different certificate becomes the first retained subject.
+    fn finality_canonical_block_hash_for_height(&self, height: u64) -> Option<HashOf<BlockHeader>> {
         let height_idx = height.checked_sub(1)?;
         let idx = usize::try_from(height_idx).ok()?;
         self.state
@@ -42660,6 +42987,9 @@ impl Actor {
         let expires = now.checked_add(cooldown).unwrap_or(now);
         let mut sent = 0usize;
         for peer in targets.drain(..) {
+            if self.consensus_participation_halted() {
+                return false;
+            }
             let dedup_key = (peer.clone(), local_height, frontier_height, reason);
             if self
                 .range_pull_escalation_cooldowns

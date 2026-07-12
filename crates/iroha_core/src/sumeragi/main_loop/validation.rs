@@ -1225,6 +1225,9 @@ impl Actor {
     }
 
     pub(in crate::sumeragi) fn poll_validation_results(&mut self) -> bool {
+        if self.consensus_participation_halted() {
+            return false;
+        }
         let Some(result_rx) = self.subsystems.validation.result_rx.take() else {
             return false;
         };

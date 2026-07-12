@@ -3016,7 +3016,7 @@ impl Actor {
         sent
     }
 
-    fn vote_backed_block_sync_update_shape(&self, block: &SignedBlock) -> (bool, bool) {
+    fn vote_backed_block_sync_update_shape(&mut self, block: &SignedBlock) -> (bool, bool) {
         let msg = self.build_fetch_pending_block_payload(block);
         let BlockMessage::BlockSyncUpdate(_) = msg else {
             return (false, false);
