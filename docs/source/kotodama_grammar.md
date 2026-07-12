@@ -718,9 +718,12 @@ only private helpers and `#[test]` functions needs no runtime artifact; its
 tests, coverage, and profile data run from the test projection. This runner-only
 derivation is not available to ordinary production builds. The two projections
 retain separate immutable prepared artifacts, compiler reports, and code hashes.
-The test projection authenticates its terminal return `HALT` through the
-compiler-owned `__koto_test_return` CNTR descriptor; that selector is reserved
-from source declarations and rejected by production admission. Host-private
+The test projection is a generic IVM 1.0 harness with no deployable `CNTR`
+section. Its compiler-owned interface is carried separately inside the local
+runner and authenticates the terminal return `HALT` through the reserved
+`__koto_test_return` descriptor. Production admission accepts only IVM 1.1
+contracts with an embedded interface and therefore rejects the harness profile.
+Host-private
 `0x00FE0001..=0x00FE0005` helpers require the crate-private test loader plus an
 explicit host opt-in (the runner supplies `KotoTestHost`), remain outside ABI v1
 and its hash, and cannot be enabled by public VM loaders or a permissive custom
@@ -741,13 +744,15 @@ Source code uses namespaced capabilities. Representative roots are:
   `ledger::contract::revoke_entrypoint` for the current immutable seiyaku
   address and an exact entrypoint selector
 - `state::get`, `state::set`, and `state::delete`
+- `bytes::len(value)` for the exact payload length of a first-class `bytes`
+  value; it does not accept `Json`, IDs, strings, or generic pointer-ABI values
 - `crypto::sha256`, `crypto::sha3`, and signature/proof operations
 - `math::wrapping_add`, `math::wrapping_sub`, `math::wrapping_mul`, and
   `math::wrapping_neg` for explicitly modular 512-bit integer arithmetic
 - `debug::info` for diagnostics
 - `test::assert` and `test::assert_eq` in test builds only
 
-Flat aliases are errors. Allocation, heap growth, raw pointers, direct syscall variants, opaque instruction submission, and compiler `*_direct` helpers are not source APIs. The canonical builtin registry defines each capability's signature, effect, syscall, access behavior, gas class, and permitted execution modes.
+Flat aliases are errors. Allocation, heap growth, raw pointers, direct syscall variants, opaque instruction submission, and compiler `*_direct` helpers are not source APIs. In particular, `tlv_len` and `codec::tlv_len` remain internal; source uses only the typed `bytes::len`. The canonical builtin registry defines each capability's signature, effect, syscall, access behavior, gas class, and permitted execution modes.
 
 The scalar IVM operations historically exposed as `math::isqrt`, `math::abs`,
 `math::min`, `math::max`, `math::div_ceil`, `math::gcd`, and `math::mean` are not

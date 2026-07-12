@@ -43,8 +43,7 @@ use ivm_abi::state_value::{
 use norito::codec::Encode;
 use norito::json::{self, Value};
 
-const DEFAULT_CALLER: &str =
-    "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const DEFAULT_CALLER: &str = "sorauﾛ1PzEcｸZkfGﾊ1ﾚ9ﾐﾂRﾕDAuXﾋyﾔヰヰ3VgAｸ4ﾇｹWL6iXCEYDCW";
 const ENTRYPOINT_IMPL_PREFIX: &str = "__entrypoint_impl__";
 const TEST_SYSCALL_ACTOR_ACCOUNT: u32 = crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT;
 const TEST_SYSCALL_ACTOR_PUBLIC_KEY: u32 = crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY;
@@ -651,9 +650,11 @@ fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSu
         .map_err(|diagnostics| diagnostics.render_human())?;
     let test_output = outputs.suite;
     let test_report = test_output.report;
-    let suite_program =
-        crate::contract_artifact::prepare_koto_test_contract(Arc::from(test_output.artifact))
-            .map_err(|err| format!("failed to prepare compiled Kotodama test suite: {err}"))?;
+    let suite_program = crate::contract_artifact::prepare_koto_test_contract(
+        Arc::from(test_output.artifact),
+        test_output.contract_interface,
+    )
+    .map_err(|err| format!("failed to prepare compiled Kotodama test suite: {err}"))?;
     if suite_program.code_hash() != test_report.artifact_hash {
         return Err(format!(
             "compiled suite artifact hash mismatch: expected {}, got {}",
@@ -2696,16 +2697,18 @@ mod tests {
         assert!(
             production_error
                 .to_string()
-                .contains("compiler-owned Kotodama test return selector"),
+                .contains("expected IVM 1.1 contract artifact"),
             "unexpected production-admission failure: {production_error}"
         );
 
         let mut post_compile_mutation = suite_program.to_vec();
         post_compile_mutation
             .extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
-        let error =
-            crate::contract_artifact::prepare_koto_test_contract(Arc::from(post_compile_mutation))
-                .expect_err("post-compile executable mutation must remain rejected");
+        let error = crate::contract_artifact::prepare_koto_test_contract(
+            Arc::from(post_compile_mutation),
+            compiled.suite.program.contract_interface().clone(),
+        )
+        .expect_err("post-compile executable mutation must remain rejected");
         assert!(
             error.to_string().contains("must select the terminal HALT"),
             "unexpected mutation failure: {error}"
@@ -3275,7 +3278,9 @@ mod tests {
         let production_error = crate::prepare_contract(compiled.suite.program.shared_artifact())
             .expect_err("production admission must reject host-private Kotodama test bytecode");
         assert!(
-            production_error.to_string().contains("disallowed syscall"),
+            production_error
+                .to_string()
+                .contains("expected IVM 1.1 contract artifact"),
             "unexpected production-admission failure: {production_error}"
         );
         let results = execute_suite(&compiled, TraceMode::PcOnly, 2).expect("execute suite");

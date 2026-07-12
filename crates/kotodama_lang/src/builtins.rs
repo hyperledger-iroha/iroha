@@ -470,6 +470,7 @@ pub enum Builtin {
     NameDecode,
     TlvEq,
     TlvLen,
+    BytesLen,
     PointerToNorito,
     JsonObject,
     JsonSetInt,
@@ -750,6 +751,7 @@ impl Builtin {
         Self::NameDecode,
         Self::TlvEq,
         Self::TlvLen,
+        Self::BytesLen,
         Self::PointerToNorito,
         Self::JsonObject,
         Self::JsonSetInt,
@@ -990,6 +992,7 @@ impl Builtin {
             "name_decode" => Self::NameDecode,
             "tlv_eq" => Self::TlvEq,
             "tlv_len" => Self::TlvLen,
+            "bytes_len" => Self::BytesLen,
             "pointer_to_norito" => Self::PointerToNorito,
             "json_object" => Self::JsonObject,
             "json_set_int" => Self::JsonSetInt,
@@ -1227,6 +1230,7 @@ impl Builtin {
             Self::NameDecode => "name_decode",
             Self::TlvEq => "tlv_eq",
             Self::TlvLen => "tlv_len",
+            Self::BytesLen => "bytes_len",
             Self::PointerToNorito => "pointer_to_norito",
             Self::JsonObject => "json_object",
             Self::JsonSetInt => "json_set_int",
@@ -1523,6 +1527,7 @@ impl Builtin {
             Self::NameDecode => "codec::decode_name",
             Self::TlvEq => "codec::tlv_eq",
             Self::TlvLen => "codec::tlv_len",
+            Self::BytesLen => "bytes::len",
             Self::PointerToNorito => "codec::to_norito",
             Self::EncodeInt => self.name(),
             Self::DecodeInt => self.name(),
@@ -2161,7 +2166,7 @@ impl Builtin {
             Self::Path => &[s::SYSCALL_BUILD_PATH_KEY_NORITO],
             Self::NameDecode => &[s::SYSCALL_NAME_DECODE],
             Self::TlvEq => &[s::SYSCALL_TLV_EQ],
-            Self::TlvLen => &[s::SYSCALL_TLV_LEN],
+            Self::TlvLen | Self::BytesLen => &[s::SYSCALL_TLV_LEN],
             Self::PointerToNorito => &[s::SYSCALL_POINTER_TO_NORITO],
             Self::JsonObject => &[s::SYSCALL_JSON_OBJECT],
             Self::JsonSetInt => &[s::SYSCALL_JSON_SET_I64],
@@ -2549,6 +2554,7 @@ impl Builtin {
             Self::NameDecode => S::new(&["bytes"], "Name"),
             Self::TlvEq => S::new(&["pointer-ABI", "pointer-ABI"], "bool"),
             Self::TlvLen => S::new(&["pointer-ABI"], "int"),
+            Self::BytesLen => S::new(&["bytes"], "int"),
             Self::PointerToNorito => S::new(&["pointer-ABI"], "bytes"),
             Self::JsonObject => S::new(&[], "Json"),
             Self::JsonSetInt | Self::JsonSetIntDirect => S::new(&["Json", "Name", "int"], "Json"),
@@ -3366,6 +3372,25 @@ mod tests {
                 "source builtin {builtin:?} must be namespaced"
             );
         }
+    }
+
+    #[test]
+    fn bytes_len_is_a_narrow_pure_source_capability() {
+        let builtin = Builtin::BytesLen;
+        assert_eq!(Builtin::from_source_name("bytes::len"), Some(builtin));
+        assert_eq!(Builtin::from_source_name("bytes_len"), None);
+        assert_eq!(builtin.signature().parameters, &["bytes"]);
+        assert_eq!(builtin.signature().return_type, "int");
+        assert_eq!(builtin.effects(), BuiltinEffects::NONE);
+        assert_eq!(builtin.access(), BuiltinAccess::None);
+        assert_eq!(builtin.mode(), BuiltinMode::Any);
+        assert_eq!(builtin.surface(), BuiltinSurface::Function);
+        assert_eq!(
+            builtin.operation_syscalls(),
+            &[ivm_abi::syscalls::SYSCALL_TLV_LEN]
+        );
+        assert_eq!(builtin.syscall(), Some(ivm_abi::syscalls::SYSCALL_TLV_LEN));
+        assert_eq!(builtin.gas_class(), BuiltinGasClass::HostQuoted);
     }
 
     #[test]

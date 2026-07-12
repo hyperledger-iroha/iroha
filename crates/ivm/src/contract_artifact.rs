@@ -127,13 +127,16 @@ pub fn prepare_contract(artifact: Arc<[u8]>) -> Result<PreparedContract, Contrac
 
 /// Prepare a compiler-produced Kotodama test-suite artifact for local execution.
 ///
-/// This path is intentionally crate-private: it accepts the compiler-owned test
-/// return descriptor and host-private `koto test` syscalls that production
-/// contract admission must continue to reject.
+/// This path is intentionally crate-private. It accepts the generic IVM 1.0
+/// harness profile and host-private `koto test` syscalls that production
+/// contract admission must continue to reject. The compiler-owned interface is
+/// carried beside the generic image so local execution retains exact entrypoint
+/// and durable-state schemas without embedding a deployable `CNTR` section.
 pub(crate) fn prepare_koto_test_contract(
     artifact: Arc<[u8]>,
+    contract_interface: EmbeddedContractInterfaceV1,
 ) -> Result<PreparedContract, ContractArtifactError> {
-    PreparedContract::prepare_with_profile(artifact, ArtifactValidationProfile::KotoTest)
+    PreparedContract::prepare_koto_test_harness(artifact, contract_interface)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,25 +155,48 @@ impl ArtifactValidationProfile {
 impl PreparedContract {
     /// Parse, validate, index, and predecode a canonical deployable contract artifact.
     pub fn prepare(artifact: Arc<[u8]>) -> Result<Self, ContractArtifactError> {
-        Self::prepare_with_profile(artifact, ArtifactValidationProfile::Production)
-    }
-
-    fn prepare_with_profile(
-        artifact: Arc<[u8]>,
-        profile: ArtifactValidationProfile,
-    ) -> Result<Self, ContractArtifactError> {
         let parsed = parse_contract_metadata(artifact.as_ref())?;
         let envelope = validate_contract_envelope(artifact.as_ref(), &parsed)?;
+        let decoded = decode_instruction_stream(artifact.as_ref(), &parsed, &envelope.metadata)?;
+        Self::prepare_validated(
+            artifact,
+            parsed,
+            envelope,
+            decoded,
+            ArtifactValidationProfile::Production,
+        )
+    }
+
+    fn prepare_koto_test_harness(
+        artifact: Arc<[u8]>,
+        contract_interface: EmbeddedContractInterfaceV1,
+    ) -> Result<Self, ContractArtifactError> {
+        let parsed = parse_contract_metadata(artifact.as_ref())?;
+        let metadata = validate_koto_test_envelope(artifact.as_ref(), &parsed)?;
+        let decoded = decode_instruction_stream(artifact.as_ref(), &parsed, &metadata)?;
+        let envelope = ValidatedContractEnvelope {
+            metadata,
+            contract_interface,
+        };
+        Self::prepare_validated(
+            artifact,
+            parsed,
+            envelope,
+            decoded,
+            ArtifactValidationProfile::KotoTest,
+        )
+    }
+
+    fn prepare_validated(
+        artifact: Arc<[u8]>,
+        parsed: ParsedProgramMetadata,
+        envelope: ValidatedContractEnvelope,
+        decoded: Arc<[DecodedOp]>,
+        profile: ArtifactValidationProfile,
+    ) -> Result<Self, ContractArtifactError> {
         let instruction_region = artifact.get(parsed.code_offset..).ok_or_else(|| {
             ContractArtifactError::invalid("executable stream offset exceeds artifact length")
         })?;
-        let decoded =
-            crate::ivm_cache::global_get_with_meta(instruction_region, &envelope.metadata)
-                .map_err(|err| {
-                    ContractArtifactError::invalid(format!(
-                        "instruction decode failed for executable stream: {err}"
-                    ))
-                })?;
         let verified = verify_decoded_contract_artifact(
             artifact.as_ref(),
             &parsed,
@@ -231,6 +257,21 @@ impl PreparedContract {
 struct ValidatedContractEnvelope {
     metadata: ProgramMetadata,
     contract_interface: EmbeddedContractInterfaceV1,
+}
+
+fn decode_instruction_stream(
+    artifact: &[u8],
+    parsed: &ParsedProgramMetadata,
+    metadata: &ProgramMetadata,
+) -> Result<Arc<[DecodedOp]>, ContractArtifactError> {
+    let instruction_region = artifact.get(parsed.code_offset..).ok_or_else(|| {
+        ContractArtifactError::invalid("executable stream offset exceeds artifact length")
+    })?;
+    crate::ivm_cache::global_get_with_meta(instruction_region, metadata).map_err(|err| {
+        ContractArtifactError::invalid(format!(
+            "instruction decode failed for executable stream: {err}"
+        ))
+    })
 }
 
 fn parse_contract_metadata(
@@ -308,6 +349,56 @@ fn validate_contract_envelope(
         metadata,
         contract_interface,
     })
+}
+
+fn validate_koto_test_envelope(
+    artifact: &[u8],
+    parsed: &ParsedProgramMetadata,
+) -> Result<ProgramMetadata, ContractArtifactError> {
+    let metadata = parsed.metadata.clone();
+    if metadata.version_major != 1 || metadata.version_minor != 0 {
+        return Err(ContractArtifactError::invalid(format!(
+            "expected generic IVM 1.0 Kotodama test harness, got {}.{}",
+            metadata.version_major, metadata.version_minor
+        )));
+    }
+    if metadata.mode & !(mode::ZK | mode::VECTOR) != 0 {
+        return Err(ContractArtifactError::invalid(format!(
+            "unsupported Kotodama test execution mode bits 0x{:02x}",
+            metadata.mode
+        )));
+    }
+    if metadata.vector_length != 0 {
+        return Err(ContractArtifactError::invalid(
+            "Kotodama test harness must use the compiler-owned default vector length",
+        ));
+    }
+    if artifact.len() < HEADER_SIZE {
+        return Err(ContractArtifactError::invalid(
+            "artifact shorter than fixed IVM header",
+        ));
+    }
+    let code_region_len = artifact
+        .len()
+        .checked_sub(parsed.header_len)
+        .and_then(|len| u64::try_from(len).ok())
+        .ok_or_else(|| ContractArtifactError::invalid("test harness image length is invalid"))?;
+    if code_region_len > crate::memory::Memory::HEAP_START {
+        return Err(ContractArtifactError::invalid(
+            "Kotodama test harness exceeds IVM code memory",
+        ));
+    }
+    if parsed.contract_interface.is_some() {
+        return Err(ContractArtifactError::invalid(
+            "generic IVM 1.0 Kotodama test harness must not embed a CNTR section",
+        ));
+    }
+    if parsed.contract_debug.is_some() {
+        return Err(ContractArtifactError::invalid(
+            "generic IVM 1.0 Kotodama test harness must not embed DBG1 metadata",
+        ));
+    }
+    Ok(metadata)
 }
 
 fn verify_decoded_contract_artifact(
@@ -1502,12 +1593,26 @@ mod tests {
         Arc::from(artifact.into_boxed_slice())
     }
 
-    fn kotodama_test_fixture(
-        instructions: &[u32],
-        public_entry_pc: u64,
+    fn kotodama_test_fixture(instructions: &[u32]) -> Arc<[u8]> {
+        kotodama_test_fixture_with_minor(instructions, 0)
+    }
+
+    fn kotodama_test_fixture_with_minor(instructions: &[u32], version_minor: u8) -> Arc<[u8]> {
+        let metadata = ProgramMetadata {
+            version_minor,
+            ..ProgramMetadata::default()
+        };
+        let mut artifact = metadata.encode();
+        for instruction in instructions {
+            artifact.extend_from_slice(&instruction.to_le_bytes());
+        }
+        Arc::from(artifact.into_boxed_slice())
+    }
+
+    fn kotodama_test_interface(
+        public_entry_pc: Option<u64>,
         test_return_pc: u64,
-    ) -> Arc<[u8]> {
-        let metadata = ProgramMetadata::default();
+    ) -> EmbeddedContractInterfaceV1 {
         let descriptor = |name: &str, entry_pc| EmbeddedEntrypointDescriptor {
             name: name.to_owned(),
             kind: EntryPointKind::View,
@@ -1523,26 +1628,22 @@ mod tests {
             triggers: Vec::new(),
             entry_pc,
         };
-        let interface = EmbeddedContractInterfaceV1 {
+        let mut entrypoints = Vec::new();
+        if let Some(entry_pc) = public_entry_pc {
+            entrypoints.push(descriptor("inspect", entry_pc));
+        }
+        entrypoints.push(descriptor(KOTO_TEST_RETURN_ENTRYPOINT, test_return_pc));
+        EmbeddedContractInterfaceV1 {
             seiyaku_name: "KotoTestFixture".to_owned(),
             compiler_fingerprint: "ivm-unit-tests".to_owned(),
             abi_hash: crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
-            entrypoints: vec![
-                descriptor("inspect", public_entry_pc),
-                descriptor(KOTO_TEST_RETURN_ENTRYPOINT, test_return_pc),
-            ],
+            entrypoints,
             error_codes: Vec::new(),
             states: Vec::new(),
-        };
-        let mut artifact = metadata.encode();
-        artifact.extend_from_slice(&interface.encode_section());
-        for instruction in instructions {
-            artifact.extend_from_slice(&instruction.to_le_bytes());
         }
-        Arc::from(artifact.into_boxed_slice())
     }
 
     #[test]
@@ -1551,41 +1652,48 @@ mod tests {
         let private = crate::encoding::wide::encode_syscallx(
             crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT,
         );
-        let valid = kotodama_test_fixture(&[halt, private, halt, halt], 0, 12);
-        prepare_koto_test_contract(Arc::clone(&valid))
+        let valid = kotodama_test_fixture(&[halt, private, halt, halt]);
+        prepare_koto_test_contract(Arc::clone(&valid), kotodama_test_interface(Some(0), 12))
             .expect("unreachable test helper syscall is valid for local test preparation");
         let production_error = prepare_contract(Arc::clone(&valid))
-            .expect_err("production preparation must reject the private test syscall");
-        assert!(production_error.to_string().contains("disallowed syscall"));
+            .expect_err("production preparation must reject the IVM 1.0 test profile");
+        assert!(
+            production_error
+                .to_string()
+                .contains("expected IVM 1.1 contract")
+        );
 
-        let reachable = kotodama_test_fixture(&[private, halt, halt], 0, 8);
-        let reachable_error = prepare_koto_test_contract(reachable)
-            .expect_err("a deployable entrypoint must not reach a private test syscall");
+        let reachable = kotodama_test_fixture(&[private, halt, halt]);
+        let reachable_error =
+            prepare_koto_test_contract(reachable, kotodama_test_interface(Some(0), 8))
+                .expect_err("a deployable entrypoint must not reach a private test syscall");
         assert!(
             reachable_error
                 .to_string()
                 .contains("reaches a host-private Kotodama test syscall")
         );
 
-        let adjacent = kotodama_test_fixture(
-            &[
-                halt,
-                crate::encoding::wide::encode_syscallx(0x00FE_0006),
-                halt,
-                halt,
-            ],
-            0,
-            12,
-        );
-        let adjacent_error = prepare_koto_test_contract(adjacent)
-            .expect_err("adjacent private syscall numbers remain forbidden");
+        let adjacent = kotodama_test_fixture(&[
+            halt,
+            crate::encoding::wide::encode_syscallx(0x00FE_0006),
+            halt,
+            halt,
+        ]);
+        let adjacent_error =
+            prepare_koto_test_contract(adjacent, kotodama_test_interface(Some(0), 12))
+                .expect_err("adjacent private syscall numbers remain forbidden");
         assert!(adjacent_error.to_string().contains("disallowed syscall"));
     }
 
     #[test]
     fn kotodama_test_preparation_requires_the_exact_terminal_return_descriptor() {
-        let missing = prepared_fixture(0);
-        let missing_error = prepare_koto_test_contract(missing)
+        let halt = crate::encoding::wide::encode_halt();
+        let missing = kotodama_test_fixture(&[halt, halt]);
+        let mut missing_interface = kotodama_test_interface(Some(0), 4);
+        missing_interface
+            .entrypoints
+            .retain(|entrypoint| entrypoint.name != KOTO_TEST_RETURN_ENTRYPOINT);
+        let missing_error = prepare_koto_test_contract(missing, missing_interface)
             .expect_err("test preparation must require the compiler-owned return descriptor");
         assert!(
             missing_error
@@ -1593,18 +1701,64 @@ mod tests {
                 .contains("missing its compiler-owned return")
         );
 
-        let halt = crate::encoding::wide::encode_halt();
         let private = crate::encoding::wide::encode_syscallx(
             crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT,
         );
-        let nonterminal = kotodama_test_fixture(&[halt, private, halt, halt], 0, 8);
-        let nonterminal_error = prepare_koto_test_contract(nonterminal)
-            .expect_err("the compiler-owned return descriptor must select the final HALT");
+        let nonterminal = kotodama_test_fixture(&[halt, private, halt, halt]);
+        let nonterminal_error =
+            prepare_koto_test_contract(nonterminal, kotodama_test_interface(Some(0), 8))
+                .expect_err("the compiler-owned return descriptor must select the final HALT");
         assert!(
             nonterminal_error
                 .to_string()
                 .contains("must select the terminal HALT")
         );
+    }
+
+    #[test]
+    fn kotodama_test_preparation_rejects_wrong_profile_embedded_cntr_and_stale_abi() {
+        let halt = crate::encoding::wide::encode_halt();
+        let private = crate::encoding::wide::encode_syscallx(
+            crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT,
+        );
+
+        let production_profile = kotodama_test_fixture_with_minor(&[private, halt], 1);
+        let profile_error =
+            prepare_koto_test_contract(production_profile, kotodama_test_interface(None, 4))
+                .expect_err("test preparation must reject a production IVM profile");
+        assert!(
+            profile_error
+                .to_string()
+                .contains("expected generic IVM 1.0 Kotodama test harness")
+        );
+
+        let mut embedded_cntr = prepared_fixture(0).to_vec();
+        embedded_cntr[5] = 0;
+        let cntr_error =
+            prepare_koto_test_contract(Arc::from(embedded_cntr), kotodama_test_interface(None, 0))
+                .expect_err("generic test harnesses must not embed a CNTR section");
+        assert!(
+            cntr_error
+                .to_string()
+                .contains("must not embed a CNTR section")
+        );
+
+        let no_terminal_halt = kotodama_test_fixture(&[private]);
+        let terminal_error =
+            prepare_koto_test_contract(no_terminal_halt, kotodama_test_interface(None, 0))
+                .expect_err("test harness must end in the compiler-owned return HALT");
+        assert!(
+            terminal_error
+                .to_string()
+                .contains("must select the terminal HALT")
+        );
+
+        let mut stale_abi = kotodama_test_fixture(&[halt]).to_vec();
+        stale_abi[17] ^= 1;
+        let stale_error =
+            prepare_koto_test_contract(Arc::from(stale_abi), kotodama_test_interface(None, 0))
+                .expect_err("stale ABI hashes must fail before execution");
+        assert!(stale_error.to_string().contains("abi_hash"));
     }
 
     fn indexed_literal_contract_fixture(

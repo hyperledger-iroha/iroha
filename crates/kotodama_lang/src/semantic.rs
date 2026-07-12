@@ -9010,6 +9010,21 @@ fn analyze_surface_builtin_call(
                 ty: Type::Int,
             })
         }
+        Builtin::BytesLen => {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: "bytes::len expects exactly one bytes argument".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
         Builtin::PointerToNorito => {
             if arg_typed.len() != 1 {
                 return Err(SemanticError {

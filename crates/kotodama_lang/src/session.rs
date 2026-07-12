@@ -7,6 +7,7 @@ use std::{
 
 use indexmap::IndexMap;
 use iroha_data_model::smart_contract::manifest::ContractManifest;
+use ivm_abi::metadata::EmbeddedContractInterfaceV1;
 
 use crate::{
     ast::{FunctionKind, Item, Program, SourceUnitKind},
@@ -35,6 +36,12 @@ pub struct CompileOutput {
     pub artifact: Vec<u8>,
     /// Manifest derived from the embedded contract interface.
     pub manifest: ContractManifest,
+    /// Compiler-owned interface paired with the artifact.
+    ///
+    /// Production artifacts also embed this interface in their `CNTR` section.
+    /// Generic IVM 1.0 local-test harnesses deliberately carry it only here so
+    /// they cannot be admitted as deployable contracts.
+    pub contract_interface: EmbeddedContractInterfaceV1,
     /// Source-map, budget, and access-hint sidecar data.
     pub report: CompileReport,
 }
@@ -536,11 +543,12 @@ impl CompilerSession {
             return Err(non_deployable_module_diagnostic(source_name));
         }
         let compiler = Compiler::new_with_options(self.options.clone());
-        let (artifact, manifest, report) = compiler
+        let (artifact, manifest, report, contract_interface) = compiler
             .compile_typed_program_with_manifest_and_report_diagnostics(program, source_name)?;
         Ok(CompileOutput {
             artifact,
             manifest,
+            contract_interface,
             report,
         })
     }

@@ -191,7 +191,7 @@ impl CodegenPhase {
                     message,
                 )
             })?;
-        let (artifact, manifest, report) = self
+        let (artifact, manifest, report, contract_interface) = self
             .compiler
             .manifest_from_artifacts(artifacts)
             .map_err(|message| {
@@ -206,6 +206,7 @@ impl CodegenPhase {
         Ok(CompileOutput {
             artifact,
             manifest,
+            contract_interface,
             report,
         })
     }
