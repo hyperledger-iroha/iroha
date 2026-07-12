@@ -5428,12 +5428,12 @@ mod strict_request_target_tests {
         };
         Router::new()
             .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST
                     .path(),
                 mount(Arc::clone(&counter)),
             )
             .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST
                     .path(),
                 mount(Arc::clone(&counter)),
             )
@@ -5636,13 +5636,13 @@ mod strict_request_target_tests {
     }
 
     #[tokio::test]
-    async fn canonical_query_routes_do_not_resolve_retired_action_aliases() {
+    async fn canonical_proposal_routes_do_not_resolve_retired_query_aliases() {
         let counter = Arc::new(AtomicUsize::new(0));
         let router = catalog_cutover_test_router(Arc::clone(&counter));
 
         for retired_path in [
-            "/v1/multisig/proposals/list",
-            "/v1/multisig/proposals/get",
+            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
             "/v1/multisig/approvals/list_for_authority",
             "/v1/controls/asset-transfer/get",
         ] {
@@ -5662,8 +5662,8 @@ mod strict_request_target_tests {
         assert_eq!(counter.load(Ordering::SeqCst), 0);
 
         for canonical_path in [
-            "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/lookup",
+            "/v1/multisig/proposals/list",
+            "/v1/multisig/proposals/get",
             "/v1/multisig/approvals/query-for-authority",
             "/v1/controls/asset-transfer/query",
         ] {
@@ -5689,7 +5689,7 @@ mod strict_request_target_tests {
         for adversarial_path in [
             "/v1/multisig/proposals//query",
             "/v1/multisig/proposals/%2fquery",
-            "/v1/multisig/proposals/query/",
+            "/v1/multisig/proposals/list/",
         ] {
             let response = router
                 .clone()
@@ -10624,11 +10624,13 @@ mod offline_kagemusha_readiness_tests {
         strong_etag_for_representation,
     };
 
-    fn transfer_verifier_world(
-        version: u32,
+    fn transfer_verifier_state(
+        record_version: u32,
+        indexed_version: u32,
+        max_proof_bytes: u32,
         activation_height: Option<u64>,
         withdrawal_height: Option<u64>,
-    ) -> iroha_core::state::World {
+    ) -> iroha_core::state::State {
         use iroha_data_model::{
             confidential::ConfidentialStatus,
             proof::{VerifyingKeyId, VerifyingKeyRecord},
@@ -10638,7 +10640,7 @@ mod offline_kagemusha_readiness_tests {
         let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
         let id = VerifyingKeyId::new("halo2/ipa", "readiness-transfer");
         let mut record = VerifyingKeyRecord::new_with_owner(
-            version,
+            record_version,
             circuit_id,
             Some("offline-cash".to_owned()),
             iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
@@ -10650,7 +10652,7 @@ mod offline_kagemusha_readiness_tests {
         record.status = ConfidentialStatus::Active;
         record.activation_height = activation_height;
         record.withdraw_height = withdrawal_height;
-        record.max_proof_bytes = 4096;
+        record.max_proof_bytes = max_proof_bytes;
 
         let mut world = iroha_core::state::World::new();
         world
@@ -10658,8 +10660,12 @@ mod offline_kagemusha_readiness_tests {
             .insert(id.clone(), record);
         world
             .verifying_keys_by_circuit_mut_for_testing()
-            .insert((circuit_id.to_owned(), version), id);
-        world
+            .insert((circuit_id.to_owned(), indexed_version), id);
+        iroha_core::state::State::new_for_testing(
+            world,
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        )
     }
 
     #[test]
@@ -10715,10 +10721,11 @@ mod offline_kagemusha_readiness_tests {
     #[test]
     fn readiness_exposes_the_exact_active_transfer_verifier_window() {
         let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
-        let world = transfer_verifier_world(7, Some(5), Some(10));
+        let state = transfer_verifier_state(7, 7, 4096, Some(5), Some(10));
+        let view = state.view();
 
         let selected = offline_kagemusha_readiness_verifier_record(
-            &world,
+            &view.world,
             9,
             circuit_id,
             iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
@@ -10737,7 +10744,7 @@ mod offline_kagemusha_readiness_tests {
 
         assert!(
             offline_kagemusha_readiness_verifier_record(
-                &world,
+                &view.world,
                 10,
                 circuit_id,
                 iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
@@ -10750,11 +10757,12 @@ mod offline_kagemusha_readiness_tests {
 
     #[test]
     fn readiness_does_not_substitute_a_global_verifier_for_the_asset_binding() {
-        let world = transfer_verifier_world(7, None, None);
+        let state = transfer_verifier_state(7, 7, 4096, None, None);
+        let view = state.view();
         let asset: AssetDefinitionId = "xor#wonderland".parse().expect("asset definition id");
 
         assert!(
-            offline_kagemusha_asset_transfer_verifier_record(&world, &asset, 9)
+            offline_kagemusha_asset_transfer_verifier_record(&view.world, &asset, 9)
                 .expect("evaluate asset-bound transfer verifier")
                 .is_none(),
             "a globally active circuit is not the verifier selected by an unbound asset"
@@ -10764,17 +10772,11 @@ mod offline_kagemusha_readiness_tests {
     #[test]
     fn readiness_rejects_a_stale_verifier_index_version() {
         let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
-        let mut world = transfer_verifier_world(7, None, None);
-        let id = world
-            .verifying_keys_by_circuit_mut_for_testing()
-            .remove(&(circuit_id.to_owned(), 7))
-            .expect("indexed verifier id");
-        world
-            .verifying_keys_by_circuit_mut_for_testing()
-            .insert((circuit_id.to_owned(), 8), id);
+        let state = transfer_verifier_state(7, 8, 4096, None, None);
+        let view = state.view();
 
         let error = offline_kagemusha_readiness_verifier_record(
-            &world,
+            &view.world,
             9,
             circuit_id,
             iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
@@ -10786,20 +10788,11 @@ mod offline_kagemusha_readiness_tests {
     #[test]
     fn readiness_rejects_an_active_verifier_without_proof_metadata() {
         let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
-        let mut world = transfer_verifier_world(7, None, None);
-        let id = world
-            .verifying_keys_by_circuit_mut_for_testing()
-            .get(&(circuit_id.to_owned(), 7))
-            .expect("indexed verifier id")
-            .clone();
-        world
-            .verifying_keys_mut_for_testing()
-            .get_mut(&id)
-            .expect("verifier record")
-            .max_proof_bytes = 0;
+        let state = transfer_verifier_state(7, 7, 0, None, None);
+        let view = state.view();
 
         let error = offline_kagemusha_readiness_verifier_record(
-            &world,
+            &view.world,
             9,
             circuit_id,
             iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
@@ -35303,7 +35296,7 @@ async fn handler_post_multisig_proposals_list(
         &app,
         &headers,
         remote_ip,
-        "v1/multisig/proposals/query",
+        "v1/multisig/proposals/list",
         "multisig_proposals_list",
         app.api_token_enforced(),
     )
@@ -35355,7 +35348,7 @@ async fn handler_post_multisig_proposals_get(
         &app,
         &headers,
         remote_ip,
-        "v1/multisig/proposals/lookup",
+        "v1/multisig/proposals/get",
         "multisig_proposals_get",
         app.api_token_enforced(),
     )
@@ -44771,11 +44764,11 @@ impl Torii {
             catalog_post(handler_post_multisig_spec),
         );
         builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
+            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST,
             catalog_post(handler_post_multisig_proposals_list),
         );
         builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
+            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST,
             catalog_post(handler_post_multisig_proposals_get),
         );
         builder.route(
@@ -50227,11 +50220,17 @@ impl IntoResponse for Error {
             }
             Self::AppServiceUnavailable { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
-                utils::respond_with_status_and_format(
+                let mut response = utils::respond_with_status_and_format(
                     StatusCode::SERVICE_UNAVAILABLE,
                     payload,
                     format,
-                )
+                );
+                if let Ok(header) = HeaderValue::from_str(code) {
+                    response
+                        .headers_mut()
+                        .insert(HeaderName::from_static("x-iroha-reject-code"), header);
+                }
+                response
             }
             Self::ProofRateLimited {
                 endpoint,
@@ -59808,10 +59807,13 @@ pub(crate) mod tests_runtime_handlers {
             legacy_validator_pop,
         );
         state.insert_commit_qc_for_testing(block_hash, legacy_qc);
-        assert!(
-            state.world.commit_qcs().get(&block_hash).is_some(),
-            "SCCP adversarial fixture retains a valid legacy QC"
-        );
+        {
+            let view = state.view();
+            assert!(
+                view.world.commit_qcs().get(&block_hash).is_some(),
+                "SCCP adversarial fixture retains a valid legacy QC"
+            );
+        }
         (app, message_id, artifact)
     }
 

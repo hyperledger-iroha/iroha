@@ -30,6 +30,63 @@ DOC_PATHS = (
     "python/iroha_python/README.md",
 )
 
+# The production release has one public spend-again corridor.  The V2 suffix is
+# the product selector; V3 names the governed artifact manifest/streaming
+# lifecycle, and 18 is the exact native bridge ABI.  Historical ABI-6/ABI-7
+# fixtures are deliberately not part of this release policy.
+FIRST_RELEASE_SELECTOR = "recursive_spend_v2"
+FIRST_RELEASE_BRIDGE_ABI = 18
+FIRST_RELEASE_MANIFEST_SCHEMA = "kagemusha.offline.recursive_spend.artifact_manifest.v3"
+FIRST_RELEASE_JAVA_PROVER = (
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/"
+    "KagemushaRecursiveSpendProver.java"
+)
+FIRST_RELEASE_JAVA_TEST = (
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/"
+    "KagemushaRecursiveSpendProverTest.java"
+)
+FIRST_RELEASE_KOTLIN_PROVER = (
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/"
+    "KagemushaRecursiveSpendProver.kt"
+)
+FIRST_RELEASE_KOTLIN_TEST = (
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/"
+    "KagemushaRecursiveSpendProverTest.kt"
+)
+FIRST_RELEASE_V3_C_SYMBOLS = {
+    "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+    "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
+}
+FIRST_RELEASE_V3_JVM_NATIVE_METHODS = {
+    "nativeArtifactBeginV3",
+    "nativeArtifactWriteV3",
+    "nativeArtifactFinalizeV3",
+    "nativeArtifactCancelV3",
+    "nativeArtifactSetInstallV3",
+    "nativeArtifactSetIsInstalledV3",
+    "nativeArtifactSetUninstallV3",
+}
+RETIRED_JVM_RECURSIVE_SPEND_PUBLIC_METHODS = {
+    "initSpend",
+    "appendSpend",
+    "topUpSpend",
+    "verifySpend",
+    "redeemSpend",
+    "transitionProfileInit",
+    "transitionProfileAppend",
+    "lineageAppendBoundary",
+    "lineageWitnessFromInitResult",
+    "lineageWitnessAppendResult",
+    "buildPallasOpenEnvelopesArchive",
+    "buildPreviousProofOpenEnvelopesArchive",
+}
+
 SHARED_FIXTURE_PATH = "fixtures/kagemusha_recursive_spend_abi6/manifest.json"
 SHARED_ARCHIVE_FIXTURE_PATH = "fixtures/kagemusha_recursive_spend_abi6/archives.json"
 SHARED_ABI7_FIXTURE_PATH = "fixtures/kagemusha_recursive_spend_abi7/manifest.json"
@@ -2756,18 +2813,16 @@ WORKFLOW_REQUIRED_PATHS = (
     WORKFLOW_PATH,
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Native.swift",
-    SHARED_FIXTURE_PATH,
-    SHARED_ABI7_FIXTURE_PATH,
+    FIRST_RELEASE_JAVA_PROVER,
+    FIRST_RELEASE_JAVA_TEST,
+    FIRST_RELEASE_KOTLIN_PROVER,
+    FIRST_RELEASE_KOTLIN_TEST,
+    "crates/iroha_data_model/src/offline/mod.rs",
+    "crates/connect_norito_bridge/src/lib.rs",
+    "crates/connect_norito_bridge/include/connect_norito_bridge.h",
     *CI_GUARD_PATHS,
     *PAYLOAD_BENCH_REQUIRED_PATHS,
     *DOC_PATHS,
-    *SHARED_FIXTURE_COVERAGE.keys(),
-    *SHARED_ABI7_FIXTURE_COVERAGE.keys(),
-    *ADVERSARIAL_COVERAGE.keys(),
-    *SDK_HELPER_EDGE_COVERAGE.keys(),
-    *SDK_APPEND_CAP_BINDING_COVERAGE.keys(),
-    *NATIVE_OUTPUT_CAP_COVERAGE.keys(),
-    *RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE.keys(),
     *VERIFY_RESULT_FAIL_CLOSED_COVERAGE.keys(),
     *TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE.keys(),
     *OFFLINE_V2_VECTOR_ATTESTATION_PROFILE_COVERAGE.keys(),
@@ -3512,6 +3567,36 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "header negative-control workflow negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-header-negative-controls-workflow",
+    ),
+)
+
+# Only first-release controls are release gates.  The historical ABI-6/ABI-7
+# mutation inventory above remains readable for archaeology, but is not
+# required or executed by the ABI-18/V3 production workflow.
+POLICY_NEGATIVE_CONTROL_COMMANDS = (
+    (
+        "ABI-18/V3 first-release source contract negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-first-release-v3-contract",
+    ),
+    (
+        "ABI-18/V3 first-release JVM tests negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-first-release-v3-jvm-tests",
+    ),
+    (
+        "ABI-18/V3 first-release documentation negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-first-release-v3-docs",
+    ),
+    (
+        "core redeem execution-order negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-redeem-order",
+    ),
+    (
+        "early core redeem mint negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-redeem-early-mint",
+    ),
+    (
+        "workflow cancellation negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-workflow-cancel-in-progress",
     ),
 )
 
@@ -5991,6 +6076,195 @@ def check_current_roadmap_semantic_init_is_fresh():
             )
 
 
+def _normalized_source(text):
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _require_first_release_test_needles(relative, needles):
+    normalized = _normalized_source(read(relative))
+    for needle in needles:
+        if _normalized_source(needle) not in normalized:
+            fail(f"{relative} is missing ABI-18/V3 first-release coverage: {needle}")
+
+
+def check_first_release_v3_contract():
+    model_relative = "crates/iroha_data_model/src/offline/mod.rs"
+    bridge_relative = "crates/connect_norito_bridge/src/lib.rs"
+    header_relative = "crates/connect_norito_bridge/include/connect_norito_bridge.h"
+    model = read(model_relative)
+    bridge = read(bridge_relative)
+    header = read(header_relative)
+    java = read(FIRST_RELEASE_JAVA_PROVER)
+    kotlin = read(FIRST_RELEASE_KOTLIN_PROVER)
+
+    if re.search(
+        rf"KAGEMUSHA_RECURSIVE_SPEND_MODE_V2\s*:\s*&str\s*=\s*\"{re.escape(FIRST_RELEASE_SELECTOR)}\"\s*;",
+        model,
+    ) is None:
+        fail(
+            f"{model_relative} must expose only the {FIRST_RELEASE_SELECTOR} first-release selector"
+        )
+    if "Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2)" not in model:
+        fail(f"{model_relative} first-release selector must fail closed when the backend is unavailable")
+    if re.search(
+        rf"KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3\s*:\s*&str\s*=\s*\"{re.escape(FIRST_RELEASE_MANIFEST_SCHEMA)}\"\s*;",
+        model,
+    ) is None:
+        fail(f"{model_relative} must pin the governed V3 artifact manifest schema")
+    if re.search(
+        rf"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*{FIRST_RELEASE_BRIDGE_ABI}\s*;",
+        bridge,
+    ) is None:
+        fail(f"{bridge_relative} native bridge ABI must be exactly {FIRST_RELEASE_BRIDGE_ABI}")
+
+    rust_v3 = set(
+        re.findall(
+            r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
+            r'(connect_norito_kagemusha_recursive_spend_(?:capabilities_v1|artifact_[a-z0-9_]+_v3))\s*\(',
+            bridge,
+        )
+    )
+    header_v3 = set(
+        re.findall(
+            r'int32_t\s+'
+            r'(connect_norito_kagemusha_recursive_spend_(?:capabilities_v1|artifact_[a-z0-9_]+_v3))\s*\(',
+            header,
+        )
+    )
+    if rust_v3 != FIRST_RELEASE_V3_C_SYMBOLS:
+        fail(f"{bridge_relative} V3 artifact lifecycle export inventory is not exact")
+    if header_v3 != FIRST_RELEASE_V3_C_SYMBOLS:
+        fail(f"{header_relative} V3 artifact lifecycle declaration inventory is not exact")
+
+    install_match = re.search(
+        r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
+        r'connect_norito_kagemusha_recursive_spend_artifact_set_install_v3\s*\('
+        r'(?P<body>[\s\S]*?)\n\}\n\n/// Report whether',
+        bridge,
+    )
+    if install_match is None:
+        fail(f"{bridge_relative} is missing atomic V3 artifact-set installation")
+    install_body = install_match.group("body")
+    for needle in (
+        "handles_len != 6",
+        "unique_handles.len() != 6",
+        "expected_descriptors.len() != 6",
+        "validate_kagemusha_recursive_spend_artifact_spool_v3(&mut artifact_guard)?",
+        "let removed = registry.remove(handle);",
+        "*active = Some(installed);",
+    ):
+        if needle not in install_body:
+            fail(f"{bridge_relative} atomic V3 artifact install is missing: {needle}")
+    validation = install_body.find("validate_kagemusha_recursive_spend_artifact_spool_v3")
+    removal = install_body.find("let removed = registry.remove(handle);")
+    activation = install_body.find("*active = Some(installed);")
+    if not (0 <= validation < removal < activation):
+        fail(
+            f"{bridge_relative} must validate all six V3 artifacts before consuming handles and activating"
+        )
+
+    for relative, source, language in (
+        (FIRST_RELEASE_JAVA_PROVER, java, "Java"),
+        (FIRST_RELEASE_KOTLIN_PROVER, kotlin, "Kotlin"),
+    ):
+        if FIRST_RELEASE_MANIFEST_SCHEMA not in source:
+            fail(f"{relative} must pin {FIRST_RELEASE_MANIFEST_SCHEMA}")
+        if FIRST_RELEASE_SELECTOR not in source:
+            fail(f"{relative} must expose {FIRST_RELEASE_SELECTOR}")
+        if re.search(
+            rf"REQUIRED_NATIVE_BRIDGE_ABI_VERSION(?:\s*:\s*Int)?\s*=\s*{FIRST_RELEASE_BRIDGE_ABI}\b",
+            source,
+        ) is None:
+            fail(f"{relative} must require exact native bridge ABI {FIRST_RELEASE_BRIDGE_ABI}")
+        mode_body = re.search(
+            r"(?:public\s+)?enum(?:\s+class)?\s+Mode(?:\([^)]*\))?\s*\{(?P<body>[\s\S]*?)\n\s*\}",
+            source,
+        )
+        mode_values = (
+            []
+            if mode_body is None
+            else re.findall(r'^\s*([A-Z][A-Z0-9_]*)\("([^"]+)"\)', mode_body.group("body"), re.M)
+        )
+        if len(mode_values) != 1 or mode_values[0][1] != FIRST_RELEASE_SELECTOR:
+            fail(f"{relative} first-release mode enum must contain only {FIRST_RELEASE_SELECTOR}")
+
+        native_methods = set(re.findall(r"\b(nativeArtifact[A-Za-z0-9]+V3)\s*\(", source))
+        if native_methods != FIRST_RELEASE_V3_JVM_NATIVE_METHODS:
+            fail(f"{relative} {language} V3 artifact lifecycle native method inventory is not exact")
+        for retired in RETIRED_JVM_RECURSIVE_SPEND_PUBLIC_METHODS:
+            if language == "Java":
+                exposed = re.search(
+                    rf"\bpublic\s+static\s+[^;{{\n]+\b{re.escape(retired)}\s*\(", source
+                )
+            else:
+                exposed = re.search(rf"\bfun\s+{re.escape(retired)}\s*\(", source)
+            if exposed is not None:
+                fail(f"{relative} reintroduces retired first-release public API: {retired}")
+        for retired_marker in (
+            "kagemusha_recursive_spend_abi6",
+            "kagemusha_recursive_spend_abi7",
+            "RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
+        ):
+            if retired_marker in source:
+                fail(f"{relative} reintroduces retired compatibility surface: {retired_marker}")
+
+    java_needles = (
+        "exactAbiAndSingleModeAreFailClosed",
+        "REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 18",
+        "isExactBridgeAbi(17)",
+        "isExactBridgeAbi(19)",
+        "Mode.values().length == 1",
+        '"recursive_spend_v2".equals(KagemushaRecursiveSpendProver.MODE)',
+        "malformedArtifactInputsFailBeforeNativeDispatch",
+        "MAX_MANIFEST_BYTES + 1",
+        "new byte[31]",
+        "new byte[32]",
+        "installSessionRejectsPartialAndClosedUse",
+        "publicSurfaceOmitsRetiredRecursiveApis",
+        *tuple(f'"{name}"' for name in sorted(RETIRED_JVM_RECURSIVE_SPEND_PUBLIC_METHODS)),
+    )
+    kotlin_needles = (
+        "exact ABI and single mode fail closed",
+        "REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
+        "isExactBridgeAbi(17)",
+        "isExactBridgeAbi(19)",
+        "Mode.entries",
+        'assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.MODE)',
+        "malformed artifact inputs fail before native dispatch",
+        "MAX_MANIFEST_BYTES + 1",
+        "ByteArray(31)",
+        "ByteArray(32)",
+        "install session rejects partial and closed use",
+        "public surface omits retired recursive APIs",
+        *tuple(f'"{name}"' for name in sorted(RETIRED_JVM_RECURSIVE_SPEND_PUBLIC_METHODS)),
+    )
+    _require_first_release_test_needles(FIRST_RELEASE_JAVA_TEST, java_needles)
+    _require_first_release_test_needles(FIRST_RELEASE_KOTLIN_TEST, kotlin_needles)
+    for relative in (FIRST_RELEASE_JAVA_TEST, FIRST_RELEASE_KOTLIN_TEST):
+        test_source = read(relative)
+        for retired_marker in (
+            "sharedRecursiveSpendAbi6",
+            "sharedRecursiveSpendAbi7",
+            "kagemusha_recursive_spend_abi6",
+            "kagemusha_recursive_spend_abi7",
+        ):
+            if retired_marker in test_source:
+                fail(f"{relative} reintroduces retired compatibility fixture coverage: {retired_marker}")
+
+
+def check_first_release_v3_docs():
+    required = (
+        "`recursive_spend_v2`",
+        "ABI 18",
+        "`kagemusha.offline.recursive_spend.artifact_manifest.v3`",
+    )
+    for relative in ("docs/source/offline_kagemusha.md", "roadmap.md"):
+        normalized = _normalized_source(read(relative))
+        for needle in required:
+            if needle not in normalized:
+                fail(f"{relative} is missing the first-release ABI-18/V3 contract: {needle}")
+
+
 def run_checks():
     check_workflow_paths_cover_policy_sources()
     check_workflow_preserves_in_progress_runs()
@@ -6015,16 +6289,8 @@ def run_checks():
     check_recursive_compact_record_envelope_preflight_order()
     check_recursive_compact_first_release_public_surface()
     check_core_offline_note_v2_retired_ios_app_attest_profile()
-    check_docs_reserved_lineage_policy()
-    check_shared_fixture_manifest()
-    check_shared_archive_fixture_manifest()
-    check_shared_abi7_fixture_manifest()
-    check_shared_abi7_archive_fixture_manifest()
-    check_adversarial_coverage()
-    check_sdk_helper_edge_coverage()
-    check_sdk_append_cap_binding_coverage()
-    check_native_output_cap_coverage()
-    check_reserved_lineage_profile_split_coverage()
+    check_first_release_v3_contract()
+    check_first_release_v3_docs()
     check_current_roadmap_profile_is_fresh()
     check_current_roadmap_semantic_init_is_fresh()
     check_verify_result_fail_closed_coverage()
@@ -6034,6 +6300,168 @@ def run_checks():
     check_offline_vector_attestation_profile_coverage()
     check_readiness_section_consistency_coverage()
     check_active_kagemusha_todos_closed()
+
+
+def run_first_release_negative_cases(cases, label):
+    first_message = None
+    for target, mutate, expected in cases:
+        source = read(target)
+        mutated = mutate(source)
+        if mutated == source:
+            raise SystemExit(
+                f"negative control failed: unable to mutate {label} in {target}"
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    f"negative control failed: {label} drift in {target} was rejected for "
+                    f"the wrong reason: {message.splitlines()[0]}"
+                )
+            if first_message is None:
+                first_message = message
+        else:
+            raise SystemExit(
+                f"negative control failed: {label} drift was not detected in {target}"
+            )
+        finally:
+            text_overrides.pop(target, None)
+    print(f"negative control rejected {label} drift")
+    if first_message is not None:
+        print(first_message.splitlines()[0])
+    raise SystemExit(0)
+
+
+if mode == "--negative-control-first-release-v3-contract":
+    run_first_release_negative_cases(
+        (
+            (
+                "crates/connect_norito_bridge/src/lib.rs",
+                lambda source: source.replace(
+                    "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 18;",
+                    "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 17;",
+                    1,
+                ),
+                "native bridge ABI must be exactly 18",
+            ),
+            (
+                "crates/iroha_data_model/src/offline/mod.rs",
+                lambda source: source.replace(
+                    'KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";',
+                    'KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v1";',
+                    1,
+                ),
+                "must expose only the recursive_spend_v2 first-release selector",
+            ),
+            (
+                "crates/iroha_data_model/src/offline/mod.rs",
+                lambda source: source.replace(
+                    '"kagemusha.offline.recursive_spend.artifact_manifest.v3";',
+                    '"kagemusha.offline.recursive_spend.artifact_manifest.v2";',
+                    1,
+                ),
+                "must pin the governed V3 artifact manifest schema",
+            ),
+            (
+                FIRST_RELEASE_JAVA_PROVER,
+                lambda source: source.replace(
+                    "public final class KagemushaRecursiveSpendProver {",
+                    "public final class KagemushaRecursiveSpendProver {\n"
+                    "  public static byte[] initSpend(byte[] value) { return value; }",
+                    1,
+                ),
+                "reintroduces retired first-release public API: initSpend",
+            ),
+            (
+                FIRST_RELEASE_KOTLIN_PROVER,
+                lambda source: source.replace(
+                    "class KagemushaRecursiveSpendProver private constructor() {",
+                    "class KagemushaRecursiveSpendProver private constructor() {\n"
+                    "    fun redeemSpend(value: ByteArray): ByteArray = value",
+                    1,
+                ),
+                "reintroduces retired first-release public API: redeemSpend",
+            ),
+            (
+                FIRST_RELEASE_JAVA_PROVER,
+                lambda source: source.replace(
+                    "nativeArtifactSetInstallV3",
+                    "nativeArtifactSetInstallRemovedV3",
+                ),
+                "V3 artifact lifecycle native method inventory is not exact",
+            ),
+            (
+                "crates/connect_norito_bridge/src/lib.rs",
+                lambda source: source.replace("handles_len != 6", "handles_len != 5", 1),
+                "atomic V3 artifact install is missing: handles_len != 6",
+            ),
+        ),
+        "ABI-18/V3 first-release source contract",
+    )
+
+
+if mode == "--negative-control-first-release-v3-jvm-tests":
+    run_first_release_negative_cases(
+        (
+            (
+                FIRST_RELEASE_JAVA_TEST,
+                lambda source: source.replace(
+                    "exactAbiAndSingleModeAreFailClosed",
+                    "exactAbiAndSingleModeMayDrift",
+                ),
+                "exactAbiAndSingleModeAreFailClosed",
+            ),
+            (
+                FIRST_RELEASE_JAVA_TEST,
+                lambda source: source.replace(
+                    "publicSurfaceOmitsRetiredRecursiveApis",
+                    "publicSurfaceMayExposeRetiredRecursiveApis",
+                ),
+                "publicSurfaceOmitsRetiredRecursiveApis",
+            ),
+            (
+                FIRST_RELEASE_KOTLIN_TEST,
+                lambda source: source.replace(
+                    "malformed artifact inputs fail before native dispatch",
+                    "malformed artifact inputs may reach native dispatch",
+                ),
+                "malformed artifact inputs fail before native dispatch",
+            ),
+            (
+                FIRST_RELEASE_KOTLIN_TEST,
+                lambda source: source.replace(
+                    "public surface omits retired recursive APIs",
+                    "public surface may expose retired recursive APIs",
+                ),
+                "public surface omits retired recursive APIs",
+            ),
+        ),
+        "ABI-18/V3 first-release JVM adversarial coverage",
+    )
+
+
+if mode == "--negative-control-first-release-v3-docs":
+    run_first_release_negative_cases(
+        (
+            (
+                "docs/source/offline_kagemusha.md",
+                lambda source: source.replace(
+                    "`kagemusha.offline.recursive_spend.artifact_manifest.v3`",
+                    "`kagemusha.offline.recursive_spend.artifact_manifest.v2`",
+                ),
+                "`kagemusha.offline.recursive_spend.artifact_manifest.v3`",
+            ),
+            (
+                "roadmap.md",
+                lambda source: source.replace("`recursive_spend_v2`", "`recursive_spend_v1`"),
+                "`recursive_spend_v2`",
+            ),
+        ),
+        "ABI-18/V3 first-release documentation",
+    )
 
 
 if mode == "--negative-control":

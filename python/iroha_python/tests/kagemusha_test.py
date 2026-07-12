@@ -2536,7 +2536,7 @@ def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.Monk
     assert kagemusha.is_kagemusha_recursive_spend_available() is True
     assert (
         kagemusha.preferred_kagemusha_offline_spend_mode_for_capabilities(True, True)
-        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1
+        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
     )
     assert (
         kagemusha.preferred_kagemusha_offline_spend_mode_for_capabilities(False, True)
@@ -2544,6 +2544,10 @@ def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.Monk
     )
     assert not hasattr(kagemusha, "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1")
     assert "checked_prefold_v1" not in kagemusha.KagemushaOfflineSpendMode.__args__
+    assert "recursive_compact_v1" not in kagemusha.KagemushaOfflineSpendMode.__args__
+    assert kagemusha.is_kagemusha_spend_again_mode("recursive_spend_v1") is True
+    assert kagemusha.is_kagemusha_spend_again_mode("recursive_spend_v2") is False
+    assert kagemusha.is_kagemusha_spend_again_mode("recursive_compact_v1") is False
     assert (
         kagemusha.preferred_kagemusha_offline_spend_mode(
             recursive_compact_available=False,
@@ -2668,10 +2672,7 @@ def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.Monk
     setattr(native, RECURSIVE_COMPACT_VERIFY_METHOD, recursive_compact_verify)
     assert kagemusha.is_kagemusha_recursive_compact_payment_token_prover_available() is True
     assert kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available() is True
-    assert (
-        kagemusha.preferred_kagemusha_offline_spend_mode()
-        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1
-    )
+    assert kagemusha.preferred_kagemusha_offline_spend_mode() is None
 
     def unavailable_recursive_compact(
         record_bundle: bytes,

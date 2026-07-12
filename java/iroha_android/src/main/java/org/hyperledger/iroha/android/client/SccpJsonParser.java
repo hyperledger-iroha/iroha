@@ -1556,8 +1556,13 @@ public final class SccpJsonParser {
       throw new IllegalArgumentException(field + " must be an integer");
     }
     final Number number = (Number) value.get(field);
-    final long result = number.longValue();
-    if (!number.toString().equals(Long.toString(result)) || result < minimum || result > maximum) {
+    final long result;
+    try {
+      result = JsonNumbers.asLong(number, field);
+    } catch (final IllegalStateException error) {
+      throw new IllegalArgumentException(field + " must be an integer", error);
+    }
+    if (result < minimum || result > maximum) {
       throw new IllegalArgumentException(field + " is out of range");
     }
     return result;

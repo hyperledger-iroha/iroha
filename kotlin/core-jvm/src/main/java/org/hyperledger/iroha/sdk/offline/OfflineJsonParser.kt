@@ -20,17 +20,63 @@ object OfflineJsonParser {
                 asExactReadinessString(blocker["message"], "$path.message"),
             )
         }
+        val assetScaleValue = required(obj, "asset_scale", "root")
+        val activeVerifierValue = required(obj, "active_transfer_verifier", "root")
+        val evaluatedBlockHeight = asReadinessU64(
+            required(obj, "evaluated_block_height", "root"),
+            "evaluated_block_height",
+        )
         return OfflineReadiness(
-            asExactReadinessString(obj["asset_definition_id"], "asset_definition_id"),
-            asReadinessU64(obj["evaluated_block_height"], "evaluated_block_height"),
+            asExactReadinessString(
+                required(obj, "asset_definition_id", "root"),
+                "asset_definition_id",
+            ),
+            assetScaleValue?.let { asReadinessU32(it, "asset_scale") },
+            evaluatedBlockHeight,
             asExactLowercaseHex(
-                obj["evaluated_block_hash"],
+                required(obj, "evaluated_block_hash", "root"),
                 "evaluated_block_hash",
                 32,
             ),
-            asBoolean(obj["ready"], "ready"),
+            activeVerifierValue?.let {
+                parseActiveTransferVerifier(it, evaluatedBlockHeight, "active_transfer_verifier")
+            },
+            asBoolean(required(obj, "ready", "root"), "ready"),
             blockers,
         )
+    }
+
+    private fun parseActiveTransferVerifier(
+        value: Any,
+        evaluatedBlockHeight: BigInteger,
+        path: String,
+    ): OfflineActiveTransferVerifier {
+        val obj = expectObject(value, path)
+        val idPath = "$path.id"
+        val id = expectObject(required(obj, "id", path), idPath)
+        return OfflineActiveTransferVerifier(
+            OfflineVerifierId(
+                asExactReadinessString(required(id, "backend", idPath), "$idPath.backend"),
+                asExactReadinessString(required(id, "name", idPath), "$idPath.name"),
+            ),
+            asReadinessU32(required(obj, "version", path), "$path.version"),
+            asExactReadinessString(required(obj, "circuit_id", path), "$path.circuit_id"),
+            asExactLowercaseHex(required(obj, "commitment", path), "$path.commitment", 32),
+            asExactLowercaseHex(
+                required(obj, "public_inputs_schema_hash", path),
+                "$path.public_inputs_schema_hash",
+                32,
+            ),
+            asReadinessU32(required(obj, "max_proof_bytes", path), "$path.max_proof_bytes"),
+            asReadinessU64(required(obj, "activation_height", path), "$path.activation_height"),
+            required(obj, "withdrawal_height", path)?.let {
+                asReadinessU64(it, "$path.withdrawal_height")
+            },
+        ).also {
+            check(it.isActiveAt(evaluatedBlockHeight)) {
+                "$path must be active at evaluated_block_height"
+            }
+        }
     }
 
     /** Returns a canonical JSON string for the provided payload (keys sorted). */
@@ -320,10 +366,8 @@ object OfflineJsonParser {
             is BigInteger -> value
             is Long -> BigInteger.valueOf(value)
             is Int -> BigInteger.valueOf(value.toLong())
-            is Number -> {
-                check(value !is Float && value !is Double) { "$path must be an integer" }
-                BigInteger.valueOf(value.toLong())
-            }
+            is Byte, is Short, is Int, is Long -> BigInteger.valueOf((value as Number).toLong())
+            is Number -> error("$path must be an integer")
             else -> error("$path is not a number")
         }
     }
@@ -335,7 +379,6 @@ object OfflineJsonParser {
                 .onUnmappableCharacter(CodingErrorAction.REPORT)
                 .decode(ByteBuffer.wrap(payload))
                 .toString()
-                .trim()
         } catch (error: java.nio.charset.CharacterCodingException) {
             throw IllegalStateException("Offline JSON payload must be valid UTF-8", error)
         }
@@ -347,6 +390,11 @@ object OfflineJsonParser {
     private fun expectObject(value: Any?, path: String): Map<String, Any> {
         check(value is Map<*, *>) { "$path is not a JSON object" }
         return value as Map<String, Any>
+    }
+
+    private fun required(obj: Map<String, Any>, field: String, path: String): Any? {
+        check(obj.containsKey(field)) { "$path.$field is required" }
+        return obj[field]
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -383,11 +431,7 @@ object OfflineJsonParser {
     private fun asReadinessU64(value: Any?, path: String): BigInteger {
         val parsed = when (value) {
             is BigInteger -> value
-            is java.math.BigDecimal -> try {
-                value.toBigIntegerExact()
-            } catch (ex: ArithmeticException) {
-                throw IllegalStateException("$path must be an integer", ex)
-            }
+            is java.math.BigDecimal -> error("$path must be a JSON integer number")
             is Byte, is Short, is Int, is Long -> BigInteger.valueOf((value as Number).toLong())
             is Float, is Double -> error("$path must be an integer")
             else -> error("$path must be a JSON integer number")
@@ -396,6 +440,14 @@ object OfflineJsonParser {
             "$path must fit in an unsigned 64-bit integer"
         }
         return parsed
+    }
+
+    private fun asReadinessU32(value: Any?, path: String): Long {
+        val parsed = asReadinessU64(value, path)
+        check(parsed <= BigInteger.valueOf(0xffff_ffffL)) {
+            "$path must fit in an unsigned 32-bit integer"
+        }
+        return parsed.toLong()
     }
 
     private fun asLong(value: Any?, path: String): Long {

@@ -501,6 +501,44 @@ impl SettlementOutcomeRecord {
     }
 }
 
+/// Immutable pricing and route context retained for a successful native FX settlement.
+///
+/// The two generic leg snapshots retain the actual balance movements. This record additionally
+/// binds those legs to the exact governed policy revision and rate that the signer approved.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+pub struct FxCorridorSettlementDetails {
+    /// Stable corridor policy identifier.
+    pub policy_id: Name,
+    /// Exact policy revision used for execution.
+    pub policy_revision: u64,
+    /// Source private dataspace.
+    pub source_dataspace: DataSpaceId,
+    /// Destination private dataspace.
+    pub destination_dataspace: DataSpaceId,
+    /// Exact destination/source rate numerator.
+    pub rate_numerator: u64,
+    /// Exact destination/source rate denominator.
+    pub rate_denominator: u64,
+    /// Account that supplied source currency.
+    pub source_account: AccountId,
+    /// Account that received source currency.
+    pub source_sink: AccountId,
+    /// Account that supplied destination currency.
+    pub destination_reserve: AccountId,
+    /// Account that received destination currency.
+    pub recipient: AccountId,
+    /// Source asset definition bound by the signed instruction.
+    pub source_asset_definition_id: AssetDefinitionId,
+    /// Destination asset definition bound by the signed instruction.
+    pub destination_asset_definition_id: AssetDefinitionId,
+    /// Source quantity collected.
+    pub source_amount: Numeric,
+    /// Destination quantity paid out.
+    pub destination_amount: Numeric,
+}
+
 /// Ledger entry persisted for auditing and reconciliation.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -524,6 +562,8 @@ pub struct SettlementLedgerEntry {
     pub executed_at_ms: u64,
     /// Legs captured with their committed state at the end of execution.
     pub legs: Vec<SettlementLegSnapshot>,
+    /// Exact governed FX context, present only for native FX corridor settlements.
+    pub fx_corridor: Option<FxCorridorSettlementDetails>,
     /// Outcome of the settlement execution.
     pub outcome: SettlementOutcomeRecord,
 }

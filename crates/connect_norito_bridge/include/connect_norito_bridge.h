@@ -300,7 +300,9 @@ int32_t connect_norito_kagemusha_recursive_spend_capabilities_v1(
 // selects the roster descriptor from that typed manifest rather than trusting
 // a parallel JSON projection or generation label. Returns 0 only after the
 // manifest and roster digests, full anchor bindings, Commit-QC aggregate, and
-// exact anchor path all verify.
+// exact anchor path all verify. This symbol currently returns the unavailable
+// error until the authenticated release-envelope trust root is wired and
+// recursive init consumes the verified finality result.
 int32_t connect_norito_kagemusha_topup_finality_verify_v2(
     const uint8_t* proof_norito_ptr,
     unsigned long proof_norito_len,

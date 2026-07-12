@@ -10,12 +10,13 @@ class JsonParser private constructor(private val input: String) {
 
     private var index = 0
 
-    private fun parseValue(): Any? {
+    private fun parseValue(depth: Int): Any? {
+        check(depth <= MAX_NESTING_DEPTH) { "JSON exceeds maximum nesting depth" }
         skipWhitespace()
         check(index < input.length) { "Unexpected end of JSON input" }
         return when (input[index]) {
-            '{' -> parseObject()
-            '[' -> parseArray()
+            '{' -> parseObject(depth)
+            '[' -> parseArray(depth)
             '"' -> parseString()
             't' -> { consumeLiteral("true"); true }
             'f' -> { consumeLiteral("false"); false }
@@ -24,7 +25,7 @@ class JsonParser private constructor(private val input: String) {
         }
     }
 
-    private fun parseObject(): LinkedHashMap<String, Any?> {
+    private fun parseObject(depth: Int): LinkedHashMap<String, Any?> {
         expect('{')
         skipWhitespace()
         val map = LinkedHashMap<String, Any?>()
@@ -35,7 +36,7 @@ class JsonParser private constructor(private val input: String) {
             skipWhitespace()
             expect(':')
             skipWhitespace()
-            map[key] = parseValue()
+            map[key] = parseValue(depth + 1)
             skipWhitespace()
             if (peek('}')) { index++; return map }
             expect(',')
@@ -43,13 +44,13 @@ class JsonParser private constructor(private val input: String) {
         }
     }
 
-    private fun parseArray(): MutableList<Any?> {
+    private fun parseArray(depth: Int): MutableList<Any?> {
         expect('[')
         skipWhitespace()
         val list = mutableListOf<Any?>()
         if (peek(']')) { index++; return list }
         while (true) {
-            list.add(parseValue())
+            list.add(parseValue(depth + 1))
             skipWhitespace()
             if (peek(']')) { index++; return list }
             expect(',')
@@ -75,18 +76,47 @@ class JsonParser private constructor(private val input: String) {
                     'r' -> builder.append('\r')
                     't' -> builder.append('\t')
                     'u' -> {
-                        check(index + 4 <= input.length) { "Invalid unicode escape" }
-                        val hex = input.substring(index, index + 4)
-                        index += 4
-                        builder.append(hex.toInt(16).toChar())
+                        val high = parseUnicodeEscapeUnit()
+                        if (Character.isHighSurrogate(high)) {
+                            check(index + 2 <= input.length && input[index] == '\\' && input[index + 1] == 'u') {
+                                "Invalid unicode surrogate pair"
+                            }
+                            index += 2
+                            val low = parseUnicodeEscapeUnit()
+                            check(Character.isLowSurrogate(low)) { "Invalid unicode surrogate pair" }
+                            builder.append(high).append(low)
+                        } else {
+                            check(!Character.isLowSurrogate(high)) { "Invalid unicode surrogate pair" }
+                            builder.append(high)
+                        }
                     }
                     else -> throw IllegalStateException("Unsupported escape: \\$esc")
                 }
             } else {
-                builder.append(c)
+                check(c.code >= 0x20) { "Unescaped control character in JSON string" }
+                when {
+                    Character.isHighSurrogate(c) -> {
+                        check(index < input.length && Character.isLowSurrogate(input[index])) {
+                            "Invalid unicode surrogate pair"
+                        }
+                        builder.append(c).append(input[index])
+                        index++
+                    }
+                    Character.isLowSurrogate(c) ->
+                        throw IllegalStateException("Invalid unicode surrogate pair")
+                    else -> builder.append(c)
+                }
             }
         }
         throw IllegalStateException("Unterminated string literal")
+    }
+
+    private fun parseUnicodeEscapeUnit(): Char {
+        check(index + 4 <= input.length) { "Invalid unicode escape" }
+        val value = input.substring(index, index + 4).toIntOrNull(16)
+        check(value != null) { "Invalid unicode escape" }
+        index += 4
+        return value.toChar()
     }
 
     private fun parseNumber(): Number {
@@ -128,9 +158,7 @@ class JsonParser private constructor(private val input: String) {
                     java.math.BigInteger(token)
                 }
             } else {
-                val value = token.toDouble()
-                check(value.isFinite()) { "Invalid number: $token" }
-                value
+                java.math.BigDecimal(token)
             }
         } catch (ex: NumberFormatException) {
             throw IllegalStateException("Invalid number: $token", ex)
@@ -157,11 +185,13 @@ class JsonParser private constructor(private val input: String) {
     private fun Char.isDigit(): Boolean = this in '0'..'9'
 
     companion object {
+        private const val MAX_NESTING_DEPTH = 128
+
         @JvmStatic
         fun parse(json: String): Any? {
             val parser = JsonParser(json)
             parser.skipWhitespace()
-            val value = parser.parseValue()
+            val value = parser.parseValue(0)
             parser.skipWhitespace()
             check(parser.index == parser.input.length) { "Trailing characters after JSON payload" }
             return value

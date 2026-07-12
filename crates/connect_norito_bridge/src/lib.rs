@@ -9346,9 +9346,37 @@ const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_DECLARED_BYTES_V3: u64 =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3 * 6;
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V3: c_ulong = 1024 * 1024;
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_HEADER_BYTES_V3: usize = 64 * 1024;
+// TODO: Flip these gates only after release-envelope authentication and the
+// init-to-finality binding are implemented and covered by adversarial tests.
+const KAGEMUSHA_RECURSIVE_SPEND_AUTHENTICATED_RELEASE_ENVELOPE_WIRED_V3: bool = false;
+const KAGEMUSHA_RECURSIVE_SPEND_INIT_BINDS_TOPUP_FINALITY_V2: bool = false;
+
+const fn kagemusha_topup_finality_entrypoint_callable_v2(
+    proof_backend: bool,
+    authenticated_release_envelope: bool,
+    init_binds_topup_finality: bool,
+) -> bool {
+    proof_backend && authenticated_release_envelope && init_binds_topup_finality
+}
+
+const KAGEMUSHA_TOPUP_FINALITY_VERIFY_ENTRYPOINT_CALLABLE_V2: bool =
+    kagemusha_topup_finality_entrypoint_callable_v2(
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE,
+        KAGEMUSHA_RECURSIVE_SPEND_AUTHENTICATED_RELEASE_ENVELOPE_WIRED_V3,
+        KAGEMUSHA_RECURSIVE_SPEND_INIT_BINDS_TOPUP_FINALITY_V2,
+    );
+
 // Flip only when init/append/verify/redeem all invoke the audited Pasta prover
-// and terminal decider rather than the fail-closed sentinel.
-const KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_ENTRYPOINTS_CALLABLE: bool = false;
+// and terminal decider rather than the fail-closed sentinel. Requiring the
+// same finality boundary prevents proving from becoming callable while init
+// can still construct a lineage that is not bound to chain finality.
+const KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_ENTRYPOINTS_CALLABLE: bool =
+    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE
+        && kagemusha_topup_finality_entrypoint_callable_v2(
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE,
+            KAGEMUSHA_RECURSIVE_SPEND_AUTHENTICATED_RELEASE_ENVELOPE_WIRED_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_INIT_BINDS_TOPUP_FINALITY_V2,
+        );
 
 fn kagemusha_recursive_spend_artifact_registry_v3()
 -> &'static Mutex<HashMap<u64, Arc<Mutex<KagemushaRecursiveSpendArtifactIngestV3>>>> {
@@ -10241,6 +10269,9 @@ pub unsafe extern "C" fn connect_norito_kagemusha_topup_finality_verify_v2(
     expected_manifest_sha256_len: c_ulong,
 ) -> c_int {
     let result = (|| {
+        if !KAGEMUSHA_TOPUP_FINALITY_VERIFY_ENTRYPOINT_CALLABLE_V2 {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Unavailable);
+        }
         if proof_norito_ptr.is_null()
             || roster_norito_ptr.is_null()
             || anchor_norito_ptr.is_null()
@@ -12563,7 +12594,21 @@ mod offline_note_prover_tests {
     }
 
     #[test]
-    fn topup_finality_verifier_rejects_null_and_noncanonical_archives() {
+    fn topup_finality_verifier_remains_fail_closed_before_parsing_archives() {
+        assert!(!KAGEMUSHA_TOPUP_FINALITY_VERIFY_ENTRYPOINT_CALLABLE_V2);
+        assert!(!kagemusha_topup_finality_entrypoint_callable_v2(
+            false, true, true
+        ));
+        assert!(!kagemusha_topup_finality_entrypoint_callable_v2(
+            true, false, true
+        ));
+        assert!(!kagemusha_topup_finality_entrypoint_callable_v2(
+            true, true, false
+        ));
+        assert!(kagemusha_topup_finality_entrypoint_callable_v2(
+            true, true, true
+        ));
+
         let null_rc = unsafe {
             connect_norito_kagemusha_topup_finality_verify_v2(
                 ptr::null(),
@@ -12578,7 +12623,7 @@ mod offline_note_prover_tests {
                 0,
             )
         };
-        assert_eq!(null_rc, ERR_NULL_PTR);
+        assert_eq!(null_rc, ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_UNAVAILABLE);
 
         let malformed = [0xA5_u8];
         let expected_manifest_sha256 = [0x5A_u8; 32];
@@ -12596,7 +12641,7 @@ mod offline_note_prover_tests {
                 expected_manifest_sha256.len() as c_ulong,
             )
         };
-        assert_eq!(malformed_rc, ERR_KAGEMUSHA_PROVE);
+        assert_eq!(malformed_rc, ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_UNAVAILABLE);
 
         let oversized_proof_rc = unsafe {
             connect_norito_kagemusha_topup_finality_verify_v2(
@@ -12612,7 +12657,10 @@ mod offline_note_prover_tests {
                 expected_manifest_sha256.len() as c_ulong,
             )
         };
-        assert_eq!(oversized_proof_rc, ERR_KAGEMUSHA_PROVE);
+        assert_eq!(
+            oversized_proof_rc,
+            ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_UNAVAILABLE
+        );
 
         let oversized_anchor_rc = unsafe {
             connect_norito_kagemusha_topup_finality_verify_v2(
@@ -12628,7 +12676,10 @@ mod offline_note_prover_tests {
                 expected_manifest_sha256.len() as c_ulong,
             )
         };
-        assert_eq!(oversized_anchor_rc, ERR_KAGEMUSHA_PROVE);
+        assert_eq!(
+            oversized_anchor_rc,
+            ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_UNAVAILABLE
+        );
 
         let wrong_digest_length_rc = unsafe {
             connect_norito_kagemusha_topup_finality_verify_v2(
@@ -12644,7 +12695,10 @@ mod offline_note_prover_tests {
                 31,
             )
         };
-        assert_eq!(wrong_digest_length_rc, ERR_KAGEMUSHA_PROVE);
+        assert_eq!(
+            wrong_digest_length_rc,
+            ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_UNAVAILABLE
+        );
     }
 
     fn recursive_spend_v3_artifact_fixture() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
@@ -12654,9 +12708,10 @@ mod offline_note_prover_tests {
             KagemushaRecursiveSpendPastaCycleArtifactsV3,
         };
         use iroha_data_model::offline::{
+            KAGEMUSHA_RECURSIVE_SPEND_MODE_V2,
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3,
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_MODE_V2, KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1,
@@ -29222,6 +29277,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOfflineNoteProver_nativeProveNoteRedeemWithVk(
@@ -29239,6 +29295,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOffli
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOfflineNoteProver_nativeProveNoteAuditWithVk(
@@ -29256,6 +29313,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOffli
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOfflineNoteProver_nativeVerifyNoteRedeemWithVk(
@@ -29273,6 +29331,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOffli
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOfflineNoteProver_nativeVerifyNoteAuditWithVk(
@@ -29290,6 +29349,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOffli
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCompactPaymentTokenProver_nativeProveVerifiedCompactPaymentTokenWithRecords(
@@ -29471,6 +29531,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeOfflineNoteProver_nativeProveNoteRedeemWithVk(
@@ -29488,6 +29549,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeO
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeOfflineNoteProver_nativeProveNoteAuditWithVk(
@@ -29505,6 +29567,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeO
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeOfflineNoteProver_nativeVerifyNoteRedeemWithVk(
@@ -29522,6 +29585,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeO
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeOfflineNoteProver_nativeVerifyNoteAuditWithVk(
@@ -29539,6 +29603,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeO
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaCompactPaymentTokenProver_nativeProveVerifiedCompactPaymentTokenWithRecords(

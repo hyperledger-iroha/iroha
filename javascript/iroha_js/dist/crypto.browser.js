@@ -423,7 +423,7 @@ export function deriveConfidentialNullifierV2() {
 
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1 = "recursive_compact_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6;
+export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7;
 export const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 15;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1 = "kagemusha-recursive-compact-v1";
@@ -532,13 +532,17 @@ export function preferredKagemushaOfflineSpendModeForCapabilities(
   recursiveCompactAvailable,
   recursiveSpendAvailable,
 ) {
-  if (recursiveCompactAvailable) {
-    return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1;
-  }
+  // Compact availability describes an admission-neutral projection only; it
+  // must never select spend-again cash.
+  void recursiveCompactAvailable;
   if (recursiveSpendAvailable) {
     return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1;
   }
   return null;
+}
+
+export function isKagemushaSpendAgainMode(value) {
+  return value === KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1;
 }
 
 export function canRedeemKagemushaRecursiveSpendWitnessless(proofCircuitId, hopCount) {

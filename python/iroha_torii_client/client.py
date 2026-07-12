@@ -433,6 +433,8 @@ __all__ = [
     "KaigiRelayHealthSnapshot",
     "SumeragiQcEntry",
     "OfflineReadinessBlocker",
+    "OfflineVerifierId",
+    "OfflineActiveTransferVerifier",
     "OfflineReadiness",
     "OfflineAssetScale",
     "OfflineScaledAmountJson",
@@ -483,6 +485,8 @@ __all__ = [
     "OfflineSpendableNote",
     "OfflineVerifierKeyId",
     "OfflineTopUpAnchor",
+    "OfflineTopUpFinalityProofAnchor",
+    "OfflineTopUpFinalityProof",
     "OfflineTopUpResult",
     "OfflineRedeemResult",
     "OfflineTopUpOperationResult",
@@ -2871,6 +2875,10 @@ _OFFLINE_OPERATIONS_PATH = "/v1/offline/operations"
 _OFFLINE_OPERATION_ID_RE = re.compile(r"^(?!0{64}$)[0-9a-f]{64}$")
 _OFFLINE_TRANSACTION_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _OFFLINE_ERROR_CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,63}$")
+_OFFLINE_ASSET_DEFINITION_ID_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{28}$")
+_OFFLINE_ASSET_ALIAS_RE = re.compile(
+    r"^[a-z0-9]+(?:[._-][a-z0-9]+)*#[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)?$"
+)
 _OFFLINE_MAX_U32 = (1 << 32) - 1
 _OFFLINE_MAX_U64 = (1 << 64) - 1
 _OFFLINE_MAX_U128 = (1 << 128) - 1
@@ -2891,6 +2899,29 @@ def _offline_exact_string(value: Any, context: str, *, non_empty: bool = True) -
     if any(ord(character) < 0x20 or 0x7F <= ord(character) <= 0x9F for character in value):
         raise RuntimeError(f"{context} must not contain control characters")
     return value
+
+
+def _offline_asset_selector(value: Any, context: str) -> str:
+    selector = _offline_exact_string(value, context)
+    pattern = (
+        _OFFLINE_ASSET_ALIAS_RE
+        if "#" in selector
+        else _OFFLINE_ASSET_DEFINITION_ID_RE
+    )
+    if pattern.fullmatch(selector) is None:
+        raise RuntimeError(
+            f"{context} must be a canonical Base58 asset definition id or lowercase scoped asset alias"
+        )
+    return selector
+
+
+def _offline_canonical_asset_definition_id(value: Any, context: str) -> str:
+    asset_definition_id = _offline_exact_string(value, context)
+    if _OFFLINE_ASSET_DEFINITION_ID_RE.fullmatch(asset_definition_id) is None:
+        raise RuntimeError(
+            f"{context} must be a canonical unprefixed Base58 asset definition id"
+        )
+    return asset_definition_id
 
 
 def _offline_required(mapping: Mapping[str, Any], field: str, context: str) -> Any:
@@ -3118,12 +3149,108 @@ class OfflineReadinessBlocker:
 
 
 @dataclass(frozen=True)
+class OfflineVerifierId:
+    """Stable registry identity of a verifier selected for Offline transfers."""
+
+    backend: str
+    name: str
+
+
+@dataclass(frozen=True)
+class OfflineActiveTransferVerifier:
+    """Key-material-free transfer verifier active at the readiness snapshot."""
+
+    id: OfflineVerifierId
+    version: int
+    circuit_id: str
+    commitment: str
+    public_inputs_schema_hash: str
+    max_proof_bytes: int
+    activation_height: int
+    withdrawal_height: Optional[int]
+
+
+def _offline_active_transfer_verifier(
+    value: Any,
+    evaluated_block_height: int,
+    context: str,
+) -> OfflineActiveTransferVerifier:
+    record = _offline_mapping(value, context)
+    raw_id = _offline_mapping(_offline_required(record, "id", context), f"{context}.id")
+    backend = _offline_exact_string(
+        _offline_required(raw_id, "backend", f"{context}.id"),
+        f"{context}.id.backend",
+    )
+    name = _offline_exact_string(
+        _offline_required(raw_id, "name", f"{context}.id"),
+        f"{context}.id.name",
+    )
+    if len(backend) > 256 or len(name) > 256:
+        raise RuntimeError(f"{context}.id backend and name must not exceed 256 characters")
+    version = _offline_unsigned(
+        _offline_required(record, "version", context),
+        f"{context}.version",
+        _OFFLINE_MAX_U32,
+    )
+    circuit_id = _offline_exact_string(
+        _offline_required(record, "circuit_id", context),
+        f"{context}.circuit_id",
+    )
+    commitment = _offline_transaction_hash(
+        _offline_required(record, "commitment", context),
+        f"{context}.commitment",
+    )
+    public_inputs_schema_hash = _offline_transaction_hash(
+        _offline_required(record, "public_inputs_schema_hash", context),
+        f"{context}.public_inputs_schema_hash",
+    )
+    max_proof_bytes = _offline_unsigned(
+        _offline_required(record, "max_proof_bytes", context),
+        f"{context}.max_proof_bytes",
+        _OFFLINE_MAX_U32,
+        positive=True,
+    )
+    activation_height = _offline_unsigned(
+        _offline_required(record, "activation_height", context),
+        f"{context}.activation_height",
+        _OFFLINE_MAX_U64,
+    )
+    raw_withdrawal_height = _offline_required(record, "withdrawal_height", context)
+    withdrawal_height = (
+        None
+        if raw_withdrawal_height is None
+        else _offline_unsigned(
+            raw_withdrawal_height,
+            f"{context}.withdrawal_height",
+            _OFFLINE_MAX_U64,
+            positive=True,
+        )
+    )
+    if activation_height > evaluated_block_height:
+        raise RuntimeError(f"{context}.activation_height is after the evaluated block")
+    if withdrawal_height is not None and withdrawal_height <= evaluated_block_height:
+        raise RuntimeError(f"{context}.withdrawal_height is not after the evaluated block")
+    return OfflineActiveTransferVerifier(
+        id=OfflineVerifierId(backend=backend, name=name),
+        version=version,
+        circuit_id=circuit_id,
+        commitment=commitment,
+        public_inputs_schema_hash=public_inputs_schema_hash,
+        max_proof_bytes=max_proof_bytes,
+        activation_height=activation_height,
+        withdrawal_height=withdrawal_height,
+    )
+
+
+@dataclass(frozen=True)
 class OfflineReadiness:
     """Snapshot-bound offline readiness for one asset definition."""
 
     asset_definition_id: str
+    asset_scale: Optional[int]
     evaluated_block_height: int
     evaluated_block_hash: str
+    active_transfer_verifier: Optional[OfflineActiveTransferVerifier]
     ready: bool
     blockers: Tuple[OfflineReadinessBlocker, ...]
 
@@ -3131,18 +3258,31 @@ class OfflineReadiness:
     def from_payload(
         cls,
         payload: Mapping[str, Any],
-        expected_asset_definition_id: str,
+        requested_asset_selector: str,
     ) -> "OfflineReadiness":
         context = "offline readiness response"
+        requested_selector = _offline_asset_selector(
+            requested_asset_selector, "requested asset selector"
+        )
         record = _offline_mapping(payload, context)
-        asset_definition_id = _offline_exact_string(
+        asset_definition_id = _offline_canonical_asset_definition_id(
             _offline_required(record, "asset_definition_id", context),
             f"{context}.asset_definition_id",
         )
-        if asset_definition_id != expected_asset_definition_id:
+        if "#" not in requested_selector and asset_definition_id != requested_selector:
             raise RuntimeError(
                 f"{context}.asset_definition_id does not match the requested asset"
             )
+        raw_asset_scale = _offline_required(record, "asset_scale", context)
+        asset_scale = (
+            None
+            if raw_asset_scale is None
+            else _offline_unsigned(
+                raw_asset_scale,
+                f"{context}.asset_scale",
+                _OFFLINE_MAX_U32,
+            )
+        )
         evaluated_block_height = _offline_unsigned(
             _offline_required(record, "evaluated_block_height", context),
             f"{context}.evaluated_block_height",
@@ -3152,6 +3292,18 @@ class OfflineReadiness:
             _offline_required(record, "evaluated_block_hash", context),
             f"{context}.evaluated_block_hash",
         )
+        raw_active_transfer_verifier = _offline_required(
+            record, "active_transfer_verifier", context
+        )
+        active_transfer_verifier = (
+            None
+            if raw_active_transfer_verifier is None
+            else _offline_active_transfer_verifier(
+                raw_active_transfer_verifier,
+                evaluated_block_height,
+                f"{context}.active_transfer_verifier",
+            )
+        )
         ready = _offline_required(record, "ready", context)
         if not isinstance(ready, bool):
             raise RuntimeError(f"{context}.ready must be a boolean")
@@ -3159,6 +3311,7 @@ class OfflineReadiness:
         if not isinstance(raw_blockers, list):
             raise RuntimeError(f"{context}.blockers must be an array")
         blockers: List[OfflineReadinessBlocker] = []
+        blocker_codes: set[str] = set()
         for index, raw in enumerate(raw_blockers):
             blocker_context = f"{context}.blockers[{index}]"
             blocker = _offline_mapping(raw, blocker_context)
@@ -3170,17 +3323,50 @@ class OfflineReadiness:
                 raise RuntimeError(
                     f"{blocker_context}.code must be a stable lowercase code of 1 to 64 characters"
                 )
+            if code in blocker_codes:
+                raise RuntimeError(f"{context}.blockers repeats blocker code {code}")
+            blocker_codes.add(code)
             message = _offline_required(blocker, "message", blocker_context)
             if not isinstance(message, str):
                 raise RuntimeError(f"{blocker_context}.message must be a string")
             _offline_exact_string(message, f"{blocker_context}.message")
+            if len(message) > 1024:
+                raise RuntimeError(
+                    f"{blocker_context}.message must not exceed 1024 Unicode characters"
+                )
             blockers.append(OfflineReadinessBlocker(code=code, message=message))
         if ready != (len(blockers) == 0):
             raise RuntimeError(f"{context}.ready must be true exactly when blockers is empty")
+        if ("asset_scale_unavailable" in blocker_codes) != (asset_scale is None):
+            raise RuntimeError(
+                f"{context}.asset_scale_unavailable must be present exactly when asset_scale is null"
+            )
+        if ("asset_scale_unsupported" in blocker_codes) != (
+            asset_scale is not None and asset_scale > _OFFLINE_MAX_ASSET_SCALE
+        ):
+            raise RuntimeError(
+                f"{context}.asset_scale_unsupported must be present exactly when asset_scale exceeds 28"
+            )
+        if ("transfer_verifier_unavailable" in blocker_codes) != (
+            active_transfer_verifier is None
+        ):
+            raise RuntimeError(
+                f"{context}.transfer_verifier_unavailable must be present exactly when no active verifier is reported"
+            )
+        if ready and (
+            asset_scale is None
+            or asset_scale > _OFFLINE_MAX_ASSET_SCALE
+            or active_transfer_verifier is None
+        ):
+            raise RuntimeError(
+                f"{context}.ready requires a supported scale and active transfer verifier"
+            )
         return cls(
             asset_definition_id=asset_definition_id,
+            asset_scale=asset_scale,
             evaluated_block_height=evaluated_block_height,
             evaluated_block_hash=evaluated_block_hash,
+            active_transfer_verifier=active_transfer_verifier,
             ready=ready,
             blockers=tuple(blockers),
         )
@@ -3265,6 +3451,30 @@ class OfflineTopUpAnchor:
 
 
 @dataclass(frozen=True)
+class OfflineTopUpFinalityProofAnchor:
+    """Exact top-up identity authenticated by a finality proof."""
+
+    topup_operation_id: Tuple[int, ...]
+    anchor_digest: Tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class OfflineTopUpFinalityProof:
+    """Typed outer envelope for an otherwise opaque Sumeragi-v2 proof.
+
+    The consensus certificate and Merkle path remain direct, defensively
+    copied JSON objects for the native verifier.  The SDK only inspects the
+    operation, digest, and height bindings needed to prevent response-field
+    substitution before that cryptographic verification runs.
+    """
+
+    version: Literal[1]
+    anchor: OfflineTopUpFinalityProofAnchor
+    commit_qc: Mapping[str, Any]
+    anchor_path: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
 class OfflineTopUpResult:
     """Terminal result of an applied top-up."""
 
@@ -3272,6 +3482,7 @@ class OfflineTopUpResult:
     finalized_block_height: int
     server_time_ms: int
     anchor: OfflineTopUpAnchor
+    finality_proof: OfflineTopUpFinalityProof
 
 
 @dataclass(frozen=True)
@@ -3792,6 +4003,107 @@ def _offline_top_up_anchor(
     )
 
 
+def _offline_top_up_finality_proof(
+    value: Any,
+    context: str,
+    *,
+    expected_operation_id: str,
+    expected_anchor_digest: Tuple[int, ...],
+    expected_finalized_height: int,
+) -> OfflineTopUpFinalityProof:
+    record = _offline_mapping(value, context)
+    version = _offline_unsigned(
+        _offline_required(record, "version", context),
+        f"{context}.version",
+        (1 << 16) - 1,
+    )
+    if version != 1:
+        raise RuntimeError(f"{context}.version must be 1")
+
+    anchor_context = f"{context}.anchor"
+    raw_anchor = _offline_mapping(
+        _offline_required(record, "anchor", context), anchor_context
+    )
+    topup_operation_id = _offline_fixed_bytes(
+        _offline_required(raw_anchor, "topup_operation_id", anchor_context),
+        f"{anchor_context}.topup_operation_id",
+        non_zero=True,
+    )
+    if bytes(topup_operation_id).hex() != expected_operation_id:
+        raise RuntimeError(
+            f"{anchor_context}.topup_operation_id does not match the operation"
+        )
+    anchor_digest = _offline_fixed_bytes(
+        _offline_required(raw_anchor, "anchor_digest", anchor_context),
+        f"{anchor_context}.anchor_digest",
+        non_zero=True,
+    )
+    if anchor_digest != expected_anchor_digest:
+        raise RuntimeError(
+            f"{anchor_context}.anchor_digest does not match the finalized anchor"
+        )
+
+    commit_qc_context = f"{context}.commit_qc"
+    commit_qc = _offline_mapping(
+        _offline_required(record, "commit_qc", context), commit_qc_context
+    )
+    height_context_context = f"{commit_qc_context}.height_context"
+    height_context = _offline_mapping(
+        _offline_required(commit_qc, "height_context", commit_qc_context),
+        height_context_context,
+    )
+    context_height = _offline_unsigned(
+        _offline_required(height_context, "height", height_context_context),
+        f"{height_context_context}.height",
+        _OFFLINE_MAX_U64,
+        positive=True,
+    )
+    if context_height != expected_finalized_height:
+        raise RuntimeError(
+            f"{height_context_context}.height does not match finalized_block_height"
+        )
+
+    certificate_context = f"{commit_qc_context}.certificate"
+    certificate = _offline_mapping(
+        _offline_required(commit_qc, "certificate", commit_qc_context),
+        certificate_context,
+    )
+    round_context = f"{certificate_context}.round"
+    certificate_round = _offline_mapping(
+        _offline_required(certificate, "round", certificate_context), round_context
+    )
+    certificate_height = _offline_unsigned(
+        _offline_required(certificate_round, "height", round_context),
+        f"{round_context}.height",
+        _OFFLINE_MAX_U64,
+        positive=True,
+    )
+    if certificate_height != expected_finalized_height:
+        raise RuntimeError(
+            f"{round_context}.height does not match finalized_block_height"
+        )
+
+    anchor_path_context = f"{context}.anchor_path"
+    anchor_path = _offline_mapping(
+        _offline_required(record, "anchor_path", context), anchor_path_context
+    )
+    return OfflineTopUpFinalityProof(
+        version=1,
+        anchor=OfflineTopUpFinalityProofAnchor(
+            topup_operation_id=topup_operation_id,
+            anchor_digest=anchor_digest,
+        ),
+        commit_qc=cast(
+            Mapping[str, Any],
+            _snapshot_offline_json(commit_qc, commit_qc_context),
+        ),
+        anchor_path=cast(
+            Mapping[str, Any],
+            _snapshot_offline_json(anchor_path, anchor_path_context),
+        ),
+    )
+
+
 def _offline_applied_result(
     value: Any, context: str, operation_id: str
 ) -> OfflineAppliedResult:
@@ -3825,16 +4137,27 @@ def _offline_applied_result(
             expected_transaction_hash=transaction_hash,
             expected_finalized_height=finalized_block_height,
         )
+        finality_proof = _offline_top_up_finality_proof(
+            _offline_required(result, "finality_proof", result_context),
+            f"{result_context}.finality_proof",
+            expected_operation_id=operation_id,
+            expected_anchor_digest=anchor.anchor_digest,
+            expected_finalized_height=finalized_block_height,
+        )
         return OfflineTopUpOperationResult(
             OfflineTopUpResult(
                 transaction_hash=transaction_hash,
                 finalized_block_height=finalized_block_height,
                 server_time_ms=server_time_ms,
                 anchor=anchor,
+                finality_proof=finality_proof,
             )
         )
-    if "anchor" in result:
-        raise RuntimeError(f"{result_context}.anchor is invalid for a redeem result")
+    for top_up_only_field in ("anchor", "finality_proof"):
+        if top_up_only_field in result:
+            raise RuntimeError(
+                f"{result_context}.{top_up_only_field} is invalid for a redeem result"
+            )
     return OfflineRedeemOperationResult(
         OfflineRedeemResult(
             transaction_hash=transaction_hash,
@@ -6947,9 +7270,9 @@ class ToriiClient:
     # First-release Offline API
     # ------------------------------------------------------------------
     def get_offline_readiness(self, asset_definition_id: str) -> OfflineReadiness:
-        """Fetch the readiness snapshot for one exact asset definition."""
+        """Fetch readiness by canonical asset id or live asset alias."""
 
-        asset = _offline_exact_string(asset_definition_id, "asset_definition_id")
+        asset = _offline_asset_selector(asset_definition_id, "asset_definition_id")
         response = self._request(
             "GET",
             _OFFLINE_READINESS_PATH,

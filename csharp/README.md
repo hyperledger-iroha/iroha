@@ -438,6 +438,11 @@ using var torii = new ToriiClient(new Uri("https://torii.example"));
 
 var readiness = await torii.GetOfflineReadinessAsync("xor#wonderland");
 Console.WriteLine($"evaluated at {readiness.EvaluatedBlockHeight}: {readiness.EvaluatedBlockHash}");
+Console.WriteLine($"authoritative asset scale: {readiness.AssetScale?.ToString() ?? "unavailable"}");
+if (readiness.ActiveTransferVerifier is { } verifier)
+{
+    Console.WriteLine($"transfer verifier: {verifier.Id.Backend}:{verifier.Id.Name} v{verifier.Version}");
+}
 if (!readiness.Ready)
 {
     foreach (var blocker in readiness.Blockers)
@@ -466,6 +471,12 @@ switch (status)
         break;
 }
 ```
+
+Readiness preserves the chain's full nullable `uint` asset scale. A scale above
+28 is therefore decoded together with `asset_scale_unsupported`; only a ready
+response requires the 0-through-28 Offline amount range. The typed active
+transfer verifier is bound to the same evaluated block and contains no key
+material.
 
 Operation references and statuses are negotiated as
 `application/x-norito`. The decoder returns closed pending/applied/rejected
@@ -809,12 +820,10 @@ parsing or builder mutation. These builders require valid Norito archives,
 reject empty, malformed, tampered, or wrong-type instruction archives, and keep
 recursive redeem derivation inside the native bridge.
 
-Use `PreferredMode(...)` to select `recursive_compact_v1` when the complete
-ABI-7 compact-token native surface is available, `recursive_spend_v1` when only
-the complete ABI-6-or-later native surface is available, and otherwise `null`.
-Zero-argument selection probes the native bridge; explicit capability selection
-must pass both `recursiveCompactAvailable` and `recursiveSpendAvailable`.
-The ABI-7 `recursive_compact_v1` compact-token symbols remain source-stable and
+Use `PreferredMode(...)` to select only the first-release spend-again product
+mode `recursive_spend_v1` when the complete native surface is available, and
+otherwise `null`. `IsSpendAgainMode(...)` rejects `recursive_spend_v2` and
+`recursive_compact_v1`. The ABI-7 compact-token projection symbols remain source-stable and
 probe `kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend.
 Use `BuildPallasOpenEnvelopesArchive(...)` for the current-hop record bundle
 and `BuildPreviousProofOpenEnvelopesArchive(...)` for the previous recursive

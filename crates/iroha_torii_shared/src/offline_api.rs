@@ -16,6 +16,13 @@ pub use iroha_data_model::offline::{
 /// first-release public transport surface exposes only this current name.
 pub type OfflineTopUpAnchor = iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV2;
 
+/// Finality proof returned with an applied offline top-up.
+///
+/// The first-release transport exposes the current typed consensus proof
+/// directly. It is never wrapped as an opaque base64 payload and is required
+/// before a wallet may initialize recursive spending from the returned anchor.
+pub type OfflineTopUpFinalityProof = iroha_data_model::offline::KagemushaTopUpFinalityProofV2;
+
 /// One machine-readable reason why an asset is not ready for offline payments.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -329,6 +336,8 @@ pub struct OfflineTopUpResult {
     pub server_time_ms: u64,
     /// Typed finalized top-up anchor consumed by the local wallet prover.
     pub anchor: OfflineTopUpAnchor,
+    /// Typed consensus proof bound to the exact finalized top-up anchor.
+    pub finality_proof: OfflineTopUpFinalityProof,
 }
 
 /// Final result of an applied redemption operation.

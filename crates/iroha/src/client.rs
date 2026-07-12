@@ -1810,6 +1810,11 @@ pub struct MultisigProposalEntry {
     pub proposal_id: String,
     /// Deterministic hash of the proposal instructions.
     pub instructions_hash: String,
+    /// Canonical operation type inferred from the proposal payload.
+    pub operation_type: String,
+    /// Optional machine-readable intent payload for structured operation families.
+    #[norito(default)]
+    pub intent: Option<Json>,
     /// Proposal payload and approval state.
     pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
     /// Proposal lifecycle status.
@@ -8015,9 +8020,19 @@ mod evidence_http_tests {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
         let account_id_literal = account_id.to_string();
+        let proposal_id = "a".repeat(64);
         let response = json_response(
             StatusCode::OK,
-            &format!("{{\"resolved_multisig_account_id\":\"{account_id}\",\"proposals\":[]}}"),
+            &format!(
+                concat!(
+                    "{{\"resolved_multisig_account_id\":\"{account_id}\",\"proposals\":[{{",
+                    "\"proposal_id\":\"{proposal_id}\",\"instructions_hash\":\"{proposal_id}\",",
+                    "\"operation_type\":\"ONCHAIN_MULTISIG\",\"intent\":null,",
+                    "\"proposal\":{{\"instructions\":[],\"proposed_at_ms\":1,\"expires_at_ms\":2,",
+                    "\"approvals\":[],\"is_relayed\":null}},\"status\":\"COLLECTING_SIGNATURES\",",
+                    "\"terminal_at_ms\":null}}]}}"
+                )
+            ),
         );
 
         with_mock_http(respond_with(&snapshots, response), || {
@@ -8025,7 +8040,12 @@ mod evidence_http_tests {
                 .post_multisig_proposals_list(&account_id, &["COLLECTING_SIGNATURES"])
                 .expect("post multisig proposals list");
             assert_eq!(resp.resolved_multisig_account_id, account_id);
-            assert!(resp.proposals.is_empty());
+            assert_eq!(resp.proposals.len(), 1);
+            assert_eq!(resp.proposals[0].proposal_id, proposal_id);
+            assert_eq!(resp.proposals[0].operation_type, "ONCHAIN_MULTISIG");
+            assert_eq!(resp.proposals[0].status, "COLLECTING_SIGNATURES");
+            assert!(resp.proposals[0].intent.is_none());
+            assert!(resp.proposals[0].terminal_at_ms.is_none());
         });
 
         let store = snapshots.lock().expect("lock snapshot store");
@@ -8034,7 +8054,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/proposals/query"
+            "http://mock.local/v1/multisig/proposals/list"
         );
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
@@ -13785,7 +13805,7 @@ impl Client {
             .send()
     }
 
-    /// Convenience: POST `/v1/multisig/proposals/query` for a multisig account id.
+    /// Convenience: POST `/v1/multisig/proposals/list` for a multisig account id.
     ///
     /// # Errors
     /// Returns an error if request construction, JSON serialization, the HTTP call,
@@ -13795,7 +13815,7 @@ impl Client {
         multisig_account_id: &iroha_data_model::account::AccountId,
         statuses: &[&str],
     ) -> Result<MultisigProposalsListResponse> {
-        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/query");
+        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/list");
         let status = statuses
             .iter()
             .map(|value| (*value).to_owned())

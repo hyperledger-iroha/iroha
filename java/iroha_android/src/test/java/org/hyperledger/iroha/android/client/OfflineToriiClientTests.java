@@ -33,6 +33,8 @@ public final class OfflineToriiClientTests {
     operationStatusesMatchRustGoldenArchives();
     typedOperationStatusesRoundTrip();
     readinessUsesCanonicalGetPathAndParsesResponse();
+    readinessBindsCanonicalSelectorsButAllowsAliasResolution();
+    readinessRejectsMalformedSelectorsBeforeTransport();
     readinessRequiresJsonResponseMediaType();
     operationsUseCanonicalPathsAndNoritoBodies();
     requestsDeriveAndValidateCanonicalOperationIds();
@@ -149,6 +151,36 @@ public final class OfflineToriiClientTests {
     assert BigInteger.valueOf(42).equals(redeemResult.serverTimeMs())
         : "applied server_time_ms mismatch";
 
+    final byte[] anchorArchive = opaqueArchive(TOP_UP_ANCHOR_SCHEMA, new byte[] {1, 2, 3});
+    final byte[] finalityProofArchive =
+        opaqueArchive(TOP_UP_FINALITY_PROOF_SCHEMA, new byte[] {4, 5, 6});
+    final OfflineOperationStatus.Applied appliedTopUp =
+        new OfflineOperationStatus.Applied(
+            operationId,
+            new OfflineOperationStatus.Result.TopUp(
+                new OfflineOperationStatus.TopUpResult(
+                    TRANSACTION_HASH,
+                    BigInteger.valueOf(7),
+                    BigInteger.valueOf(42),
+                    OfflineOperationCodec.decodeTopUpAnchor(anchorArchive),
+                    OfflineOperationCodec.decodeTopUpFinalityProof(finalityProofArchive))));
+    final OfflineOperationStatus.TopUpResult decodedTopUp =
+        ((OfflineOperationStatus.Result.TopUp)
+                ((OfflineOperationStatus.Applied)
+                        OfflineOperationCodec.decodeStatus(
+                            OfflineOperationCodec.encodeStatus(appliedTopUp)))
+                    .result())
+            .value();
+    assert java.util.Arrays.equals(
+        anchorArchive, decodedTopUp.anchor().noritoArchive()) : "top-up anchor mismatch";
+    assert java.util.Arrays.equals(
+        finalityProofArchive, decodedTopUp.finalityProof().noritoArchive())
+        : "top-up finality proof mismatch";
+    final byte[] proofCopy = decodedTopUp.finalityProof().noritoArchive();
+    proofCopy[0] ^= 0x7f;
+    assert decodedTopUp.finalityProof().noritoArchive()[0] == 'N'
+        : "top-up finality proof must be defensively copied";
+
     final OfflineOperationStatus.ErrorDetails details =
         new OfflineOperationStatus.ErrorDetails(
             "torii",
@@ -201,9 +233,20 @@ public final class OfflineToriiClientTests {
             200,
             """
             {
-              "asset_definition_id": "xor#wonderland",
+              "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+              "asset_scale": 9,
               "evaluated_block_height": 18446744073709551615,
               "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+              "active_transfer_verifier": {
+                "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+                "version": 7,
+                "circuit_id": "confidential-transfer-v2",
+                "commitment": "4444444444444444444444444444444444444444444444444444444444444444",
+                "public_inputs_schema_hash": "5555555555555555555555555555555555555555555555555555555555555555",
+                "max_proof_bytes": 4096,
+                "activation_height": 1,
+                "withdrawal_height": null
+              },
               "ready": false,
               "blockers": [
                 {"code": "offline_disabled", "message": "Offline transfers are disabled"}
@@ -227,23 +270,70 @@ public final class OfflineToriiClientTests {
         .equals(executor.lastRequest.uri().getRawQuery()) : "readiness query mismatch";
     assert "application/json".equals(firstHeader(executor.lastRequest, "Accept"))
         : "accept header mismatch";
-    assert "xor#wonderland".equals(readiness.assetDefinitionId())
+    assert "7EAD8EFYUx1aVKZPUU1fyKvr8dF1".equals(readiness.assetDefinitionId())
         : "asset_definition_id mismatch";
+    assert Long.valueOf(9).equals(readiness.assetScale()) : "asset_scale mismatch";
     assert new BigInteger("18446744073709551615").equals(readiness.evaluatedBlockHeight())
         : "evaluated_block_height mismatch";
     assert "abababababababababababababababababababababababababababababababab"
         .equals(readiness.evaluatedBlockHash()) : "evaluated_block_hash mismatch";
+    assert "halo2/ipa".equals(readiness.activeTransferVerifier().id().backend())
+        : "active transfer verifier mismatch";
     assert !readiness.ready() : "ready mismatch";
     assert readiness.blockers().size() == 1 : "blockers mismatch";
     assert "offline_disabled".equals(readiness.blockers().get(0).code())
         : "blocker code mismatch";
   }
 
+  private static void readinessRejectsMalformedSelectorsBeforeTransport() {
+    for (final String selector :
+        List.of(
+            "",
+            " xor#wonderland",
+            "xor#wonderland ",
+            "XOR#wonderland",
+            "xor",
+            "xor#",
+            "xor##wonderland",
+            "0EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+            "7EAD8EFYUx1aVKZPUU1fyKvr8dF0")) {
+      final StubExecutor executor = new StubExecutor(200, "{}");
+      final OfflineToriiClient client =
+          OfflineToriiClient.builder()
+              .executor(executor)
+              .baseUri(URI.create("https://example.com"))
+              .build();
+      assertRejects(
+          () -> client.getOfflineReadiness(selector),
+          "readiness must reject a malformed asset selector before transport");
+      assert executor.lastRequest == null : "invalid selector must not reach transport";
+    }
+  }
+
+  private static void readinessBindsCanonicalSelectorsButAllowsAliasResolution() {
+    final StubExecutor executor =
+        new StubExecutor(200, canonicalReadinessBody("7EAD8EFYUx1aVKZPUU1fyKvr8dF1"));
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build();
+
+    final OfflineReadiness alias = client.getOfflineReadiness("xor#wonderland").join();
+    assert "7EAD8EFYUx1aVKZPUU1fyKvr8dF1".equals(alias.assetDefinitionId());
+
+    assertClientRejects(
+        () -> client.getOfflineReadiness("61CtjvNd9T3THAR65GsMVHr82Bjc").join(),
+        "canonical readiness selector must bind the response asset definition");
+  }
+
   private static void readinessRequiresJsonResponseMediaType() {
     final String body =
         "{\"asset_definition_id\":\"xor#wonderland\","
+            + "\"asset_scale\":9,"
             + "\"evaluated_block_height\":7,"
             + "\"evaluated_block_hash\":\"" + repeat("ab", 32) + "\","
+            + "\"active_transfer_verifier\":null,"
             + "\"ready\":true,\"blockers\":[]}";
     for (final Map<String, List<String>> headers :
         List.of(
@@ -434,12 +524,12 @@ public final class OfflineToriiClientTests {
     assertRejects(
         () ->
             new OfflineOperationStatus.TopUpResult(
-                TRANSACTION_HASH, BigInteger.ZERO, BigInteger.ONE, null),
+                TRANSACTION_HASH, BigInteger.ZERO, BigInteger.ONE, null, null),
         "top-up result must reject zero finalizedBlockHeight");
     assertRejects(
         () ->
             new OfflineOperationStatus.TopUpResult(
-                TRANSACTION_HASH, BigInteger.ONE, BigInteger.ZERO, null),
+                TRANSACTION_HASH, BigInteger.ONE, BigInteger.ZERO, null, null),
         "top-up result must reject zero serverTimeMs");
     assertRejects(
         () ->
@@ -711,6 +801,29 @@ public final class OfflineToriiClientTests {
         TOP_UP_REQUEST_SCHEMA, 8, 6, operationId, new byte[0]);
   }
 
+  private static String canonicalReadinessBody(final String assetDefinitionId) {
+    return """
+        {
+          "asset_definition_id": "%s",
+          "asset_scale": 9,
+          "evaluated_block_height": 7,
+          "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "active_transfer_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+            "version": 7,
+            "circuit_id": "confidential-transfer-v2",
+            "commitment": "4444444444444444444444444444444444444444444444444444444444444444",
+            "public_inputs_schema_hash": "5555555555555555555555555555555555555555555555555555555555555555",
+            "max_proof_bytes": 4096,
+            "activation_height": 1,
+            "withdrawal_height": null
+          },
+          "ready": true,
+          "blockers": []
+        }
+        """.formatted(assetDefinitionId);
+  }
+
   private static byte[] redeemRequestArchive(final byte[] operationId) {
     return canonicalRequestArchive(
         REDEEM_REQUEST_SCHEMA, 11, 9, operationId, new byte[0]);
@@ -729,6 +842,21 @@ public final class OfflineToriiClientTests {
         operationId,
         trailingBytes,
         NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] opaqueArchive(final String schema, final byte[] payload) {
+    final byte[] body = java.util.Arrays.copyOf(payload, payload.length);
+    final byte[] header =
+        new NoritoHeader(
+                SchemaHash.hash16(schema),
+                body.length,
+                CRC64.compute(body),
+                NoritoHeader.COMPACT_LEN,
+                NoritoHeader.COMPRESSION_NONE)
+            .encode();
+    final byte[] archive = java.util.Arrays.copyOf(header, header.length + body.length);
+    System.arraycopy(body, 0, archive, header.length, body.length);
+    return archive;
   }
 
   private static byte[] canonicalRequestArchive(
@@ -863,6 +991,10 @@ public final class OfflineToriiClientTests {
 
   private static final String TOP_UP_REQUEST_SCHEMA =
       "iroha.torii.v1.offline.top_up.request";
+  private static final String TOP_UP_ANCHOR_SCHEMA =
+      "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpAnchorV2";
+  private static final String TOP_UP_FINALITY_PROOF_SCHEMA =
+      "iroha_data_model::offline::model::KagemushaTopUpFinalityProofV2";
 
   private static final String REDEEM_REQUEST_SCHEMA =
       "iroha.torii.v1.offline.redeem.request";

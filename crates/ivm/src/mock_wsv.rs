@@ -1958,6 +1958,7 @@ pub struct WsvHost {
     axt_policy_overridden: bool,
     sm_enabled: bool,
     allow_contract_runtime_asset_transfer_bypass: bool,
+    contract_runtime_address: Option<ContractAddress>,
     fastpq_batch_entries: Option<Vec<(AccountId, AccountId, AssetDefinitionId, Numeric)>>,
     actual_access: crate::host::AccessLog,
     state_overlay: HashMap<String, Option<Vec<u8>>>,
@@ -1983,6 +1984,7 @@ struct WsvHostSnapshot {
     axt_policy_overridden: bool,
     sm_enabled: bool,
     allow_contract_runtime_asset_transfer_bypass: bool,
+    contract_runtime_address: Option<ContractAddress>,
     fastpq_batch_entries: Option<Vec<(AccountId, AccountId, AssetDefinitionId, Numeric)>>,
     actual_access: crate::host::AccessLog,
     state_overlay: HashMap<String, Option<Vec<u8>>>,
@@ -2116,6 +2118,7 @@ impl WsvHost {
             axt_policy_overridden: false,
             sm_enabled: false,
             allow_contract_runtime_asset_transfer_bypass: false,
+            contract_runtime_address: None,
             fastpq_batch_entries: None,
             actual_access: crate::host::AccessLog::default(),
             state_overlay: HashMap::new(),
@@ -2212,6 +2215,7 @@ impl WsvHost {
             sm_enabled: self.sm_enabled,
             allow_contract_runtime_asset_transfer_bypass: self
                 .allow_contract_runtime_asset_transfer_bypass,
+            contract_runtime_address: self.contract_runtime_address.clone(),
             fastpq_batch_entries: self.fastpq_batch_entries.clone(),
             actual_access: self.actual_access.clone(),
             state_overlay: self.state_overlay.clone(),
@@ -2238,6 +2242,7 @@ impl WsvHost {
         self.sm_enabled = snapshot.sm_enabled;
         self.allow_contract_runtime_asset_transfer_bypass =
             snapshot.allow_contract_runtime_asset_transfer_bypass;
+        self.contract_runtime_address = snapshot.contract_runtime_address.clone();
         self.fastpq_batch_entries = snapshot.fastpq_batch_entries.clone();
         self.actual_access = snapshot.actual_access.clone();
         self.state_overlay = snapshot.state_overlay.clone();
@@ -2534,6 +2539,11 @@ impl WsvHost {
     /// Opt-in test-host bypass that mirrors executor-scoped contract transfer authorization.
     pub fn set_allow_contract_runtime_asset_transfer_bypass(&mut self, enabled: bool) {
         self.allow_contract_runtime_asset_transfer_bypass = enabled;
+    }
+
+    /// Bind the immutable contract address used by contract-scoped permission builtins.
+    pub fn set_contract_runtime_address(&mut self, contract: ContractAddress) {
+        self.contract_runtime_address = Some(contract);
     }
 
     #[must_use]
@@ -5761,6 +5771,38 @@ impl IVMHost for WsvHost {
                     }
                 };
                 self.wsv.revoke_permission(&subject, &token);
+                Ok(Self::mutation_gas(0))
+            }
+            syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT
+            | syscalls::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT => {
+                let subject = self.decode_account_subject_reg(vm, 10)?;
+                let selector_tlv = vm.validate_tlv(vm.register(11))?;
+                if selector_tlv.type_id != PointerType::Blob {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let entrypoint =
+                    core::str::from_utf8(selector_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
+                    return Err(VMError::DecodeError);
+                }
+                let contract = self
+                    .contract_runtime_address
+                    .clone()
+                    .ok_or(VMError::PermissionDenied)?;
+                let token = PermissionToken::ContractEntrypoint {
+                    contract,
+                    entrypoint: entrypoint.to_owned(),
+                };
+                let is_grant = number == syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT;
+                let exists = self.wsv.has_permission(&subject, &token);
+                if exists == is_grant {
+                    return Err(VMError::PermissionDenied);
+                }
+                if is_grant {
+                    self.wsv.grant_permission(&subject, token);
+                } else {
+                    self.wsv.revoke_permission(&subject, &token);
+                }
                 Ok(Self::mutation_gas(0))
             }
             syscalls::SYSCALL_CREATE_ROLE => {

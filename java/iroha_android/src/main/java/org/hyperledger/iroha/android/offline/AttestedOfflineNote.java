@@ -332,7 +332,7 @@ public final class AttestedOfflineNote {
     if (wirePayload != null) {
       return wirePayload;
     }
-    throw new IllegalArgumentException("Attested Offline Note instruction envelope is invalid");
+    throw new IllegalArgumentException("Offline Note V2 instruction envelope is invalid");
   }
 
   private static byte[] tryDecodeInstructionPair(
@@ -378,7 +378,7 @@ public final class AttestedOfflineNote {
       }
     }
     throw new IllegalArgumentException(
-        "Attested Offline Note instruction model payload is invalid", lastError);
+        "Offline Note V2 instruction model payload is invalid", lastError);
   }
 
   private static boolean isNoritoFrame(final byte[] bytes) {

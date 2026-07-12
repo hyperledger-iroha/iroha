@@ -423,13 +423,24 @@ impl CompilerSession {
                         Some(&target_resolved),
                     )
                 })?;
-        let external_names = target_signatures.keys().cloned().collect::<BTreeSet<_>>();
         let external_states = target_typed
             .states
             .iter()
             .map(|state| (state.name.clone(), state.ty.clone()))
             .collect::<IndexMap<_, _>>();
-        let external_state_names = external_states.keys().cloned().collect::<BTreeSet<_>>();
+        let target_environment =
+            target_semantic.test_target_environment(target_signatures, external_states);
+        let resolution_environment = crate::resolved::ExternalResolutionEnvironment {
+            functions: target_environment.functions.keys().cloned().collect(),
+            states: target_environment.states.keys().cloned().collect(),
+            structs: target_environment.structs.keys().cloned().collect(),
+            consts: target_environment.consts.keys().cloned().collect(),
+            error_codes: target_environment
+                .error_codes
+                .iter()
+                .map(|(name, code)| (name.clone(), *code))
+                .collect(),
+        };
 
         let mut resolved_modules = Vec::with_capacity(parsed.len());
         for (index, program) in parsed.into_iter().enumerate() {
@@ -437,8 +448,7 @@ impl CompilerSession {
             resolved_modules.push(crate::resolved::resolve_with_external_environment(
                 program,
                 file,
-                &external_names,
-                &external_state_names,
+                &resolution_environment,
             )?);
         }
         reject_duplicate_test_graph_symbols(
@@ -462,7 +472,7 @@ impl CompilerSession {
             let semantic =
                 crate::semantic::SemanticContext::with_capabilities(self.options.force_zk, true);
             let mut typed = semantic
-                .analyze_resolved_with_test_target(resolved, &target_signatures, &external_states)
+                .analyze_resolved_with_test_target(resolved, &target_environment)
                 .map_err(|failures| {
                     crate::semantic_diagnostics::from_semantic_failures(
                         failures,

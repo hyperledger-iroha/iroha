@@ -711,6 +711,9 @@ Source code uses namespaced capabilities. Representative roots are:
 - `context::authority`, `context::block_height`, and other immutable call context
 - `ledger::asset::transfer`, `ledger::asset::mint`, and `ledger::asset::burn`
 - `ledger::account::set_detail`
+- `ledger::contract::grant_entrypoint` and
+  `ledger::contract::revoke_entrypoint` for the current immutable seiyaku
+  address and an exact entrypoint selector
 - `state::get`, `state::set`, and `state::delete`
 - `crypto::sha256`, `crypto::sha3`, and signature/proof operations
 - `math::wrapping_add`, `math::wrapping_sub`, `math::wrapping_mul`, and

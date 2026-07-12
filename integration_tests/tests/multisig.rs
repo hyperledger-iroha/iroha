@@ -293,7 +293,7 @@ fn wait_for_multisig_proposal_status(
     proposal_id: &str,
     expected_status: &str,
 ) -> Result<JsonValue> {
-    let endpoint = format!("{torii_base}/v1/multisig/proposals/lookup");
+    let endpoint = format!("{torii_base}/v1/multisig/proposals/get");
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut last_status = None;
     let mut last_error = None;
@@ -704,7 +704,7 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
 
     let canceled_list = post_torii_app_json(
         &rt,
-        &format!("{torii_base}/v1/multisig/proposals/query"),
+        &format!("{torii_base}/v1/multisig/proposals/list"),
         &MultisigProposalsListRequestDto {
             selector,
             status: vec!["CANCELED".to_owned()],

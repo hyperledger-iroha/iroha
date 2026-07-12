@@ -102,7 +102,9 @@ material. Production defaults still stay on ABI 6 Reserved-lineage recursive
 spend until that archive is shipped and signed for release. A missing packaged
 key, the generic compact-token reservation, and the multi-hop
 verifier-batch reservation still reach the proof-composition reservation and
-remain reserved ABI-7 state. `preferredKagemushaOfflineSpendMode()` selects `recursive_spend_v1`
+remain reserved ABI-7 state. The `recursive_compact_v1` identifier describes an
+admission-neutral projection and is never a spend-again product selector.
+`preferredKagemushaOfflineSpendMode()` selects `recursive_spend_v1`
 when the native host reports native bridge ABI 6 or later and every required
 recursive-spend method rejects the malformed availability probe, and otherwise
 returns `null` rather than falling back to archived checked-prefold fixtures:
@@ -115,6 +117,8 @@ lineage-witness helpers, `kagemushaRecursiveSpendVerify`, and
 `kagemushaRecursiveSpendRedeem`. Explicit capability selection must pass both
 `recursiveCompactAvailable` and `recursiveSpendAvailable`; single-argument
 selectors are not shipped.
+`isKagemushaSpendAgainMode(...)` accepts only `recursive_spend_v1` and rejects
+both the internal `recursive_spend_v2` protocol label and the compact projection.
 
 Typed Node callers can build the ABI-6 recursive spend request archives without
 hand-framing Norito payloads. Use
@@ -3557,6 +3561,7 @@ requests whose authorization carries a different ID.
 
 ```js
 const readiness = await torii.getOfflineReadiness("xor#sora");
+console.log(readiness.asset_scale, readiness.active_transfer_verifier?.id);
 if (readiness.ready) {
   const accepted = await torii.submitOfflineTopUp({
     ...signedTopUp,
@@ -3583,9 +3588,18 @@ non-finite values, excessive nesting, and unpaired Unicode surrogates are
 rejected before DTO normalization, so a JavaScript runtime never silently
 rounds an amount, height, or timestamp.
 
+Readiness returns the authoritative nullable `u32` asset scale and the typed,
+key-material-free transfer verifier selected at the same evaluated block. An
+expected unavailable response can carry a scale above 28 together with
+`asset_scale_unsupported`; only `ready: true` requires the Offline amount range
+and a live verifier. Verifier activation/withdrawal bounds, hashes, proof-size
+limit, blocker correlations, and duplicate blocker codes are checked before the
+snapshot is returned.
+
 The TypeScript surface exposes closed request DTOs and a typed
 `OfflineTopUpAnchor`; proof-bearing nested objects use named Norito-JSON DTOs
-instead of `Record<string, unknown>`. Asset scales are limited to `0..=28`.
+instead of `Record<string, unknown>`. Command and anchor asset scales are
+limited to `0..=28`.
 Applied top-up responses are accepted only when the anchor's operation ID,
 transaction hash, finality height, amount/scale, roots, note material, and
 one-or-two sorted input nullifiers are internally consistent.

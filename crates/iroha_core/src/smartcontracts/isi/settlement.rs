@@ -1,10 +1,8 @@
 //! Host execution for delivery-versus-payment and payment-versus-payment settlements.
 
-#[cfg(feature = "telemetry")]
-use std::time::Instant;
-
 use iroha_data_model::{
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetId},
+    events::data::prelude::{ConfigurationEvent, ParameterChanged},
     isi::{
         error::{InstructionEvaluationError, InstructionExecutionError, InvalidParameterError},
         settlement::{
@@ -16,13 +14,19 @@ use iroha_data_model::{
     prelude::*,
     query::error::FindError,
 };
+use iroha_executor_data_model::permission::settlement::{
+    CanManageFxCorridors, CanSetFxCorridorPolicy, CanSettleFxCorridor,
+};
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, NumericSpec},
 };
 
 use super::*;
-use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
+use crate::smartcontracts::isi::asset::isi::{
+    assert_numeric_spec_with, execute_native_fx_numeric_asset_pair,
+    validate_native_fx_numeric_asset_pair,
+};
 use crate::smartcontracts::isi::error::MathError;
 #[cfg(feature = "telemetry")]
 use crate::sumeragi::status::SettlementOutcomeKind;
@@ -82,6 +86,7 @@ fn record_settlement_snapshot(
     metadata: Metadata,
     kind: SettlementKind,
     legs: Vec<SettlementLegSnapshot>,
+    fx_corridor: Option<FxCorridorSettlementDetails>,
     outcome: SettlementOutcomeRecord,
 ) {
     let mut ledger = stx
@@ -111,6 +116,7 @@ fn record_settlement_snapshot(
         block_hash,
         executed_at_ms,
         legs,
+        fx_corridor,
         outcome,
     });
 
@@ -180,18 +186,16 @@ fn fx_corridor_leg_snapshots(
     ]
 }
 
-fn has_named_permission(
+fn has_exact_permission(
     stx: &StateTransaction<'_, '_>,
     authority: &AccountId,
-    permission_name: &str,
+    required: &Permission,
 ) -> bool {
-    let matches_name = |permission: &Permission| permission.name() == permission_name;
-
     if stx
         .world
         .account_permissions
         .get(authority)
-        .is_some_and(|permissions| permissions.iter().any(matches_name))
+        .is_some_and(|permissions| permissions.contains(required))
     {
         return true;
     }
@@ -206,7 +210,36 @@ fn has_named_permission(
                 None
             }
         })
-        .any(|role| role.permissions().any(matches_name))
+        .any(|role| role.permissions().any(|permission| permission == required))
+}
+
+fn can_manage_fx_corridors(stx: &StateTransaction<'_, '_>, authority: &AccountId) -> bool {
+    let manager: Permission = CanManageFxCorridors.into();
+    has_exact_permission(stx, authority, &manager)
+}
+
+fn can_set_fx_corridor_policy(
+    stx: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    policy_id: &Name,
+) -> bool {
+    let exact: Permission = CanSetFxCorridorPolicy {
+        policy_id: policy_id.clone(),
+    }
+    .into();
+    can_manage_fx_corridors(stx, authority) || has_exact_permission(stx, authority, &exact)
+}
+
+fn can_settle_fx_corridor(
+    stx: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    policy_id: &Name,
+) -> bool {
+    let exact: Permission = CanSettleFxCorridor {
+        policy_id: policy_id.clone(),
+    }
+    .into();
+    can_manage_fx_corridors(stx, authority) || has_exact_permission(stx, authority, &exact)
 }
 
 fn invalid_fx_parameter(message: impl Into<String>) -> Error {
@@ -433,62 +466,6 @@ fn scoped_fx_leg_asset_ids(leg: &SettlementLeg, dataspace: DataSpaceId) -> (Asse
     )
 }
 
-fn ensure_scoped_fx_leg_funding(
-    stx: &StateTransaction<'_, '_>,
-    leg: &SettlementLeg,
-    dataspace: DataSpaceId,
-) -> Result<(), Error> {
-    let (source, _) = scoped_fx_leg_asset_ids(leg, dataspace);
-    let available = stx
-        .world
-        .assets
-        .get(&source)
-        .map_or_else(Numeric::zero, |balance| balance.as_ref().clone());
-    let funded = available
-        .clone()
-        .checked_sub(leg.quantity().clone())
-        .is_some_and(|remaining| !remaining.mantissa().is_negative());
-    if !funded {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!(
-                "FX corridor leg requires {} but only {} is available for {} in dataspace {}",
-                leg.quantity(),
-                available,
-                leg.from(),
-                dataspace.as_u64()
-            )
-            .into(),
-        ));
-    }
-    Ok(())
-}
-
-fn apply_scoped_fx_leg(
-    stx: &mut StateTransaction<'_, '_>,
-    leg: &SettlementLeg,
-    dataspace: DataSpaceId,
-    spec: NumericSpec,
-) -> Result<(), Error> {
-    assert_numeric_spec_with(leg.quantity(), spec)?;
-    let (source, destination) = scoped_fx_leg_asset_ids(leg, dataspace);
-    withdraw_numeric_asset_exact(stx, &source, leg.quantity())?;
-    if let Err(err) = deposit_numeric_asset_exact(stx, &destination, leg.quantity()) {
-        deposit_numeric_asset_exact(stx, &source, leg.quantity())?;
-        return Err(err);
-    }
-    Ok(())
-}
-
-fn rollback_scoped_fx_leg(
-    stx: &mut StateTransaction<'_, '_>,
-    leg: &SettlementLeg,
-    dataspace: DataSpaceId,
-) -> Result<(), Error> {
-    let (source, destination) = scoped_fx_leg_asset_ids(leg, dataspace);
-    withdraw_numeric_asset_exact(stx, &destination, leg.quantity())?;
-    deposit_numeric_asset_exact(stx, &source, leg.quantity())
-}
-
 fn enforce_atomicity(plan: SettlementPlan) {
     match plan.atomicity() {
         SettlementAtomicity::AllOrNothing
@@ -508,7 +485,6 @@ fn log_atomicity_warning(stage: &str, rollback_err: &Error) {
 struct SettlementPairOutcome {
     first_committed: bool,
     second_committed: bool,
-    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
     fx_window_ms: Option<u64>,
 }
 
@@ -576,9 +552,6 @@ fn execute_settlement_pair(
     }
     outcome.first_committed = true;
 
-    #[cfg(feature = "telemetry")]
-    let first_leg_finished_at = Instant::now();
-
     if let Err(err) = apply_settlement_leg(stx, second.0, second.1) {
         match plan.atomicity() {
             SettlementAtomicity::AllOrNothing | SettlementAtomicity::CommitSecondLeg => {
@@ -595,12 +568,6 @@ fn execute_settlement_pair(
         return Err(SettlementPairError::new(outcome, err));
     }
     outcome.second_committed = true;
-    #[cfg(feature = "telemetry")]
-    {
-        let elapsed_ms = first_leg_finished_at.elapsed().as_millis();
-        let window_ms = u64::try_from(elapsed_ms).unwrap_or(u64::MAX);
-        outcome.fx_window_ms = Some(window_ms);
-    }
     Ok(outcome)
 }
 
@@ -637,38 +604,6 @@ fn exact_fx_destination_amount(
         ));
     }
     Ok(destination_amount)
-}
-
-fn execute_scoped_fx_pair(
-    stx: &mut StateTransaction<'_, '_>,
-    source: (&SettlementLeg, DataSpaceId, NumericSpec),
-    destination: (&SettlementLeg, DataSpaceId, NumericSpec),
-) -> Result<SettlementPairOutcome, SettlementPairError> {
-    let mut outcome = SettlementPairOutcome::default();
-    if let Err(err) = apply_scoped_fx_leg(stx, source.0, source.1, source.2) {
-        return Err(SettlementPairError::new(outcome, err));
-    }
-    outcome.first_committed = true;
-
-    #[cfg(feature = "telemetry")]
-    let first_leg_finished_at = Instant::now();
-
-    if let Err(err) = apply_scoped_fx_leg(stx, destination.0, destination.1, destination.2) {
-        if let Err(rollback_err) = rollback_scoped_fx_leg(stx, source.0, source.1) {
-            log_atomicity_warning("FX source", &rollback_err);
-        } else {
-            outcome.first_committed = false;
-        }
-        return Err(SettlementPairError::new(outcome, err));
-    }
-    outcome.second_committed = true;
-
-    #[cfg(feature = "telemetry")]
-    {
-        let elapsed_ms = first_leg_finished_at.elapsed().as_millis();
-        outcome.fx_window_ms = Some(u64::try_from(elapsed_ms).unwrap_or(u64::MAX));
-    }
-    Ok(outcome)
 }
 
 fn validate_dvp_preconditions(
@@ -740,19 +675,14 @@ fn validate_fx_settlement_preconditions(
     authority: &AccountId,
     stx: &mut StateTransaction<'_, '_>,
     instruction: &SettleFxCorridor,
-) -> Result<
-    (
-        FxCorridorPolicy,
-        SettlementLeg,
-        SettlementLeg,
-        NumericSpec,
-        NumericSpec,
-    ),
-    Error,
-> {
-    if !has_named_permission(stx, authority, CAN_SETTLE_FX_CORRIDOR) {
+) -> Result<(FxCorridorPolicy, SettlementLeg, SettlementLeg), Error> {
+    if !can_settle_fx_corridor(stx, authority, &instruction.policy_id) {
         return Err(InstructionExecutionError::InvariantViolation(
-            format!("not permitted: {CAN_SETTLE_FX_CORRIDOR}").into(),
+            format!(
+                "not permitted: exact {CAN_SETTLE_FX_CORRIDOR} for policy `{}` is required",
+                instruction.policy_id
+            )
+            .into(),
         ));
     }
     if stx
@@ -829,16 +759,22 @@ fn validate_fx_settlement_preconditions(
         policy.destination_reserve.clone(),
         instruction.recipient.clone(),
     );
-    ensure_scoped_fx_leg_funding(stx, &source_leg, policy.source_dataspace)?;
-    ensure_scoped_fx_leg_funding(stx, &destination_leg, policy.destination_dataspace)?;
+    let (source_id, source_destination_id) =
+        scoped_fx_leg_asset_ids(&source_leg, policy.source_dataspace);
+    let (destination_source_id, destination_id) =
+        scoped_fx_leg_asset_ids(&destination_leg, policy.destination_dataspace);
+    validate_native_fx_numeric_asset_pair(
+        stx,
+        authority,
+        source_id,
+        source_destination_id,
+        source_leg.quantity().clone(),
+        destination_source_id,
+        destination_id,
+        destination_leg.quantity().clone(),
+    )?;
 
-    Ok((
-        policy,
-        source_leg,
-        destination_leg,
-        source_spec,
-        destination_spec,
-    ))
+    Ok((policy, source_leg, destination_leg))
 }
 
 impl Execute for SetFxCorridorPolicy {
@@ -847,9 +783,13 @@ impl Execute for SetFxCorridorPolicy {
         authority: &AccountId,
         stx: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if !has_named_permission(stx, authority, CAN_SET_FX_CORRIDOR_POLICY) {
+        if !can_set_fx_corridor_policy(stx, authority, &self.policy.policy_id) {
             return Err(InstructionExecutionError::InvariantViolation(
-                format!("not permitted: {CAN_SET_FX_CORRIDOR_POLICY}").into(),
+                format!(
+                    "not permitted: exact {CAN_SET_FX_CORRIDOR_POLICY} for policy `{}` is required",
+                    self.policy.policy_id
+                )
+                .into(),
             ));
         }
         validate_fx_policy_entities(stx, &self.policy)?;
@@ -868,8 +808,19 @@ impl Execute for SetFxCorridorPolicy {
             )));
         }
         registry.upsert(self.policy);
-        SetParameter::new(Parameter::Custom(registry.into_custom_parameter()))
-            .execute(authority, stx)
+        let next = registry.into_custom_parameter();
+        let previous = {
+            let parameters = stx.world.parameters.get_mut();
+            let previous = parameters.custom().get(next.id()).cloned();
+            parameters.set_parameter(Parameter::Custom(next.clone()));
+            previous.unwrap_or_else(|| next.clone())
+        };
+        stx.world
+            .emit_events(Some(ConfigurationEvent::Changed(ParameterChanged {
+                old_value: Parameter::Custom(previous),
+                new_value: Parameter::Custom(next),
+            })));
+        Ok(())
     }
 }
 
@@ -888,19 +839,28 @@ impl Execute for SettleFxCorridor {
         authority: &AccountId,
         stx: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let (policy, source_leg, destination_leg, source_spec, destination_spec) =
+        let (policy, source_leg, destination_leg) =
             validate_fx_settlement_preconditions(authority, stx, &self)?;
 
-        let outcome = execute_scoped_fx_pair(
+        let (source_id, source_destination_id) =
+            scoped_fx_leg_asset_ids(&source_leg, policy.source_dataspace);
+        let (destination_source_id, destination_id) =
+            scoped_fx_leg_asset_ids(&destination_leg, policy.destination_dataspace);
+        execute_native_fx_numeric_asset_pair(
             stx,
-            (&source_leg, policy.source_dataspace, source_spec),
-            (
-                &destination_leg,
-                policy.destination_dataspace,
-                destination_spec,
-            ),
-        )
-        .map_err(SettlementPairError::into_error)?;
+            authority,
+            source_id,
+            source_destination_id,
+            source_leg.quantity().clone(),
+            destination_source_id,
+            destination_id,
+            destination_leg.quantity().clone(),
+        )?;
+        let outcome = SettlementPairOutcome {
+            first_committed: true,
+            second_committed: true,
+            fx_window_ms: None,
+        };
 
         let plan = SettlementPlan::new(
             SettlementExecutionOrder::DeliveryThenPayment,
@@ -926,6 +886,22 @@ impl Execute for SettleFxCorridor {
             Json::new(policy.destination_dataspace.as_u64()),
         );
         let legs = fx_corridor_leg_snapshots(&outcome, &source_leg, &destination_leg);
+        let fx_corridor = FxCorridorSettlementDetails {
+            policy_id: policy.policy_id.clone(),
+            policy_revision: policy.revision,
+            source_dataspace: policy.source_dataspace,
+            destination_dataspace: policy.destination_dataspace,
+            rate_numerator: policy.rate_numerator,
+            rate_denominator: policy.rate_denominator,
+            source_account: policy.source_account.clone(),
+            source_sink: policy.source_sink.clone(),
+            destination_reserve: policy.destination_reserve.clone(),
+            recipient: self.recipient.clone(),
+            source_asset_definition_id: policy.source_asset_definition_id.clone(),
+            destination_asset_definition_id: policy.destination_asset_definition_id.clone(),
+            source_amount: source_leg.quantity().clone(),
+            destination_amount: destination_leg.quantity().clone(),
+        };
         record_settlement_snapshot(
             stx,
             authority,
@@ -934,6 +910,7 @@ impl Execute for SettleFxCorridor {
             metadata,
             SettlementKind::FxCorridor,
             legs,
+            Some(fx_corridor),
             SettlementOutcomeRecord::Success(SettlementSuccessRecord {
                 first_committed: outcome.first_committed,
                 second_committed: outcome.second_committed,
@@ -1032,6 +1009,7 @@ impl Execute for DvpIsi {
                         metadata.clone(),
                         SettlementKind::Dvp,
                         legs,
+                        None,
                         SettlementOutcomeRecord::Failure(SettlementFailureRecord {
                             reason: reason.to_string(),
                         }),
@@ -1082,6 +1060,7 @@ impl Execute for DvpIsi {
                     metadata.clone(),
                     SettlementKind::Dvp,
                     legs,
+                    None,
                     SettlementOutcomeRecord::Success(SettlementSuccessRecord {
                         first_committed: outcome.first_committed,
                         second_committed: outcome.second_committed,
@@ -1117,6 +1096,7 @@ impl Execute for DvpIsi {
                     metadata.clone(),
                     SettlementKind::Dvp,
                     legs,
+                    None,
                     SettlementOutcomeRecord::Failure(SettlementFailureRecord {
                         reason: reason.to_string(),
                     }),
@@ -1175,6 +1155,7 @@ impl Execute for PvpIsi {
                         metadata.clone(),
                         SettlementKind::Pvp,
                         legs,
+                        None,
                         SettlementOutcomeRecord::Failure(SettlementFailureRecord {
                             reason: reason.to_string(),
                         }),
@@ -1226,6 +1207,7 @@ impl Execute for PvpIsi {
                     metadata.clone(),
                     SettlementKind::Pvp,
                     legs,
+                    None,
                     SettlementOutcomeRecord::Success(SettlementSuccessRecord {
                         first_committed: outcome.first_committed,
                         second_committed: outcome.second_committed,
@@ -1261,6 +1243,7 @@ impl Execute for PvpIsi {
                     metadata.clone(),
                     SettlementKind::Pvp,
                     legs,
+                    None,
                     SettlementOutcomeRecord::Failure(SettlementFailureRecord {
                         reason: reason.to_string(),
                     }),
@@ -1325,6 +1308,7 @@ mod tests {
             AssetDefinitionId::new(domain_id.clone(), "pkr".parse().expect("PKR name"));
         let source_dataspace = DataSpaceId::new(10);
         let destination_dataspace = DataSpaceId::new(12);
+        let policy_id: Name = "aed_to_pkr".parse().expect("policy id");
 
         let mut world = World::with_assets(
             [Domain::new(domain_id).build(&ALICE_ID)],
@@ -1365,12 +1349,16 @@ mod tests {
         world.account_permissions.insert(
             ALICE_ID.clone(),
             BTreeSet::from([
-                Permission::new(CAN_SET_FX_CORRIDOR_POLICY.to_owned(), Json::new(())),
-                Permission::new(CAN_SETTLE_FX_CORRIDOR.to_owned(), Json::new(())),
+                Permission::from(CanSetFxCorridorPolicy {
+                    policy_id: policy_id.clone(),
+                }),
+                Permission::from(CanSettleFxCorridor {
+                    policy_id: policy_id.clone(),
+                }),
             ]),
         );
         let policy = FxCorridorPolicy {
-            policy_id: "aed_to_pkr".parse().expect("policy id"),
+            policy_id,
             revision: 1,
             source_dataspace,
             source_account: ALICE_ID.clone(),
@@ -1509,10 +1497,9 @@ mod tests {
 
         stx.world.account_permissions.insert(
             BOB_ID.clone(),
-            BTreeSet::from([Permission::new(
-                CAN_SETTLE_FX_CORRIDOR.to_owned(),
-                Json::new(()),
-            )]),
+            BTreeSet::from([Permission::from(CanSettleFxCorridor {
+                policy_id: policy.policy_id.clone(),
+            })]),
         );
         assert!(
             fx_settlement(&policy, "fx_wrong_authority", 1)
@@ -1520,6 +1507,20 @@ mod tests {
                 .expect_err("misgranted permission must not bypass source ownership")
                 .to_string()
                 .contains("policy source account")
+        );
+
+        stx.world.account_permissions.insert(
+            CARPENTER_ID.clone(),
+            BTreeSet::from([Permission::from(CanSettleFxCorridor {
+                policy_id: "another_corridor".parse().expect("other policy id"),
+            })]),
+        );
+        assert!(
+            fx_settlement(&policy, "fx_wrong_permission_scope", 1)
+                .execute(&CARPENTER_ID, &mut stx)
+                .expect_err("a permission for another corridor must fail closed")
+                .to_string()
+                .contains("exact CanSettleFxCorridor")
         );
 
         let mut revision_two = policy.clone();

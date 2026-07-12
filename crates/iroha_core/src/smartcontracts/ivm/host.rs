@@ -101,6 +101,7 @@ use iroha_data_model::{
     },
     zk::{BackendTag, OpenVerifyEnvelopeBounds, OpenVerifyEnvelopeValidationError},
 };
+use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
 use iroha_primitives::{
     bigint::BigInt,
     calendar,
@@ -10605,6 +10606,35 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let isi = Revoke::account_permission(permission, account);
                 let instr = InstructionBox::from(isi);
                 Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT
+            | ivm::syscalls::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT => {
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
+                let selector_tlv = vm.validate_tlv(vm.register(11))?;
+                if selector_tlv.type_id != PointerType::Blob {
+                    return Err(ivm::VMError::NoritoInvalid);
+                }
+                let entrypoint = core::str::from_utf8(selector_tlv.payload)
+                    .map_err(|_| ivm::VMError::DecodeError)?;
+                if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
+                    return Err(ivm::VMError::DecodeError);
+                }
+                let contract = self
+                    .current_contract_runtime_context
+                    .as_ref()
+                    .map(|context| context.contract_address.clone())
+                    .ok_or(ivm::VMError::PermissionDenied)?;
+                let permission = Permission::from(CanInvokeContractEntrypoint {
+                    contract,
+                    entrypoint: entrypoint.to_owned(),
+                });
+                let instruction = if number == ivm::syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT {
+                    InstructionBox::from(Grant::account_permission(permission, account))
+                } else {
+                    InstructionBox::from(Revoke::account_permission(permission, account))
+                };
+                Ok(self.queue_instruction(instruction))
             }
             ivm::syscalls::SYSCALL_CREATE_TRIGGER => {
                 let ptr = vm.register(10);

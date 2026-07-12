@@ -2791,17 +2791,17 @@ fn multisig_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/multisig/proposals/query".to_owned(),
+        "/v1/multisig/proposals/list".to_owned(),
         Value::Object(multisig_post_operation(
-            "List active multisig proposals.",
-            "Resolve a multisig selector and list nonterminal proposals for the active concrete multisig authority.",
+            "List multisig proposals.",
+            "Resolve a multisig selector and list proposals for the active concrete multisig authority, optionally filtered by lifecycle status.",
             "#/components/schemas/MultisigProposalsListRequest",
             "#/components/schemas/MultisigProposalsListResponse",
             "Multisig alias not found.",
         )),
     );
     paths.insert(
-        "/v1/multisig/proposals/lookup".to_owned(),
+        "/v1/multisig/proposals/get".to_owned(),
         Value::Object(multisig_post_operation(
             "Fetch a multisig proposal.",
             "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
@@ -8722,8 +8722,8 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/multisig/approvals/lookup-for-authority"
                     | "/v1/multisig/approvals/query"
                     | "/v1/multisig/approvals/query-for-authority"
-                    | "/v1/multisig/proposals/lookup"
-                    | "/v1/multisig/proposals/query"
+                    | "/v1/multisig/proposals/get"
+                    | "/v1/multisig/proposals/list"
                     | "/v1/multisig/spec"
                     | "/v1/nfts/query"
                     | "/v1/proofs/query"
@@ -10000,6 +10000,9 @@ fn app_page_schema(item_schema_ref: &str) -> Value {
 /// envelopes. Public component names keep the internally versioned proof types
 /// out of the transport contract.
 fn insert_offline_typed_schemas(schemas: &mut Map) {
+    let max_topup_anchors =
+        iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_MAX_ANCHORS_PER_BLOCK_V2;
+    let max_topup_siblings = iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_MAX_SIBLINGS_V2;
     for (name, schema) in [
         (
             "OfflineFixed8Bytes",
@@ -10442,6 +10445,90 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "topup_operation_id": { "$ref": "#/components/schemas/OfflineOperationIdBytes" },
                     "anchor_digest": { "$ref": "#/components/schemas/OfflineFixed32Bytes" }
                 }
+            }),
+        ),
+        (
+            "OfflineTopUpFinalityHeightContext",
+            norito::json!({
+                "type": "object",
+                "required": [
+                    "context_id", "chain_id", "protocol_version", "height", "epoch",
+                    "epoch_end_height", "mode", "nexus_amx_context_hash", "da_layout",
+                    "leader_seed"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "context_id": { "$ref": "#/components/schemas/SumeragiV2HeightContextId" },
+                    "chain_id": { "type": "string", "minLength": 1 },
+                    "protocol_version": { "type": "integer", "format": "uint16", "enum": [2] },
+                    "height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                    "epoch": { "type": "integer", "format": "uint64", "minimum": 0 },
+                    "epoch_end_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                    "next_epoch_snapshot": {
+                        "$ref": "#/components/schemas/SumeragiV2FinalizedNextEpochSnapshot"
+                    },
+                    "mode": { "$ref": "#/components/schemas/SumeragiV2ConsensusMode" },
+                    "parent_commit_qc": {
+                        "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
+                    },
+                    "nexus_amx_context_hash": { "$ref": "#/components/schemas/Hash" },
+                    "da_layout": { "$ref": "#/components/schemas/SumeragiV2DataAvailabilityLayout" },
+                    "leader_seed": { "$ref": "#/components/schemas/SumeragiV2Bytes32" }
+                }
+            }),
+        ),
+        (
+            "OfflineTopUpFinalityCompactQc",
+            norito::json!({
+                "type": "object",
+                "required": ["height_context", "certificate"],
+                "additionalProperties": false,
+                "properties": {
+                    "height_context": {
+                        "$ref": "#/components/schemas/OfflineTopUpFinalityHeightContext"
+                    },
+                    "certificate": {
+                        "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
+                    }
+                }
+            }),
+        ),
+        (
+            "OfflineTopUpAnchorMerkleProof",
+            norito::json!({
+                "type": "object",
+                "required": ["leaf_index", "leaf_count", "siblings"],
+                "additionalProperties": false,
+                "properties": {
+                    "leaf_index": {
+                        "type": "integer", "format": "uint32", "minimum": 0,
+                        "maximum": (max_topup_anchors - 1)
+                    },
+                    "leaf_count": {
+                        "type": "integer", "format": "uint32", "minimum": 1,
+                        "maximum": max_topup_anchors
+                    },
+                    "siblings": {
+                        "type": "array", "minItems": 0, "maxItems": max_topup_siblings,
+                        "items": { "$ref": "#/components/schemas/OfflineFixed32Bytes" }
+                    }
+                },
+                "description": "Canonical balanced-Merkle inclusion path for the exact block-local top-up anchor. Native verification also requires leaf_index < leaf_count and the canonical sibling count."
+            }),
+        ),
+        (
+            "OfflineTopUpFinalityProof",
+            norito::json!({
+                "type": "object",
+                "required": ["version", "anchor", "commit_qc", "anchor_path"],
+                "additionalProperties": false,
+                "properties": {
+                    "version": { "type": "integer", "format": "uint16", "enum": [2] },
+                    "anchor": { "$ref": "#/components/schemas/OfflineTopUpAnchorRef" },
+                    "commit_qc": { "$ref": "#/components/schemas/OfflineTopUpFinalityCompactQc" },
+                    "anchor_path": { "$ref": "#/components/schemas/OfflineTopUpAnchorMerkleProof" }
+                },
+                "description": "Direct typed Sumeragi-v2 finality proof for one applied top-up; this is never a base64-wrapped Norito archive."
             }),
         ),
         (
@@ -12360,6 +12447,8 @@ fn sccp_governance_schemas(schemas: &mut Map) {
 }
 
 fn bridge_finality_schemas(schemas: &mut Map) {
+    let max_kagemusha_topups =
+        u64::from(iroha_data_model::block::consensus_v2::MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK);
     schemas.insert(
         "SumeragiV2Bytes32".to_owned(),
         norito::json!({
@@ -12583,15 +12672,57 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         }),
     );
     schemas.insert(
+        "SumeragiV2ExecutionCommitment".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "parent_state_root", "post_state_root", "ordinary_writes_root",
+                "topup_anchor_count"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "parent_state_root": { "$ref": "#/components/schemas/Hash" },
+                "post_state_root": { "$ref": "#/components/schemas/Hash" },
+                "ordinary_writes_root": { "$ref": "#/components/schemas/Hash" },
+                "topup_anchor_root": { "$ref": "#/components/schemas/Hash" },
+                "topup_anchor_count": {
+                    "type": "integer", "format": "uint32", "minimum": 0,
+                    "maximum": max_kagemusha_topups
+                }
+            },
+            "oneOf": [
+                {
+                    "properties": { "topup_anchor_count": { "const": 0 } },
+                    "not": { "required": ["topup_anchor_root"] }
+                },
+                {
+                    "required": ["topup_anchor_root"],
+                    "properties": {
+                        "topup_anchor_count": {
+                            "minimum": 1, "maximum": max_kagemusha_topups
+                        }
+                    }
+                }
+            ],
+            "description": "Mandatory deterministic execution result authenticated by every Prepare/Commit vote and quorum certificate. A top-up root is present exactly when topup_anchor_count is non-zero."
+        }),
+    );
+    schemas.insert(
         "SumeragiV2QuorumCertificate".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["round", "phase", "subject", "signers", "aggregate_signature"],
+            "required": [
+                "round", "phase", "subject", "execution_commitment", "signers",
+                "aggregate_signature"
+            ],
             "additionalProperties": false,
             "properties": {
                 "round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
                 "phase": { "$ref": "#/components/schemas/SumeragiV2GlobalPhase" },
                 "subject": { "$ref": "#/components/schemas/SumeragiV2BlockSubject" },
+                "execution_commitment": {
+                    "$ref": "#/components/schemas/SumeragiV2ExecutionCommitment"
+                },
                 "signers": {
                     "type": "array", "minItems": 1, "maxItems": 4096,
                     "uniqueItems": true,
@@ -12609,12 +12740,18 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         "SumeragiV2CommitQuorumCertificate".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["round", "phase", "subject", "signers", "aggregate_signature"],
+            "required": [
+                "round", "phase", "subject", "execution_commitment", "signers",
+                "aggregate_signature"
+            ],
             "additionalProperties": false,
             "properties": {
                 "round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
                 "phase": { "$ref": "#/components/schemas/SumeragiV2CommitPhase" },
                 "subject": { "$ref": "#/components/schemas/SumeragiV2BlockSubject" },
+                "execution_commitment": {
+                    "$ref": "#/components/schemas/SumeragiV2ExecutionCommitment"
+                },
                 "signers": {
                     "type": "array", "minItems": 1, "maxItems": 4096,
                     "uniqueItems": true,
@@ -13928,6 +14065,7 @@ fn openapi_schemas() -> Map {
                 "message": {
                     "type": "string",
                     "minLength": 1,
+                    "maxLength": 1024,
                     "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
                     "description": "Non-empty human-readable and non-stable explanation without surrounding whitespace or control characters."
                 }
@@ -14001,7 +14139,11 @@ fn openapi_schemas() -> Map {
                 "evaluated_block_hash", "active_transfer_verifier", "ready", "blockers"
             ],
             "properties": {
-                "asset_definition_id": { "type": "string" },
+                "asset_definition_id": {
+                    "type": "string",
+                    "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$",
+                    "description": "Resolved canonical unprefixed Base58 asset-definition address; an alias selector is never echoed here."
+                },
                 "asset_scale": {
                     "anyOf": [
                         {
@@ -14094,7 +14236,10 @@ fn openapi_schemas() -> Map {
         "OfflineTopUpResult".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["transaction_hash", "finalized_block_height", "server_time_ms", "anchor"],
+            "required": [
+                "transaction_hash", "finalized_block_height", "server_time_ms", "anchor",
+                "finality_proof"
+            ],
             "properties": {
                 "transaction_hash": { "$ref": "#/components/schemas/OfflineTransactionHash" },
                 "finalized_block_height": {
@@ -14106,6 +14251,10 @@ fn openapi_schemas() -> Map {
                 "anchor": {
                     "$ref": "#/components/schemas/OfflineTopUpAnchor",
                     "description": "Direct typed top-up anchor representation; it is not a Norito-base64 wrapper."
+                },
+                "finality_proof": {
+                    "$ref": "#/components/schemas/OfflineTopUpFinalityProof",
+                    "description": "Direct typed consensus proof for the exact anchor; it is mandatory before a wallet may run recursive init."
                 }
             }
         }),
@@ -17417,18 +17566,28 @@ fn openapi_schemas() -> Map {
         "MultisigResponse".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["ok", "resolved_multisig_account_id"],
+            "required": [
+                "ok",
+                "resolved_multisig_account_id",
+                "submitted",
+                "proposal_id",
+                "instructions_hash",
+                "tx_hash_hex",
+                "executed_tx_hash_hex",
+                "creation_time_ms",
+                "signing_message_b64"
+            ],
             "additionalProperties": false,
             "properties": {
                 "ok": { "type": "boolean" },
                 "resolved_multisig_account_id": { "type": "string" },
-                "submitted": { "type": "boolean" },
-                "proposal_id": { "type": "string" },
-                "instructions_hash": { "type": "string" },
-                "tx_hash_hex": { "type": "string" },
-                "executed_tx_hash_hex": { "type": "string" },
-                "creation_time_ms": { "type": "integer", "format": "uint64" },
-                "signing_message_b64": { "type": "string" }
+                "submitted": { "oneOf": [{ "type": "boolean" }, { "type": "null" }] },
+                "proposal_id": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+                "instructions_hash": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+                "tx_hash_hex": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+                "executed_tx_hash_hex": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+                "creation_time_ms": { "oneOf": [{ "type": "integer", "format": "uint64" }, { "type": "null" }] },
+                "signing_message_b64": { "oneOf": [{ "type": "string" }, { "type": "null" }] }
             }
         }),
     );
@@ -17525,20 +17684,34 @@ fn openapi_schemas() -> Map {
         "MultisigCancelResponse".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["ok", "resolved_multisig_account_id"],
+            "required": [
+                "ok",
+                "resolved_multisig_account_id",
+                "submitted",
+                "action",
+                "target_proposal_id",
+                "target_instructions_hash",
+                "cancel_proposal_id",
+                "cancel_instructions_hash",
+                "tx_hash_hex",
+                "executed_tx_hash_hex",
+                "creation_time_ms",
+                "signing_message_b64"
+            ],
             "additionalProperties": false,
             "properties": {
                 "ok": { "type": "boolean" },
                 "resolved_multisig_account_id": { "type": "string" },
-                "submitted": { "type": "boolean" },
+                "submitted": { "oneOf": [{ "type": "boolean" }, { "type": "null" }] },
                 "action": { "type": "string" },
                 "target_proposal_id": { "type": "string" },
                 "target_instructions_hash": { "type": "string" },
                 "cancel_proposal_id": { "type": "string" },
                 "cancel_instructions_hash": { "type": "string" },
-                "executed_tx_hash_hex": { "type": "string" },
-                "creation_time_ms": { "type": "integer", "format": "uint64" },
-                "signing_message_b64": { "type": "string" }
+                "tx_hash_hex": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+                "executed_tx_hash_hex": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+                "creation_time_ms": { "oneOf": [{ "type": "integer", "format": "uint64" }, { "type": "null" }] },
+                "signing_message_b64": { "oneOf": [{ "type": "string" }, { "type": "null" }] }
             }
         }),
     );
@@ -17566,7 +17739,20 @@ fn openapi_schemas() -> Map {
         "MultisigProposalsListRequest".to_owned(),
         norito::json!({
             "allOf": [
-                { "$ref": "#/components/schemas/MultisigAccountSelector" }
+                { "$ref": "#/components/schemas/MultisigAccountSelector" },
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "status": {
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "enum": ["COLLECTING_SIGNATURES", "FINALIZED", "CANCELED", "EXPIRED"]
+                            }
+                        }
+                    }
+                }
             ]
         }),
     );
@@ -17574,12 +17760,19 @@ fn openapi_schemas() -> Map {
         "MultisigProposalEntry".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["proposal_id", "instructions_hash", "proposal"],
+            "required": ["proposal_id", "instructions_hash", "operation_type", "proposal", "status"],
             "additionalProperties": false,
             "properties": {
                 "proposal_id": { "type": "string" },
                 "instructions_hash": { "type": "string" },
-                "proposal": { "$ref": "#/components/schemas/MultisigProposalPayload" }
+                "operation_type": { "type": "string" },
+                "intent": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
+                "proposal": { "$ref": "#/components/schemas/MultisigProposalPayload" },
+                "status": {
+                    "type": "string",
+                    "enum": ["COLLECTING_SIGNATURES", "FINALIZED", "CANCELED", "EXPIRED"]
+                },
+                "terminal_at_ms": { "type": "integer", "format": "uint64", "nullable": true }
             }
         }),
     );
@@ -17618,13 +17811,20 @@ fn openapi_schemas() -> Map {
         "MultisigProposalGetResponse".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["resolved_multisig_account_id", "proposal_id", "instructions_hash", "proposal"],
+            "required": ["resolved_multisig_account_id", "proposal_id", "instructions_hash", "operation_type", "proposal", "status"],
             "additionalProperties": false,
             "properties": {
                 "resolved_multisig_account_id": { "type": "string" },
                 "proposal_id": { "type": "string" },
                 "instructions_hash": { "type": "string" },
-                "proposal": { "$ref": "#/components/schemas/MultisigProposalPayload" }
+                "operation_type": { "type": "string" },
+                "intent": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
+                "proposal": { "$ref": "#/components/schemas/MultisigProposalPayload" },
+                "status": {
+                    "type": "string",
+                    "enum": ["COLLECTING_SIGNATURES", "FINALIZED", "CANCELED", "EXPIRED"]
+                },
+                "terminal_at_ms": { "type": "integer", "format": "uint64", "nullable": true }
             }
         }),
     );
@@ -18009,6 +18209,14 @@ mod tests {
                     schemas.contains_key(&referenced),
                     "Offline component {name} references missing component {referenced}"
                 );
+                // The top-up finality projection intentionally reuses the
+                // already-public Sumeragi consensus contracts. Treat those
+                // shared schemas as terminal dependencies so the Offline
+                // first-release naming guard continues to prohibit internal
+                // Kagemusha/wire-version component names of its own.
+                if is_shared_sumeragi_consensus_component(&referenced) {
+                    continue;
+                }
                 if !reachable.contains(&referenced) {
                     pending.push_back(referenced);
                 }
@@ -18016,6 +18224,18 @@ mod tests {
         }
 
         reachable
+    }
+
+    fn is_shared_sumeragi_consensus_component(name: &str) -> bool {
+        matches!(
+            name,
+            "SumeragiV2HeightContextId"
+                | "SumeragiV2FinalizedNextEpochSnapshot"
+                | "SumeragiV2ConsensusMode"
+                | "SumeragiV2CommitQuorumCertificate"
+                | "SumeragiV2DataAvailabilityLayout"
+                | "SumeragiV2Bytes32"
+        )
     }
 
     fn assert_no_internal_offline_name(value: &Value, component: &str) {
@@ -18035,7 +18255,17 @@ mod tests {
                 }
             }
             Value::Object(object) => {
-                for value in object.values() {
+                for (key, value) in object {
+                    if key == "$ref"
+                        && value
+                            .as_str()
+                            .and_then(|reference| {
+                                reference.strip_prefix(COMPONENT_SCHEMA_REF_PREFIX)
+                            })
+                            .is_some_and(is_shared_sumeragi_consensus_component)
+                    {
+                        continue;
+                    }
                     assert_no_internal_offline_name(value, component);
                 }
             }
@@ -19495,10 +19725,10 @@ mod tests {
         assert!(paths.contains_key("/v1/contracts/call/multisig/approve"));
         assert!(paths.contains_key("/v1/multisig/cancel"));
         assert!(paths.contains_key("/v1/multisig/spec"));
-        assert!(paths.contains_key("/v1/multisig/proposals/query"));
-        assert!(paths.contains_key("/v1/multisig/proposals/lookup"));
-        assert!(!paths.contains_key("/v1/multisig/proposals/list"));
-        assert!(!paths.contains_key("/v1/multisig/proposals/get"));
+        assert!(paths.contains_key("/v1/multisig/proposals/list"));
+        assert!(paths.contains_key("/v1/multisig/proposals/get"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/query"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/lookup"));
         assert!(paths.contains_key("/v1/multisig/approvals/query"));
         assert!(paths.contains_key("/v1/multisig/approvals/lookup"));
         assert!(paths.contains_key("/v1/multisig/approvals/query-for-authority"));
@@ -19887,6 +20117,28 @@ mod tests {
             blocker_code.get("pattern").and_then(Value::as_str),
             Some("^[a-z0-9][a-z0-9_]{0,63}$")
         );
+        let blocker_message = schemas
+            .get("OfflineReadinessBlocker")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("message"))
+            .and_then(Value::as_object)
+            .expect("offline readiness blocker message schema");
+        assert_eq!(
+            blocker_message.get("maxLength").and_then(Value::as_u64),
+            Some(1024)
+        );
+        let readiness_asset = readiness
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("asset_definition_id"))
+            .and_then(Value::as_object)
+            .expect("offline readiness canonical asset schema");
+        assert_eq!(
+            readiness_asset.get("pattern").and_then(Value::as_str),
+            Some("^[1-9A-HJ-NP-Za-km-z]{28}$")
+        );
         assert!(schemas.contains_key("OfflineOperationReference"));
         let status = schemas
             .get("OfflineOperationStatus")
@@ -19922,6 +20174,9 @@ mod tests {
             "OfflineVerifyingKeyRecord",
             "OfflineRedeemChangeBranch",
             "OfflineTopUpAnchor",
+            "OfflineTopUpFinalityProof",
+            "OfflineTopUpFinalityCompactQc",
+            "OfflineTopUpAnchorMerkleProof",
             "OfflineBase64Bytes",
             "OfflineLanePrivacyWitness",
         ] {
@@ -20014,6 +20269,32 @@ mod tests {
         assert_eq!(
             property_ref(schemas, "OfflineTopUpResult", "anchor"),
             "#/components/schemas/OfflineTopUpAnchor"
+        );
+        assert_eq!(
+            component_required(schemas, "OfflineTopUpResult"),
+            [
+                "transaction_hash",
+                "finalized_block_height",
+                "server_time_ms",
+                "anchor",
+                "finality_proof",
+            ]
+        );
+        assert_eq!(
+            property_ref(schemas, "OfflineTopUpResult", "finality_proof"),
+            "#/components/schemas/OfflineTopUpFinalityProof"
+        );
+        assert_eq!(
+            property_ref(schemas, "OfflineTopUpFinalityProof", "anchor"),
+            "#/components/schemas/OfflineTopUpAnchorRef"
+        );
+        assert_eq!(
+            property_ref(schemas, "OfflineTopUpFinalityProof", "commit_qc"),
+            "#/components/schemas/OfflineTopUpFinalityCompactQc"
+        );
+        assert_eq!(
+            property_ref(schemas, "OfflineTopUpFinalityProof", "anchor_path"),
+            "#/components/schemas/OfflineTopUpAnchorMerkleProof"
         );
 
         let top_up_anchor = component_properties(schemas, "OfflineTopUpAnchor");
@@ -20636,10 +20917,7 @@ mod tests {
             Some("read")
         );
 
-        for path in [
-            "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/lookup",
-        ] {
+        for path in ["/v1/multisig/proposals/list", "/v1/multisig/proposals/get"] {
             let operation = paths
                 .get(path)
                 .and_then(Value::as_object)
@@ -21410,6 +21688,72 @@ mod tests {
     }
 
     #[test]
+    fn multisig_proposal_schemas_document_status_filters_and_lifecycle_fields() {
+        let doc = generate_spec();
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("components schemas");
+
+        let request_status = schemas
+            .get("MultisigProposalsListRequest")
+            .and_then(Value::as_object)
+            .and_then(|request| request.get("allOf"))
+            .and_then(Value::as_array)
+            .and_then(|all_of| all_of.get(1))
+            .and_then(Value::as_object)
+            .and_then(|query| query.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("status"))
+            .and_then(Value::as_object)
+            .and_then(|status| status.get("items"))
+            .and_then(Value::as_object)
+            .and_then(|items| items.get("enum"))
+            .and_then(Value::as_array)
+            .expect("proposal status filter enum");
+        let expected_request_status =
+            norito::json!(["COLLECTING_SIGNATURES", "FINALIZED", "CANCELED", "EXPIRED"]);
+        assert_eq!(
+            request_status,
+            expected_request_status
+                .as_array()
+                .expect("expected proposal status enum array")
+        );
+
+        for schema_name in ["MultisigProposalEntry", "MultisigProposalGetResponse"] {
+            let schema = schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{schema_name} schema"));
+            let required = schema
+                .get("required")
+                .and_then(Value::as_array)
+                .expect("required fields");
+            for field in ["operation_type", "proposal", "status"] {
+                assert!(
+                    required.iter().any(|value| value.as_str() == Some(field)),
+                    "{schema_name} must require {field}"
+                );
+            }
+            let properties = schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("proposal properties");
+            assert!(properties.contains_key("intent"));
+            assert!(properties.contains_key("terminal_at_ms"));
+            let status_values = properties
+                .get("status")
+                .and_then(Value::as_object)
+                .and_then(|status| status.get("enum"))
+                .and_then(Value::as_array)
+                .expect("proposal response status enum");
+            assert_eq!(status_values, request_status);
+        }
+    }
+
+    #[test]
     #[allow(clippy::similar_names)]
     fn helper_builders_emit_expected_shapes() {
         let body = binary_request_body("binary payload");
@@ -21786,6 +22130,7 @@ mod tests {
             "SumeragiV2ValidatorPower",
             "SumeragiV2DualQuorum",
             "SumeragiV2BlockSubject",
+            "SumeragiV2ExecutionCommitment",
             "SumeragiV2QuorumCertificate",
             "SumeragiV2CommitQuorumCertificate",
             "SumeragiV2BlsProof",
@@ -21980,6 +22325,23 @@ mod tests {
             &["block_hash", "payload_hash"],
             &["parent_block_hash", "block_hash", "payload_hash"],
         );
+        assert_closed_shape(
+            &schemas,
+            "SumeragiV2ExecutionCommitment",
+            &[
+                "parent_state_root",
+                "post_state_root",
+                "ordinary_writes_root",
+                "topup_anchor_count",
+            ],
+            &[
+                "parent_state_root",
+                "post_state_root",
+                "ordinary_writes_root",
+                "topup_anchor_root",
+                "topup_anchor_count",
+            ],
+        );
         for certificate in [
             "SumeragiV2QuorumCertificate",
             "SumeragiV2CommitQuorumCertificate",
@@ -21991,6 +22353,7 @@ mod tests {
                     "round",
                     "phase",
                     "subject",
+                    "execution_commitment",
                     "signers",
                     "aggregate_signature",
                 ],
@@ -21998,6 +22361,7 @@ mod tests {
                     "round",
                     "phase",
                     "subject",
+                    "execution_commitment",
                     "signers",
                     "aggregate_signature",
                 ],
@@ -22174,6 +22538,37 @@ mod tests {
             "commit_qc",
             "#/components/schemas/SumeragiV2CommitQuorumCertificate",
         );
+        for certificate in [
+            "SumeragiV2QuorumCertificate",
+            "SumeragiV2CommitQuorumCertificate",
+        ] {
+            assert_ref(
+                &schemas,
+                certificate,
+                "execution_commitment",
+                "#/components/schemas/SumeragiV2ExecutionCommitment",
+            );
+        }
+        let topup_count = property(
+            &schemas,
+            "SumeragiV2ExecutionCommitment",
+            "topup_anchor_count",
+        );
+        assert_eq!(topup_count.get("minimum").and_then(Value::as_u64), Some(0));
+        assert_eq!(
+            topup_count.get("maximum").and_then(Value::as_u64),
+            Some(u64::from(
+                iroha_data_model::block::consensus_v2::MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK,
+            ))
+        );
+        assert_eq!(
+            schema(&schemas, "SumeragiV2ExecutionCommitment")
+                .get("oneOf")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2),
+            "top-up root/count presence must be encoded as an exact two-branch contract"
+        );
         assert_eq!(
             property(&schemas, "SumeragiV2CommitPhase", "phase")
                 .get("enum")
@@ -22195,6 +22590,7 @@ mod tests {
             "SumeragiV2ValidatorPower",
             "SumeragiV2DualQuorum",
             "SumeragiV2BlockSubject",
+            "SumeragiV2ExecutionCommitment",
             "SumeragiV2QuorumCertificate",
             "SumeragiV2CommitQuorumCertificate",
         ] {
@@ -22217,8 +22613,6 @@ mod tests {
             "validator_set_hash_version",
             "validator_set",
             "subject_block_hash",
-            "parent_state_root",
-            "post_state_root",
             "mode_tag",
             "highest_qc",
             "aggregate",
@@ -22396,6 +22790,44 @@ mod tests {
                 .and_then(Value::as_array)
                 .is_some_and(|context_id| context_id.len() == 1)
         );
+        let execution_commitment = commit_qc
+            .get("execution_commitment")
+            .and_then(Value::as_object)
+            .expect("mandatory execution commitment object");
+        let mut execution_fields = execution_commitment
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        execution_fields.sort_unstable();
+        assert_eq!(
+            execution_fields,
+            [
+                "ordinary_writes_root",
+                "parent_state_root",
+                "post_state_root",
+                "topup_anchor_count",
+            ],
+            "zero-top-up commitment must omit only its optional top-up root"
+        );
+        for root in [
+            "parent_state_root",
+            "post_state_root",
+            "ordinary_writes_root",
+        ] {
+            assert!(
+                execution_commitment
+                    .get(root)
+                    .and_then(Value::as_str)
+                    .is_some_and(|hash| hash.starts_with("hash:") && hash.len() == 74),
+                "execution commitment omitted canonical {root}"
+            );
+        }
+        assert_eq!(
+            execution_commitment
+                .get("topup_anchor_count")
+                .and_then(Value::as_u64),
+            Some(0)
+        );
         assert!(
             commit_qc
                 .get("aggregate_signature")
@@ -22416,6 +22848,27 @@ mod tests {
                         .all(|byte| byte.as_u64().is_some_and(|byte| byte <= 255))
             })
         }));
+
+        let mut missing_execution = value.clone();
+        let removed = missing_execution
+            .as_object_mut()
+            .and_then(|proof| proof.get_mut("finality_artifact"))
+            .and_then(Value::as_object_mut)
+            .and_then(|artifact| artifact.get_mut("commit_qc"))
+            .and_then(Value::as_object_mut)
+            .expect("mutable commit QC object")
+            .remove("execution_commitment");
+        assert!(
+            removed.is_some(),
+            "fixture commit QC must carry execution commitment"
+        );
+        assert!(
+            norito::json::from_value::<iroha_data_model::bridge::BridgeFinalityProof>(
+                missing_execution,
+            )
+            .is_err(),
+            "BridgeFinalityProof JSON decoder accepted a CommitQC without its execution commitment"
+        );
 
         for retired in [
             "height",

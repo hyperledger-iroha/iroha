@@ -9418,7 +9418,7 @@ final class ToriiClientTests: XCTestCase {
     func testGetOfflineReadinessParsesExactContract() async throws {
         let payload = """
         {
-          "asset_definition_id": "xor#wonderland",
+          "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "asset_scale": 9,
           "evaluated_block_height": 18446744073709551615,
           "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
@@ -9453,7 +9453,7 @@ final class ToriiClientTests: XCTestCase {
         let readiness = try await makeClient().getOfflineReadiness(
             assetDefinitionId: "xor#wonderland"
         )
-        XCTAssertEqual(readiness.assetDefinitionId, "xor#wonderland")
+        XCTAssertEqual(readiness.assetDefinitionId, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1")
         XCTAssertEqual(readiness.assetScale, 9)
         XCTAssertEqual(readiness.evaluatedBlockHeight, UInt64.max)
         XCTAssertEqual(readiness.evaluatedBlockHash, String(repeating: "ab", count: 32))
@@ -9470,9 +9470,95 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testGetOfflineReadinessBindsCanonicalSelectorsButResolvesAliases() async throws {
+        let requestedID = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+        let returnedID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+        let payload = """
+        {
+          "asset_definition_id": "\(returnedID)",
+          "asset_scale": 9,
+          "evaluated_block_height": 7,
+          "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "active_transfer_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+            "version": 7,
+            "circuit_id": "halo2/pasta/ipa/offline-transfer",
+            "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+            "max_proof_bytes": 4096,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
+          "ready": true,
+          "blockers": []
+        }
+        """.data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, payload)
+        }
+
+        let resolved = try await makeClient().getOfflineReadiness(
+            assetDefinitionId: "xor#wonderland"
+        )
+        XCTAssertEqual(resolved.assetDefinitionId, returnedID)
+
+        do {
+            _ = try await makeClient().getOfflineReadiness(assetDefinitionId: requestedID)
+            XCTFail("expected canonical selector mismatch to fail")
+        } catch {
+            XCTAssertTrue(
+                String(describing: error).contains(
+                    "offline readiness response is not bound to the requested asset definition"
+                )
+            )
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetOfflineReadinessRejectsMalformedSelectorsBeforeTransport() async throws {
+        StubURLProtocol.handler = { request in
+            XCTFail("malformed readiness selector reached transport: \(request)")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 500,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data())
+        }
+
+        for selector in [
+            "",
+            " xor#wonderland",
+            "xor#wonderland ",
+            "XOR#wonderland",
+            "xor##wonderland",
+            "xor..coin#wonderland",
+            "xor#wonder_land",
+            "xor#world..land",
+            "xor\u{0001}#wonderland",
+            "61CtjvNd9T3THAR65GsMVHr82Bjc ",
+        ] {
+            do {
+                _ = try await makeClient().getOfflineReadiness(assetDefinitionId: selector)
+                XCTFail("expected malformed readiness selector to fail: \(selector)")
+            } catch {
+                XCTAssertTrue(String(describing: error).contains("assetDefinitionId"))
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineReadinessRejectsNonCanonicalFields() async throws {
         func payload(extra: String = "",
-                     assetDefinitionId: String = "\"xor#wonderland\"",
+                     assetDefinitionId: String = "\"7EAD8EFYUx1aVKZPUU1fyKvr8dF1\"",
                      assetScale: String = "9",
                      blockHash: String = "\"abababababababababababababababababababababababababababababababab\"",
                      activeTransferVerifier: String? = nil,
@@ -9506,8 +9592,12 @@ final class ToriiClientTests: XCTestCase {
 
         let cases: [(Data, String)] = [
             (
+                payload(assetDefinitionId: "\"rose#wonderland\""),
+                "asset_definition_id must be a canonical unprefixed Base58 asset definition id"
+            ),
+            (
                 payload(assetDefinitionId: "\" xor#wonderland\""),
-                "asset_definition_id must be exact non-empty text without whitespace"
+                "asset_definition_id must be a canonical unprefixed Base58 asset definition id"
             ),
             (
                 payload(blockHash: "\"ABababababababababababababababababababababababababababababababab\""),
@@ -9536,6 +9626,161 @@ final class ToriiClientTests: XCTestCase {
             (
                 payload(activeTransferVerifier: "null"),
                 "active_transfer_verifier must be null exactly when transfer_verifier_unavailable is blocked"
+            ),
+            (
+                payload(activeTransferVerifier: """
+                {
+                  "id": {"backend": "halo2/ipa", "name": "Offline-Transfer"},
+                  "version": 7,
+                  "circuit_id": "halo2/pasta/ipa/offline-transfer",
+                  "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+                  "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                  "max_proof_bytes": 4096,
+                  "activation_height": 0,
+                  "withdrawal_height": null
+                }
+                """),
+                "id must use bounded portable verifier-registry syntax"
+            ),
+            (
+                payload(activeTransferVerifier: """
+                {
+                  "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+                  "version": 7,
+                  "circuit_id": "halo2//offline-transfer",
+                  "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+                  "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                  "max_proof_bytes": 4096,
+                  "activation_height": 0,
+                  "withdrawal_height": null
+                }
+                """),
+                "circuit_id must use the portable OpenVerify grammar"
+            ),
+            (
+                payload(activeTransferVerifier: """
+                {
+                  "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+                  "version": 7,
+                  "circuit_id": "halo2/pasta/ipa/offline-transfer",
+                  "commitment": "0000000000000000000000000000000000000000000000000000000000000000",
+                  "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                  "max_proof_bytes": 4096,
+                  "activation_height": 0,
+                  "withdrawal_height": null
+                }
+                """),
+                "verifier commitment and public-input schema hash must be nonzero"
+            ),
+            (
+                payload(activeTransferVerifier: """
+                {
+                  "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+                  "version": 7,
+                  "circuit_id": "halo2/pasta/ipa/offline-transfer",
+                  "commitment": "CDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCD",
+                  "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                  "max_proof_bytes": 4096,
+                  "activation_height": 0,
+                  "withdrawal_height": null
+                }
+                """),
+                "commitment must be exact lowercase 32-byte hexadecimal"
+            ),
+            (
+                payload(activeTransferVerifier: """
+                {
+                  "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+                  "version": 7,
+                  "circuit_id": "halo2/pasta/ipa/offline-transfer",
+                  "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+                  "public_inputs_schema_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+                  "max_proof_bytes": 4096,
+                  "activation_height": 0,
+                  "withdrawal_height": null
+                }
+                """),
+                "verifier commitment and public-input schema hash must be nonzero"
+            ),
+            (
+                payload(activeTransferVerifier: """
+                {
+                  "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+                  "version": 7,
+                  "circuit_id": "halo2/pasta/ipa/offline-transfer",
+                  "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+                  "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                  "max_proof_bytes": 0,
+                  "activation_height": 0,
+                  "withdrawal_height": null
+                }
+                """),
+                "max_proof_bytes must be greater than zero"
+            ),
+            (
+                payload(activeTransferVerifier: """
+                {
+                  "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+                  "version": 7,
+                  "circuit_id": "halo2/pasta/ipa/offline-transfer",
+                  "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+                  "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                  "max_proof_bytes": 4096,
+                  "activation_height": 8,
+                  "withdrawal_height": null
+                }
+                """),
+                "active_transfer_verifier must be active at evaluated_block_height"
+            ),
+            (
+                payload(activeTransferVerifier: """
+                {
+                  "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+                  "version": 7,
+                  "circuit_id": "halo2/pasta/ipa/offline-transfer",
+                  "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+                  "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                  "max_proof_bytes": 4096,
+                  "activation_height": 7,
+                  "withdrawal_height": 7
+                }
+                """),
+                "withdrawal_height must be greater than activation_height"
+            ),
+            (
+                payload(
+                    ready: "false",
+                    blockers: "[{\"code\":\"asset_scale_unavailable\",\"message\":\"no\"}]"
+                ),
+                "supported asset_scale must not have an asset scale blocker"
+            ),
+            (
+                payload(
+                    ready: "false",
+                    blockers: "[{\"code\":\"transfer_verifier_unavailable\",\"message\":\"no\"}]"
+                ),
+                "active_transfer_verifier must be null exactly when transfer_verifier_unavailable is blocked"
+            ),
+            (
+                payload(
+                    ready: "false",
+                    blockers: "[{\"code\":\"blocked\",\"message\":\"no\\u0001control\"}]"
+                ),
+                "message must be exact non-empty text of at most 1024 Unicode characters"
+            ),
+            (
+                payload(
+                    ready: "false",
+                    blockers: "[{\"code\":\"blocked\",\"message\":\"\(String(repeating: "x", count: 1025))\"}]"
+                ),
+                "message must be exact non-empty text of at most 1024 Unicode characters"
+            ),
+            (
+                payload(
+                    ready: "false",
+                    blockers: "[{\"code\":\"blocked\",\"message\":\"one\"},{\"code\":\"blocked\",\"message\":\"two\"}]"
+                ),
+                "blocker codes must be unique"
             )
         ]
 
@@ -9562,13 +9807,126 @@ final class ToriiClientTests: XCTestCase {
                 )
             }
         }
+
+        let numericBoundaryCases = [
+            payload(assetScale: "-1"),
+            payload(assetScale: "4294967296"),
+            payload(activeTransferVerifier: """
+            {
+              "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+              "version": 4294967296,
+              "circuit_id": "halo2/pasta/ipa/offline-transfer",
+              "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+              "max_proof_bytes": 4096,
+              "activation_height": 0,
+              "withdrawal_height": null
+            }
+            """),
+            payload(extra: "\"future\": true,", activeTransferVerifier: """
+            {
+              "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+              "version": 7,
+              "circuit_id": "halo2/pasta/ipa/offline-transfer",
+              "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+              "max_proof_bytes": 4096,
+              "activation_height": 18446744073709551616,
+              "withdrawal_height": null
+            }
+            """)
+        ]
+        for body in numericBoundaryCases {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (response, body)
+            }
+            do {
+                _ = try await makeClient().getOfflineReadiness(
+                    assetDefinitionId: "xor#wonderland"
+                )
+                XCTFail("expected out-of-range readiness integer to fail")
+            } catch {}
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetOfflineReadinessRequiresExplicitNullableSnapshotFields() async throws {
+        let valid = """
+        {
+          "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+          "asset_scale": 9,
+          "evaluated_block_height": 7,
+          "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "active_transfer_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+            "version": 7,
+            "circuit_id": "halo2/pasta/ipa/offline-transfer",
+            "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+            "max_proof_bytes": 4096,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
+          "ready": true,
+          "blockers": []
+        }
+        """
+        let cases: [(String, String)] = [
+            (
+                valid.replacingOccurrences(of: "  \"asset_scale\": 9,\n", with: ""),
+                "asset_scale is required"
+            ),
+            (
+                valid.replacingOccurrences(
+                    of: #"  "active_transfer_verifier": {"#,
+                    with: #"  "omitted_transfer_verifier": {"#
+                ),
+                "active_transfer_verifier is required"
+            ),
+            (
+                valid.replacingOccurrences(
+                    of: ",\n    \"withdrawal_height\": null",
+                    with: ""
+                ),
+                "withdrawal_height is required"
+            )
+        ]
+
+        for (json, expectedMessage) in cases {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (response, Data(json.utf8))
+            }
+            do {
+                _ = try await makeClient().getOfflineReadiness(
+                    assetDefinitionId: "xor#wonderland"
+                )
+                XCTFail("expected omitted readiness field to fail")
+            } catch {
+                XCTAssertTrue(
+                    String(describing: error).contains(expectedMessage),
+                    "expected \(expectedMessage), got \(error)"
+                )
+            }
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineReadinessAcceptsUnsupportedScaleAndUnavailableVerifierBlockers() async throws {
         let payload = """
         {
-          "asset_definition_id": "xor#wonderland",
+          "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "asset_scale": 29,
           "evaluated_block_height": 7,
           "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
@@ -9603,7 +9961,7 @@ final class ToriiClientTests: XCTestCase {
     func testGetOfflineReadinessIgnoresIndependentUnknownMembers() async throws {
         let payload = """
         {
-          "asset_definition_id": "xor#wonderland",
+          "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "asset_scale": 9,
           "evaluated_block_height": 7,
           "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
@@ -9626,7 +9984,7 @@ final class ToriiClientTests: XCTestCase {
               "future_blocker_metadata": {"opaque": 1}
             }
           ],
-          "future_snapshot_metadata": [1, 2, 3]
+          "future_snapshot_metadata": [1.25, -2e3, 6E+2]
         }
         """.data(using: .utf8)!
 
@@ -9645,6 +10003,51 @@ final class ToriiClientTests: XCTestCase {
         )
         XCTAssertFalse(readiness.ready)
         XCTAssertEqual(readiness.blockers.map(\.code), ["offline_disabled"])
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetOfflineReadinessAcceptsMaximumHumanBlockerMessage() async throws {
+        let message = String(repeating: "x", count: 1023) + "\u{200E}"
+        let encodedMessage = try XCTUnwrap(
+            String(data: JSONEncoder().encode(message), encoding: .utf8)
+        )
+        let payload = """
+        {
+          "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+          "asset_scale": 9,
+          "evaluated_block_height": 7,
+          "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "active_transfer_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+            "version": 7,
+            "circuit_id": "halo2/pasta/ipa/offline-transfer",
+            "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+            "max_proof_bytes": 4096,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
+          "ready": false,
+          "blockers": [{"code":"offline_disabled","message":\(encodedMessage)}]
+        }
+        """.data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, payload)
+        }
+
+        let readiness = try await makeClient().getOfflineReadiness(
+            assetDefinitionId: "xor#wonderland"
+        )
+        XCTAssertEqual(readiness.blockers.count, 1)
+        XCTAssertEqual(readiness.blockers[0].message, message)
+        XCTAssertEqual(readiness.blockers[0].message.unicodeScalars.count, 1024)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -9673,7 +10076,12 @@ final class ToriiClientTests: XCTestCase {
         }
         """.data(using: .utf8)!
 
-        for body in [duplicateRoot, duplicateNested, Data([0xff, 0xfe])] {
+        let deeplyNested = Data(
+            (String(repeating: "[", count: 129)
+                + "0"
+                + String(repeating: "]", count: 129)).utf8
+        )
+        for body in [duplicateRoot, duplicateNested, deeplyNested, Data([0xff, 0xfe])] {
             StubURLProtocol.handler = { request in
                 let response = HTTPURLResponse(
                     url: request.url!,
@@ -15743,7 +16151,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         let proposalId = String(repeating: "d", count: 64)
         let approverId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/query")
+            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/list")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -15776,7 +16184,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         let approverOne = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
         let approverTwo = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/lookup")
+            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/get")
             guard let body = self.bodyData(from: request),
                   let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
                 XCTFail("missing JSON body")
@@ -16357,7 +16765,10 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
                 headerFields: ["x-iroha-reject-code": "build_claim_missing"]
             )!
             let body = """
-            {"message":"missing build claim for transaction status"}
+            {
+              "code":"body_fallback_must_not_override_header",
+              "message":"missing build claim for transaction status"
+            }
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -16372,6 +16783,41 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
             XCTAssertEqual(code, 400)
             XCTAssertEqual(rejectCode, "build_claim_missing")
             XCTAssertEqual(message, "missing build claim for transaction status")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetTransactionStatusHttpErrorUsesTopLevelEnvelopeCodeFallback() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 503,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let body = """
+            {
+              "code": "offline_topup_finality_proof_unavailable",
+              "message": "The finalized proof is not available yet.",
+              "details": {"retry_after_ms": 250}
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        do {
+            _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+            XCTFail("expected status failure")
+        } catch let error as ToriiClientError {
+            guard case let .httpStatus(code, message, rejectCode) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(code, 503)
+            XCTAssertEqual(rejectCode, "offline_topup_finality_proof_unavailable")
+            XCTAssertEqual(message, "The finalized proof is not available yet.")
         } catch {
             XCTFail("unexpected error: \(error)")
         }
@@ -16540,7 +16986,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
                 return XCTFail("unexpected error: \(error)")
             }
             XCTAssertEqual(code, 500)
-            XCTAssertNil(rejectCode)
+            XCTAssertEqual(rejectCode, "E123")
             XCTAssertEqual(message, #"{"code":"E123","status":"invalid"}"#)
         } catch {
             XCTFail("unexpected error: \(error)")

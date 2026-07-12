@@ -388,19 +388,16 @@ public sealed class KagemushaRecursiveSpendVerifyResult
 public enum KagemushaOfflineSpendMode
 {
     RecursiveSpendV1 = 0,
-    RecursiveCompactV1 = 2,
 }
 
 public static class KagemushaOfflineSpendModeExtensions
 {
-    public const string RecursiveCompactV1WireName = "recursive_compact_v1";
     public const string RecursiveSpendV1WireName = "recursive_spend_v1";
 
     public static string WireName(this KagemushaOfflineSpendMode mode)
     {
         return mode switch
         {
-            KagemushaOfflineSpendMode.RecursiveCompactV1 => RecursiveCompactV1WireName,
             KagemushaOfflineSpendMode.RecursiveSpendV1 => RecursiveSpendV1WireName,
             _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown Kagemusha offline spend mode."),
         };
@@ -479,7 +476,7 @@ public static class KagemushaRecursiveSpendNative
     public const string RecursiveSpendAccumulatorDomain =
         "iroha:kagemusha:v1:recursive-spend-accumulator";
 
-    public const uint RequiredNativeBridgeAbiVersion = 6;
+    public const uint RequiredNativeBridgeAbiVersion = 18;
     public const uint RecursiveCompactRequiredNativeBridgeAbiVersion = 7;
     public const uint TopUpRequiredNativeBridgeAbiVersion = 15;
     public const uint CompactTokenMaxHops = 64;
@@ -965,21 +962,19 @@ public static class KagemushaRecursiveSpendNative
 
     public static KagemushaOfflineSpendMode? PreferredMode()
     {
-        return PreferredMode(IsRecursiveCompactPaymentTokenProverAvailable(), IsAvailable());
+        return PreferredMode(IsAvailable());
     }
 
-    public static KagemushaOfflineSpendMode? PreferredMode(
-        bool recursiveCompactAvailable,
-        bool recursiveSpendAvailable)
+    public static KagemushaOfflineSpendMode? PreferredMode(bool recursiveSpendAvailable)
     {
-        if (recursiveCompactAvailable)
-        {
-            return KagemushaOfflineSpendMode.RecursiveCompactV1;
-        }
-
         return recursiveSpendAvailable
             ? KagemushaOfflineSpendMode.RecursiveSpendV1
             : null;
+    }
+
+    public static bool IsSpendAgainMode(string? value)
+    {
+        return value == KagemushaOfflineSpendModeExtensions.RecursiveSpendV1WireName;
     }
 
     public static bool CanRedeemWitnessless(string? circuitId, uint hopCount)

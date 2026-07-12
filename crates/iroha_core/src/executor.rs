@@ -13764,8 +13764,7 @@ seiyaku IdentityRequired {
             iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
                 contract: contract_address.clone(),
                 entrypoint: "role_admin".to_owned(),
-            }
-            .into(),
+            },
         );
         Register::role(role)
             .execute(&authority, &mut tx)

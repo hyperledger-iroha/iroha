@@ -15312,7 +15312,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-android-device-lab-family-override-binding",
     "--negative-control-android-device-lab-assembler-identity-fields",
     "--negative-control-native-c-bridge-abi-version",
-    "--negative-control-abi18-pasta-cycle-mode-v2",
+    "--negative-control-abi18-pasta-cycle-mode-v1",
     "--negative-control-native-bridge-zero-envelope-pallas-guard",
     "--negative-control-native-bridge-recursive-compact-invalid-proof-isolation",
     "--negative-control-bridge-zk1-i10p-parser-exactness",
@@ -17712,7 +17712,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const androidDeviceLabAssemblerIdentityBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-android-device-lab-assembler-identity-fields":'),
-    guard.indexOf('if mode == "--negative-control-abi18-pasta-cycle-mode-v2":'),
+    guard.indexOf('if mode == "--negative-control-abi18-pasta-cycle-mode-v1":'),
   );
   assert.match(
     guard,
@@ -17735,23 +17735,23 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "Android device-lab assembler identity negative control must not pass unconditionally after run_checks",
   );
   const abi18PastaCycleModeBranch = guard.slice(
-    guard.indexOf('if mode == "--negative-control-abi18-pasta-cycle-mode-v2":'),
+    guard.indexOf('if mode == "--negative-control-abi18-pasta-cycle-mode-v1":'),
     guard.indexOf('if mode == "--negative-control-native-c-bridge-abi-version":'),
   );
   assert.match(
     guard,
-    /KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";[\s\S]*?Swift ABI-18 Pasta-cycle first-release mode V2 contract[\s\S]*?Kotlin ABI-18 Pasta-cycle first-release mode V2 contract[\s\S]*?Android Java ABI-18 Pasta-cycle first-release mode V2 contract[\s\S]*?native bridge ABI-18 Pasta-cycle first-release mode V2 fixture[\s\S]*?ABI-18 recursion adapter contract mode/u,
-    "SDK parity guard must pin recursive_spend_v2 across every ABI-18 Pasta-cycle surface",
+    /KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: &str = "recursive_spend_v1";[\s\S]*?Swift ABI-18 Pasta-cycle first-release mode V1 contract[\s\S]*?Kotlin ABI-18 Pasta-cycle first-release mode V1 contract[\s\S]*?Android Java ABI-18 Pasta-cycle first-release mode V1 contract[\s\S]*?native bridge ABI-18 Pasta-cycle first-release mode V1 fixture[\s\S]*?ABI-18 recursion adapter contract mode/u,
+    "SDK parity guard must pin recursive_spend_v1 across every ABI-18 Pasta-cycle surface",
   );
   assert.match(
     guard,
-    /KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 18;[\s\S]*?requiredNativeBridgeAbiVersion: UInt32 = 18[\s\S]*?PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18[\s\S]*?PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18;[\s\S]*?CONNECT_NORITO_BRIDGE_ABI_VERSION:\\s\*u32\\s\*=\\s\*18;[\s\S]*?ABI-18 recursion adapter contract mode/u,
-    "SDK parity guard must pin ABI 18 with the first-release V2 Pasta-cycle mode across Rust, Swift, Kotlin, Java, bridge, and docs",
+    /KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 18;[\s\S]*?requiredNativeBridgeAbiVersion: UInt32 = 18[\s\S]*?REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18[\s\S]*?REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18;[\s\S]*?CONNECT_NORITO_BRIDGE_ABI_VERSION:\\s\*u32\\s\*=\\s\*18;[\s\S]*?ABI-18 recursion adapter contract mode/u,
+    "SDK parity guard must pin ABI 18 with the first-release V1 Pasta-cycle mode across Rust, Swift, Kotlin, Java, bridge, and docs",
   );
   assert.match(
     abi18PastaCycleModeBranch,
-    /recursive_spend_v2[\s\S]*?unsupported_mode[\s\S]*?for target, old, new, expected_label in cases:[\s\S]*?negative control rejected every one-sided ABI-18 Pasta-cycle V2 substitution/u,
-    "ABI-18 Pasta-cycle mode negative control must reject one-sided recursive_spend_v2 substitutions",
+    /recursive_spend_v1[\s\S]*?unsupported_mode[\s\S]*?for target, old, new, expected_label in cases:[\s\S]*?negative control rejected every one-sided ABI-18 Pasta-cycle V1 substitution/u,
+    "ABI-18 Pasta-cycle mode negative control must reject one-sided recursive_spend_v1 substitutions",
   );
   const nativeCBridgeAbiVersionBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-native-c-bridge-abi-version":'),
@@ -17779,11 +17779,12 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       'KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE: bool = true;',
       'proof_backend_available: true,',
       'authenticated_release_envelope',
+      'topup_finality_bound_init',
       'Rust C recursive Kagemusha exports drifted',
       'Rust ABI-18 V3 fail-closed capability contract missing',
       'Swift ABI-18 V3 fail-closed capability contract missing',
-      'Rust ABI-18 authenticated release-envelope gate',
-      'Swift ABI-18 authenticated release-envelope gate',
+      'Rust ABI-18 release trust and init-finality gates',
+      'Swift ABI-18 release trust and init-finality gates',
       'finally:',
       'mutated[target] = original',
       'negative control rejected ABI-18 native capability drift',
@@ -18025,8 +18026,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     preferredModeFallbackBranch,
-    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*void recursiveCompactAvailable[\s\S]*_ = recursive_compact_available[\s\S]*C# preferred Kagemusha compact-first mode policy[\s\S]*checked_prefold_export_mutations[\s\S]*KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1[\s\S]*CheckedPrefoldV1/u,
-    "preferred-mode fallback negative control must mutate retained ABI-6 selectors",
+    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*void recursiveCompactAvailable[\s\S]*del recursive_compact_available[\s\S]*C# preferred Kagemusha spend-again-only mode policy[\s\S]*checked_prefold_export_mutations[\s\S]*KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1[\s\S]*CheckedPrefoldV1/u,
+    "preferred-mode fallback negative control must mutate first-release spend-again selectors",
   );
   assert.match(
     guard,
@@ -18041,14 +18042,14 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   assertContainsAll(
     preferredModeFallbackBranch,
     [
-      "javascript/iroha_js/src/crypto.js preferred Kagemusha compact-first mode policy",
-      "javascript/iroha_js/dist/crypto.js preferred Kagemusha compact-first mode policy",
-      "javascript/iroha_js/src/crypto.browser.js preferred Kagemusha compact-first mode policy",
-      "javascript/iroha_js/dist/crypto.browser.js preferred Kagemusha compact-first mode policy",
-      "Python preferred Kagemusha compact-first mode policy",
+      "javascript/iroha_js/src/crypto.js compact projection must not select spend-again cash",
+      "javascript/iroha_js/dist/crypto.js compact projection must not select spend-again cash",
+      "javascript/iroha_js/src/crypto.browser.js compact projection must not select spend-again cash",
+      "javascript/iroha_js/dist/crypto.browser.js compact projection must not select spend-again cash",
+      "Python compact projection must not select spend-again cash",
       "preferred Kagemusha single-argument fallback removal",
       "Python preferred Kagemusha explicit capability arity",
-      "C# preferred Kagemusha compact-first mode policy",
+      "C# preferred Kagemusha spend-again-only mode policy",
     ],
     "preferred-mode fallback negative control must require every retained JS/Python/C# fallback drift label",
   );

@@ -4070,7 +4070,10 @@ mod tests {
 
     #[test]
     fn default_contract_gas_limit_covers_strict_argument_admission_floor() {
-        assert_eq!(dev_profile_default_gas_limit(None), DEFAULT_CONTRACT_GAS_LIMIT);
+        assert_eq!(
+            dev_profile_default_gas_limit(None),
+            DEFAULT_CONTRACT_GAS_LIMIT
+        );
         assert!(DEFAULT_CONTRACT_GAS_LIMIT > 1_048_752);
     }
 
@@ -4093,9 +4096,9 @@ mod tests {
             nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Int)],
         };
         let schema_bytes = norito::to_bytes(&schema).expect("encode state int schema");
-        let envelope = ivm::numeric_tlv::encode_int(
-            &iroha_primitives::bigint::BigInt::from_i128(i128::from(value)),
-        )
+        let envelope = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(
+            i128::from(value),
+        ))
         .expect("encode canonical state int pointer");
         norito::to_bytes(&StateValueRecordV1 {
             schema_hash: state_value_schema_hash_v1(&schema_bytes),

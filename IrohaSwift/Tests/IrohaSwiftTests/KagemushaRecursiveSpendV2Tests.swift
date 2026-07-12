@@ -578,11 +578,20 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             "The ABI-18 Kagemusha recursive spend V2 bridge is unavailable."
         )
         XCTAssertEqual(
+            KagemushaRecursiveSpendError.finalityTrustUnavailable.errorDescription,
+            "Kagemusha top-up finality is unavailable until the authenticated release trust root is wired and recursive init consumes its result."
+        )
+        XCTAssertEqual(
             KagemushaRecursiveSpend.artifactManifestSchema,
             "kagemusha.offline.recursive_spend.artifact_manifest.v3"
         )
         XCTAssertEqual(KagemushaRecursiveSpend.mode, "recursive_spend_v1")
-        XCTAssertEqual(KagemushaOfflineSpendMode.recursiveSpend.rawValue, "recursive_spend_v1")
+        XCTAssertEqual(KagemushaOfflineSpendMode.recursiveSpendV1.rawValue, "recursive_spend_v1")
+        XCTAssertTrue(KagemushaRecursiveSpend.isSpendAgainMode("recursive_spend_v1"))
+        XCTAssertFalse(KagemushaRecursiveSpend.isSpendAgainMode("recursive_spend_v2"))
+        XCTAssertFalse(KagemushaRecursiveSpend.isSpendAgainMode("recursive_compact_v1"))
+        XCTAssertNil(KagemushaOfflineSpendMode(rawValue: "recursive_spend_v2"))
+        XCTAssertNil(KagemushaOfflineSpendMode(rawValue: "recursive_compact_v1"))
         XCTAssertFalse(KagemushaRecursiveSpend.isProductionAvailable)
         XCTAssertNil(KagemushaRecursiveSpend.preferredProductionMode)
         XCTAssertEqual(
@@ -643,7 +652,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
                 proofBackendAvailable: true,
                 nativeStubAvailable: true
             ),
-            .recursiveSpend
+            .recursiveSpendV1
         )
         XCTAssertEqual(
             NativeBridgeError.fromStatus(-314),
@@ -667,7 +676,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
     }
 
     func testNativeCapabilitiesRequireExactABI18ContractAndGateSet() throws {
-        let capabilities = try KagemushaRecursiveSpendNativeCapabilitiesV1(
+        let capabilities = try KagemushaRecursiveSpendNativeCapabilities(
             bridgeABIVersion: 18,
             artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchema,
             mode: KagemushaRecursiveSpend.mode,
@@ -687,7 +696,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             capabilities.missingGates,
             KagemushaRecursiveSpend.unavailableProofBackendGates
         )
-        XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilitiesV1(
+        XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilities(
             bridgeABIVersion: 18,
             artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchema,
             mode: KagemushaRecursiveSpend.mode,
@@ -701,7 +710,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             proofBackendAvailable: false,
             missingGates: []
         ))
-        XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilitiesV1(
+        XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilities(
             bridgeABIVersion: 18,
             artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchema,
             mode: "unsupported_mode",
@@ -715,6 +724,22 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             proofBackendAvailable: true,
             missingGates: []
         ))
+        for rejectedMode in ["unknown_recursive_mode", "recursive_spend_v2"] {
+            XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilities(
+                bridgeABIVersion: 18,
+                artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchema,
+                mode: rejectedMode,
+                proofBackend: KagemushaRecursiveSpend.pastaCycleBackend,
+                transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscript,
+                proofEnvelopeVersion: KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion,
+                stateBoundaryVersion: KagemushaRecursiveSpend.stateBoundaryVersion,
+                transitionCircuitID: KagemushaRecursiveSpend.transitionEqCircuitID,
+                stateCircuitID: KagemushaRecursiveSpend.stateEpCircuitID,
+                maxProofBytes: UInt32(KagemushaRecursiveSpend.releaseMaximumProofBytes),
+                proofBackendAvailable: false,
+                missingGates: KagemushaRecursiveSpend.unavailableProofBackendGates
+            ), rejectedMode)
+        }
     }
 
     func testTopUpFinalityOpaqueTypesPinExactNoritoSchemasAndCopyBytes() throws {
@@ -733,7 +758,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         let manifestArchive = framedArchive(
             typeName: KagemushaRecursiveSpend.artifactManifestWireName
         )
-        let manifest = try KagemushaRecursiveSpendArtifactManifestArchiveV3(
+        let manifest = try KagemushaRecursiveSpendArtifactManifestArchive(
             noritoArchive: manifestArchive,
             expectedSHA256: Data(SHA256.hash(data: manifestArchive))
         )
@@ -757,6 +782,28 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
                 .invalidArchive("topUpFinalityRosterArtifact")
             )
         }
+        XCTAssertThrowsError(try KagemushaTopUpFinalityProofArchive(
+            noritoArchive: noritoEncode(
+                typeName: KagemushaRecursiveSpend.topUpFinalityProofWireName,
+                payload: Data(
+                    repeating: 0xa5,
+                    count: KagemushaRecursiveSpend
+                        .topUpFinalityProofMaximumArchiveBytes
+                ),
+                flags: NoritoHeader.compactLen
+            )
+        ))
+        XCTAssertThrowsError(try KagemushaTopUpFinalityRosterArtifactArchive(
+            noritoArchive: noritoEncode(
+                typeName: KagemushaRecursiveSpend.topUpFinalityRosterArtifactWireName,
+                payload: Data(
+                    repeating: 0xa6,
+                    count: KagemushaRecursiveSpend
+                        .topUpFinalityRosterMaximumArchiveBytes
+                ),
+                flags: NoritoHeader.compactLen
+            )
+        ))
     }
 
     func testV3ArtifactManifestArchivePinsSchemaAndDigest() throws {
@@ -767,7 +814,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             typeName: "iroha_core::zk::kagemusha_v2::KagemushaRecursiveSpendPastaCycleArtifactsV3"
         )
         let manifestSHA256 = Data(SHA256.hash(data: manifestArchive))
-        let manifest = try KagemushaRecursiveSpendArtifactManifestArchiveV3(
+        let manifest = try KagemushaRecursiveSpendArtifactManifestArchive(
             noritoArchive: manifestArchive,
             expectedSHA256: manifestSHA256
         )
@@ -777,11 +824,11 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             KagemushaRecursiveSpend.artifactManifestWireName,
             "iroha_data_model::offline::model::KagemushaRecursiveSpendArtifactManifestV3"
         )
-        XCTAssertThrowsError(try KagemushaRecursiveSpendArtifactManifestArchiveV3(
+        XCTAssertThrowsError(try KagemushaRecursiveSpendArtifactManifestArchive(
             noritoArchive: nonManifestArchive,
             expectedSHA256: Data(SHA256.hash(data: nonManifestArchive))
         ))
-        XCTAssertThrowsError(try KagemushaRecursiveSpendArtifactManifestArchiveV3(
+        XCTAssertThrowsError(try KagemushaRecursiveSpendArtifactManifestArchive(
             noritoArchive: manifestArchive,
             expectedSHA256: Data(repeating: 0xA5, count: 32)
         ))
@@ -791,29 +838,29 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         let manifestArchive = framedArchive(
             typeName: KagemushaRecursiveSpend.artifactManifestWireName
         )
-        let manifest = try KagemushaRecursiveSpendArtifactManifestArchiveV3(
+        let manifest = try KagemushaRecursiveSpendArtifactManifestArchive(
             noritoArchive: manifestArchive,
             expectedSHA256: Data(SHA256.hash(data: manifestArchive))
         )
         let session = KagemushaRecursiveSpendArtifactInstallSessionV3(manifest: manifest)
         XCTAssertEqual(session.manifest, manifest)
 
-        XCTAssertThrowsError(try session.beginArtifact(
+        XCTAssertThrowsError(try session.beginPastaCycleV3ArtifactIngest(
             expectedArtifactSHA256: Data(repeating: 0, count: 32)
         )) { error in
             XCTAssertEqual(
-                error as? KagemushaRecursiveSpendV2Error,
+                error as? KagemushaRecursiveSpendError,
                 .invalidField("artifact.sha256")
             )
         }
 
         // An empty pending session cancels without resolving native symbols.
         try session.cancel()
-        XCTAssertThrowsError(try session.beginArtifact(
+        XCTAssertThrowsError(try session.beginPastaCycleV3ArtifactIngest(
             expectedArtifactSHA256: fixed32(0xA5)
         )) { error in
             XCTAssertEqual(
-                error as? KagemushaRecursiveSpendV2Error,
+                error as? KagemushaRecursiveSpendError,
                 .invalidField("artifactSet.state")
             )
         }
@@ -1099,7 +1146,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ])
         let verifierEntry = fields([verifierKeyIDPayload, verifierRecord])
         let recordBundle = noritoEncode(
-            typeName: KagemushaRecursiveSpendRequestCodecs.recordBundleWireName,
+            typeName: KagemushaRecursiveSpend.verifiedFoldRecordBundleWireName,
             payload: fields([bundle, sequence([verifierEntry])]),
             flags: NoritoHeader.compactLen
         )

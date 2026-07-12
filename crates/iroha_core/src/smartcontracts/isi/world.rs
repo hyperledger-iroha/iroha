@@ -17074,6 +17074,16 @@ pub mod isi {
                                     ),
                                 ));
                             }
+                            if next.id()
+                                == &iroha_data_model::isi::settlement::FxCorridorPolicyRegistry::parameter_id()
+                            {
+                                return Err(InstructionExecutionError::InvalidParameter(
+                                    InvalidParameterError::SmartContract(
+                                        "the reserved FX corridor policy registry can only be changed by SetFxCorridorPolicy"
+                                            .to_owned(),
+                                    ),
+                                ));
+                            }
                             if let Some(npos) = iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter(&next) {
                                 if npos.evidence_horizon_blocks() == 0 {
                                     return Err(InstructionExecutionError::InvalidParameter(
@@ -24737,6 +24747,7 @@ seiyaku GovernanceLifecycle {
                     ),
                     committed: true,
                 }],
+                fx_corridor: None,
                 outcome: iroha_data_model::isi::SettlementOutcomeRecord::Success(
                     iroha_data_model::isi::SettlementSuccessRecord {
                         first_committed: true,
@@ -34984,6 +34995,59 @@ seiyaku GovernanceLifecycle {
                     .get(&self.id)
                     .cloned()
                     .ok_or_else(|| Error::Conversion("FeeSponsorPolicy not found".to_string()))
+            }
+        }
+
+        fn load_fx_corridor_policy_registry(
+            state_ro: &impl StateReadOnly,
+        ) -> Result<iroha_data_model::isi::settlement::FxCorridorPolicyRegistry, Error> {
+            use iroha_data_model::isi::settlement::FxCorridorPolicyRegistry;
+
+            let parameter = state_ro
+                .world()
+                .parameters()
+                .custom()
+                .get(&FxCorridorPolicyRegistry::parameter_id())
+                .ok_or_else(|| {
+                    Error::Conversion("FX corridor policy registry is not initialized".to_string())
+                })?;
+            FxCorridorPolicyRegistry::from_custom_parameter(parameter)
+                .map_err(|error| {
+                    Error::Conversion(format!("FX corridor policy registry is malformed: {error}"))
+                })?
+                .ok_or_else(|| {
+                    Error::Conversion("FX corridor policy registry is malformed".to_string())
+                })
+        }
+
+        impl ValidSingularQuery
+            for iroha_data_model::query::settlement::prelude::FindFxCorridorPolicyRegistry
+        {
+            #[metrics(+"find_fx_corridor_policy_registry")]
+            fn execute(
+                &self,
+                state_ro: &impl StateReadOnly,
+            ) -> Result<iroha_data_model::isi::settlement::FxCorridorPolicyRegistry, Error>
+            {
+                load_fx_corridor_policy_registry(state_ro)
+            }
+        }
+
+        impl ValidSingularQuery for iroha_data_model::query::settlement::prelude::FindFxCorridorPolicyById {
+            #[metrics(+"find_fx_corridor_policy_by_id")]
+            fn execute(
+                &self,
+                state_ro: &impl StateReadOnly,
+            ) -> Result<iroha_data_model::isi::settlement::FxCorridorPolicy, Error> {
+                load_fx_corridor_policy_registry(state_ro)?
+                    .get(&self.policy_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        Error::Conversion(format!(
+                            "FX corridor policy `{}` was not found",
+                            self.policy_id
+                        ))
+                    })
             }
         }
 

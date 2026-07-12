@@ -343,7 +343,7 @@ object AttestedOfflineNote {
         if (isNoritoFrame(bytes)) return bytes.copyOf()
         tryDecodeInstructionPair(bytes, expectedWireNames, NoritoHeader.COMPACT_LEN)?.let { return it }
         tryDecodeInstructionPair(bytes, expectedWireNames, 0)?.let { return it }
-        throw IllegalArgumentException("Attested Offline Note instruction envelope is invalid")
+        throw IllegalArgumentException("Offline Note V2 instruction envelope is invalid")
     }
 
     private fun tryDecodeInstructionPair(
@@ -390,7 +390,7 @@ object AttestedOfflineNote {
                 lastError = ex
             }
         }
-        throw IllegalArgumentException("Attested Offline Note instruction model payload is invalid", lastError)
+        throw IllegalArgumentException("Offline Note V2 instruction model payload is invalid", lastError)
     }
 
     private fun isNoritoFrame(bytes: ByteArray): Boolean =

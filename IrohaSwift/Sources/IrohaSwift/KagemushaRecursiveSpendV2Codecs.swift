@@ -20,13 +20,13 @@ public enum KagemushaRecursiveSpendCodecs {
 
     public static func decodeNativeCapabilities(
         _ archive: Data
-    ) throws -> KagemushaRecursiveSpendNativeCapabilitiesV1 {
+    ) throws -> KagemushaRecursiveSpendNativeCapabilities {
         var reader = KagemushaV2Reader(try payload(
             archive,
             schema: KagemushaRecursiveSpend.nativeCapabilitiesWireName,
             field: "nativeCapabilities"
         ))
-        let value = try KagemushaRecursiveSpendNativeCapabilitiesV1(
+        let value = try KagemushaRecursiveSpendNativeCapabilities(
             bridgeABIVersion: scalarUInt32(
                 reader.field(),
                 field: "nativeCapabilities.bridgeABIVersion"
@@ -613,8 +613,6 @@ public enum KagemushaRecursiveSpendCodecs {
         writer.writeField(uint32(request.maximumHops))
         writer.writeField(string(request.artifactGeneration))
         writer.writeField(uint64(request.verifiedAtMilliseconds))
-        writer.writeField(try optionalVerifierRecord(request.lineageVerifierRecord))
-        writer.writeField(optionalUInt64(request.blockHeight))
         return frame(KagemushaRecursiveSpend.verifyRequestWireName, payload: writer.data)
     }
 

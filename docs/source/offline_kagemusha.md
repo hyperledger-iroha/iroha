@@ -6,6 +6,13 @@ sender change use the canonical first-release
 backend is intentionally fail-closed until branch lineage is proven in-circuit;
 retired pre-release wire shapes are not accepted as compatibility inputs.
 
+The sole first-release product selector is `recursive_spend_v2`. It requires
+exact native bridge ABI 18 and the governed
+`kagemusha.offline.recursive_spend.artifact_manifest.v3` manifest. Artifact
+streaming, validation, atomic six-file installation, readiness, and uninstall
+use only the V3 lifecycle; ABI-6/ABI-7 fixtures and unsuffixed bridge helpers
+are not compatibility surfaces.
+
 > **Release blocker:** the current Reserved-lineage prototype does not verify
 > an inner Kagemusha proof. It opens a fixed `1..n` polynomial that is unrelated
 > to the confidential-transfer, unshield, or previous recursive proof. Binding

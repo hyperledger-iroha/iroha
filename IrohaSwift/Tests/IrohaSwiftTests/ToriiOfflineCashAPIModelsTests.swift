@@ -116,6 +116,9 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
     func testOfflineTopUpAnchorUsesCurrentPublicNameAndRetainsCanonicalWire() throws {
         let archive = try canonicalTopUpAnchorArchive()
         let anchor = try OfflineTopUpAnchor(noritoArchive: archive)
+        let finalityProof = try OfflineTopUpFinalityProof(
+            noritoArchive: canonicalTopUpFinalityProofArchive()
+        )
         XCTAssertEqual(anchor.noritoArchive(), archive)
         XCTAssertEqual(anchor.digest, Data(repeating: 0xd8, count: 32))
         XCTAssertEqual(
@@ -128,11 +131,24 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             transactionHash: Self.transactionHash,
             finalizedBlockHeight: 7,
             serverTimeMs: 8,
-            anchor: anchor
+            anchor: anchor,
+            finalityProof: finalityProof
         )
         XCTAssertEqual(result.anchor.noritoArchive(), archive)
+        XCTAssertEqual(
+            result.finalityProof.noritoArchive,
+            canonicalTopUpFinalityProofArchive()
+        )
 
         XCTAssertThrowsError(try OfflineTopUpAnchor(noritoArchive: Data()))
+        XCTAssertThrowsError(try OfflineTopUpAnchor(noritoArchive: noritoEncode(
+            typeName: KagemushaRecursiveSpend.topUpAnchorWireName,
+            payload: Data(
+                repeating: 0xa4,
+                count: KagemushaRecursiveSpend.topUpFinalityAnchorMaximumArchiveBytes
+            ),
+            flags: NoritoHeader.compactLen
+        )))
         XCTAssertThrowsError(try OfflineTopUpAnchor(noritoArchive: noritoEncode(
             typeName: "wrong.anchor.schema",
             payload: try XCTUnwrap(noritoDecodeFrame(archive)).payload,
@@ -212,6 +228,9 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         }
 
         let anchor = try OfflineTopUpAnchor(noritoArchive: canonicalTopUpAnchorArchive())
+        let finalityProof = try OfflineTopUpFinalityProof(
+            noritoArchive: canonicalTopUpFinalityProofArchive()
+        )
         for (finalizedBlockHeight, serverTimeMs, field) in [
             (UInt64(0), UInt64(1), "finalized_block_height"),
             (UInt64(1), UInt64(0), "server_time_ms"),
@@ -220,7 +239,8 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
                 transactionHash: Self.transactionHash,
                 finalizedBlockHeight: finalizedBlockHeight,
                 serverTimeMs: serverTimeMs,
-                anchor: anchor
+                anchor: anchor,
+                finalityProof: finalityProof
             )) { error in
                 XCTAssertEqual(error as? OfflineOperationError, .invalidField(field))
             }
@@ -543,6 +563,14 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             archive: Data([1])
         )
         return try KagemushaRecursiveSpendCodecs.encodeTopUpAnchor(draft)
+    }
+
+    private func canonicalTopUpFinalityProofArchive() -> Data {
+        noritoEncode(
+            typeName: KagemushaRecursiveSpend.topUpFinalityProofWireName,
+            payload: Data([0x02]),
+            flags: NoritoHeader.compactLen
+        )
     }
 
     private static let operationId = String(repeating: "11", count: 32)

@@ -1087,6 +1087,8 @@ impl KotoTestHost {
             DataSpaceId::UNIVERSAL,
         )
         .expect("Kotodama test contract address derivation must be deterministic");
+        let mut inner = inner;
+        inner.set_contract_runtime_address(contract_address.clone());
         Self {
             inner,
             actors: HashMap::new(),

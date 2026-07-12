@@ -101,6 +101,7 @@ const {
   buildPrivateKaigiFeeSpend,
   isKagemushaRecursiveSpendNativeAvailable,
   isKagemushaRecursiveSpendTopUpNativeAvailable,
+  isKagemushaSpendAgainMode,
   isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable,
   isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable,
   kagemushaProveVerifiedCompactPaymentTokenWithRecords,
@@ -2065,6 +2066,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "KagemushaRecursiveSpendRequestCodecError",
     "preferredKagemushaOfflineSpendMode",
     "preferredKagemushaOfflineSpendModeForCapabilities",
+    "isKagemushaSpendAgainMode",
     "canRedeemKagemushaRecursiveSpendWitnessless",
     "requiresKagemushaRecursiveSpendLineageWitnessForRedeem",
     "canAppendKagemushaRecursiveSpendWitnesslessLineage",
@@ -3058,7 +3060,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   }
   assert.equal(
     preferredKagemushaOfflineSpendModeForCapabilities(true, true),
-    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
+    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
   );
   assert.equal(
     preferredKagemushaOfflineSpendModeForCapabilities(false, true),
@@ -3072,6 +3074,9 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     preferredKagemushaOfflineSpendMode(false, false),
     null,
   );
+  assert.equal(isKagemushaSpendAgainMode("recursive_spend_v1"), true);
+  assert.equal(isKagemushaSpendAgainMode("recursive_spend_v2"), false);
+  assert.equal(isKagemushaSpendAgainMode("recursive_compact_v1"), false);
   assert.throws(
     () => preferredKagemushaOfflineSpendMode(true),
     /requires either zero arguments or both recursiveCompactAvailable and recursiveSpendAvailable/u,

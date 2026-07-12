@@ -83,7 +83,7 @@ public sealed record OfflineReadinessBlocker
     public OfflineReadinessBlocker(string code, string message)
     {
         Code = OfflineApiValidation.RequireCode(code, nameof(code));
-        Message = OfflineApiValidation.RequireExactText(message, nameof(message));
+        Message = OfflineApiValidation.RequireBoundedText(message, 1024, nameof(message));
     }
 
     public string Code { get; }
@@ -183,7 +183,8 @@ public sealed record OfflineReadiness
         IReadOnlyList<OfflineReadinessBlocker> blockers)
     {
         ArgumentNullException.ThrowIfNull(blockers);
-        AssetDefinitionId = OfflineApiValidation.RequireExactToken(assetDefinitionId, nameof(assetDefinitionId));
+        AssetDefinitionId = OfflineNoteCanonicalPayloadCodec.RequireCanonicalAssetDefinitionId(
+            OfflineApiValidation.RequireExactToken(assetDefinitionId, nameof(assetDefinitionId)));
         EvaluatedBlockHeight = evaluatedBlockHeight;
         EvaluatedBlockHash = OfflineApiValidation.RequireTransactionHash(
             evaluatedBlockHash,
@@ -191,10 +192,17 @@ public sealed record OfflineReadiness
         ActiveTransferVerifier = activeTransferVerifier;
         Ready = ready;
         this.blockers = new OfflineReadinessBlocker[blockers.Count];
+        var blockerCodes = new HashSet<string>(StringComparer.Ordinal);
         for (var index = 0; index < blockers.Count; index++)
         {
             this.blockers[index] = blockers[index]
                 ?? throw new ArgumentException("Readiness blockers must not contain null items.", nameof(blockers));
+            if (!blockerCodes.Add(this.blockers[index].Code))
+            {
+                throw new ArgumentException(
+                    "Readiness blockers must not repeat blocker codes.",
+                    nameof(blockers));
+            }
         }
 
         if (ready && this.blockers.Length != 0)
@@ -215,10 +223,9 @@ public sealed record OfflineReadiness
                 nameof(activeTransferVerifier));
         }
 
-        var scaleUnavailable = this.blockers.Any(static blocker => blocker.Code == "asset_scale_unavailable");
-        var scaleUnsupported = this.blockers.Any(static blocker => blocker.Code == "asset_scale_unsupported");
-        var verifierUnavailable = this.blockers.Any(
-            static blocker => blocker.Code == "transfer_verifier_unavailable");
+        var scaleUnavailable = blockerCodes.Contains("asset_scale_unavailable");
+        var scaleUnsupported = blockerCodes.Contains("asset_scale_unsupported");
+        var verifierUnavailable = blockerCodes.Contains("transfer_verifier_unavailable");
         if (scaleUnavailable != !assetScale.HasValue)
         {
             throw new ArgumentException(
@@ -316,6 +323,20 @@ public sealed class OfflineTopUpAnchor
     public byte[] NoritoArchive() => (byte[])archive.Clone();
 }
 
+/// <summary>Opaque schema-bound Sumeragi proof for one finalized top-up anchor.</summary>
+public sealed class OfflineTopUpFinalityProof
+{
+    private readonly byte[] archive;
+
+    internal OfflineTopUpFinalityProof(byte[] canonicalArchive)
+    {
+        archive = (byte[])canonicalArchive.Clone();
+    }
+
+    /// <summary>Return a defensive copy of the canonical proof archive.</summary>
+    public byte[] NoritoArchive() => (byte[])archive.Clone();
+}
+
 /// <summary>Final result of an applied top-up operation.</summary>
 public sealed record OfflineTopUpResult
 {
@@ -323,12 +344,14 @@ public sealed record OfflineTopUpResult
         string transactionHash,
         ulong finalizedBlockHeight,
         ulong serverTimeMs,
-        OfflineTopUpAnchor anchor)
+        OfflineTopUpAnchor anchor,
+        OfflineTopUpFinalityProof finalityProof)
     {
         TransactionHash = OfflineApiValidation.RequireTransactionHash(transactionHash, nameof(transactionHash));
         FinalizedBlockHeight = OfflineApiValidation.RequirePositive(finalizedBlockHeight, nameof(finalizedBlockHeight));
         ServerTimeMs = OfflineApiValidation.RequirePositive(serverTimeMs, nameof(serverTimeMs));
         Anchor = anchor ?? throw new ArgumentNullException(nameof(anchor));
+        FinalityProof = finalityProof ?? throw new ArgumentNullException(nameof(finalityProof));
     }
 
     public string TransactionHash { get; }
@@ -338,6 +361,8 @@ public sealed record OfflineTopUpResult
     public ulong ServerTimeMs { get; }
 
     public OfflineTopUpAnchor Anchor { get; }
+
+    public OfflineTopUpFinalityProof FinalityProof { get; }
 }
 
 /// <summary>Final result of an applied redemption.</summary>
@@ -604,6 +629,9 @@ public static class OfflineOperationCodec
     private const string StatusSchema = "iroha_torii_shared::offline_api::OfflineOperationStatus";
     private const string TopUpAnchorSchema =
         "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpAnchorV2";
+    private const string TopUpFinalityProofSchema =
+        "iroha_data_model::offline::model::KagemushaTopUpFinalityProofV2";
+    private const int TopUpFinalityProofMaxArchiveBytes = 1024 * 1024;
     private const byte CompactLengthFlag = 0x02;
     private const int StatusHeaderPadding = 8;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -752,7 +780,17 @@ public static class OfflineOperationCodec
             static child => child.ReadBytes(child.Remaining, "anchor"),
             "anchor");
         var anchor = CreateTopUpAnchor(anchorPayload);
-        return new OfflineTopUpResult(transactionHash, finalizedBlockHeight, serverTimeMs, anchor);
+        var finalityProofPayload = ReadField(
+            reader,
+            static child => child.ReadBytes(child.Remaining, "finality_proof"),
+            "finality_proof");
+        var finalityProof = CreateTopUpFinalityProof(finalityProofPayload);
+        return new OfflineTopUpResult(
+            transactionHash,
+            finalizedBlockHeight,
+            serverTimeMs,
+            anchor,
+            finalityProof);
     }
 
     private static OfflineRedeemResult ReadRedeemResult(Reader reader)
@@ -993,6 +1031,17 @@ public static class OfflineOperationCodec
         return new OfflineTopUpAnchor(NoritoCodec.Encode(TopUpAnchorSchema, payload, CompactLengthFlag));
     }
 
+    private static OfflineTopUpFinalityProof CreateTopUpFinalityProof(byte[] payload)
+    {
+        var archive = NoritoCodec.Encode(TopUpFinalityProofSchema, payload, CompactLengthFlag);
+        if (archive.Length > TopUpFinalityProofMaxArchiveBytes)
+        {
+            throw new ArgumentException(
+                $"Top-up finality proof archive must not exceed {TopUpFinalityProofMaxArchiveBytes} bytes.");
+        }
+        return new OfflineTopUpFinalityProof(archive);
+    }
+
     private static void RequireNonZeroFixed32(byte[] value, string field)
     {
         if (value.Length != 32 || value.All(static valueByte => valueByte == 0))
@@ -1176,6 +1225,10 @@ public static class OfflineOperationCodec
 
 internal static class OfflineApiValidation
 {
+    private static readonly System.Text.RegularExpressions.Regex AssetAliasPattern = new(
+        "^[a-z0-9]+(?:[._-][a-z0-9]+)*#[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)?$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
     internal static ulong RequirePositive(ulong value, string parameterName)
     {
         if (value == 0)
@@ -1203,6 +1256,22 @@ internal static class OfflineApiValidation
         return value;
     }
 
+    internal static string RequireAssetSelector(string? value, string parameterName)
+    {
+        var exact = RequireExactText(value, parameterName);
+        if (exact.Contains('#'))
+        {
+            if (!AssetAliasPattern.IsMatch(exact))
+            {
+                throw new ArgumentException(
+                    "Asset selector must be a lowercase scoped asset alias.",
+                    parameterName);
+            }
+            return exact;
+        }
+        return OfflineNoteCanonicalPayloadCodec.RequireCanonicalAssetDefinitionId(exact);
+    }
+
     internal static string RequireTransactionHash(string? value, string parameterName)
         => RequireLowercaseHash(value, parameterName, "Transaction hash");
 
@@ -1226,10 +1295,10 @@ internal static class OfflineApiValidation
     internal static string RequireBoundedText(string? value, int maxLength, string parameterName)
     {
         var exact = RequireExactText(value, parameterName);
-        if (exact.Length > maxLength)
+        if (CountUnicodeScalars(exact, parameterName) > maxLength)
         {
             throw new ArgumentException(
-                $"Value must contain at most {maxLength} characters.",
+                $"Value must contain at most {maxLength} Unicode characters.",
                 parameterName);
         }
         return exact;
@@ -1284,6 +1353,33 @@ internal static class OfflineApiValidation
         {
             throw new ArgumentException("Value must be exact non-empty text.", parameterName);
         }
+        _ = CountUnicodeScalars(value, parameterName);
         return value;
+    }
+
+    private static int CountUnicodeScalars(string value, string parameterName)
+    {
+        var count = 0;
+        for (var index = 0; index < value.Length; index++)
+        {
+            var character = value[index];
+            if (char.IsHighSurrogate(character))
+            {
+                if (++index >= value.Length || !char.IsLowSurrogate(value[index]))
+                {
+                    throw new ArgumentException(
+                        "Value must contain well-formed Unicode.",
+                        parameterName);
+                }
+            }
+            else if (char.IsLowSurrogate(character))
+            {
+                throw new ArgumentException(
+                    "Value must contain well-formed Unicode.",
+                    parameterName);
+            }
+            count++;
+        }
+        return count;
     }
 }

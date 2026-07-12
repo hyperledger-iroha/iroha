@@ -239,6 +239,9 @@ material: Kotlin wallet code must pass it through Norito unchanged and must not
 construct, rewrite, or mutate it. The native bridge validates `vk_commitment`,
 `public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
 before proving or returning output bytes.
+Wallets use the append-boundary helper to bind that validated previous-proof
+material to the public chain/asset and final-root/current-note boundary before
+append proving.
 Native append streams the previous recursive proof bytes and per-hop accumulator
 material into native-owned accumulator digests (`recursive_proof_chain_digest`,
 lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base,

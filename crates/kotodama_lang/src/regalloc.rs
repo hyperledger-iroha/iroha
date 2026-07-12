@@ -2028,6 +2028,17 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*account);
             f(*token);
         }
+        GrantContractEntrypoint {
+            account,
+            entrypoint,
+        }
+        | RevokeContractEntrypoint {
+            account,
+            entrypoint,
+        } => {
+            f(*account);
+            f(*entrypoint);
+        }
         GrantRole { account, name } | RevokeRole { account, name } => {
             f(*account);
             f(*name);
@@ -2497,6 +2508,8 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         Instr::Call { dest, .. } | Instr::InvokeEntrypointAs { dest, .. } => dest.as_ref().copied(),
         Instr::GrantPermission { .. }
         | Instr::RevokePermission { .. }
+        | Instr::GrantContractEntrypoint { .. }
+        | Instr::RevokeContractEntrypoint { .. }
         | Instr::RegisterAsset { .. }
         | Instr::CreateNewAsset { .. }
         | Instr::TransferAsset { .. }

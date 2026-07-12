@@ -1333,6 +1333,9 @@ material: Android wallet code must pass it through Norito unchanged and must not
 construct, rewrite, or mutate it. The native bridge validates `vk_commitment`,
 `public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
 before proving or returning output bytes.
+Wallets use the append-boundary helper to bind that validated previous-proof
+material to the public chain/asset and final-root/current-note boundary before
+append proving.
 Native append streams the previous recursive proof bytes and per-hop accumulator
 material into native-owned accumulator digests (`recursive_proof_chain_digest`,
 lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base,
@@ -1481,13 +1484,27 @@ created from any `HttpClientTransport`:
 transport
     .offlineToriiClient()
     .getOfflineReadiness("xor#wonderland")
-    .thenAccept(readiness -> System.out.println(readiness.ready()));
+    .thenAccept(readiness -> {
+      var verifier = readiness.activeTransferVerifier();
+      var verifierLabel = verifier == null
+          ? "unavailable"
+          : verifier.id().backend() + ":" + verifier.id().name() + " v" + verifier.version();
+      System.out.println(
+          readiness.ready() + " scale=" + readiness.assetScale()
+              + " verifier=" + verifierLabel);
+    });
 ```
 
 `OfflineToriiClient` exposes only the first-release routes: readiness for a
 required asset definition, direct-Norito top-up and redeem submissions, and the
 operation status resource. Use `getOfflineReadiness(assetDefinitionId)` before
 showing offline receive or payment-token UI.
+Readiness preserves the authoritative nullable unsigned-32-bit asset scale and
+the key-material-free transfer verifier selected at the same evaluated block.
+A scale above 28 remains decodable with `asset_scale_unsupported`; only a ready
+snapshot requires the 0-through-28 Offline amount range and an active verifier.
+The Kotlin/JVM mirror enforces the same verifier-window, digest, proof-size,
+blocker-correlation, and duplicate-code invariants.
 `OfflineTopUpRequest` and `OfflineRedeemRequest` accept only the canonical
 schema-bound request archive and derive the lowercase `Idempotency-Key` from
 its nonzero 32-byte `operation_id`; callers cannot provide a second, mismatched

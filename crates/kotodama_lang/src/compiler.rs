@@ -13470,6 +13470,51 @@ impl Compiler {
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                         }
+                        Instr::GrantContractEntrypoint {
+                            account,
+                            entrypoint,
+                        }
+                        | Instr::RevokeContractEntrypoint {
+                            account,
+                            entrypoint,
+                        } => {
+                            // r10 = &AccountId; r11 = &Blob containing the UTF-8 selector.
+                            if let Some(a) = string_map.get(&(func_idx, *account)) {
+                                let key = DataKey(DataKind::Account, a.clone());
+                                emit_literal_load(&mut code, &fixups, 10, key);
+                            } else {
+                                let r = src_reg(account, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            if let Some(selector) = string_map.get(&(func_idx, *entrypoint)) {
+                                let key = DataKey(DataKind::Blob, selector.clone());
+                                emit_literal_load(&mut code, &fixups, 11, key);
+                            } else {
+                                let r = src_reg(entrypoint, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r, 0)?);
+                            }
+                            let publish = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&publish.to_le_bytes());
+                            push_word(&mut code, encode_addi(12, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 11, 0)?);
+                            code.extend_from_slice(&publish.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 12, 0)?);
+                            let number = match instr {
+                                Instr::GrantContractEntrypoint { .. } => {
+                                    syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT
+                                }
+                                _ => syscalls::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT,
+                            };
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                number as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
                         Instr::ZkVerify { number, payload } => {
                             // Load/move payload pointer into x10
                             if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
@@ -19846,6 +19891,19 @@ fn record_isi_access(
             add_account_hint_rw(access_set, &account);
             add_permission_account_hint_w(access_set, &account, &perm);
         }
+        ir::Instr::GrantContractEntrypoint { account, .. }
+        | ir::Instr::RevokeContractEntrypoint { account, .. } => {
+            let Some(account) = account_access_hint_for_temp(
+                string_map,
+                authority_account_temps,
+                func_idx,
+                *account,
+            ) else {
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            };
+            add_account_hint_rw(access_set, &account);
+            add_permission_account_hint_w(access_set, &account, "CanInvokeContractEntrypoint");
+        }
         ir::Instr::RegisterAsset { asset, .. } => {
             if let Some(id) = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset) {
                 add_asset_def_domain_r_if_projected(access_set, &id);
@@ -22136,6 +22194,12 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::SetTriggerEnabled { .. } => access_class_for_builtin(Builtin::SetTriggerEnabled),
         ir::Instr::GrantPermission { .. } => access_class_for_builtin(Builtin::GrantPermission),
         ir::Instr::RevokePermission { .. } => access_class_for_builtin(Builtin::RevokePermission),
+        ir::Instr::GrantContractEntrypoint { .. } => {
+            access_class_for_builtin(Builtin::GrantContractEntrypoint)
+        }
+        ir::Instr::RevokeContractEntrypoint { .. } => {
+            access_class_for_builtin(Builtin::RevokeContractEntrypoint)
+        }
         ir::Instr::CreateRole { .. } => access_class_for_builtin(Builtin::CreateRole),
         ir::Instr::DeleteRole { .. } => access_class_for_builtin(Builtin::DeleteRole),
         ir::Instr::GrantRole { .. } => access_class_for_builtin(Builtin::GrantRole),

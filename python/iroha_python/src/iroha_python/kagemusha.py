@@ -13,10 +13,7 @@ from typing import Any, Literal, Mapping, Optional, Union
 from ._native import load_crypto_extension
 
 BytesLike = Union[bytes, bytearray, memoryview]
-KagemushaOfflineSpendMode = Literal[
-    "recursive_compact_v1",
-    "recursive_spend_v1",
-]
+KagemushaOfflineSpendMode = Literal["recursive_spend_v1"]
 KagemushaInstructionArchiveType = Literal[
     "KagemushaTransfer",
     "RedeemKagemushaRecursive",
@@ -263,6 +260,7 @@ __all__ = [
     "is_kagemusha_recursive_spend_topup_available",
     "preferred_kagemusha_offline_spend_mode_for_capabilities",
     "preferred_kagemusha_offline_spend_mode",
+    "is_kagemusha_spend_again_mode",
     "kagemusha_prove_verified_compact_payment_token_with_records",
     _PALLAS_OPEN_ENVELOPE_BUILDER_METHOD,
     _PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD,
@@ -1052,11 +1050,18 @@ def preferred_kagemusha_offline_spend_mode_for_capabilities(
     recursive_compact_available: bool,
     recursive_spend_available: bool,
 ) -> Optional[KagemushaOfflineSpendMode]:
-    if recursive_compact_available:
-        return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1
+    # Compact availability describes an admission-neutral projection only; it
+    # must never select spend-again cash.
+    del recursive_compact_available
     if recursive_spend_available:
         return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
     return None
+
+
+def is_kagemusha_spend_again_mode(value: object) -> bool:
+    """Return whether *value* is the sole first-release cash selector."""
+
+    return value == KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
 
 
 def can_redeem_kagemusha_recursive_spend_witnessless(

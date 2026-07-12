@@ -6,6 +6,7 @@ public enum KagemushaRecursiveSpendError: Error, Equatable, LocalizedError {
     case invalidArchive(String)
     case nativeBridgeUnavailable
     case proofBackendUnavailable
+    case finalityTrustUnavailable
 
     public var errorDescription: String? {
         switch self {
@@ -17,6 +18,8 @@ public enum KagemushaRecursiveSpendError: Error, Equatable, LocalizedError {
             return "The ABI-18 Kagemusha recursive spend V2 bridge is unavailable."
         case .proofBackendUnavailable:
             return "Kagemusha recursive spend V2 is unavailable until the branch-safe proof backend is linked."
+        case .finalityTrustUnavailable:
+            return "Kagemusha top-up finality is unavailable until the authenticated release trust root is wired and recursive init consumes its result."
         }
     }
 }
@@ -24,7 +27,7 @@ public enum KagemushaRecursiveSpendError: Error, Equatable, LocalizedError {
 /// Exact capability record returned by the loaded ABI-18 native bridge.
 /// Wallet readiness uses this authenticated, canonical Norito record rather
 /// than inferring proof availability from symbol presence.
-public struct KagemushaRecursiveSpendNativeCapabilitiesV1: Equatable, Sendable {
+public struct KagemushaRecursiveSpendNativeCapabilities: Equatable, Sendable {
     public let bridgeABIVersion: UInt32
     public let artifactManifestSchema: String
     public let mode: String
@@ -82,12 +85,6 @@ public struct KagemushaRecursiveSpendNativeCapabilitiesV1: Equatable, Sendable {
     }
 }
 
-/// Availability, canonical wire names, and high-level native entrypoints for
-/// exact-amount branch-safe recursive offline cash.
-public enum KagemushaOfflineSpendMode: String, Equatable, CaseIterable, Sendable {
-    case recursiveSpend = "recursive_spend_v1"
-}
-
 public enum KagemushaRecursiveSpend {
     public static let requiredNativeBridgeAbiVersion: UInt32 = 18
     public static let artifactManifestSchema =
@@ -102,20 +99,30 @@ public enum KagemushaRecursiveSpend {
     public static let stateEpCircuitID = "kagemusha-recursive-spend-state-ep-v1"
     public static let releaseMaximumProofBytes = 4_096
     public static let artifactMaximumFileBytes = 256 * 1024 * 1024
+    public static let topUpFinalityProofMaximumArchiveBytes = 2 * 1_024 * 1_024
+    public static let topUpFinalityRosterMaximumArchiveBytes = 2 * 1_024 * 1_024
+    public static let topUpFinalityAnchorMaximumArchiveBytes = 64 * 1_024
     public static let unavailableProofBackendGates = [
         "opposite_field_pasta_loader",
         "cross_field_poseidon_transcript",
         "two_layer_recursive_accumulator",
         "authenticated_release_envelope",
+        "topup_finality_bound_init",
         "independent_cryptographic_review",
         "physical_device_performance_evidence",
     ]
 
     /// Canonical supporting archives consumed by the V2 request records.
     /// These are not alternate spend modes; they are authenticated inputs to
-    /// the sole first-release `recursive_spend_v2` protocol.
+    /// the sole first-release `recursive_spend_v1` product mode. Their V2
+    /// wire names describe the internal protocol generation, not a selector.
     public static let verifiedFoldRecordBundleWireName =
         "iroha_data_model::offline::model::KagemushaVerifiedFoldRecordBundle"
+
+    /// Return whether a raw capability value is the spend-again product mode.
+    public static func isSpendAgainMode(_ value: String?) -> Bool {
+        value == mode
+    }
     public static let proofAttachmentWireName =
         "iroha_data_model::proof::ProofAttachment"
     public static let verifyingKeyRecordWireName =
@@ -257,14 +264,14 @@ public enum KagemushaRecursiveSpend {
     }
 
     public static var isNativeStubAvailable: Bool {
-        NoritoNativeBridge.shared.hasKagemushaRecursiveSpendContractSymbols
+        NoritoNativeBridge.shared.isKagemushaRecursiveSpendV2StubAvailable
             && NoritoNativeBridge.shared.hasKagemushaRecursiveSpendV2Symbols(
                 requiredNativeSymbols
             )
     }
 
     public static func nativeCapabilities() throws
-        -> KagemushaRecursiveSpendNativeCapabilitiesV1
+        -> KagemushaRecursiveSpendNativeCapabilities
     {
         // Capability admission is intentionally evaluated on every call. A
         // backend-enabled bridge rejects this query until one complete V3
@@ -285,9 +292,11 @@ public enum KagemushaRecursiveSpend {
 
     /// Exact local production capability; Torii readiness remains an additional requirement.
     public static var isProductionAvailable: Bool {
-        isProofBackendAvailable
-            && isNativeStubAvailable
-            && (try? nativeCapabilities().proofBackendAvailable) == true
+        guard isProofBackendAvailable, isNativeStubAvailable else {
+            return false
+        }
+        let cachedNativeCapabilities = try? nativeCapabilities()
+        return cachedNativeCapabilities?.proofBackendAvailable == true
     }
 
     /// Select V2 only after the explicit ABI-18 proof capability is green.
@@ -302,7 +311,7 @@ public enum KagemushaRecursiveSpend {
         proofBackendAvailable: Bool,
         nativeStubAvailable: Bool
     ) -> KagemushaOfflineSpendMode? {
-        proofBackendAvailable && nativeStubAvailable ? .recursiveSpend : nil
+        proofBackendAvailable && nativeStubAvailable ? .recursiveSpendV1 : nil
     }
 
     public static func initSpend(
@@ -340,16 +349,20 @@ public enum KagemushaRecursiveSpend {
         proof: KagemushaTopUpFinalityProofArchive,
         rosterArtifact: KagemushaTopUpFinalityRosterArtifactArchive,
         anchor: KagemushaRecursiveSpendTopUpAnchor,
-        manifest: KagemushaRecursiveSpendArtifactManifestArchiveV3
+        manifest: KagemushaRecursiveSpendArtifactManifestArchive
     ) throws {
-        guard try NoritoNativeBridge.shared.kagemushaTopUpFinalityVerifyV2(
-            proofArchive: proof.noritoArchive,
-            rosterArtifactArchive: rosterArtifact.noritoArchive,
-            anchorArchive: anchor.archive,
-            manifestArchive: manifest.noritoArchive,
-            expectedManifestSHA256: manifest.sha256
-        ) else {
-            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        do {
+            guard try NoritoNativeBridge.shared.kagemushaTopUpFinalityVerifyV2(
+                proofArchive: proof.noritoArchive,
+                rosterArtifactArchive: rosterArtifact.noritoArchive,
+                anchorArchive: anchor.archive,
+                manifestArchive: manifest.noritoArchive,
+                expectedManifestSHA256: manifest.sha256
+            ) else {
+                throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+            }
+        } catch NativeBridgeError.kagemushaRecursiveSpendV2Unavailable {
+            throw KagemushaRecursiveSpendError.finalityTrustUnavailable
         }
     }
 
@@ -507,41 +520,6 @@ public enum KagemushaRecursiveSpend {
         } catch NativeBridgeError.kagemushaRecursiveSpendV2Unavailable {
             throw KagemushaRecursiveSpendError.proofBackendUnavailable
         }
-    }
-}
-
-/// An exact Torii verifier record bound to its registry identifier.
-/// The archived bytes are preserved verbatim and revalidated when encoded
-/// into a recursive-spend request.
-public struct KagemushaRecursiveSpendVerifierRecordRef: Equatable, Sendable {
-    public let verifierKeyId: String
-    public let recordBytes: Data
-
-    public init(verifierKeyId: String, recordBytes: Data) throws {
-        guard let separator = verifierKeyId.firstIndex(of: ":"),
-              separator != verifierKeyId.startIndex,
-              separator != verifierKeyId.index(before: verifierKeyId.endIndex),
-              verifierKeyId[verifierKeyId.index(after: separator)...].contains(":") == false
-        else {
-            throw KagemushaRecursiveSpendError.invalidField("verifierKeyId")
-        }
-        let backend = String(verifierKeyId[..<separator])
-        let name = String(verifierKeyId[verifierKeyId.index(after: separator)...])
-        try KagemushaRecursiveSpend.requirePortableText(
-            backend,
-            field: "verifierKeyId.backend"
-        )
-        try KagemushaRecursiveSpend.requirePortableText(
-            name,
-            field: "verifierKeyId.name"
-        )
-        try KagemushaRecursiveSpend.requireArchive(
-            recordBytes,
-            schema: KagemushaRecursiveSpend.verifyingKeyRecordWireName,
-            field: "recordBytes"
-        )
-        self.verifierKeyId = verifierKeyId
-        self.recordBytes = Data(recordBytes)
     }
 }
 
@@ -1465,6 +1443,11 @@ public struct KagemushaTopUpFinalityProofArchive: Equatable, Sendable {
     public let noritoArchive: Data
 
     public init(noritoArchive: Data) throws {
+        guard !noritoArchive.isEmpty,
+              noritoArchive.count
+                <= KagemushaRecursiveSpend.topUpFinalityProofMaximumArchiveBytes else {
+            throw KagemushaRecursiveSpendError.invalidArchive("topUpFinalityProof")
+        }
         try KagemushaRecursiveSpend.requireArchive(
             noritoArchive,
             schema: KagemushaRecursiveSpend.topUpFinalityProofWireName,
@@ -1483,6 +1466,13 @@ public struct KagemushaTopUpFinalityRosterArtifactArchive: Equatable, Sendable {
     public let noritoArchive: Data
 
     public init(noritoArchive: Data) throws {
+        guard !noritoArchive.isEmpty,
+              noritoArchive.count
+                <= KagemushaRecursiveSpend.topUpFinalityRosterMaximumArchiveBytes else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "topUpFinalityRosterArtifact"
+            )
+        }
         try KagemushaRecursiveSpend.requireArchive(
             noritoArchive,
             schema: KagemushaRecursiveSpend.topUpFinalityRosterArtifactWireName,
@@ -1494,7 +1484,7 @@ public struct KagemushaTopUpFinalityRosterArtifactArchive: Equatable, Sendable {
 
 /// Canonical authenticated V3 release manifest passed opaquely to the native
 /// artifact loader. Application code never derives proof parameters from it.
-public struct KagemushaRecursiveSpendArtifactManifestArchiveV3: Equatable, Sendable {
+public struct KagemushaRecursiveSpendArtifactManifestArchive: Equatable, Sendable {
     public let noritoArchive: Data
     public let sha256: Data
 
@@ -2042,16 +2032,12 @@ public struct KagemushaRecursiveSpendVerifyRequest: Equatable, Sendable {
     public let maximumHops: UInt32
     public let artifactGeneration: String
     public let verifiedAtMilliseconds: UInt64
-    public let lineageVerifierRecord: KagemushaRecursiveSpendVerifierRecordRef?
-    public let blockHeight: UInt64?
 
     public init(
         bundle: KagemushaRecursiveSpendBundle,
         recipientRequest: KagemushaRecipientPaymentRequest,
         maximumHops: UInt32,
-        verifiedAtMilliseconds: UInt64,
-        lineageVerifierRecord: KagemushaRecursiveSpendVerifierRecordRef? = nil,
-        blockHeight: UInt64? = nil
+        verifiedAtMilliseconds: UInt64
     ) throws {
         guard maximumHops > 0,
               maximumHops <= 64,
@@ -2064,8 +2050,6 @@ public struct KagemushaRecursiveSpendVerifyRequest: Equatable, Sendable {
         self.maximumHops = maximumHops
         self.artifactGeneration = bundle.summary.artifactGeneration
         self.verifiedAtMilliseconds = verifiedAtMilliseconds
-        self.lineageVerifierRecord = lineageVerifierRecord
-        self.blockHeight = blockHeight
     }
 
     public func noritoEncoded() throws -> Data {
@@ -2903,15 +2887,15 @@ public struct KagemushaRecursiveSpendRedeemResult: Equatable, Sendable {
 /// Owns one ABI-18 V3 streaming handle. `write` accepts chunks of the complete
 /// published `KRV3KEY` file and never exposes or parses its header or payload.
 /// Native finalization re-parses and authenticates the held file descriptor.
-public final class KagemushaRecursiveSpendArtifactIngestV3: @unchecked Sendable {
-    public let manifest: KagemushaRecursiveSpendArtifactManifestArchiveV3
+public final class KagemushaRecursiveSpendArtifactIngest: @unchecked Sendable {
+    public let manifest: KagemushaRecursiveSpendArtifactManifestArchive
     public let artifactSHA256: Data
     private var handle: UInt64?
     private var finalized = false
     private let lock = NSLock()
 
     public init(
-        manifest: KagemushaRecursiveSpendArtifactManifestArchiveV3,
+        manifest: KagemushaRecursiveSpendArtifactManifestArchive,
         expectedArtifactSHA256: Data
     ) throws {
         try KagemushaRecursiveSpend.requireNonzeroFixed32(
@@ -3007,7 +2991,7 @@ public final class KagemushaRecursiveSpendArtifactIngestV3: @unchecked Sendable 
     }
 
     fileprivate func finalizedHandle(
-        for expectedManifest: KagemushaRecursiveSpendArtifactManifestArchiveV3
+        for expectedManifest: KagemushaRecursiveSpendArtifactManifestArchive
     ) throws -> UInt64 {
         lock.lock()
         defer { lock.unlock() }
@@ -3035,14 +3019,14 @@ public final class KagemushaRecursiveSpendArtifactIngestV3: @unchecked Sendable 
 /// Each artifact is still streamed independently, but `install()` is the only
 /// operation that transfers ownership to the prover. Native code revalidates
 /// all six anonymous files and either consumes every finalized handle or none.
-public final class KagemushaRecursiveSpendArtifactInstallSessionV3: @unchecked Sendable {
-    public let manifest: KagemushaRecursiveSpendArtifactManifestArchiveV3
-    private var artifacts: [Data: KagemushaRecursiveSpendArtifactIngestV3] = [:]
+public final class KagemushaRecursiveSpendArtifactInstallSession: @unchecked Sendable {
+    public let manifest: KagemushaRecursiveSpendArtifactManifestArchive
+    private var artifacts: [Data: KagemushaRecursiveSpendArtifactIngest] = [:]
     private var installed = false
     private var closed = false
     private let lock = NSLock()
 
-    public init(manifest: KagemushaRecursiveSpendArtifactManifestArchiveV3) {
+    public init(manifest: KagemushaRecursiveSpendArtifactManifestArchive) {
         self.manifest = manifest
     }
 
@@ -3061,7 +3045,7 @@ public final class KagemushaRecursiveSpendArtifactInstallSessionV3: @unchecked S
     /// digest not present exactly once in the canonical manifest.
     public func beginArtifact(
         expectedArtifactSHA256: Data
-    ) throws -> KagemushaRecursiveSpendArtifactIngestV3 {
+    ) throws -> KagemushaRecursiveSpendArtifactIngest {
         try KagemushaRecursiveSpend.requireNonzeroFixed32(
             expectedArtifactSHA256,
             field: "artifact.sha256"
@@ -3074,7 +3058,7 @@ public final class KagemushaRecursiveSpendArtifactInstallSessionV3: @unchecked S
         guard artifacts[expectedArtifactSHA256] == nil else {
             throw KagemushaRecursiveSpendError.invalidField("artifactSet.duplicate")
         }
-        let artifact = try KagemushaRecursiveSpendArtifactIngestV3(
+        let artifact = try KagemushaRecursiveSpendArtifactIngest(
             manifest: manifest,
             expectedArtifactSHA256: expectedArtifactSHA256
         )

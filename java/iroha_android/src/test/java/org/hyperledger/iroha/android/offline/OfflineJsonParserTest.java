@@ -5,14 +5,20 @@ import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 public final class OfflineJsonParserTest {
+  private static final String CANONICAL_ASSET_DEFINITION_ID =
+      "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
+  private static final String CANONICAL_ASSET_JSON = "\"" + CANONICAL_ASSET_DEFINITION_ID + "\"";
 
   private OfflineJsonParserTest() {}
 
   public static void main(final String[] args) {
     parsesOfflineReadiness();
+    parsesExpectedUnavailableReadiness();
     ignoresUnknownOfflineReadinessMembers();
     rejectsMalformedUtf8WithoutReplacement();
+    acceptsOnlyJsonWhitespaceAroundTheDocument();
     rejectsNonCanonicalOfflineReadiness();
+    validatesReadinessTextAsBoundedUnicodeScalars();
     parsesOfflineTransfers();
     rejectsOfflineTransferMalformedIntegerFields();
     canonicalizesJson();
@@ -23,9 +29,20 @@ public final class OfflineJsonParserTest {
     final String json =
         """
         {
-          "asset_definition_id": "xor#wonderland",
+          "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+          "asset_scale": 9,
           "evaluated_block_height": 18446744073709551615,
           "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "active_transfer_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+            "version": 7,
+            "circuit_id": "confidential-transfer-v2",
+            "commitment": "4444444444444444444444444444444444444444444444444444444444444444",
+            "public_inputs_schema_hash": "5555555555555555555555555555555555555555555555555555555555555555",
+            "max_proof_bytes": 4096,
+            "activation_height": 1,
+            "withdrawal_height": null
+          },
           "ready": false,
           "blockers": [
             {"code": "offline_disabled", "message": "Offline transfers are disabled"}
@@ -34,10 +51,13 @@ public final class OfflineJsonParserTest {
         """;
     final OfflineReadiness readiness =
         OfflineJsonParser.parseOfflineReadiness(json.getBytes(StandardCharsets.UTF_8));
-    assert "xor#wonderland".equals(readiness.assetDefinitionId());
+    assert CANONICAL_ASSET_DEFINITION_ID.equals(readiness.assetDefinitionId());
+    assert Long.valueOf(9).equals(readiness.assetScale());
     assert new BigInteger("18446744073709551615").equals(readiness.evaluatedBlockHeight());
     assert "abababababababababababababababababababababababababababababababab"
         .equals(readiness.evaluatedBlockHash());
+    assert "halo2/ipa".equals(readiness.activeTransferVerifier().id().backend());
+    assert readiness.activeTransferVerifier().maxProofBytes() == 4096L;
     assert !readiness.ready();
     assert readiness.blockers().size() == 1;
     assert "offline_disabled".equals(readiness.blockers().get(0).code());
@@ -48,8 +68,8 @@ public final class OfflineJsonParserTest {
     final OfflineReadiness readiness =
         parseOfflineReadiness(
             readinessBody(
-                "\"future_top_level\": {\"ignored\": true},",
-                "\"xor#wonderland\"",
+                "\"future_top_level\": {\"ignored\": true, \"ratio\": 1.25},",
+                CANONICAL_ASSET_JSON,
                 "7",
                 "false",
                 "[{\"code\":\"2fa_required\",\"message\":\"no\",\"future_detail\":7}]"));
@@ -57,11 +77,26 @@ public final class OfflineJsonParserTest {
     assert "2fa_required".equals(readiness.blockers().get(0).code());
   }
 
+  private static void parsesExpectedUnavailableReadiness() {
+    final OfflineReadiness readiness =
+        parseOfflineReadiness(
+            readinessBody(
+                "",
+                CANONICAL_ASSET_JSON,
+                "29",
+                "7",
+                activeTransferVerifier(),
+                "false",
+                "[{\"code\":\"asset_scale_unsupported\",\"message\":\"unsupported\"}]"));
+    assert Long.valueOf(29).equals(readiness.assetScale());
+    assert readiness.activeTransferVerifier() != null;
+  }
+
   private static void rejectsMalformedUtf8WithoutReplacement() {
     final byte[] payload =
-        readinessBody("", "\"xor#wonderland\"", "7", "true", "[]")
+        readinessBody("", CANONICAL_ASSET_JSON, "7", "true", "[]")
             .getBytes(StandardCharsets.UTF_8);
-    final byte[] marker = "xor#wonderland".getBytes(StandardCharsets.US_ASCII);
+    final byte[] marker = CANONICAL_ASSET_DEFINITION_ID.getBytes(StandardCharsets.US_ASCII);
     final int offset = findSubsequence(payload, marker);
     if (offset < 0) {
       throw new AssertionError("readiness asset marker missing from test payload");
@@ -72,10 +107,34 @@ public final class OfflineJsonParserTest {
         "Offline JSON payload must be valid UTF-8");
   }
 
+  private static void acceptsOnlyJsonWhitespaceAroundTheDocument() {
+    final String canonical = readinessBody("", CANONICAL_ASSET_JSON, "7", "true", "[]");
+    final OfflineReadiness readiness = parseOfflineReadiness("\t\n" + canonical + "\r ");
+    assert CANONICAL_ASSET_DEFINITION_ID.equals(readiness.assetDefinitionId());
+    expectIllegalState(
+        () -> parseOfflineReadiness("\u0000" + canonical),
+        "Invalid number: expected digit");
+  }
+
   private static void rejectsNonCanonicalOfflineReadiness() {
     for (final MalformedReadinessCase item : malformedReadinessCases()) {
       expectIllegalState(() -> parseOfflineReadiness(item.body), item.message);
     }
+  }
+
+  private static void validatesReadinessTextAsBoundedUnicodeScalars() {
+    final String boundary = "x".repeat(1023) + "😀";
+    final OfflineReadinessBlocker blocker = new OfflineReadinessBlocker("blocked", boundary);
+    assert blocker.message().codePointCount(0, blocker.message().length()) == 1024;
+    expectIllegalState(
+        () -> new OfflineReadinessBlocker("blocked", "x".repeat(1024) + "😀"),
+        "must not exceed 1024 Unicode characters");
+    expectIllegalState(
+        () -> new OfflineReadinessBlocker("blocked", "line\u0001break"),
+        "must be exact non-empty text");
+    expectIllegalState(
+        () -> new OfflineVerifierId(new String(new char[] {'\uD800'}), "transfer"),
+        "must contain well-formed Unicode");
   }
 
 
@@ -155,35 +214,71 @@ public final class OfflineJsonParserTest {
   private static MalformedReadinessCase[] malformedReadinessCases() {
     return new MalformedReadinessCase[] {
       new MalformedReadinessCase(
-          readinessBody("", "\"xor#wonderland\"", "\"7\"", "true", "[]"),
+          readinessBody("", CANONICAL_ASSET_JSON, "\"7\"", "true", "[]"),
           "evaluated_block_height must be a JSON integer number"),
       new MalformedReadinessCase(
-          readinessBody("", "\"xor#wonderland\"", "-1", "true", "[]"),
+          readinessBody("", CANONICAL_ASSET_JSON, "-1", "true", "[]"),
           "evaluated_block_height must fit in an unsigned 64-bit integer"),
       new MalformedReadinessCase(
-          readinessBody("", "\"xor#wonderland\"", "18446744073709551616", "true", "[]"),
+          readinessBody("", CANONICAL_ASSET_JSON, "18446744073709551616", "true", "[]"),
           "evaluated_block_height must fit in an unsigned 64-bit integer"),
       new MalformedReadinessCase(
-          readinessBody("", "\"xor#wonderland\"", "7", "1", "[]"),
+          readinessBody("", CANONICAL_ASSET_JSON, "1e1", "true", "[]"),
+          "evaluated_block_height must be a JSON integer number"),
+      new MalformedReadinessCase(
+          readinessBody("", CANONICAL_ASSET_JSON, "-1", "7", activeTransferVerifier(),
+              "true", "[]"),
+          "asset_scale must fit in an unsigned 64-bit integer"),
+      new MalformedReadinessCase(
+          readinessBody("", CANONICAL_ASSET_JSON, "4294967296", "7",
+              activeTransferVerifier(), "true", "[]"),
+          "asset_scale must fit in an unsigned 32-bit integer"),
+      new MalformedReadinessCase(
+          readinessBody("", CANONICAL_ASSET_JSON, "29", "7", activeTransferVerifier(),
+              "true", "[]"),
+          "asset_scale_unsupported must be present exactly when assetScale exceeds 28"),
+      new MalformedReadinessCase(
+          readinessBody("", CANONICAL_ASSET_JSON, "null", "7", activeTransferVerifier(),
+              "false", "[{\"code\":\"blocked\",\"message\":\"no\"}]"),
+          "asset_scale_unavailable must be present exactly when assetScale is null"),
+      new MalformedReadinessCase(
+          readinessBody("", CANONICAL_ASSET_JSON, "9", "7", "null", "true", "[]"),
+          "transfer_verifier_unavailable must be present exactly when no active verifier is reported"),
+      new MalformedReadinessCase(
+          readinessBody("", CANONICAL_ASSET_JSON, "9", "7",
+              activeTransferVerifier().replace("\"max_proof_bytes\": 4096", "\"max_proof_bytes\": 0"),
+              "true", "[]"),
+          "maxProofBytes must fit in a positive unsigned 32-bit integer"),
+      new MalformedReadinessCase(
+          readinessBody("", CANONICAL_ASSET_JSON, "9", "7",
+              activeTransferVerifier().replace("\"activation_height\": 1", "\"activation_height\": 8"),
+              "true", "[]"),
+          "active_transfer_verifier must be active at evaluated_block_height"),
+      new MalformedReadinessCase(
+          readinessBody("", CANONICAL_ASSET_JSON, "7", "1", "[]"),
           "ready must be a boolean"),
       new MalformedReadinessCase(
           readinessBody("", "\" xor#wonderland\"", "7", "true", "[]"),
           "asset_definition_id must be an exact non-empty string"),
       new MalformedReadinessCase(
-          readinessBody("", "\"xor#wonderland\"", "7", "true",
+          readinessBody("", CANONICAL_ASSET_JSON, "7", "true",
               "[{\"code\":\"blocked\",\"message\":1}]"),
           "blockers[0].message must be a string"),
       new MalformedReadinessCase(
-          readinessBody("", "\"xor#wonderland\"", "7", "false",
+          readinessBody("", CANONICAL_ASSET_JSON, "7", "false",
               "[{\"code\":\"Bad-Code\",\"message\":\"no\"}]"),
           "code must be a 1-64 character lowercase stable identifier"),
       new MalformedReadinessCase(
-          readinessBody("", "\"xor#wonderland\"", "7", "false", "[]"),
+          readinessBody("", CANONICAL_ASSET_JSON, "7", "false", "[]"),
           "ready must be true exactly when blockers is empty"),
       new MalformedReadinessCase(
-          readinessBody("", "\"xor#wonderland\"", "7", "true",
+          readinessBody("", CANONICAL_ASSET_JSON, "7", "true",
               "[{\"code\":\"blocked\",\"message\":\"no\"}]"),
-          "ready must be true exactly when blockers is empty")
+          "ready must be true exactly when blockers is empty"),
+      new MalformedReadinessCase(
+          readinessBody("", CANONICAL_ASSET_JSON, "7", "false",
+              "[{\"code\":\"blocked\",\"message\":\"one\"},{\"code\":\"blocked\",\"message\":\"two\"}]"),
+          "blockers must not repeat blocker codes")
     };
   }
 
@@ -244,23 +339,60 @@ public final class OfflineJsonParserTest {
       final String evaluatedBlockHeight,
       final String ready,
       final String blockers) {
+    return readinessBody(
+        extra,
+        assetDefinitionId,
+        "9",
+        evaluatedBlockHeight,
+        activeTransferVerifier(),
+        ready,
+        blockers);
+  }
+
+  private static String readinessBody(
+      final String extra,
+      final String assetDefinitionId,
+      final String assetScale,
+      final String evaluatedBlockHeight,
+      final String activeTransferVerifier,
+      final String ready,
+      final String blockers) {
     return String.format(
         Locale.ROOT,
         """
         {
           %s
           "asset_definition_id": %s,
+          "asset_scale": %s,
           "evaluated_block_height": %s,
           "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "active_transfer_verifier": %s,
           "ready": %s,
           "blockers": %s
         }
         """,
         extra,
         assetDefinitionId,
+        assetScale,
         evaluatedBlockHeight,
+        activeTransferVerifier,
         ready,
         blockers);
+  }
+
+  private static String activeTransferVerifier() {
+    return """
+        {
+          "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+          "version": 7,
+          "circuit_id": "confidential-transfer-v2",
+          "commitment": "4444444444444444444444444444444444444444444444444444444444444444",
+          "public_inputs_schema_hash": "5555555555555555555555555555555555555555555555555555555555555555",
+          "max_proof_bytes": 4096,
+          "activation_height": 1,
+          "withdrawal_height": null
+        }
+        """;
   }
 
   private static int findSubsequence(final byte[] haystack, final byte[] needle) {

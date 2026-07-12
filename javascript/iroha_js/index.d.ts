@@ -501,6 +501,18 @@ export interface ProposeMultisigExecuteTriggerOptions
 export interface MultisigAccountSelector {
   multisigAccountId?: string;
   multisigAccountAlias?: string;
+  multisig_account_id?: string;
+  multisig_account_alias?: string;
+}
+
+export type MultisigProposalStatus =
+  | "COLLECTING_SIGNATURES"
+  | "FINALIZED"
+  | "CANCELED"
+  | "EXPIRED";
+
+export interface MultisigProposalQuery extends MultisigAccountSelector {
+  status?: ReadonlyArray<MultisigProposalStatus>;
 }
 
 export type MultisigProposeInstructionInput =
@@ -671,7 +683,11 @@ export interface MultisigSpecResponse {
 export interface MultisigProposalEntry {
   proposal_id: string;
   instructions_hash: string;
+  operation_type: string;
+  intent: JsonValue | null;
   proposal: JsonValue;
+  status: MultisigProposalStatus;
+  terminal_at_ms: number | null;
 }
 
 export interface MultisigProposalListResponse {
@@ -5176,6 +5192,7 @@ type CryptoRuntimeNamespaceExport =
   | "isKagemushaRecursiveSpendLineageProofCircuitId"
   | "isKagemushaRecursiveSpendNativeAvailable"
   | "isKagemushaRecursiveSpendTopUpNativeAvailable"
+  | "isKagemushaSpendAgainMode"
   | "isPrivacyNativeAvailable"
   | "isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId"
   | "isSupportedKagemushaRecursiveSpendAppendProofTransition"
@@ -6771,10 +6788,29 @@ export interface ToriiOfflineReadinessBlocker {
   message: string;
 }
 
+export interface ToriiOfflineVerifierId {
+  backend: string;
+  name: string;
+}
+
+export interface ToriiOfflineActiveTransferVerifier {
+  id: ToriiOfflineVerifierId;
+  version: number;
+  circuit_id: string;
+  commitment: string;
+  public_inputs_schema_hash: string;
+  max_proof_bytes: number;
+  activation_height: number | bigint;
+  withdrawal_height: number | bigint | null;
+}
+
 export interface ToriiOfflineReadinessResponse {
   asset_definition_id: string;
+  /** Authoritative live u32 scale; values above 28 accompany asset_scale_unsupported. */
+  asset_scale: number | null;
   evaluated_block_height: number | bigint;
   evaluated_block_hash: string;
+  active_transfer_verifier: ToriiOfflineActiveTransferVerifier | null;
   ready: boolean;
   blockers: ToriiOfflineReadinessBlocker[];
 }
@@ -6820,11 +6856,51 @@ export interface OfflineTopUpAnchor {
   anchor_digest: OfflineFixed32Bytes;
 }
 
+export interface OfflineTopUpFinalityProofAnchor {
+  topup_operation_id: OfflineFixed32Bytes;
+  anchor_digest: OfflineFixed32Bytes;
+}
+
+export interface OfflineTopUpFinalityHeightContextBinding {
+  height: OfflineJsonUnsignedInteger;
+  /** Remaining consensus context is opaque and consumed by the native verifier. */
+  readonly [key: string]: unknown;
+}
+
+export interface OfflineTopUpFinalityRoundBinding {
+  height: OfflineJsonUnsignedInteger;
+  /** Remaining round fields are opaque and consumed by the native verifier. */
+  readonly [key: string]: unknown;
+}
+
+export interface OfflineTopUpFinalityCertificateBinding {
+  round: OfflineTopUpFinalityRoundBinding;
+  /** Remaining certificate fields are opaque and consumed by the native verifier. */
+  readonly [key: string]: unknown;
+}
+
+export interface OfflineTopUpFinalityCommitQcBinding {
+  height_context: OfflineTopUpFinalityHeightContextBinding;
+  certificate: OfflineTopUpFinalityCertificateBinding;
+  /** Remaining QC fields are opaque and consumed by the native verifier. */
+  readonly [key: string]: unknown;
+}
+
+export interface OfflineTopUpFinalityProof {
+  version: 1 | 1n;
+  anchor: OfflineTopUpFinalityProofAnchor;
+  commit_qc: OfflineTopUpFinalityCommitQcBinding;
+  anchor_path: Readonly<Record<string, unknown>>;
+  /** Future proof fields are preserved for the native verifier. */
+  readonly [key: string]: unknown;
+}
+
 export interface OfflineTopUpResult {
   transaction_hash: string;
   finalized_block_height: number | bigint;
   server_time_ms: number | bigint;
   anchor: OfflineTopUpAnchor;
+  finality_proof: OfflineTopUpFinalityProof;
 }
 
 export interface OfflineRedeemResult {
@@ -11513,22 +11589,27 @@ export declare class ToriiBrowserClient {
     options?: Record<string, unknown>,
   ): Promise<unknown>;
   getMultisigSpec(
-    selector: Record<string, unknown>,
+    selector: MultisigAccountSelector,
     options?: Record<string, unknown>,
-  ): Promise<unknown>;
+  ): Promise<MultisigSpecResponse>;
   listMultisigProposals(
-    selector: Record<string, unknown>,
+    selector: MultisigProposalQuery,
     options?: Record<string, unknown>,
-  ): Promise<unknown>;
+  ): Promise<MultisigProposalListResponse>;
   getMultisigProposal(
-    request: Record<string, unknown>,
+    request: MultisigAccountSelector & {
+      proposalId?: string;
+      instructionsHash?: string;
+      proposal_id?: string;
+      instructions_hash?: string;
+    },
     options?: Record<string, unknown>,
-  ): Promise<unknown>;
+  ): Promise<MultisigProposalGetResponse>;
   getMultisigProposal(
     accountId: string,
     proposalId: string,
     options?: Record<string, unknown>,
-  ): Promise<unknown>;
+  ): Promise<MultisigProposalGetResponse>;
   listMultisigApprovals(
     request?: Record<string, unknown>,
     options?: Record<string, unknown>,
@@ -12694,7 +12775,7 @@ export declare class ToriiClient {
     options?: { signal?: AbortSignal },
   ): Promise<MultisigSpecResponse>;
   listMultisigProposals(
-    request: MultisigAccountSelector,
+    request: MultisigProposalQuery,
     options?: { signal?: AbortSignal },
   ): Promise<MultisigProposalListResponse>;
   getMultisigProposal(
@@ -13016,7 +13097,7 @@ export function deriveConfidentialNullifierV2(input: {
 
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1: "recursive_compact_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: "recursive_spend_v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 6;
+export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 18;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 7;
 export const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 15;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1: "kagemusha-recursive-compact-v1";
@@ -13057,9 +13138,7 @@ export class KagemushaRecursiveSpendRequestCodecError extends Error {
   readonly field: string;
   constructor(kind: string, field: string, message?: string);
 }
-export type KagemushaOfflineSpendMode =
-  | "recursive_compact_v1"
-  | "recursive_spend_v1";
+export type KagemushaOfflineSpendMode = "recursive_spend_v2";
 export type KagemushaRecursiveSpendLineageKeyArtifactOpeningLen =
   | 2
   | 4
@@ -13092,6 +13171,9 @@ export function preferredKagemushaOfflineSpendModeForCapabilities(
   recursiveCompactAvailable: boolean,
   recursiveSpendAvailable: boolean,
 ): KagemushaOfflineSpendMode | null;
+export function isKagemushaSpendAgainMode(
+  value: unknown,
+): value is KagemushaOfflineSpendMode;
 export function canRedeemKagemushaRecursiveSpendWitnessless(
   proofCircuitId: string,
   hopCount: number,

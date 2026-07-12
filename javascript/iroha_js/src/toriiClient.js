@@ -334,6 +334,12 @@ const ISO_STATUS_VALUES = new Map([
   ["rejected", "Rejected"],
   ["committed", "Committed"],
 ]);
+const MULTISIG_PROPOSAL_STATUS_VALUES = new Set([
+  "COLLECTING_SIGNATURES",
+  "FINALIZED",
+  "CANCELED",
+  "EXPIRED",
+]);
 const PACS002_STATUS_CODES = new Set(["ACTC", "ACSP", "ACSC", "ACWC", "PDNG", "RJCT"]);
 
 function resolveNativeBinding(nativeBinding) {
@@ -8758,18 +8764,18 @@ export class ToriiClient {
   }
 
   /**
-   * List nonterminal multisig proposals for a selector (`POST /v1/multisig/proposals/query`).
+   * List multisig proposals for a selector, optionally filtered by lifecycle status (`POST /v1/multisig/proposals/list`).
    * @param {object} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
    */
   async listMultisigProposals(request = {}, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "listMultisigProposals");
-    const payload = normalizeMultisigSelectorOnlyRequest(
+    const payload = normalizeMultisigProposalsListRequest(
       request,
       "listMultisigProposals request",
     );
-    const response = await this._request("POST", "/v1/multisig/proposals/query", {
+    const response = await this._request("POST", "/v1/multisig/proposals/list", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
@@ -8783,7 +8789,7 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch one multisig proposal by proposal id or instructions hash (`POST /v1/multisig/proposals/lookup`).
+   * Fetch one multisig proposal by proposal id or instructions hash (`POST /v1/multisig/proposals/get`).
    * @param {object} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
@@ -8791,7 +8797,7 @@ export class ToriiClient {
   async getMultisigProposal(request = {}, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getMultisigProposal");
     const payload = normalizeMultisigProposalLookupRequest(request);
-    const response = await this._request("POST", "/v1/multisig/proposals/lookup", {
+    const response = await this._request("POST", "/v1/multisig/proposals/get", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
@@ -22630,6 +22636,30 @@ function normalizeMultisigSelectorOnlyRequest(input, context) {
   return normalizeMultisigAccountSelector(input, context);
 }
 
+function normalizeMultisigProposalStatus(value, context) {
+  const status = requireNonEmptyString(value, context).trim().toUpperCase();
+  if (!MULTISIG_PROPOSAL_STATUS_VALUES.has(status)) {
+    throw new TypeError(
+      `${context} must be one of ${[...MULTISIG_PROPOSAL_STATUS_VALUES].join(", ")}`,
+    );
+  }
+  return status;
+}
+
+function normalizeMultisigProposalsListRequest(input, context) {
+  const record = ensureRecord(input, context);
+  const payload = normalizeMultisigAccountSelector(record, context);
+  if (record.status !== undefined) {
+    if (!Array.isArray(record.status)) {
+      throw new TypeError(`${context}.status must be an array`);
+    }
+    payload.status = record.status.map((status, index) =>
+      normalizeMultisigProposalStatus(status, `${context}.status[${index}]`),
+    );
+  }
+  return payload;
+}
+
 function normalizeMultisigProposeInstructionInput(value, context) {
   if (
     typeof value === "string" ||
@@ -23009,7 +23039,24 @@ function normalizeMultisigProposalEntry(payload, context) {
       record.instructions_hash,
       `${context}.instructions_hash`,
     ),
+    operation_type: requireNonEmptyString(
+      record.operation_type,
+      `${context}.operation_type`,
+    ),
+    intent:
+      record.intent === undefined || record.intent === null
+        ? null
+        : cloneJsonValue(record.intent, `${context}.intent`),
     proposal: cloneJsonValue(record.proposal, `${context}.proposal`),
+    status: normalizeMultisigProposalStatus(record.status, `${context}.status`),
+    terminal_at_ms:
+      record.terminal_at_ms === undefined || record.terminal_at_ms === null
+        ? null
+        : ToriiClient._normalizeUnsignedInteger(
+            record.terminal_at_ms,
+            `${context}.terminal_at_ms`,
+            { allowZero: true },
+          ),
   };
 }
 
@@ -23074,12 +23121,7 @@ function normalizeMultisigProposalGetResponse(
       record.resolved_multisig_account_id,
       `${context}.resolved_multisig_account_id`,
     ),
-    proposal_id: requireNonEmptyString(record.proposal_id, `${context}.proposal_id`),
-    instructions_hash: normalizeHex32String(
-      record.instructions_hash,
-      `${context}.instructions_hash`,
-    ),
-    proposal: cloneJsonValue(record.proposal, `${context}.proposal`),
+    ...normalizeMultisigProposalEntry(record, context),
   };
 }
 

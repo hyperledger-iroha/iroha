@@ -555,6 +555,7 @@ enum StrictJSONDuplicateKeyRejector {
     }
 
     private struct Parser {
+        private static let maximumNestingDepth = 128
         private let text: String
         private var index: String.Index
 
@@ -564,23 +565,26 @@ enum StrictJSONDuplicateKeyRejector {
         }
 
         mutating func parse() throws {
-            try parseValue()
+            try parseValue(depth: 0)
             skipWhitespace()
             guard index == text.endIndex else {
                 throw ZkAssetMerklePathError.invalidField("json")
             }
         }
 
-        private mutating func parseValue() throws {
+        private mutating func parseValue(depth: Int) throws {
+            guard depth <= Self.maximumNestingDepth else {
+                throw ZkAssetMerklePathError.invalidField("json.depth")
+            }
             skipWhitespace()
             guard let character = peek() else {
                 throw ZkAssetMerklePathError.invalidField("json")
             }
             switch character {
             case "{":
-                try parseObject()
+                try parseObject(depth: depth)
             case "[":
-                try parseArray()
+                try parseArray(depth: depth)
             case "\"":
                 _ = try parseString()
             case "-", "0"..."9":
@@ -596,7 +600,7 @@ enum StrictJSONDuplicateKeyRejector {
             }
         }
 
-        private mutating func parseObject() throws {
+        private mutating func parseObject(depth: Int) throws {
             try consume("{")
             skipWhitespace()
             var keys = Set<String>()
@@ -614,7 +618,7 @@ enum StrictJSONDuplicateKeyRejector {
                 }
                 skipWhitespace()
                 try consume(":")
-                try parseValue()
+                try parseValue(depth: depth + 1)
                 skipWhitespace()
                 if consumeIf("}") {
                     return
@@ -623,14 +627,14 @@ enum StrictJSONDuplicateKeyRejector {
             }
         }
 
-        private mutating func parseArray() throws {
+        private mutating func parseArray(depth: Int) throws {
             try consume("[")
             skipWhitespace()
             if consumeIf("]") {
                 return
             }
             while true {
-                try parseValue()
+                try parseValue(depth: depth + 1)
                 skipWhitespace()
                 if consumeIf("]") {
                     return
@@ -725,22 +729,43 @@ enum StrictJSONDuplicateKeyRejector {
 
         private mutating func parseNumber() throws {
             if consumeIf("-") {}
-            guard let first = peek(), first.isNumber else {
+            guard let first = peek(), Self.isASCIIDigit(first) else {
                 throw ZkAssetMerklePathError.invalidField("json.number")
             }
             if first == "0" {
                 advance()
+                if let character = peek(), Self.isASCIIDigit(character) {
+                    throw ZkAssetMerklePathError.invalidField("json.number")
+                }
             } else {
-                while let character = peek(), character.isNumber {
+                while let character = peek(), Self.isASCIIDigit(character) {
                     advance()
                 }
             }
             if consumeIf(".") {
-                throw ZkAssetMerklePathError.invalidField("json.number")
+                guard let character = peek(), Self.isASCIIDigit(character) else {
+                    throw ZkAssetMerklePathError.invalidField("json.number")
+                }
+                while let character = peek(), Self.isASCIIDigit(character) {
+                    advance()
+                }
             }
             if let character = peek(), character == "e" || character == "E" {
-                throw ZkAssetMerklePathError.invalidField("json.number")
+                advance()
+                if let sign = peek(), sign == "+" || sign == "-" {
+                    advance()
+                }
+                guard let digit = peek(), Self.isASCIIDigit(digit) else {
+                    throw ZkAssetMerklePathError.invalidField("json.number")
+                }
+                while let digit = peek(), Self.isASCIIDigit(digit) {
+                    advance()
+                }
             }
+        }
+
+        private static func isASCIIDigit(_ character: Character) -> Bool {
+            character >= "0" && character <= "9"
         }
 
         private mutating func skipWhitespace() {

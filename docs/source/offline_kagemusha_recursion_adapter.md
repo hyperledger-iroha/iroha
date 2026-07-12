@@ -226,7 +226,7 @@ runtime `CircuitAuthenticatedRecursionAdapter` must continue returning
 
 The fail-closed production contract is now explicit even though the loader is
 not yet available. Native capability negotiation reports bridge ABI `18`, mode
-`recursive_spend_v1`, manifest schema
+`recursive_spend_v2`, manifest schema
 `kagemusha.offline.recursive_spend.artifact_manifest.v3`, proof backend
 `halo2/ipa-pasta-cycle-v1`, and transcript profile
 `kagemusha-pasta-cycle-poseidon-v1`. The two fixed circuit roles are:
@@ -305,8 +305,10 @@ entrypoints fail closed. Symbol presence and successful ingestion are not
 readiness signals; the retired V2 artifact spool is not exported in the
 first-release surface. `authenticated_release_envelope` remains an explicit
 missing gate until a signer/policy-bound verifier produces the trusted manifest
-digest consumed by native verification. The availability constant may change
-only in the audited release that
+digest consumed by native verification. `topup_finality_bound_init` remains an
+independent missing gate until recursive init must consume that verified
+finality result; the standalone finality symbol is unavailable in the interim.
+The availability constant may change only in the audited release that
 supplies both opposite-field loaders, the cross-field Poseidon transcript,
 the two-layer accumulator, release-envelope authentication, substitution tests,
 review, and device evidence.

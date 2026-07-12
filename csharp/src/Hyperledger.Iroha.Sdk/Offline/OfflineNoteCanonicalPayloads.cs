@@ -1876,6 +1876,12 @@ public static class OfflineNoteCanonicalPayloadCodec
         }
     }
 
+    internal static string RequireCanonicalAssetDefinitionId(string value)
+    {
+        var definitionBytes = ParseAssetDefinitionAddress(value);
+        return EncodeAssetDefinitionAddress(definitionBytes);
+    }
+
     private static byte[] ParseAssetDefinitionAddress(string value)
     {
         var exact = RequireExactNonBlankText(value, "asset_definition_id", nameof(value));

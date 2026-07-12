@@ -685,10 +685,6 @@ top-up results expose `OfflineTopUpAnchor`, which validates and retains the
 canonical anchor archive without publishing an internal versioned wire type.
 Classic note issue, redemption, audit, and defund models are fixture-only;
 production offline payments use Kagemusha transaction builders.
-The stricter attestation-aware fixture codec is named
-`AttestedOfflineNoteDecoding`, with `AttestedOfflineNote*` models and
-`Halo2AttestedOfflineNoteProver`; its internal Norito schema labels remain
-unchanged.
 Swift exposes `OfflineNoteIssue`, `OfflineNoteRedeem`, and `OfflineNoteAuditBundle`
 models plus retired `buildIssueOfflineNote`, `buildRedeemOfflineNote`,
 `buildAuditOfflineNote`, and `buildDefundOfflineNote` methods on `IrohaSDK`.
@@ -704,8 +700,9 @@ offline payments use Kagemusha flows. When an injected test issuer path is
 used, `load` records issued notes as `.issuePending` until `sync()`
 observes matching `IssueOfflineNote` finality; rejected issue outcomes cancel
 the pending note.
-The first release exposes one Kagemusha production mode:
-`recursive_spend_v1`. Selection requires the exact native bridge ABI 18
+The first release exposes one Kagemusha production mode: `recursive_spend_v2`.
+Internal V2 request and circuit names do not define a second product selector.
+Selection requires the exact native bridge ABI 18
 capability archive, a validated `proof_backend_available` value, and the full
 native symbol inventory. `KagemushaRecursiveSpendProver.preferredMode` returns
 `.recursiveSpendV1` only when that ABI-18 backend is ready; otherwise it returns
@@ -728,20 +725,20 @@ content address. The release directory has exactly ten files:
 Treat `manifest.norito` as the canonical runtime object and verify its SHA-256
 before ingesting any payload. JSON is an operator view, not a trust anchor. For
 each of the six `KRV3KEY\0` files, begin a manifest-bound streaming ingest with
-`KagemushaRecursiveSpendArtifactInstallSessionV3.beginArtifact`, write bounded
-chunks, finalize only after the complete file has been validated, and cancel
-the session on every error path.
+`KagemushaRecursiveSpendArtifactInstallSession.beginArtifact`, write bounded chunks, finalize only after the
+complete file has been validated, and cancel the handle on every error path.
 The native begin/write/finalize/cancel operations bind the manifest digest,
 artifact digest, framing header, descriptor, payload size, and payload digest.
-Successful ingestion alone does not advertise proof readiness. Use
-`KagemushaRecursiveSpendArtifactInstallSessionV3` to collect exactly one
-finalized handle for each of the six manifest roles and install them as one
-generation. Installation revalidates every anonymous file, normalizes caller
-order to manifest profile/role order, and consumes either all six handles or
-none. `isInstalled()` checks the exact canonical manifest, while `uninstall()`
-is digest-guarded so a stale session cannot remove a replacement generation;
-operations already holding the prior generation keep its file descriptors
-alive until their native call returns.
+Successful ingestion alone does not advertise proof readiness. The six finalized
+streams must be installed atomically through
+`KagemushaRecursiveSpendArtifactInstallSession`; partial generations remain
+unavailable and failed installation retains the prior active generation.
+The SDK also exposes the recursive-spend compact projection verifier for raw
+Norito compact-token and verifier-record archives. Call
+`verifyRecursiveSpendCompactPaymentTokenProjection(compactTokenArchive:verifierRecordArchive:blockHeight:)`
+and require its native boolean receiver result; use
+`isProjectionVerifierNativeAvailable` to probe that verifier surface before
+dispatch.
 
 Top-up admission also requires the manifest-bound finality roster and a final
 committed Torii result. An accepted submission, an unknown operation state, or
@@ -760,10 +757,10 @@ from a native recursive redeem request before signing. These builders require
 valid Norito archives, reject empty, malformed, tampered, or wrong-type
 instruction archives, and keep recursive top-up/redeem derivation inside the
 native bridge. Experimental helper symbols are not compatibility inputs to the
-first-release ABI-18 DTOs and cannot be selected as a release mode.
+first-release ABI-18/V2 DTOs and cannot be selected as a release mode.
 
-The first-release recursive-spend surface uses the flat,
-`KagemushaRecursiveSpendInitRequest` contract instead. Its five fields are the
+The first-release V2 surface uses the flat,
+`KagemushaRecursiveSpendInitRequestV2` contract instead. Its five fields are the
 finalized top-up anchor, checked one-hop record bundle, Pallas opening archive,
 lineage mode, and optional Reserved-lineage artifact. Amount, current note,
 operation id, artifact generation, and verifier lifecycle height are derived
@@ -777,7 +774,7 @@ those tags as `[Data]`, while canonical Norito concatenates them into one
 `depth * 24` byte `Vec<u8>` with no nested per-tag vectors. The recipient-only
 peer-payment wire contains only its proof-bearing recipient bundle; operation id
 and recipient-request digest are derived from that bundle's recipient
-`PeerSplit` transition and are never duplicated beside it. A split accepts
+`PeerSplit` transition and are never duplicated beside it. A V2 split accepts
 one or two canonical parents; semantic redemption carries the bounded canonical
 lineage DAG needed to verify cross-top-up joins.
 For protocol preflight, the append-boundary helper
@@ -858,10 +855,6 @@ Torii and keep it bound to the native proof through the complete
 request-to-redeem flow. The high-level helper performs the fetch, canonical
 Norito archive conversion, proof construction, and local proof verification:
 
-Native proof-helper DTOs use explicit `KagemushaRecursiveProof*` names so they
-cannot be confused with the first-release top-up and redeem command DTOs; their
-versioned Norito wire labels remain internal to the codecs.
-
 ```swift
 let unshieldVerifierKeyId = try ToriiVerifyingKeyId(
     backend: "halo2/ipa",
@@ -873,7 +866,7 @@ let redeemProof = try await sdk
         verifierKeyId: unshieldVerifierKeyId,
         blockHeight: currentBlockHeight
     )
-let redeemRequest = try KagemushaRecursiveProofRedemptionRequest(
+let redeemRequest = try KagemushaRecursiveSpendRedeemRequest(
     bundle: recursiveBundle,
     recipient: recipient,
     publicAmount: publicAmount,

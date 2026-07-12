@@ -6944,6 +6944,9 @@ mod settlement {
         metadata::Metadata,
         nexus::DataSpaceId,
         prelude::{AssetDefinitionId, Name, Numeric},
+        query::settlement::prelude::{
+            FindFxCorridorPolicyById, FindFxCorridorPolicyRegistry,
+        },
     };
 
     #[derive(clap::Subcommand, Debug)]
@@ -6956,6 +6959,10 @@ mod settlement {
         SetFxCorridorPolicy(SetFxCorridorPolicyArgs),
         /// Execute one policy-backed native FX corridor settlement
         SettleFxCorridor(SettleFxCorridorArgs),
+        /// Read one governed native FX corridor policy
+        GetFxCorridorPolicy(GetFxCorridorPolicyArgs),
+        /// Read the complete governed native FX corridor policy registry
+        ListFxCorridorPolicies,
     }
 
     impl Run for Command {
@@ -6965,6 +6972,13 @@ mod settlement {
                 Command::Pvp(args) => args.run(context),
                 Command::SetFxCorridorPolicy(args) => args.run(context),
                 Command::SettleFxCorridor(args) => args.run(context),
+                Command::GetFxCorridorPolicy(args) => args.run(context),
+                Command::ListFxCorridorPolicies => {
+                    let registry = context
+                        .client_from_config()
+                        .query_single(FindFxCorridorPolicyRegistry)?;
+                    context.print_data(&registry)
+                }
             }
         }
     }
@@ -7009,6 +7023,22 @@ mod settlement {
         pub disabled: bool,
     }
 
+    #[derive(clap::Args, Debug)]
+    pub struct GetFxCorridorPolicyArgs {
+        /// Stable policy identifier
+        #[arg(long)]
+        pub policy_id: Name,
+    }
+
+    impl GetFxCorridorPolicyArgs {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let policy = context
+                .client_from_config()
+                .query_single(FindFxCorridorPolicyById::new(self.policy_id))?;
+            context.print_data(&policy)
+        }
+    }
+
     impl SetFxCorridorPolicyArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let policy = FxCorridorPolicy {
@@ -7028,6 +7058,9 @@ mod settlement {
                 rate_denominator: self.rate_denominator,
                 enabled: !self.disabled,
             };
+            if let Some(error) = policy.invariant_error() {
+                return Err(eyre!(error));
+            }
             let instruction: SettlementInstructionBox = SetFxCorridorPolicy { policy }.into();
             context.finish([InstructionBox::from(instruction)])
         }
@@ -7060,6 +7093,14 @@ mod settlement {
 
     impl SettleFxCorridorArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            if self.expected_policy_revision == 0 {
+                return Err(eyre!(
+                    "--expected-policy-revision must be greater than zero"
+                ));
+            }
+            if self.source_amount.is_zero() || self.source_amount.mantissa().is_negative() {
+                return Err(eyre!("--source-amount must be positive"));
+            }
             let instruction = SettleFxCorridor {
                 policy_id: self.policy_id,
                 expected_policy_revision: self.expected_policy_revision,

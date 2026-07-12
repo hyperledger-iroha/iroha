@@ -280,6 +280,14 @@ pub const SYSCALL_GRANT_ROLE: u32 = 0x32;
 pub const SYSCALL_REVOKE_ROLE: u32 = 0x33;
 pub const SYSCALL_GRANT_PERMISSION: u32 = 0x34;
 pub const SYSCALL_REVOKE_PERMISSION: u32 = 0x35;
+/// Grant the current immutable contract address's exact entrypoint capability.
+///
+/// Args: r10 = &AccountId, r11 = &Blob (UTF-8 canonical entrypoint selector).
+pub const SYSCALL_GRANT_CONTRACT_ENTRYPOINT: u32 = 0x36;
+/// Revoke the current immutable contract address's exact entrypoint capability.
+///
+/// Args: r10 = &AccountId, r11 = &Blob (UTF-8 canonical entrypoint selector).
+pub const SYSCALL_REVOKE_CONTRACT_ENTRYPOINT: u32 = 0x37;
 
 /// Triggers.
 pub const SYSCALL_CREATE_TRIGGER: u32 = 0x40;
@@ -876,6 +884,8 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_REVOKE_ROLE
             | SYSCALL_GRANT_PERMISSION
             | SYSCALL_REVOKE_PERMISSION
+            | SYSCALL_GRANT_CONTRACT_ENTRYPOINT
+            | SYSCALL_REVOKE_CONTRACT_ENTRYPOINT
             | SYSCALL_CREATE_TRIGGER
             | SYSCALL_REMOVE_TRIGGER
             | SYSCALL_SET_TRIGGER_ENABLED
@@ -1230,6 +1240,8 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_REVOKE_ROLE,
             SYSCALL_GRANT_PERMISSION,
             SYSCALL_REVOKE_PERMISSION,
+            SYSCALL_GRANT_CONTRACT_ENTRYPOINT,
+            SYSCALL_REVOKE_CONTRACT_ENTRYPOINT,
         ]);
         // Triggers
         v.extend_from_slice(&[
@@ -1427,6 +1439,8 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_REVOKE_ROLE => "REVOKE_ROLE",
         SYSCALL_GRANT_PERMISSION => "GRANT_PERMISSION",
         SYSCALL_REVOKE_PERMISSION => "REVOKE_PERMISSION",
+        SYSCALL_GRANT_CONTRACT_ENTRYPOINT => "GRANT_CONTRACT_ENTRYPOINT",
+        SYSCALL_REVOKE_CONTRACT_ENTRYPOINT => "REVOKE_CONTRACT_ENTRYPOINT",
         // Triggers
         SYSCALL_CREATE_TRIGGER => "CREATE_TRIGGER",
         SYSCALL_REMOVE_TRIGGER => "REMOVE_TRIGGER",

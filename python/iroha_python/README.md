@@ -73,12 +73,27 @@ from iroha_python import ToriiClient
 client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
 
 readiness = client.get_offline_readiness(asset_definition_id="xor#wonderland")
-print("offline ready", readiness.ready, readiness.blockers)
+print(
+    "offline ready",
+    readiness.ready,
+    readiness.asset_scale,
+    readiness.active_transfer_verifier,
+    readiness.blockers,
+)
 ```
+
+The readiness decoder preserves the authoritative nullable `u32` asset scale
+and the typed, key-material-free transfer verifier from the same evaluated
+block. A scale above 28 remains decodable with
+`asset_scale_unsupported`; only `ready=True` requires the supported Offline
+amount range and an active verifier. Verifier activation/withdrawal bounds,
+hashes, proof-size limits, blocker correlations, and duplicate blocker codes
+are validated before the snapshot is returned.
 
 `OfflineTopUpRequest` and `OfflineRedeemRequest` are exported `TypedDict`
 contracts, and an applied top-up returns a frozen `OfflineTopUpAnchor` rather
-than an untyped mapping. The decoder enforces the `0..=28` scale bound and
+than an untyped mapping. Command and anchor decoders enforce the `0..=28` scale
+bound and
 cross-checks the anchor's operation ID, transaction hash, finality height,
 amount, roots, current note, and sorted nullifier set before returning it.
 
@@ -160,6 +175,8 @@ release. A missing packaged key, the generic compact-token reservation, and the
 multi-hop verifier-batch reservation still reach the proof-composition
 reservation and remain reserved ABI-7 state; unavailable compact surfaces raise
 `RuntimeError` before wallet code can treat reserved admission as success.
+`recursive_compact_v1` is an admission-neutral projection identifier, not a
+spend-again product mode; compact availability never wins selector choice.
 `preferred_kagemusha_offline_spend_mode()` selects
 `recursive_spend_v1` when the native extension reports native bridge ABI 6 or later
 and every required recursive-spend method rejects the malformed availability
@@ -175,6 +192,8 @@ helpers, `kagemusha_recursive_spend_verify`, and
 `kagemusha_recursive_spend_redeem`. Explicit capability selection must pass both
 `recursive_compact_available` and `recursive_spend_available`; single-argument
 selectors are not shipped.
+`is_kagemusha_spend_again_mode(...)` accepts only `recursive_spend_v1` and
+rejects both `recursive_spend_v2` and `recursive_compact_v1`.
 
 Transaction helpers expose the same Kagemusha instruction surface without
 asking wallet code to reframe native archives. Use

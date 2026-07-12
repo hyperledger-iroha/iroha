@@ -197,6 +197,18 @@ ret = "u64=0"
 gas = "G_revoke_perm"
 
 [[syscall]]
+number = "0x36"
+args = "r10=&AccountId, r11=&Blob(entrypoint)"
+ret = "u64=0"
+gas = "G_grant_perm"
+
+[[syscall]]
+number = "0x37"
+args = "r10=&AccountId, r11=&Blob(entrypoint)"
+ret = "u64=0"
+gas = "G_revoke_perm"
+
+[[syscall]]
 number = "0x40"
 args = "r10=&Json(spec)"
 ret = "u64=0"

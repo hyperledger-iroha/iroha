@@ -158,6 +158,7 @@ export {
   KagemushaRecursiveSpendRequestCodecError,
   preferredKagemushaOfflineSpendMode,
   preferredKagemushaOfflineSpendModeForCapabilities,
+  isKagemushaSpendAgainMode,
   canRedeemKagemushaRecursiveSpendWitnessless,
   isKagemushaRecursiveSpendLineageProofCircuitId,
   isKagemushaRecursiveSpendLineageAppendOutputCircuitId,

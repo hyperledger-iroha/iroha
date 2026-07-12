@@ -21,8 +21,8 @@ use crate::{
     asset::{AssetDefinitionId, AssetId},
     block::consensus_v2::{
         ConsensusMode, DataAvailabilityLayout, DualQuorum, GlobalPhase, HeightContext,
-        HeightContextId, PROTOCOL_VERSION, QuorumCertificate, ValidatorPower,
-        finality::FinalizedNextEpochSnapshot,
+        HeightContextId, MAX_VALIDATORS_PER_HEIGHT, PROTOCOL_VERSION, QuorumCertificate,
+        ValidatorPower, finality::FinalizedNextEpochSnapshot,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     zk::BackendTag,
@@ -171,10 +171,9 @@ pub const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: u
 pub const KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1: u16 = 1;
 /// Kagemusha aggregation mode for compact tokens whose private-hop verifier is proven in-circuit.
 pub const KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1: u16 = 2;
-/// SDK-facing Kagemusha spend mode for recursive compact tokens.
-pub const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1: &str = "recursive_compact_v1";
-/// SDK-facing Kagemusha spend mode for recursive spend-again-offline cash.
-pub const KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";
+/// Sole first-release product selector for recursive spend-again-offline cash.
+/// Internal V2 request/circuit names are not public product selectors.
+pub const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: &str = "recursive_spend_v1";
 /// Maximum asset scale accepted by the exact Kagemusha V2 amount contract.
 pub const KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2: u32 = 28;
 /// Maximum number of branch decisions carried by one recursive spend lineage.
@@ -194,17 +193,24 @@ pub const KAGEMUSHA_TOPUP_FINALITY_MAX_ANCHORS_PER_BLOCK_V2: u32 = 16;
 /// Maximum balanced-Merkle siblings for 16 block-local anchors.
 pub const KAGEMUSHA_TOPUP_FINALITY_MAX_SIBLINGS_V2: usize = 4;
 /// Maximum validator count accepted by an offline roster artifact.
-pub const KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2: usize = 256;
+///
+/// This is deliberately identical to the live Sumeragi-v2 bound. A smaller
+/// offline bound would let consensus finalize a top-up for which no portable
+/// proof could subsequently be produced.
+pub const KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2: usize = MAX_VALIDATORS_PER_HEIGHT;
 /// Maximum roster activation windows in one authenticated finality artifact.
 ///
-/// Sixteen full 256-validator windows, including fixed-width PoPs, fit below
-/// the independent 1 MiB canonical-archive ingress cap.
-pub const KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2: usize = 16;
+/// A release binds exactly one immutable roster window. Rotation publishes a
+/// new content-addressed release instead of making every verifier ingest
+/// unrelated historical or future validator sets.
+pub const KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2: usize = 1;
 /// Maximum canonical Norito bytes accepted for one compact top-up finality proof.
 ///
 /// The epoch-boundary case retains the complete next-epoch identity snapshot,
-/// including up to 256 bounded PoPs, so 64 KiB is not a sound worst-case cap.
-pub const KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2: u64 = 256 * 1024;
+/// including all 4,096 bounded PoPs plus maximum current and parent signer
+/// lists. The exact maximum wire-shape test below pins the encoded size below
+/// this 2 MiB ingress cap.
+pub const KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2: u64 = 2 * 1024 * 1024;
 /// Maximum canonical Norito bytes accepted for one complete validated top-up anchor.
 pub const KAGEMUSHA_TOPUP_FINALITY_ANCHOR_MAX_BYTES_V2: u64 = 64 * 1024;
 /// Development/staging-only hop cap for record-backed semantic lineage.
@@ -382,8 +388,9 @@ pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2: &str =
     "iroha_data_model::offline::model::KagemushaTopUpFinalityRosterArtifactV2";
 /// Canonical release file name for the top-up finality roster.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2: &str = "topup-finality-roster.norito";
-/// Maximum canonical roster artifact size; 256 BLS validators fit well below this bound.
-pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2: u64 = 1024 * 1024;
+/// Maximum canonical roster artifact size; one full 4,096-validator window is
+/// pinned below this bound by an exact maximum wire-shape test.
+pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2: u64 = 2 * 1024 * 1024;
 /// Whether the branch-safe fractional recursive-spend V2 circuit is linked.
 ///
 /// The public V2 statement is defined so SDKs can converge on one wire contract,
@@ -404,7 +411,7 @@ pub const fn preferred_kagemusha_offline_spend_mode(
     pasta_cycle_v3_backend_available: bool,
 ) -> Option<&'static str> {
     if pasta_cycle_v3_backend_available {
-        Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2)
+        Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1)
     } else {
         None
     }
@@ -4141,10 +4148,6 @@ mod model {
         pub artifact_generation: String,
         /// Authoritative current Unix time in milliseconds used for expiry checks.
         pub verified_at_ms: u64,
-        /// Optional active Reserved-lineage verifier record.
-        pub lineage_verifier_record: Option<VerifyingKeyRecord>,
-        /// Optional verifier activation height.
-        pub block_height: Option<u64>,
     }
 
     /// Opaque-safe summary decoded from a recursive spend bundle for wallet state.
@@ -10626,7 +10629,7 @@ impl KagemushaRecursiveSpendArtifactManifestV3 {
         if self.schema != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
             || self.version != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3
             || self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
-            || self.mode != KAGEMUSHA_RECURSIVE_SPEND_MODE_V2
+            || self.mode != KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
             || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
             || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
             || !is_kagemusha_v3_portable_identifier(&self.generation)
@@ -10698,7 +10701,7 @@ impl KagemushaRecursiveSpendNativeCapabilitiesV1 {
         if self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
             || self.artifact_manifest_schema
                 != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
-            || self.mode != KAGEMUSHA_RECURSIVE_SPEND_MODE_V2
+            || self.mode != KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
             || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
             || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
             || self.proof_envelope_version
@@ -10726,7 +10729,7 @@ pub fn kagemusha_recursive_spend_native_capabilities_v1()
     KagemushaRecursiveSpendNativeCapabilitiesV1 {
         bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
         artifact_manifest_schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
-        mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V2.to_owned(),
+        mode: KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1.to_owned(),
         proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
         transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
         proof_envelope_version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1,
@@ -10748,6 +10751,7 @@ fn kagemusha_v3_missing_gates() -> Vec<String> {
         "opposite_field_pasta_loader",
         "cross_field_poseidon_transcript",
         "two_layer_recursive_accumulator",
+        "topup_finality_bound_init",
         "authenticated_release_envelope",
         "independent_cryptographic_review",
         "physical_device_performance_evidence",
@@ -18360,7 +18364,7 @@ mod offline_note_tests {
             schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
             bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-            mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V2.to_owned(),
+            mode: KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1.to_owned(),
             proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
             transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
             generation: "release-generation-1".to_owned(),
@@ -18526,6 +18530,7 @@ mod offline_note_tests {
                 "opposite_field_pasta_loader",
                 "cross_field_poseidon_transcript",
                 "two_layer_recursive_accumulator",
+                "topup_finality_bound_init",
                 "authenticated_release_envelope",
                 "independent_cryptographic_review",
                 "physical_device_performance_evidence",
@@ -18555,6 +18560,11 @@ mod offline_note_tests {
         assert_invalid_pasta_capabilities("mode", |value| {
             value.mode.push_str("-forged");
         });
+        for rejected_mode in ["recursive_spend_v1", "recursive_compact_v1"] {
+            assert_invalid_pasta_capabilities("non-product mode", |value| {
+                value.mode = rejected_mode.to_owned();
+            });
+        }
         assert_invalid_pasta_capabilities("proof backend", |value| {
             value.proof_backend.push_str("-forged");
         });
@@ -18603,6 +18613,11 @@ mod offline_note_tests {
             value.bridge_abi_version = value.bridge_abi_version.wrapping_add(1);
         });
         assert_invalid_pasta_manifest("mode", |value| value.mode.push_str("-forged"));
+        for rejected_mode in ["recursive_spend_v1", "recursive_compact_v1"] {
+            assert_invalid_pasta_manifest("non-product mode", |value| {
+                value.mode = rejected_mode.to_owned();
+            });
+        }
         assert_invalid_pasta_manifest("proof backend", |value| {
             value.proof_backend.push_str("-forged");
         });
@@ -21357,7 +21372,7 @@ mod offline_note_tests {
         );
         assert_eq!(
             preferred_kagemusha_offline_spend_mode(true),
-            Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2)
+            Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1)
         );
         assert_eq!(preferred_kagemusha_offline_spend_mode(false), None);
         assert_eq!(
@@ -31375,7 +31390,7 @@ mod offline_note_tests {
     fn kagemusha_finality_roster_fixture(count: usize) -> KagemushaTopUpFinalityRosterWindowV2 {
         use crate::peer::PeerId;
 
-        let pairs = (0..count)
+        let mut pairs = (0..count)
             .map(|_| {
                 let pair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
                     .expect("BLS finality fixture key");
@@ -31384,6 +31399,7 @@ mod offline_note_tests {
                 (PeerId::new(pair.public_key().clone()), pop)
             })
             .collect::<Vec<_>>();
+        pairs.sort_by(|left, right| left.0.cmp(&right.0));
         let validator_set = pairs
             .iter()
             .map(|(peer, _)| ValidatorPower {
@@ -31620,33 +31636,124 @@ mod offline_note_tests {
 
     #[test]
     fn kagemusha_topup_finality_max_roster_shape_fits_the_archive_byte_cap() {
-        let template =
-            kagemusha_finality_roster_fixture(KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2);
-        let windows = (0..KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2)
-            .map(|index| {
-                let mut window = template.clone();
-                let start = 1 + u64::try_from(index).expect("small index") * 100;
-                window.activates_at_height = start;
-                window.withdraws_at_height = start + 100;
-                window
-            })
-            .collect::<Vec<_>>();
+        assert_eq!(
+            KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2, MAX_VALIDATORS_PER_HEIGHT,
+            "offline finality must accept every roster live consensus can finalize"
+        );
+        assert_eq!(KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2, 1);
+
+        // Public keys and PoPs are fixed-width on this wire. Cloning one valid
+        // BLS pair makes this size-only golden fast without performing 4,096
+        // unnecessary key generations; uniqueness is enforced independently
+        // by `validate_structure` and the live consensus tests.
+        let seed = kagemusha_finality_roster_fixture(1);
+        let template = KagemushaTopUpFinalityRosterWindowV2 {
+            activates_at_height: 1,
+            withdraws_at_height: u64::MAX,
+            consensus_mode: ConsensusMode::Permissioned,
+            validator_set: vec![
+                seed.validator_set[0].clone();
+                KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
+            ],
+            validator_set_pops: vec![
+                seed.validator_set_pops[0];
+                KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
+            ],
+        };
         let artifact = KagemushaTopUpFinalityRosterArtifactV2 {
             version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
-            chain_id: ChainId::from("kagemusha-finality-max-shape"),
-            artifact_generation: "max-shape-generation".to_owned(),
-            windows,
+            chain_id: ChainId::from("c".repeat(128)),
+            artifact_generation: "g".repeat(128),
+            windows: vec![template],
         };
-        artifact
-            .validate_structure()
-            .expect("maximum roster shape is structurally valid");
         let bytes = to_bytes(&artifact).expect("encode maximum roster shape");
+        assert_eq!(
+            bytes.len(),
+            1_278_320,
+            "the maximum roster wire shape changed; reassess the ingress bound"
+        );
         assert!(
             u64::try_from(bytes.len()).expect("archive length")
                 <= KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2,
             "maximum valid roster shape encoded to {} bytes, exceeding the {}-byte ingress cap",
             bytes.len(),
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2,
+        );
+    }
+
+    #[test]
+    fn kagemusha_topup_finality_max_proof_shape_fits_the_proof_byte_cap() {
+        let small_window = kagemusha_finality_roster_fixture(4);
+        let mut proof = kagemusha_finality_proof_fixture(&small_window);
+        let seed = &small_window.validator_set[0];
+        let seed_pop = small_window.validator_set_pops[0];
+        let validator_count = KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2;
+        let validator_count_u32 =
+            u32::try_from(validator_count).expect("consensus validator bound fits u32");
+        let signer_indices = (0..validator_count_u32).collect::<Vec<_>>();
+        let next_roster = vec![seed.clone(); validator_count];
+        let next_pops = vec![seed_pop.to_vec(); validator_count];
+
+        // Distinct validator bytes do not change the encoded length. Reusing
+        // one valid fixed-width key/PoP pair keeps this wire-size golden fast;
+        // the cryptographic and uniqueness checks have independent tests.
+        proof.commit_qc.height_context.chain_id = ChainId::from("c".repeat(128));
+        proof.commit_qc.height_context.height = 3;
+        proof.commit_qc.height_context.epoch_end_height = proof.commit_qc.height_context.height;
+        proof.commit_qc.height_context.next_epoch_snapshot = Some(FinalizedNextEpochSnapshot {
+            epoch: proof.commit_qc.height_context.epoch + 1,
+            epoch_end_height: u64::MAX,
+            mode: ConsensusMode::Permissioned,
+            roster: next_roster,
+            validator_set_pops: next_pops,
+            quorum: DualQuorum {
+                min_signers: DualQuorum::count_threshold(validator_count_u32)
+                    .expect("non-empty maximum roster"),
+                total_power: u64::from(validator_count_u32),
+            },
+            leader_seed: [0xA7; 32],
+        });
+        let block_hash = proof.commit_qc.certificate.subject.block_hash;
+        proof.commit_qc.certificate.round.height = proof.commit_qc.height_context.height;
+        proof.commit_qc.certificate.subject.parent_block_hash = Some(block_hash);
+        let mut parent = proof.commit_qc.certificate.clone();
+        parent.round.height = proof
+            .commit_qc
+            .height_context
+            .height
+            .checked_sub(1)
+            .expect("non-genesis maximum proof height");
+        parent.subject.parent_block_hash = Some(block_hash);
+        parent.signers = signer_indices.clone();
+        proof.commit_qc.height_context.parent_commit_qc = Some(parent);
+        proof.commit_qc.certificate.signers = signer_indices;
+        proof
+            .commit_qc
+            .certificate
+            .execution_commitment
+            .topup_anchor_count = KAGEMUSHA_TOPUP_FINALITY_MAX_ANCHORS_PER_BLOCK_V2;
+        proof.anchor_path.leaf_count = KAGEMUSHA_TOPUP_FINALITY_MAX_ANCHORS_PER_BLOCK_V2;
+        proof.anchor_path.siblings = vec![[0xA9; 32]; KAGEMUSHA_TOPUP_FINALITY_MAX_SIBLINGS_V2];
+
+        let valid_proof_bytes = to_bytes(&proof).expect("encode maximum valid proof shape");
+        let snapshot = proof
+            .commit_qc
+            .height_context
+            .next_epoch_snapshot
+            .as_mut()
+            .expect("maximum proof has a next-epoch snapshot");
+        for pop in &mut snapshot.validator_set_pops {
+            pop.resize(
+                crate::block::consensus_v2::finality::MAX_VALIDATOR_POP_BYTES,
+                0xA5,
+            );
+        }
+        let bounded_proof_bytes =
+            to_bytes(&proof).expect("encode maximum structurally bounded proof shape");
+        panic!(
+            "update exact proof goldens: valid={}, structurally_bounded={}",
+            valid_proof_bytes.len(),
+            bounded_proof_bytes.len()
         );
     }
 }

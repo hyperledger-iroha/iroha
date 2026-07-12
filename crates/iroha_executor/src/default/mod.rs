@@ -1008,6 +1008,7 @@ pub mod domain {
             | AnyPermission::CanRegisterDomain(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
+            | AnyPermission::CanProposeSccpRouteGovernance(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -1310,6 +1311,7 @@ pub mod account {
             | AnyPermission::CanModifyNftMetadata(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
+            | AnyPermission::CanProposeSccpRouteGovernance(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -1557,6 +1559,7 @@ pub mod asset_definition {
             | AnyPermission::CanModifyNftMetadata(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
+            | AnyPermission::CanProposeSccpRouteGovernance(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -1606,10 +1609,10 @@ pub mod asset {
     use super::*;
     use crate::permission::{asset::is_asset_owner, asset_definition::is_asset_definition_owner};
 
-    fn target_account_domain(
+    fn target_account_scope(
         executor: &(impl Execute + Visit + ?Sized),
         account_id: &AccountId,
-    ) -> Result<AccountAliasDomain, String> {
+    ) -> Result<(AccountAliasDomain, DataSpaceId), String> {
         let accounts = executor
             .host()
             .query(FindAccounts)
@@ -1621,15 +1624,21 @@ pub mod asset {
             if account.id() != account_id {
                 continue;
             }
-            return account
-                .label()
-                .and_then(|label| label.domain.as_ref())
-                .cloned()
-                .ok_or_else(|| {
+            return account.label().map_or_else(
+                || {
+                    Err(format!(
+                        "transfer-control target account `{account_id}` has no canonical on-chain alias label"
+                    ))
+                },
+                |label| {
+                    let account_domain = label.domain.as_ref().cloned().ok_or_else(|| {
                     format!(
                         "transfer-control target account `{account_id}` has no canonical on-chain domain label"
                     )
-                });
+                    })?;
+                    Ok((account_domain, label.dataspace))
+                },
+            );
         }
         Err(format!(
             "transfer-control target account `{account_id}` does not exist"
@@ -1654,11 +1663,15 @@ pub mod asset {
             Ok(false) => {}
         }
 
-        let account_domain = target_account_domain(executor, &isi.account_id)
-            .unwrap_or_else(|err| deny!(executor, err));
+        let (account_domain, account_dataspace) =
+            match target_account_scope(executor, &isi.account_id) {
+                Ok(scope) => scope,
+                Err(err) => deny!(executor, ValidationFail::NotPermitted(err)),
+            };
         let permission = CanSetAssetTransferFreeze {
             asset_definition: isi.asset_definition_id.clone(),
             account_domain,
+            account_dataspace,
         };
         if permission.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
@@ -1694,11 +1707,15 @@ pub mod asset {
             );
         }
 
-        let account_domain = target_account_domain(executor, &isi.account_id)
-            .unwrap_or_else(|err| deny!(executor, err));
+        let (account_domain, account_dataspace) =
+            match target_account_scope(executor, &isi.account_id) {
+                Ok(scope) => scope,
+                Err(err) => deny!(executor, ValidationFail::NotPermitted(err)),
+            };
         let permission = CanSetAssetTransferDailyLimit {
             asset_definition: isi.asset_definition_id.clone(),
             account_domain,
+            account_dataspace,
         };
         if permission.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
@@ -2889,6 +2906,7 @@ pub mod trigger {
             | AnyPermission::CanManageZkAceIdentityForAccount(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
+            | AnyPermission::CanProposeSccpRouteGovernance(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanRegisterNft(_)
             | AnyPermission::CanUnregisterNft(_)
@@ -3761,6 +3779,8 @@ pub mod log {
 /// Permission-checked visitors for bridge instructions.
 pub mod bridge {
     use iroha_executor_data_model::permission::sccp::CanManageSccpGovernance;
+    use iroha_smart_contract::data_model::isi::BuiltInInstruction;
+    use norito::NoritoSerialize;
 
     use super::*;
 

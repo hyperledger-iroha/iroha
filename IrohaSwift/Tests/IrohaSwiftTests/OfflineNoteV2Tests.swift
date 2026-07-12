@@ -46,7 +46,7 @@ final class AttestedOfflineNoteTests: XCTestCase {
         )
     }
 
-    func testAttestedOfflineNoteDecodersRoundTripRustNoritoVectors() throws {
+    func testOfflineNoteV2DecodersRoundTripRustNoritoVectors() throws {
         let fixture = try Self.loadFixture()
         let certificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
         let certificatePayload = try certificate.signingPayload()
@@ -106,7 +106,7 @@ final class AttestedOfflineNoteTests: XCTestCase {
         )
     }
 
-    func testAttestedOfflineNoteInstructionDecodersReadExplorerEnvelopeBytes() throws {
+    func testOfflineNoteV2InstructionDecodersReadExplorerEnvelopeBytes() throws {
         let fixture = try Self.loadFixture()
         let issue = try Self.issue(fixture)
         let audit = try Self.audit(fixture)
@@ -184,7 +184,7 @@ final class AttestedOfflineNoteTests: XCTestCase {
         )
     }
 
-    func testAttestedOfflineNoteInstructionDecodersRejectRetiredAliasEnvelopeBytes() throws {
+    func testOfflineNoteV2InstructionDecodersRejectRetiredAliasEnvelopeBytes() throws {
         let fixture = try Self.loadFixture()
         let issue = try Self.issue(fixture)
         let audit = try Self.audit(fixture)
@@ -228,7 +228,7 @@ final class AttestedOfflineNoteTests: XCTestCase {
         )
     }
 
-    func testAttestedOfflineNoteInstructionDecodersRejectWrongEnvelopeShapes() throws {
+    func testOfflineNoteV2InstructionDecodersRejectWrongEnvelopeShapes() throws {
         let fixture = try Self.loadFixture()
         let issue = try Self.issue(fixture)
         let issueWirePayload = Self.instructionWirePayload(
@@ -258,7 +258,7 @@ final class AttestedOfflineNoteTests: XCTestCase {
         XCTAssertThrowsError(try AttestedOfflineNoteDecoding.decodeIssueInstruction(Data(issueEnvelope.dropLast())))
     }
 
-    func testAttestedOfflineNoteDecodersRejectMalformedPayloads() throws {
+    func testOfflineNoteV2DecodersRejectMalformedPayloads() throws {
         let fixture = try Self.loadFixture()
         let certificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
         let issue = try Self.issue(fixture)
@@ -474,7 +474,7 @@ final class AttestedOfflineNoteTests: XCTestCase {
         XCTAssertNil(registerAttestation.payload)
         XCTAssertCanonicalExternalEntrypointHash(registerAttestation)
 
-        let registerInstruction = try Self.parseSingleAttestedOfflineNoteInstruction(registerAttestation)
+        let registerInstruction = try Self.parseSingleOfflineNoteV2Instruction(registerAttestation)
         XCTAssertEqual(registerInstruction.wireName, AttestedOfflineNoteTypeNames.registerDeviceAttestationInstruction)
         XCTAssertEqual(
             registerInstruction.archive.base64EncodedString(),
@@ -518,7 +518,7 @@ final class AttestedOfflineNoteTests: XCTestCase {
         }
     }
 
-    func testAttestedOfflineNoteProofAndHashValidationRejectsMalformedValues() throws {
+    func testOfflineNoteV2ProofAndHashValidationRejectsMalformedValues() throws {
         let fixture = try Self.loadFixture()
         let publicInputsHash = try Self.hex(fixture.chainVectors.audit.publicInputsHash)
 
@@ -971,7 +971,7 @@ final class AttestedOfflineNoteTests: XCTestCase {
         }
     }
 
-    func testAttestedOfflineNoteIssueAndClaimValidationCoversDerivedClaimAndFailures() throws {
+    func testOfflineNoteV2IssueAndClaimValidationCoversDerivedClaimAndFailures() throws {
         let fixture = try Self.loadFixture()
         let certificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
         let noteCommitment = try Self.hex(fixture.chainVectors.issue.noteCommitment)
@@ -1166,7 +1166,7 @@ final class AttestedOfflineNoteTests: XCTestCase {
         }
     }
 
-    func testAttestedOfflineNoteRecursiveProofCoversCustomVerifierAndVerifierValidation() throws {
+    func testOfflineNoteV2RecursiveProofCoversCustomVerifierAndVerifierValidation() throws {
         let publicInputsHash = try Self.audit(Self.loadFixture()).publicInputsHash()
         let proof = try AttestedOfflineNoteRecursiveProof(
             verifierBackend: "custom_backend",
@@ -1808,7 +1808,7 @@ final class AttestedOfflineNoteTests: XCTestCase {
         let archive: Data
     }
 
-    private static func parseSingleAttestedOfflineNoteInstruction(
+    private static func parseSingleOfflineNoteV2Instruction(
         _ envelope: SignedTransactionEnvelope
     ) throws -> ParsedAttestedOfflineNoteInstruction {
         var signed = OfflineNoritoReader(data: envelope.signedTransaction)

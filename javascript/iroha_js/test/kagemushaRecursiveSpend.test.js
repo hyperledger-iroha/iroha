@@ -72,6 +72,7 @@ import {
   isKagemushaRecursiveSpendLineageAppendOutputCircuitId,
   isKagemushaRecursiveSpendNativeAvailable,
   isKagemushaRecursiveSpendTopUpNativeAvailable,
+  isKagemushaSpendAgainMode,
   isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId,
   isSupportedKagemushaRecursiveSpendAppendProofTransition,
   isSupportedKagemushaRecursiveSpendPreviousProofCircuitId,
@@ -4843,11 +4844,11 @@ test("Kagemusha offline spend mode prefers recursive compact when ABI-7 support 
   assert.equal(isKagemushaRecursiveCompactUnavailable(null), false);
   assert.equal(
     preferredKagemushaOfflineSpendModeForCapabilities(true, true),
-    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
+    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
   );
   assert.equal(
     preferredKagemushaOfflineSpendModeForCapabilities(true, false),
-    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
+    null,
   );
   assert.equal(
     preferredKagemushaOfflineSpendModeForCapabilities(false, true),
@@ -4865,6 +4866,9 @@ test("Kagemusha offline spend mode prefers recursive compact when ABI-7 support 
     preferredKagemushaOfflineSpendMode(false, false),
     null,
   );
+  assert.equal(isKagemushaSpendAgainMode("recursive_spend_v1"), true);
+  assert.equal(isKagemushaSpendAgainMode("recursive_spend_v2"), false);
+  assert.equal(isKagemushaSpendAgainMode("recursive_compact_v1"), false);
   assert.throws(
     () => preferredKagemushaOfflineSpendMode(true),
     /requires either zero arguments or both recursiveCompactAvailable and recursiveSpendAvailable/u,

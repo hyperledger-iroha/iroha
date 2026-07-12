@@ -1210,7 +1210,7 @@ if [[ "${MODE}" == --negative-control-* ]]; then
         "${tmp}/NoritoBridge.h"
       ;;
     --negative-control-missing-recursive-header)
-      perl -0pi -e 's/int32_t\s+connect_norito_kagemusha_recursive_spend_redeem\s*\([^;]*\);\n//s or die "missing recursive declaration target\n"' "${tmp}/connect_norito_bridge.h"
+      perl -0pi -e 's/int32_t\s+connect_norito_kagemusha_recursive_spend_redeem_v2\s*\([^;]*\);\n//s or die "missing recursive declaration target\n"' "${tmp}/connect_norito_bridge.h"
       expect_contract_rejection \
         "missing required C header declarations" \
         "${tmp}/lib.rs" \
@@ -1296,7 +1296,7 @@ if [[ "${MODE}" == --negative-control-* ]]; then
         "${tmp}/NoritoBridge.h"
       ;;
     --negative-control-missing-rust-export)
-      perl -0pi -e 's/pub\s+unsafe\s+extern\s+"C"\s+fn\s+connect_norito_kagemusha_recursive_spend_lineage_append_boundary\s*\(/pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_lineage_append_boundary_removed(/s or die "missing Rust export target\n"' "${tmp}/lib.rs"
+      perl -0pi -e 's/pub\s+unsafe\s+extern\s+"C"\s+fn\s+connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3\s*\(/pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3_removed(/s or die "missing Rust export target\n"' "${tmp}/lib.rs"
       expect_contract_rejection \
         "missing required Rust recursive-spend exports" \
         "${tmp}/lib.rs" \

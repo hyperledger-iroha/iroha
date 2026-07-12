@@ -27,7 +27,7 @@ use iroha_primitives::numeric::Numeric;
 use iroha_torii_shared::offline_api::{
     OfflineOperationKind, OfflineOperationReference, OfflineOperationResult, OfflineOperationState,
     OfflineOperationStatus, OfflineRedeemRequest, OfflineRedeemResult, OfflineTopUpRequest,
-    OfflineTopUpResult,
+    OfflineTopUpFinalityProof, OfflineTopUpResult,
 };
 use mv::storage::StorageReadOnly;
 use tokio::sync::watch;
@@ -1193,11 +1193,18 @@ fn offline_operation_status_response(
                     &record.transaction_hash,
                     finalized_block_height,
                 )?;
+                let finality_proof = load_finalized_kagemusha_v2_topup_proof(
+                    app,
+                    finalized_block_height,
+                    operation_id,
+                    &anchor,
+                )?;
                 OfflineOperationResult::TopUp(OfflineTopUpResult {
                     transaction_hash: record.transaction_hash.to_string(),
                     finalized_block_height,
                     server_time_ms,
                     anchor,
+                    finality_proof,
                 })
             }
             KagemushaV2OperationKind::Redeem => {
@@ -1595,6 +1602,33 @@ fn load_finalized_kagemusha_v2_anchor(
         ));
     }
     Ok(anchor)
+}
+
+fn load_finalized_kagemusha_v2_topup_proof(
+    app: &SharedAppState,
+    finalized_block_height: u64,
+    operation_id: [u8; 32],
+    anchor: &KagemushaRecursiveSpendTopUpAnchorV2,
+) -> Result<OfflineTopUpFinalityProof, Error> {
+    let proof = app
+        .kura
+        .kagemusha_topup_finality_proof_v2(finalized_block_height, operation_id)
+        .map_err(|_| offline_topup_finality_proof_unavailable())?
+        .ok_or_else(offline_topup_finality_proof_unavailable)?;
+    let anchor_ref = anchor
+        .compact_ref()
+        .map_err(|_| offline_topup_finality_proof_unavailable())?;
+    if proof.anchor != anchor_ref || proof.validate_structure().is_err() {
+        return Err(offline_topup_finality_proof_unavailable());
+    }
+    Ok(proof)
+}
+
+fn offline_topup_finality_proof_unavailable() -> Error {
+    Error::AppServiceUnavailable {
+        code: "offline_topup_finality_proof_unavailable",
+        message: "The finalized top-up proof is not available yet.".to_owned(),
+    }
 }
 
 fn require_issuer(app: &AppState) -> Result<Arc<OfflineV2IssuerRuntime>, Error> {

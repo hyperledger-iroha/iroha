@@ -15,6 +15,12 @@ import {
 } from "./offlineApi.js";
 
 const DEFAULT_SUCCESS_STATUSES = [200];
+const MULTISIG_PROPOSAL_STATUS_VALUES = new Set([
+  "COLLECTING_SIGNATURES",
+  "FINALIZED",
+  "CANCELED",
+  "EXPIRED",
+]);
 
 let noritoEncodersPromise;
 
@@ -301,6 +307,28 @@ function normalizeMultisigSelectorBody(value, context) {
   }
   delete body.multisigAccountId;
   delete body.multisigAccountAlias;
+  return body;
+}
+
+function normalizeMultisigProposalQueryBody(value, context) {
+  const source = requireObject(value, context);
+  const body = normalizeMultisigSelectorBody(source, context);
+  if (source.status !== undefined) {
+    if (!Array.isArray(source.status)) {
+      throw new TypeError(`${context}.status must be an array`);
+    }
+    body.status = source.status.map((value, index) => {
+      const status = requireNonEmptyString(value, `${context}.status[${index}]`).toUpperCase();
+      if (!MULTISIG_PROPOSAL_STATUS_VALUES.has(status)) {
+        throw new TypeError(
+          `${context}.status[${index}] must be one of ${[
+            ...MULTISIG_PROPOSAL_STATUS_VALUES,
+          ].join(", ")}`,
+        );
+      }
+      return status;
+    });
+  }
   return body;
 }
 
@@ -818,8 +846,11 @@ export class ToriiBrowserClient {
 
   listMultisigProposals(selector, options = {}) {
     const opts = requireObject(options, "listMultisigProposals options");
-    return this._json("POST", "/v1/multisig/proposals/query", {
-      body: normalizeMultisigSelectorBody(selector, "listMultisigProposals selector"),
+    return this._json("POST", "/v1/multisig/proposals/list", {
+      body: normalizeMultisigProposalQueryBody(
+        selector,
+        "listMultisigProposals selector",
+      ),
       signal: signalFrom(opts),
     });
   }
@@ -839,7 +870,7 @@ export class ToriiBrowserClient {
       legacySignature ? options : proposalIdOrOptions,
       "getMultisigProposal options",
     );
-    return this._json("POST", "/v1/multisig/proposals/lookup", {
+    return this._json("POST", "/v1/multisig/proposals/get", {
       body: request,
       signal: signalFrom(opts),
     });

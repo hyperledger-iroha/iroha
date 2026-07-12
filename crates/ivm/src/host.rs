@@ -839,6 +839,8 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_REVOKE_ROLE
             | syscalls::SYSCALL_GRANT_PERMISSION
             | syscalls::SYSCALL_REVOKE_PERMISSION
+            | syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT
+            | syscalls::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT
             | syscalls::SYSCALL_CREATE_TRIGGER
             | syscalls::SYSCALL_REMOVE_TRIGGER
             | syscalls::SYSCALL_SET_TRIGGER_ENABLED

@@ -17495,6 +17495,11 @@ fn build_contract_call_metadata(
             .expect("static metadata key `contract_entrypoint`");
         metadata.insert(entrypoint_key, IrohaJson::new(entrypoint.to_owned()));
     }
+    if let Some(payload) = payload {
+        let payload_key =
+            Name::from_str("contract_payload").expect("static metadata key `contract_payload`");
+        metadata.insert(payload_key, payload.clone());
+    }
     if let Some(module) = canonical_contract_module(
         contract_alias.map(ToString::to_string).as_deref(),
         &contract_address.to_string(),
@@ -18414,12 +18419,24 @@ fn multisig_proposal_is_user_visible(
 }
 
 #[cfg(feature = "app_api")]
-fn requested_multisig_statuses(statuses: &[String]) -> BTreeSet<String> {
-    statuses
-        .iter()
-        .map(|status| status.trim().to_uppercase())
-        .filter(|status| !status.is_empty())
-        .collect()
+fn requested_multisig_statuses(statuses: &[String]) -> Result<BTreeSet<String>> {
+    let mut normalized = BTreeSet::new();
+    for (index, status) in statuses.iter().enumerate() {
+        let status = status.trim().to_uppercase();
+        if !matches!(
+            status.as_str(),
+            "COLLECTING_SIGNATURES" | "FINALIZED" | "CANCELED" | "EXPIRED"
+        ) {
+            return Err(Error::AppQueryValidation {
+                code: "multisig_status_invalid",
+                message: format!(
+                    "status[{index}] must be one of COLLECTING_SIGNATURES, FINALIZED, CANCELED, or EXPIRED"
+                ),
+            });
+        }
+        normalized.insert(status);
+    }
+    Ok(normalized)
 }
 
 #[cfg(feature = "app_api")]
@@ -18455,37 +18472,6 @@ fn multisig_json_scalar_literal(value: Option<&norito::json::Value>) -> Option<S
 }
 
 #[cfg(feature = "app_api")]
-fn multisig_execute_trigger_is_mint_request(
-    trigger_id: &str,
-    args: Option<&norito::json::Value>,
-) -> bool {
-    let normalized_trigger_id = trigger_id.trim().to_ascii_lowercase();
-    if !matches!(
-        normalized_trigger_id.as_str(),
-        "staged_mint_request_hbl" | "staged_mint_request_ubl"
-    ) {
-        return false;
-    }
-    let Some(args) = args.and_then(norito::json::Value::as_object) else {
-        return false;
-    };
-    if let Some(action) = multisig_json_scalar_literal(args.get("action"))
-        && !action.eq_ignore_ascii_case("create")
-    {
-        return false;
-    }
-    [
-        "request_id",
-        "asset_id",
-        "to_account_id",
-        "fi_id",
-        "amount_i64",
-    ]
-    .into_iter()
-    .all(|key| multisig_json_scalar_literal(args.get(key)).is_some())
-}
-
-#[cfg(feature = "app_api")]
 fn multisig_metadata_string(metadata: &Metadata, key: &str) -> Option<String> {
     let name = Name::from_str(key).ok()?;
     let value = metadata.get(&name)?;
@@ -18507,30 +18493,304 @@ const MULTISIG_PACS009_MARKER_PREFIX: &str = "PAYNET_PACS009_MINT_V1:";
 const MULTISIG_PACS009_MINT_OPERATION_TYPE: &str = "ISO20022_PACS009_MINT";
 
 #[cfg(feature = "app_api")]
-fn multisig_contract_call_operation_type(
-    instruction: &iroha_data_model::isi::InstructionBox,
-) -> Option<&'static str> {
-    let register = instruction
+fn multisig_metadata_json(metadata: &Metadata, key: &str) -> Option<norito::json::Value> {
+    metadata
+        .get(&Name::from_str(key).ok()?)?
+        .try_into_any_norito::<norito::json::Value>()
+        .ok()
+}
+
+#[cfg(feature = "app_api")]
+fn json_object_has_exact_keys(object: &Map, expected: &[&str]) -> bool {
+    object.len() == expected.len() && expected.iter().all(|key| object.contains_key(*key))
+}
+
+#[cfg(feature = "app_api")]
+fn required_nonempty_json_string(object: &Map, key: &str) -> Option<String> {
+    object
+        .get(key)?
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+#[cfg(feature = "app_api")]
+fn required_canonical_account_id_string(object: &Map, key: &str) -> Option<String> {
+    let literal = required_nonempty_json_string(object, key)?;
+    let account = iroha_data_model::account::AccountId::parse_encoded(&literal)
+        .ok()?
+        .into_account_id();
+    (account.to_string() == literal).then_some(literal)
+}
+
+#[cfg(feature = "app_api")]
+fn required_canonical_asset_definition_id_string(object: &Map, key: &str) -> Option<String> {
+    let literal = required_nonempty_json_string(object, key)?;
+    let asset = literal
+        .parse::<iroha_data_model::asset::AssetDefinitionId>()
+        .ok()?;
+    (asset.canonical_address() == literal).then_some(literal)
+}
+
+#[cfg(feature = "app_api")]
+fn required_canonical_name_string(object: &Map, key: &str) -> Option<String> {
+    let literal = required_nonempty_json_string(object, key)?;
+    let name = literal.parse::<Name>().ok()?;
+    (name.as_ref() == literal).then_some(literal)
+}
+
+#[cfg(feature = "app_api")]
+fn canonical_quantity_string(value: &Value, allow_zero: bool) -> Option<String> {
+    let literal = value.as_str()?;
+    if literal.is_empty() || literal.trim() != literal {
+        return None;
+    }
+    let quantity = literal.parse::<Numeric>().ok()?;
+    if quantity.mantissa().is_negative() || (!allow_zero && quantity.is_zero()) {
+        return None;
+    }
+    (quantity.to_string() == literal).then(|| literal.to_owned())
+}
+
+#[cfg(feature = "app_api")]
+struct StrictMultisigContractCallIntent {
+    operation_type: &'static str,
+    intent: IrohaJson,
+    contract_alias: iroha_data_model::smart_contract::ContractAlias,
+    contract_address: iroha_data_model::smart_contract::ContractAddress,
+    contract_entrypoint: String,
+    payload: IrohaJson,
+}
+
+#[cfg(feature = "app_api")]
+fn strict_multisig_contract_call_intent(
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+) -> Option<StrictMultisigContractCallIntent> {
+    if proposal.instructions.len() != 2 {
+        return None;
+    }
+    let register = proposal.instructions[0]
         .as_any()
         .downcast_ref::<iroha_data_model::isi::RegisterBox>()?;
-    let iroha_data_model::isi::RegisterBox::Trigger(register_trigger) = register else {
+    let iroha_data_model::isi::RegisterBox::Trigger(register) = register else {
         return None;
     };
-    let metadata = register_trigger.object().action().metadata();
-    let contract_alias = multisig_metadata_string(metadata, "contract_alias")?;
-    let contract_alias: iroha_data_model::smart_contract::ContractAlias =
-        contract_alias.parse().ok()?;
-    if !contract_alias
-        .name_segment()
-        .eq_ignore_ascii_case("mint_request")
+    let execute = proposal.instructions[1]
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::ExecuteTrigger>()?;
+    let trigger = register.object();
+    if trigger.id() != &execute.trigger
+        || trigger.action().repeats() != iroha_data_model::trigger::action::Repeats::Exactly(1)
+        || trigger.action().authority() != multisig_account_id
     {
         return None;
     }
-    let entrypoint = multisig_metadata_string(metadata, "contract_entrypoint")?;
-    match entrypoint.trim().to_ascii_lowercase().as_str() {
-        "create_mint_request" | "finalize_mint_request" => Some("MINT_REQUEST"),
-        _ => None,
+    let expected_filter =
+        iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
+            .for_trigger(trigger.id().clone());
+    if !matches!(
+        trigger.action().filter(),
+        iroha_data_model::events::EventFilterBox::ExecuteTrigger(filter)
+            if filter == &expected_filter
+    ) {
+        return None;
     }
+    let iroha_data_model::transaction::Executable::ContractCall(invocation) =
+        trigger.action().executable()
+    else {
+        return None;
+    };
+    let metadata = trigger.action().metadata();
+    let contract_alias_literal = multisig_metadata_string(metadata, "contract_alias")?;
+    let contract_alias: iroha_data_model::smart_contract::ContractAlias =
+        contract_alias_literal.parse().ok()?;
+    let contract_entrypoint = multisig_metadata_string(metadata, "contract_entrypoint")?;
+    let contract_address = multisig_metadata_string(metadata, "contract_address")?;
+    if contract_entrypoint != invocation.entrypoint
+        || contract_address != invocation.contract_address.to_string()
+    {
+        return None;
+    }
+    let payload = execute
+        .args
+        .try_into_any_norito::<norito::json::Value>()
+        .ok()?;
+    if multisig_metadata_json(metadata, "contract_payload").as_ref() != Some(&payload) {
+        return None;
+    }
+    let object = payload.as_object()?;
+
+    let (operation_type, expected_keys) = match (
+        contract_alias_literal.as_str(),
+        contract_entrypoint.as_str(),
+    ) {
+        ("apps_freeze::hbl.sbp" | "apps_freeze::ubl.sbp", "apply_freeze") => (
+            "FREEZE",
+            &[
+                "change_id",
+                "account",
+                "asset_definition",
+                "reason",
+                "frozen",
+            ][..],
+        ),
+        ("apps_limits_update::hbl.sbp" | "apps_limits_update::ubl.sbp", "apply_limits") => (
+            "LIMITS_UPDATE",
+            &[
+                "change_id",
+                "account",
+                "asset_definition",
+                "reason",
+                "daily_transfer_cap",
+                "offline_spend_cap",
+            ][..],
+        ),
+        ("apps_mint_request::sbp", "create_mint_request") => {
+            ("MINT_REQUEST", &["proposal_id", "amount"][..])
+        }
+        ("apps_mint_request::sbp", "finalize_mint_request" | "cancel_mint_request") => {
+            ("MINT_REQUEST", &["proposal_id"][..])
+        }
+        _ => return None,
+    };
+    if !json_object_has_exact_keys(object, expected_keys) {
+        return None;
+    }
+
+    let mut intent = Map::new();
+    intent.insert("contract_alias".into(), Value::from(contract_alias_literal));
+    intent.insert(
+        "contract_entrypoint".into(),
+        Value::from(contract_entrypoint.clone()),
+    );
+    match operation_type {
+        "FREEZE" => {
+            intent.insert(
+                "change_id".into(),
+                Value::from(required_canonical_name_string(object, "change_id")?),
+            );
+            intent.insert(
+                "account".into(),
+                Value::from(required_canonical_account_id_string(object, "account")?),
+            );
+            intent.insert(
+                "asset_definition".into(),
+                Value::from(required_canonical_asset_definition_id_string(
+                    object,
+                    "asset_definition",
+                )?),
+            );
+            intent.insert(
+                "reason".into(),
+                Value::from(required_nonempty_json_string(object, "reason")?),
+            );
+            intent.insert(
+                "frozen".into(),
+                Value::from(object.get("frozen")?.as_bool()?),
+            );
+        }
+        "LIMITS_UPDATE" => {
+            intent.insert(
+                "change_id".into(),
+                Value::from(required_canonical_name_string(object, "change_id")?),
+            );
+            intent.insert(
+                "account".into(),
+                Value::from(required_canonical_account_id_string(object, "account")?),
+            );
+            intent.insert(
+                "asset_definition".into(),
+                Value::from(required_canonical_asset_definition_id_string(
+                    object,
+                    "asset_definition",
+                )?),
+            );
+            intent.insert(
+                "reason".into(),
+                Value::from(required_nonempty_json_string(object, "reason")?),
+            );
+            for key in ["daily_transfer_cap", "offline_spend_cap"] {
+                let value = match object.get(key)? {
+                    Value::Null => Value::Null,
+                    value => Value::from(canonical_quantity_string(value, true)?),
+                };
+                intent.insert(key.into(), value);
+            }
+        }
+        "MINT_REQUEST" => {
+            intent.insert(
+                "proposal_id".into(),
+                Value::from(required_canonical_name_string(object, "proposal_id")?),
+            );
+            if let Some(amount) = object.get("amount") {
+                intent.insert(
+                    "amount".into(),
+                    Value::from(canonical_quantity_string(amount, false)?),
+                );
+            }
+        }
+        _ => return None,
+    }
+    Some(StrictMultisigContractCallIntent {
+        operation_type,
+        intent: IrohaJson::new(Value::Object(intent)),
+        contract_alias,
+        contract_address: invocation.contract_address.clone(),
+        contract_entrypoint,
+        payload: IrohaJson::new(payload),
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn strict_multisig_contract_call_intent_with_world<W: iroha_core::state::WorldReadOnly>(
+    world: &W,
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+) -> Option<StrictMultisigContractCallIntent> {
+    let parsed = strict_multisig_contract_call_intent(multisig_account_id, proposal)?;
+    if world.contract_aliases().get(&parsed.contract_alias) != Some(&parsed.contract_address) {
+        return None;
+    }
+
+    let binding = world.contract_instances().get(&parsed.contract_address)?;
+    let code = world.contract_code().get(binding)?;
+    let prepared = ivm::prepare_contract(Arc::<[u8]>::from(code.as_ref())).ok()?;
+    let stored_manifest = world.contract_manifests().get(binding)?;
+    if stored_manifest.signature_payload() != prepared.manifest().signature_payload() {
+        return None;
+    }
+    let descriptor = prepared.entrypoint_descriptor(&parsed.contract_entrypoint)?;
+    if descriptor.kind != manifest::EntryPointKind::Kotoage
+        || descriptor.permission.as_deref() != Some("CanInvokeContractEntrypoint")
+    {
+        return None;
+    }
+    let expected_arguments = encode_contract_argument_record(
+        &prepared,
+        &parsed.contract_entrypoint,
+        Some(&parsed.payload),
+    )
+    .ok()?;
+    let actual_arguments = proposal.instructions[0]
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::RegisterBox>()
+        .and_then(|register| match register {
+            iroha_data_model::isi::RegisterBox::Trigger(register) => Some(register.object()),
+            _ => None,
+        })
+        .and_then(|trigger| match trigger.action().executable() {
+            iroha_data_model::transaction::Executable::ContractCall(invocation) => invocation
+                .arguments
+                .as_ref()
+                .map(|record| record.as_bytes()),
+            _ => None,
+        });
+    if expected_arguments.as_deref() != actual_arguments {
+        return None;
+    }
+    Some(parsed)
 }
 
 #[cfg(feature = "app_api")]
@@ -18681,9 +18941,16 @@ fn multisig_execute_trigger_is_issuance_swap(
 }
 
 #[cfg(feature = "app_api")]
-fn multisig_proposal_operation_type(
+fn multisig_proposal_operation_type<W: iroha_core::state::WorldReadOnly>(
+    world: &W,
+    multisig_account_id: &iroha_data_model::account::AccountId,
     proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
 ) -> &'static str {
+    if let Some(intent) =
+        strict_multisig_contract_call_intent_with_world(world, multisig_account_id, proposal)
+    {
+        return intent.operation_type;
+    }
     let Some(first_instruction) = proposal.instructions.first() else {
         return "ONCHAIN_MULTISIG";
     };
@@ -18716,10 +18983,6 @@ fn multisig_proposal_operation_type(
         return "MINT";
     }
 
-    if let Some(operation_type) = multisig_contract_call_operation_type(first_instruction) {
-        return operation_type;
-    }
-
     if let Some(execute_trigger) = first_instruction
         .as_any()
         .downcast_ref::<iroha_data_model::isi::ExecuteTrigger>()
@@ -18733,9 +18996,6 @@ fn multisig_proposal_operation_type(
         if multisig_execute_trigger_is_issuance_swap(&trigger_id, args) {
             return "ISSUANCE_SWAP";
         }
-        if multisig_execute_trigger_is_mint_request(&trigger_id, args) {
-            return "MINT_REQUEST";
-        }
         return "EXECUTE_TRIGGER";
     }
 
@@ -18743,24 +19003,30 @@ fn multisig_proposal_operation_type(
 }
 
 #[cfg(feature = "app_api")]
-fn multisig_proposal_intent(
+fn multisig_proposal_intent<W: iroha_core::state::WorldReadOnly>(
+    world: &W,
+    multisig_account_id: &iroha_data_model::account::AccountId,
     proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
 ) -> Option<IrohaJson> {
-    proposal
-        .instructions
-        .first()
-        .and_then(|instruction| {
-            multisig_asset_transfer_control_operation(instruction).map(|(_, intent)| intent)
+    strict_multisig_contract_call_intent_with_world(world, multisig_account_id, proposal)
+        .map(|intent| intent.intent)
+        .or_else(|| {
+            proposal
+                .instructions
+                .first()
+                .and_then(|instruction| {
+                    multisig_asset_transfer_control_operation(instruction).map(|(_, intent)| intent)
+                })
+                .or_else(|| multisig_pacs009_marker_intent(proposal))
         })
-        .or_else(|| multisig_pacs009_marker_intent(proposal))
 }
 
 #[cfg(feature = "app_api")]
 fn multisig_operation_type_matches_requested_set(
     requested: &BTreeSet<String>,
-    proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+    operation_type: &str,
 ) -> bool {
-    requested.is_empty() || requested.contains(multisig_proposal_operation_type(proposal))
+    requested.is_empty() || requested.contains(operation_type)
 }
 
 #[cfg(feature = "app_api")]
@@ -18805,8 +19071,9 @@ fn list_multisig_proposals(
         if !status_matches_requested_set(requested_statuses, status) {
             continue;
         }
-        let operation_type = multisig_proposal_operation_type(&proposal).to_owned();
-        let intent = multisig_proposal_intent(&proposal);
+        let operation_type =
+            multisig_proposal_operation_type(&world, multisig_account_id, &proposal).to_owned();
+        let intent = multisig_proposal_intent(&world, multisig_account_id, &proposal);
         proposals.push(MultisigProposalEntryDto {
             proposal_id: hash_literal.to_owned(),
             instructions_hash: hash_literal.to_owned(),
@@ -18848,8 +19115,11 @@ fn list_multisig_proposals(
         if !status_matches_requested_set(requested_statuses, status) {
             continue;
         }
-        let operation_type = multisig_proposal_operation_type(&terminal_state.proposal).to_owned();
-        let intent = multisig_proposal_intent(&terminal_state.proposal);
+        let operation_type =
+            multisig_proposal_operation_type(&world, multisig_account_id, &terminal_state.proposal)
+                .to_owned();
+        let intent =
+            multisig_proposal_intent(&world, multisig_account_id, &terminal_state.proposal);
         proposals.push(MultisigProposalEntryDto {
             proposal_id: hash_literal.to_owned(),
             instructions_hash: hash_literal.to_owned(),
@@ -19048,16 +19318,14 @@ fn multisig_approval_entry(
     spec: iroha_executor_data_model::isi::multisig::MultisigSpec,
     proposal_entry: MultisigProposalEntryDto,
 ) -> MultisigApprovalEntryDto {
-    let operation_type = multisig_proposal_operation_type(&proposal_entry.proposal).to_owned();
-    let intent = multisig_proposal_intent(&proposal_entry.proposal);
     MultisigApprovalEntryDto {
         multisig_account_id,
         spec,
         proposal_id: proposal_entry.proposal_id,
         instructions_hash: proposal_entry.instructions_hash,
         proposal: proposal_entry.proposal,
-        operation_type,
-        intent,
+        operation_type: proposal_entry.operation_type,
+        intent: proposal_entry.intent,
         status: proposal_entry.status,
         terminal_at_ms: proposal_entry.terminal_at_ms,
     }
@@ -19066,6 +19334,24 @@ fn multisig_approval_entry(
 #[cfg(all(test, feature = "app_api"))]
 mod multisig_contract_call_tests {
     use super::*;
+
+    fn manifest_with_entrypoints(
+        entrypoints: Option<Vec<manifest::EntrypointDescriptor>>,
+    ) -> manifest::ContractManifest {
+        manifest::ContractManifest {
+            seiyaku_name: None,
+            code_hash: None,
+            abi_hash: None,
+            compiler_fingerprint: Some("torii-multisig-tests".to_owned()),
+            features_bitmap: Some(0),
+            access_set_hints: None,
+            entrypoints,
+            states: None,
+            kotoba: None,
+            error_codes: None,
+            provenance: None,
+        }
+    }
 
     #[test]
     fn implicit_contract_gas_limit_covers_strict_argument_admission_floor() {
@@ -19153,19 +19439,20 @@ mod multisig_contract_call_tests {
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
-        let manifest = manifest::ContractManifest {
-            seiyaku_name: None,
-            code_hash: None,
-            abi_hash: None,
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            states: None,
-            kotoba: None,
-            error_codes: None,
-            provenance: None,
-        };
+        let manifest = manifest_with_entrypoints(Some(vec![manifest::EntrypointDescriptor {
+            name: "main".to_owned(),
+            kind: manifest::EntryPointKind::Kotoage,
+            params: Vec::new(),
+            argument_schema: None,
+            return_type: None,
+            return_schema: None,
+            permission: Some("CanInvokeContractEntrypoint".to_owned()),
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+        }]));
         let code_hash = Hash::new(b"code-hash".to_vec());
         let payload = IrohaJson::new(norito::json!({ "invoice_id": "INV-1" }));
         let asset_definition =
@@ -19197,6 +19484,230 @@ mod multisig_contract_call_tests {
             execute_trigger.args, payload,
             "contract-call trigger execution must carry the normalized payload because the trigger host receives ExecuteTrigger args"
         );
+    }
+
+    #[test]
+    fn multisig_contract_call_intent_requires_exact_canonical_envelope() {
+        let multisig = sample_account_id();
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &multisig,
+            7,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let manifest = manifest_with_entrypoints(Some(
+            [
+                "apply_freeze",
+                "apply_limits",
+                "create_mint_request",
+                "finalize_mint_request",
+                "cancel_mint_request",
+            ]
+            .into_iter()
+            .map(|name| manifest::EntrypointDescriptor {
+                name: name.to_owned(),
+                kind: manifest::EntryPointKind::Kotoage,
+                params: Vec::new(),
+                argument_schema: None,
+                return_type: None,
+                return_schema: None,
+                permission: Some("CanInvokeContractEntrypoint".to_owned()),
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+            })
+            .collect(),
+        ));
+        let code_hash = Hash::new(b"strict-control-intent");
+        let canonical_alias: iroha_data_model::smart_contract::ContractAlias =
+            "apps_freeze::hbl.sbp".parse().expect("canonical alias");
+        let account = multisig.to_string();
+        let asset_definition =
+            test_asset_definition_literal_from_hex("550e8400e29b41d4a7164466554400aa");
+        let payload = IrohaJson::new(norito::json!({
+            "change_id": "freeze_1",
+            "account": account,
+            "asset_definition": asset_definition,
+            "reason": "risk review",
+            "frozen": true,
+        }));
+        let build = |alias: &iroha_data_model::smart_contract::ContractAlias,
+                     entrypoint: &str,
+                     payload: &IrohaJson| {
+            build_multisig_contract_call_instructions(
+                &multisig,
+                &contract_address,
+                Some(alias),
+                entrypoint,
+                Some(payload),
+                None,
+                None,
+                None,
+                300_000,
+                &manifest,
+                &code_hash,
+            )
+            .expect("build strict contract proposal")
+            .0
+        };
+        let proposal = |instructions| {
+            iroha_executor_data_model::isi::multisig::MultisigProposalValue::new(
+                instructions,
+                1,
+                2,
+                BTreeSet::new(),
+                None,
+            )
+        };
+
+        let canonical = proposal(build(&canonical_alias, "apply_freeze", &payload));
+        let typed = strict_multisig_contract_call_intent(&multisig, &canonical)
+            .expect("typed canonical intent");
+        assert_eq!(typed.operation_type, "FREEZE");
+        let intent = typed
+            .intent
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("intent value");
+        assert_eq!(
+            intent["contract_alias"].as_str(),
+            Some("apps_freeze::hbl.sbp")
+        );
+        assert_eq!(intent["contract_entrypoint"].as_str(), Some("apply_freeze"));
+        assert_eq!(intent["change_id"].as_str(), Some("freeze_1"));
+        assert_eq!(intent["frozen"].as_bool(), Some(true));
+        assert_eq!(intent.as_object().expect("flat intent").len(), 7);
+
+        let mint_alias: iroha_data_model::smart_contract::ContractAlias =
+            "apps_mint_request::sbp".parse().expect("mint alias");
+        let mint_payload = IrohaJson::new(norito::json!({
+            "proposal_id": "mint_1",
+            "amount": "125",
+        }));
+        let mint_instructions = build(&mint_alias, "create_mint_request", &mint_payload);
+        let mint_typed =
+            strict_multisig_contract_call_intent(&multisig, &proposal(mint_instructions))
+                .expect("typed mint intent");
+        assert_eq!(mint_typed.operation_type, "MINT_REQUEST");
+        let mint_intent = mint_typed
+            .intent
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("mint intent value");
+        assert_eq!(mint_intent["proposal_id"].as_str(), Some("mint_1"));
+        assert_eq!(mint_intent["amount"].as_str(), Some("125"));
+        assert_eq!(mint_intent.as_object().expect("flat mint intent").len(), 4);
+
+        for noncanonical_amount in [
+            norito::json!(125),
+            norito::json!(9_007_199_254_740_993_u64),
+            norito::json!("0125"),
+            norito::json!("-1"),
+            norito::json!("0"),
+        ] {
+            let payload = IrohaJson::new(norito::json!({
+                "proposal_id": "mint_bad_amount",
+                "amount": noncanonical_amount,
+            }));
+            assert!(
+                strict_multisig_contract_call_intent(
+                    &multisig,
+                    &proposal(build(&mint_alias, "create_mint_request", &payload)),
+                )
+                .is_none(),
+                "mint intent must reject non-string, non-canonical, non-positive, and unsafe-integer amounts",
+            );
+        }
+
+        let limits_alias: iroha_data_model::smart_contract::ContractAlias =
+            "apps_limits_update::hbl.sbp".parse().expect("limits alias");
+        let canonical_limits = IrohaJson::new(norito::json!({
+            "change_id": "limits_1",
+            "account": account,
+            "asset_definition": asset_definition,
+            "reason": "risk policy",
+            "daily_transfer_cap": "9007199254740993",
+            "offline_spend_cap": null,
+        }));
+        let limits = strict_multisig_contract_call_intent(
+            &multisig,
+            &proposal(build(&limits_alias, "apply_limits", &canonical_limits)),
+        )
+        .expect("canonical string limits intent");
+        let limits_intent = limits
+            .intent
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("limits intent value");
+        assert_eq!(
+            limits_intent["daily_transfer_cap"].as_str(),
+            Some("9007199254740993")
+        );
+        assert!(limits_intent["offline_spend_cap"].is_null());
+
+        for invalid_cap in [norito::json!(10), norito::json!("01"), norito::json!("-1")] {
+            let payload = IrohaJson::new(norito::json!({
+                "change_id": "limits_bad_cap",
+                "account": account,
+                "asset_definition": asset_definition,
+                "reason": "risk policy",
+                "daily_transfer_cap": invalid_cap,
+                "offline_spend_cap": null,
+            }));
+            assert!(
+                strict_multisig_contract_call_intent(
+                    &multisig,
+                    &proposal(build(&limits_alias, "apply_limits", &payload)),
+                )
+                .is_none(),
+                "limits intent must reject numeric, non-canonical, and negative caps",
+            );
+        }
+
+        let wrong_scope: iroha_data_model::smart_contract::ContractAlias = "apps_freeze::cbuae"
+            .parse()
+            .expect("noncanonical scope alias");
+        assert!(
+            strict_multisig_contract_call_intent(
+                &multisig,
+                &proposal(build(&wrong_scope, "apply_freeze", &payload)),
+            )
+            .is_none()
+        );
+
+        let malformed = IrohaJson::new(norito::json!({
+            "change_id": "freeze_1",
+            "account": account,
+            "asset_definition": asset_definition,
+            "reason": "risk review",
+            "frozen": true,
+            "spoofed_operation_type": "LIMITS_UPDATE",
+        }));
+        assert!(
+            strict_multisig_contract_call_intent(
+                &multisig,
+                &proposal(build(&canonical_alias, "apply_freeze", &malformed)),
+            )
+            .is_none()
+        );
+
+        let mut mismatched = build(&canonical_alias, "apply_freeze", &payload);
+        let trigger_id = mismatched[1]
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::ExecuteTrigger>()
+            .expect("execute trigger")
+            .trigger
+            .clone();
+        mismatched[1] = iroha_data_model::isi::ExecuteTrigger::new(trigger_id)
+            .with_args(IrohaJson::new(norito::json!({
+                "change_id": "spoof",
+                "account": account,
+                "asset_definition": asset_definition,
+                "reason": "spoof",
+                "frozen": false,
+            })))
+            .into();
+        assert!(strict_multisig_contract_call_intent(&multisig, &proposal(mismatched)).is_none());
     }
 
     #[test]
@@ -19241,16 +19752,13 @@ mod multisig_contract_call_tests {
         );
         assert_eq!(
             metadata.iter().count(),
-            5,
-            "contract address and entrypoint should stay alongside the fee metadata"
+            6,
+            "contract identity and exact payload should stay alongside the fee metadata"
         );
         assert!(metadata.get("gov_contract_address").is_none());
         assert!(metadata.get("contract_address").is_some());
         assert!(metadata.get("contract_entrypoint").is_some());
-        assert!(
-            metadata.get("contract_payload").is_none(),
-            "the canonical Norito argument record is the only V1 call payload"
-        );
+        assert!(metadata.get("contract_payload").is_some());
     }
 
     #[test]
@@ -20004,6 +20512,38 @@ mod multisig_selector_tests {
         nexus.dataspace_catalog = dataspace_catalog;
     }
 
+    fn install_sbp_routing_state(state: &State) {
+        let sbp_dataspace_id = DataSpaceId::new(10);
+        let sbp_lane_id = LaneId::new(1);
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: sbp_dataspace_id,
+                alias: "sbp".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("valid SBP dataspace catalog");
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: sbp_lane_id,
+                    dataspace_id: sbp_dataspace_id,
+                    alias: "sbp".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("valid SBP lane catalog");
+        let mut nexus = state.nexus.write();
+        nexus.routing_policy = paynet_routing_policy();
+        nexus.lane_catalog = lane_catalog;
+        nexus.dataspace_catalog = dataspace_catalog;
+    }
+
     fn test_asset_definition_id() -> dm::AssetDefinitionId {
         test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400aa")
     }
@@ -20470,6 +21010,7 @@ mod multisig_selector_tests {
             authority_keypair,
             contract_address,
             minimal_ivm_program(1),
+            None,
         );
     }
 
@@ -20492,6 +21033,7 @@ mod multisig_selector_tests {
         authority_keypair: &KeyPair,
         contract_address: &iroha_data_model::smart_contract::ContractAddress,
         code: Vec<u8>,
+        contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
     ) {
         let mut block = state.block(dm::BlockHeader::new(
             NonZeroU64::new(1).expect("height"),
@@ -20524,6 +21066,30 @@ mod multisig_selector_tests {
         register_manifest(authority, manifest, &mut stx).expect("register manifest");
         activate_instance(authority, contract_address.clone(), code_hash, &mut stx)
             .expect("activate instance");
+        if let Some(contract_alias) = contract_alias {
+            let alias_dataspace = contract_address
+                .dataspace_id()
+                .expect("test contract dataspace");
+            Grant::account_permission(
+                Permission::from(
+                    iroha_executor_data_model::permission::account::CanManageAccountAlias {
+                        scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
+                            alias_dataspace,
+                        ),
+                    },
+                ),
+                authority.clone(),
+            )
+            .execute(authority, &mut stx)
+            .expect("grant contract-alias namespace permission");
+            iroha_data_model::isi::contract_alias::SetContractAlias::bind(
+                contract_address.clone(),
+                contract_alias,
+                None,
+            )
+            .execute(authority, &mut stx)
+            .expect("bind contract alias");
+        }
 
         stx.apply();
         block.commit().expect("commit block");
@@ -20919,6 +21485,31 @@ mod multisig_selector_tests {
 
         assert_eq!(response.resolved_multisig_account_id, multisig_account_id);
         assert_eq!(response.spec, spec);
+    }
+
+    #[test]
+    fn multisig_status_filters_are_canonical_and_fail_closed() {
+        let statuses = requested_multisig_statuses(&[
+            "collecting_signatures".to_owned(),
+            " CANCELED ".to_owned(),
+        ])
+        .expect("supported statuses");
+        assert_eq!(
+            statuses,
+            BTreeSet::from(["CANCELED".to_owned(), "COLLECTING_SIGNATURES".to_owned(),])
+        );
+
+        for status in ["READY_TO_SUBMIT", " "] {
+            let error = requested_multisig_statuses(&[status.to_owned()])
+                .expect_err("unsupported status must fail before querying state");
+            assert!(matches!(
+                error,
+                Error::AppQueryValidation {
+                    code: "multisig_status_invalid",
+                    ..
+                }
+            ));
+        }
     }
 
     #[tokio::test]
@@ -21747,76 +22338,54 @@ mod multisig_selector_tests {
             BTreeSet::new(),
             None,
         );
-        let mint_request_hash = insert_active_multisig_proposal(
-            &mut world,
-            &multisig_account_id,
-            vec![execute_trigger_instruction(
-                "staged_mint_request_hbl",
-                norito::json::parse_value(&format!(
-                    r#"{{"action":"create","request_id":"mr_type_filter_1","asset_id":"{}","to_account_id":"{}","fi_id":"banka","amount_i64":77}}"#,
-                    test_asset_definition_id(),
-                    multisig_account_id,
-                ))
-                .expect("mint request args"),
-            )],
-            1_700_000_000_130,
-            4_000_000_000_000,
-            BTreeSet::new(),
-            None,
-        );
-        let contract_manifest = manifest::ContractManifest {
-            seiyaku_name: None,
-            code_hash: None,
-            abi_hash: None,
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            states: None,
-            kotoba: None,
-            error_codes: None,
-            provenance: None,
-        };
-        let asset_definition = test_asset_definition_id().to_string();
-        let contract_address = derived_universal_contract_address(&multisig_account_id, 2);
+        let contract_code = ivm::KotodamaCompiler::new()
+            .compile_source(
+                r#"
+seiyaku MintRequestProjection {
+  kotoage fn create_mint_request(proposal_id: Name, amount: quantity)
+    authorize("CanInvokeContractEntrypoint") {}
+}
+"#,
+            )
+            .expect("compile strict mint-request projection contract");
+        let verified_contract =
+            ivm::verify_contract_artifact(&contract_code).expect("verify projection contract");
+        let prepared_contract = ivm::prepare_contract(Arc::<[u8]>::from(contract_code.as_slice()))
+            .expect("prepare projection contract");
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &signer_one_id,
+            2,
+            DataSpaceId::new(10),
+        )
+        .expect("derive SBP contract address");
         let contract_alias: iroha_data_model::smart_contract::ContractAlias =
-            "mint_request::universal"
+            "apps_mint_request::sbp"
                 .parse()
                 .expect("mint request alias");
-        let contract_payload = IrohaJson::new(
-            norito::json::parse_value(&format!(
-                r#"{{
-                    "proposal_id":"mr_type_filter_contract",
-                    "approval_alias":"banking@centralbank",
-                    "requesting_fi_dataspace":"banka",
-                    "asset_definition":"{asset_definition}",
-                    "to_account_alias":"cbdc@banka.centralbank",
-                    "amount":"77",
-                    "requested_by_actor":{{
-                        "proposal_id":"mr_type_filter_contract",
-                        "requesting_fi_id":"banka",
-                        "approval_alias_fqn":"banking@centralbank",
-                        "creation_multisig_alias_fqn":"cbdc@banka.centralbank",
-                        "asset_id":"{asset_definition}",
-                        "amount":"77",
-                        "to_account_id":"cbdc@banka.centralbank"
-                    }}
-                }}"#,
-            ))
-            .expect("contract mint request payload"),
-        );
+        let contract_payload = IrohaJson::new(norito::json!({
+            "proposal_id": "mr_type_filter_contract",
+            "amount": "77",
+        }));
+        let contract_arguments = encode_contract_argument_record(
+            &prepared_contract,
+            "create_mint_request",
+            Some(&contract_payload),
+        )
+        .expect("encode mint-request arguments")
+        .expect("parameterized mint-request arguments");
         let (contract_mint_request_instructions, _) = build_multisig_contract_call_instructions(
             &multisig_account_id,
             &contract_address,
             Some(&contract_alias),
             "create_mint_request",
             Some(&contract_payload),
-            None,
+            Some(&contract_arguments),
             None,
             None,
             300_000,
-            &contract_manifest,
-            &Hash::new(b"mint-request-type-filter-contract".to_vec()),
+            &verified_contract.manifest,
+            &verified_contract.code_hash,
         )
         .expect("contract mint request instructions");
         let contract_mint_request_hash = insert_active_multisig_proposal(
@@ -21824,6 +22393,40 @@ mod multisig_selector_tests {
             &multisig_account_id,
             contract_mint_request_instructions,
             1_700_000_000_135,
+            4_000_000_000_000,
+            BTreeSet::new(),
+            None,
+        );
+        let tampered_payload = IrohaJson::new(norito::json!({
+            "proposal_id": "mr_type_filter_contract",
+            "amount": "78",
+        }));
+        let tampered_arguments = encode_contract_argument_record(
+            &prepared_contract,
+            "create_mint_request",
+            Some(&tampered_payload),
+        )
+        .expect("encode tampered mint-request arguments")
+        .expect("parameterized tampered arguments");
+        let (tampered_contract_instructions, _) = build_multisig_contract_call_instructions(
+            &multisig_account_id,
+            &contract_address,
+            Some(&contract_alias),
+            "create_mint_request",
+            Some(&contract_payload),
+            Some(&tampered_arguments),
+            None,
+            None,
+            300_000,
+            &verified_contract.manifest,
+            &verified_contract.code_hash,
+        )
+        .expect("build payload/argument mismatch fixture");
+        let tampered_contract_hash = insert_active_multisig_proposal(
+            &mut world,
+            &multisig_account_id,
+            tampered_contract_instructions,
+            1_700_000_000_136,
             4_000_000_000_000,
             BTreeSet::new(),
             None,
@@ -21867,6 +22470,21 @@ mod multisig_selector_tests {
             None,
         );
         let state = build_state(world);
+        install_sbp_routing_state(state.as_ref());
+        let authority_keypair =
+            checked_multisig_selector_keypair(0x60, "derive multisig selector signer one key");
+        assert_eq!(
+            dm::AccountId::new(authority_keypair.public_key().clone()),
+            signer_one_id
+        );
+        install_contract_instance_with_code(
+            state.as_ref(),
+            &signer_one_id,
+            &authority_keypair,
+            &contract_address,
+            contract_code,
+            Some(contract_alias),
+        );
 
         let list_hashes = |items: &[MultisigApprovalEntryDto]| {
             items
@@ -21952,10 +22570,7 @@ mod multisig_selector_tests {
         .expect("mint request approvals");
         assert_eq!(
             list_hashes(&mint_request_items.items),
-            BTreeSet::from([
-                mint_request_hash.clone(),
-                contract_mint_request_hash.clone()
-            ])
+            BTreeSet::from([contract_mint_request_hash.clone()])
         );
 
         let JsonBody(issuance_swap_items) = handle_post_multisig_approvals_list(
@@ -22015,7 +22630,7 @@ mod multisig_selector_tests {
         .expect("onchain approvals");
         assert_eq!(
             list_hashes(&onchain_items.items),
-            BTreeSet::from([onchain_hash.clone()])
+            BTreeSet::from([onchain_hash.clone(), tampered_contract_hash])
         );
 
         let JsonBody(unknown_items) = handle_post_multisig_approvals_list(
@@ -22728,6 +23343,7 @@ seiyaku BytesPayloadNormalizeTest {
             &authority_keypair,
             &derived_universal_contract_address(&authority_account_id, 1),
             code,
+            None,
         );
         let contract_address = derived_universal_contract_address(&authority_account_id, 1);
 
@@ -24084,6 +24700,7 @@ pub async fn handle_post_multisig_cancel(
                 "multisig cancel detached signature verification failed: {err}"
             ))
         })?;
+        let tx_hash_hex = hex::encode(tx.hash().as_ref());
         handle_transaction_with_metrics(
             chain_id,
             queue,
@@ -24118,6 +24735,7 @@ pub async fn handle_post_multisig_cancel(
             target_instructions_hash: target_hash_literal.clone(),
             cancel_proposal_id: cancel_hash_literal.clone(),
             cancel_instructions_hash: cancel_hash_literal.clone(),
+            tx_hash_hex: Some(tx_hash_hex),
             executed_tx_hash_hex: None,
             creation_time_ms: Some(creation_time_ms),
             signing_message_b64: None,
@@ -24139,6 +24757,7 @@ pub async fn handle_post_multisig_cancel(
             target_instructions_hash: target_hash_literal,
             cancel_proposal_id: cancel_hash_literal.clone(),
             cancel_instructions_hash: cancel_hash_literal,
+            tx_hash_hex: None,
             executed_tx_hash_hex: None,
             creation_time_ms: Some(creation_time_ms),
             signing_message_b64: Some(signing_message_b64),
@@ -24529,7 +25148,7 @@ fn multisig_spec_response(
     })
 }
 
-/// POST /v1/multisig/proposals/query — list multisig proposals for a multisig authority.
+/// POST /v1/multisig/proposals/list — list multisig proposals for a multisig authority.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_proposals_list(
@@ -24560,7 +25179,7 @@ fn multisig_proposals_list_response(
     req: &MultisigProposalsListRequestDto,
     resolve_authority: Option<&AccountId>,
 ) -> Result<MultisigProposalsListResponseDto> {
-    let requested_statuses = requested_multisig_statuses(&req.status);
+    let requested_statuses = requested_multisig_statuses(&req.status)?;
     let (resolved_multisig_account_id, spec) =
         resolve_multisig_account_and_spec(state, &req.selector, resolve_authority)?;
     let proposals = list_multisig_proposals(
@@ -24575,7 +25194,7 @@ fn multisig_proposals_list_response(
     })
 }
 
-/// POST /v1/multisig/proposals/lookup — resolve a multisig selector and fetch a specific proposal.
+/// POST /v1/multisig/proposals/get — resolve a multisig selector and fetch a specific proposal.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_proposals_get(
@@ -24618,8 +25237,18 @@ fn multisig_proposals_get_response(
     )?
     .filter(|record| multisig_proposal_is_user_visible(&record.proposal))
     .ok_or_else(multisig_not_found_error)?;
-    let operation_type = multisig_proposal_operation_type(&proposal_record.proposal).to_owned();
-    let intent = multisig_proposal_intent(&proposal_record.proposal);
+    let world = state.world_view();
+    let operation_type = multisig_proposal_operation_type(
+        &world,
+        &resolved_multisig_account_id,
+        &proposal_record.proposal,
+    )
+    .to_owned();
+    let intent = multisig_proposal_intent(
+        &world,
+        &resolved_multisig_account_id,
+        &proposal_record.proposal,
+    );
     Ok(MultisigProposalGetResponseDto {
         resolved_multisig_account_id,
         proposal_id: hash_literal.clone(),
@@ -24668,7 +25297,7 @@ fn multisig_approvals_list_response(
     viewer_scope: &MultisigApprovalsViewerScope,
     req: &MultisigApprovalsListRequestDto,
 ) -> Result<MultisigApprovalsListResponseDto> {
-    let requested_statuses = requested_multisig_statuses(&req.status);
+    let requested_statuses = requested_multisig_statuses(&req.status)?;
     let requested_operation_types = requested_multisig_operation_types(&req.operation_type);
     let page_limit = app_query_limits().clamp_page_limit(req.limit)?;
     let cursor = req
@@ -24687,7 +25316,7 @@ fn multisig_approvals_list_response(
         for proposal_entry in proposals {
             if !multisig_operation_type_matches_requested_set(
                 &requested_operation_types,
-                &proposal_entry.proposal,
+                &proposal_entry.operation_type,
             ) {
                 continue;
             }
@@ -24789,13 +25418,22 @@ fn multisig_approvals_get_response(
         if !multisig_proposal_is_user_visible(&proposal_record.proposal) {
             continue;
         }
+        let world = state.world_view();
+        let operation_type = multisig_proposal_operation_type(
+            &world,
+            &multisig_account_id,
+            &proposal_record.proposal,
+        )
+        .to_owned();
+        let intent =
+            multisig_proposal_intent(&world, &multisig_account_id, &proposal_record.proposal);
         matches.push(MultisigApprovalEntryDto {
             multisig_account_id,
             spec,
             proposal_id: hash_literal.clone(),
             instructions_hash: hash_literal.clone(),
-            operation_type: multisig_proposal_operation_type(&proposal_record.proposal).to_owned(),
-            intent: multisig_proposal_intent(&proposal_record.proposal),
+            operation_type,
+            intent,
             proposal: proposal_record.proposal,
             status: proposal_record.status.as_str().to_owned(),
             terminal_at_ms: proposal_record.terminal_at_ms,
@@ -28116,6 +28754,9 @@ pub struct MultisigCancelResponseDto {
     pub cancel_proposal_id: String,
     /// Deterministic hash of the cancel proposal instructions.
     pub cancel_instructions_hash: String,
+    /// Submitted cancellation participation transaction hash when available.
+    #[norito(default)]
+    pub tx_hash_hex: Option<String>,
     /// Executed tx hash once quorum has executed.
     #[norito(default)]
     pub executed_tx_hash_hex: Option<String>,
@@ -39889,9 +40530,9 @@ pub const ENDPOINT_MULTISIG_CANCEL: &str = "/v1/multisig/cancel";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_SPEC: &str = "/v1/multisig/spec";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_MULTISIG_PROPOSALS_LIST: &str = "/v1/multisig/proposals/query";
+pub const ENDPOINT_MULTISIG_PROPOSALS_LIST: &str = "/v1/multisig/proposals/list";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_MULTISIG_PROPOSALS_GET: &str = "/v1/multisig/proposals/lookup";
+pub const ENDPOINT_MULTISIG_PROPOSALS_GET: &str = "/v1/multisig/proposals/get";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
     "/v1/accounts/{account_id}/transactions/query";

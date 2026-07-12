@@ -165,6 +165,30 @@ def check_release_contract() -> list[str]:
         bridge,
     ) is None:
         errors.append(f"{BRIDGE}: native bridge ABI must be exactly 18")
+    if re.search(
+        r"KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE\s*:\s*bool\s*=\s*false\s*;",
+        model,
+    ) is None:
+        errors.append(f"{MODEL}: unavailable proof backend must remain truthfully false")
+    for gate in (
+        "KAGEMUSHA_RECURSIVE_SPEND_AUTHENTICATED_RELEASE_ENVELOPE_WIRED_V3",
+        "KAGEMUSHA_RECURSIVE_SPEND_INIT_BINDS_TOPUP_FINALITY_V2",
+    ):
+        if re.search(rf"const\s+{gate}\s*:\s*bool\s*=\s*false\s*;", bridge) is None:
+            errors.append(f"{BRIDGE}: first-release trust gate `{gate}` must remain fail-closed")
+    add_missing(
+        errors,
+        BRIDGE,
+        bridge,
+        (
+            "KAGEMUSHA_TOPUP_FINALITY_VERIFY_ENTRYPOINT_CALLABLE_V2: bool =",
+            "kagemusha_topup_finality_entrypoint_callable_v2(",
+            "authenticated_release_envelope && init_binds_topup_finality",
+            "proof_backend",
+            "&& kagemusha_topup_finality_entrypoint_callable_v2(",
+            "if !KAGEMUSHA_TOPUP_FINALITY_VERIFY_ENTRYPOINT_CALLABLE_V2",
+        ),
+    )
     if rust_string_constant(model, "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1") != "recursive_spend_v1":
         errors.append(f"{MODEL}: first-release mode must be exactly recursive_spend_v1")
 
@@ -243,6 +267,37 @@ def check_release_contract() -> list[str]:
         errors.append(f"{BRIDGE}: V3 C export inventory is not exact")
     if header_v3 != set(V3_C_SYMBOLS):
         errors.append(f"{HEADER}: V3 C declaration inventory is not exact")
+    install_match = re.search(
+        r"pub\s+unsafe\s+extern\s+\"C\"\s+fn\s+"
+        r"connect_norito_kagemusha_recursive_spend_artifact_set_install_v3\s*\("
+        r"(?P<body>[\s\S]*?)\n\}\n\n/// Report whether",
+        bridge,
+    )
+    if install_match is None:
+        errors.append(f"{BRIDGE}: missing atomic six-artifact install implementation")
+    else:
+        install_body = install_match.group("body")
+        add_missing(
+            errors,
+            BRIDGE,
+            install_body,
+            (
+                "handles_len != 6",
+                "unique_handles.len() != 6",
+                "expected_descriptors.len() != 6",
+                "All fallible validation happens before any handle is removed",
+                "validate_kagemusha_recursive_spend_artifact_spool_v3(&mut artifact_guard)?",
+                "let removed = registry.remove(handle);",
+                "*active = Some(installed);",
+            ),
+        )
+        validation = install_body.find("validate_kagemusha_recursive_spend_artifact_spool_v3")
+        removal = install_body.find("let removed = registry.remove(handle);")
+        activation = install_body.find("*active = Some(installed);")
+        if not (0 <= validation < removal < activation):
+            errors.append(
+                f"{BRIDGE}: install must validate all six files before consuming handles and activating"
+            )
     retired_ingest = re.compile(
         r"connect_norito_kagemusha_recursive_spend_artifact_(?:begin|write|finalize|cancel)_v2"
     )
@@ -309,6 +364,9 @@ def check_release_contract() -> list[str]:
             "public static func verifyTopUpFinality(",
             "anchor: KagemushaRecursiveSpendTopUpAnchor,",
             "anchorArchive: anchor.archive,",
+            "case finalityTrustUnavailable",
+            "catch NativeBridgeError.kagemushaRecursiveSpendV2Unavailable",
+            "throw KagemushaRecursiveSpendError.finalityTrustUnavailable",
             "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
             "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
             "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
@@ -534,6 +592,27 @@ def run_self_test() -> None:
             "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 18;",
             "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 17;",
             "native bridge ABI must be exactly 18",
+        ),
+        (
+            "premature proof-backend advertisement",
+            MODEL,
+            "KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE: bool = false;",
+            "KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE: bool = true;",
+            "unavailable proof backend must remain truthfully false",
+        ),
+        (
+            "unauthenticated release activation",
+            BRIDGE,
+            "KAGEMUSHA_RECURSIVE_SPEND_AUTHENTICATED_RELEASE_ENVELOPE_WIRED_V3: bool = false;",
+            "KAGEMUSHA_RECURSIVE_SPEND_AUTHENTICATED_RELEASE_ENVELOPE_WIRED_V3: bool = true;",
+            "must remain fail-closed",
+        ),
+        (
+            "unbound top-up finality activation",
+            BRIDGE,
+            "KAGEMUSHA_RECURSIVE_SPEND_INIT_BINDS_TOPUP_FINALITY_V2: bool = false;",
+            "KAGEMUSHA_RECURSIVE_SPEND_INIT_BINDS_TOPUP_FINALITY_V2: bool = true;",
+            "must remain fail-closed",
         ),
         (
             "mode substitution",
