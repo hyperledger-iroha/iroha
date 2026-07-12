@@ -88,12 +88,11 @@ const ADDITIVE_ABI18_V3_C_SYMBOLS = Object.freeze([
 ]);
 
 const CURRENT_C_SYMBOLS = Object.freeze([
-  ...REQUIRED_C_SYMBOLS,
   ...ABI18_V2_C_SYMBOLS,
   ...ADDITIVE_ABI18_V3_C_SYMBOLS,
 ]);
 
-const REQUIRED_RECURSIVE_COMPACT_C_SYMBOLS = Object.freeze([
+const RETIRED_RECURSIVE_COMPACT_C_SYMBOLS = Object.freeze([
   "connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes",
   "connect_norito_kagemusha_verify_recursive_compact_payment_token",
   "connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle",
@@ -773,6 +772,11 @@ test("recursive Kagemusha ABI-18 native host and SDK method names stay in parity
   );
   assert.match(
     headerGuard,
+    /len\(required_kagemusha_v2_proof_exports\) != 5[\s\S]*len\(required_kagemusha_v2_protocol_exports\) != 31[\s\S]*len\(required_kagemusha_native_exports\) != 36[\s\S]*set\(expected_kagemusha_v2_signatures\) != required_kagemusha_native_exports[\s\S]*set\(expected_kagemusha_v2_rust_signatures\) != required_kagemusha_native_exports/u,
+    "NoritoBridge header guard must pin exact ABI-18 proof, protocol, total, and signature inventories",
+  );
+  assert.match(
+    headerGuard,
     /expected_connect_norito_free_header_signature[\s\S]*expected_connect_norito_free_rust_signature[\s\S]*Rust connect_norito_free export has wrong signature[\s\S]*C header connect_norito_free declaration has wrong signature/u,
     "NoritoBridge header guard must reject Rust and C connect_norito_free signature drift",
   );
@@ -952,6 +956,33 @@ test("recursive Kagemusha ABI-18 native host and SDK method names stay in parity
   );
 });
 
+test("ABI-18 checker rejects partial hybrids and stale ABI-17 assumptions", () => {
+  const cases = [
+    [
+      "--negative-control-bad-abi18-capabilities-rust-signature",
+      "Rust ABI-18 Kagemusha V2 export has wrong signature: connect_norito_kagemusha_recursive_spend_capabilities_v1",
+    ],
+    [
+      "--negative-control-missing-swift-abi18-symbol",
+      "Swift ABI-18 Kagemusha V2 requiredProtocolSymbols inventory drifted",
+    ],
+    [
+      "--negative-control-stale-abi17-export",
+      "retired ABI-17 unsuffixed Rust exports reintroduced: connect_norito_kagemusha_recursive_spend_init",
+    ],
+  ];
+
+  for (const [mode, expected] of cases) {
+    const result = spawnSync(
+      "bash",
+      ["ci/check_connect_norito_bridge_header.sh", mode],
+      { cwd: REPO_ROOT, encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, `${mode}: ${result.stderr}`);
+    assert.match(result.stdout, new RegExp(escapeRegExp(expected), "u"), mode);
+  }
+});
+
 test("Kagemusha Kotlin recursive spend JNI declarations stay static", () => {
   const kotlinRecursive = source(
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
@@ -1038,12 +1069,12 @@ test("Kagemusha mobile compact-token native output guards require Norito archive
   ]) {
     assert.match(
       text,
-      /KagemushaCompactPaymentTokenProver\.isValidNoritoArchive/u,
+      /NoritoArchiveValidation\.isValidNoritoArchive/u,
       `${label} must reuse the shared Norito archive validator`,
     );
     assert.match(
       text,
-      /KagemushaCompactPaymentTokenProver\.hasNonEmptyNoritoPayload/u,
+      /NoritoArchiveValidation\.hasNonEmptyNoritoPayload/u,
       `${label} must require non-empty Norito native output payloads`,
     );
     assert.match(text, /requireNativeInput/u, `${label} must preflight native input archives`);
@@ -1597,7 +1628,7 @@ test("Kagemusha Swift and C# recursive spend inputs require Norito archives", ()
       ".invalidBundleArchive",
       "testProjectionRejectsMalformedBundleArchiveBeforeBridgeCall",
       "testNativeArchiveLimitMatchesSharedKagemushaCap",
-      "KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes",
+      "KagemushaRecursiveSpendProver.nativeArchiveMaxBytes",
       "KagemushaRecursiveSpendProver.nativeArchiveMaxBytes",
       "256 * 1024 * 1024",
     ],
@@ -2569,18 +2600,29 @@ test("Kagemusha Python instruction transaction builder stays wired", () => {
 test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () => {
   const rustBridge = source("crates/connect_norito_bridge/src/lib.rs");
   const header = source("crates/connect_norito_bridge/include/connect_norito_bridge.h");
-  assertContainsAll(rustBridge, REQUIRED_RECURSIVE_COMPACT_C_SYMBOLS, "Rust recursive compact C bridge");
-  assertContainsAll(header, REQUIRED_RECURSIVE_COMPACT_C_SYMBOLS, "C header recursive compact bridge");
-  assertContainsAll(
-    header,
-    [
-      "uint8_t* out_valid",
-      "Input 2: Norito-archive bytes of `KagemushaRecursiveCompactVerifierKeysV1`.",
-      "Proof payloads below the ABI-7 compact floor return ERR_KAGEMUSHA_PROVE.",
-      "Preverified tokens with cryptographically invalid proof bodies return success",
-    ],
-    "C header recursive compact verifier contract",
-  );
+  for (const symbol of RETIRED_RECURSIVE_COMPACT_C_SYMBOLS) {
+    assert.doesNotMatch(
+      header,
+      new RegExp(`\\b${escapeRegExp(symbol)}\\b`, "u"),
+      `ABI-18 C header must not restore retired compact export ${symbol}`,
+    );
+    assert.doesNotMatch(
+      rustBridge,
+      new RegExp(
+        `#\\[unsafe\\(no_mangle\\)\\]\\s*pub unsafe extern "C" fn ${escapeRegExp(symbol)}\\b`,
+        "u",
+      ),
+      `ABI-18 Rust bridge must not restore retired compact export ${symbol}`,
+    );
+    assert.match(
+      rustBridge,
+      new RegExp(
+        `\\blegacy_test_only_${escapeRegExp(symbol.replace(/^connect_norito_/u, ""))}\\b`,
+        "u",
+      ),
+      `Rust bridge must retain test-only compact coverage for ${symbol}`,
+    );
+  }
   assertContainsAll(
     rustBridge,
     [
@@ -12302,7 +12344,7 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
 
   const offlineVectorPlatformBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-offline-vector-platform-aliases":'),
-    guard.indexOf('if mode == "--negative-control-torii-offline-v2-kagemusha-redeem":'),
+    guard.indexOf('if mode == "--negative-control-torii-kagemusha-redeem":'),
   );
   assertContainsAll(
     workflow,
@@ -12349,19 +12391,19 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
 
   const toriiKagemushaRedeemBranch = guard.slice(
-    guard.indexOf('if mode == "--negative-control-torii-offline-v2-kagemusha-redeem":'),
-    guard.indexOf('if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":'),
+    guard.indexOf('if mode == "--negative-control-torii-kagemusha-redeem":'),
+    guard.indexOf('if mode == "--negative-control-torii-kagemusha-openapi":'),
   );
   assertContainsAll(
     workflow,
-    ["ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-redeem"],
+    ["ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-kagemusha-redeem"],
     "Kagemusha payload workflow must run the typed first-release Torii offline redeem ingress negative control",
   );
   assertContainsAll(
     guard,
     [
       "typed first-release Torii offline redeem ingress negative control",
-      "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-redeem",
+      "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-kagemusha-redeem",
     ],
     "policy negative-control inventory must include the typed first-release Torii offline redeem command",
   );
@@ -12371,7 +12413,7 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
       "crates/iroha_torii_shared/src/route_catalog.rs",
       'pub const REDEEM_PATH: &str = "/v1/offline/redeem";',
       "crates/iroha_torii_shared/src/offline_api.rs",
-      "KagemushaRecursiveSpendRedeemRequest as OfflineRedeemRequest",
+      "KagemushaRecursiveSpendRedeemRequestV2 as OfflineRedeemRequest",
       "iroha_torii_shared::offline_api::OfflineRedeemRequest,",
       "&route_catalog::offline::REDEEM,",
       "validate_kagemusha_v2_redeem_snapshot(&app, &redeem_request)?;",
@@ -12402,19 +12444,19 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
 
   const toriiKagemushaOpenApiBranch = guard.slice(
-    guard.indexOf('if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":'),
-    guard.indexOf('if mode == "--negative-control-torii-offline-v2-kagemusha-smoke":'),
+    guard.indexOf('if mode == "--negative-control-torii-kagemusha-openapi":'),
+    guard.indexOf('if mode == "--negative-control-torii-kagemusha-smoke":'),
   );
   assertContainsAll(
     workflow,
-    ["ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-openapi"],
+    ["ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-kagemusha-openapi"],
     "Kagemusha payload workflow must run the typed first-release Torii offline redeem OpenAPI negative control",
   );
   assertContainsAll(
     guard,
     [
       "typed first-release Torii offline redeem OpenAPI negative control",
-      "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-openapi",
+      "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-kagemusha-openapi",
     ],
     "policy negative-control inventory must include the typed first-release Torii offline redeem OpenAPI command",
   );
@@ -12424,8 +12466,7 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
       "crates/iroha_torii/src/openapi.rs",
       "docs/portal/static/openapi/torii.json",
       "docs/portal/static/openapi/versions/current/torii.json",
-      'assert!(redeem_description.contains("directly encoded OfflineRedeemRequest"));',
-      'assert!(redeem_description.contains("whole-payload base64 wrappers are rejected"));',
+      'assert!(redeem_description.contains("typed Kagemusha OfflineRedeemRequest"));',
       '"/v1/offline/redeem": {',
       '"$ref": "#/components/schemas/OfflineRedeemRequest"',
       "for target, before, after in cases:",
@@ -12454,19 +12495,19 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
 
   const toriiKagemushaSmokeBranch = guard.slice(
-    guard.indexOf('if mode == "--negative-control-torii-offline-v2-kagemusha-smoke":'),
+    guard.indexOf('if mode == "--negative-control-torii-kagemusha-smoke":'),
     guard.indexOf('if mode == "--negative-control-active-kagemusha-todo":'),
   );
   assertContainsAll(
     workflow,
-    ["ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-smoke"],
+    ["ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-kagemusha-smoke"],
     "Kagemusha payload workflow must run the typed first-release Torii offline redeem smoke negative control",
   );
   assertContainsAll(
     guard,
     [
       "typed first-release Torii offline redeem smoke negative control",
-      "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-smoke",
+      "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-kagemusha-smoke",
     ],
     "policy negative-control inventory must include the typed Torii offline redeem smoke command",
   );
@@ -12474,10 +12515,10 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     toriiKagemushaSmokeBranch,
     [
       'target = "crates/iroha_torii/tests/offline_redeem_contract.rs"',
-      "redeem_is_a_typed_async_command_on_the_final_route",
+      "typed_offline_redeem_route_accepts_only_the_direct_v2_request",
       'TORII_SOURCE.contains("NoritoJson(request)")',
-      "redeem_has_no_wrapper_or_compatibility_payload",
-      "retired_redeem_routes_are_not_mounted",
+      "typed_offline_redeem_contract_rejects_wrappers_aliases_and_ambiguous_envelopes",
+      "offline_operation_polling_preserves_redeem_identity_and_finality_integrity",
       "for before, after in cases:",
     ],
     "typed Torii offline redeem smoke negative control must mutate every final-route assertion",

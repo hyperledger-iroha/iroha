@@ -2264,6 +2264,13 @@ identical signed request resolves to the original operation; reusing its
 operation id for different canonical request bytes is a conflict. Operation ids
 share one global namespace across authorities and operation kinds; nonces,
 payload digests, and exact-request replay markers remain authority-scoped.
+`202 Accepted` is not an atomic redemption receipt and must not unlock public
+funds in a wallet. Redemption remains locally pending until that canonical
+operation resource reports `applied` with the exact signed operation id,
+transaction hash, non-zero finalized height, and non-zero block time. A
+`rejected` result is terminal, while missing or inconsistent queue, pipeline,
+index, block, or finality provenance fails closed instead of being inferred by
+an unbounded submission wait or request-driven history scan.
 The profile-specific `kagemusha-recursive-spend-lineage-onehop-v1` and
 `kagemusha-recursive-spend-lineage-append-v1` proof ids identify the reserved
 verifier-slice profiles. Witnessless chain admission remains fail-closed for
