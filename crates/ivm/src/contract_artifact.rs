@@ -66,12 +66,10 @@ impl ContractArtifactError {
     /// Convert this artifact-admission failure into the stable VM error surface.
     #[must_use]
     pub fn into_vm_error(self) -> crate::VMError {
-        self.abi_hash_mismatch.map_or(crate::VMError::InvalidMetadata, |(
-            expected,
-            actual,
-        )| {
-            crate::VMError::ArtifactAbiHashMismatch { expected, actual }
-        })
+        self.abi_hash_mismatch
+            .map_or(crate::VMError::InvalidMetadata, |(expected, actual)| {
+                crate::VMError::ArtifactAbiHashMismatch { expected, actual }
+            })
     }
 }
 
@@ -200,18 +198,14 @@ struct ValidatedContractEnvelope {
 fn parse_contract_metadata(
     artifact: &[u8],
 ) -> Result<ParsedProgramMetadata, ContractArtifactError> {
-    ProgramMetadata::parse(artifact).map_err(|err| {
-        match err {
-            crate::VMError::ArtifactAbiHashMismatch { expected, actual } => {
-                ContractArtifactError::abi_hash_mismatch(expected, actual)
-            }
-            _ if header_declares_contract_minor_one(artifact)
-                && cntr_section_missing(artifact) =>
-            {
-                ContractArtifactError::invalid("missing required CNTR section")
-            }
-            other => ContractArtifactError::invalid(format!("metadata parse failed: {other}")),
+    ProgramMetadata::parse(artifact).map_err(|err| match err {
+        crate::VMError::ArtifactAbiHashMismatch { expected, actual } => {
+            ContractArtifactError::abi_hash_mismatch(expected, actual)
         }
+        _ if header_declares_contract_minor_one(artifact) && cntr_section_missing(artifact) => {
+            ContractArtifactError::invalid("missing required CNTR section")
+        }
+        other => ContractArtifactError::invalid(format!("metadata parse failed: {other}")),
     })
 }
 

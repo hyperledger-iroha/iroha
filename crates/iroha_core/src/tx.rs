@@ -9144,18 +9144,22 @@ pub mod tests {
         assert!(AcceptedTransaction::ensure_signature_limit(2, &limits).is_ok());
     }
 
-    const IVM_METADATA_HEADER_LEN: usize = 17;
+    const IVM_METADATA_HEADER_LEN: usize = ivm::HEADER_SIZE;
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
 
     /// Build a minimal valid IVM program: header (1.0, vector=4, `max_cycles=0`, abi=1) + HALT.
     fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         let mut code = Vec::new();
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let mut program = Vec::new();
-        program.extend_from_slice(b"IVM\0");
-        program.extend_from_slice(&[1, 0, 0, 4]);
-        program.extend_from_slice(&1_000u64.to_le_bytes());
-        program.push(abi_version);
+        let mut program = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 0,
+            mode: 0,
+            vector_length: 4,
+            max_cycles: 1_000,
+            abi_version,
+        }
+        .encode();
         program.extend_from_slice(&code);
         program
     }
@@ -9180,11 +9184,15 @@ pub mod tests {
         for _ in 0..instruction_count {
             code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         }
-        let mut program = Vec::new();
-        program.extend_from_slice(b"IVM\0");
-        program.extend_from_slice(&[1, 0, 0, 4]);
-        program.extend_from_slice(&max_cycles.to_le_bytes());
-        program.push(abi_version);
+        let mut program = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 0,
+            mode: 0,
+            vector_length: 4,
+            max_cycles,
+            abi_version,
+        }
+        .encode();
         program.extend_from_slice(&code);
         program
     }
@@ -9249,11 +9257,15 @@ pub mod tests {
         );
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
 
-        let mut program = Vec::new();
-        program.extend_from_slice(b"IVM\0");
-        program.extend_from_slice(&[1, 0, 0, 4]);
-        program.extend_from_slice(&1_000u64.to_le_bytes());
-        program.push(abi_version);
+        let mut program = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 0,
+            mode: 0,
+            vector_length: 4,
+            max_cycles: 1_000,
+            abi_version,
+        }
+        .encode();
         program.extend_from_slice(&code);
         program
     }
@@ -9264,11 +9276,15 @@ pub mod tests {
         code.extend_from_slice(&ivm::encoding::wide::encode_syscallx(syscall).to_le_bytes());
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
 
-        let mut program = Vec::new();
-        program.extend_from_slice(b"IVM\0");
-        program.extend_from_slice(&[1, 0, 0, 4]);
-        program.extend_from_slice(&1_000u64.to_le_bytes());
-        program.push(abi_version);
+        let mut program = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 0,
+            mode: 0,
+            vector_length: 4,
+            max_cycles: 1_000,
+            abi_version,
+        }
+        .encode();
         program.extend_from_slice(&code);
         program
     }

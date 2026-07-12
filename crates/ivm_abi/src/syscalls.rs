@@ -2221,7 +2221,11 @@ fn numeric_operator_surface_v1() -> Vec<AbiNumericOperatorSurface> {
                 "decimal",
                 "checked-exact-negation;canonicalize-then-final-domain-check",
             ),
-            "quantity" => (false, INVALID.0, "compile-time-error:quantity-is-nonnegative"),
+            "quantity" => (
+                false,
+                INVALID.0,
+                "compile-time-error:quantity-is-nonnegative",
+            ),
             _ => unreachable!("closed numeric type inventory"),
         };
         rows.push(AbiNumericOperatorSurface {
@@ -2254,9 +2258,7 @@ fn numeric_operator_surface_v1() -> Vec<AbiNumericOperatorSurface> {
                         ("+" | "-" | "*", "int", "int") => {
                             ("int", "exact-checked-integer-arithmetic")
                         }
-                        ("/", "int", "int") => {
-                            ("int", "checked-quotient-truncates-toward-zero")
-                        }
+                        ("/", "int", "int") => ("int", "checked-quotient-truncates-toward-zero"),
                         ("%", "int", "int") => (
                             "int",
                             "checked-remainder-sign-is-dividend;paired-quotient-must-fit",
@@ -2282,9 +2284,10 @@ fn numeric_operator_surface_v1() -> Vec<AbiNumericOperatorSurface> {
                         ("+", "quantity", "quantity") => {
                             ("quantity", "exact-checked-nonnegative-addition")
                         }
-                        ("-", "quantity", "quantity") => {
-                            ("quantity", "exact-subtraction;negative-result-is-quantity-underflow")
-                        }
+                        ("-", "quantity", "quantity") => (
+                            "quantity",
+                            "exact-subtraction;negative-result-is-quantity-underflow",
+                        ),
                         ("*", "quantity", "decimal") => (
                             "quantity",
                             "exact-product;negative-result-is-quantity-underflow;canonical-final-domain-check",
@@ -2314,8 +2317,8 @@ fn numeric_operator_surface_v1() -> Vec<AbiNumericOperatorSurface> {
     for operator in COMPARISONS {
         for lhs in TYPES {
             for rhs in TYPES {
-                let allowed = lhs == rhs
-                    || matches!((lhs, rhs), ("int", "decimal") | ("decimal", "int"));
+                let allowed =
+                    lhs == rhs || matches!((lhs, rhs), ("int", "decimal") | ("decimal", "int"));
                 let semantics = if !allowed {
                     INVALID.1
                 } else if lhs == "quantity" {
@@ -3761,6 +3764,10 @@ mod tests {
             changed.descriptor_format_version += 1;
         });
         assert_surface_mutation_changes_hash(|changed| changed.policy_tag += 1);
+        assert_eq!(surface.program_header_layout, PROGRAM_HEADER_LAYOUT_V1);
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.program_header_layout = "host-dependent-header";
+        });
         assert_surface_mutation_changes_hash(|changed| {
             changed.indexed_literals[1].opcode ^= 1;
         });

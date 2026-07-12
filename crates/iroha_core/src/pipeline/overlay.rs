@@ -904,9 +904,7 @@ fn metadata_contract_manifest(
         .map(|json| {
             json.clone()
                 .try_into_any_norito::<ContractManifest>()
-                .map_err(|_| {
-                    OverlayBuildError::HeaderPolicy(IvmAdmissionError::ManifestMalformed)
-                })
+                .map_err(|_| OverlayBuildError::HeaderPolicy(IvmAdmissionError::ManifestMalformed))
         })
         .transpose()
 }

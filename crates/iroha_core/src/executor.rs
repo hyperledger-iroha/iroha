@@ -5583,24 +5583,24 @@ fn detect_fixture_executor_kind(executor: &LoadedExecutor) -> Option<FixtureExec
 
 fn detect_fixture_executor_kind_from_bytecode(bytecode: &[u8]) -> Option<FixtureExecutorKind> {
     // Placeholder samples are tiny deterministic programs with this exact layout:
-    // header(17) + HALT(4) = 21 bytes.
-    if bytecode.len() != 21 {
+    // authenticated header + one HALT instruction.
+    if bytecode.len() != ivm::HEADER_SIZE + core::mem::size_of::<u32>() {
         return None;
     }
-    if bytecode.get(0..4) != Some(b"IVM\0") {
+    let parsed = ivm::ProgramMetadata::parse(bytecode).ok()?;
+    if parsed.code_offset != ivm::HEADER_SIZE
+        || parsed.metadata.version_major != 1
+        || parsed.metadata.version_minor != 1
+        || parsed.metadata.mode != 0
+        || parsed.metadata.abi_version != 1
+    {
         return None;
     }
-    if bytecode.get(4..7) != Some(&[1, 1, 0]) {
-        return None;
-    }
-    let vector_length = *bytecode.get(7)?;
+    let vector_length = parsed.metadata.vector_length;
     let kind = FixtureExecutorKind::from_vector_length(vector_length)?;
-    if bytecode.get(16) != Some(&1) {
-        return None;
-    }
 
     let halt = ivm::encoding::wide::encode_halt().to_le_bytes();
-    if bytecode.get(17..21) != Some(&halt) {
+    if bytecode.get(ivm::HEADER_SIZE..) != Some(&halt) {
         return None;
     }
 
@@ -8386,11 +8386,15 @@ mod tests {
     }
 
     fn generate_fixture_placeholder_program(vector_length: u8) -> Vec<u8> {
-        let mut program = Vec::new();
-        program.extend_from_slice(b"IVM\0");
-        program.extend_from_slice(&[1, 1, 0, vector_length]);
-        program.extend_from_slice(&1_000_000_u64.to_le_bytes());
-        program.push(1);
+        let mut program = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 1,
+            mode: 0,
+            vector_length,
+            max_cycles: 1_000_000,
+            abi_version: 1,
+        }
+        .encode();
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         program
     }
@@ -14633,11 +14637,9 @@ seiyaku IdentityRequired {
     fn migrate_fails_on_invalid_bytecode() {
         // Construct an invalid program (oversized code section) to trigger a VM error
         let mut prog = Vec::new();
-        // Metadata header: IVM, version 1.0, mode 0, vector len 0, max_cycles 0, abi_version 0
-        prog.extend_from_slice(b"IVM\0");
-        prog.extend_from_slice(&[1, 0, 0, 0]);
-        prog.extend_from_slice(&0u64.to_le_bytes());
-        prog.push(0);
+        // Start with a fully valid authenticated header so rejection exercises the
+        // oversized code section rather than an earlier metadata failure.
+        prog.extend_from_slice(&ivm::ProgramMetadata::default_for(1, 0, 1).encode());
         // Oversized code
         let heap_start =
             usize::try_from(ivm::Memory::HEAP_START).expect("HEAP_START fits within usize");

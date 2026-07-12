@@ -1,6 +1,6 @@
 //! Program metadata parsing tests for literal sections.
 
-use ivm::ProgramMetadata;
+use ivm::{HEADER_SIZE, ProgramMetadata};
 
 const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
 
@@ -11,15 +11,15 @@ fn build_header(
     max_cycles: u64,
     abi_version: u8,
 ) -> Vec<u8> {
-    let mut v = Vec::new();
-    v.extend_from_slice(b"IVM\0");
-    v.push(version_major);
-    v.push(1); // version_minor
-    v.push(mode);
-    v.push(vector_length);
-    v.extend_from_slice(&max_cycles.to_le_bytes());
-    v.push(abi_version);
-    v
+    ProgramMetadata {
+        version_major,
+        version_minor: 1,
+        mode,
+        vector_length,
+        max_cycles,
+        abi_version,
+    }
+    .encode()
 }
 
 #[test]
@@ -37,7 +37,7 @@ fn parse_accepts_version_1_and_abi_v1() {
     assert_eq!(meta.vector_length, 0);
     assert_eq!(meta.max_cycles, 0);
     assert_eq!(meta.abi_version, 1);
-    assert_eq!(off, 17);
+    assert_eq!(off, HEADER_SIZE);
 }
 
 #[test]
@@ -86,7 +86,7 @@ fn parse_skips_literal_section_when_present() {
 
     let off = parsed.code_offset;
     assert_eq!(meta.version_major, 1);
-    assert_eq!(off, 17 + 16 + 16);
+    assert_eq!(off, HEADER_SIZE + 16 + 16);
     assert!(off < bytes.len());
 }
 

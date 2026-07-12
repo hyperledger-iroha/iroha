@@ -15282,15 +15282,15 @@ mod pointer_abi_tests {
 
 #[cfg(test)]
 fn build_program(code: &[u8], vector_length: u8) -> Vec<u8> {
-    let mut program = Vec::with_capacity(17 + code.len());
-    program.extend_from_slice(b"IVM\0");
-    program.push(1); // version_major
-    program.push(0); // version_minor
-    program.push(0); // mode
-    program.push(vector_length);
-    program.extend_from_slice(&1_000_000_u64.to_le_bytes());
-    // ABI v1 is the only supported surface; tests must encode the version byte accordingly.
-    program.push(1); // abi_version
+    let mut program = ivm::ProgramMetadata {
+        version_major: 1,
+        version_minor: 0,
+        mode: 0,
+        vector_length,
+        max_cycles: 1_000_000,
+        abi_version: 1,
+    }
+    .encode();
     program.extend_from_slice(code);
     program
 }

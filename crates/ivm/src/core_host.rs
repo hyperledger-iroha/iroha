@@ -2526,7 +2526,7 @@ impl IVMHost for CoreHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{IVM, encoding, instruction, syscalls};
+    use crate::{IVM, ProgramMetadata, encoding, instruction, syscalls};
     use ivm_abi::metadata::{
         EmbeddedContractInterfaceV1, EmbeddedStateDescriptor, EmbeddedStateType,
         LITERAL_SECTION_MAGIC, ProgramMetadata,
@@ -2676,14 +2676,15 @@ mod tests {
         for word in words {
             code.extend_from_slice(&word.to_le_bytes());
         }
-        let mut program = Vec::with_capacity(16 + code.len());
-        program.extend_from_slice(b"IVM\0");
-        program.push(1); // version major
-        program.push(0); // version minor
-        program.push(0); // mode flags
-        program.push(0); // vector length (unused when mode == 0)
-        program.extend_from_slice(&0u64.to_le_bytes()); // max_cycles
-        program.push(1); // abi_version
+        let mut program = ProgramMetadata {
+            version_major: 1,
+            version_minor: 0,
+            mode: 0,
+            vector_length: 0,
+            max_cycles: 0,
+            abi_version: 1,
+        }
+        .encode();
         program.extend_from_slice(&code);
         program
     }

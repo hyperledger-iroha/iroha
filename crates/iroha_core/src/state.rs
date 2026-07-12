@@ -103858,14 +103858,15 @@ seiyaku IdentitylessRawCallback {
     }
 
     fn assemble_ivm_header(code: &[u8]) -> Vec<u8> {
-        let mut blob = Vec::with_capacity(16 + code.len());
-        blob.extend_from_slice(b"IVM\0");
-        blob.push(1); // version major
-        blob.push(0); // version minor
-        blob.push(0); // mode flags
-        blob.push(0); // vector length
-        blob.extend_from_slice(&1_000_000_u64.to_le_bytes()); // release-default cycle ceiling
-        blob.push(1); // abi_version = 1
+        let mut blob = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 0,
+            mode: 0,
+            vector_length: 0,
+            max_cycles: 1_000_000,
+            abi_version: 1,
+        }
+        .encode();
         blob.extend_from_slice(code);
         blob
     }

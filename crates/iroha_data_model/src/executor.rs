@@ -10,11 +10,10 @@ use iroha_schema::Ident;
 pub use self::model::*;
 #[cfg(not(any(feature = "transparent_api", feature = "ffi_import")))]
 pub use self::model::{
-    DecodedCodeSizeLimitInfo, DecodedInstructionLimitInfo, Executor, ExecutorDataModel,
-    ArtifactAbiHashMismatchInfo, IvmAdmissionError, ManifestAbiHashMismatchInfo,
-    ManifestCodeHashMismatchInfo,
-    MaxCyclesExceedsFuelInfo, MaxCyclesExceedsUpperBoundInfo, UnsupportedVersionInfo,
-    ValidationFail, VectorLengthTooLargeInfo,
+    ArtifactAbiHashMismatchInfo, DecodedCodeSizeLimitInfo, DecodedInstructionLimitInfo, Executor,
+    ExecutorDataModel, IvmAdmissionError, ManifestAbiHashMismatchInfo,
+    ManifestCodeHashMismatchInfo, MaxCyclesExceedsFuelInfo, MaxCyclesExceedsUpperBoundInfo,
+    UnsupportedVersionInfo, ValidationFail, VectorLengthTooLargeInfo,
 };
 use crate::transaction::executable::IvmBytecode;
 
