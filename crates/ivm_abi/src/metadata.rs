@@ -97,6 +97,12 @@ pub fn decode_literal_descriptor(raw: u64) -> Result<(LiteralKindV1, u64), VMErr
 }
 /// Embedded contract interface section marker used by self-describing contract artifacts.
 pub const CONTRACT_INTERFACE_SECTION_MAGIC: [u8; 4] = *b"CNTR";
+/// Compiler-owned local entrypoint that authenticates the terminal return target
+/// of a Kotodama test-suite artifact.
+///
+/// Production contract admission rejects this reserved selector. Only the
+/// crate-private Kotodama test preparation path accepts it.
+pub const KOTO_TEST_RETURN_ENTRYPOINT: &str = "__koto_test_return";
 /// Stable nominal Norito schema name for the first-release contract interface.
 pub const CONTRACT_INTERFACE_SCHEMA_NAME_V1: &str = "iroha.kotodama.EmbeddedContractInterfaceV1";
 /// Stable nominal Norito schema name for embedded durable-state type trees.

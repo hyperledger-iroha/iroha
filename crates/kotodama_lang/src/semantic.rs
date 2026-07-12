@@ -190,6 +190,7 @@ pub fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
     name.starts_with(LINKED_SYMBOL_PREFIX)
         || compiler_intrinsic_kind(name).is_some()
         || is_canonical_type_spelling(name)
+        || (is_function && name == crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
         || (is_function
             && (Builtin::from_name(name).is_some() || Builtin::from_source_name(name).is_some()))
 }
@@ -15111,6 +15112,18 @@ fn expr_mutates_durable_state(context: &SemanticContext, expr: &TypedExpr) -> bo
 mod tests {
     use super::*;
     use crate::parser::parse_test_fragment as parse;
+
+    #[test]
+    fn compiler_owned_test_return_selector_is_reserved_for_functions() {
+        assert!(is_reserved_source_declaration(
+            crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT,
+            true
+        ));
+        assert!(!is_reserved_source_declaration(
+            crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT,
+            false
+        ));
+    }
 
     #[test]
     fn production_projection_accepts_registered_intrinsics_and_rejects_fabricated_calls() {

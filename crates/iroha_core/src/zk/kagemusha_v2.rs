@@ -2589,6 +2589,8 @@ mod tests {
 
     use super::*;
 
+    const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND: &str = "halo2/ipa";
+
     fn scalar_bytes(value: u64) -> [u8; 32] {
         let repr = Scalar::from(value).to_repr();
         let mut bytes = [0; 32];
@@ -2601,7 +2603,6 @@ mod tests {
             ChainId,
             asset::AssetDefinitionId,
             offline::{
-                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
                 KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
                 KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchPathV2,
                 KagemushaRecursiveSpendLineageModeV2, KagemushaRecursiveSpendTopUpAnchorRefV2,
